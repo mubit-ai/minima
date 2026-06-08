@@ -1,0 +1,12 @@
+{
+  "note": "Maps canonical Costit model_id -> alternate keys used by LiteLLM/OpenRouter price maps and by offline datasets (e.g. RouterBench). Used to overlay live cost and to normalize seeded model ids.",
+  "aliases": {
+    "claude-haiku-4-5": ["claude-haiku-4-5", "anthropic/claude-haiku-4.5", "claude-3-5-haiku-20241022", "claude-3-5-haiku-latest"],
+    "claude-sonnet-4-6": ["claude-sonnet-4-6", "anthropic/claude-sonnet-4.6", "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-latest"],
+    "claude-opus-4-8": ["claude-opus-4-8", "anthropic/claude-opus-4.8", "claude-3-opus-20240229"],
+    "gpt-4o-mini": ["gpt-4o-mini", "openai/gpt-4o-mini", "gpt-4o-mini-2024-07-18"],
+    "gpt-4o": ["gpt-4o", "openai/gpt-4o", "gpt-4o-2024-08-06"],
+    "gemini-2.5-flash": ["gemini-2.5-flash", "gemini/gemini-2.5-flash", "google/gemini-2.5-flash"],
+    "gemini-2.5-pro": ["gemini-2.5-pro", "gemini/gemini-2.5-pro", "google/gemini-2.5-pro"]
+  }
+}

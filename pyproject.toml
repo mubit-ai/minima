@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "costit"
+version = "0.1.0"
+description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Mubit" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "httpx>=0.27",
+  "anyio>=4.4",
+  "structlog>=24.1",
+  "tenacity>=8.4",
+  "mubit-sdk>=0.10.0",
+]
+
+[project.optional-dependencies]
+reasoner-anthropic = ["anthropic>=0.40"]
+reasoner-gemini = ["google-genai>=0.3"]
+seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+costit-seed = "costit.seeding.run_seed:main"
+
+[tool.uv.sources]
+mubit-sdk = { path = "../ricedb/sdk/python/mubit-sdk", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/costit", "client_sdk/costit_client"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+  "live: requires a running Mubit runtime (make run-mubit)",
+  "eval: slow offline evaluation (RouterBench)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4"]
+# B008: FastAPI's Depends() in argument defaults is the intended idiom.
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/costit/recommender/classify.py" = ["E501"]  # regex pattern tables
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
