@@ -156,6 +156,9 @@ class EvalResult:
     headline_savings_ci: tuple[float, float]
     headline_retention_ci: tuple[float, float]
     per_task_type: dict[str, dict[str, float]]
+    # Per RouterBench benchmark family (mmlu, gsm8k, mbpp, arc, hellaswag, ...) — the
+    # "wide variety of workloads" view of cost reduction at the operating point.
+    per_eval_name: dict[str, dict[str, float]]
     frontier: list[SliderResult]
     crosscheck_match_rate: float
     use_train_priors: bool
@@ -294,12 +297,18 @@ async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: lis
 
 
 def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
-          in_tokens: int, settings: Settings) -> str:
-    """Factored mirror of engine `_score_candidates` + `_optimize` (exploration off)."""
+          in_tokens: int, settings: Settings,
+          eval_priors: dict[str, dict[str, float]] | None = None, eval_name: str = "") -> str:
+    """Factored mirror of engine `_score_candidates` + `_optimize` (exploration off).
+
+    ``eval_priors`` (when supplied) overrides the per-task-type prior with a finer
+    per-benchmark-family prior — a SIMULATION of a recommender whose capability priors are
+    keyed at the benchmark grain (the shipping engine keys them by task_type)."""
+    pmap = eval_priors.get(eval_name) if eval_priors else None
     scored = []
     for mid, card in cards.items():
         agg = aggs.get(mid)
-        prior = score.capability_prior(card, tt)
+        prior = pmap.get(mid, score.capability_prior(card, tt)) if pmap else score.capability_prior(card, tt)
         pred, conf = score.predicted_success(agg, prior, settings.costit_beta_pseudocount)
         est, _ = score.estimate_cost(card, in_tokens, _OUT_TOKENS, False)
         scored.append((mid, pred, conf, est))
@@ -310,12 +319,14 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
     return max(scored, key=lambda s: s[1])[0]
 
 
-def _score_picks(rows: list[Row], aggs_list: list[dict], cards, slider, settings) -> SliderResult:
+def _score_picks(rows: list[Row], aggs_list: list[dict], cards, slider, settings,
+                 eval_priors: dict[str, dict[str, float]] | None = None) -> SliderResult:
     n = len(rows)
     acc = cost = 0.0
     picks: dict[str, int] = {}
     for row, aggs in zip(rows, aggs_list, strict=True):
-        m = _pick(aggs, cards, row.task_type, slider, _est_in_tokens(row.prompt), settings)
+        m = _pick(aggs, cards, row.task_type, slider, _est_in_tokens(row.prompt), settings,
+                  eval_priors, row.eval_name)
         picks[m] = picks.get(m, 0) + 1
         acc += row.scores[m]
         cost += row.costs[m]
@@ -425,6 +436,7 @@ async def evaluate(
     retention_floor: float = 0.95,
     seed: int = 42,
     use_train_priors: bool = False,
+    prior_grain: str = "task_type",  # task_type | eval_name (finer, train-derived simulation)
     hard_key: str = "grade-school-math",
     hard_frac: float = 0.15,  # representative-ish mix (RB is mostly MMLU/commonsense, ~20% math)
     crosscheck_n: int = 12,
@@ -454,8 +466,25 @@ async def evaluate(
 
     memory = MubitMemory(settings)
     lane = f"{settings.costit_lane_prefix}:rbeval-{uuid.uuid4().hex[:8]}"
+    # eval_name priors are train-derived; keep card task_type priors as the fallback.
+    use_train_priors = use_train_priors or prior_grain == "eval_name"
     catalog = build_catalog(settings, candidates, train, use_train_priors)
     cards = {c.model_id: c for c in catalog.get().cards}
+
+    # Per-benchmark-family prior (model -> mean train success on that eval_name). Finer than
+    # the per-task-type prior, so the threshold can escalate hard families (gsm8k/mbpp) while
+    # keeping easy ones (mmlu knowledge) cheap — the test of selective, per-workload routing.
+    eval_priors: dict[str, dict[str, float]] | None = None
+    if prior_grain == "eval_name":
+        acc_by: dict[str, dict[str, list[float]]] = {}
+        for row in train:
+            md = acc_by.setdefault(row.eval_name, {m: [] for m in candidates})
+            for m in candidates:
+                md[m].append(row.scores[m])
+        eval_priors = {
+            en: {m: (sum(v) / len(v) if v else 0.5) for m, v in md.items()}
+            for en, md in acc_by.items()
+        }
 
     seeded = await seed_train(memory, lane, train, candidates)
     await _barrier(memory, lane, train[0], settings)
@@ -489,41 +518,60 @@ async def evaluate(
     ) / len(candidates)
     val_results = []
     for s in sliders:
-        sr = _score_picks(vrows, vaggs, cards, s, settings)
+        sr = _score_picks(vrows, vaggs, cards, s, settings, eval_priors)
         val_results.append((s, 1.0 - sr.cost / val_prem_cost, sr.accuracy))
     beats_random = [(s, sav) for (s, sav, acc) in val_results if acc >= val_rand_acc]
     selected = max(beats_random, key=lambda x: x[1])[0] if beats_random else max(
         val_results, key=lambda x: x[2])[0]
 
     # TEST frontier + headline at the pre-selected slider.
-    frontier = [fill(_score_picks(test, test_aggs, cards, s, settings)) for s in sliders]
-    headline = fill(_score_picks(test, test_aggs, cards, selected, settings))
+    frontier = [fill(_score_picks(test, test_aggs, cards, s, settings, eval_priors)) for s in sliders]
+    headline = fill(_score_picks(test, test_aggs, cards, selected, settings, eval_priors))
 
     # Per-row arrays for bootstrap + per-task breakdown at the selected slider.
     pc, ps, ppc, pps = [], [], [], []
     by_type: dict[str, list[tuple[float, float, float, float]]] = {}
+    by_eval: dict[str, list[tuple[float, float, float, float]]] = {}
     for row, aggs in zip(test, test_aggs, strict=True):
-        m = _pick(aggs, cards, row.task_type, selected, _est_in_tokens(row.prompt), settings)
+        m = _pick(aggs, cards, row.task_type, selected, _est_in_tokens(row.prompt), settings,
+                  eval_priors, row.eval_name)
         pc.append(row.costs[m]); ps.append(row.scores[m])
         ppc.append(row.costs[premium]); pps.append(row.scores[premium])
-        by_type.setdefault(row.task_type.value, []).append(
-            (row.scores[m], row.costs[m], row.scores[premium], row.costs[premium]))
+        quad = (row.scores[m], row.costs[m], row.scores[premium], row.costs[premium])
+        by_type.setdefault(row.task_type.value, []).append(quad)
+        by_eval.setdefault(row.eval_name or "unknown", []).append(quad)
     sav_ci, ret_ci = _bootstrap_ci(pc, ps, ppc, pps, seed)
 
-    per_task = {}
-    for tt, vals in sorted(by_type.items()):
-        cacc = sum(v[0] for v in vals) / len(vals)
-        ccost = sum(v[1] for v in vals)
-        pacc = sum(v[2] for v in vals) / len(vals)
-        pcost = sum(v[3] for v in vals)
-        per_task[tt] = {"n": len(vals), "costit_acc": cacc, "premium_acc": pacc,
-                        "savings": (1 - ccost / pcost) if pcost else 0.0}
+    def _breakdown(buckets: dict[str, list[tuple[float, float, float, float]]]) -> dict:
+        out = {}
+        for key, vals in sorted(buckets.items()):
+            cacc = sum(v[0] for v in vals) / len(vals)
+            ccost = sum(v[1] for v in vals)
+            pacc = sum(v[2] for v in vals) / len(vals)
+            pcost = sum(v[3] for v in vals)
+            out[key] = {
+                "n": len(vals),
+                "costit_acc": cacc,
+                "premium_acc": pacc,
+                "retention": (cacc / pacc) if pacc else 1.0,
+                "savings": (1 - ccost / pcost) if pcost else 0.0,
+            }
+        return out
+
+    per_task = _breakdown(by_type)
+    per_eval = _breakdown(by_eval)
 
     baselines = _baselines(test, candidates, premium)
     per_model = {m: {"accuracy": baselines["_per_model_acc"][m], "cost": baselines["_per_model_cost"][m]}
                  for m in candidates}
-    crosscheck = await _crosscheck(settings, memory, catalog, lane, test, test_aggs, candidates,
-                                   selected, crosscheck_n)
+    # The eval_name-prior variant intentionally diverges from the shipping engine (which keys
+    # priors by task_type), so the factored<->engine crosscheck doesn't apply; -1.0 = N/A.
+    crosscheck = (
+        await _crosscheck(settings, memory, catalog, lane, test, test_aggs, candidates,
+                          selected, crosscheck_n)
+        if prior_grain == "task_type"
+        else -1.0
+    )
 
     return EvalResult(
         candidates=candidates, premium=premium, train_n=len(train), val_n=len(val), test_n=len(test),
@@ -533,6 +581,7 @@ async def evaluate(
         leaky_fraction=sum(1 for x in sims if x >= 0.8) / len(sims) if sims else 0.0,
         per_model=per_model, baselines={k: v for k, v in baselines.items() if not k.startswith("_")},
         selected_slider=selected, headline=headline, headline_savings_ci=sav_ci,
-        headline_retention_ci=ret_ci, per_task_type=per_task, frontier=frontier,
+        headline_retention_ci=ret_ci, per_task_type=per_task, per_eval_name=per_eval,
+        frontier=frontier,
         crosscheck_match_rate=crosscheck, use_train_priors=use_train_priors,
     )

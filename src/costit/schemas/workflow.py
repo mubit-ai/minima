@@ -21,8 +21,12 @@ class WorkflowRequest(BaseModel):
     steps: list[WorkflowStep] = Field(..., min_length=1)
     cost_quality_tradeoff: float = Field(5.0, ge=0, le=10)
     constraints: Constraints = Field(default_factory=Constraints)
-    user_id: str | None = None
-    namespace: str | None = None
+    user_id: str | None = Field(
+        None, description="optional within-org actor label (NOT a tenant/auth boundary)"
+    )
+    namespace: str | None = Field(
+        None, description="optional within-org sub-scope; tenant boundary is the Costit key"
+    )
     allow_llm_escalation: bool = True
 
 

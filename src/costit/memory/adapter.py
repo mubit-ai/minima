@@ -123,16 +123,28 @@ class Memory(Protocol):
 class MubitMemory:
     """Concrete ``Memory`` backed by the Mubit SDK Client."""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        transport: str | None = None,
+    ):
+        # endpoint/api_key/transport override settings so one process can hold a distinct
+        # client per org (multi-tenancy). They default to the single-tenant env config.
         self._settings = settings
+        self._endpoint = endpoint or settings.mubit_endpoint
+        self._transport = transport or settings.mubit_transport
+        resolved_key = api_key if api_key is not None else settings.mubit_api_key
         kwargs: dict[str, Any] = {
-            "endpoint": settings.mubit_endpoint,
+            "endpoint": self._endpoint,
             "timeout_ms": settings.mubit_timeout_ms,
         }
-        if settings.mubit_api_key:
-            kwargs["api_key"] = settings.mubit_api_key
-        if settings.mubit_transport:
-            kwargs["transport"] = settings.mubit_transport
+        if resolved_key:
+            kwargs["api_key"] = resolved_key
+        if self._transport:
+            kwargs["transport"] = self._transport
         self._client = Client(**kwargs)
 
     # ---- reads -----------------------------------------------------------------
@@ -367,22 +379,26 @@ class MubitMemory:
         )
         return raw if isinstance(raw, dict) else {}
 
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
+
     async def health(self) -> dict:
         """Liveness probe via Mubit's core health route (no embedding, fast)."""
-        base = self._settings.mubit_endpoint.rstrip("/")
+        base = self._endpoint.rstrip("/")
         url = f"{base}/v2/core/health"
         try:
             async with httpx.AsyncClient(timeout=3.0) as http:
                 resp = await http.get(url)
             return {
                 "reachable": resp.status_code == 200,
-                "transport": self._settings.mubit_transport,
+                "transport": self._transport,
                 "status_code": resp.status_code,
             }
         except Exception as exc:  # noqa: BLE001
             return {
                 "reachable": False,
-                "transport": self._settings.mubit_transport,
+                "transport": self._transport,
                 "error": str(exc),
             }
 

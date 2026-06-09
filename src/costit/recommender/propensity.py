@@ -37,18 +37,20 @@ class PropensityTracker:
     """In-process propensity counts (lost on restart)."""
 
     def __init__(self) -> None:
-        self._counts: dict[tuple[str, str], dict[str, int]] = {}
+        self._counts: dict[tuple[str, str, str], dict[str, int]] = {}
         self._lock = Lock()
 
-    def record(self, lane: str, cluster: str, model_id: str) -> None:
+    def record(self, lane: str, cluster: str, model_id: str, org_id: str = "default") -> None:
         with self._lock:
-            bucket = self._counts.setdefault((lane, cluster), {})
+            bucket = self._counts.setdefault((org_id, lane, cluster), {})
             bucket[model_id] = bucket.get(model_id, 0) + 1
 
-    def propensities(self, lane: str, cluster: str, model_ids: Iterable[str]) -> dict[str, float]:
+    def propensities(
+        self, lane: str, cluster: str, model_ids: Iterable[str], org_id: str = "default"
+    ) -> dict[str, float]:
         ids = list(model_ids)
         with self._lock:
-            bucket = dict(self._counts.get((lane, cluster), {}))
+            bucket = dict(self._counts.get((org_id, lane, cluster), {}))
         return _laplace_shares(bucket, ids)
 
 
@@ -62,31 +64,46 @@ class SqlitePropensityTracker:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS propensity (
+                    org_id TEXT NOT NULL DEFAULT 'default',
                     lane TEXT NOT NULL,
                     cluster TEXT NOT NULL,
                     model_id TEXT NOT NULL,
-                    count INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (lane, cluster, model_id)
+                    count INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            # Add org_id to a pre-existing (dev) DB that predates multi-tenancy.
+            cols = {row[1] for row in self._conn.execute("PRAGMA table_info(propensity)")}
+            if "org_id" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE propensity ADD COLUMN org_id TEXT NOT NULL DEFAULT 'default'"
+                )
+            # Upsert target — works regardless of the original PRIMARY KEY shape.
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_propensity "
+                "ON propensity(org_id, lane, cluster, model_id)"
+            )
 
-    def record(self, lane: str, cluster: str, model_id: str) -> None:
+    def record(self, lane: str, cluster: str, model_id: str, org_id: str = "default") -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO propensity (lane, cluster, model_id, count) VALUES (?, ?, ?, 1)
-                ON CONFLICT(lane, cluster, model_id) DO UPDATE SET count = count + 1
+                INSERT INTO propensity (org_id, lane, cluster, model_id, count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(org_id, lane, cluster, model_id) DO UPDATE SET count = count + 1
                 """,
-                (lane, cluster, model_id),
+                (org_id, lane, cluster, model_id),
             )
 
-    def propensities(self, lane: str, cluster: str, model_ids: Iterable[str]) -> dict[str, float]:
+    def propensities(
+        self, lane: str, cluster: str, model_ids: Iterable[str], org_id: str = "default"
+    ) -> dict[str, float]:
         ids = list(model_ids)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT model_id, count FROM propensity WHERE lane = ? AND cluster = ?",
-                (lane, cluster),
+                "SELECT model_id, count FROM propensity "
+                "WHERE org_id = ? AND lane = ? AND cluster = ?",
+                (org_id, lane, cluster),
             ).fetchall()
         bucket = {str(mid): int(cnt) for mid, cnt in rows}
         return _laplace_shares(bucket, ids)
@@ -94,6 +111,20 @@ class SqlitePropensityTracker:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+class OrgScopedPropensity:
+    """Binds a shared propensity backend to one org, presenting the ``Propensity`` Protocol."""
+
+    def __init__(self, backend: Propensity, org_id: str):
+        self._backend = backend
+        self._org_id = org_id
+
+    def record(self, lane: str, cluster: str, model_id: str) -> None:
+        self._backend.record(lane, cluster, model_id, self._org_id)  # type: ignore[call-arg]
+
+    def propensities(self, lane: str, cluster: str, model_ids: Iterable[str]) -> dict[str, float]:
+        return self._backend.propensities(lane, cluster, model_ids, self._org_id)  # type: ignore[call-arg]
 
 
 def build_propensity(settings: Settings) -> Propensity:

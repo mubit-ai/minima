@@ -98,6 +98,22 @@ class Settings(BaseSettings):
     costit_recommendation_ttl_seconds: int = 86_400
     costit_sqlite_path: str = "costit_state.db"  # durable recstore + propensity backing file
 
+    # --- Multi-tenancy (T3: hosted, per-org Mubit instance) ---
+    # OFF by default => single-tenant: the env Mubit key above is the one "default" org
+    # (this is also the self-hosted/T1 mode). ON => each org provides its own Mubit
+    # instance once at onboarding; a Costit-issued key (cstk_<org>_<keyid>_<secret>)
+    # resolves server-side to that instance. The org's Mubit key is never sent per call.
+    costit_multitenant: bool = False
+    # Admin credential used ONLY to mint/manage tenant keys (sent as X-Costit-Provisioning-Key).
+    # Never handed to callers. Required for the /v1/admin/tenants endpoints to be usable.
+    costit_provisioning_key: str | None = None
+    costit_tenant_store: str = "memory"  # memory | sqlite
+    costit_tenant_store_path: str = "costit_tenants.db"
+    # Optional JSON file ([{org_id, mubit_endpoint, mubit_api_key_ref, ...}]) to seed the
+    # in-memory tenant store at startup (dev/bootstrap; production should provision via API).
+    costit_tenant_bootstrap_file: str | None = None
+    costit_default_org_id: str = "default"  # org id used for single-tenant state partitioning
+
     @property
     def reasoner_enabled(self) -> bool:
         return self.costit_reasoner_provider.lower() not in ("", "none")

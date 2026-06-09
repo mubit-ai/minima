@@ -6,29 +6,30 @@ import uuid
 
 from fastapi import APIRouter, Depends
 
-from costit.deps import get_recommender
-from costit.recommender.engine import Recommender
+from costit.api.auth import get_tenant
 from costit.schemas.recommend import RecommendRequest, RecommendResponse
 from costit.schemas.workflow import (
     StepRecommendation,
     WorkflowRequest,
     WorkflowResponse,
 )
+from costit.tenancy.context import TenantContext
 
 router = APIRouter(prefix="/v1", tags=["recommend"])
 
 
 @router.post("/recommend", response_model=RecommendResponse)
 async def recommend(
-    req: RecommendRequest, rec: Recommender = Depends(get_recommender)
+    req: RecommendRequest, tenant: TenantContext = Depends(get_tenant)
 ) -> RecommendResponse:
-    return await rec.recommend(req)
+    return await tenant.recommender.recommend(req)
 
 
 @router.post("/recommend/workflow", response_model=WorkflowResponse)
 async def recommend_workflow(
-    req: WorkflowRequest, rec: Recommender = Depends(get_recommender)
+    req: WorkflowRequest, tenant: TenantContext = Depends(get_tenant)
 ) -> WorkflowResponse:
+    rec = tenant.recommender
     steps: list[StepRecommendation] = []
     total = 0.0
     premium = 0.0

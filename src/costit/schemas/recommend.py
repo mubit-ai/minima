@@ -13,8 +13,16 @@ class RecommendRequest(BaseModel):
         5.0, ge=0, le=10, description="0 = cheapest acceptable, 10 = highest quality"
     )
     constraints: Constraints = Field(default_factory=Constraints)
-    user_id: str | None = None
-    namespace: str | None = Field(None, description="memory lane suffix; isolates tenants/domains")
+    user_id: str | None = Field(
+        None, description="optional within-org actor label (NOT a tenant/auth boundary)"
+    )
+    namespace: str | None = Field(
+        None,
+        description=(
+            "optional within-org sub-scope (team/project/env), namespaced under your org. "
+            "The tenant boundary is your Costit API key -> your Mubit instance, not this field."
+        ),
+    )
     max_candidates: int = Field(8, ge=1, le=64)
     allow_llm_escalation: bool = True
     explain: bool = True

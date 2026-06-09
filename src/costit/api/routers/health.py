@@ -6,10 +6,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from costit.api.auth import get_tenant_optional
 from costit.catalog.store import CatalogStore
 from costit.config import Settings
-from costit.deps import get_catalog_store, get_memory, get_settings
-from costit.memory.adapter import Memory
+from costit.deps import get_catalog_store, get_settings
+from costit.tenancy.context import TenantContext
 from costit.version import __version__
 
 router = APIRouter(prefix="/v1", tags=["health"])
@@ -17,15 +18,24 @@ router = APIRouter(prefix="/v1", tags=["health"])
 
 @router.get("/health")
 async def health(
-    memory: Memory = Depends(get_memory),
+    tenant: TenantContext | None = Depends(get_tenant_optional),
     catalog_store: CatalogStore = Depends(get_catalog_store),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    mubit = await memory.health()
     catalog = catalog_store.get()
+    # In multi-tenant mode an unauthenticated probe still gets service liveness; the
+    # Mubit block is reported only when a valid Costit key resolves an org's instance.
+    if tenant is None:
+        mubit: dict[str, Any] = {"reachable": None, "scope": "unauthenticated"}
+    else:
+        mubit = await tenant.memory.health()
+        mubit["endpoint"] = tenant.mubit_endpoint
+        mubit["org_id"] = tenant.org_id
+    reachable = mubit.get("reachable")
     return {
-        "status": "ok" if mubit.get("reachable") else "degraded",
-        "mubit": {**mubit, "endpoint": settings.mubit_endpoint},
+        "status": "ok" if reachable or reachable is None else "degraded",
+        "mubit": mubit,
+        "multitenant": settings.costit_multitenant,
         "catalog": {
             "version": catalog.version,
             "cost_source": catalog.cost_source,

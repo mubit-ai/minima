@@ -6,8 +6,9 @@ import asyncio
 
 from fastapi import APIRouter, Depends
 
+from costit.api.auth import get_tenant
 from costit.config import Settings
-from costit.deps import get_lane_counter, get_memory, get_recstore, get_settings
+from costit.deps import get_settings
 from costit.logging import get_logger
 from costit.memory.adapter import Memory
 from costit.memory.keys import (
@@ -17,9 +18,9 @@ from costit.memory.keys import (
     outcome_upsert_key,
 )
 from costit.memory.records import OutcomeRecord, quality_from_outcome, signal_from_outcome
-from costit.recommender.recstore import LaneCounter, RecStore
 from costit.schemas.common import OutcomeLabel
 from costit.schemas.feedback import FeedbackRequest, FeedbackResponse
+from costit.tenancy.context import TenantContext
 
 log = get_logger("costit.feedback")
 router = APIRouter(prefix="/v1", tags=["feedback"])
@@ -38,12 +39,13 @@ def _fire_reflect(memory: Memory, lane: str, user_id: str | None) -> None:
 @router.post("/feedback", response_model=FeedbackResponse)
 async def feedback(
     req: FeedbackRequest,
-    memory: Memory = Depends(get_memory),
-    recstore: RecStore = Depends(get_recstore),
-    counter: LaneCounter = Depends(get_lane_counter),
+    tenant: TenantContext = Depends(get_tenant),
     settings: Settings = Depends(get_settings),
 ) -> FeedbackResponse:
-    stored = recstore.get(req.recommendation_id)
+    memory = tenant.memory
+    # Org-scoped store: a recommendation_id minted for another org resolves to None here,
+    # so org A cannot credit or poison org B's recommendation.
+    stored = tenant.recstore.get(req.recommendation_id)
     if stored is None:
         return FeedbackResponse(accepted=False, warnings=["unknown_recommendation"])
 
@@ -144,7 +146,7 @@ async def feedback(
             warnings.append("lesson_promotion_failed")
 
     reflection_triggered = False
-    count = counter.bump(stored.lane)
+    count = tenant.lane_counter.bump(tenant.counter_key(stored.lane))
     every = settings.costit_reflect_every_n
     if (every > 0 and count % every == 0) or (req.verified_in_production and not is_success):
         _fire_reflect(memory, stored.lane, stored.user_id)
