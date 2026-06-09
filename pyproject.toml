@@ -63,6 +63,7 @@ ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/costit/recommender/classify.py" = ["E501"]  # regex pattern tables
+"tests/eval/*" = ["E501", "E702"]  # dense report/format lines + compact numeric loops
 
 [tool.mypy]
 python_version = "3.11"
