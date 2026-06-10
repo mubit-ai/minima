@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mubit-sdk"
+version = "0.10.0"
+description = "Public unified Mubit SDK with one Client facade"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "requests>=2.31",
+  "grpcio>=1.62",
+  "protobuf>=6.33.4"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mubit = ["proto/**/*.proto"]
