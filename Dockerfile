@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 # Copy source, then install the project itself.
+COPY README.md         ./
 COPY src/minima/       ./src/minima/
 COPY client_sdk/minima_client/ ./client_sdk/minima_client/
 RUN --mount=type=cache,target=/root/.cache/uv \
