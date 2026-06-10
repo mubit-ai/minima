@@ -37,9 +37,6 @@ dev = [
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
 
-[tool.uv.sources]
-mubit-sdk = { path = "../ricedb/sdk/python/mubit-sdk", editable = true }
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]
 

@@ -5,12 +5,6 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /build
 
-# pyproject.toml declares: mubit-sdk = { path = "../ricedb/sdk/python/mubit-sdk" }
-# Relative to WORKDIR=/build that resolves to /ricedb/sdk/python/mubit-sdk.
-# In CI the workflow copies the SDK here before running docker build.
-# For local builds: cp -r ../ricedb/sdk/python/mubit-sdk vendor/mubit-sdk
-COPY vendor/mubit-sdk/ /ricedb/sdk/python/mubit-sdk/
-
 # Install dependencies in a separate layer so source changes don't bust the cache.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
