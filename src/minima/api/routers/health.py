@@ -35,7 +35,7 @@ async def health(
     return {
         "status": "ok" if reachable or reachable is None else "degraded",
         "mubit": mubit,
-        "multitenant": settings.minima_multitenant,
+        "auth": "passthrough",
         "catalog": {
             "version": catalog.version,
             "cost_source": catalog.cost_source,

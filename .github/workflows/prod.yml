@@ -1,44 +1,41 @@
 name: Deploy — Production
 
-# Triggered when a GitHub Release is published (i.e. a release tag is created
-# and marked as released — not a draft). The release tag becomes the image tag.
 on:
   release:
     types: [published]
 
-# Never cancel an in-flight prod deployment; queue behind it instead.
 concurrency:
-  group: prod
+  group: deploy-minima-prod
   cancel-in-progress: false
+
+env:
+  PROJECT:      mubit-prod
+  REGION:       europe-west4
+  REGISTRY:     europe-west4-docker.pkg.dev/mubit-prod/minima
+  SERVICE_NAME: minima-prod
+  DOCS_SERVICE: minima-docs-prod
+  RELEASE_TAG:  ${{ github.event.release.tag_name }}
 
 permissions:
   contents: read
   id-token: write
-
-env:
-  GCP_REGION:   ${{ vars.GCP_REGION       || 'europe-west1' }}
-  GAR_REPO:     ${{ vars.GAR_REPOSITORY   || 'minima' }}
-  SERVICE_NAME: ${{ vars.PROD_SERVICE     || 'minima-prod' }}
-  DOCS_SERVICE: ${{ vars.PROD_DOCS_SERVICE || 'minima-docs-prod' }}
-  # The release tag (e.g. v1.2.3) is used as the Docker image tag.
-  RELEASE_TAG:  ${{ github.event.release.tag_name }}
 
 jobs:
 
   # ── 1. Minima service ───────────────────────────────────────────────────────
   deploy-service:
     name: Service → Cloud Run (prod)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-m
 
     steps:
       - name: Checkout minima @ release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
           path: minima
 
       - name: Checkout mubit-sdk from ricedb
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: mubit-ai/ricedb
           path: ricedb
@@ -54,112 +51,106 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ env.PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_PROD_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
       - name: Build and push service image
-        env:
-          IMAGE_BASE: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/minima-service
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --tag  "$IMAGE_BASE:${{ env.RELEASE_TAG }}" \
-            --tag  "$IMAGE_BASE:latest" \
-            --push \
-            --cache-from "type=registry,ref=$IMAGE_BASE:latest" \
-            --cache-to   "type=inline" \
-            minima/
+        uses: docker/build-push-action@v6
+        with:
+          context: ./minima
+          file: ./minima/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/minima-service:${{ env.RELEASE_TAG }}
+            ${{ env.REGISTRY }}/minima-service:latest
+          cache-from: type=gha,scope=minima-service-prod
+          cache-to: type=gha,mode=max,scope=minima-service-prod
 
       - name: Deploy service to Cloud Run (prod)
-        id: deploy-service
-        uses: google-github-actions/deploy-cloudrun@v2
-        with:
-          service: ${{ env.SERVICE_NAME }}
-          image:   ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/minima-service:${{ env.RELEASE_TAG }}
-          region:  ${{ env.GCP_REGION }}
-          # Keep one instance warm in prod; scale higher for traffic spikes.
-          # Authenticated by default — add --allow-unauthenticated if the API
-          # is public and you're not using Cloud Endpoints / API Gateway.
-          flags: >-
-            --min-instances=1
-            --max-instances=20
-            --memory=2Gi
-            --cpu=2
-            --port=8080
-            --allow-unauthenticated
-            --service-account=${{ secrets.GCP_CLOUD_RUN_SA }}
-          env_vars: |
-            MUBIT_TRANSPORT=http
-            MINIMA_LOG_LEVEL=info
-            MINIMA_RECOMMENDATION_STORE=sqlite
-            MINIMA_SQLITE_PATH=/tmp/minima_state.db
-            MINIMA_TENANT_STORE_PATH=/tmp/minima_tenants.db
-          # Separate Secret Manager secrets for prod (different values/rotation
-          # schedule from staging).
-          secrets: |
-            MUBIT_API_KEY=minima-prod-mubit-api-key:latest
-            MUBIT_ENDPOINT=minima-prod-mubit-endpoint:latest
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ env.REGISTRY }}/minima-service:${{ env.RELEASE_TAG }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --port 8080 \
+            --cpu 2 \
+            --memory 2Gi \
+            --min-instances 1 \
+            --max-instances 20 \
+            --allow-unauthenticated \
+            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }} \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=sqlite,MINIMA_SQLITE_PATH=/tmp/minima_state.db,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
+            --set-secrets="GEMINI_API_KEY=minima-prod-gemini-key:latest,ANTHROPIC_API_KEY=minima-prod-anthropic-key:latest,OPENROUTER_API_KEY=minima-prod-openrouter-key:latest" \
+            --quiet
 
       - name: Print service URL
-        run: echo "Service deployed → ${{ steps.deploy-service.outputs.url }}"
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          echo "::notice::Minima service (prod) deployed to: $URL"
 
   # ── 2. Docs site ────────────────────────────────────────────────────────────
   deploy-docs:
     name: Docs → Cloud Run (prod)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-m
 
     steps:
       - name: Checkout minima @ release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ env.PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_PROD_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
       - name: Build and push docs image
-        env:
-          IMAGE_BASE: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/minima-docs
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --tag  "$IMAGE_BASE:${{ env.RELEASE_TAG }}" \
-            --tag  "$IMAGE_BASE:latest" \
-            --push \
-            --cache-from "type=registry,ref=$IMAGE_BASE:latest" \
-            --cache-to   "type=inline" \
-            docs-site/
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docs-site
+          file: ./docs-site/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/minima-docs:${{ env.RELEASE_TAG }}
+            ${{ env.REGISTRY }}/minima-docs:latest
+          cache-from: type=gha,scope=minima-docs-prod
+          cache-to: type=gha,mode=max,scope=minima-docs-prod
 
       - name: Deploy docs to Cloud Run (prod)
-        id: deploy-docs
-        uses: google-github-actions/deploy-cloudrun@v2
-        with:
-          service: ${{ env.DOCS_SERVICE }}
-          image:   ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/minima-docs:${{ env.RELEASE_TAG }}
-          region:  ${{ env.GCP_REGION }}
-          flags: >-
-            --min-instances=1
-            --max-instances=5
-            --memory=256Mi
-            --cpu=1
-            --port=8080
-            --allow-unauthenticated
-            --service-account=${{ secrets.GCP_CLOUD_RUN_SA }}
+        run: |
+          gcloud run deploy ${{ env.DOCS_SERVICE }} \
+            --image ${{ env.REGISTRY }}/minima-docs:${{ env.RELEASE_TAG }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --port 8080 \
+            --cpu 1 \
+            --memory 256Mi \
+            --min-instances 1 \
+            --max-instances 5 \
+            --allow-unauthenticated \
+            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }} \
+            --quiet
 
       - name: Print docs URL
-        run: echo "Docs deployed → ${{ steps.deploy-docs.outputs.url }}"
+        run: |
+          URL=$(gcloud run services describe ${{ env.DOCS_SERVICE }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          echo "::notice::Minima docs (prod) deployed to: $URL"
