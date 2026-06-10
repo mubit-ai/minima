@@ -20,20 +20,20 @@ Both `MinimaClient` (sync) and `AsyncMinimaClient` (async) share the same surfac
 ```python
 from minima_client import MinimaClient
 
-with MinimaClient("https://api.minima.sh", api_key="mnim_…", timeout=10.0) as minima:
+with MinimaClient("https://api.minima.sh", api_key="mbt_…", timeout=10.0) as minima:
     rec = minima.recommend("Summarize this incident report into 3 bullets.",
                            cost_quality_tradeoff=3)
     print(rec.recommended_model.model_id)
 ```
 
 - `base_url` — the Minima API base URL (`https://api.minima.sh`).
-- `api_key` — your Minima key, sent as `Authorization: Bearer <key>`. Required.
+- `api_key` — your **Mubit** API key (`mbt_…`), sent as `Authorization: Bearer <key>` and passed through to Mubit. Required.
 - `timeout` — HTTP timeout in seconds.
 
 The async client mirrors every method with `await`; use it inside FastAPI/async apps:
 
 ```python
-async with AsyncMinimaClient("https://api.minima.sh", api_key="mnim_…") as minima:
+async with AsyncMinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     rec = await minima.recommend(task)
 ```
 
