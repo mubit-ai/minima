@@ -442,64 +442,6 @@ wheels = [
 ]
 
 [[package]]
-name = "costit"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "anyio" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "mubit-sdk" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "structlog" },
-    { name = "tenacity" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "respx" },
-    { name = "ruff" },
-]
-reasoner-anthropic = [
-    { name = "anthropic" },
-]
-reasoner-gemini = [
-    { name = "google-genai" },
-]
-seed = [
-    { name = "datasets" },
-    { name = "huggingface-hub" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'reasoner-anthropic'", specifier = ">=0.40" },
-    { name = "anyio", specifier = ">=4.4" },
-    { name = "datasets", marker = "extra == 'seed'", specifier = ">=2.20" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "google-genai", marker = "extra == 'reasoner-gemini'", specifier = ">=0.3" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
-    { name = "mubit-sdk", editable = "../ricedb/sdk/python/mubit-sdk" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pydantic-settings", specifier = ">=2.3" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "structlog", specifier = ">=24.1" },
-    { name = "tenacity", specifier = ">=8.4" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
-]
-provides-extras = ["reasoner-anthropic", "reasoner-gemini", "seed", "dev"]
-
-[[package]]
 name = "cryptography"
 version = "48.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1180,20 +1122,75 @@ wheels = [
 ]
 
 [[package]]
+name = "minima"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "anyio" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "mubit-sdk" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "structlog" },
+    { name = "tenacity" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+reasoner-anthropic = [
+    { name = "anthropic" },
+]
+reasoner-gemini = [
+    { name = "google-genai" },
+]
+seed = [
+    { name = "datasets" },
+    { name = "huggingface-hub" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'reasoner-anthropic'", specifier = ">=0.40" },
+    { name = "anyio", specifier = ">=4.4" },
+    { name = "datasets", marker = "extra == 'seed'", specifier = ">=2.20" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "google-genai", marker = "extra == 'reasoner-gemini'", specifier = ">=0.3" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
+    { name = "mubit-sdk", specifier = ">=0.10.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pydantic-settings", specifier = ">=2.3" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "structlog", specifier = ">=24.1" },
+    { name = "tenacity", specifier = ">=8.4" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+provides-extras = ["reasoner-anthropic", "reasoner-gemini", "seed", "dev"]
+
+[[package]]
 name = "mubit-sdk"
 version = "0.10.0"
-source = { editable = "../ricedb/sdk/python/mubit-sdk" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "requests" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "grpcio", specifier = ">=1.62" },
-    { name = "protobuf", specifier = ">=6.33.4" },
-    { name = "requests", specifier = ">=2.31" },
+sdist = { url = "https://files.pythonhosted.org/packages/dc/3d/ee6f95060e8715913c554a9b532ea05a3a0ae6fa89c069ff1e4b2db68d9f/mubit_sdk-0.10.0.tar.gz", hash = "sha256:b66d59e8d1a4df01181ee8927c3431080d7d14273bae700880fc4ce963cfe869", size = 109876, upload-time = "2026-06-05T13:26:44.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/e3/abfa5afd066fed654598210170ecbb70e8bfbd25ddb3e5211afa96f56b7e/mubit_sdk-0.10.0-py3-none-any.whl", hash = "sha256:69778ea8456a2d9efbff8bb73d69b7fa524d9871d17202db06c50919272485f3", size = 124467, upload-time = "2026-06-05T13:26:43.772Z" },
 ]
 
 [[package]]

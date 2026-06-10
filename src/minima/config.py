@@ -107,20 +107,8 @@ class Settings(BaseSettings):
     minima_sqlite_path: str = "minima_state.db"  # durable recstore + propensity backing file
 
     # --- Multi-tenancy (T3: hosted, per-org Mubit instance) ---
-    # OFF by default => single-tenant: the env Mubit key above is the one "default" org
-    # (this is also the self-hosted/T1 mode). ON => each org provides its own Mubit
-    # instance once at onboarding; a Minima-issued key (mnim_<org>_<keyid>_<secret>)
-    # resolves server-side to that instance. The org's Mubit key is never sent per call.
-    minima_multitenant: bool = False
-    # Admin credential used ONLY to mint/manage tenant keys (sent as X-Minima-Provisioning-Key).
-    # Never handed to callers. Required for the /v1/admin/tenants endpoints to be usable.
-    minima_provisioning_key: str | None = None
-    minima_tenant_store: str = "memory"  # memory | sqlite
-    minima_tenant_store_path: str = "minima_tenants.db"
-    # Optional JSON file ([{org_id, mubit_endpoint, mubit_api_key_ref, ...}]) to seed the
-    # in-memory tenant store at startup (dev/bootstrap; production should provision via API).
-    minima_tenant_bootstrap_file: str | None = None
-    minima_default_org_id: str = "default"  # org id used for single-tenant state partitioning
+    # org id used for state partitioning (recstore / propensity) in single-key mode
+    minima_default_org_id: str = "default"
 
     @property
     def reasoner_enabled(self) -> bool:

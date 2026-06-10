@@ -1,8 +1,8 @@
-"""Unit tests for the multi-tenancy primitives: keys, secrets, registry, org-scoping."""
+"""Unit tests for pass-through tenancy: PassthroughRuntime and org-scoped state."""
 
 from __future__ import annotations
 
-import pytest
+from unittest.mock import MagicMock, patch
 
 from minima.recommender.propensity import OrgScopedPropensity, PropensityTracker
 from minima.recommender.recstore import (
@@ -10,14 +10,7 @@ from minima.recommender.recstore import (
     RecommendationStore,
     StoredRecommendation,
 )
-from minima.tenancy.keys import (
-    generate_minima_key,
-    normalize_org_id,
-    parse_minima_key,
-    verify_secret,
-)
-from minima.tenancy.registry import InMemoryTenantStore, TenantRecord
-from minima.tenancy.secrets import SecretResolver
+from minima.tenancy.passthrough import PassthroughRuntime, _org_id
 
 
 def _rec(rec_id: str = "r1") -> StoredRecommendation:
@@ -35,78 +28,65 @@ def _rec(rec_id: str = "r1") -> StoredRecommendation:
     )
 
 
-# ---- keys -------------------------------------------------------------------
+# ---- org_id derivation ------------------------------------------------------
 
 
-def test_minima_key_roundtrip_and_verify():
-    key_id, secret_hash, full = generate_minima_key("acme")
-    parsed = parse_minima_key(full)
-    assert parsed is not None
-    org, parsed_key_id, secret = parsed
-    assert org == "acme"
-    assert parsed_key_id == key_id
-    assert verify_secret(secret, secret_hash)
-    assert not verify_secret(secret + "x", secret_hash)
+def test_org_id_parses_mbt_instance_tag():
+    assert _org_id("mbt_myinstance_kid_secret") == "myinstance"
 
 
-def test_minima_key_secret_may_contain_underscores():
-    # token_urlsafe can include '_' / '-'; the secret is everything after the 3rd '_'.
-    _kid, _h, full = generate_minima_key("globex")
-    org, _key_id, secret = parse_minima_key(full)  # type: ignore[misc]
-    assert org == "globex"
-    assert full.endswith(secret)
+def test_org_id_falls_back_to_hash_for_unknown_format():
+    result = _org_id("some-opaque-key")
+    assert len(result) == 16
+    assert result == _org_id("some-opaque-key")  # stable
 
 
-@pytest.mark.parametrize("bad", ["", "nope", "mbt_x_y_z", "mnim_acme_only", "mnim__k_s"])
-def test_parse_rejects_malformed(bad: str):
-    assert parse_minima_key(bad) is None
+def test_org_id_stable_across_calls():
+    key = "mbt_acme_abc_xyz"
+    assert _org_id(key) == _org_id(key)
 
 
-@pytest.mark.parametrize("bad", ["", "-acme", "ACME!", "a" * 64])
-def test_normalize_org_id_rejects_bad(bad: str):
-    with pytest.raises(ValueError):
-        normalize_org_id(bad)
+# ---- PassthroughRuntime caching ---------------------------------------------
 
 
-def test_normalize_org_id_lowercases():
-    assert normalize_org_id("Acme-1") == "acme-1"
+def _make_runtime():
+    from minima.config import Settings
+    from minima.recommender.propensity import build_propensity
+    from minima.recommender.recstore import LaneCounter, build_recstore
+
+    settings = Settings(mubit_api_key=None, minima_reasoner_provider="none")
+    catalog_store = MagicMock()
+
+    with patch("minima.tenancy.passthrough.MubitMemory"), \
+         patch("minima.tenancy.passthrough.Recommender"):
+        rt = PassthroughRuntime(
+            settings=settings,
+            catalog_store=catalog_store,
+            reasoner=None,
+            recstore_backend=build_recstore(settings),
+            propensity_backend=build_propensity(settings),
+            lane_counter=LaneCounter(),
+        )
+    return rt
 
 
-# ---- secrets ----------------------------------------------------------------
+def test_passthrough_same_key_returns_cached_context():
+    rt = _make_runtime()
+    with patch("minima.tenancy.passthrough.MubitMemory"), \
+         patch("minima.tenancy.passthrough.Recommender"):
+        ctx1 = rt.resolve("mbt_acme_k_s")
+        ctx2 = rt.resolve("mbt_acme_k_s")
+    assert ctx1 is ctx2
 
 
-def test_secret_resolver_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MUBIT_KEY_ACME", "mbt_secret")
-    assert SecretResolver().resolve("env:MUBIT_KEY_ACME") == "mbt_secret"
-    assert SecretResolver().resolve("env:MISSING_VAR") is None
-
-
-def test_secret_resolver_inline_and_bare():
-    r = SecretResolver()
-    assert r.resolve("inline:abc") == "abc"
-    assert r.resolve("barevalue") == "barevalue"
-    assert r.resolve(None) is None
-    assert r.resolve("  ") is None
-
-
-# ---- registry ---------------------------------------------------------------
-
-
-def test_inmemory_registry_crud():
-    store = InMemoryTenantStore()
-    rec = TenantRecord(
-        org_id="acme",
-        mubit_endpoint="http://acme:3000",
-        mubit_api_key_ref="env:K",
-        key_id="kid",
-        secret_hash="h",
-    )
-    store.put(rec)
-    assert store.get("acme") is rec
-    assert [r.org_id for r in store.list()] == ["acme"]
-    assert store.delete("acme") is True
-    assert store.get("acme") is None
-    assert store.delete("acme") is False
+def test_passthrough_different_keys_return_different_contexts():
+    rt = _make_runtime()
+    with patch("minima.tenancy.passthrough.MubitMemory"), \
+         patch("minima.tenancy.passthrough.Recommender"):
+        ctx1 = rt.resolve("mbt_acme_k_s")
+        ctx2 = rt.resolve("mbt_globex_k_s")
+    assert ctx1 is not ctx2
+    assert ctx1.org_id != ctx2.org_id
 
 
 # ---- org-scoped state isolation --------------------------------------------
@@ -117,7 +97,6 @@ def test_org_scoped_recstore_isolates_by_org():
     a = OrgScopedRecStore(backend, "acme")
     b = OrgScopedRecStore(backend, "globex")
     a.put(_rec("shared-id"))
-    # acme can resolve its own recommendation; globex cannot (cross-org guard).
     assert a.get("shared-id") is not None
     assert a.get("shared-id").org_id == "acme"  # type: ignore[union-attr]
     assert b.get("shared-id") is None
@@ -129,7 +108,6 @@ def test_org_scoped_propensity_isolates_by_org():
     b = OrgScopedPropensity(backend, "globex")
     for _ in range(5):
         a.record("minima:default", "qa:easy", "m1")
-    # acme's recommendations skew its own propensity; globex is unaffected (uniform).
     a_p = a.propensities("minima:default", "qa:easy", ["m1", "m2"])
     b_p = b.propensities("minima:default", "qa:easy", ["m1", "m2"])
     assert a_p["m1"] > a_p["m2"]
