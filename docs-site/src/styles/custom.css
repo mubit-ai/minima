@@ -1,74 +1,100 @@
-/* Minima brand — orange-red accent on white, matching minima.sh */
+/* Minima brand theme — modeled on minima.sh.
+ *
+ * Starlight color tokens are SEMANTIC, not literal:
+ *   --sl-color-white  = highest-contrast TEXT  (near-black in light, warm-white in dark)
+ *   --sl-color-black  = page BACKGROUND        (white in light, deep charcoal in dark)
+ *   --sl-color-gray-1 .. gray-7 = text→surface ramp; it INVERTS between themes
+ *     (gray-1 is the darkest in light mode and the lightest in dark mode).
+ * Getting that inversion wrong makes body text render at the same luminance as the
+ * background — which is why the previous theme was unreadable. */
 
+/* ── Light theme — white page, bold near-black text, warm neutral grays ─────── */
 :root,
 ::backdrop {
-  /* Main accent: orange-red from the landing page hero and CTAs */
-  --sl-color-accent-low: #fef0eb;
+  --sl-color-white: #18181b; /* headings / highest-contrast text */
+  --sl-color-gray-1: #27272a; /* strong body text */
+  --sl-color-gray-2: #3f3f44; /* body text */
+  --sl-color-gray-3: #6b6b70; /* muted / captions */
+  --sl-color-gray-4: #909094; /* placeholder / icons */
+  --sl-color-gray-5: #d0cfca; /* borders / dividers */
+  --sl-color-gray-6: #eeeeec; /* subtle surface (cards, table head) */
+  --sl-color-gray-7: #f7f7f6; /* faintest surface */
+  --sl-color-black: #ffffff; /* page background */
+
+  /* Orange-red accent from the landing-page hero, CTAs and "80%". */
+  --sl-color-accent-low: #fde8e2;
   --sl-color-accent: #e84524;
-  --sl-color-accent-high: #c03618;
+  --sl-color-accent-high: #b8330f; /* darker shade for accent text on white */
 
-  /* Keep text crisp on the white background */
-  --sl-color-white: #ffffff;
-  --sl-color-gray-1: #f7f7f6;
-  --sl-color-gray-2: #eeeeec;
-  --sl-color-gray-3: #c5c5c2;
-  --sl-color-gray-4: #8e8e8b;
-  --sl-color-gray-5: #6b6b68;
-  --sl-color-gray-6: #424240;
-  --sl-color-black: #1a1a18;
-}
-
-:root[data-theme='dark'],
-[data-theme='dark'] ::backdrop {
-  /* Dark mode: deep charcoal base, warm orange-red accent */
-  --sl-color-accent-low: #3d1007;
-  --sl-color-accent: #f0703a;
-  --sl-color-accent-high: #fdb79a;
-
-  --sl-color-gray-1: #1c1c1a;
-  --sl-color-gray-2: #252522;
-  --sl-color-gray-3: #46463f;
-  --sl-color-gray-4: #6b6b62;
-  --sl-color-gray-5: #929288;
-  --sl-color-gray-6: #c8c8be;
-  --sl-color-white: #f4f4f0;
-}
-
-/* Tighten the header logo area */
-.site-title {
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-/* Accent the active sidebar item with the brand color */
-[data-theme='light'] a[aria-current='page'] {
-  color: var(--sl-color-accent);
-  background-color: var(--sl-color-accent-low);
-}
-
-/* Brand the inline code highlights slightly */
-:root {
-  --sl-color-bg-inline-code: #fef6f3;
+  --sl-color-bg-inline-code: #fbeee9;
   --sl-color-text-accent: var(--sl-color-accent);
 }
 
-:root[data-theme='dark'] {
+/* ── Dark theme — deep warm charcoal page, warm off-white text ──────────────── */
+:root[data-theme='dark'],
+[data-theme='dark'] ::backdrop {
+  --sl-color-white: #f7f6f3; /* headings / highest-contrast text */
+  --sl-color-gray-1: #e9e8e3; /* strong body text */
+  --sl-color-gray-2: #c6c5be; /* body text */
+  --sl-color-gray-3: #a0a09a; /* muted / captions */
+  --sl-color-gray-4: #6e6e68; /* placeholder / icons */
+  --sl-color-gray-5: #46453f; /* borders / dividers */
+  --sl-color-gray-6: #2a2a27; /* subtle surface (cards, table head) */
+  --sl-color-gray-7: #1f1f1d; /* faintest surface / code frame */
+  --sl-color-black: #161614; /* page background */
+
+  /* Brighter orange so it pops against the dark page. */
+  --sl-color-accent-low: #3a1206;
+  --sl-color-accent: #f0703a;
+  --sl-color-accent-high: #fcb89c;
+
   --sl-color-bg-inline-code: #2a1209;
 }
 
-/* The hero "tagline" on the index page */
+/* ── Typography — match the landing page's tight, bold sans headings ────────── */
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+.content-panel h1,
+.hero h1 {
+  font-weight: 800;
+}
+
+/* Active sidebar entry as a solid accent pill (echoes the orange CTA button). */
+a[aria-current='page'],
+a[aria-current='page']:hover,
+a[aria-current='page']:focus {
+  color: var(--sl-color-white);
+  background-color: var(--sl-color-accent);
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] a[aria-current='page'] {
+  color: #161614; /* dark text reads better on the brighter dark-mode orange */
+}
+
+/* The hero tagline on the splash page. */
 .hero .tagline {
-  font-size: var(--sl-text-xl);
-  color: var(--sl-color-gray-5);
-  max-width: 48ch;
+  font-size: var(--sl-text-lg);
+  color: var(--sl-color-gray-2);
+  max-width: 52ch;
 }
 
-/* Slightly warmer table headers */
+/* Warmer, subtle table headers. */
 thead th {
-  background-color: var(--sl-color-gray-1);
+  background-color: var(--sl-color-gray-6);
 }
 
-/* Keep kbd / code blocks tight */
-code, kbd {
+/* Keep inline code / kbd tight. */
+code,
+kbd {
   font-size: 0.875em;
 }

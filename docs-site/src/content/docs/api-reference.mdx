@@ -7,14 +7,19 @@ sidebar:
 
 import { Aside, Badge } from '@astrojs/starlight/components';
 
-Base path: `/v1`. All request and response bodies are JSON. Interactive OpenAPI docs are served at `/docs` when the service is running.
+Base URL: `https://api.minima.sh`. Base path: `/v1`. All request and response bodies are JSON. Interactive OpenAPI docs are served at [`https://api.minima.sh/docs`](https://api.minima.sh/docs).
 
 ## Authentication
 
-- **Single-tenant mode** (`MINIMA_MULTITENANT=false`, the default): no caller credential is required. Every request maps to the one org configured by the env Mubit key. Any `Authorization` header is ignored.
-- **Multi-tenant mode** (`MINIMA_MULTITENANT=true`): callers must present `Authorization: Bearer mnim_<org>_<keyid>_<secret>`, which resolves server-side to that org's own Mubit instance. A missing or invalid key returns `401`. Admin/provisioning endpoints are guarded separately by the `X-Minima-Provisioning-Key` header. See [Multi-Tenancy](/multi-tenancy/).
+Every request must present your Minima API key as a bearer token:
 
-`user_id` and `namespace` are **within-org** scoping fields, not auth boundaries. The tenant boundary is the Minima key → a Mubit instance.
+```
+Authorization: Bearer mnim_<account>_<keyid>_<secret>
+```
+
+A missing or invalid key returns `401`. Your key is your account boundary — it scopes all recall, learning, and stored history. `GET /v1/health` is the only endpoint that works without a key (it returns service liveness only).
+
+`user_id` and `namespace` are **within-account** scoping fields, not auth boundaries — use them to partition recall and learning across teams, projects, or environments inside your account.
 
 ## Errors
 
@@ -28,10 +33,7 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 | Status | Title | When |
 |--------|-------|------|
 | `400` | Invalid request | Request body fails validation. |
-| `401` | Unauthorized | Multi-tenant: missing/invalid Minima key. |
-| `403` | Forbidden | Admin endpoint: invalid/missing provisioning key. |
-| `404` | Not Found | Admin endpoint called while multi-tenancy is disabled. |
-| `409` | Conflict | Provisioning an `org_id` that already exists. |
+| `401` | Unauthorized | Missing or invalid Minima key. |
 | `422` | No candidate models | Constraints eliminated every catalog model. |
 
 <Aside type="note">
@@ -51,8 +53,8 @@ Recommend a model for a single task.
 | `task` | `TaskInput` | required | The task to route (see below). |
 | `cost_quality_tradeoff` | float `0–10` | `5.0` | 0 = cheapest acceptable, 10 = highest quality. Sets the quality threshold `τ`. |
 | `constraints` | `Constraints` | `{}` | Hard limits on the candidate set (see below). |
-| `user_id` | string \| null | `null` | Within-org actor label. Scopes recall. |
-| `namespace` | string \| null | `null` | Within-org sub-scope. Maps to lane `minima:<namespace>`. |
+| `user_id` | string \| null | `null` | Within-account actor label. Scopes recall. |
+| `namespace` | string \| null | `null` | Within-account sub-scope (team / project / environment). Isolates recall and learning. |
 | `max_candidates` | int `1–64` | `8` | Cap on candidates considered. |
 | `allow_llm_escalation` | bool | `true` | Allow the cheap-LLM reasoner when evidence is thin. |
 | `explain` | bool | `true` | Include `evidence[]` refs on each ranked model. |
@@ -64,7 +66,7 @@ Recommend a model for a single task.
 | `task` | string | required | Raw task/prompt text; embedded by Mubit for recall. |
 | `task_type` | enum \| null | `null` | `code` \| `summarization` \| `extraction` \| `qa` \| `reasoning` \| `classification` \| `translation` \| `creative` \| `rag` \| `tool_use` \| `other`. Heuristic-classified if omitted. |
 | `difficulty` | enum \| null | `null` | `trivial` \| `easy` \| `medium` \| `hard` \| `expert`. |
-| `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `MINIMA_DEFAULT_INPUT_TOKENS`. |
+| `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; a per-task-type default is used if omitted. |
 | `expected_output_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate. |
 | `tags` | string[] | `[]` | Propagated to Mubit `env_tags` (e.g. `lang:python`) for version-aware recall. |
 
@@ -146,7 +148,9 @@ Recommend a model for a single task.
 ### Example
 
 ```bash
-curl -s http://localhost:8080/v1/recommend -H 'content-type: application/json' -d '{
+curl -s https://api.minima.sh/v1/recommend \
+  -H "authorization: Bearer $MINIMA_KEY" \
+  -H 'content-type: application/json' -d '{
   "task": {"task": "Write a Python function that merges k sorted linked lists.",
            "task_type": "code", "difficulty": "hard",
            "expected_input_tokens": 180, "expected_output_tokens": 600,
@@ -193,7 +197,7 @@ Recommend a model for each step of a multi-step workflow. Each step runs the sam
 | `total_est_cost_if_all_premium` | float | Sum if each step used its most expensive candidate — the savings baseline. |
 | `confidence` | float `0–1` | Mean step confidence. |
 
-See [`examples/04_workflow.py`](https://github.com/mubit-ai/minima/blob/main/examples/04_workflow.py).
+See the [multi-step workflow example](/examples/#4-multi-step-workflow).
 
 ---
 
@@ -232,7 +236,9 @@ Report an outcome and close the learning loop. This reinforces the memories that
 ### Example
 
 ```bash
-curl -s http://localhost:8080/v1/feedback -H 'content-type: application/json' -d '{
+curl -s https://api.minima.sh/v1/feedback \
+  -H "authorization: Bearer $MINIMA_KEY" \
+  -H 'content-type: application/json' -d '{
   "recommendation_id": "…",
   "chosen_model_id": "claude-haiku-4-5",
   "outcome": "success",
@@ -273,7 +279,7 @@ Surfaces the rules Mubit has promoted for a namespace — the "why" behind routi
 
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
-| `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
+| `namespace` | string | — | Within-account sub-scope to read strategies for. |
 | `lesson_types` | string[] | — | Filter by lesson type. |
 | `max_strategies` | int `1–50` | `5` | |
 
@@ -285,28 +291,15 @@ Surfaces the rules Mubit has promoted for a namespace — the "why" behind routi
 
 ## `GET /v1/health`
 
-Always returns `200`; reports degraded state in the body. Never requires auth.
+Always returns `200`; reports degraded state in the body. The only endpoint that doesn't require a key (an unauthenticated probe gets service liveness; a key-bearing probe additionally confirms your account's memory reachability).
 
 ```json
 {
   "status": "ok",
-  "mubit": {"reachable": true, "transport": "http", "latency_ms": 12,
-            "endpoint": "http://127.0.0.1:3000", "org_id": "default"},
-  "multitenant": false,
-  "catalog": {"version": "…", "cost_source": "litellm+openrouter", "stale": false, "models": 42},
-  "reasoner": {"provider": "none", "configured": false},
+  "memory": {"reachable": true, "latency_ms": 12},
+  "catalog": {"version": "…", "stale": false, "models": 42},
   "version": "0.1.0"
 }
 ```
 
-`status` is `degraded` when Mubit is unreachable. In that state `/recommend` still serves prior-only recommendations.
-
----
-
-## `POST|GET|DELETE /v1/admin/tenants` <Badge text="multi-tenant" variant="caution" />
-
-Tenant provisioning. **Multi-tenant mode only** (returns `404` otherwise), guarded by the `X-Minima-Provisioning-Key` header. Full details and schemas in [Multi-Tenancy](/multi-tenancy/).
-
-- `POST /v1/admin/tenants` — mint a new org + Minima key (the key is shown **once**).
-- `GET /v1/admin/tenants` — list orgs (summaries only; no secrets).
-- `DELETE /v1/admin/tenants/{org_id}` — revoke an org.
+`status` is `degraded` when the memory backend is unreachable. In that state `/recommend` still serves prior-only recommendations.
