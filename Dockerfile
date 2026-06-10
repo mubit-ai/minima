@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 # ── builder ───────────────────────────────────────────────────────────────────
-# uv's official image ships uv + Python 3.13 together.
+# Use /app as WORKDIR so venv shebangs resolve correctly in the runtime stage.
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
-WORKDIR /build
+WORKDIR /app
 
 # Install dependencies in a separate layer so source changes don't bust the cache.
 COPY pyproject.toml uv.lock ./
@@ -25,9 +25,9 @@ WORKDIR /app
 # Non-root user for defence-in-depth.
 RUN addgroup --system minima && adduser --system --ingroup minima --no-create-home minima
 
-COPY --from=builder --chown=minima:minima /build/.venv        /app/.venv
-COPY --from=builder --chown=minima:minima /build/src          /app/src
-COPY --from=builder --chown=minima:minima /build/client_sdk   /app/client_sdk
+COPY --from=builder --chown=minima:minima /app/.venv        /app/.venv
+COPY --from=builder --chown=minima:minima /app/src          /app/src
+COPY --from=builder --chown=minima:minima /app/client_sdk   /app/client_sdk
 
 USER minima
 
