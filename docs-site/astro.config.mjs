@@ -11,13 +11,6 @@ export default defineConfig({
         src: './src/assets/logo.svg',
         replacesTitle: false,
       },
-      social: [
-        {
-          icon: 'github',
-          label: 'GitHub',
-          href: 'https://github.com/mubit-ai/minima',
-        },
-      ],
       customCss: ['./src/styles/custom.css'],
       favicon: '/favicon.svg',
       head: [
@@ -38,18 +31,12 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'API Reference', slug: 'api-reference' },
-            { label: 'Configuration', slug: 'configuration' },
             { label: 'Python Client SDK', slug: 'client-sdk' },
           ],
         },
         {
           label: 'Guides',
-          items: [
-            { label: 'Cold-Start Seeding', slug: 'seeding' },
-            { label: 'Multi-Tenancy', slug: 'multi-tenancy' },
-            { label: 'Operations', slug: 'operations' },
-            { label: 'Examples', slug: 'examples' },
-          ],
+          items: [{ label: 'Examples', slug: 'examples' }],
         },
       ],
     }),
