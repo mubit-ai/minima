@@ -11,15 +11,15 @@ Base URL: `https://api.minima.sh`. Base path: `/v1`. All request and response bo
 
 ## Authentication
 
-Every request must present your Minima API key as a bearer token:
+Minima uses **pass-through auth**: present your own **Mubit API key** as a bearer token. There is no separate Minima key — Minima forwards the key to Mubit to read and write your `task → model → outcome` history on your behalf.
 
 ```
-Authorization: Bearer mnim_<account>_<keyid>_<secret>
+Authorization: Bearer mbt_<instance>_<keyid>_<secret>
 ```
 
-A missing or invalid key returns `401`. Your key is your account boundary — it scopes all recall, learning, and stored history. `GET /v1/health` is the only endpoint that works without a key (it returns service liveness only).
+A missing or invalid key returns `401`. Your Mubit key determines which Mubit instance Minima reads and writes — it's your data boundary. `GET /v1/health` is the only endpoint that works without a key (it returns service liveness only).
 
-`user_id` and `namespace` are **within-account** scoping fields, not auth boundaries — use them to partition recall and learning across teams, projects, or environments inside your account.
+`user_id` and `namespace` are scoping fields **within your Mubit instance**, not auth boundaries — use them to partition recall and learning across teams, projects, or environments.
 
 ## Errors
 
@@ -33,11 +33,11 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 | Status | Title | When |
 |--------|-------|------|
 | `400` | Invalid request | Request body fails validation. |
-| `401` | Unauthorized | Missing or invalid Minima key. |
+| `401` | Unauthorized | Missing or invalid Mubit key. |
 | `422` | No candidate models | Constraints eliminated every catalog model. |
 
 <Aside type="note">
-`POST /v1/feedback` does **not** error on an unknown `recommendation_id`. It returns `200` with `accepted: false` and an `unknown_recommendation` warning, so retried or cross-org feedback fails safely.
+`POST /v1/feedback` does **not** error on an unknown `recommendation_id`. It returns `200` with `accepted: false` and an `unknown_recommendation` warning, so retried or cross-instance feedback fails safely.
 </Aside>
 
 ---
@@ -149,7 +149,7 @@ Recommend a model for a single task.
 
 ```bash
 curl -s https://api.minima.sh/v1/recommend \
-  -H "authorization: Bearer $MINIMA_KEY" \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
   -H 'content-type: application/json' -d '{
   "task": {"task": "Write a Python function that merges k sorted linked lists.",
            "task_type": "code", "difficulty": "hard",
@@ -237,7 +237,7 @@ Report an outcome and close the learning loop. This reinforces the memories that
 
 ```bash
 curl -s https://api.minima.sh/v1/feedback \
-  -H "authorization: Bearer $MINIMA_KEY" \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
   -H 'content-type: application/json' -d '{
   "recommendation_id": "…",
   "chosen_model_id": "claude-haiku-4-5",
