@@ -1165,7 +1165,7 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'reasoner-gemini'", specifier = ">=0.3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
-    { name = "mubit-sdk", editable = "../ricedb/sdk/python/mubit-sdk" },
+    { name = "mubit-sdk", specifier = ">=0.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
@@ -1182,18 +1182,15 @@ provides-extras = ["reasoner-anthropic", "reasoner-gemini", "seed", "dev"]
 [[package]]
 name = "mubit-sdk"
 version = "0.10.0"
-source = { editable = "../ricedb/sdk/python/mubit-sdk" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "requests" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "grpcio", specifier = ">=1.62" },
-    { name = "protobuf", specifier = ">=6.33.4" },
-    { name = "requests", specifier = ">=2.31" },
+sdist = { url = "https://files.pythonhosted.org/packages/dc/3d/ee6f95060e8715913c554a9b532ea05a3a0ae6fa89c069ff1e4b2db68d9f/mubit_sdk-0.10.0.tar.gz", hash = "sha256:b66d59e8d1a4df01181ee8927c3431080d7d14273bae700880fc4ce963cfe869", size = 109876, upload-time = "2026-06-05T13:26:44.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/e3/abfa5afd066fed654598210170ecbb70e8bfbd25ddb3e5211afa96f56b7e/mubit_sdk-0.10.0-py3-none-any.whl", hash = "sha256:69778ea8456a2d9efbff8bb73d69b7fa524d9871d17202db06c50919272485f3", size = 124467, upload-time = "2026-06-05T13:26:43.772Z" },
 ]
 
 [[package]]

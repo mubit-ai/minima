@@ -28,32 +28,17 @@ jobs:
     runs-on: ubuntu-latest-m
 
     steps:
-      - name: Checkout minima @ release tag
+      - name: Checkout @ release tag
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
-          path: minima
-
-      - name: Checkout mubit-sdk from ricedb
-        uses: actions/checkout@v5
-        with:
-          repository: mubit-ai/ricedb
-          path: ricedb
-          token: ${{ secrets.GH_PAT }}
-          sparse-checkout: sdk/python/mubit-sdk
-          sparse-checkout-cone-mode: false
-
-      - name: Vendor mubit-sdk into build context
-        run: |
-          mkdir -p minima/vendor
-          cp -r ricedb/sdk/python/mubit-sdk minima/vendor/mubit-sdk
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           project_id: ${{ env.PROJECT }}
           workload_identity_provider: ${{ secrets.GCP_PROD_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }}
+          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA }}
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
@@ -64,8 +49,8 @@ jobs:
       - name: Build and push service image
         uses: docker/build-push-action@v6
         with:
-          context: ./minima
-          file: ./minima/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/minima-service:${{ env.RELEASE_TAG }}
@@ -85,7 +70,7 @@ jobs:
             --min-instances 1 \
             --max-instances 20 \
             --allow-unauthenticated \
-            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }} \
+            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA }} \
             --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=sqlite,MINIMA_SQLITE_PATH=/tmp/minima_state.db,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
             --set-secrets="GEMINI_API_KEY=minima-prod-gemini-key:latest,ANTHROPIC_API_KEY=minima-prod-anthropic-key:latest,OPENROUTER_API_KEY=minima-prod-openrouter-key:latest" \
             --quiet
@@ -103,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest-m
 
     steps:
-      - name: Checkout minima @ release tag
+      - name: Checkout @ release tag
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
@@ -113,7 +98,7 @@ jobs:
         with:
           project_id: ${{ env.PROJECT }}
           workload_identity_provider: ${{ secrets.GCP_PROD_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }}
+          service_account: ${{ secrets.GCP_PROD_DEPLOYER_SA }}
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
@@ -145,7 +130,7 @@ jobs:
             --min-instances 1 \
             --max-instances 5 \
             --allow-unauthenticated \
-            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA_EU }} \
+            --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA }} \
             --quiet
 
       - name: Print docs URL
