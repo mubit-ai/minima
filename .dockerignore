@@ -1,0 +1,35 @@
+# Version control
+.git/
+.github/
+
+# Python artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Dev tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Secrets — never in the image
+.env
+.env.*
+
+# Docs and examples (not needed at runtime)
+docs/
+docs-site/
+examples/
+
+# Tests
+tests/
+
+# Misc
+*.md
+uv.lock.bak
