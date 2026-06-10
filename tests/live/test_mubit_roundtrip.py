@@ -12,16 +12,16 @@ import uuid
 
 import pytest
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.memory.adapter import MubitMemory
-from costit.memory.keys import build_content, outcome_upsert_key, task_cluster, task_fingerprint
-from costit.memory.records import OutcomeRecord
-from costit.recommender.engine import Recommender
-from costit.recommender.recstore import RecommendationStore
-from costit.schemas.common import Constraints, TaskInput
-from costit.schemas.recommend import RecommendRequest
-from costit.seeding.items import SeedItem, build_item
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.memory.adapter import MubitMemory
+from minima.memory.keys import build_content, outcome_upsert_key, task_cluster, task_fingerprint
+from minima.memory.records import OutcomeRecord
+from minima.recommender.engine import Recommender
+from minima.recommender.recstore import RecommendationStore
+from minima.schemas.common import Constraints, TaskInput
+from minima.schemas.recommend import RecommendRequest
+from minima.seeding.items import SeedItem, build_item
 
 pytestmark = [
     pytest.mark.live,
@@ -40,7 +40,7 @@ async def test_seed_recommend_feedback_roundtrip():
     namespace = "e2e-" + uuid.uuid4().hex[:8]
     # Generous recall budget: the local CPU embedder is slow and variable; the
     # production default (2500ms) targets a fast GPU embedder.
-    settings = Settings(costit_reflect_every_n=0, costit_memory_recall_timeout_ms=8000)
+    settings = Settings(minima_reflect_every_n=0, minima_memory_recall_timeout_ms=8000)
     memory = MubitMemory(settings)
     lane = settings.lane(namespace)
     cluster = task_cluster("code", "hard")

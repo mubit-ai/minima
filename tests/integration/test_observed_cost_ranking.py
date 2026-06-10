@@ -10,13 +10,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from costit.catalog.store import Catalog, CatalogStore
-from costit.config import Settings
-from costit.recommender.engine import Recommender
-from costit.recommender.recstore import RecommendationStore
-from costit.schemas.common import Constraints, TaskInput
-from costit.schemas.models_catalog import ModelCard
-from costit.schemas.recommend import RecommendRequest
+from minima.catalog.store import Catalog, CatalogStore
+from minima.config import Settings
+from minima.recommender.engine import Recommender
+from minima.recommender.recstore import RecommendationStore
+from minima.schemas.common import Constraints, TaskInput
+from minima.schemas.models_catalog import ModelCard
+from minima.schemas.recommend import RecommendRequest
 from tests.factories import FakeMemory, make_evidence
 
 REASONER_CHEAP_LISTED = "reasoner-cheap-listed"  # low list price, high real (thinking) cost
@@ -40,7 +40,7 @@ def _catalog(settings: Settings) -> CatalogStore:
 
 def _evidence() -> list:
     ev = []
-    for i in range(3):  # >= costit_observed_cost_min_n so observed cost is trusted
+    for i in range(3):  # >= minima_observed_cost_min_n so observed cost is trusted
         ev.append(make_evidence(REASONER_CHEAP_LISTED, 1.0, entry_id=f"r{i}", cost_usd=0.05))
         ev.append(make_evidence(TRUE_CHEAP, 1.0, entry_id=f"t{i}", cost_usd=0.01))
     return ev
@@ -66,7 +66,7 @@ async def test_observed_cost_picks_truly_cheaper_model():
 
 
 async def test_observed_cost_disabled_reverts_to_token_misranking():
-    settings = Settings(mubit_api_key="t", costit_use_observed_cost=False)
+    settings = Settings(mubit_api_key="t", minima_use_observed_cost=False)
     engine = Recommender(
         settings, FakeMemory(_evidence()), _catalog(settings), RecommendationStore()
     )

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from costit.config import Settings
-from costit.main import create_app
+from minima.config import Settings
+from minima.main import create_app
 from tests.factories import FakeMemory
 
 EMERGENT = {
@@ -24,7 +24,7 @@ def test_strategies_endpoint_returns_normalized_rules():
         resp = client.get("/v1/strategies", params={"namespace": "acme", "max_strategies": 3})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["lane"] == "costit:acme"
+    assert body["lane"] == "minima:acme"
     assert body["namespace"] == "acme"
     assert body["count"] == 1
     assert body["strategies"][0]["description"].startswith("Route code:easy")
@@ -38,7 +38,7 @@ def test_strategies_endpoint_empty():
     assert resp.status_code == 200
     assert resp.json() == {
         "namespace": None,
-        "lane": "costit:default",
+        "lane": "minima:default",
         "strategies": [],
         "count": 0,
     }

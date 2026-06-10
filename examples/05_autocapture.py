@@ -1,9 +1,9 @@
 """Example 5 — Zero-code intake via mubit.learn autocapture.
 
-If you don't want to call /feedback explicitly, `costit_client.autocapture` pins a
-`mubit.learn` session to the SAME memory lane Costit recalls from and monkeypatches your
+If you don't want to call /feedback explicitly, `minima_client.autocapture` pins a
+`mubit.learn` session to the SAME memory lane Minima recalls from and monkeypatches your
 OpenAI/Anthropic/LiteLLM/Google-GenAI clients, so every LLM call you make auto-ingests its
-trace into Costit's lane — no changes at the call site.
+trace into Minima's lane — no changes at the call site.
 
 What autocapture does NOT do: fabricate a success signal. `mubit.learn` never decides an
 answer was "good". You still close the loop with a quality signal — either
@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 import sys
 
-from costit_client import autocapture
+from minima_client import autocapture
 
 
 def main() -> None:
@@ -29,7 +29,7 @@ def main() -> None:
     if not api_key:
         sys.exit("set MUBIT_API_KEY (a Mubit data-plane key) to run this example")
 
-    # Pin learn to Costit's lane convention: costit:<namespace>. From here, your normal
+    # Pin learn to Minima's lane convention: minima:<namespace>. From here, your normal
     # LLM client calls are captured automatically.
     autocapture.enable(
         api_key=api_key,
@@ -37,7 +37,7 @@ def main() -> None:
         namespace="autocapture-demo",
         user_id="svc-demo",
     )
-    print("autocapture enabled -> lane costit:autocapture-demo")
+    print("autocapture enabled -> lane minima:autocapture-demo")
 
     try:
         # ---- your existing, unmodified LLM code would run here ----

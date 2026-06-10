@@ -4,26 +4,26 @@ from __future__ import annotations
 
 import pytest
 
-from costit.recommender.propensity import OrgScopedPropensity, PropensityTracker
-from costit.recommender.recstore import (
+from minima.recommender.propensity import OrgScopedPropensity, PropensityTracker
+from minima.recommender.recstore import (
     OrgScopedRecStore,
     RecommendationStore,
     StoredRecommendation,
 )
-from costit.tenancy.keys import (
-    generate_costit_key,
+from minima.tenancy.keys import (
+    generate_minima_key,
     normalize_org_id,
-    parse_costit_key,
+    parse_minima_key,
     verify_secret,
 )
-from costit.tenancy.registry import InMemoryTenantStore, TenantRecord
-from costit.tenancy.secrets import SecretResolver
+from minima.tenancy.registry import InMemoryTenantStore, TenantRecord
+from minima.tenancy.secrets import SecretResolver
 
 
 def _rec(rec_id: str = "r1") -> StoredRecommendation:
     return StoredRecommendation(
         recommendation_id=rec_id,
-        lane="costit:default",
+        lane="minima:default",
         user_id=None,
         task_type="qa",
         difficulty="easy",
@@ -38,9 +38,9 @@ def _rec(rec_id: str = "r1") -> StoredRecommendation:
 # ---- keys -------------------------------------------------------------------
 
 
-def test_costit_key_roundtrip_and_verify():
-    key_id, secret_hash, full = generate_costit_key("acme")
-    parsed = parse_costit_key(full)
+def test_minima_key_roundtrip_and_verify():
+    key_id, secret_hash, full = generate_minima_key("acme")
+    parsed = parse_minima_key(full)
     assert parsed is not None
     org, parsed_key_id, secret = parsed
     assert org == "acme"
@@ -49,17 +49,17 @@ def test_costit_key_roundtrip_and_verify():
     assert not verify_secret(secret + "x", secret_hash)
 
 
-def test_costit_key_secret_may_contain_underscores():
+def test_minima_key_secret_may_contain_underscores():
     # token_urlsafe can include '_' / '-'; the secret is everything after the 3rd '_'.
-    _kid, _h, full = generate_costit_key("globex")
-    org, _key_id, secret = parse_costit_key(full)  # type: ignore[misc]
+    _kid, _h, full = generate_minima_key("globex")
+    org, _key_id, secret = parse_minima_key(full)  # type: ignore[misc]
     assert org == "globex"
     assert full.endswith(secret)
 
 
-@pytest.mark.parametrize("bad", ["", "nope", "mbt_x_y_z", "cstk_acme_only", "cstk__k_s"])
+@pytest.mark.parametrize("bad", ["", "nope", "mbt_x_y_z", "mnim_acme_only", "mnim__k_s"])
 def test_parse_rejects_malformed(bad: str):
-    assert parse_costit_key(bad) is None
+    assert parse_minima_key(bad) is None
 
 
 @pytest.mark.parametrize("bad", ["", "-acme", "ACME!", "a" * 64])
@@ -128,9 +128,9 @@ def test_org_scoped_propensity_isolates_by_org():
     a = OrgScopedPropensity(backend, "acme")
     b = OrgScopedPropensity(backend, "globex")
     for _ in range(5):
-        a.record("costit:default", "qa:easy", "m1")
+        a.record("minima:default", "qa:easy", "m1")
     # acme's recommendations skew its own propensity; globex is unaffected (uniform).
-    a_p = a.propensities("costit:default", "qa:easy", ["m1", "m2"])
-    b_p = b.propensities("costit:default", "qa:easy", ["m1", "m2"])
+    a_p = a.propensities("minima:default", "qa:easy", ["m1", "m2"])
+    b_p = b.propensities("minima:default", "qa:easy", ["m1", "m2"])
     assert a_p["m1"] > a_p["m2"]
     assert b_p["m1"] == b_p["m2"]

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.recommender import score
-from costit.recommender.engine import Recommender
-from costit.recommender.recstore import RecommendationStore
-from costit.schemas.common import TaskInput
-from costit.schemas.recommend import RecommendRequest
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.recommender import score
+from minima.recommender.engine import Recommender
+from minima.recommender.recstore import RecommendationStore
+from minima.schemas.common import TaskInput
+from minima.schemas.recommend import RecommendRequest
 from tests.factories import FakeMemory
 
 CODE_TASK = TaskInput(task="refactor a recursive parser into an iterative loop", task_type="code")
@@ -33,8 +33,8 @@ async def test_exploration_bonus_promotes_cheaper_underexplored_model():
     # lifts the cheap, unproven model over the bar and it becomes the recommendation.
     req = RecommendRequest(task=CODE_TASK, allow_llm_escalation=False)
 
-    off = await _engine(Settings(mubit_api_key="t", costit_exploration_bonus=0.0)).recommend(req)
-    on = await _engine(Settings(mubit_api_key="t", costit_exploration_bonus=0.1)).recommend(req)
+    off = await _engine(Settings(mubit_api_key="t", minima_exploration_bonus=0.0)).recommend(req)
+    on = await _engine(Settings(mubit_api_key="t", minima_exploration_bonus=0.1)).recommend(req)
 
     assert off.recommended_model.model_id != "gpt-4o-mini"
     assert on.recommended_model.model_id == "gpt-4o-mini"

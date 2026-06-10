@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from costit.config import Settings
-from costit.main import create_app
+from minima.config import Settings
+from minima.main import create_app
 from tests.factories import FakeMemory
 
 TASK = {"task": "refactor a recursive parser into an iterative loop", "task_type": "code"}
@@ -39,7 +39,7 @@ def test_verified_prod_success_promotes_lesson():
     assert resp.json()["lesson_promoted"] is True
     assert len(memory.lessons) == 1
     lesson = memory.lessons[0]
-    assert lesson["upsert_key"].startswith("costit:lesson:code:")
+    assert lesson["upsert_key"].startswith("minima:lesson:code:")
     assert lesson["metadata"]["model_id"] == model
 
 
@@ -67,7 +67,7 @@ def test_no_lesson_without_verified_or_high_quality():
 
 def test_lesson_promotion_can_be_disabled():
     memory = FakeMemory()
-    settings = Settings(mubit_api_key="t", costit_lesson_on_verified_prod=False)
+    settings = Settings(mubit_api_key="t", minima_lesson_on_verified_prod=False)
     app = create_app(settings=settings, memory=memory, start_refresh=False)
     with TestClient(app) as client:
         rid, model = _recommend(client)

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 32" fill="none">
+  <!-- Word-mark style: "minima" with the "m" in brand orange-red -->
+  <text x="0" y="24" font-family="system-ui, -apple-system, sans-serif" font-weight="700" font-size="22" letter-spacing="-0.5">
+    <tspan fill="#e84524">m</tspan><tspan fill="currentColor">inima</tspan>
+  </text>
+</svg>

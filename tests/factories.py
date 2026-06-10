@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from costit.llm.base import CandidateView, ReasonerRanking, ReasonerResult
-from costit.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
-from costit.schemas.common import Difficulty, TaskType
+from minima.llm.base import CandidateView, ReasonerRanking, ReasonerResult
+from minima.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
+from minima.schemas.common import Difficulty, TaskType
 
 
 class FakeMemory:

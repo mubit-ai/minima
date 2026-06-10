@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from costit.schemas.strategies import Strategy
+from minima.schemas.strategies import Strategy
 
 
 def test_from_emergent_snake_case():

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from costit.config import Settings
-from costit.llm import base
-from costit.llm.registry import build_reasoner
-from costit.schemas.common import Difficulty, TaskType
+from minima.config import Settings
+from minima.llm import base
+from minima.llm.registry import build_reasoner
+from minima.schemas.common import Difficulty, TaskType
 
 
 def test_parse_ranking_filters_unknown_and_clamps():
@@ -68,11 +68,11 @@ def test_registry_returns_none_when_disabled_or_unconfigured():
     no_keys = {"anthropic_api_key": None, "gemini_api_key": None}
     assert build_reasoner(Settings(mubit_api_key="t", **no_keys)) is None  # provider none
     assert (
-        build_reasoner(Settings(mubit_api_key="t", costit_reasoner_provider="anthropic", **no_keys))
+        build_reasoner(Settings(mubit_api_key="t", minima_reasoner_provider="anthropic", **no_keys))
         is None
     )  # provider set but no key
     assert (
-        build_reasoner(Settings(mubit_api_key="t", costit_reasoner_provider="bogus", **no_keys))
+        build_reasoner(Settings(mubit_api_key="t", minima_reasoner_provider="bogus", **no_keys))
         is None
     )  # unknown provider
 
@@ -81,7 +81,7 @@ def test_registry_builds_anthropic_when_available():
     import importlib.util
 
     settings = Settings(
-        mubit_api_key="t", costit_reasoner_provider="anthropic", anthropic_api_key="sk-test"
+        mubit_api_key="t", minima_reasoner_provider="anthropic", anthropic_api_key="sk-test"
     )
     reasoner = build_reasoner(settings)
     if importlib.util.find_spec("anthropic") is None:
@@ -96,7 +96,7 @@ def test_registry_gemini_degrades_without_extra():
     import importlib.util
 
     settings = Settings(
-        mubit_api_key="t", costit_reasoner_provider="gemini", gemini_api_key="g-test"
+        mubit_api_key="t", minima_reasoner_provider="gemini", gemini_api_key="g-test"
     )
     reasoner = build_reasoner(settings)  # must not raise either way
     if importlib.util.find_spec("google.genai") is None:

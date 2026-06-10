@@ -1,14 +1,14 @@
 # Cold-Start Seeding
 
-With no history, Costit can only lean on capability priors and flat cost estimates
+With no history, Minima can only lean on capability priors and flat cost estimates
 (`decision_basis: "prior"`, a `cold_start` warning), and the cheap-LLM reasoner fires more
 often. Seeding loads a base of `task → model → outcome` records into Mubit so day-one
 recommendations are grounded — and so cost ranking has observations to work with.
 
-## The CLI: `costit-seed`
+## The CLI: `minima-seed`
 
 ```bash
-uv run costit-seed [--dataset routerbench|synthetic] [--limit N] [--lane LANE]
+uv run minima-seed [--dataset routerbench|synthetic] [--limit N] [--lane LANE]
                    [--chunk N] [--dry-run]
 ```
 
@@ -16,14 +16,14 @@ uv run costit-seed [--dataset routerbench|synthetic] [--limit N] [--lane LANE]
 |------|---------|-------|
 | `--dataset` | `routerbench` | `routerbench` (real benchmark data) or `synthetic` (no download). |
 | `--limit` | `2000` | Number of source rows to load. |
-| `--lane` | `COSTIT_SEED_LANE` (`costit:default`) | Memory lane to seed into. Seed into the lane your live traffic recalls from. |
+| `--lane` | `MINIMA_SEED_LANE` (`minima:default`) | Memory lane to seed into. Seed into the lane your live traffic recalls from. |
 | `--chunk` | `200` | Batch-insert chunk size. |
 | `--dry-run` | off | Prepare and print sample records without writing. |
 
 `make seed` is shorthand:
 
 ```bash
-make seed LIMIT=2000 LANE=costit:default
+make seed LIMIT=2000 LANE=minima:default
 ```
 
 ## RouterBench (real data)
@@ -36,7 +36,7 @@ tagged `seed:routerbench` so they can be distinguished from (and down-weighted v
 outcomes.
 
 ```bash
-uv run costit-seed --dataset routerbench --limit 5000 --lane costit:default
+uv run minima-seed --dataset routerbench --limit 5000 --lane minima:default
 ```
 
 ## Synthetic (no download)
@@ -46,7 +46,7 @@ plausible outcome records across task types and models. Useful for local develop
 and CI:
 
 ```bash
-uv run costit-seed --dataset synthetic --limit 2000 --lane costit:default
+uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
 ```
 
 ## Verifying a seed
@@ -65,7 +65,7 @@ curl -s http://localhost:8080/v1/recommend -H 'content-type: application/json' \
 Lanes isolate namespaces. To warm-start a specific team/project, seed its lane directly:
 
 ```bash
-uv run costit-seed --dataset synthetic --limit 1000 --lane costit:team-payments
+uv run minima-seed --dataset synthetic --limit 1000 --lane minima:team-payments
 ```
 
 Then send `"namespace": "team-payments"` on `/recommend` so recall hits that lane.

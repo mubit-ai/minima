@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.recommender.engine import Recommender
-from costit.recommender.recstore import RecommendationStore
-from costit.schemas.common import Constraints, DecisionBasis, Difficulty, TaskInput, TaskType
-from costit.schemas.recommend import RecommendRequest
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.recommender.engine import Recommender
+from minima.recommender.recstore import RecommendationStore
+from minima.schemas.common import Constraints, DecisionBasis, Difficulty, TaskInput, TaskType
+from minima.schemas.recommend import RecommendRequest
 from tests.factories import FakeMemory, FakeReasoner
 
 CODE_TASK = TaskInput(task="refactor a recursive def foo()", task_type="code", difficulty="hard")
@@ -13,7 +13,7 @@ CANDIDATES = Constraints(candidate_models=["claude-haiku-4-5", "claude-opus-4-8"
 
 
 def _engine(reasoner, memory=None, settings=None) -> Recommender:
-    settings = settings or Settings(mubit_api_key="t", costit_reasoner_provider="anthropic")
+    settings = settings or Settings(mubit_api_key="t", minima_reasoner_provider="anthropic")
     return Recommender(
         settings,
         memory or FakeMemory(),

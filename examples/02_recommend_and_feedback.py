@@ -1,27 +1,27 @@
 """Example 2 — The core loop with the Python SDK.
 
 Recommend a model for a task, (pretend to) run it yourself, then feed the outcome back so
-the next recommendation is sharper. This is the whole Costit value loop in ~20 lines.
+the next recommendation is sharper. This is the whole Minima value loop in ~20 lines.
 
     uv run python examples/02_recommend_and_feedback.py
 
-Set COSTIT_URL (default http://localhost:8080) and, in multi-tenant mode, COSTIT_KEY.
+Set MINIMA_URL (default http://localhost:8080) and, in multi-tenant mode, MINIMA_KEY.
 """
 
 from __future__ import annotations
 
 import os
 
-from costit_client import CostitClient
+from minima_client import MinimaClient
 
-URL = os.environ.get("COSTIT_URL", "http://localhost:8080")
-KEY = os.environ.get("COSTIT_KEY")  # only needed in multi-tenant mode
+URL = os.environ.get("MINIMA_URL", "http://localhost:8080")
+KEY = os.environ.get("MINIMA_KEY")  # only needed in multi-tenant mode
 
 
 def main() -> None:
-    with CostitClient(URL, api_key=KEY) as costit:
+    with MinimaClient(URL, api_key=KEY) as minima:
         # 1. Ask which model to use. `task` accepts a plain string, a dict, or a TaskInput.
-        rec = costit.recommend(
+        rec = minima.recommend(
             {
                 "task": "Write a Python function that merges k sorted linked lists.",
                 "task_type": "code",
@@ -42,12 +42,12 @@ def main() -> None:
         if rec.warnings:
             print(f"warnings    : {rec.warnings}")
 
-        # 2. You run `chosen.model_id` in YOUR stack. Costit never calls it for you.
+        # 2. You run `chosen.model_id` in YOUR stack. Minima never calls it for you.
         #    (example 6 shows a real Claude call wired through here.)
 
-        # 3. Tell Costit how it went. Passing realized tokens + cost is what powers the
+        # 3. Tell Minima how it went. Passing realized tokens + cost is what powers the
         #    observed/rescaled cost tiers — do it whenever you have the numbers.
-        fb = costit.feedback(
+        fb = minima.feedback(
             rec.recommendation_id,
             chosen.model_id,
             "success",

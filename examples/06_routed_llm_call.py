@@ -1,9 +1,9 @@
 """Example 6 — A production wrapper that routes a REAL Claude call and feeds it back.
 
 This is the shape you'd actually ship: a loop that, for each task,
-  1. asks Costit which model to use,
+  1. asks Minima which model to use,
   2. runs that model on YOUR stack (here, via the Anthropic SDK),
-  3. reports the realized outcome — tokens, cost, quality — back to Costit.
+  3. reports the realized outcome — tokens, cost, quality — back to Minima.
 
 It uses the async client (so it drops into an async service unchanged) and degrades
 gracefully: if the recommended model isn't an Anthropic model, or no ANTHROPIC_API_KEY is
@@ -19,12 +19,12 @@ import os
 import time
 from dataclasses import dataclass
 
-from costit_client import AsyncCostitClient, CostitError
+from minima_client import AsyncMinimaClient, MinimaError
 
-from costit.schemas.common import Constraints
+from minima.schemas.common import Constraints
 
-URL = os.environ.get("COSTIT_URL", "http://localhost:8080")
-KEY = os.environ.get("COSTIT_KEY")
+URL = os.environ.get("MINIMA_URL", "http://localhost:8080")
+KEY = os.environ.get("MINIMA_KEY")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 
@@ -77,11 +77,11 @@ def grade(text: str) -> float:
 
 
 async def main() -> None:
-    async with AsyncCostitClient(URL, api_key=KEY) as costit:
+    async with AsyncMinimaClient(URL, api_key=KEY) as minima:
         try:
-            catalog = await costit.models(provider="anthropic")
-        except CostitError as exc:
-            print(f"could not reach Costit at {URL}: {exc}")
+            catalog = await minima.models(provider="anthropic")
+        except MinimaError as exc:
+            print(f"could not reach Minima at {URL}: {exc}")
             return
 
         prompts = [
@@ -93,7 +93,7 @@ async def main() -> None:
 
         for prompt, task_type, slider in prompts:
             print(f"\n• task ({task_type}, slider {slider}): {prompt[:60]}…")
-            rec = await costit.recommend({"task": prompt, "task_type": task_type},
+            rec = await minima.recommend({"task": prompt, "task_type": task_type},
                                          cost_quality_tradeoff=slider,
                                          constraints=Constraints(allowed_providers=["anthropic"]))
             model = rec.recommended_model.model_id
@@ -109,7 +109,7 @@ async def main() -> None:
             actual_cost = result.input_tokens / 1e6 * in_p + result.output_tokens / 1e6 * out_p
             quality = grade(result.text)
 
-            fb = await costit.feedback(
+            fb = await minima.feedback(
                 rec.recommendation_id, model,
                 "success" if quality >= 0.8 else "partial",
                 quality_score=quality,

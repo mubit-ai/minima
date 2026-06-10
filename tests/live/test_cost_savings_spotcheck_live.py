@@ -1,6 +1,6 @@
 """Real-model cost spot-check: a cheap model succeeds on easy tasks far cheaper.
 
-This is a provider-reachability spot-check, not a Mubit/costit code path: it calls
+This is a provider-reachability spot-check, not a Mubit/minima code path: it calls
 ``google-genai`` directly with both a cheap and a premium Gemini model on a handful of
 deterministically-checkable easy tasks, then asserts the cheap model is essentially as
 correct while costing at least 2x less in measured token spend.

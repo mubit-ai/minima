@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from costit.memory.keys import (
+from minima.memory.keys import (
     build_lesson_content,
     lesson_upsert_key,
     salient_signature,
@@ -34,7 +34,7 @@ def test_task_cluster_coarse_vs_fine():
 
 def test_lesson_helpers():
     assert lesson_upsert_key("code:hard", "claude-haiku-4-5") == (
-        "costit:lesson:code:hard:claude-haiku-4-5"
+        "minima:lesson:code:hard:claude-haiku-4-5"
     )
     content = build_lesson_content("code:hard", "claude-haiku-4-5", 0.92)
     assert "code:hard" in content and "claude-haiku-4-5" in content and "92%" in content

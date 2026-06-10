@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from costit.recommender.aggregate import apply_ipw
-from costit.recommender.propensity import PropensityTracker
-from costit.recommender.types import ModelAggregate
+from minima.recommender.aggregate import apply_ipw
+from minima.recommender.propensity import PropensityTracker
+from minima.recommender.types import ModelAggregate
 
 
 def test_propensities_are_laplace_smoothed_and_sum_to_one():

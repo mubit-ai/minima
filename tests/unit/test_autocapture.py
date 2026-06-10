@@ -4,7 +4,7 @@ import sys
 import types
 
 import pytest
-from costit_client import autocapture
+from minima_client import autocapture
 
 
 class _FakeLearn(types.ModuleType):
@@ -38,17 +38,17 @@ def fake_learn(monkeypatch):
 
 
 def test_lane_for():
-    assert autocapture.lane_for("acme") == "costit:acme"
-    assert autocapture.lane_for(None) == "costit:default"
+    assert autocapture.lane_for("acme") == "minima:acme"
+    assert autocapture.lane_for(None) == "minima:default"
     assert autocapture.lane_for("acme", "tenant") == "tenant:acme"
 
 
-def test_enable_pins_costit_lane(fake_learn):
+def test_enable_pins_minima_lane(fake_learn):
     rm = autocapture.enable(api_key="k", namespace="acme", patch_globals=False)
     assert rm == "run-manager"
     init = fake_learn.calls["init"]
-    assert init["lane"] == "costit:acme"
-    assert init["agent_id"] == "costit-autocapture"
+    assert init["lane"] == "minima:acme"
+    assert init["agent_id"] == "minima-autocapture"
     assert init["patch_globals"] is False  # passthrough kwarg
 
 

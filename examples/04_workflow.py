@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import os
 
-from costit_client import CostitClient
+from minima_client import MinimaClient
 
-from costit.schemas.common import Constraints, TaskInput
-from costit.schemas.workflow import WorkflowRequest, WorkflowStep
+from minima.schemas.common import Constraints, TaskInput
+from minima.schemas.workflow import WorkflowRequest, WorkflowStep
 
-URL = os.environ.get("COSTIT_URL", "http://localhost:8080")
-KEY = os.environ.get("COSTIT_KEY")
+URL = os.environ.get("MINIMA_URL", "http://localhost:8080")
+KEY = os.environ.get("MINIMA_KEY")
 
 
 def main() -> None:
@@ -53,8 +53,8 @@ def main() -> None:
         ],
     )
 
-    with CostitClient(URL, api_key=KEY) as costit:
-        wf = costit.recommend_workflow(req)
+    with MinimaClient(URL, api_key=KEY) as minima:
+        wf = minima.recommend_workflow(req)
 
         print(f"workflow {wf.workflow_recommendation_id}  confidence={wf.confidence}\n")
         print(f"  {'step':<10} {'model':<28} {'$/call':>10} {'basis':<7}")
@@ -66,13 +66,13 @@ def main() -> None:
         savings = wf.total_est_cost_if_all_premium - wf.total_est_cost_usd
         pct = (savings / wf.total_est_cost_if_all_premium * 100
                if wf.total_est_cost_if_all_premium else 0.0)
-        print(f"\n  total (Costit picks) : ${wf.total_est_cost_usd:.5f}")
+        print(f"\n  total (Minima picks) : ${wf.total_est_cost_usd:.5f}")
         print(f"  total (all premium)  : ${wf.total_est_cost_if_all_premium:.5f}")
         print(f"  estimated savings    : ${savings:.5f}  ({pct:.0f}%)")
 
         # Give per-step feedback after you run each step, using its own recommendation_id:
         #   for step in wf.steps:
-        #       costit.feedback(step.recommendation.recommendation_id,
+        #       minima.feedback(step.recommendation.recommendation_id,
         #                       step.recommendation.recommended_model.model_id,
         #                       "success", quality_score=..., input_tokens=..., ...)
 

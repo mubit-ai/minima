@@ -8,5 +8,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.costit_state/
+.minima_state/
 .seed_progress.json
+
+# Astro docs site
+docs-site/node_modules/
+docs-site/.astro/
+docs-site/dist/

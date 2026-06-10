@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from costit.recommender.aggregate import (
+from minima.recommender.aggregate import (
     KC_FLOOR,
     aggregate_by_model,
     is_conflicted,
     neighbor_weight,
 )
-from costit.recommender.types import ModelAggregate
+from minima.recommender.types import ModelAggregate
 from tests.factories import make_evidence
 
 

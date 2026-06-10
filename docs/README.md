@@ -1,6 +1,6 @@
-# Costit Documentation
+# Minima Documentation
 
-Costit recommends a cheaper or alternate LLM model for a given task, so LLM-driven
+Minima recommends a cheaper or alternate LLM model for a given task, so LLM-driven
 workflows spend fewer tokens without losing the quality the task actually needs. It is a
 **recommend-only** advice layer backed by [Mubit](https://docs.mubit.ai) memory — it never
 proxies a call, runs a model, rewrites a prompt, or caches, so it adds **zero latency** to
@@ -12,7 +12,7 @@ your real LLM call.
   recommendation in under five minutes.
 - **[Concepts](concepts.md)** — the recommend → run → feedback loop, the recommendation
   algorithm, the cost-basis tiers (estimate → observed → rescaled), escalation, and how
-  Costit gets sharper over time.
+  Minima gets sharper over time.
 
 ## Reference
 
@@ -20,14 +20,14 @@ your real LLM call.
   field semantics, warnings, and error formats.
 - **[Configuration](configuration.md)** — every environment variable, defaults, and tuning
   guidance.
-- **[Python Client SDK](client-sdk.md)** — the `costit_client` package: sync/async clients
+- **[Python Client SDK](client-sdk.md)** — the `minima_client` package: sync/async clients
   and the zero-code `autocapture` intake.
 
 ## Guides
 
 - **[Cold-Start Seeding](seeding.md)** — load `task → model → outcome` history so day-one
   recommendations are grounded instead of guessing.
-- **[Multi-Tenancy](multi-tenancy.md)** — run one Costit deployment for many organizations,
+- **[Multi-Tenancy](multi-tenancy.md)** — run one Minima deployment for many organizations,
   each on its own Mubit instance, with per-org API keys.
 - **[Operations](operations.md)** — deployment, health checks, degradation behavior,
   catalog refresh, and what to monitor.

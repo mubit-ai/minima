@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "costit"
+name = "minima"
 version = "0.1.0"
 description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
 readme = "README.md"
@@ -35,13 +35,13 @@ dev = [
 ]
 
 [project.scripts]
-costit-seed = "costit.seeding.run_seed:main"
+minima-seed = "minima.seeding.run_seed:main"
 
 [tool.uv.sources]
 mubit-sdk = { path = "../ricedb/sdk/python/mubit-sdk", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/costit", "client_sdk/costit_client"]
+packages = ["src/minima", "client_sdk/minima_client"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,7 +62,7 @@ select = ["E", "F", "I", "UP", "B", "C4"]
 ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/costit/recommender/classify.py" = ["E501"]  # regex pattern tables
+"src/minima/recommender/classify.py" = ["E501"]  # regex pattern tables
 "tests/eval/*" = ["E501", "E702"]  # dense report/format lines + compact numeric loops
 "tests/live/*" = ["E501"]  # inline request bodies + progress prints in live e2e demos
 

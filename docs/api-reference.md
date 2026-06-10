@@ -5,17 +5,17 @@ served at `/docs` when the service is running.
 
 ## Authentication
 
-- **Single-tenant mode** (`COSTIT_MULTITENANT=false`, the default): no caller credential is
+- **Single-tenant mode** (`MINIMA_MULTITENANT=false`, the default): no caller credential is
   required. Every request maps to the one org configured by the env Mubit key. Any
   `Authorization` header is ignored.
-- **Multi-tenant mode** (`COSTIT_MULTITENANT=true`): callers must present
-  `Authorization: Bearer cstk_<org>_<keyid>_<secret>`, which resolves server-side to that
+- **Multi-tenant mode** (`MINIMA_MULTITENANT=true`): callers must present
+  `Authorization: Bearer mnim_<org>_<keyid>_<secret>`, which resolves server-side to that
   org's own Mubit instance. A missing or invalid key returns `401`. The admin/provisioning
-  endpoints are guarded separately by the `X-Costit-Provisioning-Key` header. See
+  endpoints are guarded separately by the `X-Minima-Provisioning-Key` header. See
   **[Multi-Tenancy](multi-tenancy.md)**.
 
 `user_id` and `namespace` are **within-org** scoping fields, not auth boundaries. The tenant
-boundary is the Costit key → a Mubit instance.
+boundary is the Minima key → a Mubit instance.
 
 ## Errors
 
@@ -29,7 +29,7 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 | Status | Title | When |
 |--------|-------|------|
 | `400` | Invalid request | Request body fails validation (`ValueError`). |
-| `401` | Unauthorized | Multi-tenant: missing/invalid Costit key. |
+| `401` | Unauthorized | Multi-tenant: missing/invalid Minima key. |
 | `403` | Forbidden | Admin endpoint: invalid/missing provisioning key. |
 | `404` | Not Found | Admin endpoint called while multi-tenancy is disabled. |
 | `409` | Conflict | Provisioning an `org_id` that already exists. |
@@ -53,7 +53,7 @@ Recommend a model for a single task.
 | `cost_quality_tradeoff` | float `0–10` | `5.0` | 0 = cheapest acceptable, 10 = highest quality. Sets the quality threshold `τ`. |
 | `constraints` | `Constraints` | `{}` | Hard limits on the candidate set (see below). |
 | `user_id` | string \| null | `null` | Within-org actor label (not a tenant/auth boundary). Scopes recall. |
-| `namespace` | string \| null | `null` | Within-org sub-scope (team/project/env). Maps to lane `costit:<namespace>`. |
+| `namespace` | string \| null | `null` | Within-org sub-scope (team/project/env). Maps to lane `minima:<namespace>`. |
 | `max_candidates` | int `1–64` | `8` | Cap on candidates considered. |
 | `allow_llm_escalation` | bool | `true` | Allow the cheap-LLM reasoner when evidence is thin (no effect if no reasoner configured). |
 | `explain` | bool | `true` | Include `evidence[]` refs on each ranked model. |
@@ -65,8 +65,8 @@ Recommend a model for a single task.
 | `task` | string | required | Raw task/prompt text; embedded by Mubit for recall. |
 | `task_type` | enum \| null | `null` | One of `code, summarization, extraction, qa, reasoning, classification, translation, creative, rag, tool_use, other`. Heuristic-classified if omitted. |
 | `difficulty` | enum \| null | `null` | One of `trivial, easy, medium, hard, expert`. Heuristic-classified if omitted. |
-| `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `COSTIT_DEFAULT_INPUT_TOKENS`. |
-| `expected_output_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `COSTIT_DEFAULT_OUTPUT_TOKENS`. |
+| `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `MINIMA_DEFAULT_INPUT_TOKENS`. |
+| `expected_output_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `MINIMA_DEFAULT_OUTPUT_TOKENS`. |
 | `tags` | string[] | `[]` | Propagated to Mubit `env_tags` (e.g. `lang:python`) for version-aware recall. |
 
 **`Constraints`** (all optional; unset fields impose no limit)
@@ -97,7 +97,7 @@ Recommend a model for a single task.
 | `classified_difficulty` | enum | Final difficulty used. |
 | `catalog_version` | string | Catalog version that priced the candidates. |
 | `catalog_stale` | bool | Prices older than the staleness window. |
-| `latency_ms` | int | Costit-side recommendation latency. |
+| `latency_ms` | int | Minima-side recommendation latency. |
 | `warnings` | string[] | See **Warnings** below. |
 
 **`RankedModel`**
@@ -290,13 +290,13 @@ The current model catalog (cost + capability priors).
 ## `GET /v1/strategies`
 
 Surfaces the rules Mubit has promoted for a namespace — the "why" behind routing patterns.
-(Requires a resolved tenant; in multi-tenant mode, send the Costit key.)
+(Requires a resolved tenant; in multi-tenant mode, send the Minima key.)
 
 ### Query parameters
 
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
-| `namespace` | string | — | Resolves to lane `costit:<namespace>`. |
+| `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
 | `lesson_types` | string[] | — | Filter by lesson type. |
 | `max_strategies` | int `1–50` | `5` | |
 
@@ -333,9 +333,9 @@ prior-only recommendations.
 ## `POST|GET|DELETE /v1/admin/tenants`
 
 Tenant provisioning. **Multi-tenant mode only** (returns `404` otherwise), guarded by the
-`X-Costit-Provisioning-Key` header. Full details and schemas in
+`X-Minima-Provisioning-Key` header. Full details and schemas in
 **[Multi-Tenancy](multi-tenancy.md)**.
 
-- `POST /v1/admin/tenants` → mint a new org + Costit key (the key is shown **once**).
+- `POST /v1/admin/tenants` → mint a new org + Minima key (the key is shown **once**).
 - `GET /v1/admin/tenants` → list orgs (summaries only; no secrets).
 - `DELETE /v1/admin/tenants/{org_id}` → revoke an org.

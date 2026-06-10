@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from costit.memory import keys
-from costit.recommender.classify import classify, infer_difficulty, infer_task_type
-from costit.schemas.common import Difficulty, TaskInput, TaskType
+from minima.memory import keys
+from minima.recommender.classify import classify, infer_difficulty, infer_task_type
+from minima.schemas.common import Difficulty, TaskInput, TaskType
 
 
 def test_infer_task_type():
@@ -38,7 +38,7 @@ def test_cluster_and_upsert_key():
     assert keys.task_cluster("code", "hard") == "code:hard"
     assert (
         keys.outcome_upsert_key("code:hard", "claude-haiku-4-5")
-        == "costit:om:code:hard:claude-haiku-4-5"
+        == "minima:om:code:hard:claude-haiku-4-5"
     )
 
 

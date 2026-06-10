@@ -1,11 +1,11 @@
-"""RouterBench cost-savings evaluation harness (live, end-to-end through Costit).
+"""RouterBench cost-savings evaluation harness (live, end-to-end through Minima).
 
-The honest question: *does Costit's memory-backed recommender cut token cost without
+The honest question: *does Minima's memory-backed recommender cut token cost without
 sacrificing accuracy?* Measured on RouterBench — a public benchmark with, per
 (prompt, model), a real correctness label (0/1) and the real USD cost of that call.
 
 This harness is built to survive adversarial scrutiny (see the threats it closes):
-- NO circularity: Costit's catalog uses INDEPENDENT real market $/Mtok (not RB's cost
+- NO circularity: Minima's catalog uses INDEPENDENT real market $/Mtok (not RB's cost
   column) and per-prompt token estimates; we then score cost on RB's ground-truth cost.
 - NO leakage: prompts are de-duplicated globally (by normalized fingerprint) and every
   eval/test prompt with a high token-overlap twin in train is dropped, so recall tests
@@ -33,18 +33,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from costit.catalog.store import Catalog, CatalogStore
-from costit.config import Settings
-from costit.memory.adapter import MubitMemory
-from costit.memory.keys import build_content, task_cluster, task_fingerprint
-from costit.memory.records import OutcomeRecord
-from costit.recommender import score
-from costit.recommender.aggregate import aggregate_by_model, apply_ipw
-from costit.recommender.propensity import PropensityTracker
-from costit.schemas.common import Constraints, TaskInput, TaskType
-from costit.schemas.models_catalog import ModelCard
-from costit.seeding import routerbench as rb
-from costit.seeding.items import SeedItem, build_item
+from minima.catalog.store import Catalog, CatalogStore
+from minima.config import Settings
+from minima.memory.adapter import MubitMemory
+from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.records import OutcomeRecord
+from minima.recommender import score
+from minima.recommender.aggregate import aggregate_by_model, apply_ipw
+from minima.recommender.propensity import PropensityTracker
+from minima.schemas.common import Constraints, TaskInput, TaskType
+from minima.schemas.models_catalog import ModelCard
+from minima.seeding import routerbench as rb
+from minima.seeding.items import SeedItem, build_item
 
 # A realistic spread with a genuine quality range: a weak+cheap model (mistral-7b) at the
 # bottom so that naively "always pick the cheapest" is a POOR policy, a couple of strong
@@ -60,7 +60,7 @@ DEFAULT_CANDIDATES = [
 DEFAULT_PREMIUM = "gpt-4-1106-preview"
 
 # INDEPENDENT real market prices ($/Mtok, input/output), ~2023 list prices — deliberately
-# NOT derived from RouterBench's cost column, so Costit's decision cost is not a transform
+# NOT derived from RouterBench's cost column, so Minima's decision cost is not a transform
 # of the metric we score on.
 _MARKET_PRICES: dict[str, tuple[float, float]] = {
     "gpt-3.5-turbo-1106": (1.00, 2.00),
@@ -282,14 +282,14 @@ async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: lis
                        settings: Settings) -> tuple[dict, int, float]:
     """Returns (aggregates, n_outcome_evidence, max_neighbor_similarity)."""
     recall = await memory.recall(
-        query=row.prompt, lane=lane, limit=settings.costit_memory_recall_limit, timeout_ms=12000
+        query=row.prompt, lane=lane, limit=settings.minima_memory_recall_limit, timeout_ms=12000
     )
     aggs = aggregate_by_model(recall.outcome_evidence, set(candidates))
     # Mirror the shipped engine: IPW with a cold (empty) propensity store, exactly as a
     # /recommend call does when there's no logging history yet.
-    if settings.costit_ipw_enabled and aggs:
+    if settings.minima_ipw_enabled and aggs:
         apply_ipw(aggs, PropensityTracker().propensities(lane, "", candidates),
-                  settings.costit_ipw_clip_low, settings.costit_ipw_clip_high)
+                  settings.minima_ipw_clip_low, settings.minima_ipw_clip_high)
     rt = _toks(row.prompt)
     # Strip the "[task/diff] " prefix build_content adds, then measure overlap with neighbors.
     sims = [_jaccard(rt, _toks(re.sub(r"^\[[^\]]*\]\s*", "", e.content))) for e in recall.outcome_evidence]
@@ -305,22 +305,22 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
     per-benchmark-family prior — a SIMULATION of a recommender whose capability priors are
     keyed at the benchmark grain (the shipping engine keys them by task_type)."""
     pmap = eval_priors.get(eval_name) if eval_priors else None
-    min_cost_n = settings.costit_observed_cost_min_n
+    min_cost_n = settings.minima_observed_cost_min_n
     # Mirror the engine: pick one cost basis for the whole candidate set.
     cost_basis = score.choose_cost_basis(
         {mid: aggs.get(mid) for mid in cards},
-        settings.costit_use_observed_cost, False, min_cost_n,
+        settings.minima_use_observed_cost, False, min_cost_n,
     )
     scored = []
     for mid, card in cards.items():
         agg = aggs.get(mid)
         prior = pmap.get(mid, score.capability_prior(card, tt)) if pmap else score.capability_prior(card, tt)
-        pred, conf = score.predicted_success(agg, prior, settings.costit_beta_pseudocount)
+        pred, conf = score.predicted_success(agg, prior, settings.minima_beta_pseudocount)
         est, _ = score.effective_cost(
             card, agg, in_tokens, _OUT_TOKENS, False, cost_basis, min_cost_n
         )
         scored.append((mid, pred, conf, est))
-    tau = score.threshold_from_slider(slider, settings.costit_tau_min, settings.costit_tau_max, None)
+    tau = score.threshold_from_slider(slider, settings.minima_tau_min, settings.minima_tau_max, None)
     eligible = [s for s in scored if s[1] >= tau]
     if eligible:
         return min(eligible, key=lambda s: (s[3], -s[1], -s[2]))[0]
@@ -401,9 +401,9 @@ def _baselines(test: list[Row], candidates: list[str], premium: str) -> dict[str
 
 
 async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidates, slider, n):
-    from costit.recommender.engine import Recommender
-    from costit.recommender.recstore import RecommendationStore
-    from costit.schemas.recommend import RecommendRequest
+    from minima.recommender.engine import Recommender
+    from minima.recommender.recstore import RecommendationStore
+    from minima.schemas.recommend import RecommendRequest
 
     ns = lane.split(":", 1)[1] if ":" in lane else lane
     cards = {c.model_id: c for c in catalog.get().cards}
@@ -473,7 +473,7 @@ async def evaluate(
         raise RuntimeError(f"too few leak-free test rows: {len(test)} (train={len(train)})")
 
     memory = MubitMemory(settings)
-    lane = f"{settings.costit_lane_prefix}:rbeval-{uuid.uuid4().hex[:8]}"
+    lane = f"{settings.minima_lane_prefix}:rbeval-{uuid.uuid4().hex[:8]}"
     # eval_name priors are train-derived; keep card task_type priors as the fallback.
     use_train_priors = use_train_priors or prior_grain == "eval_name"
     catalog = build_catalog(settings, candidates, train, use_train_priors)
@@ -559,7 +559,7 @@ async def evaluate(
             pcost = sum(v[3] for v in vals)
             out[key] = {
                 "n": len(vals),
-                "costit_acc": cacc,
+                "minima_acc": cacc,
                 "premium_acc": pacc,
                 "retention": (cacc / pacc) if pacc else 1.0,
                 "savings": (1 - ccost / pcost) if pcost else 0.0,

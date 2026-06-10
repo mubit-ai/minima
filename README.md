@@ -1,11 +1,11 @@
-# Costit
+# Minima
 
 **Recommend a cheaper LLM model for each task, so LLM-driven workflows spend fewer tokens
 without losing the quality the task actually needs.**
 
-Costit **only recommends** — it never proxies a call, runs a model, rewrites a prompt, or
+Minima **only recommends** — it never proxies a call, runs a model, rewrites a prompt, or
 caches. It is a stack-agnostic advice layer backed by [Mubit](https://docs.mubit.ai) memory:
-ask which model to use, run that model yourself, then tell Costit how it went. Because it
+ask which model to use, run that model yourself, then tell Minima how it went. Because it
 sits *beside* your call rather than in front of it, **it adds zero latency to your real LLM
 request.**
 
@@ -18,21 +18,16 @@ request.**
 
 ## Why it works
 
-The recommendation engine is non-parametric **k-NN over history**: recall similar past
-`task → model → outcome` records, aggregate each candidate model's empirical success rate,
-and pick the cheapest model expected to clear a quality bar. Mubit is that substrate off the
-shelf — semantic recall, per-entry reinforcement, lesson promotion, and strategy surfacing.
-Every `POST /v1/feedback` makes the next recommendation sharper and the cost ranking more
-accurate.
+Minima is backed by [Mubit](https://mubit.ai) memory. Every `POST /v1/feedback` writes a `task → model → outcome` record; every `POST /v1/recommend` recalls the most similar past records and picks the cheapest model expected to clear a quality bar. The longer it runs, the sharper the picks.
 
 A `cost_quality_tradeoff` slider (0 = cheapest acceptable, 10 = highest quality) moves the
-bar. When memory is thin or conflicting, Costit can escalate to a cheap-LLM reasoner
+bar. When memory is thin or conflicting, Minima can escalate to a cheap-LLM reasoner
 (configurable, off by default).
 
 ### Cost ranking that reflects reality
 
 A flat token estimate assumes a fixed completion length, so it ignores reasoning/thinking
-tokens and mis-ranks a model with cheap list prices but heavy internal reasoning. Costit
+tokens and mis-ranks a model with cheap list prices but heavy internal reasoning. Minima
 ranks candidates by what they **really** cost, choosing one basis for the whole candidate
 set:
 
@@ -65,7 +60,7 @@ uv sync --extra dev
 cp .env.example .env                       # set MUBIT_API_KEY (+ MUBIT_ENDPOINT if not local)
 
 # optional: seed cold-start memory so day-one picks are grounded
-uv run costit-seed --dataset synthetic --limit 2000 --lane costit:default
+uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
 
 make run                                   # uvicorn on :8080 (interactive docs at /docs)
 ```
@@ -87,19 +82,19 @@ curl -s localhost:8080/v1/feedback -H 'content-type: application/json' -d '{
 }' | jq
 ```
 
-Costit talks to a Mubit runtime at `MUBIT_ENDPOINT` (defaults to `http://127.0.0.1:3000`;
+Minima talks to a Mubit runtime at `MUBIT_ENDPOINT` (defaults to `http://127.0.0.1:3000`;
 start one with `make run-mubit` in the Mubit repo) and uses Mubit's server-side embeddings,
 so it needs no embedding model of its own.
 
 ## Python client
 
 ```python
-from costit_client import CostitClient
+from minima_client import MinimaClient
 
-with CostitClient("http://localhost:8080") as costit:
-    rec = costit.recommend("Write a Python CSV parser.", cost_quality_tradeoff=3)
+with MinimaClient("http://localhost:8080") as minima:
+    rec = minima.recommend("Write a Python CSV parser.", cost_quality_tradeoff=3)
     # ... run rec.recommended_model.model_id yourself ...
-    costit.feedback(rec.recommendation_id, rec.recommended_model.model_id, "success",
+    minima.feedback(rec.recommendation_id, rec.recommended_model.model_id, "success",
                     quality_score=0.95, input_tokens=180, output_tokens=640,
                     actual_cost_usd=0.0034, verified_in_production=True)
 ```
@@ -114,7 +109,7 @@ Sync + async clients and zero-code `autocapture`: **[Python Client SDK](docs/cli
 | [Concepts](docs/concepts.md) | The loop, the algorithm, cost-basis tiers, escalation, how it improves. |
 | [API Reference](docs/api-reference.md) | Every endpoint, full schemas, warnings, errors. |
 | [Configuration](docs/configuration.md) | Every environment variable + tuning guidance. |
-| [Python Client SDK](docs/client-sdk.md) | `costit_client` clients + autocapture. |
+| [Python Client SDK](docs/client-sdk.md) | `minima_client` clients + autocapture. |
 | [Cold-Start Seeding](docs/seeding.md) | Load history so day-one picks are grounded. |
 | [Multi-Tenancy](docs/multi-tenancy.md) | One deployment, many orgs, per-org Mubit instances. |
 | [Operations](docs/operations.md) | Deployment, health, degradation, monitoring, secrets. |
@@ -140,10 +135,10 @@ All configuration is via environment variables (see [`.env.example`](.env.exampl
 [Configuration](docs/configuration.md)). The only required value is `MUBIT_API_KEY` (in
 single-tenant mode). Notable knobs:
 
-- `COSTIT_USE_OBSERVED_COST` / `COSTIT_OBSERVED_COST_MIN_N` — rank by realized cost.
-- `COSTIT_REASONER_PROVIDER` — enable the cheap-LLM escalation tier (`anthropic` / `gemini`).
-- `COSTIT_RECOMMENDATION_STORE=sqlite` — durable recommendation resolution (multi-worker).
-- `COSTIT_MULTITENANT` — serve many orgs from one deployment.
+- `MINIMA_USE_OBSERVED_COST` / `MINIMA_OBSERVED_COST_MIN_N` — rank by realized cost.
+- `MINIMA_REASONER_PROVIDER` — enable the cheap-LLM escalation tier (`anthropic` / `gemini`).
+- `MINIMA_RECOMMENDATION_STORE=sqlite` — durable recommendation resolution (multi-worker).
+- `MINIMA_MULTITENANT` — serve many orgs from one deployment.
 
 ## Development
 
@@ -154,22 +149,22 @@ make lint        # ruff + mypy
 make live        # end-to-end against a running Mubit (pytest -m live)
 make eval        # offline RouterBench savings evaluation (pytest -m eval)
 make fmt         # ruff --fix + format
-make seed        # costit-seed (LIMIT=, LANE= overridable)
+make seed        # minima-seed (LIMIT=, LANE= overridable)
 ```
 
 ## Project layout
 
 ```
-src/costit/
+src/minima/
   api/routers/      recommend · feedback · models · strategies · health · admin
   recommender/      engine · classify · aggregate · score · escalation · propensity · recstore
   memory/           adapter (only Mubit touchpoint) · records · keys · threadpool
   catalog/          store · merge · refresh · sources/{litellm,openrouter} · data/*.json
   llm/              base · anthropic · gemini · registry   (the escalation reasoner)
   tenancy/          runtime · registry · context · keys · secrets
-  seeding/          routerbench · synthetic · run_seed (costit-seed CLI)
+  seeding/          routerbench · synthetic · run_seed (minima-seed CLI)
   schemas/          common · recommend · workflow · feedback · models_catalog · strategies · admin
-client_sdk/costit_client/   client (sync+async) · autocapture · errors
+client_sdk/minima_client/   client (sync+async) · autocapture · errors
 docs/               full documentation       examples/   runnable examples
 tests/              unit · integration (FakeMemory) · live (-m live) · eval (-m eval)
 ```

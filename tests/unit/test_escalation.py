@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from costit.config import Settings
-from costit.recommender import escalation
-from costit.recommender.types import CandidateScore, ModelAggregate
-from costit.schemas.common import DecisionBasis
-from costit.schemas.models_catalog import ModelCard
+from minima.config import Settings
+from minima.recommender import escalation
+from minima.recommender.types import CandidateScore, ModelAggregate
+from minima.schemas.common import DecisionBasis
+from minima.schemas.models_catalog import ModelCard
 
 
 def _settings() -> Settings:

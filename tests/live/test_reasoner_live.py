@@ -10,9 +10,9 @@ import os
 
 import pytest
 
-from costit.config import Settings
-from costit.llm.base import CandidateView
-from costit.llm.registry import build_reasoner
+from minima.config import Settings
+from minima.llm.base import CandidateView
+from minima.llm.registry import build_reasoner
 
 pytestmark = [pytest.mark.live]
 
@@ -46,7 +46,7 @@ def _candidates() -> list[CandidateView]:
 async def test_gemini_reasoner_ranks_live():
     settings = Settings(
         mubit_api_key="t",
-        costit_reasoner_provider="gemini",
+        minima_reasoner_provider="gemini",
         gemini_api_key=os.environ["GEMINI_API_KEY"],
     )
     reasoner = build_reasoner(settings)
@@ -65,7 +65,7 @@ async def test_gemini_reasoner_ranks_live():
 
         try:
             genai.Client(api_key=os.environ["GEMINI_API_KEY"]).models.generate_content(
-                model=settings.costit_reasoner_model or "gemini-2.5-flash", contents="ok"
+                model=settings.minima_reasoner_model or "gemini-2.5-flash", contents="ok"
             )
         except Exception as exc:  # noqa: BLE001
             pytest.skip(f"gemini unreachable from this environment: {exc}")
@@ -78,7 +78,7 @@ async def test_gemini_reasoner_ranks_live():
 
 @pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="needs ANTHROPIC_API_KEY")
 async def test_anthropic_reasoner_ranks_live():
-    settings = Settings(mubit_api_key="t", costit_reasoner_provider="anthropic")
+    settings = Settings(mubit_api_key="t", minima_reasoner_provider="anthropic")
     reasoner = build_reasoner(settings)
     assert reasoner is not None
 

@@ -1,8 +1,8 @@
 """Live multi-tenant e2e against a real Mubit instance — NO mocks.
 
 Exercises the T3 structure end to end: provision an org (its Mubit key supplied only as a
-server-side ``env:`` reference, never on the wire), authenticate with the Costit-issued
-``cstk_…`` key, route /recommend + /feedback to that org's real Mubit instance, watch the
+server-side ``env:`` reference, never on the wire), authenticate with the Minima-issued
+``mnim_…`` key, route /recommend + /feedback to that org's real Mubit instance, watch the
 learning loop close in real memory, and prove the cross-org guard + auth rejections.
 
     cd ricedb && make run-mubit          # Mubit :3000 + embedder :8080
@@ -19,15 +19,15 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.llm.registry import build_reasoner
-from costit.main import create_app
-from costit.recommender.propensity import PropensityTracker
-from costit.recommender.recstore import LaneCounter, RecommendationStore
-from costit.tenancy.registry import InMemoryTenantStore
-from costit.tenancy.runtime import TenantRuntime
-from costit.tenancy.secrets import SecretResolver
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.llm.registry import build_reasoner
+from minima.main import create_app
+from minima.recommender.propensity import PropensityTracker
+from minima.recommender.recstore import LaneCounter, RecommendationStore
+from minima.tenancy.registry import InMemoryTenantStore
+from minima.tenancy.runtime import TenantRuntime
+from minima.tenancy.secrets import SecretResolver
 
 pytestmark = [
     pytest.mark.live,
@@ -42,14 +42,14 @@ TASK = "Summarize the following customer support email into one sentence."
 
 def _settings() -> Settings:
     return Settings(
-        costit_multitenant=True,
-        costit_provisioning_key=PROV,
+        minima_multitenant=True,
+        minima_provisioning_key=PROV,
         mubit_api_key=None,  # multi-tenant: key comes from the per-org env: reference
         mubit_endpoint=os.environ["MUBIT_ENDPOINT"],
         mubit_transport=os.getenv("MUBIT_TRANSPORT", "http"),
-        costit_memory_recall_timeout_ms=10_000,
+        minima_memory_recall_timeout_ms=10_000,
         mubit_timeout_ms=30_000,
-        costit_reflect_every_n=3,
+        minima_reflect_every_n=3,
     )
 
 
@@ -74,7 +74,7 @@ def live_client():
 def _provision(client: TestClient, org: str, lane_prefix: str, endpoint: str | None = None) -> str:
     r = client.post(
         "/v1/admin/tenants",
-        headers={"X-Costit-Provisioning-Key": PROV},
+        headers={"X-Minima-Provisioning-Key": PROV},
         json={
             "org_id": org,
             "mubit_endpoint": endpoint or os.environ["MUBIT_ENDPOINT"],
@@ -86,7 +86,7 @@ def _provision(client: TestClient, org: str, lane_prefix: str, endpoint: str | N
         },
     )
     assert r.status_code == 201, r.text
-    return r.json()["costit_api_key"]
+    return r.json()["minima_api_key"]
 
 
 def _recommend(client: TestClient, key: str) -> dict:
@@ -101,12 +101,12 @@ def _recommend(client: TestClient, key: str) -> dict:
 
 def test_multitenant_live_e2e(live_client: TestClient):
     run = uuid.uuid4().hex[:8]
-    # Two logical orgs. Each carries its OWN Costit key -> its OWN Mubit instance. (Locally
+    # Two logical orgs. Each carries its OWN Minima key -> its OWN Mubit instance. (Locally
     # there is one Mubit instance, so the two orgs use distinct lane_prefixes; the hard
     # instance boundary itself is Mubit-enforced — see verify_api_key — and would apply
     # automatically were these two separate instances.)
-    acme_key = _provision(live_client, "acme", f"costit-acme-{run}")
-    globex_key = _provision(live_client, "globex", f"costit-globex-{run}")
+    acme_key = _provision(live_client, "acme", f"minima-acme-{run}")
+    globex_key = _provision(live_client, "globex", f"minima-globex-{run}")
 
     # 1) Per-org health routes to the real instance.
     h = live_client.get("/v1/health", headers={"Authorization": f"Bearer {acme_key}"}).json()
@@ -177,7 +177,7 @@ def test_multitenant_live_e2e(live_client: TestClient):
     assert fb2["reinforced_entry_ids"], fb2  # the recalled neighbours were credited
     print(f"[reinforce] acme reinforced {len(fb2['reinforced_entry_ids'])} recalled neighbour(s)")
 
-    # 5) Cross-org guard (Costit-side): globex cannot resolve/credit acme's recommendation_id,
+    # 5) Cross-org guard (Minima-side): globex cannot resolve/credit acme's recommendation_id,
     #    regardless of the shared backing instance — the recstore is org-partitioned.
     cross = live_client.post(
         "/v1/feedback",
@@ -200,7 +200,7 @@ def test_multitenant_live_e2e(live_client: TestClient):
     #     instance — distinct orgs hit distinct instances. A deliberately-unreachable endpoint
     #     is reported unreachable for that org while acme's instance stays reachable.
     iso_key = _provision(
-        live_client, "isolated", f"costit-iso-{run}", endpoint="http://127.0.0.1:3999"
+        live_client, "isolated", f"minima-iso-{run}", endpoint="http://127.0.0.1:3999"
     )
     hi = live_client.get("/v1/health", headers={"Authorization": f"Bearer {iso_key}"}).json()
     assert hi["mubit"]["endpoint"] == "http://127.0.0.1:3999"
@@ -210,6 +210,6 @@ def test_multitenant_live_e2e(live_client: TestClient):
     # 7) Auth: no key and a forged key are both rejected.
     body = {"task": {"task": TASK}, "allow_llm_escalation": False}
     assert live_client.post("/v1/recommend", json=body).status_code == 401
-    forged = {"Authorization": "Bearer cstk_acme_0000_forgedsecret"}
+    forged = {"Authorization": "Bearer mnim_acme_0000_forgedsecret"}
     assert live_client.post("/v1/recommend", headers=forged, json=body).status_code == 401
-    print("[auth]   missing/forged Costit key -> 401\n")
+    print("[auth]   missing/forged Minima key -> 401\n")

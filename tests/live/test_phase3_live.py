@@ -12,11 +12,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from costit.config import Settings
-from costit.main import create_app
-from costit.memory.adapter import MubitMemory
-from costit.memory.keys import build_lesson_content, lesson_upsert_key
-from costit.recommender.recstore import SqliteRecommendationStore
+from minima.config import Settings
+from minima.main import create_app
+from minima.memory.adapter import MubitMemory
+from minima.memory.keys import build_lesson_content, lesson_upsert_key
+from minima.recommender.recstore import SqliteRecommendationStore
 
 pytestmark = [
     pytest.mark.live,
@@ -29,7 +29,7 @@ TASK = "Refactor a recursive descent parser into an iterative state machine with
 
 
 async def test_phase3_remember_lesson_and_surface_strategies_live():
-    settings = Settings(costit_memory_recall_timeout_ms=8000)
+    settings = Settings(minima_memory_recall_timeout_ms=8000)
     memory = MubitMemory(settings)
     namespace = "p3-" + uuid.uuid4().hex[:8]
     lane = settings.lane(namespace)
@@ -52,10 +52,10 @@ async def test_phase3_remember_lesson_and_surface_strategies_live():
 def test_phase3_sqlite_recstore_and_lesson_promotion_via_api_live(tmp_path):
     db = str(tmp_path / "recstore.db")
     settings = Settings(
-        costit_reflect_every_n=0,
-        costit_memory_recall_timeout_ms=8000,
-        costit_recommendation_store="sqlite",
-        costit_sqlite_path=db,
+        minima_reflect_every_n=0,
+        minima_memory_recall_timeout_ms=8000,
+        minima_recommendation_store="sqlite",
+        minima_sqlite_path=db,
     )
     namespace = "p3api-" + uuid.uuid4().hex[:8]
     app = create_app(settings=settings, start_refresh=False)
@@ -93,4 +93,4 @@ def test_phase3_sqlite_recstore_and_lesson_promotion_via_api_live(tmp_path):
 
         strat = client.get("/v1/strategies", params={"namespace": namespace})
         assert strat.status_code == 200
-        assert strat.json()["lane"] == f"costit:{namespace}"
+        assert strat.json()["lane"] == f"minima:{namespace}"

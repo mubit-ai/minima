@@ -1,14 +1,14 @@
 """Hard cross-instance isolation — requires TWO real Mubit instances.
 
 The single-instance live test (test_multitenant_live.py) proves per-org *routing* and the
-Costit-side guards, but NOT memory isolation (one instance + soft lane filter). This test
+Minima-side guards, but NOT memory isolation (one instance + soft lane filter). This test
 proves the hard boundary: an outcome written to org A's instance is physically absent from
 org B's instance, and org A's Mubit key is rejected by org B's instance.
 
 Provide two instances via env (skipped otherwise):
 
-    export COSTIT_MT_A_ENDPOINT=http://127.0.0.1:3000  COSTIT_MT_A_KEY=mbt_instA_...
-    export COSTIT_MT_B_ENDPOINT=http://127.0.0.1:3001  COSTIT_MT_B_KEY=mbt_instB_...
+    export MINIMA_MT_A_ENDPOINT=http://127.0.0.1:3000  MINIMA_MT_A_KEY=mbt_instA_...
+    export MINIMA_MT_B_ENDPOINT=http://127.0.0.1:3001  MINIMA_MT_B_KEY=mbt_instB_...
     uv run pytest tests/live/test_multitenant_isolation_live.py -m live -s -q
 
 Two instances can be: (a) two local `mubit` processes on different ports with distinct
@@ -24,17 +24,17 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.main import create_app
-from costit.memory.adapter import MubitMemory
-from costit.recommender.propensity import PropensityTracker
-from costit.recommender.recstore import LaneCounter, RecommendationStore
-from costit.tenancy.registry import InMemoryTenantStore
-from costit.tenancy.runtime import TenantRuntime
-from costit.tenancy.secrets import SecretResolver
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.main import create_app
+from minima.memory.adapter import MubitMemory
+from minima.recommender.propensity import PropensityTracker
+from minima.recommender.recstore import LaneCounter, RecommendationStore
+from minima.tenancy.registry import InMemoryTenantStore
+from minima.tenancy.runtime import TenantRuntime
+from minima.tenancy.secrets import SecretResolver
 
-_REQUIRED = ["COSTIT_MT_A_ENDPOINT", "COSTIT_MT_A_KEY", "COSTIT_MT_B_ENDPOINT", "COSTIT_MT_B_KEY"]
+_REQUIRED = ["MINIMA_MT_A_ENDPOINT", "MINIMA_MT_A_KEY", "MINIMA_MT_B_ENDPOINT", "MINIMA_MT_B_KEY"]
 
 pytestmark = [
     pytest.mark.live,
@@ -50,13 +50,13 @@ TASK = "Refactor this recursive descent parser into an iterative state machine."
 
 def _runtime() -> TenantRuntime:
     s = Settings(
-        costit_multitenant=True,
-        costit_provisioning_key=PROV,
+        minima_multitenant=True,
+        minima_provisioning_key=PROV,
         mubit_api_key=None,
         mubit_transport=os.getenv("MUBIT_TRANSPORT", "http"),
-        costit_memory_recall_timeout_ms=10_000,
+        minima_memory_recall_timeout_ms=10_000,
         mubit_timeout_ms=30_000,
-        costit_reasoner_provider="none",
+        minima_reasoner_provider="none",
     )
     return TenantRuntime(
         settings=s,
@@ -73,7 +73,7 @@ def _runtime() -> TenantRuntime:
 def _provision(c: TestClient, org: str, endpoint_env: str, key_env: str, lane: str) -> str:
     r = c.post(
         "/v1/admin/tenants",
-        headers={"X-Costit-Provisioning-Key": PROV},
+        headers={"X-Minima-Provisioning-Key": PROV},
         json={
             "org_id": org,
             "mubit_endpoint": os.environ[endpoint_env],
@@ -83,7 +83,7 @@ def _provision(c: TestClient, org: str, endpoint_env: str, key_env: str, lane: s
         },
     )
     assert r.status_code == 201, r.text
-    return r.json()["costit_api_key"]
+    return r.json()["minima_api_key"]
 
 
 def _recommend(c: TestClient, key: str) -> dict:
@@ -112,8 +112,8 @@ def test_hard_cross_instance_isolation():
     app = create_app(settings=rt._settings, tenant_runtime=rt, start_refresh=False)
 
     with TestClient(app) as c:
-        a_key = _provision(c, "orga", "COSTIT_MT_A_ENDPOINT", "COSTIT_MT_A_KEY", f"iso-a-{run}")
-        b_key = _provision(c, "orgb", "COSTIT_MT_B_ENDPOINT", "COSTIT_MT_B_KEY", f"iso-b-{run}")
+        a_key = _provision(c, "orga", "MINIMA_MT_A_ENDPOINT", "MINIMA_MT_A_KEY", f"iso-a-{run}")
+        b_key = _provision(c, "orgb", "MINIMA_MT_B_ENDPOINT", "MINIMA_MT_B_KEY", f"iso-b-{run}")
 
         # 1) Write a distinctive outcome into org A's instance.
         a1 = _recommend(c, a_key)
@@ -156,8 +156,8 @@ def test_hard_cross_instance_isolation():
         s = rt._settings
         cross = MubitMemory(
             s,
-            endpoint=os.environ["COSTIT_MT_B_ENDPOINT"],
-            api_key=os.environ["COSTIT_MT_A_KEY"],
+            endpoint=os.environ["MINIMA_MT_B_ENDPOINT"],
+            api_key=os.environ["MINIMA_MT_A_KEY"],
             transport=os.getenv("MUBIT_TRANSPORT", "http"),
         )
         import anyio

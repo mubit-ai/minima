@@ -9,15 +9,15 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from costit.catalog.store import CatalogStore
-from costit.config import Settings
-from costit.main import create_app
-from costit.memory.adapter import Memory
-from costit.recommender.propensity import PropensityTracker
-from costit.recommender.recstore import LaneCounter, RecommendationStore
-from costit.tenancy.registry import InMemoryTenantStore
-from costit.tenancy.runtime import TenantRuntime
-from costit.tenancy.secrets import SecretResolver
+from minima.catalog.store import CatalogStore
+from minima.config import Settings
+from minima.main import create_app
+from minima.memory.adapter import Memory
+from minima.recommender.propensity import PropensityTracker
+from minima.recommender.recstore import LaneCounter, RecommendationStore
+from minima.tenancy.registry import InMemoryTenantStore
+from minima.tenancy.runtime import TenantRuntime
+from minima.tenancy.secrets import SecretResolver
 from tests.factories import FakeMemory
 
 
@@ -29,11 +29,11 @@ def fakes() -> dict[str, FakeMemory]:
 @pytest.fixture
 def mt_client(fakes: dict[str, FakeMemory]):
     settings = Settings(
-        costit_multitenant=True,
-        costit_provisioning_key="prov-secret",
+        minima_multitenant=True,
+        minima_provisioning_key="prov-secret",
         mubit_api_key=None,
-        costit_reflect_every_n=3,
-        costit_reasoner_provider="none",
+        minima_reflect_every_n=3,
+        minima_reasoner_provider="none",
     )
 
     def factory(endpoint: str, _api_key: str | None, _transport: str) -> Memory:
@@ -58,11 +58,11 @@ def mt_client(fakes: dict[str, FakeMemory]):
 def _provision(client: TestClient, org: str, endpoint: str) -> str:
     r = client.post(
         "/v1/admin/tenants",
-        headers={"X-Costit-Provisioning-Key": "prov-secret"},
+        headers={"X-Minima-Provisioning-Key": "prov-secret"},
         json={"org_id": org, "mubit_endpoint": endpoint, "mubit_api_key_ref": f"inline:k-{org}"},
     )
     assert r.status_code == 201, r.text
-    return r.json()["costit_api_key"]
+    return r.json()["minima_api_key"]
 
 
 def test_provisioning_requires_key(mt_client: TestClient):
@@ -75,16 +75,16 @@ def test_provisioning_requires_key(mt_client: TestClient):
     # Wrong provisioning key -> 403.
     r = mt_client.post(
         "/v1/admin/tenants",
-        headers={"X-Costit-Provisioning-Key": "wrong"},
+        headers={"X-Minima-Provisioning-Key": "wrong"},
         json={"org_id": "acme", "mubit_endpoint": "http://acme", "mubit_api_key_ref": "inline:k"},
     )
     assert r.status_code == 403
 
 
-def test_recommend_requires_valid_costit_key(mt_client: TestClient):
+def test_recommend_requires_valid_minima_key(mt_client: TestClient):
     body = {"task": {"task": "Summarize this paragraph."}, "allow_llm_escalation": False}
     assert mt_client.post("/v1/recommend", json=body).status_code == 401
-    bad = {"Authorization": "Bearer cstk_acme_dead_beef"}
+    bad = {"Authorization": "Bearer mnim_acme_dead_beef"}
     assert mt_client.post("/v1/recommend", headers=bad, json=body).status_code == 401
 
 
@@ -97,7 +97,7 @@ def test_per_org_routing_and_cross_org_isolation(
     # Re-keying an existing org is refused (delete first).
     dup = mt_client.post(
         "/v1/admin/tenants",
-        headers={"X-Costit-Provisioning-Key": "prov-secret"},
+        headers={"X-Minima-Provisioning-Key": "prov-secret"},
         json={"org_id": "acme", "mubit_endpoint": "http://acme", "mubit_api_key_ref": "inline:x"},
     )
     assert dup.status_code == 409
@@ -132,7 +132,7 @@ def test_per_org_routing_and_cross_org_isolation(
 
 def test_admin_list_and_delete(mt_client: TestClient):
     _provision(mt_client, "acme", "http://acme")
-    prov = {"X-Costit-Provisioning-Key": "prov-secret"}
+    prov = {"X-Minima-Provisioning-Key": "prov-secret"}
     listed = mt_client.get("/v1/admin/tenants", headers=prov).json()
     assert listed["count"] == 1
     assert listed["tenants"][0]["org_id"] == "acme"

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Example 1 — Quickstart with raw curl.
 #
-# Exercises every Costit endpoint with nothing but curl + jq. Start the service first
-# (`make run`). Override the URL with COSTIT_URL; in multi-tenant mode set COSTIT_KEY.
+# Exercises every Minima endpoint with nothing but curl + jq. Start the service first
+# (`make run`). Override the URL with MINIMA_URL; in multi-tenant mode set MINIMA_KEY.
 #
 #   bash examples/01_quickstart.sh
 set -euo pipefail
 
-URL="${COSTIT_URL:-http://localhost:8080}"
+URL="${MINIMA_URL:-http://localhost:8080}"
 AUTH=()
-if [[ -n "${COSTIT_KEY:-}" ]]; then AUTH=(-H "authorization: Bearer ${COSTIT_KEY}"); fi
+if [[ -n "${MINIMA_KEY:-}" ]]; then AUTH=(-H "authorization: Bearer ${MINIMA_KEY}"); fi
 JQ() { if command -v jq >/dev/null; then jq "$@"; else cat; fi; }
 
 echo "== health =="

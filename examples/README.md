@@ -1,12 +1,12 @@
-# Costit Examples
+# Minima Examples
 
 Runnable examples, ordered from simplest to most advanced. Each is self-contained and
 documented inline. Full prose docs live in [`../docs/`](../docs/).
 
-> **Prerequisites.** A running Costit service (`make run`) pointed at a reachable Mubit
+> **Prerequisites.** A running Minima service (`make run`) pointed at a reachable Mubit
 > instance. The Python examples use the bundled client SDK, so run them with `uv run` from
-> the repo root. Set `COSTIT_URL` (default `http://localhost:8080`) and, in multi-tenant
-> mode, `COSTIT_KEY` (a `cstk_…` key).
+> the repo root. Set `MINIMA_URL` (default `http://localhost:8080`) and, in multi-tenant
+> mode, `MINIMA_KEY` (a `mnim_…` key).
 
 | # | File | Level | What it shows |
 |---|------|-------|---------------|
@@ -25,7 +25,7 @@ documented inline. Full prose docs live in [`../docs/`](../docs/).
 make run
 
 # 2. (optional) seed cold-start memory so picks are grounded
-uv run costit-seed --dataset synthetic --limit 2000 --lane costit:default
+uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
 
 # shell example
 bash examples/01_quickstart.sh
@@ -38,5 +38,5 @@ uv run python examples/04_workflow.py
 
 Examples 5 and 6 need extra credentials (a Mubit key for autocapture; an `ANTHROPIC_API_KEY`
 to actually run the routed call). Example 7 needs the service started with
-`COSTIT_MULTITENANT=true` and a `COSTIT_PROVISIONING_KEY`. Each script prints what it needs
+`MINIMA_MULTITENANT=true` and a `MINIMA_PROVISIONING_KEY`. Each script prints what it needs
 and exits cleanly if something is missing.

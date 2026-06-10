@@ -44,7 +44,7 @@ def test_feedback_writes_outcome_and_credits_neighbors(client, fake_memory):
 
     assert len(fake_memory.remembered) == 1
     written = fake_memory.remembered[0]
-    assert written["upsert_key"] == "costit:om:code:hard:claude-haiku-4-5"
+    assert written["upsert_key"] == "minima:om:code:hard:claude-haiku-4-5"
     assert written["record"].quality_score == 0.95
     assert written["source"] == "human"
 
@@ -68,7 +68,7 @@ def test_reflection_triggers_on_cadence(client, fake_memory):
     rec = _recommend_haiku(client, fake_memory)
     rec_id = rec["recommendation_id"]
     triggers = []
-    for _ in range(3):  # COSTIT_REFLECT_EVERY_N = 3 in the test settings
+    for _ in range(3):  # MINIMA_REFLECT_EVERY_N = 3 in the test settings
         fb = client.post(
             "/v1/feedback",
             json={

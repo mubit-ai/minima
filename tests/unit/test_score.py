@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from costit.recommender import score
-from costit.recommender.aggregate import aggregate_by_model
-from costit.recommender.types import ModelAggregate
-from costit.schemas.common import TaskType
-from costit.schemas.models_catalog import ModelCard
+from minima.recommender import score
+from minima.recommender.aggregate import aggregate_by_model
+from minima.recommender.types import ModelAggregate
+from minima.schemas.common import TaskType
+from minima.schemas.models_catalog import ModelCard
 from tests.factories import make_evidence
 
 

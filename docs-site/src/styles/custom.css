@@ -1,0 +1,74 @@
+/* Minima brand — orange-red accent on white, matching minima.sh */
+
+:root,
+::backdrop {
+  /* Main accent: orange-red from the landing page hero and CTAs */
+  --sl-color-accent-low: #fef0eb;
+  --sl-color-accent: #e84524;
+  --sl-color-accent-high: #c03618;
+
+  /* Keep text crisp on the white background */
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #f7f7f6;
+  --sl-color-gray-2: #eeeeec;
+  --sl-color-gray-3: #c5c5c2;
+  --sl-color-gray-4: #8e8e8b;
+  --sl-color-gray-5: #6b6b68;
+  --sl-color-gray-6: #424240;
+  --sl-color-black: #1a1a18;
+}
+
+:root[data-theme='dark'],
+[data-theme='dark'] ::backdrop {
+  /* Dark mode: deep charcoal base, warm orange-red accent */
+  --sl-color-accent-low: #3d1007;
+  --sl-color-accent: #f0703a;
+  --sl-color-accent-high: #fdb79a;
+
+  --sl-color-gray-1: #1c1c1a;
+  --sl-color-gray-2: #252522;
+  --sl-color-gray-3: #46463f;
+  --sl-color-gray-4: #6b6b62;
+  --sl-color-gray-5: #929288;
+  --sl-color-gray-6: #c8c8be;
+  --sl-color-white: #f4f4f0;
+}
+
+/* Tighten the header logo area */
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Accent the active sidebar item with the brand color */
+[data-theme='light'] a[aria-current='page'] {
+  color: var(--sl-color-accent);
+  background-color: var(--sl-color-accent-low);
+}
+
+/* Brand the inline code highlights slightly */
+:root {
+  --sl-color-bg-inline-code: #fef6f3;
+  --sl-color-text-accent: var(--sl-color-accent);
+}
+
+:root[data-theme='dark'] {
+  --sl-color-bg-inline-code: #2a1209;
+}
+
+/* The hero "tagline" on the index page */
+.hero .tagline {
+  font-size: var(--sl-text-xl);
+  color: var(--sl-color-gray-5);
+  max-width: 48ch;
+}
+
+/* Slightly warmer table headers */
+thead th {
+  background-color: var(--sl-color-gray-1);
+}
+
+/* Keep kbd / code blocks tight */
+code, kbd {
+  font-size: 0.875em;
+}

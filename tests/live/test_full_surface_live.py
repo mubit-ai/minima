@@ -21,13 +21,13 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from costit.config import Settings
-from costit.main import create_app
-from costit.memory.adapter import MubitMemory
-from costit.memory.keys import build_content, task_cluster, task_fingerprint
-from costit.memory.records import OutcomeRecord
-from costit.recommender.recstore import SqliteRecommendationStore
-from costit.seeding.items import SeedItem, build_item
+from minima.config import Settings
+from minima.main import create_app
+from minima.memory.adapter import MubitMemory
+from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.records import OutcomeRecord
+from minima.recommender.recstore import SqliteRecommendationStore
+from minima.seeding.items import SeedItem, build_item
 
 pytestmark = [
     pytest.mark.live,
@@ -57,8 +57,8 @@ def _ns(prefix: str = "live") -> str:
 def _base_settings(**overrides) -> Settings:
     """Settings for the memory-only (no reasoner) live tests."""
     base: dict = {
-        "costit_memory_recall_timeout_ms": RECALL_TIMEOUT_MS,
-        "costit_reflect_every_n": 0,
+        "minima_memory_recall_timeout_ms": RECALL_TIMEOUT_MS,
+        "minima_reflect_every_n": 0,
     }
     base.update(overrides)
     return Settings(**base)
@@ -250,12 +250,12 @@ def test_feedback_reinforcement_loop_live():
 )
 def test_llm_escalation_live():
     settings = Settings(
-        costit_reasoner_provider="gemini",
+        minima_reasoner_provider="gemini",
         gemini_api_key=os.environ["GEMINI_API_KEY"],
-        costit_reasoner_max_tokens=4096,
-        costit_reasoner_timeout_ms=15000,
-        costit_memory_recall_timeout_ms=RECALL_TIMEOUT_MS,
-        costit_reflect_every_n=0,
+        minima_reasoner_max_tokens=4096,
+        minima_reasoner_timeout_ms=15000,
+        minima_memory_recall_timeout_ms=RECALL_TIMEOUT_MS,
+        minima_reflect_every_n=0,
     )
     namespace = _ns()  # cold namespace -> thin evidence -> escalation
     app = create_app(settings=settings, start_refresh=False)
@@ -371,14 +371,14 @@ def test_lesson_promotion_and_strategies_live():
 
         strat = client.get("/v1/strategies", params={"namespace": namespace})
         assert strat.status_code == 200
-        assert strat.json()["lane"] == f"costit:{namespace}"
+        assert strat.json()["lane"] == f"minima:{namespace}"
 
 
 # --------------------------------------------------------------------------------------
 # 7. reflect cadence
 # --------------------------------------------------------------------------------------
 def test_reflect_cadence_live():
-    settings = _base_settings(costit_reflect_every_n=2)
+    settings = _base_settings(minima_reflect_every_n=2)
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
@@ -421,8 +421,8 @@ def test_reflect_cadence_live():
 def test_durable_sqlite_recstore_live(tmp_path):
     db = str(tmp_path / "rs.db")
     settings = _base_settings(
-        costit_recommendation_store="sqlite",
-        costit_sqlite_path=db,
+        minima_recommendation_store="sqlite",
+        minima_sqlite_path=db,
     )
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)

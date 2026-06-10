@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from costit.catalog.merge import overlay_litellm
-from costit.catalog.store import CatalogStore, load_aliases, load_snapshot_cards
-from costit.config import Settings
-from costit.memory.records import (
+from minima.catalog.merge import overlay_litellm
+from minima.catalog.store import CatalogStore, load_aliases, load_snapshot_cards
+from minima.config import Settings
+from minima.memory.records import (
     OutcomeRecord,
     quality_from_outcome,
     signal_from_outcome,

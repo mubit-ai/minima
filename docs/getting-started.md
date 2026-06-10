@@ -6,8 +6,8 @@ loop. It takes about five minutes.
 ## Prerequisites
 
 - **Python 3.11+** and [`uv`](https://github.com/astral-sh/uv).
-- **A running Mubit runtime.** Costit stores and recalls `task → model → outcome` history
-  in Mubit and uses Mubit's server-side embeddings, so Costit needs no embedding model of
+- **A running Mubit runtime.** Minima stores and recalls `task → model → outcome` history
+  in Mubit and uses Mubit's server-side embeddings, so Minima needs no embedding model of
   its own. The default endpoint is a local runtime at `http://127.0.0.1:3000`; start one
   with `make run-mubit` in the Mubit repo, or point `MUBIT_ENDPOINT` at a hosted instance.
 
@@ -32,7 +32,7 @@ cp .env.example .env
 ```
 
 The only required value is `MUBIT_API_KEY` (a Mubit **data-plane** key for the instance
-Costit should read/write). If your Mubit instance is not local, also set `MUBIT_ENDPOINT`.
+Minima should read/write). If your Mubit instance is not local, also set `MUBIT_ENDPOINT`.
 Everything else has sensible defaults — see **[Configuration](configuration.md)**.
 
 > **Local runtime note:** the bundled `.env.example` sets `MUBIT_TRANSPORT=http`. The local
@@ -42,14 +42,14 @@ Everything else has sensible defaults — see **[Configuration](configuration.md
 
 ## 3. (Optional) Seed cold-start memory
 
-With no history, Costit falls back to capability priors (`decision_basis: "prior"`, a
+With no history, Minima falls back to capability priors (`decision_basis: "prior"`, a
 `cold_start` warning) and the cheap-LLM reasoner fires more often. Seed a base of history so
 day-one recommendations are grounded:
 
 ```bash
-uv run costit-seed --limit 2000 --lane costit:default
+uv run minima-seed --limit 2000 --lane minima:default
 # or, no external dataset download:
-uv run costit-seed --dataset synthetic --limit 2000 --lane costit:default
+uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
 ```
 
 See **[Cold-Start Seeding](seeding.md)** for details.
@@ -58,7 +58,7 @@ See **[Cold-Start Seeding](seeding.md)** for details.
 
 ```bash
 make run
-# == uv run uvicorn costit.main:app --reload --host 0.0.0.0 --port 8080
+# == uv run uvicorn minima.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 Interactive API docs are served at `http://localhost:8080/docs` (OpenAPI/Swagger).
@@ -77,11 +77,11 @@ curl -s http://localhost:8080/v1/recommend \
 
 You get back a `recommendation_id`, a `recommended_model`, a ranked candidate list, a
 `fallback_model`, and a `decision_basis` (`memory` | `prior` | `llm`). Run that model in
-**your own** stack — Costit does not call it for you.
+**your own** stack — Minima does not call it for you.
 
 ## 6. Close the loop
 
-Tell Costit how it went. This is what makes the next recommendation sharper — and it
+Tell Minima how it went. This is what makes the next recommendation sharper — and it
 populates the realized cost/token history that powers accurate cost ranking.
 
 ```bash

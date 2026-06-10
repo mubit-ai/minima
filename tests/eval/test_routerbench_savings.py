@@ -1,4 +1,4 @@
-"""End-to-end: does Costit's recommender cut token cost at preserved accuracy?
+"""End-to-end: does Minima's recommender cut token cost at preserved accuracy?
 
 Runs the RouterBench harness against live Mubit and asserts a real cost cut at preserved
 accuracy, with the operating point chosen on a VALIDATION split (no test cherry-picking),
@@ -8,7 +8,7 @@ bootstrap CIs, a leakage diagnostic, and a per-task-type breakdown. Slow; needs 
     MUBIT_ENDPOINT=http://127.0.0.1:3000 MUBIT_API_KEY=... MUBIT_TRANSPORT=http \
     uv run --extra seed pytest -m eval -s -q
 
-Tunables: COSTIT_EVAL_{TRAIN_N,VAL_N,TEST_N,SLIDERS,SEED,RECALL_LIMIT,TRAIN_PRIORS}.
+Tunables: MINIMA_EVAL_{TRAIN_N,VAL_N,TEST_N,SLIDERS,SEED,RECALL_LIMIT,TRAIN_PRIORS}.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from costit.config import Settings
+from minima.config import Settings
 from tests.eval import harness
 
 pytestmark = [
@@ -30,7 +30,7 @@ RETENTION_FLOOR = 0.95
 
 
 def _sliders() -> tuple[float, ...]:
-    raw = os.getenv("COSTIT_EVAL_SLIDERS")
+    raw = os.getenv("MINIMA_EVAL_SLIDERS")
     if raw:
         return tuple(float(x) for x in raw.split(","))
     return (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
@@ -58,7 +58,7 @@ def _report(r: harness.EvalResult) -> None:
         sav = 1.0 - v["cost"] / prem["cost"] if prem["cost"] else 0.0
         p(f"  {name:20s} acc={v['accuracy']:.3f} ({ret:5.1%} of premium)  cost=${v['cost']:.4f}  savings={sav:6.1%}")
     p("-" * 84)
-    p("Costit frontier on TEST (slider 0=cheapest-acceptable … 10=quality):")
+    p("Minima frontier on TEST (slider 0=cheapest-acceptable … 10=quality):")
     p(f"  {'slider':>6} {'accuracy':>9} {'retention':>10} {'cost':>10} {'savings':>9}  picks")
     for s in r.frontier:
         picks = ", ".join(f"{k.split('/')[-1]}:{v}" for k, v in sorted(s.pick_counts.items()))
@@ -68,14 +68,14 @@ def _report(r: harness.EvalResult) -> None:
     p("-" * 84)
     p("per-task-type at the selected operating point:")
     for tt, v in r.per_task_type.items():
-        p(f"  {tt:16s} n={v['n']:>4}  costit_acc={v['costit_acc']:.3f}  premium_acc={v['premium_acc']:.3f}  savings={v['savings']:6.1%}")
+        p(f"  {tt:16s} n={v['n']:>4}  minima_acc={v['minima_acc']:.3f}  premium_acc={v['premium_acc']:.3f}  savings={v['savings']:6.1%}")
     p("-" * 84)
     h = r.headline
     cheap = r.baselines["always_cheapest"]
     p(f"HEADLINE @ slider {r.selected_slider} (selected on validation): "
       f"savings={h.savings_vs_premium:.1%} (95% CI [{r.headline_savings_ci[0]:.1%}, {r.headline_savings_ci[1]:.1%}]), "
       f"accuracy retention={h.accuracy_retention:.1%} (95% CI [{r.headline_retention_ci[0]:.1%}, {r.headline_retention_ci[1]:.1%}])")
-    p(f"INTELLIGENCE: vs always-cheapest ({cheap.get('model', '?')}): Costit acc {h.accuracy:.3f} "
+    p(f"INTELLIGENCE: vs always-cheapest ({cheap.get('model', '?')}): Minima acc {h.accuracy:.3f} "
       f"vs {cheap['accuracy']:.3f} (+{h.accuracy - cheap['accuracy']:+.3f})  |  vs always-premium "
       f"({r.premium}): {h.savings_vs_premium:.1%} cheaper at {h.accuracy_retention:.1%} of its accuracy.")
     p("=" * 84)
@@ -83,21 +83,21 @@ def _report(r: harness.EvalResult) -> None:
 
 async def test_routerbench_significant_cost_reduction():
     settings = Settings(
-        costit_memory_recall_timeout_ms=int(os.getenv("COSTIT_EVAL_RECALL_TIMEOUT_MS", "20000")),
-        costit_memory_recall_limit=int(os.getenv("COSTIT_EVAL_RECALL_LIMIT", "40")),
+        minima_memory_recall_timeout_ms=int(os.getenv("MINIMA_EVAL_RECALL_TIMEOUT_MS", "20000")),
+        minima_memory_recall_limit=int(os.getenv("MINIMA_EVAL_RECALL_LIMIT", "40")),
         mubit_timeout_ms=120_000,  # long math prompts embed slowly during bulk seeding
     )
     try:
         result = await harness.evaluate(
             settings=settings,
-            train_n=int(os.getenv("COSTIT_EVAL_TRAIN_N", "800")),
-            val_n=int(os.getenv("COSTIT_EVAL_VAL_N", "60")),
-            test_n=int(os.getenv("COSTIT_EVAL_TEST_N", "120")),
+            train_n=int(os.getenv("MINIMA_EVAL_TRAIN_N", "800")),
+            val_n=int(os.getenv("MINIMA_EVAL_VAL_N", "60")),
+            test_n=int(os.getenv("MINIMA_EVAL_TEST_N", "120")),
             sliders=_sliders(),
             retention_floor=RETENTION_FLOOR,
-            seed=int(os.getenv("COSTIT_EVAL_SEED", "42")),
-            use_train_priors=os.getenv("COSTIT_EVAL_TRAIN_PRIORS") == "1",
-            hard_frac=float(os.getenv("COSTIT_EVAL_HARD_FRAC", "0.15")),
+            seed=int(os.getenv("MINIMA_EVAL_SEED", "42")),
+            use_train_priors=os.getenv("MINIMA_EVAL_TRAIN_PRIORS") == "1",
+            hard_frac=float(os.getenv("MINIMA_EVAL_HARD_FRAC", "0.15")),
         )
     except RuntimeError as exc:
         if "seed' extra" in str(exc) or "huggingface" in str(exc).lower():
