@@ -9,6 +9,8 @@ from minima.config import Settings
 from minima.main import create_app
 from tests.factories import FakeMemory
 
+TEST_MUBIT_KEY = "mbt_test_kid_secret"
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,5 +47,5 @@ def app(settings: Settings, fake_memory: FakeMemory):
 
 @pytest.fixture
 def client(app) -> TestClient:
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as test_client:
         yield test_client
