@@ -11,11 +11,11 @@ Minima is a hosted API. There is nothing to install or run — you call the serv
 
 ## Prerequisites
 
-- **A Minima API key** (`mnim_…`). [Request access](https://minima.sh) if you don't have one yet. The key authenticates every request and scopes all of your account's learning.
-- Nothing else. Minima stores and recalls `task → model → outcome` history for you and computes its own embeddings server-side — there's no model, database, or runtime for you to operate.
+- **A Mubit API key** (`mbt_…`) — your Mubit data-plane key. Minima passes it through on each request to read and write your `task → model → outcome` history in Mubit; there is no separate Minima key. [Request access](https://minima.sh) if you don't have one yet.
+- Nothing else. Minima computes its own embeddings server-side — there's no model, database, or runtime for you to operate.
 
 <Aside type="note" title="Base URL">
-All requests go to `https://api.minima.sh`. The examples below read your key from a `MINIMA_KEY` environment variable — `export MINIMA_KEY=mnim_…` before running them.
+All requests go to `https://api.minima.sh`. The examples below read your Mubit key from a `MUBIT_API_KEY` environment variable — `export MUBIT_API_KEY=mbt_…` before running them.
 </Aside>
 
 <Steps>
@@ -24,7 +24,7 @@ All requests go to `https://api.minima.sh`. The examples below read your key fro
 
    ```bash
    curl -s https://api.minima.sh/v1/recommend \
-     -H "authorization: Bearer $MINIMA_KEY" \
+     -H "authorization: Bearer $MUBIT_API_KEY" \
      -H 'content-type: application/json' \
      -d '{
            "task": {"task": "Summarize this 2-page incident report into 3 bullet points.",
@@ -45,7 +45,7 @@ All requests go to `https://api.minima.sh`. The examples below read your key fro
 
    ```bash
    curl -s https://api.minima.sh/v1/feedback \
-     -H "authorization: Bearer $MINIMA_KEY" \
+     -H "authorization: Bearer $MUBIT_API_KEY" \
      -H 'content-type: application/json' \
      -d '{
            "recommendation_id": "<from step 1>",

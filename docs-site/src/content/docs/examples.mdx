@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Copy-paste recipes against the hosted API, from a single `curl` to a production routing wrapper. Every snippet is self-contained.
 
 <Aside type="tip" title="Setup">
-Set your key once: `export MINIMA_KEY=mnim_…`. The Python examples use the [`minima_client`](/client-sdk/) package and read the same key. All requests go to `https://api.minima.sh`.
+Set your key once: `export MUBIT_API_KEY=mbt_…`. The Python examples use the [`minima_client`](/client-sdk/) package and read the same key. All requests go to `https://api.minima.sh`.
 </Aside>
 
 ## 1. Quickstart with curl
@@ -23,7 +23,7 @@ curl -s https://api.minima.sh/v1/health | jq
 
 # A recommendation
 REC=$(curl -s https://api.minima.sh/v1/recommend \
-  -H "authorization: Bearer $MINIMA_KEY" \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"task":{"task":"Classify this support ticket by urgency.","task_type":"classification"},
        "cost_quality_tradeoff":2}')
@@ -31,7 +31,7 @@ echo "$REC" | jq '.recommended_model.model_id, .decision_basis, .recommendation_
 
 # Close the loop
 curl -s https://api.minima.sh/v1/feedback \
-  -H "authorization: Bearer $MINIMA_KEY" \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
   -H 'content-type: application/json' \
   -d "{\"recommendation_id\":$(echo "$REC" | jq .recommendation_id),
        \"chosen_model_id\":\"claude-haiku-4-5\",\"outcome\":\"success\",\"quality_score\":0.92}" | jq
@@ -44,7 +44,7 @@ The whole value loop with the Python SDK: recommend → (you run the model) → 
 ```python
 from minima_client import MinimaClient
 
-with MinimaClient("https://api.minima.sh", api_key="mnim_…") as minima:
+with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     rec = minima.recommend(
         "Summarize this incident report into 3 bullet points.",
         cost_quality_tradeoff=3,
@@ -74,7 +74,7 @@ from minima_client import MinimaClient, TaskInput, Constraints
 
 task = TaskInput(task="Refactor this 200-line module for readability.", task_type="code")
 
-with MinimaClient("https://api.minima.sh", api_key="mnim_…") as minima:
+with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     rec = minima.recommend(
         task,
         constraints=Constraints(
@@ -110,7 +110,7 @@ req = WorkflowRequest(
     cost_quality_tradeoff=4,
 )
 
-with MinimaClient("https://api.minima.sh", api_key="mnim_…") as minima:
+with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     wf = minima.recommend_workflow(req)
     for step in wf.steps:
         print(step.step_id, "→", step.recommendation.recommended_model.model_id)
