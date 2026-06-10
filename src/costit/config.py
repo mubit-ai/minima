@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     costit_default_input_tokens: int = 1500
     costit_default_output_tokens: int = 500
     costit_reflect_every_n: int = 25
+    # Rank eligible models by OBSERVED avg $/call from recalled outcomes (Mubit stores
+    # cost_usd per outcome) instead of a flat token estimate. The estimate assumes a fixed
+    # completion length and so ignores reasoning/thinking tokens, which can mis-rank a
+    # cheap-listed model that is expensive in practice (e.g. a "flash" model that spends
+    # heavily on internal reasoning). Falls back to the estimate when fewer than
+    # costit_observed_cost_min_n cost observations exist for the candidate.
+    costit_use_observed_cost: bool = True
+    costit_observed_cost_min_n: int = 3
 
     # --- Cheap-LLM reasoner (recommend-only) ---
     costit_reasoner_provider: str = "none"  # none | anthropic | gemini

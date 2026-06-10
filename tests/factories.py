@@ -119,14 +119,20 @@ def make_evidence(
     is_stale: bool = False,
     task_type: str = "code",
     difficulty: str = "hard",
+    cost_usd: float = 0.0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
         task_type=task_type,
         difficulty=difficulty,
         task_cluster=f"{task_type}:{difficulty}",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         quality_score=quality,
         outcome="success" if quality >= 0.5 else "failure",
+        cost_usd=cost_usd,
     )
     return RecalledEvidence(
         entry_id=entry_id,

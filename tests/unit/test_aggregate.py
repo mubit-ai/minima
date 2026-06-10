@@ -41,6 +41,37 @@ def test_aggregate_candidate_filter():
     assert set(aggs) == {"a"}
 
 
+def test_observed_cost_is_robust_median():
+    evidence = [
+        make_evidence("a", 1.0, entry_id="1", cost_usd=0.01),
+        make_evidence("a", 1.0, entry_id="2", cost_usd=0.01),
+        make_evidence("a", 1.0, entry_id="3", cost_usd=0.01),
+        make_evidence("a", 1.0, entry_id="4", cost_usd=5.0),  # outlier ignored by the median
+        make_evidence("b", 1.0, entry_id="5"),  # no cost_usd
+    ]
+    aggs = aggregate_by_model(evidence)
+    # similarity-weighted median shrugs off the $5 outlier
+    assert aggs["a"].observed_cost(min_n=3) == pytest.approx(0.01)
+    # below the minimum count -> None (fall back to estimate)
+    assert aggs["a"].observed_cost(min_n=9) is None
+    # no cost-bearing evidence -> None
+    assert aggs["b"].observed_cost(min_n=1) is None
+
+
+def test_observed_output_tokens_robust_median():
+    evidence = [
+        make_evidence("a", 1.0, entry_id="1", output_tokens=1000),
+        make_evidence("a", 1.0, entry_id="2", output_tokens=1000),
+        make_evidence("a", 1.0, entry_id="3", output_tokens=1000),
+        make_evidence("a", 1.0, entry_id="4", output_tokens=99999),  # outlier ignored
+        make_evidence("b", 1.0, entry_id="5"),  # no output_tokens
+    ]
+    aggs = aggregate_by_model(evidence)
+    assert aggs["a"].observed_output_tokens(min_n=3) == pytest.approx(1000)
+    assert aggs["a"].observed_output_tokens(min_n=9) is None
+    assert aggs["b"].observed_output_tokens(min_n=1) is None
+
+
 def test_is_conflicted():
     split = ModelAggregate(model_id="m", weight_sum=4.0, weighted_success=2.0, n=4)
     assert is_conflicted(split)

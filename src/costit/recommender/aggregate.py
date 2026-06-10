@@ -49,6 +49,8 @@ def aggregate_by_model(
         agg.n += 1
         agg.evidence.append(ev)
         kc_totals[model_id] += clamp01(ev.knowledge_confidence)
+        # Observed cost is derived on demand from agg.evidence (robust median, similarity
+        # weighted) — see ModelAggregate.observed_cost — not accumulated here.
 
     for model_id, agg in aggs.items():
         agg.avg_knowledge_confidence = kc_totals[model_id] / agg.n if agg.n else 0.0

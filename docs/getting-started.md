@@ -1,0 +1,118 @@
+# Getting Started
+
+This walks you from a clean checkout to a working recommendation and a closed feedback
+loop. It takes about five minutes.
+
+## Prerequisites
+
+- **Python 3.11+** and [`uv`](https://github.com/astral-sh/uv).
+- **A running Mubit runtime.** Costit stores and recalls `task → model → outcome` history
+  in Mubit and uses Mubit's server-side embeddings, so Costit needs no embedding model of
+  its own. The default endpoint is a local runtime at `http://127.0.0.1:3000`; start one
+  with `make run-mubit` in the Mubit repo, or point `MUBIT_ENDPOINT` at a hosted instance.
+
+## 1. Install
+
+```bash
+uv sync --extra dev
+```
+
+Optional extras:
+
+```bash
+uv sync --extra reasoner-anthropic   # enable the Anthropic cheap-LLM reasoner (escalation)
+uv sync --extra reasoner-gemini      # enable the Gemini reasoner
+uv sync --extra seed                 # enable RouterBench cold-start seeding (HF datasets)
+```
+
+## 2. Configure
+
+```bash
+cp .env.example .env
+```
+
+The only required value is `MUBIT_API_KEY` (a Mubit **data-plane** key for the instance
+Costit should read/write). If your Mubit instance is not local, also set `MUBIT_ENDPOINT`.
+Everything else has sensible defaults — see **[Configuration](configuration.md)**.
+
+> **Local runtime note:** the bundled `.env.example` sets `MUBIT_TRANSPORT=http`. The local
+> runtime's recall uses `mode=direct_bypass`, which its gRPC `QueryMode` enum does not
+> accept, so HTTP is the proven transport locally. Recall also requires the instance to have
+> `enable_direct_search=true`.
+
+## 3. (Optional) Seed cold-start memory
+
+With no history, Costit falls back to capability priors (`decision_basis: "prior"`, a
+`cold_start` warning) and the cheap-LLM reasoner fires more often. Seed a base of history so
+day-one recommendations are grounded:
+
+```bash
+uv run costit-seed --limit 2000 --lane costit:default
+# or, no external dataset download:
+uv run costit-seed --dataset synthetic --limit 2000 --lane costit:default
+```
+
+See **[Cold-Start Seeding](seeding.md)** for details.
+
+## 4. Run the service
+
+```bash
+make run
+# == uv run uvicorn costit.main:app --reload --host 0.0.0.0 --port 8080
+```
+
+Interactive API docs are served at `http://localhost:8080/docs` (OpenAPI/Swagger).
+
+## 5. Make your first recommendation
+
+```bash
+curl -s http://localhost:8080/v1/recommend \
+  -H 'content-type: application/json' \
+  -d '{
+        "task": {"task": "Summarize this 2-page incident report into 3 bullet points.",
+                 "task_type": "summarization"},
+        "cost_quality_tradeoff": 3
+      }' | jq
+```
+
+You get back a `recommendation_id`, a `recommended_model`, a ranked candidate list, a
+`fallback_model`, and a `decision_basis` (`memory` | `prior` | `llm`). Run that model in
+**your own** stack — Costit does not call it for you.
+
+## 6. Close the loop
+
+Tell Costit how it went. This is what makes the next recommendation sharper — and it
+populates the realized cost/token history that powers accurate cost ranking.
+
+```bash
+curl -s http://localhost:8080/v1/feedback \
+  -H 'content-type: application/json' \
+  -d '{
+        "recommendation_id": "<from step 5>",
+        "chosen_model_id": "claude-haiku-4-5",
+        "outcome": "success",
+        "quality_score": 0.95,
+        "input_tokens": 1180,
+        "output_tokens": 320,
+        "actual_cost_usd": 0.0028,
+        "verified_in_production": true
+      }' | jq
+```
+
+## Next steps
+
+- Use the typed **[Python Client SDK](client-sdk.md)** instead of raw `curl`.
+- Read **[Concepts](concepts.md)** to understand the slider, the cost-basis tiers, and the
+  escalation path.
+- Browse runnable **[examples](../examples/)** of increasing complexity.
+
+## Development commands
+
+```bash
+make install     # uv sync --extra dev
+make test        # unit + integration (no Mubit needed)
+make lint        # ruff + mypy
+make live        # end-to-end against a running Mubit (pytest -m live)
+make eval        # offline RouterBench savings evaluation (pytest -m eval)
+make fmt         # ruff --fix + format
+```

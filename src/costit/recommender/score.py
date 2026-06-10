@@ -49,6 +49,83 @@ def estimate_cost(
     return cost_in + cost_out, breakdown
 
 
+def choose_cost_basis(
+    aggs_by_id: dict[str, ModelAggregate | None],
+    use_observed: bool,
+    require_caching: bool,
+    min_cost_n: int,
+) -> str:
+    """Pick ONE cost basis for the whole candidate set so costs are compared like-for-like.
+
+    Returns the best tier EVERY candidate can support:
+    - ``"rescaled"``: observed output-token behavior priced for THIS request (size-exact AND
+      reasoning-aware) — when every candidate has >= ``min_cost_n`` output-token observations.
+    - ``"observed"``: robust median realized $/call (reasoning-aware, size-approximate) — when
+      every candidate has >= ``min_cost_n`` cost observations and caching is not requested
+      (recalled history is non-cached, so the cache-aware estimate is the right basis there).
+    - ``"estimate"``: flat (cache-aware) token estimate — cold-start / mixed-evidence fallback.
+    """
+    if not use_observed:
+        return "estimate"
+    aggs = list(aggs_by_id.values())
+    if not aggs:
+        return "estimate"
+    if all(a is not None and a.observed_output_tokens(min_cost_n) is not None for a in aggs):
+        return "rescaled"
+    if not require_caching and all(
+        a is not None and a.observed_cost(min_cost_n) is not None for a in aggs
+    ):
+        return "observed"
+    return "estimate"
+
+
+def rescaled_cost(
+    card: ModelCard, agg: ModelAggregate, input_tokens: int, use_cache: bool, min_cost_n: int
+) -> float | None:
+    """Re-scale observed output behavior to the current request: this request's input tokens at
+    the (cache-aware) input rate + the model's observed median output tokens at the output rate.
+    None when there aren't enough output-token observations.
+    """
+    out_tokens = agg.observed_output_tokens(min_cost_n)
+    if out_tokens is None:
+        return None
+    if use_cache and card.cache_read_cost_per_mtok is not None:
+        in_price = card.cache_read_cost_per_mtok
+    else:
+        in_price = card.input_cost_per_mtok
+    cost_in = (input_tokens / 1_000_000.0) * in_price
+    cost_out = (out_tokens / 1_000_000.0) * card.output_cost_per_mtok
+    return cost_in + cost_out
+
+
+def effective_cost(
+    card: ModelCard,
+    agg: ModelAggregate | None,
+    input_tokens: int,
+    output_tokens: int,
+    use_cache: bool,
+    basis: str,
+    min_cost_n: int,
+) -> tuple[float, dict[str, float]]:
+    """Cost used for ranking, on the caller-chosen ``basis`` (homogeneous across candidates).
+
+    The token estimate assumes a fixed completion length, so it understates models that spend
+    many output tokens on internal reasoning/thinking. ``"rescaled"`` re-prices observed output
+    behavior for this request; ``"observed"`` uses the robust median realized $/call; both fall
+    through to the (cache-aware) ``estimate`` when their evidence is absent.
+    """
+    if basis == "rescaled" and agg is not None:
+        rc = rescaled_cost(card, agg, input_tokens, use_cache, min_cost_n)
+        if rc is not None:
+            obs_out = agg.observed_output_tokens(min_cost_n) or 0.0
+            return rc, {"rescaled": round(rc, 8), "obs_output_tokens": round(obs_out, 1)}
+    if basis == "observed" and agg is not None:
+        observed = agg.observed_cost(min_cost_n)
+        if observed is not None:
+            return observed, {"observed_avg": round(observed, 8)}
+    return estimate_cost(card, input_tokens, output_tokens, use_cache)
+
+
 def threshold_from_slider(
     cost_quality_tradeoff: float, tau_min: float, tau_max: float, min_quality: float | None = None
 ) -> float:

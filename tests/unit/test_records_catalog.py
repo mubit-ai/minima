@@ -20,6 +20,8 @@ def test_outcome_record_metadata_roundtrip():
         task_type="code",
         difficulty="hard",
         task_cluster="code:hard",
+        input_tokens=850,
+        output_tokens=2400,
         quality_score=0.82,
         outcome="success",
         cost_usd=0.0123,
@@ -30,6 +32,10 @@ def test_outcome_record_metadata_roundtrip():
     assert parsed.model_id == "claude-haiku-4-5"
     assert parsed.quality_score == pytest.approx(0.82)
     assert parsed.outcome == "success"
+    # tokens round-trip so the engine can re-scale observed cost to the current request
+    assert parsed.input_tokens == 850
+    assert parsed.output_tokens == 2400
+    assert parsed.cost_usd == pytest.approx(0.0123)
 
 
 def test_from_metadata_rejects_non_outcome():

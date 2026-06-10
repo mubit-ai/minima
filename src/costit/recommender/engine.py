@@ -297,6 +297,17 @@ class Recommender:
     ) -> list[CandidateScore]:
         settings = self._settings
         scored: list[CandidateScore] = []
+        min_cost_n = settings.costit_observed_cost_min_n
+        # Decide the cost basis ONCE for the whole candidate set so all costs are compared
+        # like-for-like (never mix per-request estimates with historical realized costs across
+        # candidates). Prefers re-scaled observed output behavior (size-exact + reasoning-aware),
+        # then robust observed $/call, else the cache-aware token estimate.
+        cost_basis = score.choose_cost_basis(
+            {c.model_id: aggregates.get(c.model_id) for c in candidates},
+            settings.costit_use_observed_cost,
+            req.constraints.require_prompt_caching,
+            min_cost_n,
+        )
         for card in candidates:
             agg = aggregates.get(card.model_id)
             prior = score.capability_prior(card, task_type)
@@ -307,20 +318,23 @@ class Recommender:
                 predicted, confidence, settings.costit_exploration_bonus
             )
             use_cache = req.constraints.require_prompt_caching and card.supports_prompt_caching
-            est_cost, breakdown = score.estimate_cost(card, input_tokens, output_tokens, use_cache)
+            est_cost, breakdown = score.effective_cost(
+                card, agg, input_tokens, output_tokens, use_cache, cost_basis, min_cost_n
+            )
+            cost_word = "obs" if ("observed_avg" in breakdown or "rescaled" in breakdown) else "est"
 
             if agg is not None and agg.weight_sum > MEMORY_WEIGHT_MIN:
                 basis = DecisionBasis.memory
                 rationale = (
                     f"{agg.n} similar past outcome(s); weighted success "
-                    f"{agg.weighted_success_rate:.0%}; est ${est_cost:.5f}/call"
+                    f"{agg.weighted_success_rate:.0%}; {cost_word} ${est_cost:.5f}/call"
                 )
                 evidence = agg.evidence[:MAX_EVIDENCE_PER_CANDIDATE]
             else:
                 basis = DecisionBasis.prior
                 rationale = (
                     f"no memory yet; capability prior {prior:.0%} for {task_type.value}; "
-                    f"est ${est_cost:.5f}/call"
+                    f"{cost_word} ${est_cost:.5f}/call"
                 )
                 evidence = agg.evidence[:MAX_EVIDENCE_PER_CANDIDATE] if agg else []
 

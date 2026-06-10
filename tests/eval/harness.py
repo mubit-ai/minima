@@ -305,12 +305,20 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
     per-benchmark-family prior — a SIMULATION of a recommender whose capability priors are
     keyed at the benchmark grain (the shipping engine keys them by task_type)."""
     pmap = eval_priors.get(eval_name) if eval_priors else None
+    min_cost_n = settings.costit_observed_cost_min_n
+    # Mirror the engine: pick one cost basis for the whole candidate set.
+    cost_basis = score.choose_cost_basis(
+        {mid: aggs.get(mid) for mid in cards},
+        settings.costit_use_observed_cost, False, min_cost_n,
+    )
     scored = []
     for mid, card in cards.items():
         agg = aggs.get(mid)
         prior = pmap.get(mid, score.capability_prior(card, tt)) if pmap else score.capability_prior(card, tt)
         pred, conf = score.predicted_success(agg, prior, settings.costit_beta_pseudocount)
-        est, _ = score.estimate_cost(card, in_tokens, _OUT_TOKENS, False)
+        est, _ = score.effective_cost(
+            card, agg, in_tokens, _OUT_TOKENS, False, cost_basis, min_cost_n
+        )
         scored.append((mid, pred, conf, est))
     tau = score.threshold_from_slider(slider, settings.costit_tau_min, settings.costit_tau_max, None)
     eligible = [s for s in scored if s[1] >= tau]
