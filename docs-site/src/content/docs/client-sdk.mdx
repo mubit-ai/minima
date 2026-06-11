@@ -50,6 +50,7 @@ rec = minima.recommend(
     namespace=None,
     allow_llm_escalation=True,
     explain=True,
+    baseline_model_id=None,            # the model you'd use without Minima -> savings()
 )
 ```
 
@@ -114,6 +115,25 @@ catalog = minima.models(provider="anthropic", max_cost=10.0)      # ModelsRespon
 strat   = minima.strategies(namespace="team-payments", max_strategies=5)
 status  = minima.health()                                          # dict
 ```
+
+## `savings(...)` and `calibration(...)`
+
+The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/#get-v1savings) for every field).
+
+```python
+report = minima.savings(namespace="team-payments", days=30, group_by="task_type")
+print(report.summary.estimated.savings_vs_premium_usd,   # generous baseline
+      report.summary.estimated.savings_vs_declared_usd,  # your declared default
+      report.health["feedback_coverage"])                # how much to trust "realized"
+
+cal = minima.calibration(days=30)
+for r in cal.reports:
+    print(r.slice_key, r.n, r.ece, r.ece_shrunk)
+for flag in cal.drift_flags:
+    print(flag.cluster, flag.model_id, flag.direction)   # sustained prediction drift
+```
+
+Pass `baseline_model_id` on `recommend()` and realized `actual_cost_usd` on `feedback()` to turn the savings report from an estimate into a measurement.
 
 ## Errors
 

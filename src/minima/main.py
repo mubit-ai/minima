@@ -9,13 +9,23 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 
 from minima.api.errors import register_error_handlers
-from minima.api.routers import feedback, health, models, recommend, strategies
+from minima.api.routers import (
+    calibration,
+    feedback,
+    health,
+    models,
+    recommend,
+    savings,
+    strategies,
+)
 from minima.catalog.refresh import refresh_loop
 from minima.catalog.store import CatalogStore
 from minima.config import Settings, get_settings
 from minima.llm.registry import build_reasoner
 from minima.logging import configure_logging
 from minima.memory.adapter import Memory
+from minima.recommender.decisionlog import build_decision_log
+from minima.recommender.durablerefs import build_durable_refs
 from minima.recommender.engine import Recommender
 from minima.recommender.propensity import build_propensity
 from minima.recommender.recstore import LaneCounter, RecStore, build_recstore
@@ -32,6 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     catalog_store: CatalogStore = injected.get("catalog_store") or CatalogStore(settings)
     recstore_backend: RecStore = injected.get("recstore") or build_recstore(settings)
     propensity_backend = build_propensity(settings)
+    decision_log_backend = build_decision_log(settings)
     reasoner = build_reasoner(settings)
     lane_counter = LaneCounter()
 
@@ -46,6 +57,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         propensity_backend=propensity_backend,
         lane_counter=lane_counter,
         memory_factory=(lambda _key: injected_memory) if injected_memory is not None else None,
+        decision_log_backend=decision_log_backend,
+        durable_refs_backend=build_durable_refs(settings),
     )
 
     refresh_task: asyncio.Task | None = None
@@ -87,6 +100,8 @@ def create_app(
     app.include_router(feedback.router)
     app.include_router(models.router)
     app.include_router(strategies.router)
+    app.include_router(savings.router)
+    app.include_router(calibration.router)
     app.include_router(health.router)
     return app
 

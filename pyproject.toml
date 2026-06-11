@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "minima"
-version = "0.1.0"
+version = "0.2.0"
 description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,6 +36,7 @@ dev = [
 
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
+minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]

@@ -103,7 +103,16 @@ On trigger, Minima builds a memory context block, asks the reasoner to rank the 
 | **Warming up** | `/feedback` outcomes cross `MIN_N`; cost basis climbs estimate → observed → rescaled; reasoner fires less | mix of `memory` and `prior` |
 | **Mature** | dense history; most picks are empirical; reflection has promoted durable lessons; selection bias in your routing history has been corrected | mostly `memory` |
 
-New accounts start with a baseline of benchmark-derived history so picks are useful from day one; it's progressively dominated by your own `/v1/feedback` outcomes as they accumulate.
+New accounts start with a baseline of benchmark-derived history so picks are useful from day one; it's progressively dominated by your own `/v1/feedback` outcomes as they accumulate — seeded evidence is explicitly down-weighted and crowded out as live outcomes arrive, and every outcome's influence decays with age (a result from last month counts less than one from yesterday), so the recommender tracks how models behave **now**.
+
+## Measuring it
+
+Every recommendation is logged with its counterfactual cost baselines and reconciled with the outcome you report — so the two questions that matter are answerable from your own traffic, not from a benchmark:
+
+- **Did it save money?** [`GET /v1/savings`](/api-reference/#get-v1savings) reports estimated and realized savings against two explicitly-labeled baselines: the most expensive scored candidate (generous) and your own declared default (`baseline_model_id` — honest). It also reports `feedback_coverage`, the share of recommendations that ever received feedback — the number that tells you how much weight the realized figures can bear.
+- **Are the predictions honest?** [`GET /v1/calibration`](/api-reference/#get-v1calibration) compares `predicted_success` at decision time against realized outcomes (expected calibration error per task type) and flags sustained drift per `(cluster, model)` — the early-warning signal for a provider silently changing a model.
+
+Accounts can additionally opt into a small amount of bounded **exploration** (`selection_policy: epsilon_softmax`): a few percent of picks sample from the *eligible* set (never below your quality bar) instead of always taking the cheapest eligible model, which keeps evidence flowing for under-tried cheap models and makes the logged history statistically sound for off-policy analysis. Default is off — deterministic picks everywhere.
 
 ## The learning loop in detail
 

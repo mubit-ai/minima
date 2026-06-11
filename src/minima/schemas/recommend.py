@@ -26,6 +26,13 @@ class RecommendRequest(BaseModel):
     max_candidates: int = Field(8, ge=1, le=64)
     allow_llm_escalation: bool = True
     explain: bool = True
+    baseline_model_id: str | None = Field(
+        None,
+        description=(
+            "the model you would have used without Minima; powers the vs_declared_default "
+            "savings baseline in GET /v1/savings"
+        ),
+    )
 
 
 class EvidenceRef(BaseModel):
@@ -56,6 +63,10 @@ class RankedModel(BaseModel):
     evidence: list[EvidenceRef] = Field(default_factory=list)
     supports_prompt_caching: bool = False
     context_window: int = 0
+    est_latency_ms: float | None = Field(
+        None, description="observed latency percentile from similar past outcomes (ms)"
+    )
+    latency_basis: str = Field("", description='e.g. "observed_p75"; empty without evidence')
 
 
 class RecommendResponse(BaseModel):
@@ -72,3 +83,6 @@ class RecommendResponse(BaseModel):
     catalog_stale: bool = False
     latency_ms: int = 0
     warnings: list[str] = Field(default_factory=list)
+    selection_policy: str = Field(
+        "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
+    )

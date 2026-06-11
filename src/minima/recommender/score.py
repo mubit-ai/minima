@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from minima.memory.records import clamp01
 from minima.recommender.types import ModelAggregate
 from minima.schemas.common import TaskType
@@ -158,3 +160,41 @@ def ranking_score(predicted: float, normalized_cost: float, cost_quality_tradeof
     cq = max(0.0, min(10.0, cost_quality_tradeoff))
     lam = 0.3 + 0.07 * cq  # cq=0 -> 0.3 (cost-leaning); cq=10 -> 1.0 (quality-only)
     return lam * predicted - (1.0 - lam) * normalized_cost
+
+
+def posterior_interval_width(
+    agg: ModelAggregate | None, prior: float, pseudocount: float
+) -> float:
+    """Approximate 95% credible-interval width of the Beta-smoothed success estimate.
+
+    Normal approximation on the posterior mean: width = 2 * 1.96 * sqrt(p(1-p)/n_eff)
+    where n_eff = weight_sum + pseudocount. With no evidence the width is maximal (1.0) —
+    "we know nothing" reads as full uncertainty, the natural escalation signal.
+    """
+    p, _ = predicted_success(agg, prior, pseudocount)
+    n_eff = (agg.weight_sum if agg is not None else 0.0) + max(pseudocount, 1e-9)
+    width = 2.0 * 1.96 * (max(p * (1.0 - p), 1e-9) / n_eff) ** 0.5
+    return min(1.0, width)
+
+
+def softmax_propensities(
+    scores: dict[str, float], argmin_id: str, epsilon: float, temperature: float
+) -> dict[str, float]:
+    """Selection propensities for the epsilon-softmax policy over the eligible set.
+
+    pi(m) = (1 - eps) * 1[m == argmin] + eps * softmax(score(m) / temperature).
+    The deterministic policy is the eps=0 special case (degenerate vector). Returned
+    propensities sum to 1 over the eligible candidates.
+    """
+    if not scores:
+        return {}
+    t = max(temperature, 1e-6)
+    peak = max(scores.values())
+    exps = {mid: math.exp((s - peak) / t) for mid, s in scores.items()}
+    total = sum(exps.values()) or 1.0
+    soft = {mid: e / total for mid, e in exps.items()}
+    eps = max(0.0, min(1.0, epsilon))
+    return {
+        mid: (1.0 - eps) * (1.0 if mid == argmin_id else 0.0) + eps * soft[mid]
+        for mid in scores
+    }

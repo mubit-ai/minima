@@ -48,6 +48,7 @@ with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     rec = minima.recommend(
         "Summarize this incident report into 3 bullet points.",
         cost_quality_tradeoff=3,
+        baseline_model_id="claude-opus-4-8",  # what you'd use without Minima -> honest savings
     )
     print(rec.recommended_model.model_id, rec.decision_basis)
 
@@ -163,6 +164,35 @@ async def routed_call(minima: AsyncMinimaClient, client: anthropic.AsyncAnthropi
         verified_in_production=True,
     )
     return text
+```
+
+## 7. Measure your savings
+
+The measurement loop: declare your default model on `recommend`, report realized cost on `feedback`, then read the ledger. Both baselines are reported side by side — `vs_premium` (generous) and `vs_declared` (your own default; the honest one).
+
+```python
+from minima_client import MinimaClient
+
+with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
+    rec = minima.recommend(
+        "Classify this ticket by urgency.",
+        baseline_model_id="claude-opus-4-8",   # the model you'd have used
+    )
+    # ... run rec.recommended_model.model_id in your stack ...
+    minima.feedback(
+        rec.recommendation_id, rec.recommended_model.model_id, "success",
+        quality_score=0.95, actual_cost_usd=0.0009,    # realized, not estimated
+        input_tokens=420, output_tokens=80,
+    )
+
+    report = minima.savings(days=30, group_by="task_type")
+    est = report.summary.estimated
+    print(f"saved ${est.savings_vs_declared_usd:.4f} vs your default "
+          f"over {est.n_declared} calls "
+          f"(coverage {report.health['feedback_coverage']:.0%})")
+
+    cal = minima.calibration(days=30)
+    print("global ECE:", cal.reports[0].ece)   # 0 = predictions match reality
 ```
 
 ---

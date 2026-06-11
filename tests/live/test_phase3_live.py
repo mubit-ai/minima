@@ -60,7 +60,8 @@ def test_phase3_sqlite_recstore_and_lesson_promotion_via_api_live(tmp_path):
     namespace = "p3api-" + uuid.uuid4().hex[:8]
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    auth = {"Authorization": f"Bearer {os.environ['MUBIT_API_KEY']}"}
+    with TestClient(app, headers=auth) as client:
         rec = client.post(
             "/v1/recommend",
             json={
