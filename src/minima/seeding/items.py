@@ -7,6 +7,7 @@ which JSON-encodes a dict for you). ``embedding: []`` lets the server embed on i
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -22,6 +23,11 @@ class SeedItem:
 
 
 def build_item(seed: SeedItem, source: str = "system") -> dict:
+    # Stamp seed time, not dataset time: seeds are then governed by the explicit
+    # seed-vs-live weighting (source_dataset), not by pretending to be fresh or
+    # being decayed by an arbitrary benchmark-publication age.
+    if seed.record.recorded_at is None:
+        seed.record.recorded_at = time.time()
     return {
         "item_id": seed.item_id,
         "text": seed.content,

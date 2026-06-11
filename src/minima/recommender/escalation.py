@@ -29,19 +29,35 @@ def evaluate(
     recommended_confidence: float,
     ranked: list[CandidateScore],
     aggregates: dict[str, ModelAggregate],
+    recommended_interval_width: float | None = None,
 ) -> EscalationDecision:
+    """Decide whether the cheap-LLM reasoner should be consulted.
+
+    Two modes. "legacy": four independent heuristics. "uncertainty": a single
+    posterior-interval-width gate on the recommended candidate replaces the
+    thin_evidence + low_confidence pair (the interval IS the principled "how little do
+    we know" statistic); conflict stays as a hard override and tie is kept because it
+    captures rank instability between candidates that the per-candidate interval
+    doesn't see. Every escalation is a paid reasoner call — fewer, better-targeted
+    triggers are the efficiency lever.
+    """
     decision = EscalationDecision()
     if not allow:
         return decision
 
-    if (
-        total_weight < settings.minima_escalation_w_min
-        or distinct_models_with_evidence < settings.minima_escalation_n_min
-    ):
-        decision.reasons.append("thin_evidence")
+    uncertainty_mode = settings.minima_escalation_mode.lower() == "uncertainty"
+    if uncertainty_mode and recommended_interval_width is not None:
+        if recommended_interval_width > settings.minima_escalation_interval_width:
+            decision.reasons.append("wide_interval")
+    else:
+        if (
+            total_weight < settings.minima_escalation_w_min
+            or distinct_models_with_evidence < settings.minima_escalation_n_min
+        ):
+            decision.reasons.append("thin_evidence")
 
-    if recommended_confidence < settings.minima_escalation_c_min:
-        decision.reasons.append("low_confidence")
+        if recommended_confidence < settings.minima_escalation_c_min:
+            decision.reasons.append("low_confidence")
 
     if len(ranked) >= 2:
         gap = ranked[0].score - ranked[1].score

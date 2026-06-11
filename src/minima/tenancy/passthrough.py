@@ -8,14 +8,19 @@ configured MUBIT_ENDPOINT. One TenantContext is built and cached per key.
 from __future__ import annotations
 
 import hashlib
-from threading import Lock
-
 from collections.abc import Callable
+from threading import Lock
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
 from minima.llm.base import Reasoner
 from minima.memory.adapter import Memory, MubitMemory
+from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
+from minima.recommender.durablerefs import (
+    DurableRefs,
+    MemoryDurableRefs,
+    OrgScopedDurableRefs,
+)
 from minima.recommender.engine import Recommender
 from minima.recommender.propensity import OrgScopedPropensity, Propensity
 from minima.recommender.recstore import LaneCounter, OrgScopedRecStore, RecStore
@@ -43,6 +48,8 @@ class PassthroughRuntime:
         propensity_backend: Propensity,
         lane_counter: LaneCounter,
         memory_factory: Callable[[str], Memory] | None = None,
+        decision_log_backend: DecisionLog | None = None,
+        durable_refs_backend: DurableRefs | None = None,
     ):
         self._settings = settings
         self._catalog_store = catalog_store
@@ -51,6 +58,10 @@ class PassthroughRuntime:
         self._propensity_backend = propensity_backend
         self._lane_counter = lane_counter
         self._memory_factory = memory_factory
+        self._decision_log_backend = decision_log_backend or MemoryDecisionLog(
+            settings.minima_decision_log_retention_days
+        )
+        self._durable_refs_backend = durable_refs_backend or MemoryDurableRefs()
         self._cache: dict[str, TenantContext] = {}
         self._lock = Lock()
 
@@ -67,6 +78,8 @@ class PassthroughRuntime:
         else:
             memory = MubitMemory(self._settings, api_key=mubit_api_key)
         scoped_recstore = OrgScopedRecStore(self._recstore_backend, org_id)
+        scoped_decision_log = OrgScopedDecisionLog(self._decision_log_backend, org_id)
+        scoped_durable_refs = OrgScopedDurableRefs(self._durable_refs_backend, org_id)
         recommender = Recommender(
             self._settings,
             memory,
@@ -74,6 +87,9 @@ class PassthroughRuntime:
             scoped_recstore,
             reasoner=self._reasoner,
             propensity=OrgScopedPropensity(self._propensity_backend, org_id),
+            decision_log=scoped_decision_log,
+            org_id=org_id,
+            durable_refs=scoped_durable_refs,
         )
         ctx = TenantContext(
             org_id=org_id,
@@ -83,6 +99,8 @@ class PassthroughRuntime:
             lane_counter=self._lane_counter,
             lane_prefix=self._settings.minima_lane_prefix,
             mubit_endpoint=self._settings.mubit_endpoint,
+            decision_log=scoped_decision_log,
+            durable_refs=scoped_durable_refs,
         )
         with self._lock:
             existing = self._cache.get(key_hash)
