@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from fastapi import APIRouter, Depends
 
@@ -17,7 +18,13 @@ from minima.memory.keys import (
     outcome_idempotency_key,
     outcome_upsert_key,
 )
-from minima.memory.records import OutcomeRecord, quality_from_outcome, signal_from_outcome
+from minima.memory.records import (
+    OutcomeRecord,
+    quality_from_outcome,
+    reconcile_quality,
+    signal_from_outcome,
+)
+from minima.recommender.decisionlog import DecisionRecord, Reconciliation
 from minima.schemas.common import OutcomeLabel
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
 from minima.tenancy.context import TenantContext
@@ -47,11 +54,32 @@ async def feedback(
     # so org A cannot credit or poison org B's recommendation.
     stored = tenant.recstore.get(req.recommendation_id)
     if stored is None:
+        # Degraded late-feedback path: the recstore TTL expired but the decision log
+        # (longer retention) still knows the recommendation. The outcome record is still
+        # written (the durable (cluster, model) upsert keeps learning); only neighbor
+        # attribution and lesson promotion are skipped — the recalled-neighbor ids lived
+        # in the recstore alone.
+        if settings.minima_late_feedback_enabled and tenant.decision_log is not None:
+            decision = tenant.decision_log.get(req.recommendation_id)
+            if decision is not None:
+                return await _late_feedback(req, tenant, decision)
         return FeedbackResponse(accepted=False, warnings=["unknown_recommendation"])
 
     quality = quality_from_outcome(req.outcome.value, req.quality_score)
+    quality, mismatch = reconcile_quality(req.outcome.value, quality)
     signal = signal_from_outcome(req.outcome.value, quality)
     is_success = req.outcome == OutcomeLabel.success
+    warnings: list[str] = []
+    if mismatch:
+        warnings.append(mismatch)
+        log.warning(
+            "quality_outcome_mismatch",
+            outcome=req.outcome.value,
+            supplied_quality=req.quality_score,
+            clamped_quality=quality,
+            model_id=req.chosen_model_id,
+            cluster=stored.task_cluster,
+        )
 
     record = OutcomeRecord(
         model_id=req.chosen_model_id,
@@ -67,13 +95,13 @@ async def feedback(
         outcome=req.outcome.value,
         recommendation_id=req.recommendation_id,
         verified_in_production=req.verified_in_production,
+        recorded_at=time.time(),
     )
     upsert_key = outcome_upsert_key(stored.task_cluster, req.chosen_model_id)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
     importance = "high" if (req.verified_in_production and is_success) else "medium"
-    warnings: list[str] = []
 
     try:
         record_id = await memory.remember_outcome(
@@ -90,6 +118,16 @@ async def feedback(
     except Exception as exc:  # noqa: BLE001
         log.warning("remember_outcome_failed", error=str(exc))
         return FeedbackResponse(accepted=False, warnings=["memory_write_failed"])
+
+    # The upserted (cluster, model) record's id is stable across feedbacks and
+    # dereferenceable — remember it for the exact-match recall fast path.
+    if record_id and tenant.durable_refs is not None:
+        try:
+            tenant.durable_refs.upsert(
+                stored.lane, stored.task_cluster, req.chosen_model_id, record_id, record_id
+            )
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must never fail feedback
+            log.warning("durable_ref_upsert_failed", error=str(exc))
 
     neighbors = stored.neighbors_by_model.get(req.chosen_model_id, [])
     entry_ids = [eid for (eid, _ref) in neighbors if eid]
@@ -152,6 +190,8 @@ async def feedback(
         _fire_reflect(memory, stored.lane, stored.user_id)
         reflection_triggered = True
 
+    _reconcile_decision(tenant, req, quality, late=False)
+
     return FeedbackResponse(
         accepted=True,
         record_id=record_id,
@@ -161,3 +201,77 @@ async def feedback(
         lesson_promoted=lesson_promoted,
         warnings=warnings,
     )
+
+
+def _reconcile_decision(
+    tenant: TenantContext, req: FeedbackRequest, quality: float, *, late: bool
+) -> None:
+    """Fill the decision-log row's realized columns (best-effort analytics)."""
+    if tenant.decision_log is None:
+        return
+    try:
+        tenant.decision_log.reconcile(
+            req.recommendation_id,
+            Reconciliation(
+                model_id=req.chosen_model_id,
+                outcome=req.outcome.value,
+                quality=quality,
+                cost_usd=req.actual_cost_usd,
+                latency_ms=req.latency_ms,
+                ts=time.time(),
+                late=late,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — analytics must never fail feedback
+        log.warning("decision_reconcile_failed", error=str(exc))
+
+
+async def _late_feedback(
+    req: FeedbackRequest,
+    tenant: TenantContext,
+    decision: DecisionRecord,
+) -> FeedbackResponse:
+    """Accept feedback after recstore expiry: write the outcome, skip attribution."""
+    quality = quality_from_outcome(req.outcome.value, req.quality_score)
+    quality, mismatch = reconcile_quality(req.outcome.value, quality)
+    warnings = ["late_feedback_no_attribution"]
+    if mismatch:
+        warnings.append(mismatch)
+
+    record = OutcomeRecord(
+        model_id=req.chosen_model_id,
+        task_type=decision.task_type,
+        difficulty=decision.difficulty,
+        task_fingerprint=decision.fingerprint,
+        task_cluster=decision.cluster,
+        input_tokens=req.input_tokens or 0,
+        output_tokens=req.output_tokens or 0,
+        cost_usd=req.actual_cost_usd or 0.0,
+        latency_ms=req.latency_ms,
+        quality_score=quality,
+        outcome=req.outcome.value,
+        recommendation_id=req.recommendation_id,
+        verified_in_production=req.verified_in_production,
+        recorded_at=time.time(),
+    )
+    idem = req.idempotency_key or outcome_idempotency_key(
+        req.recommendation_id, req.chosen_model_id
+    )
+    try:
+        record_id = await tenant.memory.remember_outcome(
+            content=decision.content,
+            record=record,
+            lane=decision.lane,
+            upsert_key=outcome_upsert_key(decision.cluster, req.chosen_model_id),
+            idempotency_key=idem,
+            user_id=decision.user_id,
+            env_tags=decision.env_tags or None,
+            importance="medium",
+            source="human",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("late_remember_outcome_failed", error=str(exc))
+        return FeedbackResponse(accepted=False, warnings=["memory_write_failed", *warnings])
+
+    _reconcile_decision(tenant, req, quality, late=True)
+    return FeedbackResponse(accepted=True, record_id=record_id, warnings=warnings)

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 
-from minima.memory.records import RecalledEvidence, clamp01
+from minima.memory.records import OutcomeRecord, RecalledEvidence, clamp01
 from minima.recommender.types import ModelAggregate
 
 # Floor on the confidence multiplier so freshly-seeded (un-reinforced) but
@@ -12,31 +13,103 @@ from minima.recommender.types import ModelAggregate
 KC_FLOOR = 0.3
 STALE_DECAY = 0.5
 
+_SECONDS_PER_DAY = 86_400.0
 
-def neighbor_weight(ev: RecalledEvidence) -> float:
+
+def age_decay(
+    recorded_at: float | None,
+    *,
+    half_life_days: float,
+    floor: float,
+    now: float | None = None,
+) -> float | None:
+    """Exponential observation-age decay: halves every half-life, floored.
+
+    None when the record has no timestamp (legacy schema v1) — caller falls back to
+    the binary staleness penalty. Future-dated timestamps clamp to no decay.
+    """
+    if recorded_at is None or recorded_at <= 0.0 or half_life_days <= 0.0:
+        return None
+    ref_now = now if now is not None else time.time()
+    age_days = max(0.0, ref_now - recorded_at) / _SECONDS_PER_DAY
+    return max(floor, 0.5 ** (age_days / half_life_days))
+
+
+def neighbor_weight(
+    ev: RecalledEvidence,
+    *,
+    half_life_days: float = 0.0,
+    decay_floor: float = 0.1,
+    now: float | None = None,
+) -> float:
     similarity = max(0.0, ev.score)
     confidence_mult = KC_FLOOR + (1.0 - KC_FLOOR) * clamp01(ev.knowledge_confidence)
-    decay = STALE_DECAY if ev.is_stale else 1.0
+    # Observation-age decay when the record carries a timestamp; supersession (is_stale)
+    # still caps the multiplier at STALE_DECAY. Records without a timestamp keep the
+    # legacy binary behavior. knowledge_confidence is left untouched on purpose: its
+    # server-side recency component tracks *reinforcement* recency, this tracks
+    # *observation* age.
+    decay = age_decay(
+        ev.record.recorded_at if ev.record else None,
+        half_life_days=half_life_days,
+        floor=decay_floor,
+        now=now,
+    )
+    if decay is None:
+        decay = STALE_DECAY if ev.is_stale else 1.0
+    elif ev.is_stale:
+        decay = min(decay, STALE_DECAY)
     return similarity * confidence_mult * decay
+
+
+def seed_factor(n_live: int, *, seed_weight: float, crowdout_n: int) -> float:
+    """Weight multiplier for seeded evidence, crowded out linearly by live outcomes."""
+    if crowdout_n <= 0:
+        return seed_weight
+    return seed_weight * max(0.0, 1.0 - n_live / float(crowdout_n))
 
 
 def aggregate_by_model(
     evidence: Iterable[RecalledEvidence],
     candidate_ids: set[str] | None = None,
+    *,
+    half_life_days: float = 0.0,
+    decay_floor: float = 0.1,
+    seed_weight: float = 1.0,
+    seed_crowdout_n: int = 0,
+    now: float | None = None,
 ) -> dict[str, ModelAggregate]:
-    """Group neighbors by model and accumulate weighted success statistics."""
-    aggs: dict[str, ModelAggregate] = {}
-    kc_totals: dict[str, float] = {}
+    """Group neighbors by model and accumulate weighted success statistics.
 
+    Two passes: the first counts live (non-seed) outcomes per model so seeded evidence
+    can be crowded out as real feedback accumulates; the second accumulates weights.
+    Defaults preserve legacy behavior (no age decay, seeds at full weight).
+    """
+    items: list[tuple[RecalledEvidence, OutcomeRecord]] = []
+    n_live: dict[str, int] = {}
     for ev in evidence:
         rec = ev.record
         if rec is None:
             continue
-        model_id = rec.model_id
-        if candidate_ids is not None and model_id not in candidate_ids:
+        if candidate_ids is not None and rec.model_id not in candidate_ids:
             continue
+        items.append((ev, rec))
+        if rec.source_dataset is None:
+            n_live[rec.model_id] = n_live.get(rec.model_id, 0) + 1
 
-        weight = neighbor_weight(ev)
+    aggs: dict[str, ModelAggregate] = {}
+    kc_totals: dict[str, float] = {}
+
+    for ev, rec in items:
+        model_id = rec.model_id
+
+        weight = neighbor_weight(
+            ev, half_life_days=half_life_days, decay_floor=decay_floor, now=now
+        )
+        if rec.source_dataset is not None and seed_weight != 1.0:
+            weight *= seed_factor(
+                n_live.get(model_id, 0), seed_weight=seed_weight, crowdout_n=seed_crowdout_n
+            )
         agg = aggs.get(model_id)
         if agg is None:
             agg = ModelAggregate(model_id=model_id)

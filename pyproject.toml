@@ -36,6 +36,7 @@ dev = [
 
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
+minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]

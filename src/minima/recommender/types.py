@@ -9,19 +9,26 @@ from minima.schemas.common import DecisionBasis
 from minima.schemas.models_catalog import ModelCard
 
 
-def _weighted_median(pairs: list[tuple[float, float]]) -> float:
-    """Lower weighted median of (value, weight) pairs (robust to outliers)."""
+def _weighted_quantile(pairs: list[tuple[float, float]], q: float) -> float:
+    """Lower weighted q-quantile of (value, weight) pairs (robust to outliers)."""
     items = sorted(pairs, key=lambda vw: vw[0])
     total = sum(w for _, w in items)
-    if total <= 0.0:  # all-zero weights -> plain median
+    q = max(0.0, min(1.0, q))
+    if total <= 0.0:  # all-zero weights -> plain positional quantile
         vals = [v for v, _ in items]
-        return vals[len(vals) // 2]
-    half, acc = total / 2.0, 0.0
+        idx = min(len(vals) - 1, int(q * len(vals)))
+        return vals[idx]
+    target, acc = total * q, 0.0
     for value, weight in items:
         acc += weight
-        if acc >= half:
+        if acc >= target:
             return value
     return items[-1][0]
+
+
+def _weighted_median(pairs: list[tuple[float, float]]) -> float:
+    """Lower weighted median of (value, weight) pairs (robust to outliers)."""
+    return _weighted_quantile(pairs, 0.5)
 
 
 @dataclass(slots=True)
@@ -77,6 +84,23 @@ class ModelAggregate:
             return None
         return _weighted_median(pairs)
 
+    def observed_latency_ms(self, min_n: int, q: float = 0.75) -> float | None:
+        """Robust observed latency percentile (default p75) over latency-bearing neighbors.
+
+        Like realized cost, latency is an objective measurement: weighted by topical
+        similarity only, not by staleness/knowledge-confidence. A high percentile (not
+        the median) is deliberate — SLA enforcement cares about the typical-worst case.
+        None when fewer than ``min_n`` recalled neighbors carry a latency.
+        """
+        pairs = [
+            (float(ev.record.latency_ms), max(0.0, ev.score))
+            for ev in self.evidence
+            if ev.record is not None and ev.record.latency_ms and ev.record.latency_ms > 0
+        ]
+        if len(pairs) < min_n:
+            return None
+        return _weighted_quantile(pairs, q)
+
 
 @dataclass(slots=True)
 class CandidateScore:
@@ -89,3 +113,6 @@ class CandidateScore:
     evidence: list[RecalledEvidence] = field(default_factory=list)
     score: float = 0.0
     rationale: str = ""
+    # Observed latency percentile (ms) from recalled outcomes; None without evidence.
+    est_latency_ms: float | None = None
+    latency_basis: str = ""
