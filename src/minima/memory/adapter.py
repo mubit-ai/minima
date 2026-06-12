@@ -185,6 +185,7 @@ class MubitMemory:
         self._endpoint = endpoint or settings.mubit_endpoint
         self._transport = transport or settings.mubit_transport
         resolved_key = api_key if api_key is not None else settings.mubit_api_key
+        self._api_key = resolved_key
         kwargs: dict[str, Any] = {
             "endpoint": self._endpoint,
             "timeout_ms": settings.mubit_timeout_ms,
@@ -473,8 +474,9 @@ class MubitMemory:
         base = self._endpoint.rstrip("/")
         url = f"{base}/v2/core/health"
         try:
+            headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
             async with httpx.AsyncClient(timeout=3.0) as http:
-                resp = await http.get(url)
+                resp = await http.get(url, headers=headers)
             return {
                 "reachable": resp.status_code == 200,
                 "transport": self._transport,
