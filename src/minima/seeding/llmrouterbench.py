@@ -33,13 +33,17 @@ import json
 import re
 import tarfile
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 _REPO_ID = "NPULH/LLMRouterBench"
 _TARBALL = "bench-release.tar.gz"
 _ROOT = "bench-release"
 _TS_RE = re.compile(r"(\d{8}_\d{6})\.json$")
+# Cost-column suffix the eval harness keys on. MUST match
+# ``minima.seeding.routerbench.detect_model_columns`` so the wide frame this module emits is
+# consumed by the same code path as RouterBench.
+_COST_SUFFIX = "|total_cost"
 
 # The per-record fields we keep. We drop the two bulky ones the eval never needs:
 # ``raw_output`` and ``prediction`` (the latter is a full role/content conversation in the
@@ -182,3 +186,47 @@ def iter_raw_records(
                 emitted += 1
                 if limit is not None and emitted >= limit:
                     return
+
+
+def load_llmrouterbench_df(
+    candidates: Sequence[str],
+    datasets: Sequence[str],
+    tarball_path: str | None = None,
+):
+    """Pivot the long per-(prompt, model) records into the WIDE DataFrame the eval consumes.
+
+    This is Phase 3 of ``docs/PLAN/LLMRouterBench-H1-setup.md``. Output: one row per
+    ``(dataset, question index)``, with columns ``prompt``, ``eval_name`` (= dataset id), and
+    for each candidate model ``m`` a score column ``m`` and a cost column ``m|total_cost`` —
+    i.e. exactly the contract ``routerbench.detect_model_columns`` / ``harness.prepare_rows``
+    expect, so the eval reuses all its machinery unchanged.
+
+    Keyed by ``(dataset_id, index)`` — the question's identity — rather than prompt text, so it
+    is robust to repeated/boilerplate prompt strings within a dataset. Questions where any
+    candidate lacks a usable ``(score, cost)`` are dropped (the harness would drop them anyway).
+    """
+    _require_seed_extra()
+    import pandas as pd
+
+    cand = list(candidates)
+    want_ds = set(datasets)
+    bucket: dict[tuple[str, Any], dict[str, Any]] = {}
+    for r in iter_raw_records(tarball_path, datasets=want_ds, models=set(cand)):
+        key = (r["dataset_id"], r["index"])
+        slot = bucket.get(key)
+        if slot is None:
+            slot = {"prompt": r["prompt"], "scores": {}, "costs": {}}
+            bucket[key] = slot
+        slot["scores"][r["model_name"]] = r["score"]
+        slot["costs"][r["model_name"]] = r["cost"]
+
+    rows: list[dict[str, Any]] = []
+    for (dataset_id, _idx), slot in bucket.items():
+        if any(slot["scores"].get(m) is None or slot["costs"].get(m) is None for m in cand):
+            continue
+        row: dict[str, Any] = {"prompt": slot["prompt"], "eval_name": dataset_id}
+        for m in cand:
+            row[m] = slot["scores"][m]
+            row[f"{m}{_COST_SUFFIX}"] = slot["costs"][m]
+        rows.append(row)
+    return pd.DataFrame(rows)
