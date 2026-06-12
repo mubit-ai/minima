@@ -9,12 +9,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PROJECT:      mubit-dev-489910
-  REGION:       europe-west4
-  REGISTRY:     europe-west4-docker.pkg.dev/mubit-dev-489910/minima
-  SERVICE_NAME: minima-staging
-  DOCS_SERVICE: minima-docs-staging
-  IMAGE_TAG:    staging-${{ github.sha }}
+  PROJECT:         mubit-dev-489910
+  REGION:          europe-west4
+  REGISTRY:        europe-west4-docker.pkg.dev/mubit-dev-489910/minima
+  SERVICE_NAME:    minima-staging
+  DOCS_SERVICE:    minima-docs-staging
+  IMAGE_TAG:       staging-${{ github.sha }}
+  # Cloud SQL Auth Proxy — new dedicated Minima instance (not shared with console-db)
+  CLOUDSQL_INSTANCE: mubit-dev-489910:europe-west4:minima-staging-db
+  # VPC for Cloud Memorystore (Redis) connectivity
+  NETWORK:         mubit-dev-eu-network
+  SUBNET:          mubit-dev-eu-subnet
 
 permissions:
   contents: read
@@ -65,12 +70,16 @@ jobs:
             --port 8080 \
             --cpu 1 \
             --memory 1Gi \
-            --min-instances 0 \
+            --min-instances 1 \
             --max-instances 10 \
             --allow-unauthenticated \
             --service-account ${{ secrets.GCP_DEPLOYER_SA }} \
-            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=sqlite,MINIMA_SQLITE_PATH=/tmp/minima_state.db,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
-            --set-secrets="GEMINI_API_KEY=minima-staging-gemini-key:latest,ANTHROPIC_API_KEY=minima-staging-anthropic-key:latest,OPENROUTER_API_KEY=minima-staging-openrouter-key:latest" \
+            --add-cloudsql-instances=${{ env.CLOUDSQL_INSTANCE }} \
+            --network=${{ env.NETWORK }} \
+            --subnet=${{ env.SUBNET }} \
+            --vpc-egress=private-ranges-only \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
+            --set-secrets="GEMINI_API_KEY=minima-staging-gemini-key:latest,ANTHROPIC_API_KEY=minima-staging-anthropic-key:latest,OPENROUTER_API_KEY=minima-staging-openrouter-key:latest,MINIMA_DATABASE_URL=minima-staging-db-url:latest,MINIMA_REDIS_URL=minima-staging-redis-url:latest" \
             --quiet
 
       - name: Print service URL

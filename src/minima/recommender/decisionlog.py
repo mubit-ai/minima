@@ -349,8 +349,132 @@ class OrgScopedDecisionLog:
         )
 
 
+class PostgresDecisionLog:
+    """Durable decision log backed by PostgreSQL (Cloud SQL via Auth Proxy).
+
+    Shares the same database as the other Postgres stores; each store owns its table.
+    """
+
+    def __init__(self, database_url: str, retention_days: int = 90):
+        from minima.recommender._pg_pool import cursor as _cursor
+
+        self._retention = retention_days * _SECONDS_PER_DAY
+        self._url = database_url
+        self._cursor = _cursor
+        self._last_purge = 0.0
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS decisions (
+                    recommendation_id TEXT PRIMARY KEY,
+                    org_id TEXT NOT NULL DEFAULT 'default',
+                    ts DOUBLE PRECISION NOT NULL,
+                    lane TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS ix_decisions_org_ts ON decisions(org_id, ts)"
+            )
+
+    def put(self, rec: DecisionRecord, org_id: str | None = None) -> None:
+        if org_id is not None:
+            rec.org_id = org_id
+        if rec.ts == 0.0:
+            rec.ts = time.time()
+        with self._cursor(self._url) as cur:
+            if time.time() - self._last_purge > _PURGE_INTERVAL_S:
+                cur.execute(
+                    "DELETE FROM decisions WHERE ts < %s", (time.time() - self._retention,)
+                )
+                self._last_purge = time.time()
+            cur.execute(
+                """
+                INSERT INTO decisions (recommendation_id, org_id, ts, lane, payload)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (recommendation_id) DO UPDATE SET
+                    org_id  = EXCLUDED.org_id,
+                    ts      = EXCLUDED.ts,
+                    lane    = EXCLUDED.lane,
+                    payload = EXCLUDED.payload
+                """,
+                (rec.recommendation_id, rec.org_id, rec.ts, rec.lane, _serialize(rec)),
+            )
+
+    def get(self, recommendation_id: str, org_id: str | None = None) -> DecisionRecord | None:
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                "SELECT payload, org_id FROM decisions WHERE recommendation_id = %s",
+                (recommendation_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        if org_id is not None and str(row[1]) != org_id:
+            return None
+        return _deserialize(str(row[0]))
+
+    def reconcile(
+        self, recommendation_id: str, update: Reconciliation, org_id: str | None = None
+    ) -> bool:
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                "SELECT payload, org_id FROM decisions WHERE recommendation_id = %s",
+                (recommendation_id,),
+            )
+            row = cur.fetchone()
+            if row is None or (org_id is not None and str(row[1]) != org_id):
+                return False
+            rec = _deserialize(str(row[0]))
+            _apply(rec, update)
+            cur.execute(
+                "UPDATE decisions SET payload = %s WHERE recommendation_id = %s",
+                (_serialize(rec), recommendation_id),
+            )
+        return True
+
+    def rows(
+        self,
+        *,
+        since: float | None = None,
+        until: float | None = None,
+        lane: str | None = None,
+        org_id: str | None = None,
+    ) -> list[DecisionRecord]:
+        clauses: list[str] = []
+        params: list[str | float] = []
+        if org_id is not None:
+            clauses.append("org_id = %s")
+            params.append(org_id)
+        if since is not None:
+            clauses.append("ts >= %s")
+            params.append(since)
+        if until is not None:
+            clauses.append("ts <= %s")
+            params.append(until)
+        if lane is not None:
+            clauses.append("lane = %s")
+            params.append(lane)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                f"SELECT payload FROM decisions {where} ORDER BY ts",  # noqa: S608
+                params,
+            )
+            rows = cur.fetchall()
+        return [_deserialize(str(r[0])) for r in rows]
+
+
 def build_decision_log(settings: Settings) -> DecisionLog:
     retention = settings.minima_decision_log_retention_days
-    if settings.minima_recommendation_store.lower() == "sqlite":
+    backend = settings.minima_recommendation_store.strip().lower()
+    if backend in ("cloudsql", "postgres", "postgresql"):
+        if not settings.minima_database_url:
+            raise RuntimeError(
+                "MINIMA_DATABASE_URL is required when MINIMA_RECOMMENDATION_STORE=cloudsql"
+            )
+        return PostgresDecisionLog(settings.minima_database_url, retention)
+    if backend == "sqlite":
         return SqliteDecisionLog(settings.minima_sqlite_path, retention)
     return MemoryDecisionLog(retention)

@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     # --- Memory read path ---
     minima_memory_recall_timeout_ms: int = 2500
     minima_memory_recall_limit: int = 25
-    minima_recall_mode: str = "direct_bypass"  # direct_bypass (retrieval-only) | agent_routed
+    # direct_bypass is faster but requires enable_direct_search=true on the Mubit instance
+    # (off by default on hosted api.mubit.ai). agent_routed works on all instance types.
+    minima_recall_mode: str = "agent_routed"  # agent_routed | direct_bypass
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types
@@ -157,12 +159,24 @@ class Settings(BaseSettings):
     minima_host: str = "0.0.0.0"
     minima_port: int = 8080
     minima_log_level: str = "info"
-    minima_recommendation_store: str = "memory"  # memory | sqlite | redis
+    # memory | sqlite | cloudsql — controls DecisionLog, Propensity, and (unless
+    # MINIMA_RECSTORE_BACKEND overrides) RecStore + DurableRefs.
+    minima_recommendation_store: str = "memory"
     # 7 days: feedback often arrives well after the recommendation (batch evals, prod
     # verification). Past the TTL the late-feedback degraded path still accepts the
     # outcome (without neighbor attribution) via the decision log.
     minima_recommendation_ttl_seconds: int = 604_800
     minima_sqlite_path: str = "minima_state.db"  # durable recstore + propensity backing file
+
+    # --- Persistent store backends (Cloud SQL + Redis) ---
+    # PostgreSQL DSN for DecisionLog, Propensity, and optionally RecStore + DurableRefs.
+    # Cloud Run format: postgresql://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE
+    minima_database_url: str | None = None
+    # Redis URL for RecStore + DurableRefs when MINIMA_RECSTORE_BACKEND=redis.
+    minima_redis_url: str = "redis://localhost:6379/0"
+    # Backend override for RecStore + DurableRefs only (memory | sqlite | cloudsql | redis).
+    # Empty string means inherit from MINIMA_RECOMMENDATION_STORE.
+    minima_recstore_backend: str = ""
     # Accept feedback whose recommendation_id has expired from the recstore by falling
     # back to the decision log: the outcome record is still written (the durable
     # (cluster, model) upsert), but neighbor attribution and lesson promotion are skipped.
