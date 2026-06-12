@@ -28,6 +28,8 @@ class CandidateView:
     capability_prior: float
     est_cost_usd: float
     predicted_success: float
+    # Observed latency percentile (ms) from similar past outcomes; None without evidence.
+    est_latency_ms: float | None = None
 
 
 @dataclass(slots=True)
@@ -131,6 +133,11 @@ def build_rank_user(
             "capability_prior": round(c.capability_prior, 3),
             "current_estimate": round(c.predicted_success, 3),
             "est_cost_usd": round(c.est_cost_usd, 6),
+            **(
+                {"observed_latency_ms": round(c.est_latency_ms, 0)}
+                if c.est_latency_ms is not None
+                else {}
+            ),
         }
         for c in candidates
     ]

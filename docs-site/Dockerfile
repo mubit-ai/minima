@@ -5,8 +5,8 @@ FROM node:22-slim AS builder
 WORKDIR /app
 
 # Install dependencies first for layer caching.
-COPY package.json package-lock.json* ./
-RUN npm install --prefer-offline
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline
 
 # Copy the rest and build.
 COPY . .

@@ -10,9 +10,23 @@ from minima.schemas.common import Constraints, OutcomeLabel, TaskInput
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
 from minima.schemas.models_catalog import ModelsResponse
 from minima.schemas.recommend import RecommendRequest, RecommendResponse
+from minima.schemas.savings import CalibrationResponse, SavingsResponse
 from minima.schemas.strategies import StrategiesResponse
 from minima.schemas.workflow import WorkflowRequest, WorkflowResponse
 from minima_client.errors import raise_for_status
+
+
+def _report_params(
+    namespace: str | None, days: float | None, group_by: str | None = None
+) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if namespace is not None:
+        params["namespace"] = namespace
+    if days is not None:
+        params["days"] = days
+    if group_by is not None:
+        params["group_by"] = group_by
+    return params
 
 TaskLike = str | TaskInput | dict[str, Any]
 
@@ -75,6 +89,7 @@ class MinimaClient:
         namespace: str | None = None,
         allow_llm_escalation: bool = True,
         explain: bool = True,
+        baseline_model_id: str | None = None,
     ) -> RecommendResponse:
         req = RecommendRequest(
             task=_coerce_task(task),
@@ -84,11 +99,33 @@ class MinimaClient:
             namespace=namespace,
             allow_llm_escalation=allow_llm_escalation,
             explain=explain,
+            baseline_model_id=baseline_model_id,
         )
         return RecommendResponse.model_validate(self._post("/v1/recommend", req))
 
     def recommend_workflow(self, req: WorkflowRequest) -> WorkflowResponse:
         return WorkflowResponse.model_validate(self._post("/v1/recommend/workflow", req))
+
+    def savings(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+        group_by: str | None = None,
+    ) -> SavingsResponse:
+        """Counterfactual savings + routing health for your org (estimated AND realized)."""
+        resp = self._client.get("/v1/savings", params=_report_params(namespace, days, group_by))
+        raise_for_status(resp)
+        return SavingsResponse.model_validate(resp.json())
+
+    def calibration(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+    ) -> CalibrationResponse:
+        """Is predicted_success telling the truth? ECE, reliability, and drift flags."""
+        resp = self._client.get("/v1/calibration", params=_report_params(namespace, days))
+        raise_for_status(resp)
+        return CalibrationResponse.model_validate(resp.json())
 
     def feedback(
         self,
@@ -172,6 +209,7 @@ class AsyncMinimaClient:
         namespace: str | None = None,
         allow_llm_escalation: bool = True,
         explain: bool = True,
+        baseline_model_id: str | None = None,
     ) -> RecommendResponse:
         req = RecommendRequest(
             task=_coerce_task(task),
@@ -181,11 +219,35 @@ class AsyncMinimaClient:
             namespace=namespace,
             allow_llm_escalation=allow_llm_escalation,
             explain=explain,
+            baseline_model_id=baseline_model_id,
         )
         return RecommendResponse.model_validate(await self._post("/v1/recommend", req))
 
     async def recommend_workflow(self, req: WorkflowRequest) -> WorkflowResponse:
         return WorkflowResponse.model_validate(await self._post("/v1/recommend/workflow", req))
+
+    async def savings(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+        group_by: str | None = None,
+    ) -> SavingsResponse:
+        """Counterfactual savings + routing health for your org (estimated AND realized)."""
+        resp = await self._client.get(
+            "/v1/savings", params=_report_params(namespace, days, group_by)
+        )
+        raise_for_status(resp)
+        return SavingsResponse.model_validate(resp.json())
+
+    async def calibration(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+    ) -> CalibrationResponse:
+        """Is predicted_success telling the truth? ECE, reliability, and drift flags."""
+        resp = await self._client.get("/v1/calibration", params=_report_params(namespace, days))
+        raise_for_status(resp)
+        return CalibrationResponse.model_validate(resp.json())
 
     async def feedback(
         self,

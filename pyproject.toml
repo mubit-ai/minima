@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "minima"
-version = "0.1.0"
+version = "0.3.0"
 description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,8 @@ dependencies = [
   "structlog>=24.1",
   "tenacity>=8.4",
   "mubit-sdk>=0.10.0",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -36,9 +38,7 @@ dev = [
 
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
-
-[tool.uv.sources]
-mubit-sdk = { path = "../ricedb/sdk/python/mubit-sdk", editable = true }
+minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]

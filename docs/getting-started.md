@@ -36,9 +36,10 @@ Minima should read/write). If your Mubit instance is not local, also set `MUBIT_
 Everything else has sensible defaults — see **[Configuration](configuration.md)**.
 
 > **Local runtime note:** the bundled `.env.example` sets `MUBIT_TRANSPORT=http`. The local
-> runtime's recall uses `mode=direct_bypass`, which its gRPC `QueryMode` enum does not
-> accept, so HTTP is the proven transport locally. Recall also requires the instance to have
-> `enable_direct_search=true`.
+> runtime's gRPC `QueryMode` enum does not include `direct_bypass`, so HTTP is the proven
+> transport locally. `MINIMA_RECALL_MODE` defaults to `agent_routed`, which works on both
+> local and hosted Mubit instances. If you run a local Mubit with `enable_direct_search=true`,
+> you can switch to `direct_bypass` for lower-latency recall.
 
 ## 3. (Optional) Seed cold-start memory
 
