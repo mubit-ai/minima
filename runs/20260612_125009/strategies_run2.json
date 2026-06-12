@@ -1,0 +1,25 @@
+{
+  "run": 2,
+  "timestamp": "2026-06-12T12:56:16.951481+00:00",
+  "strategy_count": 3,
+  "strategies": [
+    {
+      "id": "strat-48d577ef-b250-4c73-8c68-e59246b2ec5f",
+      "description": "Pattern around 'tasks': 48 lessons share this theme. Example: gemini-2.5-flash is highly efficient for trivial tasks (summarization, extraction, simple translation) but shows unrelia...",
+      "lessons": 48,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-1f3ba439-bf6d-4fd3-9570-8b5290c0fde2",
+      "description": "Pattern around 'choice': 31 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, cost-effective choice (verified in production at ~100% quality).",
+      "lessons": 31,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-e697196d-6293-46fa-bc43-fda066290ea8",
+      "description": "Pattern around 'coding': 17 lessons share this theme. Example: gpt-4o-mini is more consistent and reliable for complex, hard coding tasks and data structure implementations compared t...",
+      "lessons": 17,
+      "confidence": -0.0
+    }
+  ]
+}

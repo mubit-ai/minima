@@ -1,0 +1,25 @@
+{
+  "run": 1,
+  "timestamp": "2026-06-12T12:53:14.586373+00:00",
+  "strategy_count": 3,
+  "strategies": [
+    {
+      "id": "strat-8181de22-ee71-4f1b-a23b-2044fba02a65",
+      "description": "Pattern around 'tasks': 33 lessons share this theme. Example: gemini-2.5-pro is a reliable and cost-effective choice for medium-complexity reasoning and coding tasks.",
+      "lessons": 33,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-032cc765-f8f0-4036-bdca-7410ec6ecc13",
+      "description": "Pattern around 'choice': 17 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, cost-effective choice (verified in production at ~100% quality).",
+      "lessons": 17,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-cafba265-08a9-4e35-b88f-0d730b1f21f3",
+      "description": "Pattern around 'coding': 3 lessons share this theme. Example: gpt-4o-mini consistently performs at a high success rate (95%) for hard coding tasks like merging k sorted linked lists.",
+      "lessons": 3,
+      "confidence": -0.0
+    }
+  ]
+}
