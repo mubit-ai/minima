@@ -11,7 +11,7 @@ single-tenant mode). A complete annotated template ships as
 |----------|---------|-------|
 | `MUBIT_ENDPOINT` | `http://127.0.0.1:3000` | The Mubit runtime Minima reads/writes. |
 | `MUBIT_API_KEY` | — | Mubit **data-plane** key. Required single-tenant; leave blank multi-tenant (resolved per org). |
-| `MUBIT_TRANSPORT` | `auto` | `auto` \| `grpc` \| `http`. Use `http` for the local runtime (recall's `direct_bypass` mode isn't in its gRPC enum). |
+| `MUBIT_TRANSPORT` | `auto` | `auto` \| `grpc` \| `http`. Use `http` for the local runtime (the gRPC `QueryMode` enum does not include `direct_bypass`, and auto may select gRPC). |
 | `MUBIT_TIMEOUT_MS` | `30000` | Mubit client timeout. |
 
 ## Memory read path
@@ -20,7 +20,7 @@ single-tenant mode). A complete annotated template ships as
 |----------|---------|-------|
 | `MINIMA_MEMORY_RECALL_TIMEOUT_MS` | `2500` | Hard recall timeout; on breach, prior-only. Latency is embedder-bound (~100–300ms GPU, ~1.5s local CPU). |
 | `MINIMA_MEMORY_RECALL_LIMIT` | `25` | Max neighbors recalled per request. |
-| `MINIMA_RECALL_MODE` | `direct_bypass` | `direct_bypass` (retrieval-only) \| `agent_routed`. |
+| `MINIMA_RECALL_MODE` | `agent_routed` | `agent_routed` \| `direct_bypass` (faster but requires `enable_direct_search=true` on the Mubit instance — off by default on hosted Mubit). |
 | `MINIMA_LANE_PREFIX` | `minima` | Lane prefix; lane = `<prefix>:<namespace or "default">`. |
 | `MINIMA_SEED_LANE` | `minima:default` | Default lane for `minima-seed`. |
 

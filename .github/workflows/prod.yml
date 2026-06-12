@@ -9,12 +9,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PROJECT:      mubit-prod
-  REGION:       europe-west4
-  REGISTRY:     europe-west4-docker.pkg.dev/mubit-prod/minima
-  SERVICE_NAME: minima-prod
-  DOCS_SERVICE: minima-docs-prod
-  RELEASE_TAG:  ${{ github.event.release.tag_name }}
+  PROJECT:         mubit-prod
+  REGION:          europe-west4
+  REGISTRY:        europe-west4-docker.pkg.dev/mubit-prod/minima
+  SERVICE_NAME:    minima-prod
+  DOCS_SERVICE:    minima-docs-prod
+  RELEASE_TAG:     ${{ github.event.release.tag_name }}
+  # Cloud SQL Auth Proxy — new dedicated Minima instance (not shared with console-db)
+  CLOUDSQL_INSTANCE: mubit-prod:europe-west4:minima-prod-db
+  # VPC for Cloud Memorystore (Redis) connectivity
+  NETWORK:         mubit-prod-eu-network
+  SUBNET:          mubit-prod-eu-subnet
 
 permissions:
   contents: read
@@ -71,8 +76,12 @@ jobs:
             --max-instances 20 \
             --allow-unauthenticated \
             --service-account ${{ secrets.GCP_PROD_DEPLOYER_SA }} \
-            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=sqlite,MINIMA_SQLITE_PATH=/tmp/minima_state.db,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
-            --set-secrets="GEMINI_API_KEY=minima-prod-gemini-key:latest,ANTHROPIC_API_KEY=minima-prod-anthropic-key:latest,OPENROUTER_API_KEY=minima-prod-openrouter-key:latest" \
+            --add-cloudsql-instances=${{ env.CLOUDSQL_INSTANCE }} \
+            --network=${{ env.NETWORK }} \
+            --subnet=${{ env.SUBNET }} \
+            --vpc-egress=private-ranges-only \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
+            --set-secrets="GEMINI_API_KEY=minima-prod-gemini-key:latest,ANTHROPIC_API_KEY=minima-prod-anthropic-key:latest,OPENROUTER_API_KEY=minima-prod-openrouter-key:latest,MINIMA_DATABASE_URL=minima-prod-db-url:latest,MINIMA_REDIS_URL=minima-prod-redis-url:latest" \
             --quiet
 
       - name: Print service URL
