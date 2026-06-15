@@ -11,6 +11,7 @@ across requests, and recall over the same run finds the accumulated outcomes.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -36,6 +37,49 @@ def _f(value: object, default: float = 0.0) -> float:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
+    return RecalledEvidence(
+        entry_id=str(ev.get("id", "")),
+        reference_id=(ev.get("reference_id") or None),
+        score=_f(ev.get("score")),
+        knowledge_confidence=_f(ev.get("knowledge_confidence")),
+        is_stale=bool(ev.get("is_stale", False)),
+        content=str(ev.get("content", "")),
+        record=OutcomeRecord.from_metadata(ev.get("metadata_json")),
+        referenceable=bool(ev.get("referenceable", False)),
+        entry_type=str(ev.get("entry_type", "")),
+    )
+
+
+def _log_explain(lane: str, raw: object) -> None:
+    """Diagnostic: per-evidence score components (server-side ExplainInfo)."""
+    if not isinstance(raw, Mapping):
+        return
+    components = []
+    for ev in raw.get("evidence") or []:
+        if not isinstance(ev, Mapping):
+            continue
+        info = ev.get("explain_info")
+        if isinstance(info, Mapping):
+            components.append(
+                {
+                    "id": str(ev.get("id", ""))[:12],
+                    "semantic": _f(info.get("semantic_score")),
+                    "lexical": _f(info.get("lexical_score")),
+                    "recency": _f(info.get("recency_score")),
+                    "decay": _f(info.get("temporal_decay_factor"), 1.0),
+                }
+            )
+    if components:
+        log.info(
+            "recall_explain",
+            lane=lane,
+            rank_by_mode=raw.get("rank_by_mode"),
+            n=len(components),
+            components=components,
+        )
 
 
 @runtime_checkable
@@ -99,6 +143,10 @@ class Memory(Protocol):
         self, *, run_id: str, items: list[dict], deduplicate: bool = True
     ) -> dict: ...
 
+    async def dereference(
+        self, *, lane: str, reference_id: str
+    ) -> RecalledEvidence | None: ...
+
     async def get_context(
         self,
         *,
@@ -161,33 +209,56 @@ class MubitMemory:
         env_tags: Sequence[str] | None = None,
         timeout_ms: int | None = None,
     ) -> RecallResult:
+        settings = self._settings
         budget_ms = (
-            timeout_ms if timeout_ms is not None else self._settings.minima_memory_recall_timeout_ms
+            timeout_ms if timeout_ms is not None else settings.minima_memory_recall_timeout_ms
         )
-        # No entry_type filter by default: seed records (batch_insert) land as
-        # "fact" while feedback records (remember intent=observation) land as
-        # "observation". We select Minima outcomes by metadata kind instead.
-        # prefer_current_run keeps everything in this lane's run while skipping
+        # Low-level control query (the typed recall() wrapper drops rank_by / timestamps /
+        # budget / explain). Default entry_types covers both intake paths: seed records
+        # (batch_insert) land as "fact", feedback records (remember intent=observation)
+        # as "observation"; Minima outcomes are still authoritatively selected by metadata
+        # kind. prefer_current_run keeps everything in this lane's run while skipping
         # cross-run global-lesson overlays from other actors.
-        call_kwargs = {
+        resolved_types = (
+            list(entry_types)
+            if entry_types
+            else [t.strip() for t in settings.minima_recall_entry_types.split(",") if t.strip()]
+        )
+        payload: dict[str, Any] = {
+            "run_id": lane,
             "query": query,
-            "session_id": lane,
-            "lane": lane,
-            "mode": self._settings.minima_recall_mode,
-            "user_id": user_id,
+            "mode": settings.minima_recall_mode,
             "limit": limit,
-            "entry_types": list(entry_types) if entry_types else None,
             "include_working_memory": False,
             "prefer_current_run": True,
-            "env_tags": list(env_tags) if env_tags else None,
+            "lane_filter": lane,
         }
+        if user_id:
+            payload["user_id"] = user_id
+        if resolved_types:
+            payload["entry_types"] = resolved_types
+        if env_tags:
+            payload["env_tags"] = list(env_tags)
+        if settings.minima_recall_rank_by:
+            payload["rank_by"] = settings.minima_recall_rank_by
+        if settings.minima_recall_budget:
+            payload["budget"] = settings.minima_recall_budget
+        if settings.minima_recall_max_age_days > 0:
+            payload["min_timestamp"] = int(
+                time.time() - settings.minima_recall_max_age_days * 86_400
+            )
+        if settings.minima_recall_explain:
+            payload["explain"] = True
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
-                raw = await threadpool.run_cancellable(self._client.recall, **call_kwargs)
+                raw = await threadpool.run_cancellable(self._client._control.query, payload)
             if scope.cancelled_caught:
                 log.warning("recall_timeout", lane=lane, budget_ms=budget_ms)
                 return RecallResult(evidence=[], degraded=True, timed_out=True)
-            return self._parse_recall(raw)
+            result = self._parse_recall(raw)
+            if settings.minima_recall_explain:
+                _log_explain(lane, raw)
+            return result
         except TransportError as exc:
             log.warning("recall_transport_error", lane=lane, code=exc.args[0] if exc.args else "")
             return RecallResult(evidence=[], degraded=True, error=str(exc))
@@ -201,22 +272,36 @@ class MubitMemory:
         for ev in data.get("evidence") or []:
             if not isinstance(ev, Mapping):
                 continue
-            evidence.append(
-                RecalledEvidence(
-                    entry_id=str(ev.get("id", "")),
-                    reference_id=(ev.get("reference_id") or None),
-                    score=_f(ev.get("score")),
-                    knowledge_confidence=_f(ev.get("knowledge_confidence")),
-                    is_stale=bool(ev.get("is_stale", False)),
-                    content=str(ev.get("content", "")),
-                    record=OutcomeRecord.from_metadata(ev.get("metadata_json")),
-                )
-            )
+            evidence.append(_parse_evidence(ev))
         return RecallResult(
             evidence=evidence,
             degraded=bool(data.get("degraded", False)),
             raw_confidence=_f(data.get("confidence")),
         )
+
+    async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
+        """Exact re-read of a known durable record (the (cluster, model) outcome upsert).
+
+        Returns None on any failure — the fast path is strictly additive to ANN recall.
+        """
+        try:
+            raw = await threadpool.run(
+                self._client.dereference, reference_id=reference_id, session_id=lane
+            )
+        except Exception as exc:  # noqa: BLE001 — fast path must never break a recommendation
+            log.warning("dereference_error", lane=lane, error=str(exc))
+            return None
+        if not isinstance(raw, Mapping) or raw.get("found") is False:
+            return None
+        ev = raw.get("evidence")
+        if not isinstance(ev, Mapping) or not ev:
+            return None
+        parsed = _parse_evidence(ev)
+        # Exact identity fetch: similarity is 1.0 by construction (same cluster key).
+        parsed.score = 1.0
+        if not parsed.reference_id:
+            parsed.reference_id = reference_id
+        return parsed
 
     async def get_context(
         self,
@@ -390,6 +475,7 @@ class MubitMemory:
         url = f"{base}/v2/core/health"
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
+            headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
             async with httpx.AsyncClient(timeout=3.0) as http:
                 resp = await http.get(url, headers=headers)
             return {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "minima"
-version = "0.1.0"
+version = "0.3.0"
 description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,8 @@ dependencies = [
   "structlog>=24.1",
   "tenacity>=8.4",
   "mubit-sdk>=0.10.0",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +38,7 @@ dev = [
 
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
+minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]
@@ -59,9 +62,14 @@ select = ["E", "F", "I", "UP", "B", "C4"]
 ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/minima/recommender/classify.py" = ["E501"]  # regex pattern tables
-"tests/eval/*" = ["E501", "E702"]  # dense report/format lines + compact numeric loops
-"tests/live/*" = ["E501"]  # inline request bodies + progress prints in live e2e demos
+"src/minima/recommender/classify.py" = ["E501"] # regex pattern tables
+"tests/eval/*" = [
+  "E501",
+  "E702",
+] # dense report/format lines + compact numeric loops
+"tests/live/*" = [
+  "E501",
+] # inline request bodies + progress prints in live e2e demos
 
 [tool.mypy]
 python_version = "3.11"

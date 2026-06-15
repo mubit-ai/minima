@@ -40,8 +40,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 - **Recommend-only.** No proxy, no prompt rewriting, no caching. Sits beside your calls, adds zero latency to them.
 - **Memory-driven.** Backed by [Mubit](https://mubit.ai) — semantic k-NN recall, per-entry reinforcement, and lesson promotion.
 - **Accurate cost ranking.** Three cost-basis tiers (rescaled → observed → estimate) correctly rank reasoning-heavy models that look cheap on paper but spend output tokens thinking.
-- **Works cold.** Prior-only fallback + RouterBench seeding means useful picks from day one.
-- **Multi-tenant.** One deployment, per-org Mubit instances, per-org `mnim_…` keys.
+- **Works cold.** Prior-only fallback + benchmark seeding means useful picks from day one.
+- **Provable.** `GET /v1/savings` reports estimated *and realized* savings against honest baselines, and `GET /v1/calibration` shows whether `predicted_success` matches your real outcomes.
+- **Bring your own memory.** Authenticate with your own Mubit API key — Minima reads and writes your `task → model → outcome` history in your Mubit instance, with `namespace` / `user_id` sub-scoping inside it.
 
 ```
   POST /v1/recommend  ──▶  you run the model  ──▶  POST /v1/feedback

@@ -286,10 +286,25 @@ async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidate
 async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: list[str],
                        settings: Settings) -> tuple[dict, int, float]:
     """Returns (aggregates, n_outcome_evidence, max_neighbor_similarity)."""
+    # Same budget as the engine's own recall (the crosscheck runs Recommender.recommend
+    # fresh): a budget asymmetry makes long-prompt rows time out in one path but not the
+    # other, and the factored<->engine crosscheck diverges on exactly those rows.
     recall = await memory.recall(
-        query=row.prompt, lane=lane, limit=settings.minima_memory_recall_limit, timeout_ms=12000
+        query=row.prompt,
+        lane=lane,
+        limit=settings.minima_memory_recall_limit,
+        timeout_ms=settings.minima_memory_recall_timeout_ms,
     )
-    aggs = aggregate_by_model(recall.outcome_evidence, set(candidates))
+    # Mirror the shipped engine's aggregation knobs (age decay + seed down-weighting),
+    # so the factored frontier reflects the same evidence weighting as /recommend.
+    aggs = aggregate_by_model(
+        recall.outcome_evidence,
+        set(candidates),
+        half_life_days=settings.minima_evidence_half_life_days,
+        decay_floor=settings.minima_evidence_decay_floor,
+        seed_weight=settings.minima_seed_weight,
+        seed_crowdout_n=settings.minima_seed_crowdout_n,
+    )
     # Mirror the shipped engine: IPW with a cold (empty) propensity store, exactly as a
     # /recommend call does when there's no logging history yet.
     if settings.minima_ipw_enabled and aggs:
@@ -434,12 +449,27 @@ async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidat
 
 
 async def _barrier(memory: MubitMemory, lane: str, probe: Row, settings: Settings) -> None:
-    """Wait until seeded train is recallable (server embeds on ingest)."""
-    for _ in range(10):
+    """Wait until the seeded train set is fully recallable (server embeds/indexes async).
+
+    n>0 is not enough: recalls issued while the index is still filling see a partial
+    evidence set, and the end-of-run engine crosscheck then scores against a richer
+    index than the frontier did (a guaranteed factored<->endpoint mismatch). Wait until
+    the recallable evidence count saturates: it reaches the recall limit, or is stable
+    across 3 consecutive probes.
+    """
+    last, stable = -1, 0
+    for _ in range(60):
         aggs, n, _ = await _recall_aggs(memory, lane, probe, list(probe.scores), settings)
-        if n > 0:
+        if n >= settings.minima_memory_recall_limit:
             return
-        time.sleep(1.0)
+        if n > 0 and n == last:
+            stable += 1
+            if stable >= 3:
+                return
+        else:
+            stable = 0
+        last = n
+        time.sleep(5.0)
 
 
 async def evaluate(

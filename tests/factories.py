@@ -24,11 +24,19 @@ class FakeMemory:
         self.lessons: list[dict[str, Any]] = []
         self.batches: list[tuple[str, list[dict]]] = []
         self.reflects: list[dict[str, Any]] = []
+        self.recall_calls: list[dict[str, Any]] = []
+        self.dereference_calls: list[dict[str, Any]] = []
+        self.deref_results: dict[str, RecalledEvidence] = {}
         self._strategies = list(strategies or [])
         self.next_record_id = "rec-fake-1"
 
-    async def recall(self, **_kwargs: Any) -> RecallResult:
+    async def recall(self, **kwargs: Any) -> RecallResult:
+        self.recall_calls.append(kwargs)
         return RecallResult(evidence=list(self.evidence))
+
+    async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
+        self.dereference_calls.append({"lane": lane, "reference_id": reference_id})
+        return self.deref_results.get(reference_id)
 
     async def remember_outcome(self, **kwargs: Any) -> str | None:
         self.remembered.append(kwargs)
@@ -122,6 +130,10 @@ def make_evidence(
     cost_usd: float = 0.0,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    latency_ms: int | None = None,
+    recorded_at: float | None = None,
+    source_dataset: str | None = None,
+    referenceable: bool = False,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
@@ -133,6 +145,9 @@ def make_evidence(
         quality_score=quality,
         outcome="success" if quality >= 0.5 else "failure",
         cost_usd=cost_usd,
+        latency_ms=latency_ms,
+        recorded_at=recorded_at,
+        source_dataset=source_dataset,
     )
     return RecalledEvidence(
         entry_id=entry_id,
@@ -142,4 +157,5 @@ def make_evidence(
         is_stale=is_stale,
         content="prior task",
         record=record,
+        referenceable=referenceable,
     )

@@ -9,20 +9,27 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 
 from minima.api.errors import register_error_handlers
-from minima.api.routers import admin, feedback, health, models, recommend, strategies
+from minima.api.routers import (
+    calibration,
+    feedback,
+    health,
+    models,
+    recommend,
+    savings,
+    strategies,
+)
 from minima.catalog.refresh import refresh_loop
 from minima.catalog.store import CatalogStore
 from minima.config import Settings, get_settings
 from minima.llm.registry import build_reasoner
 from minima.logging import configure_logging
-from minima.memory.adapter import Memory, MubitMemory
+from minima.memory.adapter import Memory
+from minima.recommender.decisionlog import build_decision_log
+from minima.recommender.durablerefs import build_durable_refs
 from minima.recommender.engine import Recommender
-from minima.recommender.propensity import OrgScopedPropensity, build_propensity
-from minima.recommender.recstore import LaneCounter, OrgScopedRecStore, RecStore, build_recstore
-from minima.tenancy.context import TenantContext
-from minima.tenancy.registry import build_tenant_store
-from minima.tenancy.runtime import TenantRuntime
-from minima.tenancy.secrets import SecretResolver
+from minima.recommender.propensity import build_propensity
+from minima.recommender.recstore import LaneCounter, RecStore, build_recstore
+from minima.tenancy.passthrough import PassthroughRuntime
 from minima.version import __version__
 
 
@@ -35,54 +42,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     catalog_store: CatalogStore = injected.get("catalog_store") or CatalogStore(settings)
     recstore_backend: RecStore = injected.get("recstore") or build_recstore(settings)
     propensity_backend = build_propensity(settings)
+    decision_log_backend = build_decision_log(settings)
     reasoner = build_reasoner(settings)
     lane_counter = LaneCounter()
 
     app.state.catalog_store = catalog_store
     app.state.lane_counter = lane_counter
-
-    if settings.minima_multitenant:
-        # Multi-tenant (T3): one runtime, per-org Mubit instance resolved per request.
-        runtime: TenantRuntime = injected.get("tenant_runtime") or TenantRuntime(
-            settings=settings,
-            catalog_store=catalog_store,
-            reasoner=reasoner,
-            recstore_backend=recstore_backend,
-            propensity_backend=propensity_backend,
-            lane_counter=lane_counter,
-            tenant_store=build_tenant_store(settings),
-            secret_resolver=SecretResolver(),
-        )
-        app.state.tenant_runtime = runtime
-        app.state.tenant_store = runtime.tenant_store
-        app.state.default_tenant = None
-    else:
-        # Single-tenant: the env Mubit key is the one "default" org. State is org-scoped
-        # to "default" so the storage layer is identical in both modes.
-        org = settings.minima_default_org_id
-        memory: Memory = injected.get("memory") or MubitMemory(settings)
-        scoped_recstore = OrgScopedRecStore(recstore_backend, org)
-        recommender: Recommender = injected.get("recommender") or Recommender(
-            settings,
-            memory,
-            catalog_store,
-            scoped_recstore,
-            reasoner=reasoner,
-            propensity=OrgScopedPropensity(propensity_backend, org),
-        )
-        app.state.memory = memory
-        app.state.recstore = scoped_recstore
-        app.state.recommender = recommender
-        app.state.tenant_runtime = None
-        app.state.default_tenant = TenantContext(
-            org_id=org,
-            memory=memory,
-            recommender=recommender,
-            recstore=scoped_recstore,
-            lane_counter=lane_counter,
-            lane_prefix=settings.minima_lane_prefix,
-            mubit_endpoint=settings.mubit_endpoint,
-        )
+    injected_memory: Memory | None = injected.get("memory")
+    app.state.passthrough_runtime = injected.get("passthrough_runtime") or PassthroughRuntime(
+        settings=settings,
+        catalog_store=catalog_store,
+        reasoner=reasoner,
+        recstore_backend=recstore_backend,
+        propensity_backend=propensity_backend,
+        lane_counter=lane_counter,
+        memory_factory=(lambda _key: injected_memory) if injected_memory is not None else None,
+        decision_log_backend=decision_log_backend,
+        durable_refs_backend=build_durable_refs(settings),
+    )
 
     refresh_task: asyncio.Task | None = None
     if getattr(app.state, "_start_refresh", True):
@@ -104,7 +81,7 @@ def create_app(
     catalog_store: CatalogStore | None = None,
     recstore: RecStore | None = None,
     recommender: Recommender | None = None,
-    tenant_runtime: TenantRuntime | None = None,
+    passthrough_runtime: PassthroughRuntime | None = None,
     start_refresh: bool = True,
 ) -> FastAPI:
     app = FastAPI(title="Minima", version=__version__, lifespan=lifespan)
@@ -114,7 +91,7 @@ def create_app(
         "catalog_store": catalog_store,
         "recstore": recstore,
         "recommender": recommender,
-        "tenant_runtime": tenant_runtime,
+        "passthrough_runtime": passthrough_runtime,
     }
     app.state._start_refresh = start_refresh
 
@@ -123,8 +100,9 @@ def create_app(
     app.include_router(feedback.router)
     app.include_router(models.router)
     app.include_router(strategies.router)
+    app.include_router(savings.router)
+    app.include_router(calibration.router)
     app.include_router(health.router)
-    app.include_router(admin.router)
     return app
 
 

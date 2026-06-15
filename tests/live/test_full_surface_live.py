@@ -38,6 +38,11 @@ pytestmark = [
 
 RECALL_TIMEOUT_MS = 8000
 
+
+def _auth_headers() -> dict[str, str]:
+    """Pass-through auth: every API route requires the Mubit key as a bearer token."""
+    return {"Authorization": f"Bearer {os.environ['MUBIT_API_KEY']}"}
+
 # A cohesive "code:hard" task family. Seeds reuse near-identical text so the recall
 # query embeds close to them and surfaces the seeded outcomes.
 TASK_FAMILY = (
@@ -111,7 +116,7 @@ def test_recommend_cold_start_live():
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.post(
             "/v1/recommend",
             json={
@@ -162,7 +167,7 @@ async def test_recommend_memory_driven_live():
     assert "gpt-4o-mini" in recalled_models
 
     app = create_app(settings=settings, start_refresh=False)
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.post(
             "/v1/recommend",
             json={
@@ -195,7 +200,7 @@ def test_feedback_reinforcement_loop_live():
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         first = client.post(
             "/v1/recommend",
             json={
@@ -260,7 +265,7 @@ def test_llm_escalation_live():
     namespace = _ns()  # cold namespace -> thin evidence -> escalation
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.post(
             "/v1/recommend",
             json={
@@ -294,7 +299,7 @@ def test_workflow_endpoint_live():
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.post(
             "/v1/recommend/workflow",
             json={
@@ -342,7 +347,7 @@ def test_lesson_promotion_and_strategies_live():
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         rec = client.post(
             "/v1/recommend",
             json={
@@ -382,7 +387,7 @@ def test_reflect_cadence_live():
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         triggered: list[bool] = []
         for _ in range(2):
             rec = client.post(
@@ -427,7 +432,7 @@ def test_durable_sqlite_recstore_live(tmp_path):
     namespace = _ns()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         rec = client.post(
             "/v1/recommend",
             json={
@@ -452,7 +457,7 @@ def test_models_endpoint_live():
     settings = _base_settings()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.get("/v1/models")
         assert resp.status_code == 200
         body = resp.json()
@@ -469,7 +474,7 @@ def test_health_endpoint_live():
     settings = _base_settings()
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.get("/v1/health")
         assert resp.status_code == 200
         body = resp.json()
@@ -486,7 +491,7 @@ def test_constraints_candidate_models_live():
     allowed = ["gpt-4o-mini", "claude-opus-4-8"]
     app = create_app(settings=settings, start_refresh=False)
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=_auth_headers()) as client:
         resp = client.post(
             "/v1/recommend",
             json={

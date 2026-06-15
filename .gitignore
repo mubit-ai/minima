@@ -11,8 +11,6 @@ build/
 .minima_state/
 .seed_progress.json
 
-# CI-only vendored SDK (populated by the workflow before docker build)
-vendor/
 
 # Astro docs site
 docs-site/node_modules/

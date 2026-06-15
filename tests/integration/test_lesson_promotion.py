@@ -18,7 +18,7 @@ def _recommend(client: TestClient) -> tuple[str, str]:
 
 def _client(memory: FakeMemory) -> TestClient:
     app = create_app(settings=Settings(mubit_api_key="t"), memory=memory, start_refresh=False)
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer mbt_test_kid_secret"})
 
 
 def test_verified_prod_success_promotes_lesson():
@@ -69,7 +69,7 @@ def test_lesson_promotion_can_be_disabled():
     memory = FakeMemory()
     settings = Settings(mubit_api_key="t", minima_lesson_on_verified_prod=False)
     app = create_app(settings=settings, memory=memory, start_refresh=False)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"Authorization": "Bearer mbt_test_kid_secret"}) as client:
         rid, model = _recommend(client)
         resp = client.post(
             "/v1/feedback",

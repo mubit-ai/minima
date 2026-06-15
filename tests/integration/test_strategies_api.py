@@ -20,7 +20,7 @@ EMERGENT = {
 def test_strategies_endpoint_returns_normalized_rules():
     memory = FakeMemory(strategies=[EMERGENT])
     app = create_app(settings=Settings(mubit_api_key="t"), memory=memory, start_refresh=False)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"Authorization": "Bearer mbt_test_kid_secret"}) as client:
         resp = client.get("/v1/strategies", params={"namespace": "acme", "max_strategies": 3})
     assert resp.status_code == 200
     body = resp.json()
@@ -33,7 +33,7 @@ def test_strategies_endpoint_returns_normalized_rules():
 
 def test_strategies_endpoint_empty():
     app = create_app(settings=Settings(mubit_api_key="t"), memory=FakeMemory(), start_refresh=False)
-    with TestClient(app) as client:
+    with TestClient(app, headers={"Authorization": "Bearer mbt_test_kid_secret"}) as client:
         resp = client.get("/v1/strategies")
     assert resp.status_code == 200
     assert resp.json() == {

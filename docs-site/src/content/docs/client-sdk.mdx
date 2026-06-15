@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, Code } from '@astrojs/starlight/components';
 
-The `minima_client` package is a thin, typed client for the Minima API plus an optional zero-code intake helper. It ships in the same repo as the server.
+The `minima_client` package is the official thin, typed Python client for the hosted Minima API, plus an optional zero-code intake helper.
 
 ```python
 from minima_client import MinimaClient, AsyncMinimaClient, MinimaError, autocapture
@@ -20,20 +20,20 @@ Both `MinimaClient` (sync) and `AsyncMinimaClient` (async) share the same surfac
 ```python
 from minima_client import MinimaClient
 
-with MinimaClient("http://localhost:8080", api_key=None, timeout=10.0) as minima:
+with MinimaClient("https://api.minima.sh", api_key="mbt_…", timeout=10.0) as minima:
     rec = minima.recommend("Summarize this incident report into 3 bullets.",
                            cost_quality_tradeoff=3)
     print(rec.recommended_model.model_id)
 ```
 
-- `base_url` — the Minima service URL.
-- `api_key` — sent as `Authorization: Bearer <key>`. Only needed in multi-tenant mode. `None` to omit.
+- `base_url` — the Minima API base URL (`https://api.minima.sh`).
+- `api_key` — your **Mubit** API key (`mbt_…`), sent as `Authorization: Bearer <key>` and passed through to Mubit. Required.
 - `timeout` — HTTP timeout in seconds.
 
 The async client mirrors every method with `await`; use it inside FastAPI/async apps:
 
 ```python
-async with AsyncMinimaClient("http://localhost:8080", api_key="mnim_…") as minima:
+async with AsyncMinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
     rec = await minima.recommend(task)
 ```
 
@@ -50,6 +50,7 @@ rec = minima.recommend(
     namespace=None,
     allow_llm_escalation=True,
     explain=True,
+    baseline_model_id=None,            # the model you'd use without Minima -> savings()
 )
 ```
 
@@ -59,7 +60,7 @@ rec = minima.recommend(
 minima.recommend("plain prompt text")                       # str
 minima.recommend({"task": "…", "task_type": "code"})        # dict
 
-from minima.schemas.common import TaskInput, Constraints
+from minima_client import TaskInput, Constraints
 minima.recommend(
     TaskInput(task="…", difficulty="hard"),
     constraints=Constraints(min_quality=0.85, max_cost_per_call=0.02),
@@ -71,8 +72,7 @@ minima.recommend(
 Takes a `WorkflowRequest`, returns a `WorkflowResponse`.
 
 ```python
-from minima.schemas.workflow import WorkflowRequest, WorkflowStep
-from minima.schemas.common import TaskInput
+from minima_client import WorkflowRequest, WorkflowStep, TaskInput
 
 req = WorkflowRequest(
     steps=[
@@ -116,6 +116,25 @@ strat   = minima.strategies(namespace="team-payments", max_strategies=5)
 status  = minima.health()                                          # dict
 ```
 
+## `savings(...)` and `calibration(...)`
+
+The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/#get-v1savings) for every field).
+
+```python
+report = minima.savings(namespace="team-payments", days=30, group_by="task_type")
+print(report.summary.estimated.savings_vs_premium_usd,   # generous baseline
+      report.summary.estimated.savings_vs_declared_usd,  # your declared default
+      report.health["feedback_coverage"])                # how much to trust "realized"
+
+cal = minima.calibration(days=30)
+for r in cal.reports:
+    print(r.slice_key, r.n, r.ece, r.ece_shrunk)
+for flag in cal.drift_flags:
+    print(flag.cluster, flag.model_id, flag.direction)   # sustained prediction drift
+```
+
+Pass `baseline_model_id` on `recommend()` and realized `actual_cost_usd` on `feedback()` to turn the savings report from an estimate into a measurement.
+
 ## Errors
 
 Non-2xx responses raise `MinimaError` (which carries the problem+json detail):
@@ -141,7 +160,7 @@ from minima_client import autocapture
 
 autocapture.enable(
     api_key="<mubit-key>",
-    endpoint="http://127.0.0.1:3000",
+    endpoint="https://api.mubit.ai",
     namespace="team-payments",
     user_id="svc-router",
 )
@@ -164,4 +183,4 @@ autocapture.wrap(client)                           # enrich one client instead o
 autocapture.capture(messages, response)            # manual ingest for raw HTTP / unsupported libs
 ```
 
-See [`examples/05_autocapture.py`](https://github.com/mubit-ai/minima/blob/main/examples/05_autocapture.py).
+See the [zero-code intake example](/examples/#5-zero-code-intake).

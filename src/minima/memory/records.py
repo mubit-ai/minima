@@ -11,9 +11,14 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2 adds recorded_at (unix seconds); v1 records parse unchanged
 
 _OUTCOME_DEFAULT_QUALITY = {"success": 0.9, "partial": 0.5, "failure": 0.1}
+
+# Caller-supplied quality scores that flatly contradict the outcome label are clamped
+# (never rejected — nuanced feedback like "succeeded but mediocre" must survive).
+_FAILURE_QUALITY_CAP = 0.6
+_SUCCESS_QUALITY_FLOOR = 0.4
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -29,6 +34,20 @@ def quality_from_outcome(outcome: str, quality_score: float | None) -> float:
     if quality_score is not None:
         return clamp01(float(quality_score))
     return _OUTCOME_DEFAULT_QUALITY.get(outcome, 0.5)
+
+
+def reconcile_quality(outcome: str, quality: float) -> tuple[float, str | None]:
+    """Log-and-clamp gate for outcome/quality contradictions.
+
+    A "failure" reported with quality 0.95 (or a "success" with 0.05) would poison the
+    weighted-success aggregate with a label/score pair that can't both be true. Clamp
+    into the consistent band and surface a warning so the caller can fix their scorer.
+    """
+    if outcome == "failure" and quality > _FAILURE_QUALITY_CAP:
+        return _FAILURE_QUALITY_CAP, "quality_outcome_mismatch"
+    if outcome == "success" and quality < _SUCCESS_QUALITY_FLOOR:
+        return _SUCCESS_QUALITY_FLOOR, "quality_outcome_mismatch"
+    return quality, None
 
 
 def signal_from_outcome(outcome: str, quality: float) -> float:
@@ -59,6 +78,9 @@ class OutcomeRecord:
     recommendation_id: str | None = None
     verified_in_production: bool = False
     source_dataset: str | None = None
+    # Unix seconds when the outcome was observed. Powers evidence age decay; None on
+    # legacy (schema v1) records, which fall back to the binary staleness penalty.
+    recorded_at: float | None = None
     kind: str = "outcome"
     schema_version: int = SCHEMA_VERSION
     extra: dict = field(default_factory=dict)
@@ -98,6 +120,9 @@ class OutcomeRecord:
             recommendation_id=parsed.get("recommendation_id"),
             verified_in_production=bool(parsed.get("verified_in_production", False)),
             source_dataset=parsed.get("source_dataset"),
+            recorded_at=(
+                _as_float(parsed.get("recorded_at")) if parsed.get("recorded_at") else None
+            ),
         )
 
 
@@ -112,6 +137,9 @@ class RecalledEvidence:
     is_stale: bool
     content: str
     record: OutcomeRecord | None
+    # Whether this entry can be re-read exactly via Dereference (durable fast path).
+    referenceable: bool = False
+    entry_type: str = ""
 
 
 @dataclass(slots=True)
