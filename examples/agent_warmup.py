@@ -36,6 +36,10 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 ANTH_KEY   = os.environ["ANTHROPIC_API_KEY"]
 
 N_RUNS = 5
+SEED   = int(os.environ.get("WARMUP_SEED", "7"))   # task ORDER only (reshuffles the same 20 tasks)
+# Memory isolation is by namespace → lane `minima:<namespace>`. A fresh namespace = cold/empty
+# memory, so the cold→warm learning curve is observable and the existing default lane is untouched.
+NAMESPACE = os.environ.get("WARMUP_NAMESPACE")     # None → default lane; set for an isolated run
 JUDGE_MODEL = "claude-haiku-4-5"   # cheap, different provider → avoids self-grading bias
 
 # Models available on hosted api.minima.sh — Google + Anthropic only (no OpenAI key)
@@ -106,9 +110,9 @@ TASKS: list[Task] = [
         label="sentiment",
         task_type="classification",
         slider=2.5,
-        prompt="Classify sentiment as Positive, Negative, or Mixed. Reply with one word.\n\n"
+        prompt="Classify the sentiment. Reply with exactly one word — Positive, Negative, or Mixed. No other text.\n\n"
                "'The food was amazing but the service was painfully slow and ruined the whole evening.'",
-        rubric="Correct answer is Mixed. Award 10 if Mixed, 0 otherwise.",
+        rubric="Correct answer is Mixed. Award 10 if the response contains 'Mixed' (case-insensitive), 0 otherwise.",
         expected="Mixed",
     ),
     Task(
@@ -314,10 +318,13 @@ def _call_model(model_id: str, prompt: str) -> tuple[str, int, int, int]:
     """Returns (text, input_tokens, output_tokens, latency_ms)."""
     t0 = time.monotonic()
     if model_id.startswith("gemini"):
+        # gemini-2.5-pro uses thinking tokens that consume the budget before output;
+        # 2048 gives enough headroom for reasoning tasks without hitting MAX_TOKENS.
+        max_tok = 2048 if "pro" in model_id else 1024
         r = _gem.models.generate_content(
             model=model_id,
             contents=prompt,
-            config=_gtypes.GenerateContentConfig(max_output_tokens=1024, temperature=0.0),
+            config=_gtypes.GenerateContentConfig(max_output_tokens=max_tok, temperature=0.0),
         )
         text = r.text or ""
         in_t = r.usage_metadata.prompt_token_count or 0
@@ -375,7 +382,8 @@ async def run_once(
     log_dir: Path,
 ) -> list[dict]:
     results = []
-    shuffled = random.sample(tasks, len(tasks))   # different order every run = unbiased memory
+    rng = random.Random(SEED)                       # same order every run — cross-run comparison is clean
+    shuffled = rng.sample(tasks, len(tasks))
 
     for task in shuffled:
         # 1. Recommend
@@ -383,6 +391,7 @@ async def run_once(
             {"task": task.prompt, "task_type": task.task_type},
             cost_quality_tradeoff=task.slider,
             constraints=Constraints(candidate_models=CANDIDATES),
+            namespace=NAMESPACE,
         )
         model   = rec.recommended_model.model_id
         basis   = rec.decision_basis.value if hasattr(rec.decision_basis, "value") else str(rec.decision_basis)
@@ -448,15 +457,77 @@ async def run_once(
     return results
 
 
+async def _audit_memory(minima: AsyncMinimaClient, log_dir: Path) -> dict:
+    """Check what's already in Mubit before the warmup starts."""
+    print("── Pre-flight memory audit ──────────────────────────────────────")
+
+    # 1. Strategies — synthesised lessons already in memory
+    strats = await minima.strategies(namespace=NAMESPACE)
+    total_lessons = sum(s.supporting_lesson_count for s in strats.strategies)
+    print(f"  Strategies  : {strats.count}  (total lessons across all: {total_lessons})")
+    for s in strats.strategies:
+        print(f"    [{s.supporting_lesson_count:>4} lessons] {s.description[:80]}…")
+
+    # 2. Probe recommend for one easy and one hard task — check evidence depth
+    probes = [
+        ("easy",      "Translate 'Good morning' to French.",           "translation", 2.0),
+        ("hard",      "Implement a binary search tree in Python.",      "code",        7.5),
+        ("reasoning", "What is the probability of rolling two sixes?",  "reasoning",   7.0),
+    ]
+    probe_results = []
+    for name, prompt, task_type, slider in probes:
+        rec = await minima.recommend(
+            {"task": prompt, "task_type": task_type},
+            cost_quality_tradeoff=slider,
+            constraints=Constraints(candidate_models=CANDIDATES),
+            namespace=NAMESPACE,
+        )
+        ev_count = len(rec.recommended_model.evidence)
+        basis    = str(rec.decision_basis)
+        model    = rec.recommended_model.model_id
+        print(f"  probe/{name:<10}: {model:<22} basis={basis:<7}  evidence={ev_count}")
+        probe_results.append({"probe": name, "model": model, "basis": basis, "evidence_count": ev_count})
+
+    # 3. Classify memory warmth
+    total_evidence = sum(p["evidence_count"] for p in probe_results)
+    memory_bases   = [p["basis"] for p in probe_results]
+    if strats.count == 0 and total_evidence == 0:
+        warmth = "COLD — no prior memory; all decisions will be prior-based in run 1"
+    elif total_evidence == 0:
+        warmth = "STRATEGIES ONLY — lessons exist but recall not surfacing them yet"
+    elif all(b == "memory" for b in memory_bases):
+        warmth = "HOT — strong existing memory; run 1 will benefit immediately"
+    else:
+        warmth = "WARM — partial memory; some tasks will recall evidence in run 1"
+
+    print(f"\n  Memory state: {warmth}")
+    print("─────────────────────────────────────────────────────────────────\n")
+
+    audit = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "strategy_count": strats.count,
+        "total_lessons": total_lessons,
+        "strategies": [{"description": s.description[:120], "lessons": s.supporting_lesson_count}
+                       for s in strats.strategies],
+        "probes": probe_results,
+        "memory_warmth": warmth,
+    }
+    (log_dir / "memory_audit.json").write_text(json.dumps(audit, indent=2))
+    return audit
+
+
 async def main() -> None:
     run_ts  = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     log_dir = Path("runs") / run_ts
     log_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nLogs → {log_dir}/\n")
+    print(f"\nLogs → {log_dir}/")
+    print(f"Memory lane: minima:{NAMESPACE or 'default'}  |  seed: {SEED}\n")
 
     all_results: list[dict] = []
 
     async with AsyncMinimaClient(MINIMA_URL, api_key=MUBIT_KEY, timeout=60.0) as minima:
+        await _audit_memory(minima, log_dir)
+
         for run_idx in range(1, N_RUNS + 1):
             print(f"\n{'='*72}")
             print(f"RUN {run_idx}/{N_RUNS}")
@@ -465,7 +536,7 @@ async def main() -> None:
             all_results.extend(results)
 
             # Snapshot what Minima has learned after this run
-            strats = await minima.strategies()
+            strats = await minima.strategies(namespace=NAMESPACE)
             snap = {
                 "run": run_idx,
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -501,6 +572,8 @@ async def main() -> None:
 
     summary = {
         "minima_url": MINIMA_URL,
+        "namespace": NAMESPACE,
+        "seed": SEED,
         "candidates": CANDIDATES,
         "n_runs": N_RUNS,
         "n_tasks": len(TASKS),

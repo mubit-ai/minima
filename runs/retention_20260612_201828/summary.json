@@ -1,0 +1,129 @@
+{
+  "fr-translate@2.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.001075,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "fr-translate@5.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.001075,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "fr-translate@8.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.001075,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "article-summary@2.0": {
+    "avg_quality": 0.9,
+    "avg_cost": 0.001388,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "article-summary@5.0": {
+    "avg_quality": 0.85,
+    "avg_cost": 0.001388,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "article-summary@8.0": {
+    "avg_quality": 0.85,
+    "avg_cost": 0.001388,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "fallacy-detect@2.0": {
+    "avg_quality": 0.8,
+    "avg_cost": 0.0017,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "fallacy-detect@5.0": {
+    "avg_quality": 0.9,
+    "avg_cost": 0.004287,
+    "models": [
+      "gemini-2.5-flash",
+      "gemini-2.5-pro"
+    ]
+  },
+  "fallacy-detect@8.0": {
+    "avg_quality": 0.95,
+    "avg_cost": 0.006875,
+    "models": [
+      "gemini-2.5-pro"
+    ]
+  },
+  "debug-off-by-one@2.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.0017,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "debug-off-by-one@5.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.0017,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "debug-off-by-one@8.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.006875,
+    "models": [
+      "gemini-2.5-pro"
+    ]
+  },
+  "lru-cache@2.0": {
+    "avg_quality": 0.5,
+    "avg_cost": 0.0017,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "lru-cache@5.0": {
+    "avg_quality": 0.5,
+    "avg_cost": 0.0017,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "lru-cache@8.0": {
+    "avg_quality": 0.85,
+    "avg_cost": 0.006875,
+    "models": [
+      "gemini-2.5-pro"
+    ]
+  },
+  "logic-seating@2.0": {
+    "avg_quality": 0.5,
+    "avg_cost": 0.002325,
+    "models": [
+      "gemini-2.5-flash"
+    ]
+  },
+  "logic-seating@5.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.009375,
+    "models": [
+      "gemini-2.5-pro"
+    ]
+  },
+  "logic-seating@8.0": {
+    "avg_quality": 1.0,
+    "avg_cost": 0.009375,
+    "models": [
+      "gemini-2.5-pro"
+    ]
+  }
+}

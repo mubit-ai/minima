@@ -1,0 +1,99 @@
+{
+  "minima_url": "https://api.minima.sh",
+  "namespace": "escalate-20260615",
+  "seed": 7,
+  "slider": 4.0,
+  "n_epochs": 6,
+  "cold_lane": true,
+  "total_calls": 24,
+  "by_family": {
+    "work-rate": {
+      "role": "escalation",
+      "models_by_epoch": [
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "avg_quality": 0.833,
+      "total_cost": 0.04125
+    },
+    "lattice": {
+      "role": "escalation",
+      "models_by_epoch": [
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "avg_quality": 1.0,
+      "total_cost": 0.04125
+    },
+    "anagram": {
+      "role": "control",
+      "models_by_epoch": [
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ],
+      "avg_quality": 0.833,
+      "total_cost": 0.04125
+    },
+    "pct-chain": {
+      "role": "control",
+      "models_by_epoch": [
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro",
+        "pro"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "avg_quality": 1.0,
+      "total_cost": 0.04125
+    }
+  },
+  "escalation_avg_quality": 0.917,
+  "escalation_total_cost": 0.0825,
+  "control_avg_quality": 0.917,
+  "control_total_cost": 0.0825
+}

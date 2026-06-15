@@ -1,0 +1,25 @@
+{
+  "cold": true,
+  "probes": {
+    "work-rate": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-flash"
+    },
+    "lattice": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-flash"
+    },
+    "add-mult": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-flash"
+    },
+    "csv-to-json": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-flash"
+    }
+  }
+}

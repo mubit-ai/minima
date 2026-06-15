@@ -1,0 +1,99 @@
+{
+  "minima_url": "https://api.minima.sh",
+  "namespace": "escalate2-20260615",
+  "seed": 7,
+  "slider": 5.0,
+  "n_epochs": 6,
+  "cold_lane": true,
+  "total_calls": 24,
+  "by_family": {
+    "work-rate": {
+      "role": "escalation",
+      "models_by_epoch": [
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        0.5,
+        1.0,
+        0.5,
+        0.0
+      ],
+      "avg_quality": 0.667,
+      "total_cost": 0.008325
+    },
+    "lattice": {
+      "role": "escalation",
+      "models_by_epoch": [
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "avg_quality": 1.0,
+      "total_cost": 0.008325
+    },
+    "add-mult": {
+      "role": "control",
+      "models_by_epoch": [
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "avg_quality": 1.0,
+      "total_cost": 0.008325
+    },
+    "csv-to-json": {
+      "role": "control",
+      "models_by_epoch": [
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash",
+        "flash"
+      ],
+      "quality_by_epoch": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "avg_quality": 1.0,
+      "total_cost": 0.008325
+    }
+  },
+  "escalation_avg_quality": 0.833,
+  "escalation_total_cost": 0.01665,
+  "control_avg_quality": 1.0,
+  "control_total_cost": 0.01665
+}

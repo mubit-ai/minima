@@ -1,0 +1,25 @@
+{
+  "cold": true,
+  "probes": {
+    "work-rate": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-pro"
+    },
+    "lattice": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-pro"
+    },
+    "anagram": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-pro"
+    },
+    "pct-chain": {
+      "basis": "prior",
+      "evidence": 0,
+      "model": "gemini-2.5-pro"
+    }
+  }
+}
