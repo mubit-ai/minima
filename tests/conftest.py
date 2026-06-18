@@ -28,6 +28,7 @@ def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("MINIMA_REASONER_PROVIDER", "none")
     monkeypatch.setenv("MINIMA_REASONER_MODEL", "")
+    monkeypatch.setenv("MINIMA_DURABLE_FASTPATH", "off")
 
 
 @pytest.fixture

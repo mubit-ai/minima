@@ -97,7 +97,7 @@ class Recommender:
         candidate_ids = {c.model_id for c in candidates}
 
         recall, fastpath_evidence = await self._recall_with_fastpath(
-            req=req, lane=lane, cluster=cluster
+            req=req, lane=lane, cluster=cluster, candidate_ids=candidate_ids
         )
         if recall.timed_out:
             warnings.append("recall_timeout")
@@ -199,6 +199,8 @@ class Recommender:
                 score.capability_prior(recommended.card, task_type),
                 settings.minima_beta_pseudocount,
             ),
+            recommended_predicted_success=recommended.predicted_success,
+            tau=tau,
         )
         if esc.should_escalate:
             warnings.extend(f"escalation_suggested:{reason}" for reason in esc.reasons)
@@ -328,13 +330,22 @@ class Recommender:
         weights = [math.exp((c.score - peak) / t) for c in eligible]
         return self._rng.choices(eligible, weights=weights, k=1)[0]
 
-    async def _recall_with_fastpath(self, *, req: RecommendRequest, lane: str, cluster: str):
-        """ANN recall, optionally joined by exact Dereference of the durable records.
+    async def _recall_with_fastpath(
+        self,
+        *,
+        req: RecommendRequest,
+        lane: str,
+        cluster: str,
+        candidate_ids: set[str],
+    ):
+        """ANN recall joined by a deterministic keyed lookup for the current cluster.
 
-        Returns ``(recall_result, extra_evidence)``. In "shadow" mode the dereferenced
-        records are only compared against what ANN surfaced (the logged delta is the
-        evidence for whether the fast path — and the future server-side metadata index —
-        is worth turning on); in "on" mode the ANN-missed ones join the evidence set.
+        The lookup (POST /v2/core/lookup) fetches outcome records for all candidate
+        models in this cluster straight from storage — no ANN, no flicker. Records
+        already returned by ANN are deduped by entry_id so they are never double-counted.
+
+        The old dereference-based fastpath (MINIMA_DURABLE_FASTPATH=on/shadow) is
+        retained for backward compatibility and runs concurrently when configured.
         """
         settings = self._settings
         recall_coro = self._memory.recall(
@@ -344,18 +355,45 @@ class Recommender:
             limit=settings.minima_memory_recall_limit,
             env_tags=req.task.tags or None,
         )
+
+        # Keyed lookup: one filter clause per candidate model in this cluster.
+        # OR-combined on the server; returns all matching non-deleted records.
+        lookup_coro = self._memory.lookup(
+            lane=lane,
+            match=[
+                {"kind": "outcome", "task_cluster": cluster, "model_id": mid}
+                for mid in candidate_ids
+            ],
+        )
+
         mode = settings.minima_durable_fastpath.lower()
         refs = (
             self._durable_refs.refs(lane, cluster, settings.minima_durable_fastpath_max_refs)
             if mode in ("shadow", "on") and self._durable_refs is not None
             else []
         )
-        if not refs:
-            return await recall_coro, []
 
+        if not refs:
+            # Fast common path: recall + lookup, no dereferences.
+            recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
+            ann_ids = {ev.entry_id for ev in recall.evidence}
+            extra = [ev for ev in lookup_evidence if ev.entry_id not in ann_ids]
+            if extra:
+                log.info(
+                    "keyed_lookup_delta",
+                    cluster=cluster,
+                    added=len(extra),
+                    models=[ev.record.model_id for ev in extra if ev.record],
+                )
+            return recall, extra
+
+        # Old dereference fastpath active: run all three concurrently, share the
+        # recall latency budget, then merge — lookup results deduped against both
+        # ANN and dereference results so no evidence is double-counted.
         started = time.monotonic()
         budget_s = settings.minima_memory_recall_timeout_ms / 1000.0
         recall_task = asyncio.ensure_future(recall_coro)
+        lookup_task = asyncio.ensure_future(lookup_coro)
         deref_tasks = [
             asyncio.ensure_future(
                 self._memory.dereference(lane=lane, reference_id=r.reference_id or r.entry_id)
@@ -363,9 +401,7 @@ class Recommender:
             for r in refs
         ]
         recall = await recall_task
-        # The dereferences started alongside recall and share its latency budget: wait
-        # only for what's left of it, then drop stragglers — a hung Mubit call must
-        # never hold the recommendation hostage.
+        lookup_evidence = await lookup_task
         remaining = max(0.05, budget_s - (time.monotonic() - started))
         done, pending = await asyncio.wait(deref_tasks, timeout=remaining)
         for task in pending:
@@ -389,9 +425,17 @@ class Recommender:
                 ann_missed=len(missed),
                 missed_models=[d.record.model_id for d in missed if d.record],
             )
-        if mode == "on":
-            return recall, missed
-        return recall, []
+        deref_extra = missed if mode == "on" else []
+        seen_ids = ann_ids | {ev.entry_id for ev in deref_extra}
+        lookup_extra = [ev for ev in lookup_evidence if ev.entry_id not in seen_ids]
+        if lookup_extra:
+            log.info(
+                "keyed_lookup_delta",
+                cluster=cluster,
+                added=len(lookup_extra),
+                models=[ev.record.model_id for ev in lookup_extra if ev.record],
+            )
+        return recall, lookup_extra + deref_extra
 
     def _log_decision(
         self,

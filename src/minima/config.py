@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # switching the default.
     minima_escalation_mode: str = "legacy"  # legacy | uncertainty
     minima_escalation_interval_width: float = 0.25
+    # "near_threshold" trigger: escalate when the recommended model's predicted success is
+    # within this margin above tau — a fragile pick that one more failure round would drop.
+    # 0.0 = disabled. Recommended starting value: 0.10.
+    minima_escalation_near_threshold_delta: float = 0.10
     minima_default_input_tokens: int = 1500
     minima_default_output_tokens: int = 500
     minima_reflect_every_n: int = 25
