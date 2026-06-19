@@ -1,0 +1,334 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.containers import Vertical
+from textual.widgets import Footer as TextualFooter
+from textual.widgets import Header, Input, Static
+
+from minima_harness.ai.types import AssistantMessage, Message
+from minima_harness.minima.config import HarnessConfig
+from minima_harness.minima.meter import CostMeter
+from minima_harness.minima.runtime import MinimaAgent
+from minima_harness.session import SessionManager, SessionStore
+from minima_harness.session.format import EntryType
+from minima_harness.tools import default_toolset
+from minima_harness.tui.bridge import EventBridge
+from minima_harness.tui.commands import CommandRegistry
+from minima_harness.tui.editor import parse_submission, run_bash
+from minima_harness.tui.widgets.banner import render_banner
+from minima_harness.tui.widgets.footer import render_footer
+from minima_harness.tui.widgets.transcript import Transcript
+
+_log = logging.getLogger("minima_harness.tui.app")
+
+
+class HarnessApp(App):
+    BINDINGS = [
+        ("ctrl+l", "model", "Model"),
+        ("escape", "abort", "Abort"),
+        ("ctrl+c,ctrl+c", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        config: HarnessConfig,
+        *,
+        session: SessionStore,
+        agent: MinimaAgent | None = None,
+        tools: list[Any] | None = None,
+        judge_every: int = 0,
+        cwd: Path | None = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.config.judge_every = judge_every  # default OFF in interactive mode
+        self.session = session
+        self.cwd = cwd or Path.cwd()
+        self._tools = list(tools or default_toolset())
+        self.agent = agent or MinimaAgent(self.config, tools=self._tools, meter=CostMeter())
+        self.bridge = EventBridge()
+        self.commands = self._build_commands()
+        self._routing_offline = False
+        self._rendered_msgs = 0
+        self._footer_state: dict[str, Any] = self._default_footer_state()
+
+    def _default_footer_state(self) -> dict[str, Any]:
+        m = self.agent.state.model
+        return {
+            "model": (m.id if m is not None else "?"),
+            "basis": "-",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read": 0,
+            "cache_write": 0,
+            "ctx_pct": 0.0,
+        }
+
+    # ------------------------------------------------------------- layout
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Header()
+            yield Static(id="banner")
+            yield Transcript()
+            yield Input(
+                placeholder="@file · !cmd · /command · type a prompt, Enter to send", id="editor"
+            )
+            yield TextualFooter()
+
+    def on_mount(self) -> None:
+        self.title = "minima-harness"
+        self.agent.subscribe(self.bridge)
+        self._refresh_footer()
+
+    # ------------------------------------------------------------- input
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value
+        event.input.value = ""
+        parsed = parse_submission(text)
+        kind = parsed["kind"]
+        if kind == "command":
+            await self._dispatch_command(parsed["name"], parsed["args"])
+            self._refresh_footer()
+            return
+        self.run_worker(self._run_submission(parsed), exclusive=True, name="turn")
+
+    async def _run_submission(self, parsed: dict) -> None:
+        try:
+            if parsed["kind"] == "bash":
+                output = await run_bash(parsed["command"])
+                if parsed["feed"]:
+                    await self.run_turn(output)
+                else:
+                    self.query_one(Transcript).add_system(f"$ {parsed['command']}\n{output}")
+            elif parsed["kind"] == "message":
+                await self.run_turn(parsed["text"])
+        except Exception:  # noqa: BLE001 - a bad turn must not kill the app
+            _log.warning("turn_failed", exc_info=True)
+            self.query_one(Transcript).add_error("turn failed (see logs)")
+
+    # ------------------------------------------------------------- a turn
+    async def run_turn(self, text: str) -> None:
+        transcript = self.query_one(Transcript)
+        self.session.append(EntryType.USER, {"text": text})
+        routing = None
+        try:
+            routing = await self.agent.prompt(text)
+        except Exception as exc:  # noqa: BLE001
+            transcript.add_error(str(exc))
+            self._set_banner(str(exc))
+            return
+        self._render_new_messages()
+        self._after_turn(routing)
+
+    def _render_new_messages(self) -> None:
+        transcript = self.query_one(Transcript)
+        messages = self.agent.state.messages
+        for msg in messages[self._rendered_msgs :]:
+            self._render_one(transcript, msg)
+        self._rendered_msgs = len(messages)
+
+    def _render_one(self, transcript: Transcript, msg: Message) -> None:
+        if msg.role == "user":
+            transcript.add_user(msg.text)
+        elif msg.role == "assistant":
+            transcript.add_assistant(msg.text)
+            if isinstance(msg, AssistantMessage):
+                for call in msg.tool_calls:
+                    transcript.add_tool(call.name, _args_repr(call.arguments))
+        elif msg.role == "toolResult":
+            transcript.add_tool_result(_snippet(msg.text), msg.is_error)
+
+    def _after_turn(self, routing: Any) -> None:
+        if routing is None:
+            self._routing_offline = True
+            self._set_banner("Minima unreachable — using the current model")
+        else:
+            if routing.warnings:
+                self._set_banner("; ".join(routing.warnings[:2]))
+            self._footer_state = self._routing_footer_state(routing)
+        self._refresh_footer()
+
+    def _routing_footer_state(self, routing: Any) -> dict[str, Any]:
+        last = self.agent._last_assistant()
+        usage = last.usage if last is not None else None
+        ctx = 0.0
+        if usage is not None and routing.model.context_window:
+            ctx = 100.0 * usage.input / max(1, routing.model.context_window)
+        return {
+            "model": routing.chosen_model_id or routing.model.id,
+            "basis": routing.decision_basis,
+            "input_tokens": usage.input if usage else 0,
+            "output_tokens": usage.output if usage else 0,
+            "cache_read": usage.cache_read if usage else 0,
+            "cache_write": usage.cache_write if usage else 0,
+            "ctx_pct": ctx,
+        }
+
+    # ------------------------------------------------------------- overlay
+    def _set_banner(self, reason: str) -> None:
+        self.query_one("#banner", Static).update(render_banner(reason))
+
+    def _refresh_footer(self) -> None:
+        meter = self.agent.meter or CostMeter()
+        footer = render_footer(
+            cwd=str(self.cwd),
+            session_id=(self.session.path.stem if self.session.path else "eph"),
+            model=self._footer_state["model"],
+            basis=self._footer_state["basis"],
+            meter=meter,
+            input_tokens=self._footer_state["input_tokens"],
+            output_tokens=self._footer_state["output_tokens"],
+            cache_read=self._footer_state["cache_read"],
+            cache_write=self._footer_state["cache_write"],
+            ctx_pct=self._footer_state["ctx_pct"],
+            routing_offline=self._routing_offline,
+        )
+        self.sub_title = footer.plain
+
+    # ------------------------------------------------------------- commands
+    def _build_commands(self) -> CommandRegistry:
+        reg = CommandRegistry()
+
+        async def _quit(app: HarnessApp, args: str) -> None:
+            app.exit()
+
+        async def _clear(app: HarnessApp, args: str) -> None:
+            app.query_one(Transcript).clear()
+
+        async def _cost(app: HarnessApp, args: str) -> None:
+            meter = app.agent.meter
+            app.query_one(Transcript).add_system(meter.report() if meter else "(no meter)")
+
+        async def _help(app: HarnessApp, args: str) -> None:
+            app.query_one(Transcript).add_system(app.commands.help_text())
+
+        async def _model(app: HarnessApp, args: str) -> None:
+            m = app.agent.state.model
+            app.query_one(Transcript).add_system(
+                f"model: {m.id} ({m.provider})" if m is not None else "no model"
+            )
+
+        async def _reconnect(app: HarnessApp, args: str) -> None:
+            app._routing_offline = False
+            app.query_one("#banner", Static).update(Text(""))
+            app.query_one(Transcript).add_system("reconnected (next turn routes via Minima)")
+
+        async def _new(app: HarnessApp, args: str) -> None:
+            app.session = SessionManager().new(app.cwd, name=args or None)
+            app.query_one(Transcript).clear()
+            sid = app.session.path.stem if app.session.path else "ephemeral"
+            app.query_one(Transcript).add_system(f"new session: {sid}")
+
+        async def _name(app: HarnessApp, args: str) -> None:
+            app.session.display_name = args or None
+
+        async def _session(app: HarnessApp, args: str) -> None:
+            p = app.session.path
+            app.query_one(Transcript).add_system(
+                f"session: {p.stem if p else 'ephemeral'} · entries={len(app.session.entries)} "
+                f"· name={app.session.display_name or '-'}"
+            )
+
+        async def _tree(app: HarnessApp, args: str) -> None:
+            cm = app.session.children_map()
+            lines: list[str] = []
+
+            def walk(parent: str | None, depth: int) -> None:
+                for child_id in cm.get(parent, []):
+                    lines.append(f"{'  ' * depth}- {child_id[:8]}")
+                    walk(child_id, depth + 1)
+
+            walk(None, 0)
+            app.query_one(Transcript).add_system("\n".join(lines) or "(empty session)")
+
+        async def _fork(app: HarnessApp, args: str) -> None:
+            entry_id = args.strip()
+            if not entry_id or not app.session.persistent:
+                app.query_one(Transcript).add_error(
+                    "usage: /fork <entry-id> (requires a saved session)"
+                )
+                return
+            dest = SessionManager().new(app.cwd).path
+            assert dest is not None
+            app.session.fork_to(dest, from_entry_id=entry_id)
+            app.query_one(Transcript).add_system(f"forked to {dest.stem}")
+
+        async def _clone(app: HarnessApp, args: str) -> None:
+            if not app.session.persistent:
+                app.query_one(Transcript).add_error("clone requires a saved session")
+                return
+            dest = SessionManager().new(app.cwd).path
+            assert dest is not None
+            app.session.clone_to(dest)
+            app.query_one(Transcript).add_system(f"cloned to {dest.stem}")
+
+        async def _resume(app: HarnessApp, args: str) -> None:
+            try:
+                store = SessionManager().open(app.cwd, session_id=args.strip() or None)
+            except FileNotFoundError as exc:
+                app.query_one(Transcript).add_error(str(exc))
+                return
+            app.session = store
+            sid = store.path.stem if store.path else "ephemeral"
+            app.query_one(Transcript).add_system(f"resumed {sid} ({len(store.entries)} entries)")
+
+        async def _judge(app: HarnessApp, args: str) -> None:
+            on = args.strip().lower() in {"on", "1", "true", "yes"}
+            if not args.strip():
+                on = app.config.judge_every == 0
+            app.config.judge_every = 1 if on else 0
+            app.query_one(Transcript).add_system(
+                f"judging {'on' if on else 'off'} (judge_every={app.config.judge_every})"
+            )
+
+        for name, fn, desc in [
+            ("quit", _quit, "exit the agent"),
+            ("clear", _clear, "clear the transcript"),
+            ("cost", _cost, "show the cost meter"),
+            ("help", _help, "list commands"),
+            ("model", _model, "show the current model"),
+            ("reconnect", _reconnect, "retry Minima after an offline fallback"),
+            ("new", _new, "start a fresh session"),
+            ("name", _name, "set the session display name"),
+            ("session", _session, "show session info"),
+            ("tree", _tree, "render the session tree"),
+            ("fork", _fork, "fork from an entry id"),
+            ("clone", _clone, "clone the current branch"),
+            ("resume", _resume, "resume a session (optionally by id)"),
+            ("judge", _judge, "toggle LLM judging on/off"),
+        ]:
+            reg.register(name, description=desc)(fn)
+        return reg
+
+    async def _dispatch_command(self, name: str, args: str) -> None:
+        cmd = self.commands.get(name)
+        if cmd is None:
+            self.query_one(Transcript).add_error(f"unknown command: /{name}")
+            return
+        await cmd.handler(self, args)
+
+    # ------------------------------------------------------------- actions
+    async def action_model(self) -> None:
+        await self._dispatch_command("model", "")
+
+    def action_abort(self) -> None:
+        self.agent.abort()
+
+
+def _args_repr(args: Any) -> str:
+    try:
+        if hasattr(args, "model_dump_json"):
+            return args.model_dump_json()
+        return str(args)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _snippet(text: str, limit: int = 120) -> str:
+    flat = (text or "").replace("\n", " ").strip()
+    return flat[:limit] + ("…" if len(flat) > limit else "")
