@@ -1,7 +1,7 @@
 .PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
 
 install:
-	uv sync --extra dev
+	uv sync --extra dev --extra harness
 
 run:
 	uv run uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
@@ -38,4 +38,4 @@ harness-test:
 	uv run --env-file .env.harness pytest tests/harness -m live -v
 
 harness:
-	uv run --env-file .env.harness minima-harness $(ARGS)
+	uv run --extra harness --extra tui --env-file .env.harness minima-harness $(ARGS)
