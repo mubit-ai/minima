@@ -19,6 +19,7 @@ from minima_harness.tools import default_toolset
 from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.editor import parse_submission, run_bash
+from minima_harness.tui.overlays import ModelPicker, TreePicker
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
@@ -38,6 +39,9 @@ class HarnessApp(App):
     #chatlog { height: 1fr; border: round $accent; padding: 0 1; }
     #banner { height: auto; }
     #editor { height: 5; }
+    ModelPicker, TreePicker { align: center middle; }
+    ModelPicker OptionList { width: 60; height: 14; border: round $accent; }
+    TreePicker Tree { width: 70; height: 16; border: round $accent; }
     """
 
     def __init__(
@@ -218,10 +222,14 @@ class HarnessApp(App):
             await app.query_one(ChatLog).add_system(app.commands.help_text())
 
         async def _model(app: HarnessApp, args: str) -> None:
-            m = app.agent.state.model
-            await app.query_one(ChatLog).add_system(
-                f"model: {m.id} ({m.provider})" if m is not None else "no model"
-            )
+            cands = list(app.config.candidates or [])
+            current = app.agent.state.model.id if app.agent.state.model is not None else None
+
+            def _picked(chosen: str | None) -> None:
+                if chosen:
+                    app.config.candidates = [chosen]  # pin: Minima must route to this model
+
+            app.push_screen(ModelPicker(cands, current), callback=_picked)
 
         async def _reconnect(app: HarnessApp, args: str) -> None:
             app._routing_offline = False
@@ -245,16 +253,7 @@ class HarnessApp(App):
             )
 
         async def _tree(app: HarnessApp, args: str) -> None:
-            cm = app.session.children_map()
-            lines: list[str] = []
-
-            def walk(parent: str | None, depth: int) -> None:
-                for child_id in cm.get(parent, []):
-                    lines.append(f"{'  ' * depth}- {child_id[:8]}")
-                    walk(child_id, depth + 1)
-
-            walk(None, 0)
-            await app.query_one(ChatLog).add_system("\n".join(lines) or "(empty session)")
+            app.push_screen(TreePicker(app.session))
 
         async def _fork(app: HarnessApp, args: str) -> None:
             entry_id = args.strip()
