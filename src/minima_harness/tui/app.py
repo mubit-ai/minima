@@ -7,7 +7,7 @@ from typing import Any
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Footer as TextualFooter
-from textual.widgets import Header, Input, Static
+from textual.widgets import Header, Static
 
 from minima_harness.ai.types import AssistantMessage
 from minima_harness.minima.config import HarnessConfig
@@ -20,6 +20,7 @@ from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.widgets.banner import render_banner
+from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
 
@@ -36,6 +37,7 @@ class HarnessApp(App):
     Screen { layout: vertical; }
     #chatlog { height: 1fr; border: round $accent; padding: 0 1; }
     #banner { height: auto; }
+    #editor { height: 5; }
     """
 
     def __init__(
@@ -79,15 +81,14 @@ class HarnessApp(App):
         yield Header()
         yield Static(id="banner")
         yield ChatLog(id="chatlog")
-        yield Input(
-            placeholder="@file · !cmd · /command · type a prompt, Enter to send", id="editor"
-        )
+        yield Editor()
         yield TextualFooter()
 
     def on_mount(self) -> None:
         self.title = "minima-harness"
         self.agent.subscribe(self.bridge)
         self.bridge.bind(on_text=self._append_stream)
+        self.query_one(Editor).focus()
         self._refresh_footer()
 
     # ------------------------------------------------------------- streaming
@@ -96,9 +97,9 @@ class HarnessApp(App):
             self._stream_bubble.append(delta)
 
     # ------------------------------------------------------------- input
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value
-        event.input.value = ""
+    async def on_editor_submitted(self, event: Editor.Submitted) -> None:
+        text = event.text
+        self.query_one(Editor).text = ""
         parsed = parse_submission(text)
         kind = parsed["kind"]
         if kind == "command":
