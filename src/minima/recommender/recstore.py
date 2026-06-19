@@ -69,9 +69,7 @@ class RecommendationStore:
             self._purge_locked()
             self._data[rec.recommendation_id] = rec
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         with self._lock:
             rec = self._data.get(recommendation_id)
             if rec is None:
@@ -169,9 +167,7 @@ class SqliteRecommendationStore:
                 (rec.recommendation_id, created, _serialize(rec), rec.org_id),
             )
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT created_at, payload, org_id FROM recommendations "
@@ -260,9 +256,7 @@ class PostgresRecommendationStore:
                 (rec.recommendation_id, created, _serialize(rec), rec.org_id),
             )
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         import time
 
         with self._cursor(self._url) as cur:
@@ -319,9 +313,7 @@ class RedisRecommendationStore:
         )
         self._r.expire(key, self._ttl)
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         import time
 
         key = self._key(recommendation_id)
@@ -335,7 +327,9 @@ class RedisRecommendationStore:
         row_org = row.get("org_id", "default")
         if org_id is not None and row_org != org_id:
             return None
-        return _deserialize(recommendation_id, row["payload"], created_at, row_org)
+        from minima.recommender._redis_client import decode
+
+        return _deserialize(recommendation_id, decode(row["payload"]), created_at, decode(row_org))
 
 
 def build_recstore(settings: Settings) -> RecStore:

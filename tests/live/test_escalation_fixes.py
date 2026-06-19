@@ -52,7 +52,9 @@ SETTINGS = Settings(
 )
 
 
-def _make_recommender(namespace: str, durable_refs: MemoryDurableRefs) -> tuple[Recommender, MubitMemory, str]:
+def _make_recommender(
+    namespace: str, durable_refs: MemoryDurableRefs
+) -> tuple[Recommender, MubitMemory, str]:
     memory = MubitMemory(SETTINGS)
     catalog = CatalogStore(SETTINGS)
     recstore = RecommendationStore(ttl_seconds=SETTINGS.minima_recommendation_ttl_seconds)
@@ -71,11 +73,13 @@ def _req(task: str, slider: float = 5.0, namespace: str | None = None) -> Recomm
         task=TaskInput(task=task, task_type="other"),
         cost_quality_tradeoff=slider,
         namespace=namespace,
-        constraints=Constraints(candidate_models=[
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "claude-sonnet-4-6",
-        ]),
+        constraints=Constraints(
+            candidate_models=[
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "claude-sonnet-4-6",
+            ]
+        ),
         explain=True,
         allow_llm_escalation=True,
     )
@@ -130,21 +134,25 @@ async def test_fix1_durable_fastpath_prevents_cold_regression():
 
     # Cold start — expect flash (prior 0.76 > tau 0.735)
     r0 = await rec.recommend(_req(FLASH_FAIL_TASK, namespace=ns))
-    print(f"  cold: model={r0.recommended_model.model_id} basis={r0.decision_basis} "
-          f"evidence={len(r0.recommended_model.evidence)}")
+    print(
+        f"  cold: model={r0.recommended_model.model_id} basis={r0.decision_basis} "
+        f"evidence={len(r0.recommended_model.evidence)}"
+    )
     assert r0.recommended_model.model_id == "gemini-2.5-flash", "cold should pick flash"
 
     # Feed 4 failures, each pinned into durable_refs
     for i in range(4):
         await _feedback(memory, lane, r0, quality=0.0, durable_refs=durable_refs)
-        print(f"  wrote failure #{i+1}")
+        print(f"  wrote failure #{i + 1}")
 
     # Second recommend — durable fastpath should surface the failure evidence
     r1 = await rec.recommend(_req(FLASH_FAIL_TASK, namespace=ns))
     n_ev = len(r1.recommended_model.evidence)
     pred = r1.recommended_model.predicted_success
-    print(f"  after failures: model={r1.recommended_model.model_id} basis={r1.decision_basis} "
-          f"evidence={n_ev} predicted={pred:.3f} warnings={r1.warnings}")
+    print(
+        f"  after failures: model={r1.recommended_model.model_id} basis={r1.decision_basis} "
+        f"evidence={n_ev} predicted={pred:.3f} warnings={r1.warnings}"
+    )
 
     # With 4 quality=0 feedbacks, flash predicted_success should drop below tau=0.735
     # → engine switches to pro, or fires escalation if flash still barely clears
@@ -179,13 +187,17 @@ async def test_fix2_conflict_detects_mixed_success():
 
     r1 = await rec.recommend(_req(FLASH_FAIL_TASK, namespace=ns))
     n_ev = len(r1.recommended_model.evidence)
-    print(f"  after 3x success + 3x failure: model={r1.recommended_model.model_id} "
-          f"evidence={n_ev} warnings={r1.warnings}")
+    print(
+        f"  after 3x success + 3x failure: model={r1.recommended_model.model_id} "
+        f"evidence={n_ev} warnings={r1.warnings}"
+    )
 
     conflict_fired = any("conflict" in w for w in r1.warnings)
     switched = r1.recommended_model.model_id != "gemini-2.5-flash"
     escalation_fired = any("escalation_suggested" in w for w in r1.warnings)
-    print(f"  conflict_fired={conflict_fired} switched={switched} escalation_fired={escalation_fired}")
+    print(
+        f"  conflict_fired={conflict_fired} switched={switched} escalation_fired={escalation_fired}"
+    )
 
     # With live upsert-based feedback there's only 1 record per (cluster, model), so
     # min_n=4 for is_conflicted is never reached this way. However, any escalation signal
@@ -209,8 +221,10 @@ async def test_fix3_near_threshold_escalation():
 
     r0 = await rec.recommend(_req(FLASH_FAIL_TASK, namespace=ns))
     pred_cold = r0.recommended_model.predicted_success
-    print(f"  cold: model={r0.recommended_model.model_id} predicted={pred_cold:.3f} "
-          f"warnings={r0.warnings}")
+    print(
+        f"  cold: model={r0.recommended_model.model_id} predicted={pred_cold:.3f} "
+        f"warnings={r0.warnings}"
+    )
     # Cold start should NOT fire near_threshold (confidence=0, guarded)
     assert not any("near_threshold" in w for w in r0.warnings), (
         f"near_threshold should not fire on cold start. warnings={r0.warnings}"
@@ -225,9 +239,10 @@ async def test_fix3_near_threshold_escalation():
     pred = r1.recommended_model.predicted_success
     tau_used = r1.threshold_used
     margin = pred - tau_used
-    conf = r1.recommended_model.predicted_success  # proxy
-    print(f"  after mixed feedback: model={r1.recommended_model.model_id} "
-          f"predicted={pred:.3f} tau={tau_used:.3f} margin={margin:.3f} warnings={r1.warnings}")
+    print(
+        f"  after mixed feedback: model={r1.recommended_model.model_id} "
+        f"predicted={pred:.3f} tau={tau_used:.3f} margin={margin:.3f} warnings={r1.warnings}"
+    )
 
     near_threshold_fired = any("near_threshold" in w for w in r1.warnings)
     print(f"  near_threshold_fired={near_threshold_fired}")
@@ -261,8 +276,10 @@ async def test_combined_consistent_failure_switches_model():
         n_ev = len(r.recommended_model.evidence)
         pred = r.recommended_model.predicted_success
         models_seen.append(model)
-        print(f"  e{epoch+1}: model={model} basis={r.decision_basis} evidence={n_ev} "
-              f"predicted={pred:.3f} warnings={r.warnings}")
+        print(
+            f"  e{epoch + 1}: model={model} basis={r.decision_basis} evidence={n_ev} "
+            f"predicted={pred:.3f} warnings={r.warnings}"
+        )
         await _feedback(memory, lane, r, quality=quality, durable_refs=durable_refs)
 
     # By epoch 3-4 with consistent 0.0 quality, flash should be dropped below tau

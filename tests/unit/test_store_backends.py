@@ -432,8 +432,8 @@ def test_build_factories_select_correct_backend():
     )
     from minima.recommender.recstore import (
         PostgresRecommendationStore,
-        RedisRecommendationStore,
         RecommendationStore,
+        RedisRecommendationStore,
         build_recstore,
     )
 
@@ -462,9 +462,10 @@ def test_build_factories_select_correct_backend():
         minima_redis_url=REDIS_URL,
     )
     assert isinstance(build_recstore(hybrid), RedisRecommendationStore)
-    assert isinstance(build_decision_log(hybrid), PostgresDecisionLog)   # follows RECOMMENDATION_STORE
+    # decision log follows RECOMMENDATION_STORE; durable refs follow RECSTORE_BACKEND below
+    assert isinstance(build_decision_log(hybrid), PostgresDecisionLog)
     assert isinstance(build_propensity(hybrid), PostgresPropensityTracker)
-    assert isinstance(build_durable_refs(hybrid), RedisDurableRefs)      # follows RECSTORE_BACKEND
+    assert isinstance(build_durable_refs(hybrid), RedisDurableRefs)
 
 
 def test_cloudsql_without_url_raises():

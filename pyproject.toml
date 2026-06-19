@@ -28,6 +28,7 @@ dependencies = [
 reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
+harness = ["anthropic>=0.40", "google-genai>=0.3"]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
@@ -41,7 +42,7 @@ minima-seed = "minima.seeding.run_seed:main"
 minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/minima", "client_sdk/minima_client"]
+packages = ["src/minima", "src/minima_harness", "client_sdk/minima_client"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

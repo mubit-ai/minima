@@ -114,6 +114,7 @@ Sync + async clients and zero-code `autocapture`: **[Python Client SDK](docs/cli
 | [Multi-Tenancy](docs/multi-tenancy.md) | One deployment, many orgs, per-org Mubit instances. |
 | [Operations](docs/operations.md) | Deployment, health, degradation, monitoring, secrets. |
 | [Examples](docs/examples.md) | Guided tour of the runnable examples. |
+| [Agent Harness](docs/harness.md) | `minima_harness`: a Minima-routing port of PI's agent toolkit. |
 
 ## Examples
 
@@ -128,6 +129,33 @@ Runnable, progressively advanced — in **[`examples/`](examples/)**:
 | 5 | [`05_autocapture.py`](examples/05_autocapture.py) | Zero-code intake via `mubit.learn`. |
 | 6 | [`06_routed_llm_call.py`](examples/06_routed_llm_call.py) | Routing a real Claude call + feedback. |
 | 7 | [`07_multitenant_admin.py`](examples/07_multitenant_admin.py) | Provision an org, call as that tenant. |
+| 8 | [`harness_warmup.py`](examples/harness_warmup.py) | The `minima_harness` agent loop (demo mode needs no keys). |
+
+## Agent harness
+
+[`minima_harness/`](src/minima_harness) is a lean Python port of
+[`@earendil-works/pi`](https://github.com/earendil-works/pi)'s agent toolkit, made
+Minima-native: an `Agent` runtime with tool calling **plus** a `MinimaAgent` that routes
+every prompt through Minima and feeds the realized tokens/cost/quality back. It is the
+"run the model yourself" half of the Minima loop, packaged.
+
+```python
+from minima_harness.minima import MinimaAgent, HarnessConfig
+
+agent = MinimaAgent(HarnessConfig.from_env())   # MINIMA_URL, candidates, judge policy
+await agent.prompt("Summarize this incident.", task_type="summarization", slider=3)
+# -> Minima picked the model, the agent ran it, judged quality, fed the outcome back
+```
+
+Try it with no keys via the in-process demo:
+
+```bash
+uv run python examples/harness_warmup.py          # demo (in-process Minima + fake provider)
+uv run python examples/harness_warmup.py --live   # real Minima + real providers
+```
+
+Full architecture, the loop mapping, and extension guide:
+**[Agent Harness](docs/harness.md)**.
 
 ## Configuration
 
@@ -164,6 +192,7 @@ src/minima/
   tenancy/          runtime · registry · context · keys · secrets
   seeding/          routerbench · synthetic · run_seed (minima-seed CLI)
   schemas/          common · recommend · workflow · feedback · models_catalog · strategies · admin
+src/minima_harness/   ported pi-ai (ai/) + pi-agent-core (agent/) + Minima integration (minima/) — see docs/harness.md
 client_sdk/minima_client/   client (sync+async) · autocapture · errors
 docs/               full documentation       examples/   runnable examples
 tests/              unit · integration (FakeMemory) · live (-m live) · eval (-m eval)

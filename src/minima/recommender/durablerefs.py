@@ -139,8 +139,7 @@ class SqliteDurableRefs:
                 (org_id, lane, cluster, max(0, limit)),
             ).fetchall()
         return [
-            DurableRef(model_id=str(m), entry_id=str(e), reference_id=str(r))
-            for m, e, r in rows
+            DurableRef(model_id=str(m), entry_id=str(e), reference_id=str(r)) for m, e, r in rows
         ]
 
     def close(self) -> None:
@@ -233,8 +232,7 @@ class PostgresDurableRefs:
             )
             rows = cur.fetchall()
         return [
-            DurableRef(model_id=str(m), entry_id=str(e), reference_id=str(r))
-            for m, e, r in rows
+            DurableRef(model_id=str(m), entry_id=str(e), reference_id=str(r)) for m, e, r in rows
         ]
 
 
@@ -279,12 +277,14 @@ class RedisDurableRefs:
         import json
 
         raw = self._r.hgetall(self._key(org_id, lane, cluster))
+        from minima.recommender._redis_client import decode
+
         out: list[DurableRef] = []
         for model_id, value in raw.items():
             d = json.loads(value)
             out.append(
                 DurableRef(
-                    model_id=model_id,
+                    model_id=decode(model_id),
                     entry_id=d["entry_id"],
                     reference_id=d["reference_id"],
                 )

@@ -15,7 +15,9 @@ CODE_TASK = TaskInput(task="refactor a recursive parser into an iterative loop",
 # Without constraints max_candidates=8 cuts off gpt-4o-mini (ranked #10 by code prior).
 # At slider=5 tau=0.735: gpt-4o-mini is below tau (ineligible without bonus) while flash
 # (prior=0.74) is just above. A bonus of 0.1 lifts gpt-4o-mini to 0.78 making it cheapest.
-_EXPLORATION_CONSTRAINTS = Constraints(candidate_models=["gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5-pro"])
+_EXPLORATION_CONSTRAINTS = Constraints(
+    candidate_models=["gpt-4o-mini", "gemini-2.5-flash", "gemini-2.5-pro"]
+)
 
 
 def test_with_exploration_bonus_off_is_identity():
@@ -38,7 +40,9 @@ async def test_exploration_bonus_promotes_cheaper_underexplored_model():
     # Candidate set constrained to 3 models so gpt-4o-mini (prior 0.68) is included.
     # Without exploration: gpt-4o-mini < tau → ineligible; flash (0.74 > tau) is cheapest eligible.
     # With bonus=0.1 (cold confidence=0): gpt-4o-mini → 0.78 > tau → eligible and cheapest.
-    req = RecommendRequest(task=CODE_TASK, allow_llm_escalation=False, constraints=_EXPLORATION_CONSTRAINTS)
+    req = RecommendRequest(
+        task=CODE_TASK, allow_llm_escalation=False, constraints=_EXPLORATION_CONSTRAINTS
+    )
 
     off = await _engine(Settings(mubit_api_key="t", minima_exploration_bonus=0.0)).recommend(req)
     on = await _engine(Settings(mubit_api_key="t", minima_exploration_bonus=0.1)).recommend(req)
