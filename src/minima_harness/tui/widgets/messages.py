@@ -6,7 +6,7 @@ from rich.text import Text
 from textual.containers import ScrollableContainer
 from textual.widgets import Static
 
-from minima_harness.tui.theme import get_theme
+from minima_harness.tui.theme import current_theme, get_theme
 
 THROTTLE_S = 0.03
 
@@ -14,16 +14,21 @@ _ROLE_COLOR = {"user": "user", "assistant": "assistant", "tool": "tool"}
 _ROLE_PREFIX = {"user": "▸ ", "assistant": "", "tool": "", "error": "✗ ", "system": ""}
 
 
+def _color_for(role: str) -> str:
+    t = get_theme(current_theme())
+    return t.get(_ROLE_COLOR.get(role, "muted"), t["assistant"])
+
+
 class MessageBubble(Static):
     """A single chat message. Appendable + throttled for live assistant streaming."""
 
     def __init__(self, role: str, text: str = "", *, prefix: str | None = None) -> None:
         self._role = role
-        theme = get_theme("dark")
-        self._color = theme.get(_ROLE_COLOR.get(role, "muted"), theme["assistant"])
+        self._color = _color_for(role)
         self._prefix = prefix if prefix is not None else _ROLE_PREFIX.get(role, "")
         self._buf = text
         self._last_flush = 0.0
+        self._markdown = False
         super().__init__(self._content_text())
 
     @property
@@ -50,10 +55,19 @@ class MessageBubble(Static):
         """Swap the bubble's plain-streamed text for rendered Markdown (assistant finalize)."""
         from rich.markdown import Markdown
 
+        self._markdown = True
         self._last_flush = time.monotonic()
         try:
             self.update(Markdown(self._buf))
         except Exception:  # noqa: BLE001 - fall back to plain text if markdown rendering fails
+            self.flush()
+
+    def refresh_theme(self) -> None:
+        """Re-read the active palette and re-render (used after /theme)."""
+        self._color = _color_for(self._role)
+        if self._markdown:
+            self.render_markdown()
+        else:
             self.flush()
 
     def _content_text(self) -> Text:

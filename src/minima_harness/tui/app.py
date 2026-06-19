@@ -309,21 +309,38 @@ class HarnessApp(App):
                 f"judging {'on' if on else 'off'} (judge_every={app.config.judge_every})"
             )
 
+        async def _theme(app: HarnessApp, args: str) -> None:
+            from minima_harness.tui.theme import ThemeName, current_theme, set_theme
+
+            name = args.strip().lower()
+            if not name:
+                name = "light" if current_theme() == ThemeName.DARK else "dark"
+            try:
+                set_theme(name)
+            except Exception:  # noqa: BLE001
+                await app.query_one(ChatLog).add_system(f"unknown theme: {name} (try dark|light)")
+                return
+            for b in app.query_one(ChatLog).query(MessageBubble):
+                b.refresh_theme()
+            app._refresh_footer()
+            await app.query_one(ChatLog).add_system(f"theme: {current_theme().value}")
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
             ("cost", _cost, "show the cost meter"),
             ("help", _help, "list commands"),
-            ("model", _model, "show the current model"),
+            ("model", _model, "pick / pin the model"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
             ("session", _session, "show session info"),
-            ("tree", _tree, "render the session tree"),
+            ("tree", _tree, "view the session tree"),
             ("fork", _fork, "fork from an entry id"),
             ("clone", _clone, "clone the current branch"),
             ("resume", _resume, "resume a session (optionally by id)"),
             ("judge", _judge, "toggle LLM judging on/off"),
+            ("theme", _theme, "switch theme (dark|light)"),
         ]:
             reg.register(name, description=desc)(fn)
         return reg

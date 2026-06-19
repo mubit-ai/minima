@@ -3,7 +3,7 @@ from __future__ import annotations
 from rich.text import Text
 
 from minima_harness.minima.meter import CostMeter
-from minima_harness.tui.theme import get_theme
+from minima_harness.tui.theme import current_theme, get_theme
 
 
 def render_footer(
@@ -19,7 +19,7 @@ def render_footer(
     ctx_pct: float,
     routing_offline: bool,
 ) -> Text:
-    t = get_theme("dark")
+    t = get_theme(current_theme())
     totals = meter.totals()
     bits = [
         cwd,

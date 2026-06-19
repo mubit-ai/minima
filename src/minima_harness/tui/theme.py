@@ -30,6 +30,18 @@ LIGHT: Palette = {
 
 THEMES: dict[ThemeName, Palette] = {ThemeName.DARK: DARK, ThemeName.LIGHT: LIGHT}
 
+_active: ThemeName = ThemeName.DARK
+
+
+def current_theme() -> ThemeName:
+    return _active
+
+
+def set_theme(name: ThemeName | str) -> Palette:
+    global _active
+    _active = ThemeName(name)
+    return THEMES[_active]
+
 
 def get_theme(name: ThemeName | str) -> Palette:
     return THEMES[ThemeName(name)]
