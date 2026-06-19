@@ -1,4 +1,4 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog
+.PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
 
 install:
 	uv sync --extra dev
@@ -25,3 +25,17 @@ eval:
 
 seed:
 	uv run minima-seed --limit $${LIMIT:-2000} --lane $${LANE:-minima:default}
+
+# --- minima_harness convenience targets (creds live in gitignored .env.harness) ---
+
+harness-demo:
+	uv run python examples/harness_warmup.py
+
+harness-live:
+	uv run --env-file .env.harness python examples/harness_warmup.py --live --rounds $${ROUNDS:-1}
+
+harness-test:
+	uv run --env-file .env.harness pytest tests/harness -m live -v
+
+harness:
+	uv run --env-file .env.harness minima-harness $(ARGS)
