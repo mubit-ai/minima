@@ -1,12 +1,30 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.session import SessionManager
 from minima_harness.tui.app import HarnessApp
+
+# .env files (in cwd) auto-loaded so `minima-harness` works without `make`/`--env-file`.
+_ENV_FILES = (".env.harness", ".env")
+
+
+def _load_env_files() -> None:
+    for name in _ENV_FILES:
+        path = Path(name)
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            val = val.strip().strip('"').strip("'")
+            os.environ.setdefault(key.strip(), val)  # real env / --env-file wins
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -29,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_env_files()
     args = _build_parser().parse_args(argv)
     config = HarnessConfig.from_env()
     if args.offline:
