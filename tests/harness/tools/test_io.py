@@ -29,3 +29,10 @@ def test_read_lines_offset_and_limit(tmp_path):
     assert n == 2
     assert "2: b" in body and "3: c" in body
     assert "a" not in body.splitlines()[0]
+
+
+def test_write_text_creates_parents_and_counts_lines(tmp_path):
+    f = tmp_path / "nested" / "out.txt"
+    n = write_text(f, "a\nb\nc\n")
+    assert f.read_text() == "a\nb\nc\n"
+    assert n == 3  # trailing newline not counted as an extra line
