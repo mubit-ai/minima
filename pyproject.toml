@@ -29,10 +29,12 @@ reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
 harness = ["anthropic>=0.40", "google-genai>=0.3"]
+tui = ["textual>=0.79"]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
+  "textual>=0.79",
   "ruff>=0.5",
   "mypy>=1.10",
 ]
@@ -40,6 +42,7 @@ dev = [
 [project.scripts]
 minima-seed = "minima.seeding.run_seed:main"
 minima-calibration-report = "minima.metrics.report:main"
+minima-harness = "minima_harness.tui.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "src/minima_harness", "client_sdk/minima_client"]
