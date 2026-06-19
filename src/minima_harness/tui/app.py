@@ -103,6 +103,12 @@ class HarnessApp(App):
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
+        if self.agent.state.is_streaming:
+            # Enter while running = steering (delivered after the current tool batch).
+            self.agent.steer(text)
+            self.query_one(Editor).text = ""
+            await self.query_one(ChatLog).add_system(f"↳ (steering) {text}")
+            return
         self.query_one(Editor).text = ""
         parsed = parse_submission(text)
         kind = parsed["kind"]
@@ -111,6 +117,14 @@ class HarnessApp(App):
             self._refresh_footer()
             return
         self.run_worker(self._run_submission(parsed), exclusive=True, name="turn")
+
+    async def on_editor_follow_up(self, event: Editor.FollowUp) -> None:
+        text = event.text
+        if not text.strip():
+            return
+        self.agent.follow_up(text)
+        self.query_one(Editor).text = ""
+        await self.query_one(ChatLog).add_system(f"↳ (follow-up) {text}")
 
     async def _run_submission(self, parsed: dict) -> None:
         try:
