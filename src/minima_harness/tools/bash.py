@@ -16,7 +16,10 @@ class BashParams(BaseModel):
 
 
 async def _execute(
-    tool_call_id: str, params, signal, on_update: ToolUpdate | None  # noqa: ANN001
+    tool_call_id: str,
+    params,
+    signal,
+    on_update: ToolUpdate | None,  # noqa: ANN001
 ) -> ToolResult:
     assert isinstance(params, BashParams)
     wd = str(Path(params.workdir).expanduser()) if params.workdir else None
