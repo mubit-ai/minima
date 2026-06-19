@@ -11,7 +11,7 @@ from minima_harness.tui.theme import get_theme
 THROTTLE_S = 0.03
 
 _ROLE_COLOR = {"user": "user", "assistant": "assistant", "tool": "tool"}
-_ROLE_PREFIX = {"user": "▸ ", "assistant": "◇ ", "tool": "", "error": "✗ ", "system": ""}
+_ROLE_PREFIX = {"user": "▸ ", "assistant": "", "tool": "", "error": "✗ ", "system": ""}
 
 
 class MessageBubble(Static):
@@ -45,6 +45,16 @@ class MessageBubble(Static):
             self.update(self._content_text())
         except Exception:  # noqa: BLE001 - not mounted / no active app; buffer stays current
             pass
+
+    def render_markdown(self) -> None:
+        """Swap the bubble's plain-streamed text for rendered Markdown (assistant finalize)."""
+        from rich.markdown import Markdown
+
+        self._last_flush = time.monotonic()
+        try:
+            self.update(Markdown(self._buf))
+        except Exception:  # noqa: BLE001 - fall back to plain text if markdown rendering fails
+            self.flush()
 
     def _content_text(self) -> Text:
         return Text(f"{self._prefix}{self._buf}", style=self._color)

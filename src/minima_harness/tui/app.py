@@ -138,7 +138,7 @@ class HarnessApp(App):
             return
         await self._render_tools_post_turn()
         if self._stream_bubble is not None:
-            self._stream_bubble.flush()
+            self._stream_bubble.render_markdown()
             self.session.append(EntryType.ASSISTANT, {"text": self._stream_bubble.buffer})
             self._stream_bubble = None
         self._after_turn(routing)

@@ -47,3 +47,18 @@ async def test_chatlog_mounts_bubbles_and_streams():
         assert len(bubbles) == 2
         assert bubbles[0].buffer == "hi"
         assert bubbles[1].buffer == "answer"
+
+
+@pytest.mark.asyncio
+async def test_message_bubble_render_markdown_keeps_buffer():
+    from textual.app import App, ComposeResult
+
+    class _App(App):
+        def compose(self) -> ComposeResult:
+            yield MessageBubble("assistant", "# title\n\n**bold**")
+
+    app = _App()
+    async with app.run_test():
+        bubble = app.query_one(MessageBubble)
+        bubble.render_markdown()  # should not raise; buffer is the source of truth
+        assert bubble.buffer == "# title\n\n**bold**"
