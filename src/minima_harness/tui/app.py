@@ -6,11 +6,10 @@ from typing import Any
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
 from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, Input, Static
 
-from minima_harness.ai.types import AssistantMessage, Message
+from minima_harness.ai.types import AssistantMessage
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.runtime import MinimaAgent
@@ -22,7 +21,7 @@ from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.footer import render_footer
-from minima_harness.tui.widgets.transcript import Transcript
+from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
 
 _log = logging.getLogger("minima_harness.tui.app")
 
@@ -33,6 +32,11 @@ class HarnessApp(App):
         ("escape", "abort", "Abort"),
         ("ctrl+c,ctrl+c", "quit", "Quit"),
     ]
+    CSS = """
+    Screen { layout: vertical; }
+    #chatlog { height: 1fr; border: round $accent; padding: 0 1; }
+    #banner { height: auto; }
+    """
 
     def __init__(
         self,
@@ -55,6 +59,7 @@ class HarnessApp(App):
         self.commands = self._build_commands()
         self._routing_offline = False
         self._rendered_msgs = 0
+        self._stream_bubble: MessageBubble | None = None
         self._footer_state: dict[str, Any] = self._default_footer_state()
 
     def _default_footer_state(self) -> dict[str, Any]:
@@ -71,19 +76,24 @@ class HarnessApp(App):
 
     # ------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Header()
-            yield Static(id="banner")
-            yield Transcript()
-            yield Input(
-                placeholder="@file · !cmd · /command · type a prompt, Enter to send", id="editor"
-            )
-            yield TextualFooter()
+        yield Header()
+        yield Static(id="banner")
+        yield ChatLog(id="chatlog")
+        yield Input(
+            placeholder="@file · !cmd · /command · type a prompt, Enter to send", id="editor"
+        )
+        yield TextualFooter()
 
     def on_mount(self) -> None:
         self.title = "minima-harness"
         self.agent.subscribe(self.bridge)
+        self.bridge.bind(on_text=self._append_stream)
         self._refresh_footer()
+
+    # ------------------------------------------------------------- streaming
+    def _append_stream(self, delta: str) -> None:
+        if self._stream_bubble is not None:
+            self._stream_bubble.append(delta)
 
     # ------------------------------------------------------------- input
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -104,44 +114,43 @@ class HarnessApp(App):
                 if parsed["feed"]:
                     await self.run_turn(output)
                 else:
-                    self.query_one(Transcript).add_system(f"$ {parsed['command']}\n{output}")
+                    await self.query_one(ChatLog).add_system(f"$ {parsed['command']}\n{output}")
             elif parsed["kind"] == "message":
                 await self.run_turn(parsed["text"])
         except Exception:  # noqa: BLE001 - a bad turn must not kill the app
             _log.warning("turn_failed", exc_info=True)
-            self.query_one(Transcript).add_error("turn failed (see logs)")
+            await self.query_one(ChatLog).add_error("turn failed (see logs)")
 
     # ------------------------------------------------------------- a turn
     async def run_turn(self, text: str) -> None:
-        transcript = self.query_one(Transcript)
+        chatlog = self.query_one(ChatLog)
+        await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
+        self._stream_bubble = await chatlog.add_assistant_stream()
         routing = None
         try:
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
-            transcript.add_error(str(exc))
+            await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
+            self._stream_bubble = None
             return
-        self._render_new_messages()
+        await self._render_tools_post_turn()
+        if self._stream_bubble is not None:
+            self._stream_bubble.flush()
+            self.session.append(EntryType.ASSISTANT, {"text": self._stream_bubble.buffer})
+            self._stream_bubble = None
         self._after_turn(routing)
 
-    def _render_new_messages(self) -> None:
-        transcript = self.query_one(Transcript)
-        messages = self.agent.state.messages
-        for msg in messages[self._rendered_msgs :]:
-            self._render_one(transcript, msg)
-        self._rendered_msgs = len(messages)
-
-    def _render_one(self, transcript: Transcript, msg: Message) -> None:
-        if msg.role == "user":
-            transcript.add_user(msg.text)
-        elif msg.role == "assistant":
-            transcript.add_assistant(msg.text)
+    async def _render_tools_post_turn(self) -> None:
+        chatlog = self.query_one(ChatLog)
+        for msg in self.agent.state.messages[self._rendered_msgs :]:
             if isinstance(msg, AssistantMessage):
                 for call in msg.tool_calls:
-                    transcript.add_tool(call.name, _args_repr(call.arguments))
-        elif msg.role == "toolResult":
-            transcript.add_tool_result(_snippet(msg.text), msg.is_error)
+                    await chatlog.add_tool(call.name, _args_repr(call.arguments))
+            elif msg.role == "toolResult":
+                await chatlog.add_tool_result(_snippet(msg.text), msg.is_error)
+        self._rendered_msgs = len(self.agent.state.messages)
 
     def _after_turn(self, routing: Any) -> None:
         if routing is None:
@@ -198,38 +207,38 @@ class HarnessApp(App):
             app.exit()
 
         async def _clear(app: HarnessApp, args: str) -> None:
-            app.query_one(Transcript).clear()
+            await app.query_one(ChatLog).remove_children()
 
         async def _cost(app: HarnessApp, args: str) -> None:
             meter = app.agent.meter
-            app.query_one(Transcript).add_system(meter.report() if meter else "(no meter)")
+            await app.query_one(ChatLog).add_system(meter.report() if meter else "(no meter)")
 
         async def _help(app: HarnessApp, args: str) -> None:
-            app.query_one(Transcript).add_system(app.commands.help_text())
+            await app.query_one(ChatLog).add_system(app.commands.help_text())
 
         async def _model(app: HarnessApp, args: str) -> None:
             m = app.agent.state.model
-            app.query_one(Transcript).add_system(
+            await app.query_one(ChatLog).add_system(
                 f"model: {m.id} ({m.provider})" if m is not None else "no model"
             )
 
         async def _reconnect(app: HarnessApp, args: str) -> None:
             app._routing_offline = False
             app.query_one("#banner", Static).update(Text(""))
-            app.query_one(Transcript).add_system("reconnected (next turn routes via Minima)")
+            await app.query_one(ChatLog).add_system("reconnected (next turn routes via Minima)")
 
         async def _new(app: HarnessApp, args: str) -> None:
             app.session = SessionManager().new(app.cwd, name=args or None)
-            app.query_one(Transcript).clear()
+            await app.query_one(ChatLog).remove_children()
             sid = app.session.path.stem if app.session.path else "ephemeral"
-            app.query_one(Transcript).add_system(f"new session: {sid}")
+            await app.query_one(ChatLog).add_system(f"new session: {sid}")
 
         async def _name(app: HarnessApp, args: str) -> None:
             app.session.display_name = args or None
 
         async def _session(app: HarnessApp, args: str) -> None:
             p = app.session.path
-            app.query_one(Transcript).add_system(
+            await app.query_one(ChatLog).add_system(
                 f"session: {p.stem if p else 'ephemeral'} · entries={len(app.session.entries)} "
                 f"· name={app.session.display_name or '-'}"
             )
@@ -244,45 +253,45 @@ class HarnessApp(App):
                     walk(child_id, depth + 1)
 
             walk(None, 0)
-            app.query_one(Transcript).add_system("\n".join(lines) or "(empty session)")
+            await app.query_one(ChatLog).add_system("\n".join(lines) or "(empty session)")
 
         async def _fork(app: HarnessApp, args: str) -> None:
             entry_id = args.strip()
             if not entry_id or not app.session.persistent:
-                app.query_one(Transcript).add_error(
+                await app.query_one(ChatLog).add_error(
                     "usage: /fork <entry-id> (requires a saved session)"
                 )
                 return
             dest = SessionManager().new(app.cwd).path
             assert dest is not None
             app.session.fork_to(dest, from_entry_id=entry_id)
-            app.query_one(Transcript).add_system(f"forked to {dest.stem}")
+            await app.query_one(ChatLog).add_system(f"forked to {dest.stem}")
 
         async def _clone(app: HarnessApp, args: str) -> None:
             if not app.session.persistent:
-                app.query_one(Transcript).add_error("clone requires a saved session")
+                await app.query_one(ChatLog).add_error("clone requires a saved session")
                 return
             dest = SessionManager().new(app.cwd).path
             assert dest is not None
             app.session.clone_to(dest)
-            app.query_one(Transcript).add_system(f"cloned to {dest.stem}")
+            await app.query_one(ChatLog).add_system(f"cloned to {dest.stem}")
 
         async def _resume(app: HarnessApp, args: str) -> None:
             try:
                 store = SessionManager().open(app.cwd, session_id=args.strip() or None)
             except FileNotFoundError as exc:
-                app.query_one(Transcript).add_error(str(exc))
+                await app.query_one(ChatLog).add_error(str(exc))
                 return
             app.session = store
             sid = store.path.stem if store.path else "ephemeral"
-            app.query_one(Transcript).add_system(f"resumed {sid} ({len(store.entries)} entries)")
+            await app.query_one(ChatLog).add_system(f"resumed {sid} ({len(store.entries)} entries)")
 
         async def _judge(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
                 on = app.config.judge_every == 0
             app.config.judge_every = 1 if on else 0
-            app.query_one(Transcript).add_system(
+            await app.query_one(ChatLog).add_system(
                 f"judging {'on' if on else 'off'} (judge_every={app.config.judge_every})"
             )
 
@@ -308,7 +317,7 @@ class HarnessApp(App):
     async def _dispatch_command(self, name: str, args: str) -> None:
         cmd = self.commands.get(name)
         if cmd is None:
-            self.query_one(Transcript).add_error(f"unknown command: /{name}")
+            await self.query_one(ChatLog).add_error(f"unknown command: /{name}")
             return
         await cmd.handler(self, args)
 

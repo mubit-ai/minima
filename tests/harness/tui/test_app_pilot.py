@@ -14,6 +14,7 @@ from minima_harness.minima.runtime import MinimaAgent
 from minima_harness.session import SessionStore
 from minima_harness.tools import default_toolset
 from minima_harness.tui.app import HarnessApp
+from minima_harness.tui.widgets.messages import ChatLog
 from tests.factories import FakeMemory
 from tests.harness.test_minima_e2e import TEST_KEY, _asgi_client, _fake_anthropic_client
 
@@ -53,9 +54,15 @@ async def test_app_streams_a_turn_through_minima():
                 await tui.run_turn("what is the answer")
                 await pilot.pause()
 
-            # The bridge accumulated the streamed assistant text.
-            assert tui.bridge.assistant_text == "the answer is 42"
-            assert tui.bridge.finished is True
+                # The bridge accumulated the streamed assistant text.
+                assert tui.bridge.assistant_text == "the answer is 42"
+                assert tui.bridge.finished is True
+                # The live streaming bubble captured the same text.
+                from minima_harness.tui.widgets.messages import MessageBubble
+
+                bubbles = tui.query_one(ChatLog).query(MessageBubble)
+                assert any(b.buffer == "the answer is 42" for b in bubbles)
+
             # The meter recorded exactly one routed turn.
             assert tui.agent.meter is not None
             assert tui.agent.meter.totals().n == 1
