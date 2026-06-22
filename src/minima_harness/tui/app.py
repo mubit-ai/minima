@@ -27,6 +27,7 @@ from minima_harness.minima.runtime import MinimaAgent
 from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.format import EntryType
 from minima_harness.tools import default_toolset
+from minima_harness.tui.analytics import aggregate_sessions, format_stats
 from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.clipboard import copy_to_clipboard
 from minima_harness.tui.commands import CommandRegistry
@@ -39,6 +40,9 @@ from minima_harness.tui.mubit import (
     effective_prompt,
     init_mubit,
     token_breakdown,
+)
+from minima_harness.tui.mubit import (
+    recall as mubit_recall,
 )
 from minima_harness.tui.mubit import (
     set_prompt as mubit_set_prompt,
@@ -110,6 +114,8 @@ class HarnessApp(App):
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
         self._confirm_route = False
+        self._escalate = False
+        self._escalate_threshold = 0.7
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
@@ -272,7 +278,34 @@ class HarnessApp(App):
     def _on_thinking(self, delta: str) -> None:
         self._set_state("thinking")
 
-    # ------------------------------------------------------------- routing gate
+    async def _check_escalate(self, routing: Any, task_text: str) -> None:
+        """Judge the output and suggest escalating if quality < threshold."""
+        chatlog = self.query_one(ChatLog)
+        last = self.agent._last_assistant()
+        if last is None or not last.text.strip():
+            return
+        try:
+            quality = await self.agent.judge.grade(task_text, last.text)
+        except Exception:  # noqa: BLE001
+            return
+        if quality is not None and quality < self._escalate_threshold:
+            stronger = max(
+                routing.ranked,
+                key=lambda r: r.predicted_success,
+                default=None,
+            )
+            if stronger and stronger.model_id != routing.chosen_model_id:
+                await chatlog.add_system(
+                    f"↗ quality {quality:.2f} < {self._escalate_threshold} — "
+                    f"consider {stronger.model_id} ({stronger.predicted_success:.0%} success). "
+                    f"/model {stronger.model_id} to pin it."
+                )
+            elif quality is not None:
+                await chatlog.add_system(
+                    f"quality {quality:.2f} < {self._escalate_threshold} "
+                    f"(already on the strongest candidate)"
+                )
+
     async def _route_hook(self, routing: Any, task_text: str) -> Any:
         """before_route hook: always emits a rationale line; shows confirm panel when on."""
         chatlog = self.query_one(ChatLog)
@@ -291,9 +324,7 @@ class HarnessApp(App):
         chosen_id = result.get("model_id")
         action = result.get("action")
         if chosen_id:
-            provider = next(
-                (r.provider for r in routing.ranked if r.model_id == chosen_id), ""
-            )
+            provider = next((r.provider for r in routing.ranked if r.model_id == chosen_id), "")
             model = self.agent.router.mapping._resolve(provider, chosen_id)  # noqa: SLF001
             if model is not None:
                 routing.model = model
@@ -403,9 +434,22 @@ class HarnessApp(App):
         await self._render_tools_post_turn()
         if self._stream_bubble is not None:
             self._stream_bubble.render_markdown()
-            self.session.append(EntryType.ASSISTANT, {"text": self._stream_bubble.buffer})
+            _last = self.agent._last_assistant()
+            _usage = _last.usage if _last is not None else None
+            self.session.append(
+                EntryType.ASSISTANT,
+                {
+                    "text": self._stream_bubble.buffer,
+                    "model": routing.chosen_model_id if routing else None,
+                    "in_tokens": _usage.input if _usage else 0,
+                    "out_tokens": _usage.output if _usage else 0,
+                    "cost": _usage.cost.total if _usage else 0.0,
+                },
+            )
             self._stream_bubble = None
         self._scroll_bottom()
+        if self._escalate and routing is not None:
+            await self._check_escalate(routing, text)
         self._after_turn(routing)
 
     async def _render_tools_post_turn(self) -> None:
@@ -766,6 +810,42 @@ class HarnessApp(App):
                 f"routing confirm: {'ON (shows tradeoff panel each turn)' if on else 'off'}"
             )
 
+        async def _escalate(app: HarnessApp, args: str) -> None:
+            parts = args.strip().split()
+            on = parts[0].lower() in {"on", "1", "true", "yes"} if parts else not app._escalate
+            app._escalate = on
+            if len(parts) > 1:
+                try:
+                    app._escalate_threshold = float(parts[1])
+                except ValueError:
+                    pass
+            if on:
+                app.config.judge_every = 1  # judging must be on for escalation
+            await app.query_one(ChatLog).add_system(
+                f"escalation: {'on' if on else 'off'} "
+                f"(threshold {app._escalate_threshold} · judge_every={app.config.judge_every})"
+            )
+
+        async def _stats(app: HarnessApp, args: str) -> None:
+            stats = aggregate_sessions(app.cwd)
+            await app.query_one(ChatLog).add_system(format_stats(stats))
+
+        async def _recall(app: HarnessApp, args: str) -> None:
+            query = args.strip()
+            if not query:
+                await app.query_one(ChatLog).add_error("usage: /recall <query>")
+                return
+            sid = app.session.path.stem if app.session.path else None
+            results = mubit_recall(query, session_id=sid, limit=5)
+            if not results:
+                await app.query_one(ChatLog).add_system("(no recall results)")
+                return
+            lines = []
+            for r in results[:5]:
+                text = r.get("text", str(r)) if isinstance(r, dict) else str(r)
+                lines.append(f"  • {text[:120]}")
+            await app.query_one(ChatLog).add_system("Recall:\n" + "\n".join(lines))
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -779,6 +859,9 @@ class HarnessApp(App):
             ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),
+            ("escalate", _escalate, "toggle quality escalation"),
+            ("stats", _stats, "show session analytics (last 10)"),
+            ("recall", _recall, "Mubit cross-session recall"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
