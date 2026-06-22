@@ -7,6 +7,7 @@ from minima_harness.tui import clipboard
 
 def test_copy_to_clipboard_darwin_pbcopy(monkeypatch):
     monkeypatch.setattr(clipboard.sys, "platform", "darwin")
+    monkeypatch.setattr(clipboard, "_osc52_copy", lambda t: False)  # isolate from /dev/tty
     captured: dict = {}
 
     def fake_run(cmd, input=None, check=False, **k):  # noqa: ANN001
@@ -20,9 +21,17 @@ def test_copy_to_clipboard_darwin_pbcopy(monkeypatch):
     assert captured["input"] == b"hi"
 
 
-def test_copy_to_clipboard_no_tool_returns_false(monkeypatch):
+def test_copy_to_clipboard_osc52_when_no_platform_tool(monkeypatch):
     monkeypatch.setattr(clipboard.sys, "platform", "unknown-os")
     monkeypatch.setattr(clipboard.shutil, "which", lambda _: None)
+    monkeypatch.setattr(clipboard, "_osc52_copy", lambda t: True)
+    assert clipboard.copy_to_clipboard("hi") is True
+
+
+def test_copy_to_clipboard_nothing_works(monkeypatch):
+    monkeypatch.setattr(clipboard.sys, "platform", "unknown-os")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda _: None)
+    monkeypatch.setattr(clipboard, "_osc52_copy", lambda t: False)
     assert clipboard.copy_to_clipboard("hi") is False
 
 
