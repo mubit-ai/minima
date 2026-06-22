@@ -10,7 +10,7 @@ from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from minima_harness.ai.types import AssistantMessage
+from minima_harness.ai.types import AssistantMessage, Message
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.runtime import MinimaAgent
@@ -19,6 +19,7 @@ from minima_harness.session.format import EntryType
 from minima_harness.tools import default_toolset
 from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.commands import CommandRegistry
+from minima_harness.tui.compaction import summarize
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.overlays import ModelPicker, TreePicker
 from minima_harness.tui.widgets.banner import render_banner
@@ -59,6 +60,7 @@ class HarnessApp(App):
         tools: list[Any] | None = None,
         judge_every: int = 0,
         cwd: Path | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -66,7 +68,9 @@ class HarnessApp(App):
         self.session = session
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
-        self.agent = agent or MinimaAgent(self.config, tools=self._tools, meter=CostMeter())
+        self.agent = agent or MinimaAgent(
+            self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
+        )
         self.bridge = EventBridge()
         self.commands = self._build_commands()
         self._routing_offline = False
@@ -169,6 +173,13 @@ class HarnessApp(App):
         ed.move_cursor((0, len(ed.text)))
         self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
 
+    def on_editor_cycle_thinking(self, event: Editor.CycleThinking) -> None:
+        levels = ("off", "low", "medium", "high")
+        cur = self.agent.state.thinking_level
+        nxt = levels[(levels.index(cur) + 1) % len(levels)] if cur in levels else "low"
+        self.agent.state.thinking_level = nxt  # type: ignore[assignment]
+        self.query_one("#banner", Static).update(Text(f"thinking: {nxt}"))
+
     async def _run_submission(self, parsed: dict) -> None:
         try:
             if parsed["kind"] == "bash":
@@ -223,11 +234,13 @@ class HarnessApp(App):
             self._routing_offline = True
             self._set_banner("Minima unreachable — using the current model")
         else:
+            self._footer_state = self._routing_footer_state(routing)
             if routing.warnings:
                 self._set_banner("; ".join(routing.warnings[:2]))
+            elif self._footer_state["ctx_pct"] > 80:
+                self._set_banner("context near limit — /compact to free space")
             else:
                 self.query_one("#banner", Static).update(Text(""))
-            self._footer_state = self._routing_footer_state(routing)
         self._refresh_footer()
 
     def _routing_footer_state(self, routing: Any) -> dict[str, Any]:
@@ -374,10 +387,35 @@ class HarnessApp(App):
             app._refresh_footer()
             await app.query_one(ChatLog).add_system(f"theme: {current_theme().value}")
 
+        async def _compact(app: HarnessApp, args: str) -> None:
+            agent = app.agent
+            msgs = agent.state.messages
+            if len(msgs) < 6:
+                await app.query_one(ChatLog).add_system("not enough conversation to compact")
+                return
+            keep = max(2, len(msgs) // 4)
+            old, recent = msgs[:-keep], msgs[-keep:]
+            model = getattr(getattr(agent, "judge", None), "_model", None) or agent.state.model
+            assert model is not None
+            try:
+                summary = await summarize(old, model, instructions=args)
+            except Exception as exc:  # noqa: BLE001
+                await app.query_one(ChatLog).add_error(f"compact failed: {exc}")
+                return
+            note = Message(
+                role="user", content=f"<compacted_context>\n{summary}\n</compacted_context>"
+            )
+            agent.state.messages = [note] + list(recent)
+            app._rendered_msgs = len(agent.state.messages)
+            await app.query_one(ChatLog).add_system(
+                f"compacted {len(old)} msg(s) → summary (kept {keep})"
+            )
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
             ("cost", _cost, "show the cost meter"),
+            ("compact", _compact, "summarize older context"),
             ("help", _help, "list commands"),
             ("model", _model, "pick / pin the model"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),

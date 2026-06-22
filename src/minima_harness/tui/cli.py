@@ -8,6 +8,7 @@ from pathlib import Path
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.session import SessionManager
 from minima_harness.tui.app import HarnessApp
+from minima_harness.tui.context import build_system_prompt
 
 # .env files (in cwd) auto-loaded so `minima-harness` works without `make`/`--env-file`.
 _ENV_FILES = (".env.harness", ".env")
@@ -72,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         deny = {t.strip() for t in args.exclude_tools.split(",")}
         tools = [t for t in tools if t.name not in deny]
 
-    app = HarnessApp(config, session=session, tools=tools, cwd=cwd)
+    app = HarnessApp(
+        config, session=session, tools=tools, cwd=cwd, system_prompt=build_system_prompt(cwd)
+    )
     app.run()
     return 0
 

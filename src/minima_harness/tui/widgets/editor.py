@@ -31,6 +31,10 @@ class Editor(TextArea):
             super().__init__()
             self.text = text
 
+    class CycleThinking(Message):
+        def __init__(self) -> None:
+            super().__init__()
+
     def __init__(self) -> None:
         super().__init__(id="editor", soft_wrap=True, show_line_numbers=False)
 
@@ -39,6 +43,11 @@ class Editor(TextArea):
             event.prevent_default()
             event.stop()
             self.post_message(self.CompleteRequested(self.text))
+            return
+        if event.key == "shift+tab":
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.CycleThinking())
             return
         if event.key == "enter":
             event.prevent_default()
