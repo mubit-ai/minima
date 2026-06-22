@@ -4,7 +4,7 @@ import pytest
 
 from minima_harness.tui import extensions as extmod
 
-EXT_SRC = '''
+EXT_SRC = """
 from pydantic import BaseModel
 
 from minima_harness.agent.tools import AgentTool, ToolResult
@@ -29,7 +29,7 @@ def register(api):
     @api.on("finish")
     def _f(event):
         return None
-'''
+"""
 
 
 def _make(tmp_path, monkeypatch):
