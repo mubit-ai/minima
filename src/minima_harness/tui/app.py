@@ -33,7 +33,7 @@ from minima_harness.tui.compaction import summarize
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.extensions import load_extensions
 from minima_harness.tui.history import History, append_history, load_history
-from minima_harness.tui.overlays import ModelPicker, SessionPicker, TreePicker
+from minima_harness.tui.overlays import CommandPicker, ModelPicker, SessionPicker, TreePicker
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
@@ -61,6 +61,7 @@ class HarnessApp(App):
     ModelPicker, TreePicker, SessionPicker { align: center middle; }
     ModelPicker OptionList { width: 60; height: 14; border: round $accent; }
     SessionPicker OptionList { width: 60; height: 14; border: round $accent; }
+    CommandPicker OptionList { width: 64; height: 16; border: round $accent; }
     TreePicker Tree { width: 70; height: 16; border: round $accent; }
     """
 
@@ -179,6 +180,16 @@ class HarnessApp(App):
         self.query_one(Editor).prompt_history = self._history
         self.query_one(Editor).focus()
         self._refresh_footer()
+        self.run_worker(self._show_welcome(), exclusive=True)
+
+    async def _show_welcome(self) -> None:
+        """Mount the ASCII welcome + status bubble at the top of the transcript."""
+        from minima_harness.tui.welcome import render_welcome
+
+        chatlog = self.query_one(ChatLog)
+        welcome = Static(render_welcome(self), id="welcome")
+        await chatlog.mount(welcome)
+        chatlog.scroll_end(animate=False)
         if self._load_session_on_mount and self.session.entries:
             self.run_worker(self._load_session(self.session), exclusive=True)
 
@@ -394,6 +405,7 @@ class HarnessApp(App):
 
         async def _clear(app: HarnessApp, args: str) -> None:
             await app.query_one(ChatLog).remove_children()
+            await app._show_welcome()
 
         async def _cost(app: HarnessApp, args: str) -> None:
             meter = app.agent.meter
@@ -598,6 +610,13 @@ class HarnessApp(App):
                 f"exported {len(md)} char(s) → {target} (open as Markdown for the formatted view)"
             )
 
+        async def _commands(app: HarnessApp, args: str) -> None:
+            def _picked(chosen: str | None) -> None:
+                if chosen:
+                    app.run_worker(app._dispatch_command(chosen, ""), exclusive=True)
+
+            app.push_screen(CommandPicker(app.commands.all()), callback=_picked)
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -607,6 +626,7 @@ class HarnessApp(App):
             ("model", _model, "pick / pin the model"),
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
             ("export", _export, "export the conversation to a Markdown file"),
+            ("commands", _commands, "open the command palette"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),

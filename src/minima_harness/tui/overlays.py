@@ -9,6 +9,7 @@ from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.store import SessionSummary
+from minima_harness.tui.commands import Command
 
 
 class ModelPicker(ModalScreen[str | None]):
@@ -94,3 +95,26 @@ class SessionPicker(ModalScreen[str | None]):
 
 def list_sessions_for_picker(cwd: Path | None) -> list[SessionSummary]:
     return SessionManager().list_sessions(cwd) if cwd is not None else []
+
+
+class CommandPicker(ModalScreen[str | None]):
+    """Modal command palette. Returns the chosen command name, or None on cancel."""
+
+    BINDINGS = [("escape", "cancel")]
+
+    def __init__(self, commands: list[Command]) -> None:
+        super().__init__()
+        self._commands = commands
+
+    def compose(self) -> ComposeResult:
+        if not self._commands:
+            yield OptionList(Option("(no commands)", id=""))
+            return
+        options = [Option(f"{c.name}  {c.description}".rstrip(), id=c.name) for c in self._commands]
+        yield OptionList(*options)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
