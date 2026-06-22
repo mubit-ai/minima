@@ -80,10 +80,11 @@ class HarnessApp(App):
         self._footer_state: dict[str, Any] = self._default_footer_state()
 
     def _default_footer_state(self) -> dict[str, Any]:
-        m = self.agent.state.model
+        # Pre-turn placeholder: Minima picks the model per turn, so show "auto" rather
+        # than the offline default (gpt-4o-mini), which would be misleading.
         return {
-            "model": (m.id if m is not None else "?"),
-            "basis": "-",
+            "model": "auto",
+            "basis": "minima",
             "input_tokens": 0,
             "output_tokens": 0,
             "cache_read": 0,
@@ -304,6 +305,9 @@ class HarnessApp(App):
             def _picked(chosen: str | None) -> None:
                 if chosen:
                     app.config.candidates = [chosen]  # pin: Minima must route to this model
+                    app._footer_state["model"] = chosen
+                    app._footer_state["basis"] = "pinned"
+                    app._refresh_footer()  # reflect the pin at the top immediately
 
             app.push_screen(ModelPicker(cands, current), callback=_picked)
 
