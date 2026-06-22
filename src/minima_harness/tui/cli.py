@@ -58,6 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="interactive",
         help="run mode (interactive TUI, one-shot print, or JSON event stream)",
     )
+    p.add_argument(
+        "--mouse",
+        action="store_true",
+        help="enable mouse capture (scroll/click). Default OFF so you can select/copy text.",
+    )
     return p
 
 
@@ -136,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
     )
-    app.run()
+    app.run(mouse=args.mouse)
     return 0
 
 
