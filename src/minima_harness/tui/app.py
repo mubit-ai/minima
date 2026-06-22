@@ -124,16 +124,29 @@ class HarnessApp(App):
         self._skills: dict[str, str] = {}
         self._history: History = History(load_history(self.cwd))
         self._load_session_on_mount = load_session
+        init_mubit(self.cwd)
         self._load_customization()
         self._apply_extensions()
 
     def _load_customization(self) -> None:
         from minima_harness.tui.customize import load_skills, load_templates
+        from minima_harness.tui.mubit import available, get_skills
         from minima_harness.tui.theme import reload_file_themes
 
         reload_file_themes(self.cwd)
         self._templates = load_templates(self.cwd)
         self._skills = load_skills(self.cwd)
+        # Merge Mubit-stored skills (project-scoped) alongside local SKILL.md files.
+        if available():
+            for skill in get_skills(self.cwd):
+                name = skill.get("name") or skill.get("function", {}).get("name", "")
+                inst = (
+                    skill.get("instructions")
+                    or skill.get("description")
+                    or skill.get("function", {}).get("description", "")
+                )
+                if name and inst and name not in self._skills:
+                    self._skills[name] = f"# Mubit skill: {name}\n{inst}"
 
     def _apply_theme(self) -> None:
         for bubble in self.query_one(ChatLog).query(MessageBubble):
@@ -206,7 +219,6 @@ class HarnessApp(App):
         self.query_one(Editor).prompt_history = self._history
         self.query_one(Editor).focus()
         self._refresh_footer()
-        init_mubit(self.cwd)
         self._apply_effective_prompt()
         self.run_worker(self._show_welcome(), exclusive=True)
 
@@ -702,6 +714,16 @@ class HarnessApp(App):
 
             app.push_screen(PromptInspector(prompt_text, tokens), callback=_saved)
 
+        async def _skills(app: HarnessApp, args: str) -> None:
+            if not app._skills:
+                await app.query_one(ChatLog).add_system("no skills loaded (local or Mubit)")
+                return
+            lines = []
+            for sname in sorted(app._skills):
+                src = "Mubit" if app._skills[sname].startswith("# Mubit skill:") else "local"
+                lines.append(f"  {sname}  ({src})")
+            await app.query_one(ChatLog).add_system("Skills:\n" + "\n".join(lines))
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -713,6 +735,7 @@ class HarnessApp(App):
             ("export", _export, "export the conversation to a Markdown file"),
             ("commands", _commands, "open the command palette"),
             ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
+            ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
@@ -737,6 +760,22 @@ class HarnessApp(App):
         # /skill:<name> → load a skill's instructions into the system prompt
         if name.startswith("skill:"):
             sname = name.split(":", 1)[1]
+            if sname == "set":
+                parts = args.strip().split(None, 1)
+                if len(parts) < 2:
+                    await self.query_one(ChatLog).add_error(
+                        "usage: /skill:set <name> <description>"
+                    )
+                    return
+                from minima_harness.tui.mubit import set_skill
+
+                ok = set_skill(self.cwd, parts[0], parts[1])
+                if ok:
+                    self._load_customization()
+                    await self.query_one(ChatLog).add_system(f"saved Mubit skill: {parts[0]}")
+                else:
+                    await self.query_one(ChatLog).add_error(f"failed to save skill: {parts[0]}")
+                return
             body = self._skills.get(sname)
             if body:
                 cur = self.agent.state.system_prompt or ""
