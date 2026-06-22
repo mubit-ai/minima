@@ -4,26 +4,39 @@ import json
 from pathlib import Path
 
 GLOBAL_DIR = Path.home() / ".minima-harness"
+PACKAGES_DIR = GLOBAL_DIR / "packages"
 
 # Theme palette keys a theme JSON file may set.
 _THEME_KEYS = ("user", "assistant", "tool", "warning", "muted", "accent")
 
 
+def package_roots() -> list[Path]:
+    """Installed package roots (``~/.minima-harness/packages/*/``)."""
+    if not PACKAGES_DIR.is_dir():
+        return []
+    return [d for d in sorted(PACKAGES_DIR.iterdir()) if d.is_dir()]
+
+
 def _theme_dirs(cwd: Path) -> list[Path]:
-    return [GLOBAL_DIR / "themes", cwd / ".pi" / "themes"]
+    return [GLOBAL_DIR / "themes", cwd / ".pi" / "themes", *(p / "themes" for p in package_roots())]
 
 
 def _prompt_dirs(cwd: Path) -> list[Path]:
-    return [GLOBAL_DIR / "prompts", cwd / ".pi" / "prompts"]
+    return [
+        GLOBAL_DIR / "prompts",
+        cwd / ".pi" / "prompts",
+        *(p / "prompts" for p in package_roots()),
+    ]
 
 
 def _skill_dirs(cwd: Path) -> list[Path]:
-    # Agent Skills standard: ~/.agents/skills and .agents/skills (cwd up); plus our dirs.
+    # Agent Skills standard: ~/.agents/skills and .agents/skills (cwd); plus our dirs + packages.
     return [
         GLOBAL_DIR / "skills",
         Path.home() / ".agents" / "skills",
         cwd / ".agents" / "skills",
         cwd / ".pi" / "skills",
+        *(p / "skills" for p in package_roots()),
     ]
 
 

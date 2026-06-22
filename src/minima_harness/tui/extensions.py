@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from minima_harness.tui.commands import Command
-from minima_harness.tui.customize import GLOBAL_DIR
+from minima_harness.tui.customize import GLOBAL_DIR, package_roots
 
 _log = logging.getLogger("minima_harness.tui.extensions")
 
@@ -52,7 +52,11 @@ class ExtensionAPI:
 
 def load_extensions(cwd: Path) -> list[ExtensionAPI]:
     """Discover and load Python extension modules from the extensions dirs."""
-    dirs = [GLOBAL_DIR / "extensions", cwd / ".pi" / "extensions"]
+    dirs = [
+        GLOBAL_DIR / "extensions",
+        cwd / ".pi" / "extensions",
+        *(p / "extensions" for p in package_roots()),
+    ]
     apis: list[ExtensionAPI] = []
     seen: set[str] = set()
     for base in dirs:
