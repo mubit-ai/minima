@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 
 Palette = dict[str, str]
 
@@ -30,18 +31,41 @@ LIGHT: Palette = {
 
 THEMES: dict[ThemeName, Palette] = {ThemeName.DARK: DARK, ThemeName.LIGHT: LIGHT}
 
-_active: ThemeName = ThemeName.DARK
+# Registry of usable themes: the two built-ins plus any loaded from JSON files.
+_registry: dict[str, Palette] = {"dark": DARK, "light": LIGHT}
+_active: str = "dark"
 
 
-def current_theme() -> ThemeName:
+def available_themes() -> dict[str, Palette]:
+    """All themes usable by name right now (built-ins + loaded file themes)."""
+    return dict(_registry)
+
+
+def register_theme(name: str, palette: Palette) -> None:
+    _registry[name] = palette
+
+
+def reload_file_themes(cwd: Path) -> None:
+    """Re-discover ``*.json`` theme files and merge into the registry (hot-reload)."""
+    from minima_harness.tui.customize import load_file_themes
+
+    for name, palette in load_file_themes(cwd).items():
+        register_theme(name, palette)
+
+
+def current_theme() -> str:
     return _active
 
 
-def set_theme(name: ThemeName | str) -> Palette:
+def set_theme(name: str) -> Palette:
     global _active
-    _active = ThemeName(name)
-    return THEMES[_active]
+    if name not in _registry:
+        raise KeyError(f"unknown theme: {name}")
+    _active = name
+    return _registry[name]
 
 
-def get_theme(name: ThemeName | str) -> Palette:
-    return THEMES[ThemeName(name)]
+def get_theme(name: str) -> Palette:
+    if name not in _registry:
+        raise KeyError(f"unknown theme: {name}")
+    return _registry[name]

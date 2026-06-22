@@ -78,6 +78,22 @@ class HarnessApp(App):
         self._stream_bubble: MessageBubble | None = None
         self._working = False
         self._footer_state: dict[str, Any] = self._default_footer_state()
+        self._templates: dict[str, str] = {}
+        self._skills: dict[str, str] = {}
+        self._load_customization()
+
+    def _load_customization(self) -> None:
+        from minima_harness.tui.customize import load_skills, load_templates
+        from minima_harness.tui.theme import reload_file_themes
+
+        reload_file_themes(self.cwd)
+        self._templates = load_templates(self.cwd)
+        self._skills = load_skills(self.cwd)
+
+    def _apply_theme(self) -> None:
+        for bubble in self.query_one(ChatLog).query(MessageBubble):
+            bubble.refresh_theme()
+        self._refresh_footer()
 
     def _default_footer_state(self) -> dict[str, Any]:
         # Pre-turn placeholder: Minima picks the model per turn, so show "auto" rather
@@ -376,20 +392,23 @@ class HarnessApp(App):
             )
 
         async def _theme(app: HarnessApp, args: str) -> None:
-            from minima_harness.tui.theme import ThemeName, current_theme, set_theme
+            from minima_harness.tui.theme import available_themes, current_theme, set_theme
 
+            avail = available_themes()
             name = args.strip().lower()
-            if not name:
-                name = "light" if current_theme() == ThemeName.DARK else "dark"
-            try:
+            if name and name in avail:
                 set_theme(name)
-            except Exception:  # noqa: BLE001
-                await app.query_one(ChatLog).add_system(f"unknown theme: {name} (try dark|light)")
+                app._apply_theme()
+                await app.query_one(ChatLog).add_system(f"theme: {name}")
                 return
-            for b in app.query_one(ChatLog).query(MessageBubble):
-                b.refresh_theme()
-            app._refresh_footer()
-            await app.query_one(ChatLog).add_system(f"theme: {current_theme().value}")
+            cur = current_theme()
+
+            def _picked(chosen: str | None) -> None:
+                if chosen and chosen in avail:
+                    set_theme(chosen)
+                    app._apply_theme()
+
+            app.push_screen(ModelPicker(sorted(avail), cur), callback=_picked)
 
         async def _compact(app: HarnessApp, args: str) -> None:
             agent = app.agent
@@ -438,10 +457,30 @@ class HarnessApp(App):
 
     async def _dispatch_command(self, name: str, args: str) -> None:
         cmd = self.commands.get(name)
-        if cmd is None:
-            await self.query_one(ChatLog).add_error(f"unknown command: /{name}")
+        if cmd is not None:
+            await cmd.handler(self, args)
             return
-        await cmd.handler(self, args)
+        # /skill:<name> → load a skill's instructions into the system prompt
+        if name.startswith("skill:"):
+            sname = name.split(":", 1)[1]
+            body = self._skills.get(sname)
+            if body:
+                cur = self.agent.state.system_prompt or ""
+                self.agent.state.system_prompt = f"{cur}\n\n# Skill: {sname}\n{body}"
+                await self.query_one(ChatLog).add_system(f"loaded skill: {sname}")
+                return
+            await self.query_one(ChatLog).add_error(f"unknown skill: {sname}")
+            return
+        # /<template-name> → expand a prompt template into the editor
+        body = self._templates.get(name)
+        if body:
+            text = body if not args.strip() else f"{body}\n{args.strip()}"
+            ed = self.query_one(Editor)
+            ed.text = text
+            ed.move_cursor((0, len(text)))
+            await self.query_one(ChatLog).add_system(f"loaded template: /{name} (edit + Enter)")
+            return
+        await self.query_one(ChatLog).add_error(f"unknown command: /{name}")
 
     # ------------------------------------------------------------- actions
     async def action_model(self) -> None:
