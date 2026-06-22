@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -155,6 +156,56 @@ class PromptInspector(ModalScreen[dict | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class RoutingConfirm(ModalScreen[dict | None]):
+    """Modal routing confirmation: shows ranked candidates with predicted success /
+    estimated cost tradeoffs. Enter selects, 'p' pins, Esc cancels."""
+
+    BINDINGS = [
+        ("escape", "cancel"),
+        Binding("p", "pin", "Pin", priority=True),
+    ]
+
+    def __init__(self, routing: Any) -> None:
+        super().__init__()
+        self._routing = routing
+
+    def compose(self) -> ComposeResult:
+        chosen = self._routing.chosen_model_id or self._routing.model.id
+        yield Static(
+            Text(
+                f"Recommended: {chosen} · basis {self._routing.decision_basis} · "
+                f"confidence {self._routing.confidence:.0%}\n↑↓ navigate · Enter select · "
+                f"p pin · Esc cancel",
+                style="bold",
+            )
+        )
+        ranked = self._routing.ranked or []
+        cheapest = min((r.est_cost_usd for r in ranked), default=0.0)
+        options = []
+        for r in ranked:
+            mark = "●" if r.model_id == self._routing.chosen_model_id else "○"
+            delta = r.est_cost_usd - cheapest
+            dstr = "cheapest" if delta <= 0 else f"+${delta:.4f}"
+            label = (
+                f"{mark} {r.model_id}  {r.provider}  {r.predicted_success:.0%}  "
+                f"${r.est_cost_usd:.4f}  {dstr}"
+            )
+            options.append(Option(label, id=r.model_id))
+        yield OptionList(*options)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss({"action": "select", "model_id": event.option.id})
+
+    def action_pin(self) -> None:
+        ol = self.query_one(OptionList)
+        if ol.highlighted is not None:
+            opt = ol.get_option_at_index(ol.highlighted)
+            self.dismiss({"action": "pin", "model_id": opt.id})
+
+    def action_cancel(self) -> None:
+        self.dismiss({"action": "cancel", "model_id": None})
 
 
 def list_sessions_for_picker(cwd: Path | None) -> list[SessionSummary]:

@@ -47,6 +47,7 @@ from minima_harness.tui.overlays import (
     CommandPicker,
     ModelPicker,
     PromptInspector,
+    RoutingConfirm,
     SessionPicker,
     TreePicker,
 )
@@ -108,9 +109,11 @@ class HarnessApp(App):
         self.session = session
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
+        self._confirm_route = False
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
+        self.agent.before_route = self._route_hook
         self.bridge = EventBridge()
         self.commands = self._build_commands()
         self._extensions = load_extensions(self.cwd)
@@ -268,6 +271,36 @@ class HarnessApp(App):
 
     def _on_thinking(self, delta: str) -> None:
         self._set_state("thinking")
+
+    # ------------------------------------------------------------- routing gate
+    async def _route_hook(self, routing: Any, task_text: str) -> Any:
+        """before_route hook: always emits a rationale line; shows confirm panel when on."""
+        chatlog = self.query_one(ChatLog)
+        if routing is not None:
+            chosen = routing.chosen_model_id or routing.model.id
+            await chatlog.add_system(
+                f"▸ routed to {chosen} · basis {routing.decision_basis} "
+                f"· est ${routing.est_cost_usd:.4f}"
+            )
+        if not self._confirm_route or routing is None:
+            return None  # accept as-is
+        result = await self.push_screen(RoutingConfirm(routing), wait_for_dismiss=True)
+        if result is None or result.get("action") == "cancel":
+            routing.recommendation_id = None  # veto feedback
+            return routing
+        chosen_id = result.get("model_id")
+        action = result.get("action")
+        if chosen_id:
+            provider = next(
+                (r.provider for r in routing.ranked if r.model_id == chosen_id), ""
+            )
+            model = self.agent.router.mapping._resolve(provider, chosen_id)  # noqa: SLF001
+            if model is not None:
+                routing.model = model
+                routing.chosen_model_id = chosen_id
+        if action == "pin" and chosen_id:
+            self.config.candidates = [chosen_id]
+        return routing
 
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
@@ -724,6 +757,15 @@ class HarnessApp(App):
                 lines.append(f"  {sname}  ({src})")
             await app.query_one(ChatLog).add_system("Skills:\n" + "\n".join(lines))
 
+        async def _confirm(app: HarnessApp, args: str) -> None:
+            on = args.strip().lower() in {"on", "1", "true", "yes"}
+            if not args.strip():
+                on = not app._confirm_route
+            app._confirm_route = on
+            await app.query_one(ChatLog).add_system(
+                f"routing confirm: {'ON (shows tradeoff panel each turn)' if on else 'off'}"
+            )
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -736,6 +778,7 @@ class HarnessApp(App):
             ("commands", _commands, "open the command palette"),
             ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
             ("skills", _skills, "list loaded skills (local + Mubit)"),
+            ("confirm", _confirm, "toggle routing confirm gate"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
