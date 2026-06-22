@@ -58,4 +58,3 @@ def copy_to_clipboard(text: str) -> bool:
     if _osc52_copy(text):
         ok = True
     return ok
-
