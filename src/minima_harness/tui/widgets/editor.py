@@ -4,6 +4,8 @@ from textual.events import Key
 from textual.message import Message
 from textual.widgets import TextArea
 
+from minima_harness.tui.history import History
+
 _NEWLINE_KEYS = frozenset({"shift+enter", "ctrl+enter"})
 
 
@@ -37,8 +39,25 @@ class Editor(TextArea):
 
     def __init__(self) -> None:
         super().__init__(id="editor", soft_wrap=True, show_line_numbers=False)
+        self.prompt_history: History | None = None  # set by the app for Up/Down recall
 
     def on_key(self, event: Key) -> None:
+        if event.key in ("up", "down") and self.prompt_history is not None:
+            row = self.cursor_location[0]
+            on_edge = (event.key == "up" and row == 0) or (
+                event.key == "down" and row >= self.text.count("\n")
+            )
+            if "\n" not in self.text or on_edge:
+                entry = (
+                    self.prompt_history.prev() if event.key == "up" else self.prompt_history.next()
+                )
+                if entry is None:
+                    return  # nothing to recall / already at the new position
+                event.prevent_default()
+                event.stop()
+                self.text = entry
+                self.move_cursor((0, len(entry)))
+                return
         if event.key == "tab" and self.text.startswith("/"):
             event.prevent_default()
             event.stop()

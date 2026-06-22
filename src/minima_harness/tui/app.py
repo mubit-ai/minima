@@ -18,7 +18,7 @@ from minima_harness.agent.events import (
     ToolExecutionStartEvent,
     TurnEndEvent,
 )
-from minima_harness.ai.types import AssistantMessage, Message
+from minima_harness.ai.types import AssistantMessage, Message, TextContent
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.runtime import MinimaAgent
@@ -31,7 +31,8 @@ from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.extensions import load_extensions
-from minima_harness.tui.overlays import ModelPicker, TreePicker
+from minima_harness.tui.history import History, append_history, load_history
+from minima_harness.tui.overlays import ModelPicker, SessionPicker, TreePicker
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
@@ -56,8 +57,9 @@ class HarnessApp(App):
         border: round $accent; background: $panel;
     }
     #cmd-popup.visible { display: block; }
-    ModelPicker, TreePicker { align: center middle; }
+    ModelPicker, TreePicker, SessionPicker { align: center middle; }
     ModelPicker OptionList { width: 60; height: 14; border: round $accent; }
+    SessionPicker OptionList { width: 60; height: 14; border: round $accent; }
     TreePicker Tree { width: 70; height: 16; border: round $accent; }
     """
 
@@ -71,6 +73,7 @@ class HarnessApp(App):
         judge_every: int = 0,
         cwd: Path | None = None,
         system_prompt: str | None = None,
+        load_session: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -92,6 +95,8 @@ class HarnessApp(App):
         self._footer_state: dict[str, Any] = self._default_footer_state()
         self._templates: dict[str, str] = {}
         self._skills: dict[str, str] = {}
+        self._history: History = History(load_history(self.cwd))
+        self._load_session_on_mount = load_session
         self._load_customization()
         self._apply_extensions()
 
@@ -170,8 +175,11 @@ class HarnessApp(App):
         self.agent.subscribe(self.bridge)
         self.agent.subscribe(self._extension_fanout)
         self.bridge.bind(on_text=self._append_stream)
+        self.query_one(Editor).prompt_history = self._history
         self.query_one(Editor).focus()
         self._refresh_footer()
+        if self._load_session_on_mount and self.session.entries:
+            self.run_worker(self._load_session(self.session), exclusive=True)
 
     # ------------------------------------------------------------- streaming
     def _append_stream(self, delta: str) -> None:
@@ -185,6 +193,9 @@ class HarnessApp(App):
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
         self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
+        if text.strip():
+            self._history.add(text)
+            append_history(self.cwd, text)
         if self.agent.state.is_streaming:
             # Enter while running = steering (delivered after the current tool batch).
             self.agent.steer(text)
@@ -294,6 +305,29 @@ class HarnessApp(App):
                 await chatlog.add_tool_result(_snippet(msg.text), msg.is_error)
         self._rendered_msgs = len(self.agent.state.messages)
 
+    async def _load_session(self, store: SessionStore) -> None:
+        """Switch the active session and rebuild the agent context + transcript from it."""
+        self.session = store
+        chatlog = self.query_one(ChatLog)
+        await chatlog.remove_children()
+        self._rendered_msgs = 0
+        msgs: list = []
+        for entry in store.entries:
+            txt = entry.payload.get("text", "")
+            if entry.type == EntryType.USER:
+                await chatlog.add_user(txt)
+                msgs.append(Message(role="user", content=txt))
+            elif entry.type == EntryType.ASSISTANT:
+                bubble = await chatlog.add_assistant_stream()
+                bubble.set_text(txt)
+                bubble.render_markdown()
+                msgs.append(AssistantMessage(role="assistant", content=[TextContent(text=txt)]))
+        self.agent.state.messages = msgs
+        self._rendered_msgs = len(msgs)
+        label = store.display_name or (store.path.stem if store.path else "ephemeral")
+        await chatlog.add_system(f"resumed {label} ({len(msgs)} msg(s) in context)")
+        self._refresh_footer()
+
     def _after_turn(self, routing: Any) -> None:
         self._working = False
         if routing is None:
@@ -331,9 +365,13 @@ class HarnessApp(App):
 
     def _refresh_footer(self) -> None:
         meter = self.agent.meter or CostMeter()
+        session_label = self.session.display_name or (
+            self.session.path.stem if self.session.path else "ephemeral"
+        )
+        self.title = f"minima-harness · {session_label}"
         footer = render_footer(
             cwd=str(self.cwd),
-            session_id=(self.session.path.stem if self.session.path else "eph"),
+            session_id=session_label,
             model=self._footer_state["model"],
             basis=self._footer_state["basis"],
             meter=meter,
@@ -422,14 +460,22 @@ class HarnessApp(App):
             await app.query_one(ChatLog).add_system(f"cloned to {dest.stem}")
 
         async def _resume(app: HarnessApp, args: str) -> None:
-            try:
-                store = SessionManager().open(app.cwd, session_id=args.strip() or None)
-            except FileNotFoundError as exc:
-                await app.query_one(ChatLog).add_error(str(exc))
+            if args.strip():
+                try:
+                    store = SessionManager().open(app.cwd, session_id=args.strip())
+                except FileNotFoundError as exc:
+                    await app.query_one(ChatLog).add_error(str(exc))
+                    return
+                await app._load_session(store)
                 return
-            app.session = store
-            sid = store.path.stem if store.path else "ephemeral"
-            await app.query_one(ChatLog).add_system(f"resumed {sid} ({len(store.entries)} entries)")
+            summaries = SessionManager().list_sessions(app.cwd)
+
+            def _picked(chosen: str | None) -> None:
+                if chosen:
+                    store = SessionStore.file_backed(Path(chosen))
+                    app.run_worker(app._load_session(store), exclusive=True)
+
+            app.push_screen(SessionPicker(summaries), callback=_picked)
 
         async def _judge(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}

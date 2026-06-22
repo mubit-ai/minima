@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Tree
 from textual.widgets.option_list import Option
 
-from minima_harness.session import SessionStore
+from minima_harness.session import SessionManager, SessionStore
+from minima_harness.session.store import SessionSummary
 
 
 class ModelPicker(ModalScreen[str | None]):
@@ -61,3 +64,33 @@ class TreePicker(ModalScreen[None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class SessionPicker(ModalScreen[str | None]):
+    """Modal session-history picker. Returns the chosen session file path, or None."""
+
+    BINDINGS = [("escape", "cancel")]
+
+    def __init__(self, summaries: list[SessionSummary]) -> None:
+        super().__init__()
+        self._summaries = summaries
+
+    def compose(self) -> ComposeResult:
+        if not self._summaries:
+            yield OptionList(Option("(no saved sessions)", id=""))
+            return
+        options = [
+            Option(f"{s.session_id[:8]}  ·  {s.n_entries} entries", id=str(s.path))
+            for s in self._summaries
+        ]
+        yield OptionList(*options)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def list_sessions_for_picker(cwd: Path | None) -> list[SessionSummary]:
+    return SessionManager().list_sessions(cwd) if cwd is not None else []

@@ -23,7 +23,7 @@ def render_footer(
     totals = meter.totals()
     bits = [
         cwd,
-        f"sess {session_id[:4]}",
+        f"sess {session_id[:24]}",
         f"↑{input_tokens} ↓{output_tokens} R{cache_read} W{cache_write}",
         f"${totals.actual_cost_usd:.4f}",
         f"ctx {ctx_pct:.0f}%",

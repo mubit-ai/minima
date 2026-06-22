@@ -9,7 +9,7 @@ from pathlib import Path
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.runtime import MinimaAgent
-from minima_harness.session import SessionManager
+from minima_harness.session import SessionManager, SessionStore
 from minima_harness.tui.app import HarnessApp
 from minima_harness.tui.context import build_system_prompt
 from minima_harness.tui.packages import packages_cli
@@ -113,8 +113,15 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(runner(agent, prompt))
 
     mgr = SessionManager()
+    load_on_start = False
     try:
-        session = mgr.open(cwd, session_id=args.session, no_session=args.no_session)
+        if args.no_session:
+            session = SessionStore.in_memory()
+        elif args.session or args.continue_last:
+            session = mgr.open(cwd, session_id=args.session)
+            load_on_start = True
+        else:
+            session = mgr.new(cwd, name=args.name)
         if args.name:
             session.display_name = args.name
     except FileNotFoundError as exc:
@@ -122,7 +129,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     app = HarnessApp(
-        config, session=session, tools=tools, cwd=cwd, system_prompt=build_system_prompt(cwd)
+        config,
+        session=session,
+        tools=tools,
+        cwd=cwd,
+        system_prompt=build_system_prompt(cwd),
+        load_session=load_on_start,
     )
     app.run()
     return 0
