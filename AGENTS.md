@@ -71,6 +71,14 @@ Phases are independently verifiable; do not skip the verify step.
   `minima/runtime.py` (`MinimaAgent`). Hermetic via FakeMemory+ASGI app; live test.
 - **Phase 4 (done)** — `examples/harness_warmup.py` (demo + live modes),
   `docs/harness.md`, README + examples/README sections.
+- **Phase A (done)** — cost observability: `RoutingResult` carries Minima's full ranked/
+  rationale/warnings payload + `baseline_cost_usd`; `CostMeter`; `before_route`
+  override/veto hook.
+- **Phase B (done)** — code-quality-aware routing: `CodeHealthExtractor` +
+  `ContextExtractor` protocol; `tags`/`difficulty`/`expected_input_tokens` from touched
+  files flow into `recommend()` via `prompt(files=...)`, with a discrimination gate.
+- **Phase C (done)** — token yield: `turns_taken` per prompt → `feedback(iterations=)` →
+  `FeedbackRequest`/`OutcomeRecord` gain a backward-compatible `iterations` field.
 
 ## Hard rules
 

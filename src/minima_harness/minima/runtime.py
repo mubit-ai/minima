@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
@@ -27,13 +29,20 @@ from minima_harness.minima.judge import (
     clamp01,
 )
 from minima_harness.minima.mapping import ModelMapping
+from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.router import MinimaRouter, RoutingResult
+from minima_harness.minima.signals import ContextExtractor, extract_or_none
 from minima_harness.tasks.task_set import grade_outcome
 
 if TYPE_CHECKING:
     pass
 
 _log = logging.getLogger("minima_harness.runtime")
+
+# Inspect/override a recommendation before the model runs. Return a (possibly modified)
+# RoutingResult to override the model; None to accept as-is; a result with
+# recommendation_id=None to veto (run a different model with no feedback attribution).
+BeforeRoute = Callable[[RoutingResult, str], Awaitable[RoutingResult | None]]
 
 
 class MinimaAgent(Agent):
@@ -50,11 +59,17 @@ class MinimaAgent(Agent):
         task_type: str | None = None,
         thinking_level: ThinkingLevel = "off",
         max_turns: int = 50,
+        meter: CostMeter | None = None,
+        before_route: BeforeRoute | None = None,
+        extractor: ContextExtractor | None = None,
     ) -> None:
         self.config = config
         self.mapping = mapping or (router.mapping if router else ModelMapping())
         self.router = router or MinimaRouter.for_config(config, self.mapping)
         self.judge = judge if judge is not None else _default_judge(config)
+        self.meter = meter
+        self.before_route = before_route
+        self.extractor = extractor
         self._task_type_hint = task_type
         self._prompts_run = 0
         initial = model or self.mapping.default_model()
@@ -72,12 +87,13 @@ class MinimaAgent(Agent):
         *,
         task_type: str | None = None,
         slider: float | None = None,
+        files: list[str | Path] | None = None,
     ) -> RoutingResult | None:
         task_text = _text_of(content)
         effective_task_type = task_type or self._task_type_hint
         self._prompts_run += 1
 
-        routing = await self._route(task_text, effective_task_type, slider)
+        routing = await self._route(task_text, effective_task_type, slider, files=files)
         start = monotonic()
         run_error: BaseException | None = None
         try:
@@ -86,8 +102,24 @@ class MinimaAgent(Agent):
             run_error = exc
 
         latency_ms = int((monotonic() - start) * 1000)
+        turns_taken = self.state.turns_taken
+        quality: float | None = None
+        outcome = "success"
         if routing is not None:
-            await self._feedback_safely(task_text, routing, latency_ms, run_error)
+            quality, outcome = await self._feedback_safely(
+                task_text, routing, latency_ms, run_error, turns_taken
+            )
+        if self.meter is not None:
+            last = self._last_assistant()
+            actual = last.usage.cost.total if last is not None else 0.0
+            self.meter.record(
+                label=_short_label(task_text),
+                routing=routing,
+                actual_cost_usd=actual,
+                quality=quality if run_error is None else 0.0,
+                outcome=("failure" if run_error is not None else outcome),
+                turns=turns_taken,
+            )
         if run_error is not None:
             raise run_error
         return routing
@@ -95,15 +127,37 @@ class MinimaAgent(Agent):
     # ------------------------------------------------------------------ routing
 
     async def _route(
-        self, task_text: str, task_type: str | None, slider: float | None
+        self,
+        task_text: str,
+        task_type: str | None,
+        slider: float | None,
+        *,
+        files: list[str | Path] | None = None,
     ) -> RoutingResult | None:
+        bundle = await extract_or_none(
+            self.extractor, task_text, [Path(f) for f in files] if files else None
+        )
+        tags = bundle.tags if bundle else None
+        difficulty = bundle.difficulty if bundle else None
+        exp_tokens = bundle.expected_input_tokens if bundle else None
         try:
-            routing = await self.router.recommend(task_text, task_type=task_type, slider=slider)
+            routing = await self.router.recommend(
+                task_text,
+                task_type=task_type,
+                slider=slider,
+                tags=tags,
+                difficulty=difficulty,
+                expected_input_tokens=exp_tokens,
+            )
         except Exception:  # noqa: BLE001
             if not self.config.allow_offline:
                 raise
             _log.warning("minima_recommend_failed_offline_fallback", exc_info=True)
             return None
+        if self.before_route is not None:
+            overridden = await self.before_route(routing, task_text)
+            if overridden is not None:
+                routing = overridden
         self.state.model = routing.model
         return routing
 
@@ -113,14 +167,18 @@ class MinimaAgent(Agent):
         routing: RoutingResult,
         latency_ms: int,
         run_error: BaseException | None,
-    ) -> None:
+        turns_taken: int = 0,
+    ) -> tuple[float | None, str]:
+        """Send feedback; return the (quality, outcome) used (for the meter). Never raises."""
         if routing.recommendation_id is None or routing.chosen_model_id is None:
-            return
+            return None, "success"
+        quality: float | None = None
+        outcome = "success"
         try:
             last = self._last_assistant()
             usage = last.usage if last is not None else Usage()
             if run_error is not None:
-                quality: float | None = 0.0
+                quality = 0.0
                 outcome = "failure"
             elif not self._should_judge():
                 quality = None
@@ -136,9 +194,11 @@ class MinimaAgent(Agent):
                 quality=quality,
                 usage=usage,
                 latency_ms=latency_ms,
+                iterations=turns_taken or None,
             )
         except Exception:  # noqa: BLE001 - feedback must never break a successful run
             _log.warning("minima_feedback_failed", exc_info=True)
+        return quality, outcome
 
     # ----------------------------------------------------------------- helpers
 
@@ -187,3 +247,11 @@ def _text_of(content: str | list[ContentBlock] | Message | list[Any]) -> str:
                 parts.append(getattr(item, "text", ""))
         return "\n".join(p for p in parts if p)
     return str(content)
+
+
+def _short_label(task_text: str) -> str:
+    """One-line label for a cost-meter row (first non-empty line, truncated)."""
+    first = (task_text.splitlines()[0] if task_text else "").strip()
+    if len(first) > 48:
+        first = first[:45] + "..."
+    return first or "(empty)"

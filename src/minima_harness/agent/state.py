@@ -36,6 +36,9 @@ class AgentState:
     streaming_message: AssistantMessage | None = None
     pending_tool_calls: set[str] = field(default_factory=set)
     error_message: str | None = None
+    # Turns actually run in the last agent_loop (token-yield signal: a cheap model that
+    # takes many turns to resolve can cost more than one frontier turn). Set by the loop.
+    turns_taken: int = 0
     # Queues the Agent pushes into mid-run; drained between turns by the loop.
     steering: deque[Message] = field(default_factory=deque)
     follow_up: deque[Message] = field(default_factory=deque)

@@ -119,6 +119,37 @@ still learned).
 `Constraints.candidate_models`; `namespace` isolates memory (lane `minima:<namespace>`).
 A fresh namespace = cold memory; use it to keep experiments clean.
 
+**Cost observability (CostMeter).** Hand a `CostMeter` to `MinimaAgent(..., meter=...)`
+and it records one row per prompt — model picked, decision basis, est $ / actual $ /
+savings-vs-baseline $, turns, quality, outcome — then `meter.report()` renders the table
+plus totals (actual vs baseline $, **savings %**, success rate). The data already flowed
+to Minima; the meter surfaces it to the human. `baseline_model_id` in `HarnessConfig`
+populates each row's "save$" (resolved from the ranked set, no extra round-trip).
+
+**Override / veto (before_route).** Pass an `async (routing, task) -> RoutingResult | None`
+hook to inspect or change Minima's pick *before* the model runs: return `None` to accept,
+a modified `RoutingResult` to **override** the model/tier, or a result with
+`recommendation_id=None` to **veto** (run a different model with no feedback attribution).
+This is the explicit, auditable mitigation for routing's "silent quality regression" risk
+and the seam for an interactive "Minima picked X for $Y because Z — accept?".
+
+**Code-quality-aware routing (the wedge).** Without signals, `recommend()` sees only the
+prompt text, so Minima's recall is text-similarity-based. Pass `files=` to `prompt()` with
+a `ContextExtractor` (default: `CodeHealthExtractor`) and the harness computes lightweight
+code-health signals — proxy McCabe (decision-keyword count), non-blank LOC, sibling-test
+detection, language-agnostic and dependency-free — and feeds them as `tags` /
+`difficulty` / `expected_input_tokens` into the recommendation. Routing becomes
+*code-aware*: a hard, untested refactor is steered toward a stronger tier than a trivial
+extraction. A broken/missing extractor degrades gracefully to text-only routing. The
+signal's discrimination (does it actually separate trivial/medium/complex tasks?) is the
+falsifiable gate — see `tests/harness/test_signals.py`.
+
+**Token yield (iterations).** The agent loop records `state.turns_taken` per prompt; the
+meter shows it and feedback sends it as `iterations` (a new, backward-compatible field on
+`FeedbackRequest` / `OutcomeRecord`). This counters the "almost right" retry trap: a cheap
+model that takes many turns to resolve can cost more than one frontier turn, and Minima can
+now learn *tokens-to-resolution*, not just $/call.
+
 ## Extending
 
 - **Add a provider** — implement the `Provider` protocol (`api_id` + async `stream()`
@@ -147,6 +178,15 @@ LLM calls; the full Minima round-trip is exercised in-process via `create_app` +
 
 ## Build roadmap
 
-Phases 0–4 are complete: scaffold → ported `pi-ai` (providers + compat) → ported
-`pi-agent-core` (agent loop + tools + hooks) → Minima integration (`MinimaAgent`) →
-example + these docs. See [`AGENTS.md`](../AGENTS.md) for the per-phase history.
+- **Phases 0–4** — scaffold → ported `pi-ai` (providers + compat) → ported
+  `pi-agent-core` (agent loop + tools + hooks) → Minima integration (`MinimaAgent`) →
+  example + these docs.
+- **Phase A** — cost observability: `RoutingResult` carries Minima's full ranked/rationale/
+  warnings payload + `baseline_cost_usd`; `CostMeter`; the `before_route` override/veto hook.
+- **Phase B** — code-quality-aware routing: `CodeHealthExtractor` + `ContextExtractor`
+  protocol; `tags`/`difficulty`/`expected_input_tokens` flow from touched files into
+  `recommend()` via `MinimaAgent.prompt(files=...)`, with a discrimination gate.
+- **Phase C** — token yield: `turns_taken` tracked per prompt → `feedback(iterations=)` →
+  `FeedbackRequest`/`OutcomeRecord` gain a backward-compatible `iterations` field.
+
+See [`AGENTS.md`](../AGENTS.md) for the per-phase history.

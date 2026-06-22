@@ -35,6 +35,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from minima_harness.minima import (  # noqa: E402
+    CostMeter,
     HarnessConfig,
     MinimaAgent,
     MinimaRouter,
@@ -45,8 +46,9 @@ from minima_harness.tasks import TASKS, Task  # noqa: E402
 
 ROUNDS_DEFAULT = 2
 SEED = 7
-# Demo candidate must be known to Minima's catalog AND mapped in the harness registry.
-DEMO_CANDIDATES = ["claude-haiku-4-5"]
+# Demo candidates must be known to Minima's catalog AND mapped in the harness registry.
+# Includes a premium model so the cost meter can show savings vs the opus baseline.
+DEMO_CANDIDATES = ["claude-haiku-4-5", "claude-opus-4-8"]
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +278,16 @@ async def run_demo(rounds: int) -> None:
                 minima_url="http://testserver",
                 minima_api_key="demo-key",
                 candidates=DEMO_CANDIDATES,
+                baseline_model_id="claude-opus-4-8",  # so the meter shows savings vs premium
                 judge_every=1,
             )
+            meter = CostMeter()
             agent = MinimaAgent(
                 config,
                 router=MinimaRouter(client, config),
                 judge=DeterministicJudge(lambda t: 0.5),
                 model=get_model("anthropic", "claude-haiku-4-5"),
+                meter=meter,
             )
             rows = await _run_corpus(
                 agent,
@@ -293,6 +298,8 @@ async def run_demo(rounds: int) -> None:
         register_provider("anthropic-messages", original)
 
     _print_summary(rows, remembered=len(memory.remembered))
+    print()
+    print(meter.report())
 
 
 # ---------------------------------------------------------------------------

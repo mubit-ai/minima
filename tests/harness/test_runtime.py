@@ -29,7 +29,16 @@ class FakeRouter:
         self._fail = fail_recommend
         self._recommend_model_id = recommend_model_id
 
-    async def recommend(self, task, *, task_type=None, slider=None):
+    async def recommend(
+        self,
+        task,
+        *,
+        task_type=None,
+        slider=None,
+        tags=None,
+        difficulty=None,
+        expected_input_tokens=None,
+    ):
         self.recommend_calls.append({"task": task, "task_type": task_type, "slider": slider})
         if self._fail:
             raise RuntimeError("minima unreachable")
@@ -41,7 +50,9 @@ class FakeRouter:
             decision_basis="memory",
         )
 
-    async def feedback(self, rec_id, chosen, outcome, *, quality, usage, latency_ms):
+    async def feedback(
+        self, rec_id, chosen, outcome, *, quality, usage, latency_ms, iterations=None
+    ):
         self.feedback_calls.append(
             {
                 "rec_id": rec_id,

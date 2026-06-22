@@ -135,6 +135,7 @@ async def agent_loop(
                 continue
             break
 
+    state.turns_taken = turns
     state.streaming_message = None
     yield AgentEndEvent(messages=list(state.messages))
 

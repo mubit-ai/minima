@@ -16,6 +16,9 @@ class FeedbackRequest(BaseModel):
     output_tokens: int | None = Field(None, ge=0)
     actual_cost_usd: float | None = Field(None, ge=0)
     latency_ms: int | None = Field(None, ge=0)
+    iterations: int | None = Field(
+        None, ge=0, description="agent loop turns to resolution (token-yield signal)"
+    )
     verified_in_production: bool = False
     notes: str | None = None
     idempotency_key: str | None = None
