@@ -39,6 +39,7 @@ from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
+from minima_harness.tui.widgets.status import StatusBar
 
 _log = logging.getLogger("minima_harness.tui.app")
 
@@ -56,6 +57,7 @@ class HarnessApp(App):
     #chatlog { height: 1fr; background: $boost; padding: 0 1; }
     #banner { height: auto; padding: 0 1; }
     #editor { height: 5; background: $panel; padding: 0 1; }
+    #status { height: 1; background: $panel; padding: 0 1; color: $text-muted; }
     #cmd-popup {
         display: none; height: auto; max-height: 8;
         background: $panel; padding: 0 1;
@@ -176,13 +178,14 @@ class HarnessApp(App):
         yield ChatLog(id="chatlog")
         yield OptionList(id="cmd-popup")
         yield Editor()
+        yield StatusBar(id="status")
         yield TextualFooter()
 
     def on_mount(self) -> None:
         self.title = "minima-harness"
         self.agent.subscribe(self.bridge)
         self.agent.subscribe(self._extension_fanout)
-        self.bridge.bind(on_text=self._append_stream)
+        self.bridge.bind(on_text=self._append_stream, on_thinking=self._on_thinking)
         self.query_one(Editor).prompt_history = self._history
         self.query_one(Editor).focus()
         self._refresh_footer()
@@ -200,12 +203,19 @@ class HarnessApp(App):
             self.run_worker(self._load_session(self.session), exclusive=True)
 
     # ------------------------------------------------------------- streaming
+    def _set_state(self, state: str) -> None:
+        try:
+            self.query_one(StatusBar).set_state(state)
+        except Exception:  # noqa: BLE001 - during teardown the widget may be gone
+            pass
+
     def _append_stream(self, delta: str) -> None:
-        if self._working:
-            self._working = False
-            self.query_one("#banner", Static).update(Text(""))
+        self._set_state("working")
         if self._stream_bubble is not None:
             self._stream_bubble.append(delta)
+
+    def _on_thinking(self, delta: str) -> None:
+        self._set_state("thinking")
 
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
@@ -295,13 +305,12 @@ class HarnessApp(App):
         await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
         self._stream_bubble = await chatlog.add_assistant_stream()
-        self._working = True
-        self.query_one("#banner", Static).update(Text("working…"))
+        self._set_state("routing")
         routing = None
         try:
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
-            self._working = False
+            self._set_state("idle")
             await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
             self._stream_bubble = None
@@ -348,7 +357,6 @@ class HarnessApp(App):
         self._refresh_footer()
 
     def _after_turn(self, routing: Any) -> None:
-        self._working = False
         if routing is None:
             self._routing_offline = True
             self._set_banner("Minima unreachable — using the current model")
@@ -361,6 +369,7 @@ class HarnessApp(App):
             else:
                 self.query_one("#banner", Static).update(Text(""))
         self._refresh_footer()
+        self._set_state("idle")
 
     def _routing_footer_state(self, routing: Any) -> dict[str, Any]:
         last = self.agent._last_assistant()
@@ -388,6 +397,7 @@ class HarnessApp(App):
             self.session.path.stem if self.session.path else "ephemeral"
         )
         self.title = "minima-harness"
+        self.sub_title = ""
         footer = render_footer(
             cwd=str(self.cwd),
             session_id=session_label,
@@ -401,7 +411,11 @@ class HarnessApp(App):
             ctx_pct=self._footer_state["ctx_pct"],
             routing_offline=self._routing_offline,
         )
-        self.sub_title = footer.plain
+        self.sub_title = ""
+        try:
+            self.query_one(StatusBar).set_idle_text(footer.plain)
+        except Exception:  # noqa: BLE001 - not mounted yet during early init
+            pass
 
     # ------------------------------------------------------------- commands
     def _build_commands(self) -> CommandRegistry:

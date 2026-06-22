@@ -51,3 +51,14 @@ async def test_bridge_invokes_bound_text_callback():
     br.bind(on_text=lambda d: seen.append(d))
     await br(MessageUpdateEvent(assistant_message_event=TextDeltaEvent(delta="abc")))
     assert seen == ["abc"]
+
+
+async def test_bridge_routes_thinking_to_its_own_callback():
+    from minima_harness.ai.events import ThinkingDeltaEvent
+
+    thinking: list[str] = []
+    br = EventBridge()
+    br.bind(on_thinking=lambda d: thinking.append(d))
+    await br(MessageUpdateEvent(assistant_message_event=ThinkingDeltaEvent(delta="reasoning")))
+    assert thinking == ["reasoning"]
+    assert br.assistant_text == ""  # thinking isn't folded into the answer text

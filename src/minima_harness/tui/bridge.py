@@ -16,7 +16,7 @@ from minima_harness.agent.events import (
     TurnEndEvent,
     TurnStartEvent,
 )
-from minima_harness.ai.events import TextDeltaEvent
+from minima_harness.ai.events import TextDeltaEvent, ThinkingDeltaEvent
 
 _log = logging.getLogger("minima_harness.tui.bridge")
 
@@ -37,6 +37,7 @@ class EventBridge:
 
     def __post_init__(self) -> None:
         self._on_text = None
+        self._on_thinking = None
         self._on_tool_start = None
         self._on_tool_end = None
         self._on_turn = None
@@ -46,12 +47,14 @@ class EventBridge:
         self,
         *,
         on_text=None,
+        on_thinking=None,
         on_tool_start=None,
         on_tool_end=None,
         on_turn=None,
         on_finish=None,
     ) -> None:
         self._on_text = on_text
+        self._on_thinking = on_thinking
         self._on_tool_start = on_tool_start
         self._on_tool_end = on_tool_end
         self._on_turn = on_turn
@@ -80,6 +83,8 @@ class EventBridge:
             if isinstance(stream, TextDeltaEvent) and stream.delta:
                 self.assistant_text += stream.delta
                 self._safe(self._on_text, stream.delta)
+            elif isinstance(stream, ThinkingDeltaEvent) and stream.delta:
+                self._safe(self._on_thinking, stream.delta)
         elif isinstance(event, MessageEndEvent):
             pass
         elif isinstance(event, ToolExecutionStartEvent):
