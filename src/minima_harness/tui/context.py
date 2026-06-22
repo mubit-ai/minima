@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from minima_harness.session.format import EntryType
+
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
 GLOBAL_DIR = Path.home() / ".minima-harness"
 
@@ -60,3 +62,16 @@ def build_system_prompt(cwd: Path) -> str:
     if agents:
         prompt = f"{prompt}\n\n# Project context\n{agents}"
     return prompt
+
+
+def get_session_override(store) -> str:
+    """Read the most recent session-level system-prompt override (a SYSTEM entry)."""
+    for entry in reversed(store.entries):
+        if entry.type == EntryType.SYSTEM and "override" in entry.payload:
+            return entry.payload.get("override", "")
+    return ""
+
+
+def set_session_override(store, text: str) -> None:
+    """Persist a session-level system-prompt override."""
+    store.append(EntryType.SYSTEM, {"override": text})

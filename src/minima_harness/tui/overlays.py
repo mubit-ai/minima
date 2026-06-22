@@ -4,8 +4,9 @@ from pathlib import Path
 
 from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static, Tree
+from textual.widgets import OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
@@ -110,6 +111,47 @@ class SessionPicker(ModalScreen[str | None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PromptInspector(ModalScreen[dict | None]):
+    """Edit the effective system prompt. Ctrl+P saves to Mubit (project), Ctrl+S to the
+    session override, Esc cancels. Returns {"action", "content"} or None."""
+
+    BINDINGS = [
+        Binding("ctrl+p", "save_project", "Project", priority=True),
+        Binding("ctrl+s", "save_session", "Session", priority=True),
+        ("escape", "cancel"),
+    ]
+
+    def __init__(self, prompt_text: str, tokens: dict[str, int]) -> None:
+        super().__init__()
+        self._prompt = prompt_text
+        self._tokens = tokens
+
+    def compose(self) -> ComposeResult:
+        t = self._tokens
+        yield Static(
+            Text(
+                f"system ~{t['system']} · history ~{t['history']} · total ~{t['total']} "
+                "tokens (est)  |  Ctrl+P save project (Mubit) · Ctrl+S save session · Esc cancel",
+                style="dim",
+            )
+        )
+        yield TextArea(self._prompt, id="prompt-editor", soft_wrap=True, show_line_numbers=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt-editor", TextArea).focus()
+
+    def action_save_project(self) -> None:
+        text = self.query_one("#prompt-editor", TextArea).text
+        self.dismiss({"action": "project", "content": text})
+
+    def action_save_session(self) -> None:
+        text = self.query_one("#prompt-editor", TextArea).text
+        self.dismiss({"action": "session", "content": text})
 
     def action_cancel(self) -> None:
         self.dismiss(None)

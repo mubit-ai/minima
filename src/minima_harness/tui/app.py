@@ -31,10 +31,25 @@ from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.clipboard import copy_to_clipboard
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
+from minima_harness.tui.context import get_session_override, set_session_override
 from minima_harness.tui.editor import parse_submission, run_bash
 from minima_harness.tui.extensions import load_extensions
 from minima_harness.tui.history import History, append_history, load_history
-from minima_harness.tui.overlays import CommandPicker, ModelPicker, SessionPicker, TreePicker
+from minima_harness.tui.mubit import (
+    effective_prompt,
+    init_mubit,
+    token_breakdown,
+)
+from minima_harness.tui.mubit import (
+    set_prompt as mubit_set_prompt,
+)
+from minima_harness.tui.overlays import (
+    CommandPicker,
+    ModelPicker,
+    PromptInspector,
+    SessionPicker,
+    TreePicker,
+)
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
@@ -70,6 +85,8 @@ class HarnessApp(App):
     ModelPicker OptionList { width: 60; height: 14; }
     SessionPicker OptionList { width: 60; height: 14; }
     CommandPicker OptionList { width: 64; height: 16; }
+    PromptInspector { align: center middle; }
+    PromptInspector TextArea { width: 80; height: 20; background: $panel; }
     TreePicker Tree { width: 70; height: 16; }
     """
 
@@ -189,7 +206,30 @@ class HarnessApp(App):
         self.query_one(Editor).prompt_history = self._history
         self.query_one(Editor).focus()
         self._refresh_footer()
+        init_mubit(self.cwd)
+        self._apply_effective_prompt()
         self.run_worker(self._show_welcome(), exclusive=True)
+
+    def _apply_effective_prompt(self) -> None:
+        """Recompute and apply the Mubit+local+session system prompt to the agent."""
+        self.agent.state.system_prompt = effective_prompt(
+            self.cwd, get_session_override(self.session)
+        )
+
+    async def _apply_prompt_edit(self, result: dict) -> None:
+        action, content = result["action"], result["content"]
+        if action == "project":
+            ok = mubit_set_prompt(content)
+            msg = (
+                "system prompt saved to Mubit (project, versioned)"
+                if ok
+                else "Mubit save failed — prompt unchanged"
+            )
+        else:
+            set_session_override(self.session, content)
+            msg = "session prompt override saved"
+        self._apply_effective_prompt()
+        await self.query_one(ChatLog).add_system(msg)
 
     async def _show_welcome(self) -> None:
         """Mount the ASCII welcome + status bubble at the top of the transcript."""
@@ -652,6 +692,16 @@ class HarnessApp(App):
 
             app.push_screen(CommandPicker(app.commands.all()), callback=_picked)
 
+        async def _prompt(app: HarnessApp, args: str) -> None:
+            tokens = token_breakdown(app.cwd, app.agent.state.messages)
+            prompt_text = effective_prompt(app.cwd, get_session_override(app.session))
+
+            def _saved(result: dict | None) -> None:
+                if result:
+                    app.run_worker(app._apply_prompt_edit(result), exclusive=True)
+
+            app.push_screen(PromptInspector(prompt_text, tokens), callback=_saved)
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -662,6 +712,7 @@ class HarnessApp(App):
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
             ("export", _export, "export the conversation to a Markdown file"),
             ("commands", _commands, "open the command palette"),
+            ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
