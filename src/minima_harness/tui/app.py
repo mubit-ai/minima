@@ -26,6 +26,7 @@ from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.format import EntryType
 from minima_harness.tools import default_toolset
 from minima_harness.tui.bridge import EventBridge
+from minima_harness.tui.clipboard import copy_to_clipboard
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
 from minima_harness.tui.editor import parse_submission, run_bash
@@ -503,6 +504,21 @@ class HarnessApp(App):
                 f"reloaded: {len(app._extensions)} extension(s)"
             )
 
+        async def _copy(app: HarnessApp, args: str) -> None:
+            text = args.strip()
+            if not text:
+                last = app.agent._last_assistant()
+                text = last.text if last is not None else ""
+            if not text:
+                await app.query_one(ChatLog).add_system("nothing to copy yet")
+                return
+            if copy_to_clipboard(text):
+                await app.query_one(ChatLog).add_system(f"copied {len(text)} char(s) to clipboard")
+            else:
+                await app.query_one(ChatLog).add_error(
+                    "no clipboard tool found (install pbcopy/xclip/xsel)"
+                )
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -510,6 +526,7 @@ class HarnessApp(App):
             ("compact", _compact, "summarize older context"),
             ("help", _help, "list commands"),
             ("model", _model, "pick / pin the model"),
+            ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
