@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import anyio
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Footer as TextualFooter
@@ -551,18 +552,32 @@ class HarnessApp(App):
             )
 
         async def _copy(app: HarnessApp, args: str) -> None:
+            import os
+            import tempfile
+
             text = args.strip()
             if not text:
                 last = app.agent._last_assistant()
                 text = last.text if last is not None else ""
             if not text:
-                await app.query_one(ChatLog).add_system("nothing to copy yet")
+                # fall back to the last assistant bubble shown in the transcript
+                for bubble in reversed(app.query_one(ChatLog).query(MessageBubble)):
+                    if getattr(bubble, "_role", "") == "assistant" and bubble.buffer:
+                        text = bubble.buffer
+                        break
+            if not text:
+                await app.query_one(ChatLog).add_system("nothing to copy yet (run a prompt first)")
                 return
-            if copy_to_clipboard(text):
+            # run the clipboard call off the event loop for a clean subprocess context
+            ok = await anyio.to_thread.run_sync(copy_to_clipboard, text)
+            if ok:
                 await app.query_one(ChatLog).add_system(f"copied {len(text)} char(s) to clipboard")
             else:
+                fd, path = tempfile.mkstemp(suffix=".txt", prefix="minima-harness-")
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(text)
                 await app.query_one(ChatLog).add_error(
-                    "no clipboard tool found (install pbcopy/xclip/xsel)"
+                    f"clipboard unavailable — wrote {len(text)} char(s) to {path}"
                 )
 
         for name, fn, desc in [
