@@ -7,7 +7,8 @@ from typing import Any
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Footer as TextualFooter
-from textual.widgets import Header, Static
+from textual.widgets import Header, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
 
 from minima_harness.ai.types import AssistantMessage
 from minima_harness.minima.config import HarnessConfig
@@ -39,6 +40,11 @@ class HarnessApp(App):
     #chatlog { height: 1fr; border: round $accent; padding: 0 1; }
     #banner { height: auto; }
     #editor { height: 5; }
+    #cmd-popup {
+        display: none; height: auto; max-height: 8;
+        border: round $accent; background: $panel;
+    }
+    #cmd-popup.visible { display: block; }
     ModelPicker, TreePicker { align: center middle; }
     ModelPicker OptionList { width: 60; height: 14; border: round $accent; }
     TreePicker Tree { width: 70; height: 16; border: round $accent; }
@@ -66,6 +72,7 @@ class HarnessApp(App):
         self._routing_offline = False
         self._rendered_msgs = 0
         self._stream_bubble: MessageBubble | None = None
+        self._working = False
         self._footer_state: dict[str, Any] = self._default_footer_state()
 
     def _default_footer_state(self) -> dict[str, Any]:
@@ -85,6 +92,7 @@ class HarnessApp(App):
         yield Header()
         yield Static(id="banner")
         yield ChatLog(id="chatlog")
+        yield OptionList(id="cmd-popup")
         yield Editor()
         yield TextualFooter()
 
@@ -97,12 +105,16 @@ class HarnessApp(App):
 
     # ------------------------------------------------------------- streaming
     def _append_stream(self, delta: str) -> None:
+        if self._working:
+            self._working = False
+            self.query_one("#banner", Static).update(Text(""))
         if self._stream_bubble is not None:
             self._stream_bubble.append(delta)
 
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
+        self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
         if self.agent.state.is_streaming:
             # Enter while running = steering (delivered after the current tool batch).
             self.agent.steer(text)
@@ -126,6 +138,37 @@ class HarnessApp(App):
         self.query_one(Editor).text = ""
         await self.query_one(ChatLog).add_system(f"↳ (follow-up) {text}")
 
+    # ------------------------------------------------------------- command popup
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        text = event.text_area.text
+        popup = self.query_one("#cmd-popup", OptionList)
+        frag = text[1:] if text.startswith("/") else ""
+        if text.startswith("/") and " " not in frag:
+            matches = [c for c in self.commands.all() if not frag or c.name.startswith(frag)]
+            if matches:
+                popup.clear_options()
+                for c in matches:
+                    label = f"/{c.name}  {c.description}".rstrip()
+                    popup.add_option(Option(label, id=c.name))
+                popup.set_class(True, "visible")
+            else:
+                popup.set_class(False, "visible")
+        else:
+            popup.set_class(False, "visible")
+
+    def on_editor_complete_requested(self, event: Editor.CompleteRequested) -> None:
+        text = event.text
+        if not text.startswith("/") or " " in text[1:]:
+            return
+        frag = text[1:]
+        matches = [c for c in self.commands.all() if not frag or c.name.startswith(frag)]
+        if not matches:
+            return
+        ed = self.query_one(Editor)
+        ed.text = f"/{matches[0].name} "
+        ed.move_cursor((0, len(ed.text)))
+        self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
+
     async def _run_submission(self, parsed: dict) -> None:
         try:
             if parsed["kind"] == "bash":
@@ -146,10 +189,13 @@ class HarnessApp(App):
         await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
         self._stream_bubble = await chatlog.add_assistant_stream()
+        self._working = True
+        self.query_one("#banner", Static).update(Text("working…"))
         routing = None
         try:
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
+            self._working = False
             await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
             self._stream_bubble = None
@@ -172,12 +218,15 @@ class HarnessApp(App):
         self._rendered_msgs = len(self.agent.state.messages)
 
     def _after_turn(self, routing: Any) -> None:
+        self._working = False
         if routing is None:
             self._routing_offline = True
             self._set_banner("Minima unreachable — using the current model")
         else:
             if routing.warnings:
                 self._set_banner("; ".join(routing.warnings[:2]))
+            else:
+                self.query_one("#banner", Static).update(Text(""))
             self._footer_state = self._routing_footer_state(routing)
         self._refresh_footer()
 
