@@ -580,6 +580,24 @@ class HarnessApp(App):
                     f"clipboard unavailable — wrote {len(text)} char(s) to {path}"
                 )
 
+        async def _export(app: HarnessApp, args: str) -> None:
+            target = (
+                Path(args.strip())
+                if args.strip()
+                else (
+                    Path.cwd() / f"{(app.session.path.stem if app.session.path else 'session')}.md"
+                )
+            )
+            md = _conversation_to_markdown(app.agent.state.messages)
+            try:
+                target.write_text(md, encoding="utf-8")
+            except OSError as exc:  # noqa: BLE001
+                await app.query_one(ChatLog).add_error(f"export failed: {exc}")
+                return
+            await app.query_one(ChatLog).add_system(
+                f"exported {len(md)} char(s) → {target} (open as Markdown for the formatted view)"
+            )
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -588,6 +606,7 @@ class HarnessApp(App):
             ("help", _help, "list commands"),
             ("model", _model, "pick / pin the model"),
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
+            ("export", _export, "export the conversation to a Markdown file"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
             ("new", _new, "start a fresh session"),
             ("name", _name, "set the session display name"),
@@ -651,3 +670,23 @@ def _args_repr(args: Any) -> str:
 def _snippet(text: str, limit: int = 120) -> str:
     flat = (text or "").replace("\n", " ").strip()
     return flat[:limit] + ("…" if len(flat) > limit else "")
+
+
+def _conversation_to_markdown(messages: list) -> str:
+    """Render the agent's message history as clean Markdown (for /export)."""
+    parts = ["# minima-harness conversation\n"]
+    for m in messages:
+        if m.role == "user":
+            parts.append(f"\n## You\n\n{m.text}\n")
+        elif m.role == "assistant":
+            parts.append(f"\n## Assistant\n\n{m.text}\n")
+            for call in getattr(m, "tool_calls", []):
+                parts.append(f"\n```tool:{call.name}\n{_args_repr(call.arguments)}\n```\n")
+        elif m.role == "toolResult":
+            block = (
+                "\n<details><summary>tool result</summary>\n\n"
+                f"```\n{_snippet(m.text, 2000)}\n```\n\n"
+                "</details>\n"
+            )
+            parts.append(block)
+    return "\n".join(parts)
