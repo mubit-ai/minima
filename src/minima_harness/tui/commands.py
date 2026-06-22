@@ -28,6 +28,12 @@ class CommandRegistry:
     def get(self, name: str) -> Command | None:
         return self._cmds.get(name)
 
+    def add_command(self, cmd: Command) -> None:
+        self._cmds[cmd.name] = cmd
+
+    def remove_command(self, name: str) -> None:
+        self._cmds.pop(name, None)
+
     def all(self) -> list[Command]:
         return sorted(self._cmds.values(), key=lambda c: c.name)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,13 @@ from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from minima_harness.agent.events import (
+    AgentEndEvent,
+    MessageUpdateEvent,
+    ToolExecutionEndEvent,
+    ToolExecutionStartEvent,
+    TurnEndEvent,
+)
 from minima_harness.ai.types import AssistantMessage, Message
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
@@ -21,6 +29,7 @@ from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
 from minima_harness.tui.editor import parse_submission, run_bash
+from minima_harness.tui.extensions import load_extensions
 from minima_harness.tui.overlays import ModelPicker, TreePicker
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.editor import Editor
@@ -73,6 +82,8 @@ class HarnessApp(App):
         )
         self.bridge = EventBridge()
         self.commands = self._build_commands()
+        self._extensions = load_extensions(self.cwd)
+        self._ext_cmd_names: list[str] = []
         self._routing_offline = False
         self._rendered_msgs = 0
         self._stream_bubble: MessageBubble | None = None
@@ -81,6 +92,7 @@ class HarnessApp(App):
         self._templates: dict[str, str] = {}
         self._skills: dict[str, str] = {}
         self._load_customization()
+        self._apply_extensions()
 
     def _load_customization(self) -> None:
         from minima_harness.tui.customize import load_skills, load_templates
@@ -94,6 +106,41 @@ class HarnessApp(App):
         for bubble in self.query_one(ChatLog).query(MessageBubble):
             bubble.refresh_theme()
         self._refresh_footer()
+
+    # ------------------------------------------------------------- extensions
+    def _apply_extensions(self) -> None:
+        """Merge extension tools/commands into the agent + registry (init + /reload)."""
+        ext_tools = [t for ext in self._extensions for t in ext.tools]
+        self.agent.state.tools = list(self._tools) + ext_tools
+        for name in self._ext_cmd_names:
+            self.commands.remove_command(name)
+        self._ext_cmd_names = []
+        for ext in self._extensions:
+            for cname, cmd in ext.commands.items():
+                self.commands.add_command(cmd)
+                self._ext_cmd_names.append(cname)
+
+    async def _extension_fanout(self, event: Any) -> None:
+        if isinstance(event, ToolExecutionStartEvent):
+            key = "tool_start"
+        elif isinstance(event, ToolExecutionEndEvent):
+            key = "tool_end"
+        elif isinstance(event, AgentEndEvent):
+            key = "finish"
+        elif isinstance(event, MessageUpdateEvent):
+            key = "text"
+        elif isinstance(event, TurnEndEvent):
+            key = "turn"
+        else:
+            return
+        for ext in self._extensions:
+            for handler in ext.hooks.get(key, []):
+                try:
+                    result = handler(event)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # noqa: BLE001 - an extension hook must not break the run
+                    _log.warning("extension_hook_failed", exc_info=True)
 
     def _default_footer_state(self) -> dict[str, Any]:
         # Pre-turn placeholder: Minima picks the model per turn, so show "auto" rather
@@ -120,6 +167,7 @@ class HarnessApp(App):
     def on_mount(self) -> None:
         self.title = "minima-harness"
         self.agent.subscribe(self.bridge)
+        self.agent.subscribe(self._extension_fanout)
         self.bridge.bind(on_text=self._append_stream)
         self.query_one(Editor).focus()
         self._refresh_footer()
@@ -434,6 +482,27 @@ class HarnessApp(App):
                 f"compacted {len(old)} msg(s) → summary (kept {keep})"
             )
 
+        async def _ext_list(app: HarnessApp, args: str) -> None:
+            if not app._extensions:
+                await app.query_one(ChatLog).add_system("no extensions loaded")
+                return
+            lines = []
+            for ext in app._extensions:
+                nhooks = sum(len(v) for v in ext.hooks.values())
+                lines.append(
+                    f"{ext.name}: {len(ext.tools)} tool(s), {len(ext.commands)} cmd(s), "
+                    f"{nhooks} hook(s)"
+                )
+            await app.query_one(ChatLog).add_system("\n".join(lines))
+
+        async def _reload(app: HarnessApp, args: str) -> None:
+            app._extensions = load_extensions(app.cwd)
+            app._apply_extensions()
+            app._load_customization()
+            await app.query_one(ChatLog).add_system(
+                f"reloaded: {len(app._extensions)} extension(s)"
+            )
+
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
@@ -450,7 +519,9 @@ class HarnessApp(App):
             ("clone", _clone, "clone the current branch"),
             ("resume", _resume, "resume a session (optionally by id)"),
             ("judge", _judge, "toggle LLM judging on/off"),
-            ("theme", _theme, "switch theme (dark|light)"),
+            ("theme", _theme, "switch theme (dark|light|file)"),
+            ("extensions", _ext_list, "list loaded extensions"),
+            ("reload", _reload, "reload extensions + customization"),
         ]:
             reg.register(name, description=desc)(fn)
         return reg
