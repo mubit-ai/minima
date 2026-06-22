@@ -8,6 +8,7 @@ from typing import Any
 import anyio
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -47,22 +48,27 @@ class HarnessApp(App):
         ("ctrl+l", "model", "Model"),
         ("escape", "abort", "Abort"),
         ("ctrl+c,ctrl+c", "quit", "Quit"),
+        Binding("pageup", "scroll_up", "PgUp", priority=True),
+        Binding("pagedown", "scroll_down", "PgDn", priority=True),
     ]
     CSS = """
     Screen { layout: vertical; }
-    #chatlog { height: 1fr; border: round $accent; padding: 0 1; }
-    #banner { height: auto; }
-    #editor { height: 5; }
+    #chatlog { height: 1fr; background: $boost; padding: 0 1; }
+    #banner { height: auto; padding: 0 1; }
+    #editor { height: 5; background: $panel; padding: 0 1; }
     #cmd-popup {
         display: none; height: auto; max-height: 8;
-        border: round $accent; background: $panel;
+        background: $panel; padding: 0 1;
     }
     #cmd-popup.visible { display: block; }
-    ModelPicker, TreePicker, SessionPicker { align: center middle; }
-    ModelPicker OptionList { width: 60; height: 14; border: round $accent; }
-    SessionPicker OptionList { width: 60; height: 14; border: round $accent; }
-    CommandPicker OptionList { width: 64; height: 16; border: round $accent; }
-    TreePicker Tree { width: 70; height: 16; border: round $accent; }
+    ModelPicker, TreePicker, SessionPicker, CommandPicker { align: center middle; }
+    ModelPicker OptionList, SessionPicker OptionList, CommandPicker OptionList, TreePicker Tree {
+        background: $panel; padding: 0 1;
+    }
+    ModelPicker OptionList { width: 60; height: 14; }
+    SessionPicker OptionList { width: 60; height: 14; }
+    CommandPicker OptionList { width: 64; height: 16; }
+    TreePicker Tree { width: 70; height: 16; }
     """
 
     def __init__(
@@ -305,6 +311,7 @@ class HarnessApp(App):
             self._stream_bubble.render_markdown()
             self.session.append(EntryType.ASSISTANT, {"text": self._stream_bubble.buffer})
             self._stream_bubble = None
+        self._scroll_bottom()
         self._after_turn(routing)
 
     async def _render_tools_post_turn(self) -> None:
@@ -380,7 +387,7 @@ class HarnessApp(App):
         session_label = self.session.display_name or (
             self.session.path.stem if self.session.path else "ephemeral"
         )
-        self.title = f"minima-harness · {session_label}"
+        self.title = "minima-harness"
         footer = render_footer(
             cwd=str(self.cwd),
             session_id=session_label,
@@ -415,17 +422,31 @@ class HarnessApp(App):
             await app.query_one(ChatLog).add_system(app.commands.help_text())
 
         async def _model(app: HarnessApp, args: str) -> None:
+            from minima_harness.ai import all_models
+
             cands = list(app.config.candidates or [])
-            current = app.agent.state.model.id if app.agent.state.model is not None else None
+            providers = {m.id: m.provider for m in all_models()}
+            active = app._footer_state.get("model")
+            basis = app._footer_state.get("basis")
+            pinned = cands[0] if len(cands) == 1 else None
 
             def _picked(chosen: str | None) -> None:
                 if chosen:
                     app.config.candidates = [chosen]  # pin: Minima must route to this model
                     app._footer_state["model"] = chosen
                     app._footer_state["basis"] = "pinned"
-                    app._refresh_footer()  # reflect the pin at the top immediately
+                    app._refresh_footer()  # reflect the pin immediately
 
-            app.push_screen(ModelPicker(cands, current), callback=_picked)
+            app.push_screen(
+                ModelPicker(
+                    cands,
+                    active=active,
+                    basis=basis,
+                    pinned=pinned,
+                    providers=providers,
+                ),
+                callback=_picked,
+            )
 
         async def _reconnect(app: HarnessApp, args: str) -> None:
             app._routing_offline = False
@@ -516,7 +537,7 @@ class HarnessApp(App):
                     set_theme(chosen)
                     app._apply_theme()
 
-            app.push_screen(ModelPicker(sorted(avail), cur), callback=_picked)
+            app.push_screen(ModelPicker(sorted(avail), active=cur), callback=_picked)
 
         async def _compact(app: HarnessApp, args: str) -> None:
             agent = app.agent
@@ -676,6 +697,18 @@ class HarnessApp(App):
 
     def action_abort(self) -> None:
         self.agent.abort()
+
+    def action_scroll_up(self) -> None:
+        self.query_one(ChatLog).scroll_page_up()
+
+    def action_scroll_down(self) -> None:
+        self.query_one(ChatLog).scroll_page_down()
+
+    def _scroll_bottom(self) -> None:
+        try:
+            self.query_one(ChatLog).scroll_end(animate=False)
+        except Exception:  # noqa: BLE001 - during teardown the widget may be gone
+            pass
 
 
 def _args_repr(args: Any) -> str:

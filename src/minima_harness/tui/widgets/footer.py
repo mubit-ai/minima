@@ -22,12 +22,11 @@ def render_footer(
     t = get_theme(current_theme())
     totals = meter.totals()
     bits = [
-        cwd,
-        f"sess {session_id[:24]}",
-        f"↑{input_tokens} ↓{output_tokens} R{cache_read} W{cache_write}",
-        f"${totals.actual_cost_usd:.4f}",
+        f"model: {model} ▸ {basis}",
         f"ctx {ctx_pct:.0f}%",
-        model,
+        f"↑{input_tokens} ↓{output_tokens}",
+        f"${totals.actual_cost_usd:.4f}",
+        f"sess {session_id[:24]}",
     ]
     if routing_offline:
         bits.append("[routing offline]")

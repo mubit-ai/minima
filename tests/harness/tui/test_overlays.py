@@ -18,7 +18,7 @@ async def test_model_picker_dismisses_with_selection():
 
         def on_mount(self) -> None:
             self.push_screen(
-                ModelPicker(["a", "b"], "a"), callback=lambda r: setattr(self, "result", r)
+                ModelPicker(["a", "b"], active="a"), callback=lambda r: setattr(self, "result", r)
             )
 
     app = _App()
@@ -41,7 +41,7 @@ async def test_model_picker_escape_cancels():
 
         def on_mount(self) -> None:
             self.push_screen(
-                ModelPicker(["a", "b"], None), callback=lambda r: setattr(self, "result", r)
+                ModelPicker(["a", "b"], active=None), callback=lambda r: setattr(self, "result", r)
             )
 
     app = _App()

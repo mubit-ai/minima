@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Tree
+from textual.widgets import OptionList, Static, Tree
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
@@ -20,15 +21,36 @@ class ModelPicker(ModalScreen[str | None]):
 
     BINDINGS = [("escape", "cancel")]
 
-    def __init__(self, candidates: list[str], current: str | None) -> None:
+    def __init__(
+        self,
+        candidates: list[str],
+        *,
+        active: str | None = None,
+        basis: str | None = None,
+        pinned: str | None = None,
+        providers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__()
         self._candidates = candidates
-        self._current = current
+        self._active = active
+        self._basis = basis
+        self._pinned = pinned
+        self._providers = providers or {}
 
     def compose(self) -> ComposeResult:
-        options = [
-            Option(f"{c}  ◂ current" if c == self._current else c, id=c) for c in self._candidates
-        ]
+        yield Static(
+            Text(
+                f"active: {self._active or '—'} · basis: {self._basis or '-'} "
+                f"· pinned: {self._pinned or 'none'}",
+                style="bold",
+            )
+        )
+        options = []
+        for c in self._candidates:
+            mark = "●" if c == self._active else "○"
+            prov = self._providers.get(c, "")
+            last = "  ◂ last" if c == self._active else ""
+            options.append(Option(f"{mark} {c}  {prov}{last}".rstrip(), id=c))
         yield OptionList(*options)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:

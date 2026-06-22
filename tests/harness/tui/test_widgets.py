@@ -21,9 +21,9 @@ def test_render_footer_includes_model_cost_and_ctx():
         routing_offline=False,
     )
     s = str(html)
-    assert "costit" in s and "gemini-2.5-flash" in s
+    assert "model: gemini-2.5-flash ▸ memory" in s
     assert "$0.0000" in s
-    assert "12%" in s
+    assert "ctx 12%" in s
 
 
 def test_render_footer_shows_offline_when_routing_offline():
