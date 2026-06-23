@@ -185,8 +185,15 @@ class MinimaAgent(Agent):
                 outcome = "success"
             else:
                 output = last.text if last is not None else ""
-                quality = clamp01(await self.judge.grade(task_text, output))
-                outcome = grade_outcome(quality)
+                graded = await self.judge.grade(task_text, output)
+                if graded is None:
+                    # Judge abstained (API error / unparseable): record realized cost &
+                    # latency but send NO fabricated quality/outcome signal.
+                    quality = None
+                    outcome = "success"
+                else:
+                    quality = clamp01(graded)
+                    outcome = grade_outcome(quality)
             await self.router.feedback(
                 routing.recommendation_id,
                 routing.chosen_model_id,
@@ -225,10 +232,11 @@ def _default_judge(config: HarnessConfig) -> QualityJudge:
         except Exception:  # noqa: BLE001
             pass
     _log.warning(
-        "no_judge_configured_using_const_0_5 -- pass judge=LLMJudge/DeterministicJudge "
-        "for real learning; set judge_every=0 to skip judging entirely"
+        "no_judge_configured_abstaining -- pass judge=LLMJudge/DeterministicJudge for real "
+        "learning; set judge_every=0 to skip judging entirely. Abstaining feeds NO quality "
+        "signal (better than a fabricated neutral 0.5 that would poison the feedback loop)."
     )
-    return ConstJudge(0.5)
+    return ConstJudge(None)
 
 
 def _text_of(content: str | list[ContentBlock] | Message | list[Any]) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 
 from minima.memory.records import clamp01
 from minima.recommender.types import ModelAggregate
@@ -198,3 +199,50 @@ def softmax_propensities(
         mid: (1.0 - eps) * (1.0 if mid == argmin_id else 0.0) + eps * soft[mid]
         for mid in scores
     }
+
+
+def beta_params(
+    agg: ModelAggregate | None, prior: float, pseudocount: float
+) -> tuple[float, float]:
+    """Beta posterior (alpha, beta) for a candidate's success — the conjugate of
+    :func:`predicted_success` (whose mean is alpha / (alpha + beta)). Both are floored at a
+    tiny positive value so they are valid Beta parameters for sampling.
+    """
+    alpha0 = prior * pseudocount
+    beta0 = (1.0 - prior) * pseudocount
+    if agg is None or agg.weight_sum <= 0.0:
+        return max(alpha0, 1e-6), max(beta0, 1e-6)
+    alpha = agg.weighted_success + alpha0
+    beta = (agg.weight_sum - agg.weighted_success) + beta0
+    return max(alpha, 1e-6), max(beta, 1e-6)
+
+
+def thompson_select(
+    items: list[tuple[str, float, float, float]],
+    tau: float,
+    rng: random.Random,
+    samples: int = 128,
+) -> tuple[str, dict[str, float]]:
+    """Posterior-sampling (Thompson) selection over the cost-aware objective.
+
+    ``items`` is ``(model_id, alpha, beta, est_cost_usd)`` per candidate. Each Monte-Carlo
+    round samples theta_m ~ Beta(alpha_m, beta_m) and picks the cheapest model whose sampled
+    success clears ``tau`` (falling back to the highest sampled success when none clears).
+    The selection frequencies ARE the propensities (so IPW/off-policy evaluation stay valid),
+    and the returned pick is sampled proportional to those frequencies — consistent with them.
+    """
+    if not items:
+        return "", {}
+    counts = {m: 0 for m, _, _, _ in items}
+    for _ in range(max(1, samples)):
+        theta = {m: rng.betavariate(a, b) for m, a, b, _ in items}
+        clears = [(m, cost) for m, _, _, cost in items if theta[m] >= tau]
+        if clears:
+            pick = min(clears, key=lambda mc: (mc[1], -theta[mc[0]]))[0]
+        else:
+            pick = max(items, key=lambda it: theta[it[0]])[0]
+        counts[pick] += 1
+    total = sum(counts.values()) or 1
+    propensities = {m: counts[m] / total for m in counts}
+    pick_id = rng.choices(list(counts), weights=[counts[m] for m in counts], k=1)[0]
+    return pick_id, propensities

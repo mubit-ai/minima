@@ -10,10 +10,13 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+from pydantic import BaseModel
+
 from minima_harness.ai import Context, Message, complete
 from minima_harness.ai.providers import ensure_providers_registered, get_provider, register_provider
 from minima_harness.ai.providers.anthropic import AnthropicProvider
-from minima_harness.ai.types import Model, ModelCost
+from minima_harness.ai.types import Model, ModelCost, Tool, Usage
+from minima_harness.ai.usage import cost_for
 
 
 def _model() -> Model:
@@ -139,3 +142,67 @@ def test_anthropic_maps_text_tool_and_usage():
         asyncio.run(run())
     finally:
         register_provider("anthropic-messages", original)
+
+
+class _EchoArgs(BaseModel):
+    x: int
+
+
+def _run_with_context(ctx: Context, *, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Drive complete() through a fake client and return the wire kwargs it saw."""
+    ensure_providers_registered()
+    original = get_provider("anthropic-messages")
+    fake = _FakeClient(_events())
+    register_provider("anthropic-messages", AnthropicProvider(client=fake))
+    try:
+        asyncio.run(complete(_model(), ctx, options=options))
+    finally:
+        register_provider("anthropic-messages", original)
+    return fake.last_kwargs
+
+
+def test_prompt_caching_marks_stable_prefix_by_default():
+    ctx = Context(
+        system_prompt="you are a coding agent",
+        messages=[Message(role="user", content="hi")],
+        tools=[Tool(name="echo", description="echo", parameters=_EchoArgs)],
+    )
+    kw = _run_with_context(ctx)
+    # system becomes a list of blocks with a cache breakpoint
+    assert isinstance(kw["system"], list)
+    assert kw["system"][-1]["cache_control"] == {"type": "ephemeral"}
+    # the last tool carries a breakpoint (caches the whole tool array)
+    assert kw["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    # the last message's last content block carries a breakpoint (incremental history cache)
+    assert kw["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_prompt_caching_can_be_disabled():
+    ctx = Context(
+        system_prompt="you are a coding agent",
+        messages=[Message(role="user", content="hi")],
+        tools=[Tool(name="echo", description="echo", parameters=_EchoArgs)],
+    )
+    kw = _run_with_context(ctx, options={"prompt_cache": False})
+    assert kw["system"] == "you are a coding agent"  # plain string, no breakpoint
+    assert "cache_control" not in kw["tools"][-1]
+    assert "cache_control" not in kw["messages"][-1]["content"][-1]
+
+
+def test_cost_for_includes_cache_components():
+    model = Model(
+        id="claude-haiku-4-5",
+        provider="anthropic",
+        api="anthropic-messages",
+        name="haiku",
+        cost=ModelCost(input=1.0, output=5.0, cache_read=0.1, cache_write=1.25),
+        context_window=200_000,
+        max_tokens=1024,
+    )
+    usage = Usage(input=1_000_000, output=0, cache_read=1_000_000, cache_write=1_000_000)
+    cost = cost_for(model, usage)
+    assert cost.input == 1.0
+    assert cost.cache_read == 0.1
+    assert cost.cache_write == 1.25
+    # total folds in the cache components (was previously undercounted)
+    assert cost.total == 1.0 + 0.1 + 1.25

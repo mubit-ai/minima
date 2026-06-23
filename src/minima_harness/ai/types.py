@@ -20,10 +20,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Cost(BaseModel):
-    """USD cost breakdown for a single generation."""
+    """USD cost breakdown for a single generation.
+
+    ``input``/``output`` are the uncached token costs; ``cache_read``/``cache_write`` are
+    the prompt-cache components (read ~0.1x input, write ~1.25x input on Anthropic).
+    ``total`` is the true realized spend across all four — this is what flows to Minima's
+    ``actual_cost_usd`` so the observed cost tier reflects real post-cache economics.
+    """
 
     input: float = 0.0
     output: float = 0.0
+    cache_read: float = 0.0
+    cache_write: float = 0.0
     total: float = 0.0
 
 

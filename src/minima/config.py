@@ -198,6 +198,12 @@ class Settings(BaseSettings):
     minima_epsilon_selection_orgs: str = ""
     minima_epsilon: float = 0.03
     minima_epsilon_softmax_temperature: float = 0.1
+    # Orgs (comma-separated) that opt into Thompson (posterior-sampling) selection instead of
+    # epsilon-softmax: each decision samples theta_m ~ Beta(alpha_m, beta_m) and picks the
+    # cheapest model clearing tau under the sample. Monte-Carlo selection frequencies are
+    # logged as propensities so IPW/OPE stay valid. Takes precedence over epsilon if both set.
+    minima_thompson_selection_orgs: str = ""
+    minima_thompson_samples: int = 128
 
     # --- Calibration monitoring ---
     minima_calibration_window_days: int = 30
@@ -209,6 +215,27 @@ class Settings(BaseSettings):
     # Smaller values flag every healthy stream.
     minima_cusum_k: float = 0.25
     minima_cusum_h: float = 2.0
+
+    # --- Calibration APPLY (remap predicted_success before the tau decision) ---
+    # The monitoring above MEASURES calibration; these control whether a fitted isotonic
+    # remap is actually applied so predicted_success is a truthful probability. Safe by
+    # construction: with < min_n reconciled outcomes the fit returns identity (no-op), and
+    # each slice shrinks toward identity by n/(n+shrinkage_k). Reuses the calibration
+    # window + shrinkage_k above. Refit is lazy and cached per Recommender (org).
+    minima_calibration_apply: bool = True
+    minima_calibration_min_n: int = 30
+    minima_calibration_refresh_seconds: int = 600
+
+    # --- Routing-collapse margin guard ---
+    # Scalar-score + cheapest-clearing-tau can collapse to the single most expensive model
+    # at high quality bars (arXiv 2602.03478). When the cheapest-eligible pick IS the
+    # priciest candidate, prefer a cheaper candidate whose success credible interval could
+    # still clear tau. The optimism is TAU-AWARE so it shrinks as the quality bar rises:
+    #   eligible_optimistic = predicted + margin * (1 - tau) * 0.5 * interval_width.
+    # margin >= 0: 0 disables the guard. The (1 - tau) factor keeps the guard gentle at high
+    # cost_quality (where the user wants quality) and active at low (cost-leaning). The judge
+    # / escalation loop is the safety net that catches an over-optimistic cheap pick.
+    minima_collapse_margin: float = 1.0
 
     # --- Durable-record fast path ---
     # Dereference the durable (cluster, model) outcome records alongside ANN recall so the

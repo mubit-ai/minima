@@ -33,6 +33,7 @@ class CostRow:
 @dataclass(slots=True)
 class CostTotals:
     n: int = 0
+    est_cost_usd: float = 0.0
     actual_cost_usd: float = 0.0
     baseline_cost_usd: float = 0.0
     baseline_rows: int = 0  # prompts that had a baseline to compare against
@@ -85,6 +86,7 @@ class CostMeter:
         t = CostTotals()
         for r in self.rows:
             t.n += 1
+            t.est_cost_usd += r.est_cost_usd
             t.actual_cost_usd += r.actual_cost_usd
             if r.baseline_cost_usd is not None:
                 t.baseline_cost_usd += r.baseline_cost_usd

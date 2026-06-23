@@ -36,6 +36,10 @@ class CandidateSnapshot:
     confidence: float
     est_cost_usd: float
     propensity: float
+    # Pre-calibration, pre-bonus Beta-posterior mean for the chosen candidate. Calibration
+    # is fit on THIS (not the deployed predicted_success) so the loop converges. Defaults
+    # to None for rows written before calibration existed (back-compat on deserialize).
+    raw_predicted_success: float | None = None
 
 
 @dataclass(slots=True)
@@ -84,6 +88,20 @@ class DecisionRecord:
     def predicted_success_chosen(self) -> float | None:
         for c in self.candidates:
             if c.model_id == self.chosen_model_id:
+                return c.predicted_success
+        return None
+
+    @property
+    def raw_predicted_success_chosen(self) -> float | None:
+        """Pre-calibration Beta mean for the chosen model (the quantity calibration fits on).
+
+        Falls back to the deployed ``predicted_success`` for rows logged before the raw
+        value was captured, so historical rows still contribute (slightly biased) pairs.
+        """
+        for c in self.candidates:
+            if c.model_id == self.chosen_model_id:
+                if c.raw_predicted_success is not None:
+                    return c.raw_predicted_success
                 return c.predicted_success
         return None
 

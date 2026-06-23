@@ -67,11 +67,14 @@ _log = logging.getLogger("minima_harness.tui.app")
 class HarnessApp(App):
     BINDINGS = [
         ("ctrl+l", "model", "Model"),
+        ("ctrl+r", "cycle_route_mode", "Route"),
         ("escape", "abort", "Abort"),
         ("ctrl+c,ctrl+c", "quit", "Quit"),
         Binding("pageup", "scroll_up", "PgUp", priority=True),
         Binding("pagedown", "scroll_down", "PgDn", priority=True),
     ]
+    # Routing autonomy dial (Ctrl+R cycles). "plan" arrives with the Phase-3 plan/act split.
+    ROUTE_MODES = ("auto", "confirm")
     CSS = """
     Screen { layout: vertical; }
     #chatlog { height: 1fr; background: $boost; padding: 0 1; }
@@ -113,7 +116,7 @@ class HarnessApp(App):
         self.session = session
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
-        self._confirm_route = False
+        self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
         self._escalate = False
         self._escalate_threshold = 0.7
         self.agent = agent or MinimaAgent(
@@ -306,16 +309,34 @@ class HarnessApp(App):
                     f"(already on the strongest candidate)"
                 )
 
+    async def _emit_cost_line(self) -> None:
+        """Close the loop visibly: est (from recommend) -> actual (from feedback) per turn."""
+        meter = self.agent.meter
+        if meter is None or not meter.rows:
+            return
+        r = meter.rows[-1]
+        parts = [f"est ${r.est_cost_usd:.4f} → actual ${r.actual_cost_usd:.4f}"]
+        if r.baseline_cost_usd is not None:
+            save = r.baseline_cost_usd - r.actual_cost_usd
+            pct = (100.0 * save / r.baseline_cost_usd) if r.baseline_cost_usd > 0 else 0.0
+            verb = "saved" if save >= 0 else "over"
+            parts.append(f"{verb} ${abs(save):.4f} ({abs(pct):.0f}%) vs baseline")
+        await self.query_one(ChatLog).add_system("   └ " + " · ".join(parts))
+
     async def _route_hook(self, routing: Any, task_text: str) -> Any:
         """before_route hook: always emits a rationale line; shows confirm panel when on."""
         chatlog = self.query_one(ChatLog)
         if routing is not None:
             chosen = routing.chosen_model_id or routing.model.id
-            await chatlog.add_system(
-                f"▸ routed to {chosen} · basis {routing.decision_basis} "
-                f"· est ${routing.est_cost_usd:.4f}"
+            level, color = _confidence_band(routing)
+            extra = _reasoner_note(routing)
+            line = (
+                f"● routed to {chosen} · basis {routing.decision_basis} "
+                f"· est ${routing.est_cost_usd:.4f} · conf {routing.confidence:.0%} "
+                f"({level}){extra}"
             )
-        if not self._confirm_route or routing is None:
+            await chatlog.add_system(line, color=color)
+        if self._route_mode != "confirm" or routing is None:
             return None  # accept as-is
         result = await self.push_screen(RoutingConfirm(routing), wait_for_dismiss=True)
         if result is None or result.get("action") == "cancel":
@@ -448,6 +469,7 @@ class HarnessApp(App):
             )
             self._stream_bubble = None
         self._scroll_bottom()
+        await self._emit_cost_line()
         if self._escalate and routing is not None:
             await self._check_escalate(routing, text)
         self._after_turn(routing)
@@ -539,6 +561,7 @@ class HarnessApp(App):
             cache_write=self._footer_state["cache_write"],
             ctx_pct=self._footer_state["ctx_pct"],
             routing_offline=self._routing_offline,
+            route_mode=self._route_mode,
         )
         self.sub_title = ""
         try:
@@ -804,8 +827,9 @@ class HarnessApp(App):
         async def _confirm(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
-                on = not app._confirm_route
-            app._confirm_route = on
+                on = app._route_mode != "confirm"
+            app._route_mode = "confirm" if on else "auto"
+            app._refresh_footer()
             await app.query_one(ChatLog).add_system(
                 f"routing confirm: {'ON (shows tradeoff panel each turn)' if on else 'off'}"
             )
@@ -925,6 +949,14 @@ class HarnessApp(App):
     async def action_model(self) -> None:
         await self._dispatch_command("model", "")
 
+    async def action_cycle_route_mode(self) -> None:
+        cur = self._route_mode if self._route_mode in self.ROUTE_MODES else "auto"
+        nxt = self.ROUTE_MODES[(self.ROUTE_MODES.index(cur) + 1) % len(self.ROUTE_MODES)]
+        self._route_mode = nxt
+        self._refresh_footer()
+        note = " · shows the tradeoff panel each turn" if nxt == "confirm" else ""
+        await self.query_one(ChatLog).add_system(f"route mode: {nxt}{note}")
+
     def action_abort(self) -> None:
         self.agent.abort()
 
@@ -939,6 +971,36 @@ class HarnessApp(App):
             self.query_one(ChatLog).scroll_end(animate=False)
         except Exception:  # noqa: BLE001 - during teardown the widget may be gone
             pass
+
+
+def _confidence_band(routing: Any) -> tuple[str, str]:
+    """Map a routing decision to a (label, color) confidence signal for the rationale line.
+
+    green = confident and the pick clears tau; amber = thin/uncertain evidence; red = the
+    pick doesn't clear tau (or no model met it). Calibrated server-side, so the colour means
+    a real probability, not a raw guess.
+    """
+    chosen_id = routing.chosen_model_id or routing.model.id
+    predicted = next(
+        (r.predicted_success for r in routing.ranked if r.model_id == chosen_id),
+        routing.confidence,
+    )
+    tau = routing.threshold_used or 0.0
+    no_meet = any("no_model_meets_threshold" in w for w in routing.warnings)
+    if no_meet or predicted < tau:
+        return "low", "red"
+    if routing.confidence >= 0.66:
+        return "high", "green"
+    return "uncertain", "yellow"
+
+
+def _reasoner_note(routing: Any) -> str:
+    """Surface the server-side escalation pathway when it fired (thin/conflicted evidence)."""
+    if any(w == "reasoner_consulted" for w in routing.warnings):
+        return " · consulted reasoner (thin evidence)"
+    if any(w.startswith("escalation_suggested") for w in routing.warnings):
+        return " · evidence thin"
+    return ""
 
 
 def _args_repr(args: Any) -> str:

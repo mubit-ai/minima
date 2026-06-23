@@ -116,3 +116,15 @@ class CandidateScore:
     # Observed latency percentile (ms) from recalled outcomes; None without evidence.
     est_latency_ms: float | None = None
     latency_basis: str = ""
+    # 95% credible-interval width of the success estimate (1.0 = no evidence). Powers the
+    # routing-collapse margin guard and the harness green/amber/red confidence signal.
+    interval_width: float = 1.0
+    # Beta posterior parameters for the (uncalibrated) success estimate — used by Thompson
+    # sampling when that selection policy is enabled.
+    alpha: float = 0.0
+    beta: float = 0.0
+    # The pre-calibration, pre-exploration-bonus Beta-posterior mean — the HONEST
+    # evidence-based probability. ``predicted_success`` above is the deployed value
+    # (calibrated + exploration bonus); this raw value is what calibration is fit on,
+    # so the recalibration loop converges instead of oscillating. None when unset.
+    raw_predicted_success: float | None = None

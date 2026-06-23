@@ -15,6 +15,7 @@ from minima.logging import get_logger
 from minima.memory.adapter import Memory
 from minima.memory.keys import build_content, salient_signature, task_cluster, task_fingerprint
 from minima.memory.records import clamp01
+from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model, apply_ipw
 from minima.recommender.classify import classify
@@ -73,6 +74,13 @@ class Recommender:
             o.strip() for o in settings.minima_epsilon_selection_orgs.split(",") if o.strip()
         }
         self._epsilon_enabled = org_id in epsilon_orgs
+        thompson_orgs = {
+            o.strip() for o in settings.minima_thompson_selection_orgs.split(",") if o.strip()
+        }
+        self._thompson_enabled = org_id in thompson_orgs
+        # Lazily-fit, cached calibrator (org-scoped via this Recommender's decision log).
+        self._calibrators: CalibratorSet | None = None
+        self._calibrators_fitted_at: float = 0.0
 
     async def recommend(self, req: RecommendRequest) -> RecommendResponse:
         started = time.monotonic()
@@ -235,7 +243,25 @@ class Recommender:
             (c.card.model_id for c in ranked), 0.0
         )
         sel_propensities[recommended.card.model_id] = 1.0
-        if self._epsilon_enabled:
+        if self._thompson_enabled and len(scored) >= 2:
+            # Posterior-sampling selection: sample each candidate's success, pick cheapest
+            # clearing tau under the sample. MC frequencies are the logged propensities.
+            selection_policy = "thompson"
+            items = [(c.card.model_id, c.alpha, c.beta, c.est_cost_usd) for c in scored]
+            pick_id, pi = score.thompson_select(
+                items, tau, self._rng, settings.minima_thompson_samples
+            )
+            sel_propensities = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
+            sel_propensities.update(pi)
+            if pick_id and pick_id != recommended.card.model_id:
+                sampled = next((c for c in scored if c.card.model_id == pick_id), None)
+                if sampled is not None:
+                    fallback = recommended  # the deterministic pick is the natural retry
+                    recommended = sampled
+                    overall_basis = recommended.decision_basis
+                    explored_pick = True
+                    warnings.append("thompson_pick")
+        elif self._epsilon_enabled:
             eligible = [c for c in ranked if c.predicted_success >= tau]
             if len(eligible) >= 2:
                 selection_policy = "epsilon_softmax"
@@ -509,6 +535,11 @@ class Recommender:
                             confidence=round(c.confidence, 6),
                             est_cost_usd=c.est_cost_usd,
                             propensity=round(sel_propensities.get(c.card.model_id, 0.0), 6),
+                            raw_predicted_success=(
+                                round(c.raw_predicted_success, 6)
+                                if c.raw_predicted_success is not None
+                                else None
+                            ),
                         )
                         for c in ranked
                     ],
@@ -621,7 +652,45 @@ class Recommender:
             c.score = score.ranking_score(
                 c.predicted_success, c.est_cost_usd / max_cost, cost_quality_tradeoff
             )
-        return _optimize(scored, tau)
+        return _optimize(scored, tau, self._settings.minima_collapse_margin)
+
+    # --------------------------------------------------------------- calibration
+    def _calibrate(self, task_type_value: str, predicted: float) -> float:
+        """Remap the raw Beta mean through the fitted calibrator (identity when unfit)."""
+        cal = self._get_calibrators()
+        if cal is None:
+            return predicted
+        return cal.transform(task_type_value, predicted)
+
+    def _get_calibrators(self) -> CalibratorSet | None:
+        settings = self._settings
+        if not settings.minima_calibration_apply or self._decision_log is None:
+            return None
+        now = time.monotonic()
+        if (
+            self._calibrators is None
+            or now - self._calibrators_fitted_at > settings.minima_calibration_refresh_seconds
+        ):
+            # Stamp BEFORE refit so concurrent requests for this org don't all refit at once.
+            self._calibrators_fitted_at = now
+            self._refit_calibrators()
+        return self._calibrators
+
+    def _refit_calibrators(self) -> None:
+        """Refit from the org's reconciled decision rows (best-effort: keep prior on failure)."""
+        settings = self._settings
+        assert self._decision_log is not None
+        try:
+            since = time.time() - settings.minima_calibration_window_days * 86_400.0
+            rows = self._decision_log.rows(since=since)
+            self._calibrators = fit_calibrators(
+                rows,
+                min_n=settings.minima_calibration_min_n,
+                shrinkage_k=settings.minima_calibration_shrinkage_k,
+                now=time.time(),
+            )
+        except Exception as exc:  # noqa: BLE001 — calibration must never break a recommendation
+            log.warning("calibrator_refit_failed", error=str(exc))
 
     def _score_candidates(
         self,
@@ -651,6 +720,14 @@ class Recommender:
             predicted, confidence = score.predicted_success(
                 agg, prior, settings.minima_beta_pseudocount
             )
+            raw_predicted = predicted
+            interval_width = score.posterior_interval_width(
+                agg, prior, settings.minima_beta_pseudocount
+            )
+            alpha, beta = score.beta_params(agg, prior, settings.minima_beta_pseudocount)
+            # Calibrate the honest Beta mean to a truthful probability BEFORE the
+            # exploration bonus (deliberate optimism) is layered on for the tau decision.
+            predicted = self._calibrate(task_type.value, predicted)
             predicted = score.with_exploration_bonus(
                 predicted, confidence, settings.minima_exploration_bonus
             )
@@ -686,12 +763,16 @@ class Recommender:
                 CandidateScore(
                     card=card,
                     predicted_success=predicted,
+                    raw_predicted_success=raw_predicted,
                     confidence=confidence,
                     est_cost_usd=est_cost,
                     est_cost_breakdown=breakdown,
                     decision_basis=basis,
                     evidence=evidence,
                     rationale=rationale,
+                    interval_width=interval_width,
+                    alpha=alpha,
+                    beta=beta,
                     est_latency_ms=est_latency,
                     latency_basis=(
                         f"observed_p{int(settings.minima_latency_percentile * 100)}"
@@ -734,19 +815,57 @@ def _select_candidates(
 
 
 def _optimize(
-    scored: list[CandidateScore], tau: float
+    scored: list[CandidateScore], tau: float, collapse_margin: float = 0.0
 ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
     warnings: list[str] = []
     ranked = sorted(scored, key=lambda c: c.score, reverse=True)
     eligible = [c for c in scored if c.predicted_success >= tau]
 
+    # Tau-aware optimism: the rescue shrinks as the quality bar rises, so at a HIGH
+    # cost_quality setting (user wants quality) the guard barely fires, and at a LOW bar
+    # (cost-leaning) it rescues cheap-but-uncertain models freely. This is what keeps the
+    # guard from trading away quality exactly where the user asked for it.
+    effective_margin = collapse_margin * max(0.0, 1.0 - tau)
+
+    def _optimistic_clears(c: CandidateScore) -> bool:
+        # Upper credible-bound view: predicted + effective_margin * half-width clears tau.
+        # Only applied to candidates with ACTUAL evidence (confidence > 0) — at cold start,
+        # capability priors (not optimism over a maximal interval) decide, so the guard is inert.
+        if c.confidence <= 0.0:
+            return False
+        return c.predicted_success + effective_margin * 0.5 * c.interval_width >= tau
+
     if eligible:
         recommended = min(
             eligible, key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence)
         )
+        # Routing-collapse guard: if the cheapest model clearing tau is ITSELF the priciest
+        # candidate, prefer a cheaper candidate whose credible interval could still clear tau
+        # (the judge/escalation loop catches an over-optimistic cheap pick).
+        if collapse_margin > 0.0 and len(scored) > 1:
+            max_cost = max(c.est_cost_usd for c in scored)
+            if recommended.est_cost_usd >= max_cost - 1e-12:
+                cheaper = [
+                    c
+                    for c in scored
+                    if c.est_cost_usd < recommended.est_cost_usd and _optimistic_clears(c)
+                ]
+                if cheaper:
+                    recommended = min(
+                        cheaper,
+                        key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence),
+                    )
+                    warnings.append("collapse_guard_applied")
     else:
         warnings.append("no_model_meets_threshold")
-        recommended = max(scored, key=lambda c: c.predicted_success)
+        # Don't default to the strongest (usually priciest) model: prefer the cheapest whose
+        # optimistic upper bound could still clear tau, falling back to strongest if none.
+        plausible = [c for c in scored if _optimistic_clears(c)] if collapse_margin > 0.0 else []
+        if plausible:
+            recommended = min(plausible, key=lambda c: (c.est_cost_usd, -c.predicted_success))
+            warnings.append("collapse_guard_applied")
+        else:
+            recommended = max(scored, key=lambda c: c.predicted_success)
 
     others = [c for c in eligible if c.card.model_id != recommended.card.model_id]
     reliable = [c for c in others if c.predicted_success >= tau + 0.05]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from minima_harness.minima.meter import CostMeter
+from minima_harness.minima.meter import CostMeter, CostRow
 from minima_harness.tui.widgets.banner import render_banner
 from minima_harness.tui.widgets.footer import render_footer
 
@@ -29,6 +29,29 @@ def test_render_footer_includes_model_cost_and_ctx():
 def test_render_footer_shows_offline_when_routing_offline():
     html = render_footer("d", "s", "m", "prior", CostMeter(), 0, 0, 0, 0, 0.0, True)
     assert "offline" in str(html).lower()
+
+
+def test_render_footer_shows_savings_when_baseline_present():
+    meter = CostMeter()
+    meter.rows.append(
+        CostRow(
+            label="t",
+            model="claude-haiku-4-5",
+            decision_basis="memory",
+            est_cost_usd=0.001,
+            actual_cost_usd=0.0008,
+            baseline_cost_usd=0.002,
+            quality=0.9,
+            outcome="success",
+        )
+    )
+    s = str(render_footer("d", "s", "m", "memory", meter, 1, 2, 0, 0, 1.0, False))
+    assert "save" in s and "vs base" in s
+
+
+def test_render_footer_shows_cache_marker_when_tokens_cached():
+    s = str(render_footer("d", "s", "m", "memory", CostMeter(), 10, 2, 500, 0, 1.0, False))
+    assert "⚡500" in s
 
 
 def test_render_banner_contains_reason():

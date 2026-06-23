@@ -176,17 +176,33 @@ class AnthropicProvider:
         yield DoneEvent(reason=assistant.stop_reason, message=assistant)
 
 
+_EPHEMERAL = {"type": "ephemeral"}
+
+
 def _build_kwargs(model: Model, context: Context, options: dict[str, Any]) -> dict[str, Any]:
+    # Prompt caching is ON by default (the agent re-sends a large stable prefix —
+    # system prompt + tool schemas + conversation history — every turn). cache_control
+    # breakpoints mark the longest prefix to cache: Anthropic reads it at ~0.1x next turn.
+    # Callers with unique one-shot prompts (e.g. the LLM judge) pass prompt_cache=False to
+    # avoid a pointless cache write. Below the per-model min-cacheable size the API simply
+    # ignores the breakpoint, so this is always safe.
+    cache = bool(options.get("prompt_cache", True))
     messages = normalize_for_target(context.messages, "anthropic-messages")
+    wire = [_to_wire(m) for m in messages]
     kwargs: dict[str, Any] = {
         "model": model.id,
         "max_tokens": options.get("max_tokens", model.max_tokens),
-        "messages": [_to_wire(m) for m in messages],
+        "messages": wire,
     }
     if context.system_prompt:
-        kwargs["system"] = context.system_prompt
+        if cache:
+            kwargs["system"] = [
+                {"type": "text", "text": context.system_prompt, "cache_control": _EPHEMERAL}
+            ]
+        else:
+            kwargs["system"] = context.system_prompt
     if context.tools:
-        kwargs["tools"] = [
+        tools = [
             {
                 "name": t.name,
                 "description": t.description,
@@ -194,11 +210,28 @@ def _build_kwargs(model: Model, context: Context, options: dict[str, Any]) -> di
             }
             for t in context.tools
         ]
+        if cache and tools:
+            # A breakpoint on the LAST tool caches the whole (stable) tool array.
+            tools[-1] = {**tools[-1], "cache_control": _EPHEMERAL}
+        kwargs["tools"] = tools
+    if cache and wire:
+        _mark_last_block(wire[-1])
     # Thinking is opt-in via options to avoid surprise token spend.
     if options.get("thinking") and model.reasoning:
         budget = options.get("thinking_budget", 1024)
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": int(budget)}
     return kwargs
+
+
+def _mark_last_block(wire_msg: dict[str, Any]) -> None:
+    """Add a cache_control breakpoint to the last content block of a wire message.
+
+    Caches the conversation prefix incrementally: each turn extends the cached prefix, so
+    the prior history is re-read at ~0.1x rather than re-charged at the full input rate.
+    """
+    content = wire_msg.get("content")
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1] = {**content[-1], "cache_control": _EPHEMERAL}
 
 
 def _to_wire(m: Message) -> dict[str, Any]:

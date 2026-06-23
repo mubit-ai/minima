@@ -22,9 +22,12 @@ def _color_for(role: str) -> str:
 class MessageBubble(Static):
     """A single chat message. Appendable + throttled for live assistant streaming."""
 
-    def __init__(self, role: str, text: str = "", *, prefix: str | None = None) -> None:
+    def __init__(
+        self, role: str, text: str = "", *, prefix: str | None = None, color: str | None = None
+    ) -> None:
         self._role = role
-        self._color = _color_for(role)
+        self._color_override = color
+        self._color = color or _color_for(role)
         self._prefix = prefix if prefix is not None else _ROLE_PREFIX.get(role, "")
         self._buf = text
         self._last_flush = 0.0
@@ -64,7 +67,7 @@ class MessageBubble(Static):
 
     def refresh_theme(self) -> None:
         """Re-read the active palette and re-render (used after /theme)."""
-        self._color = _color_for(self._role)
+        self._color = self._color_override or _color_for(self._role)
         if self._markdown:
             self.render_markdown()
         else:
@@ -98,5 +101,5 @@ class ChatLog(ScrollableContainer):
     async def add_error(self, message: str) -> MessageBubble:
         return await self._add(MessageBubble("error", message))
 
-    async def add_system(self, text: str) -> MessageBubble:
-        return await self._add(MessageBubble("system", text))
+    async def add_system(self, text: str, *, color: str | None = None) -> MessageBubble:
+        return await self._add(MessageBubble("system", text, color=color))
