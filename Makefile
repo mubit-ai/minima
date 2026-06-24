@@ -1,10 +1,10 @@
 .PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
 
 install:
-	uv sync --extra dev --extra harness
+	uv sync --extra dev   # dev pulls server + harness + tui for the full test suite
 
 run:
-	uv run uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
+	uv run --extra server uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
 
 test:
 	uv run pytest -m "not live and not eval" -q

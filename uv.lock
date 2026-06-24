@@ -1249,27 +1249,29 @@ version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "mubit-sdk" },
-    { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "redis" },
     { name = "structlog" },
     { name = "tenacity" },
-    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
 dev = [
+    { name = "anthropic" },
+    { name = "fastapi" },
+    { name = "google-genai" },
     { name = "keyring" },
     { name = "mypy" },
+    { name = "psycopg2-binary" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "redis" },
     { name = "respx" },
     { name = "ruff" },
     { name = "textual" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 harness = [
     { name = "anthropic" },
@@ -1285,6 +1287,12 @@ seed = [
     { name = "datasets" },
     { name = "huggingface-hub" },
 ]
+server = [
+    { name = "fastapi" },
+    { name = "psycopg2-binary" },
+    { name = "redis" },
+    { name = "uvicorn", extra = ["standard"] },
+]
 tui = [
     { name = "keyring" },
     { name = "textual" },
@@ -1296,30 +1304,29 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'reasoner-anthropic'", specifier = ">=0.40" },
     { name = "anyio", specifier = ">=4.4" },
     { name = "datasets", marker = "extra == 'seed'", specifier = ">=2.20" },
-    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "google-genai", marker = "extra == 'harness'", specifier = ">=0.3" },
     { name = "google-genai", marker = "extra == 'reasoner-gemini'", specifier = ">=0.3" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
-    { name = "keyring", marker = "extra == 'dev'", specifier = ">=24" },
     { name = "keyring", marker = "extra == 'tui'", specifier = ">=24" },
+    { name = "minima", extras = ["server", "harness", "tui"], marker = "extra == 'dev'" },
     { name = "mubit-sdk", specifier = ">=0.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "psycopg2-binary", specifier = ">=2.9" },
+    { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "redis", specifier = ">=5.0" },
+    { name = "redis", marker = "extra == 'server'", specifier = ">=5.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "tenacity", specifier = ">=8.4" },
-    { name = "textual", marker = "extra == 'dev'", specifier = ">=0.79" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=0.79" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.30" },
 ]
-provides-extras = ["reasoner-anthropic", "reasoner-gemini", "seed", "harness", "tui", "dev"]
+provides-extras = ["server", "reasoner-anthropic", "reasoner-gemini", "seed", "harness", "tui", "dev"]
 
 [[package]]
 name = "more-itertools"

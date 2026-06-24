@@ -23,9 +23,11 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+# Core = the recommender library + HTTP client. The server stack (fastapi/uvicorn/psycopg2/
+# redis) lives in the `server` extra: Minima is a hosted service, so the public package's
+# audience is CLI/library users hitting api.minima.sh — only the operator's container (and
+# self-hosters) runs the API and needs `[server]`.
 dependencies = [
-  "fastapi>=0.115",
-  "uvicorn[standard]>=0.30",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
   "httpx>=0.27",
@@ -33,8 +35,6 @@ dependencies = [
   "structlog>=24.1",
   "tenacity>=8.4",
   "mubit-sdk>=0.10.0",
-  "psycopg2-binary>=2.9",
-  "redis>=5.0",
 ]
 
 [project.urls]
@@ -44,6 +44,13 @@ Repository = "https://github.com/mubit-ai/minima"
 Issues = "https://github.com/mubit-ai/minima/issues"
 
 [project.optional-dependencies]
+# Run the Minima API server (operator/self-host only — hosted users don't need this).
+server = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
+]
 reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
@@ -51,12 +58,12 @@ harness = ["anthropic>=0.40", "google-genai>=0.3"]
 # keyring: OS-keychain credential storage for `minima-harness config` (graceful 0600-file
 # fallback when no backend is present, so it stays optional).
 tui = ["textual>=0.79", "keyring>=24"]
+# dev pulls every runtime extra so the full test suite (server API tests, TUI, providers) runs.
 dev = [
+  "minima[server,harness,tui]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
-  "textual>=0.79",
-  "keyring>=24",
   "ruff>=0.5",
   "mypy>=1.10",
 ]
