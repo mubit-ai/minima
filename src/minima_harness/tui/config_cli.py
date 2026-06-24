@@ -11,6 +11,7 @@ import getpass
 import os
 import sys
 
+from minima_harness.minima.config import DEFAULT_MINIMA_URL
 from minima_harness.tui import config_store as store
 
 _USAGE = (
@@ -71,7 +72,7 @@ def _doctor() -> int:
         ok = bool(os.environ.get(key))
         print(f"  [{'ok' if ok else '  '}] {label:<10} {key:<18} {'present' if ok else 'missing'}")
 
-    url = os.environ.get("MINIMA_URL", "https://api.minima.sh")
+    url = os.environ.get("MINIMA_URL", DEFAULT_MINIMA_URL)
     print(f"\n  Minima endpoint: {url}")
     import httpx
 
