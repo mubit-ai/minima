@@ -237,6 +237,31 @@ class Settings(BaseSettings):
     # / escalation loop is the safety net that catches an over-optimistic cheap pick.
     minima_collapse_margin: float = 1.0
 
+    # --- Lever-aware cost (prompt caching) ---
+    # When on, the ESTIMATE cost tier prices a cache-supporting model's input at a blend of
+    # its cache-read and full rates (assuming the caller applies prompt caching, as the
+    # harness does), so ranking can favor a cache-friendly model that is cheaper in practice.
+    # Off by default (no behavior change). Observed/rescaled tiers stay evidence-based — they
+    # already reflect real caching via the realized cost in feedback, so they self-correct.
+    # recommend() also returns `recommended_actions` (e.g. enable_prompt_cache) regardless.
+    minima_cost_lever_aware: bool = False
+    minima_cost_cache_input_fraction: float = 0.5
+
+    # --- Neighbor-vote classification ---
+    # When the heuristic classifier returns `other`, disambiguate the task_type from the
+    # ANN-recalled semantic neighbors' types (free + semantic) instead of (or before) a paid
+    # LLM-classify call. Embedding-based routing already happens via recall; this just makes
+    # the cluster KEY semantically coherent for ambiguous prompts.
+    minima_neighbor_classify: bool = True
+
+    # --- Shadow bandit (advisory only) ---
+    # When on, a UCB contextual-bandit policy computes what it WOULD pick and logs it on the
+    # decision row (shadow_chosen_model_id) alongside the deployed conjugate pick. It NEVER
+    # overrides the recommendation — it exists so we can measure agreement / regret offline
+    # before considering promotion. alpha scales the exploration optimism.
+    minima_shadow_bandit: bool = False
+    minima_shadow_ucb_alpha: float = 1.0
+
     # --- Durable-record fast path ---
     # Dereference the durable (cluster, model) outcome records alongside ANN recall so the
     # highest-signal evidence is always present regardless of embedding noise.

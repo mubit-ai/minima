@@ -54,6 +54,20 @@ def test_render_footer_shows_cache_marker_when_tokens_cached():
     assert "⚡500" in s
 
 
+def test_render_footer_shows_thinking_level():
+    s = str(
+        render_footer(
+            "d", "s", "m", "memory", CostMeter(), 1, 2, 0, 0, 1.0, False, thinking_level="high"
+        )
+    )
+    assert "think: high" in s
+
+
+def test_render_footer_marks_ephemeral_session():
+    s = str(render_footer("d", "ephemeral", "m", "memory", CostMeter(), 1, 2, 0, 0, 1.0, False))
+    assert "◈" in s and "ephemeral" in s
+
+
 def test_render_banner_contains_reason():
     out = str(render_banner("recall_timeout — using gemini-2.5-flash"))
     assert "recall_timeout" in out

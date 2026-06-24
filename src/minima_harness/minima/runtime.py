@@ -72,6 +72,12 @@ class MinimaAgent(Agent):
         self.extractor = extractor
         self._task_type_hint = task_type
         self._prompts_run = 0
+        # Count of tool calls the human rejected this turn (diff-approval). A reject is a
+        # ground-truth negative that overrides the (noisier) judge signal in feedback.
+        self._rejected_tools = 0
+        # Why the last route fell back to offline (None = routed fine). Surfaced by the TUI
+        # so a degraded-to-offline turn is visible, not silent.
+        self._offline_reason: str | None = None
         initial = model or self.mapping.default_model()
         super().__init__(
             model=initial,
@@ -92,6 +98,7 @@ class MinimaAgent(Agent):
         task_text = _text_of(content)
         effective_task_type = task_type or self._task_type_hint
         self._prompts_run += 1
+        self._rejected_tools = 0  # reset per-turn reject tally
 
         routing = await self._route(task_text, effective_task_type, slider, files=files)
         start = monotonic()
@@ -149,10 +156,14 @@ class MinimaAgent(Agent):
                 difficulty=difficulty,
                 expected_input_tokens=exp_tokens,
             )
-        except Exception:  # noqa: BLE001
+            self._offline_reason = None
+        except Exception as exc:  # noqa: BLE001
             if not self.config.allow_offline:
                 raise
-            _log.warning("minima_recommend_failed_offline_fallback", exc_info=True)
+            self._offline_reason = _classify_offline_reason(exc)
+            _log.warning(
+                "minima_recommend_failed_offline_fallback: %s", self._offline_reason, exc_info=True
+            )
             return None
         if self.before_route is not None:
             overridden = await self.before_route(routing, task_text)
@@ -194,6 +205,11 @@ class MinimaAgent(Agent):
                 else:
                     quality = clamp01(graded)
                     outcome = grade_outcome(quality)
+            if run_error is None and self._rejected_tools > 0:
+                # A human rejected the model's edit(s): a strong ground-truth negative that
+                # overrides the judge (applies even when judging is off).
+                quality = min(quality if quality is not None else 0.25, 0.25)
+                outcome = grade_outcome(quality)
             await self.router.feedback(
                 routing.recommendation_id,
                 routing.chosen_model_id,
@@ -208,6 +224,10 @@ class MinimaAgent(Agent):
         return quality, outcome
 
     # ----------------------------------------------------------------- helpers
+
+    def record_tool_rejection(self) -> None:
+        """Called by the TUI when the human rejects a proposed edit (diff approval)."""
+        self._rejected_tools += 1
 
     def _should_judge(self) -> bool:
         every = self.config.judge_every
@@ -237,6 +257,17 @@ def _default_judge(config: HarnessConfig) -> QualityJudge:
         "signal (better than a fabricated neutral 0.5 that would poison the feedback loop)."
     )
     return ConstJudge(None)
+
+
+def _classify_offline_reason(exc: BaseException) -> str:
+    """A short, human-readable reason a route fell back to offline (for the TUI banner)."""
+    name = type(exc).__name__
+    if "Timeout" in name:
+        return "Minima timed out"
+    if "Connect" in name:
+        return "Minima unreachable"
+    detail = str(exc).strip().splitlines()[0] if str(exc).strip() else name
+    return detail[:80]
 
 
 def _text_of(content: str | list[ContentBlock] | Message | list[Any]) -> str:

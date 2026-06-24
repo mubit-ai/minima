@@ -208,6 +208,45 @@ class RoutingConfirm(ModalScreen[dict | None]):
         self.dismiss({"action": "cancel", "model_id": None})
 
 
+class DiffApproval(ModalScreen[dict | None]):
+    """Modal diff review for a mutating tool. Enter/a approve, Esc/r reject.
+
+    Returns {"action": "approve"|"reject"}. A reject blocks the tool and feeds a
+    ground-truth negative signal back to Minima.
+    """
+
+    BINDINGS = [
+        Binding("enter", "approve", "Approve", priority=True),
+        Binding("a", "approve", "Approve", priority=True),
+        Binding("escape", "reject", "Reject", priority=True),
+        Binding("r", "reject", "Reject", priority=True),
+    ]
+
+    def __init__(self, tool_name: str, diff_text: str, target: str = "") -> None:
+        super().__init__()
+        self._name = tool_name
+        self._diff = diff_text
+        self._target = target
+
+    def compose(self) -> ComposeResult:
+        head = f"{self._name} {self._target}".strip()
+        yield Static(
+            Text(f"review: {head}  ·  Enter/a approve · Esc/r reject", style="bold"),
+        )
+        yield TextArea(
+            self._diff, id="diff-view", read_only=True, soft_wrap=False, show_line_numbers=False
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#diff-view", TextArea).focus()
+
+    def action_approve(self) -> None:
+        self.dismiss({"action": "approve"})
+
+    def action_reject(self) -> None:
+        self.dismiss({"action": "reject"})
+
+
 def list_sessions_for_picker(cwd: Path | None) -> list[SessionSummary]:
     return SessionManager().list_sessions(cwd) if cwd is not None else []
 

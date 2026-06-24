@@ -16,7 +16,7 @@ class StatusBar(Static):
         super().__init__(*args, **kwargs)
         self._state = "idle"  # idle | routing | thinking | working
         self._frame = 0
-        self._idle_text = ""
+        self._idle_text: Text | str = ""
 
     def on_mount(self) -> None:
         self.set_interval(0.1, self._tick)
@@ -31,7 +31,8 @@ class StatusBar(Static):
         self._state = state
         self._display()
 
-    def set_idle_text(self, text: str) -> None:
+    def set_idle_text(self, text: Text | str) -> None:
+        # Accept a rich Text so the footer's per-segment colours survive (don't flatten).
         self._idle_text = text
         if self._state == "idle":
             self._display()
@@ -39,6 +40,6 @@ class StatusBar(Static):
     def _display(self) -> None:
         t = get_theme(current_theme())
         if self._state == "idle":
-            self.update(Text(self._idle_text, style=t["muted"]))
+            self.update(self._idle_text or "")
         else:
             self.update(Text(f"{_FRAMES[self._frame]} {self._state}…", style=t["accent"]))

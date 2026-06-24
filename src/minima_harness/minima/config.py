@@ -40,16 +40,30 @@ class HarnessConfig:
     # Judge every Nth terminal turn (1 = every turn). 0 disables judging.
     judge_every: int = 1
     baseline_model_id: str | None = None
-    timeout: float = 10.0
+    # Minima HTTP timeout (s). Cold-start recommend can take >10s when Minima consults its
+    # LLM reasoner (thin evidence), so a tight timeout silently degrades to OFFLINE routing.
+    # 30s comfortably covers reasoner + recall. Override with MINIMA_TIMEOUT.
+    timeout: float = 30.0
     # When True, an unreachable Minima falls back to a fixed default model instead of
     # raising. Keeps ad-hoc runs working without a Minima instance.
     allow_offline: bool = True
+    # Semantic response cache (/cache): a near-duplicate prompt returns a prior answer for
+    # free. Off by default — a too-loose threshold risks stale hits, and coding prompts are
+    # mostly unique. threshold is the min similarity for a hit.
+    cache_enabled: bool = False
+    cache_threshold: float = 0.95
 
     @classmethod
     def from_env(cls, **overrides: object) -> HarnessConfig:
         cfg = cls()
         cfg.minima_url = os.environ.get("MINIMA_URL", cfg.minima_url)
         cfg.minima_api_key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")
+        timeout_env = os.environ.get("MINIMA_TIMEOUT")
+        if timeout_env:
+            try:
+                cfg.timeout = float(timeout_env)
+            except ValueError:
+                pass
         for key, value in overrides.items():
             setattr(cfg, key, value)
         return cfg

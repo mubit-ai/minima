@@ -40,10 +40,20 @@ def predicted_success(
 
 
 def estimate_cost(
-    card: ModelCard, input_tokens: int, output_tokens: int, use_cache: bool = False
+    card: ModelCard,
+    input_tokens: int,
+    output_tokens: int,
+    use_cache: bool = False,
+    cache_fraction: float = 0.0,
 ) -> tuple[float, dict[str, float]]:
+    """Flat token estimate. ``use_cache`` prices input fully at the cache-read rate (caching
+    is REQUIRED); ``cache_fraction`` in (0,1] is the lever-aware blend — assume that fraction
+    of input is served from cache at the read rate, the rest at the full rate."""
     if use_cache and card.cache_read_cost_per_mtok is not None:
         in_price = card.cache_read_cost_per_mtok
+    elif cache_fraction > 0.0 and card.cache_read_cost_per_mtok is not None:
+        f = min(1.0, cache_fraction)
+        in_price = f * card.cache_read_cost_per_mtok + (1.0 - f) * card.input_cost_per_mtok
     else:
         in_price = card.input_cost_per_mtok
     cost_in = (input_tokens / 1_000_000.0) * in_price
@@ -109,6 +119,7 @@ def effective_cost(
     use_cache: bool,
     basis: str,
     min_cost_n: int,
+    cache_fraction: float = 0.0,
 ) -> tuple[float, dict[str, float]]:
     """Cost used for ranking, on the caller-chosen ``basis`` (homogeneous across candidates).
 
@@ -126,7 +137,7 @@ def effective_cost(
         observed = agg.observed_cost(min_cost_n)
         if observed is not None:
             return observed, {"observed_avg": round(observed, 8)}
-    return estimate_cost(card, input_tokens, output_tokens, use_cache)
+    return estimate_cost(card, input_tokens, output_tokens, use_cache, cache_fraction)
 
 
 def threshold_from_slider(
@@ -161,6 +172,26 @@ def ranking_score(predicted: float, normalized_cost: float, cost_quality_tradeof
     cq = max(0.0, min(10.0, cost_quality_tradeoff))
     lam = 0.3 + 0.07 * cq  # cq=0 -> 0.3 (cost-leaning); cq=10 -> 1.0 (quality-only)
     return lam * predicted - (1.0 - lam) * normalized_cost
+
+
+def ucb_score(
+    predicted: float,
+    interval_width: float,
+    normalized_cost: float,
+    cost_quality_tradeoff: float,
+    alpha: float,
+) -> float:
+    """Upper-confidence-bound contextual-bandit score (optimism-in-the-face-of-uncertainty).
+
+    Same cost/quality scalarization as :func:`ranking_score`, but the success term gets an
+    optimism bonus of ``alpha * half-width`` so under-explored arms are favoured for
+    exploration. Used by the SHADOW bandit policy (logged for regret comparison, never
+    overrides the deployed conjugate pick).
+    """
+    cq = max(0.0, min(10.0, cost_quality_tradeoff))
+    lam = 0.3 + 0.07 * cq
+    optimistic = clamp01(predicted + alpha * 0.5 * interval_width)
+    return lam * optimistic - (1.0 - lam) * normalized_cost
 
 
 def posterior_interval_width(

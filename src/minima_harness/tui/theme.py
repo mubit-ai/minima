@@ -18,6 +18,10 @@ DARK: Palette = {
     "warning": "#f7768e",
     "muted": "#665c6e",
     "accent": "#9ece6a",
+    # Footer/status emphasis: amber for $ value (legible against green/blue), a brighter
+    # dim than `muted` for de-emphasized metrics. .get()-accessed so JSON themes can omit them.
+    "footer_accent": "#e0af68",
+    "footer_dim": "#9aa0a6",
 }
 
 LIGHT: Palette = {
@@ -27,6 +31,8 @@ LIGHT: Palette = {
     "warning": "#c0152e",
     "muted": "#7a7a7a",
     "accent": "#0f7b3a",
+    "footer_accent": "#b45309",
+    "footer_dim": "#6b7280",
 }
 
 THEMES: dict[ThemeName, Palette] = {ThemeName.DARK: DARK, ThemeName.LIGHT: LIGHT}

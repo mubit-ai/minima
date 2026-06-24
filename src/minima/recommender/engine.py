@@ -18,7 +18,7 @@ from minima.memory.records import clamp01
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model, apply_ipw
-from minima.recommender.classify import classify
+from minima.recommender.classify import classify, classify_from_neighbors
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.propensity import Propensity, PropensityTracker
@@ -112,6 +112,23 @@ class Recommender:
         elif recall.error:
             warnings.append("memory_unavailable")
         evidence = recall.outcome_evidence + fastpath_evidence
+
+        # Neighbor-vote refinement: if the heuristic couldn't place the task, let the
+        # ANN-recalled semantic neighbors vote on its type (free; the cluster key then
+        # becomes coherent for scoring + the stored outcome). Caller-supplied types win.
+        if (
+            req.task.task_type is None
+            and task_type == TaskType.other
+            and settings.minima_neighbor_classify
+            and evidence
+        ):
+            voted = classify_from_neighbors(
+                [(ev.record.task_type, ev.score) for ev in evidence if ev.record is not None]
+            )
+            if voted is not None and voted != task_type:
+                task_type = voted
+                cluster = task_cluster(task_type, difficulty, signature)
+                warnings.append("neighbor_classified")
 
         # Remember durable-record ids surfaced by recall so the fast path can
         # Dereference them next time (live records only — seeds are per-row inserts,
@@ -283,6 +300,15 @@ class Recommender:
 
         self._propensity.record(lane, cluster, recommended.card.model_id)
 
+        # Advisory shadow bandit: log what a UCB policy WOULD pick (never overrides).
+        shadow_pick: str | None = None
+        if settings.minima_shadow_bandit and ranked:
+            shadow_pick = _shadow_pick(
+                ranked, req.cost_quality_tradeoff, settings.minima_shadow_ucb_alpha
+            )
+            if shadow_pick is not None and shadow_pick != recommended.card.model_id:
+                warnings.append("shadow_disagree")
+
         recommendation_id = uuid.uuid4().hex
         self._recstore.put(
             StoredRecommendation(
@@ -320,6 +346,7 @@ class Recommender:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             est_cost_premium=est_cost_premium,
+            shadow_chosen_model_id=shadow_pick,
         )
 
         confidence = _overall_confidence(overall_basis, recommended.confidence)
@@ -338,6 +365,7 @@ class Recommender:
             latency_ms=int((time.monotonic() - started) * 1000),
             warnings=warnings,
             selection_policy=selection_policy,
+            recommended_actions=_actions_for(recommended.card),
         )
 
     def _maybe_explore(
@@ -483,6 +511,7 @@ class Recommender:
         input_tokens: int,
         output_tokens: int,
         est_cost_premium: float,
+        shadow_chosen_model_id: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
@@ -526,6 +555,7 @@ class Recommender:
                     epsilon=settings.minima_epsilon if selection_policy != "argmin" else 0.0,
                     chosen_model_id=recommended.card.model_id,
                     escalated=esc.should_escalate,
+                    shadow_chosen_model_id=shadow_chosen_model_id,
                     explored=explored_pick,
                     escalation_reasons=list(esc.reasons),
                     candidates=[
@@ -732,8 +762,16 @@ class Recommender:
                 predicted, confidence, settings.minima_exploration_bonus
             )
             use_cache = req.constraints.require_prompt_caching and card.supports_prompt_caching
+            cache_fraction = (
+                settings.minima_cost_cache_input_fraction
+                if settings.minima_cost_lever_aware
+                and card.supports_prompt_caching
+                and not use_cache
+                else 0.0
+            )
             est_cost, breakdown = score.effective_cost(
-                card, agg, input_tokens, output_tokens, use_cache, cost_basis, min_cost_n
+                card, agg, input_tokens, output_tokens, use_cache, cost_basis, min_cost_n,
+                cache_fraction,
             )
             cost_word = "obs" if ("observed_avg" in breakdown or "rescaled" in breakdown) else "est"
             est_latency = (
@@ -782,6 +820,36 @@ class Recommender:
                 )
             )
         return scored
+
+
+def _shadow_pick(
+    scored: list[CandidateScore], cost_quality_tradeoff: float, alpha: float
+) -> str | None:
+    """The UCB shadow policy's pick (argmax ucb_score over the scored candidates)."""
+    if not scored:
+        return None
+    max_cost = max((c.est_cost_usd for c in scored), default=0.0) or 1.0
+    best = max(
+        scored,
+        key=lambda c: score.ucb_score(
+            c.predicted_success, c.interval_width, c.est_cost_usd / max_cost,
+            cost_quality_tradeoff, alpha,
+        ),
+    )
+    return best.card.model_id
+
+
+def _actions_for(card: ModelCard) -> list[str]:
+    """Near-free cost-saving actions the caller should apply to realize the quoted cost.
+
+    Currently: prompt caching for models that support it (the harness applies it, so the
+    realized cost reflects the cache discount). Batch mode is left to the caller's
+    interactive/background signal and is not inferred here.
+    """
+    actions: list[str] = []
+    if card.supports_prompt_caching:
+        actions.append("enable_prompt_cache")
+    return actions
 
 
 def _overall_confidence(basis: DecisionBasis, recommended_confidence: float) -> float:

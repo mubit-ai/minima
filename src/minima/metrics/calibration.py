@@ -219,6 +219,7 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
             "top_model_share": 0.0,
             "cheapest_model_share": 0.0,
             "cost_position": 0.0,
+            "shadow_agreement": 0.0,
         }
     reconciled = sum(1 for r in rows if r.reconciled)
     late = sum(1 for r in rows if r.late_feedback)
@@ -249,7 +250,22 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
         "top_model_share": top_share,
         "cheapest_model_share": cheapest_share,
         "cost_position": cost_position,
+        # Share of decisions where the advisory shadow bandit agreed with the deployed pick
+        # (over rows that logged a shadow pick). Low agreement => the policies diverge; pair
+        # with offline regret before considering promotion.
+        "shadow_agreement": _shadow_agreement(rows),
     }
+
+
+def _shadow_agreement(rows: list[DecisionRecord]) -> float:
+    counted = agree = 0
+    for r in rows:
+        if r.shadow_chosen_model_id is None:
+            continue
+        counted += 1
+        if r.shadow_chosen_model_id == r.chosen_model_id:
+            agree += 1
+    return round(agree / counted, 4) if counted else 0.0
 
 
 def _cost_metrics(rows: list[DecisionRecord]) -> tuple[float, float, float]:

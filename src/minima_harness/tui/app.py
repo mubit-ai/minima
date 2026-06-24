@@ -21,8 +21,9 @@ from minima_harness.agent.events import (
     TurnEndEvent,
 )
 from minima_harness.ai.types import AssistantMessage, Message, TextContent
+from minima_harness.minima.cache import SemanticCache
 from minima_harness.minima.config import HarnessConfig
-from minima_harness.minima.meter import CostMeter
+from minima_harness.minima.meter import CostMeter, CostRow
 from minima_harness.minima.runtime import MinimaAgent
 from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.format import EntryType
@@ -49,6 +50,7 @@ from minima_harness.tui.mubit import (
 )
 from minima_harness.tui.overlays import (
     CommandPicker,
+    DiffApproval,
     ModelPicker,
     PromptInspector,
     RoutingConfirm,
@@ -62,6 +64,9 @@ from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
 from minima_harness.tui.widgets.status import StatusBar
 
 _log = logging.getLogger("minima_harness.tui.app")
+
+# Tools whose effects are gated behind diff approval when /edits is on.
+_MUTATING_TOOLS = frozenset({"edit", "write"})
 
 
 class HarnessApp(App):
@@ -78,8 +83,9 @@ class HarnessApp(App):
     CSS = """
     Screen { layout: vertical; }
     #chatlog { height: 1fr; background: $boost; padding: 0 1; }
+    #chatlog.empty { align: center middle; }  /* fresh session: center the splash, no void */
     #banner { height: auto; padding: 0 1; }
-    #editor { height: 5; background: $panel; padding: 0 1; }
+    #editor { height: 6; background: $panel; border: round $accent; padding: 0 1; }
     #status { height: 1; background: $panel; padding: 0 1; color: $text-muted; }
     #cmd-popup {
         display: none; height: auto; max-height: 8;
@@ -96,6 +102,8 @@ class HarnessApp(App):
     PromptInspector { align: center middle; }
     PromptInspector TextArea { width: 80; height: 20; background: $panel; }
     TreePicker Tree { width: 70; height: 16; }
+    DiffApproval { align: center middle; }
+    DiffApproval TextArea { width: 90; height: 24; background: $panel; }
     """
 
     def __init__(
@@ -117,12 +125,16 @@ class HarnessApp(App):
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
         self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
+        self._confirm_edits = False  # /edits: review edit/write diffs before applying
+        self._cache_enabled = config.cache_enabled  # /cache: serve near-duplicate prompts free
+        self._cache = SemanticCache(threshold=config.cache_threshold)
         self._escalate = False
         self._escalate_threshold = 0.7
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
         self.agent.before_route = self._route_hook
+        self.agent.before_tool_call = self._tool_hook
         self.bridge = EventBridge()
         self.commands = self._build_commands()
         self._extensions = load_extensions(self.cwd)
@@ -262,9 +274,17 @@ class HarnessApp(App):
         chatlog = self.query_one(ChatLog)
         welcome = Static(render_welcome(self), id="welcome")
         await chatlog.mount(welcome)
+        chatlog.add_class("empty")  # center the splash until the first message lands
         chatlog.scroll_end(animate=False)
         if self._load_session_on_mount and self.session.entries:
             self.run_worker(self._load_session(self.session), exclusive=True)
+
+    def _dismiss_welcome(self) -> None:
+        """Remove the launch splash + un-center the transcript (called on the first turn)."""
+        chatlog = self.query_one(ChatLog)
+        for w in chatlog.query("#welcome"):
+            w.remove()
+        chatlog.remove_class("empty")
 
     # ------------------------------------------------------------- streaming
     def _set_state(self, state: str) -> None:
@@ -354,6 +374,34 @@ class HarnessApp(App):
             self.config.candidates = [chosen_id]
         return routing
 
+    async def _tool_hook(self, ctx: Any) -> Any:
+        """before_tool_call hook: when /edits is on, review edit/write diffs before applying.
+
+        A rejected edit is blocked (the model sees the rejection) AND recorded as a
+        ground-truth negative outcome fed back to Minima.
+        """
+        from minima_harness.agent.tools import BeforeToolCallResult
+        from minima_harness.tui.diff import render_tool_diff
+
+        if not self._confirm_edits or ctx.tool_call.name not in _MUTATING_TOOLS:
+            return None
+        target = getattr(ctx.args, "path", "")
+        diff = render_tool_diff(ctx.tool_call.name, ctx.args)
+        result = await self.push_screen(
+            DiffApproval(ctx.tool_call.name, diff, target), wait_for_dismiss=True
+        )
+        if result and result.get("action") == "approve":
+            return None
+        self.agent.record_tool_rejection()
+        await self.query_one(ChatLog).add_system(
+            f"✗ rejected {ctx.tool_call.name} {target}".rstrip(), color="red"
+        )
+        return BeforeToolCallResult(
+            block=True,
+            reason="The user rejected this edit. Do not retry it verbatim — propose a "
+            "different approach or ask what they want changed.",
+        )
+
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
@@ -420,7 +468,7 @@ class HarnessApp(App):
         cur = self.agent.state.thinking_level
         nxt = levels[(levels.index(cur) + 1) % len(levels)] if cur in levels else "low"
         self.agent.state.thinking_level = nxt  # type: ignore[assignment]
-        self.query_one("#banner", Static).update(Text(f"thinking: {nxt}"))
+        self._refresh_footer()  # thinking level lives in the footer now, not the warning banner
 
     async def _run_submission(self, parsed: dict) -> None:
         try:
@@ -439,11 +487,18 @@ class HarnessApp(App):
     # ------------------------------------------------------------- a turn
     async def run_turn(self, text: str) -> None:
         chatlog = self.query_one(ChatLog)
+        self._dismiss_welcome()  # first prompt: drop the splash, let the conversation flow top-down
         await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
+        if self._cache_enabled:
+            hit = self._cache.get(text)
+            if hit is not None:
+                await self._serve_cache_hit(text, hit)
+                return
         self._stream_bubble = await chatlog.add_assistant_stream()
         self._set_state("routing")
         routing = None
+        resp_text = ""
         try:
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
@@ -455,6 +510,7 @@ class HarnessApp(App):
         await self._render_tools_post_turn()
         if self._stream_bubble is not None:
             self._stream_bubble.render_markdown()
+            resp_text = self._stream_bubble.buffer
             _last = self.agent._last_assistant()
             _usage = _last.usage if _last is not None else None
             self.session.append(
@@ -472,7 +528,47 @@ class HarnessApp(App):
         await self._emit_cost_line()
         if self._escalate and routing is not None:
             await self._check_escalate(routing, text)
+        # Cache a clean, successful answer so a near-duplicate prompt is free next time.
+        if self._cache_enabled and routing is not None and resp_text:
+            self._cache.put(text, resp_text)
         self._after_turn(routing)
+
+    async def _serve_cache_hit(self, text: str, hit: Any) -> None:
+        """Return a cached response: render it, log a $0 CostMeter row, skip Minima entirely."""
+        chatlog = self.query_one(ChatLog)
+        bubble = await chatlog.add_assistant_stream()
+        bubble.set_text(hit.response)
+        bubble.render_markdown()
+        self.session.append(
+            EntryType.ASSISTANT,
+            {
+                "text": hit.response,
+                "model": "(cache)",
+                "in_tokens": 0,
+                "out_tokens": 0,
+                "cost": 0.0,
+            },
+        )
+        await chatlog.add_system(
+            f"⚡ cache hit (similarity {hit.similarity:.2f}) · $0.0000", color="green"
+        )
+        meter = self.agent.meter
+        if meter is not None:
+            meter.rows.append(
+                CostRow(
+                    label=text.splitlines()[0][:48] if text.strip() else "(empty)",
+                    model="(cache)",
+                    decision_basis="cache",
+                    est_cost_usd=0.0,
+                    actual_cost_usd=0.0,
+                    baseline_cost_usd=None,
+                    quality=None,
+                    outcome="success",
+                )
+            )
+        self._scroll_bottom()
+        self._refresh_footer()
+        self._set_state("idle")
 
     async def _render_tools_post_turn(self) -> None:
         chatlog = self.query_one(ChatLog)
@@ -489,6 +585,7 @@ class HarnessApp(App):
         self.session = store
         chatlog = self.query_one(ChatLog)
         await chatlog.remove_children()
+        chatlog.remove_class("empty")
         self._rendered_msgs = 0
         msgs: list = []
         for entry in store.entries:
@@ -510,7 +607,13 @@ class HarnessApp(App):
     def _after_turn(self, routing: Any) -> None:
         if routing is None:
             self._routing_offline = True
-            self._set_banner("Minima unreachable — using the current model")
+            reason = getattr(self.agent, "_offline_reason", None) or "Minima unreachable"
+            model = self.agent.state.model.id if self.agent.state.model else "default model"
+            self._footer_state["model"] = model
+            self._footer_state["basis"] = "offline"
+            self._set_banner(
+                f"routing offline ({reason}) — ran {model} unrouted; /reconnect to retry Minima"
+            )
         else:
             self._footer_state = self._routing_footer_state(routing)
             if routing.warnings:
@@ -562,10 +665,11 @@ class HarnessApp(App):
             ctx_pct=self._footer_state["ctx_pct"],
             routing_offline=self._routing_offline,
             route_mode=self._route_mode,
+            thinking_level=str(self.agent.state.thinking_level),
         )
         self.sub_title = ""
         try:
-            self.query_one(StatusBar).set_idle_text(footer.plain)
+            self.query_one(StatusBar).set_idle_text(footer)  # rich Text: keep per-segment colour
         except Exception:  # noqa: BLE001 - not mounted yet during early init
             pass
 
@@ -579,6 +683,25 @@ class HarnessApp(App):
         async def _clear(app: HarnessApp, args: str) -> None:
             await app.query_one(ChatLog).remove_children()
             await app._show_welcome()
+
+        async def _banner(app: HarnessApp, args: str) -> None:
+            from minima_harness.tui.welcome import render_welcome
+
+            chatlog = app.query_one(ChatLog)
+            existing = list(chatlog.query("#welcome"))
+            if existing:
+                for w in existing:
+                    w.remove()
+                chatlog.remove_class("empty")
+                await chatlog.add_system("welcome hidden · /banner to show")
+            else:
+                w = Static(render_welcome(app), id="welcome")
+                kids = list(chatlog.children)
+                if kids:
+                    await chatlog.mount(w, before=kids[0])
+                else:
+                    await chatlog.mount(w)
+                    chatlog.add_class("empty")
 
         async def _cost(app: HarnessApp, args: str) -> None:
             meter = app.agent.meter
@@ -850,6 +973,27 @@ class HarnessApp(App):
                 f"(threshold {app._escalate_threshold} · judge_every={app.config.judge_every})"
             )
 
+        async def _edits(app: HarnessApp, args: str) -> None:
+            on = args.strip().lower() in {"on", "1", "true", "yes"}
+            if not args.strip():
+                on = not app._confirm_edits
+            app._confirm_edits = on
+            await app.query_one(ChatLog).add_system(
+                "edit confirmation: "
+                + ("ON (review each edit/write diff before it applies)" if on else "off")
+            )
+
+        async def _cache(app: HarnessApp, args: str) -> None:
+            on = args.strip().lower() in {"on", "1", "true", "yes"}
+            if not args.strip():
+                on = not app._cache_enabled
+            app._cache_enabled = on
+            hr = app._cache.hit_rate
+            await app.query_one(ChatLog).add_system(
+                f"semantic cache: {'ON' if on else 'off'} "
+                f"(threshold {app._cache.threshold:.2f} · hit-rate {hr:.0%})"
+            )
+
         async def _stats(app: HarnessApp, args: str) -> None:
             stats = aggregate_sessions(app.cwd)
             await app.query_one(ChatLog).add_system(format_stats(stats))
@@ -873,6 +1017,7 @@ class HarnessApp(App):
         for name, fn, desc in [
             ("quit", _quit, "exit the agent"),
             ("clear", _clear, "clear the transcript"),
+            ("banner", _banner, "show / hide the welcome splash"),
             ("cost", _cost, "show the cost meter"),
             ("compact", _compact, "summarize older context"),
             ("help", _help, "list commands"),
@@ -884,6 +1029,8 @@ class HarnessApp(App):
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),
             ("escalate", _escalate, "toggle quality escalation"),
+            ("edits", _edits, "toggle edit/write diff confirmation"),
+            ("cache", _cache, "toggle semantic response cache"),
             ("stats", _stats, "show session analytics (last 10)"),
             ("recall", _recall, "Mubit cross-session recall"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),

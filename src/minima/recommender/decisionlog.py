@@ -57,6 +57,9 @@ class DecisionRecord:
     epsilon: float
     chosen_model_id: str
     escalated: bool
+    # What the (advisory) shadow bandit would have picked; None when shadow is off. Logged
+    # for offline agreement/regret comparison — never affects the deployed decision.
+    shadow_chosen_model_id: str | None = None
     # True when the epsilon branch actually changed the pick away from the argmin
     # (distinct from policy == "epsilon_softmax", which only says exploration was POSSIBLE).
     explored: bool = False

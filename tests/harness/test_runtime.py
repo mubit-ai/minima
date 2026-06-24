@@ -132,6 +132,35 @@ def test_low_quality_maps_to_failure():
     assert router.feedback_calls[0]["outcome"] == "failure"
 
 
+def test_rejected_edit_overrides_to_failure():
+    # Even with a high judge score, a rejected edit is a ground-truth negative.
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("done")])
+        faux_model = reg.get_model()
+        router = FakeRouter(faux_model)
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], judge_every=1),
+            router=router,
+            judge=DeterministicJudge(lambda t: 0.95),
+            model=faux_model,
+        )
+        agent.state.messages.append(_text_msg("done"))
+        agent.record_tool_rejection()  # simulate a user rejecting the proposed edit
+        routing = RoutingResult(
+            recommendation_id="rec-1",
+            chosen_model_id="faux",
+            model=faux_model,
+            est_cost_usd=0.001,
+            decision_basis="memory",
+        )
+        quality, outcome = asyncio.run(
+            agent._feedback_safely("task", routing, 10, None, 1)  # noqa: SLF001
+        )
+    assert outcome == "failure"
+    assert quality is not None and quality <= 0.25
+    assert router.feedback_calls[0]["outcome"] == "failure"
+
+
 def test_offline_fallback_runs_without_feedback():
     with register_faux_provider() as reg:
         reg.set_responses([_text_msg("ans")])
@@ -163,6 +192,60 @@ def test_offline_fallback_raises_when_disallowed():
 
         with pytest.raises(RuntimeError, match="minima unreachable"):
             asyncio.run(agent.prompt("hi"))
+
+
+def test_default_timeout_covers_reasoner_latency():
+    # Cold-start recommend with the reasoner can exceed 10s; the default must not silently
+    # time out into offline routing.
+    assert HarnessConfig().timeout >= 30.0
+
+
+def test_from_env_reads_minima_timeout(monkeypatch):
+    monkeypatch.setenv("MINIMA_TIMEOUT", "45")
+    assert HarnessConfig.from_env().timeout == 45.0
+
+
+def test_classify_offline_reason():
+    from minima_harness.minima.runtime import _classify_offline_reason
+
+    class ReadTimeout(Exception):
+        pass
+
+    class ConnectError(Exception):
+        pass
+
+    assert "timed out" in _classify_offline_reason(ReadTimeout())
+    assert "unreachable" in _classify_offline_reason(ConnectError())
+    assert _classify_offline_reason(RuntimeError("boom")) == "boom"
+
+
+def test_offline_fallback_records_reason():
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("ans")])
+        faux_model = reg.get_model()
+        router = FakeRouter(faux_model, fail_recommend=True)
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], allow_offline=True),
+            router=router,
+            judge=DeterministicJudge(lambda t: 0.9),
+            model=faux_model,
+        )
+        asyncio.run(agent.prompt("hi"))
+    assert agent._offline_reason == "minima unreachable"  # surfaced by the TUI banner
+
+
+def test_offline_reason_cleared_on_successful_route():
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("ans")])
+        faux_model = reg.get_model()
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], judge_every=0),
+            router=FakeRouter(faux_model),
+            model=faux_model,
+        )
+        agent._offline_reason = "stale"  # simulate a prior offline turn
+        asyncio.run(agent.prompt("hi"))
+    assert agent._offline_reason is None
 
 
 def test_multi_turn_tool_run_judges_final_answer():

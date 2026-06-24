@@ -39,6 +39,7 @@ class Editor(TextArea):
 
     def __init__(self) -> None:
         super().__init__(id="editor", soft_wrap=True, show_line_numbers=False)
+        self.border_title = "prompt"  # titled accent border frames the input as the focus target
         self.prompt_history: History | None = None  # set by the app for Up/Down recall
 
     def on_key(self, event: Key) -> None:

@@ -10,47 +10,37 @@ from minima_harness.tui.theme import current_theme, get_theme
 if TYPE_CHECKING:
     from minima_harness.tui.app import HarnessApp
 
-DIAGRAM = """\
-        ╭──────────────╮
-   ┌───▶│   recommend  │   Minima picks the model
-   │    ╰──────┬───────╯
-   │           ▼
-   │    ╭──────────────╮    ╭─────────╮
-   │    │     run      │───▶│  judge  │   quality 0-1
-   │    ╰──────┬───────╯    ╰─────────╯
-   │           │ model + your tools
-   │    ╭──────▼───────╮
-   └───▶│   feedback   │   realized cost / tokens / outcome
-        ╰──────────────╯
-              ▼
-           memory
-"""
+# ANSI-Shadow-style block glyphs (6 rows). Built programmatically and joined row-wise so the
+# columns always line up — never hand-concatenate ASCII art. Each letter's rows are equal width.
+_GLYPHS: dict[str, list[str]] = {
+    "M": ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
+    "I": ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
+    "N": ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
+    "A": [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+}
+
+
+def _ascii_banner(word: str) -> str:
+    return "\n".join(" ".join(_GLYPHS[ch][row] for ch in word) for row in range(6))
+
+
+BANNER = _ascii_banner("MINIMA")  # ~51 cols wide; the hero of the launch splash
+
+# A one-line workflow strap. Live state lives in the footer (the single status surface), not
+# here — the splash is pure onboarding. Auto-collapses on the first prompt; /banner toggles it.
+DIAGRAM = "recommend → run → judge → feedback → memory"
 
 
 def render_welcome(app: HarnessApp) -> Group:
-    """ASCII diagram + a live status panel for the startup transcript bubble."""
+    """The centered launch splash: MINIMA CLI banner + workflow strap + one onboarding hint.
+
+    Carries NO live status (model/session/cost/theme — that's the footer's job) and NO
+    duplicated key help.
+    """
     t = get_theme(current_theme())
-    accent, muted, user = t["accent"], t["muted"], t["user"]
-
-    diagram = Text(DIAGRAM.rstrip(), style=accent)
-    title = Text("minima-harness", style=f"bold {user}")
-    sub = Text("recommend → run → judge → feedback", style=muted)
-
-    session_label = app.session.display_name or (
-        app.session.path.stem if app.session.path else "ephemeral"
-    )
-    model = app._footer_state.get("model", "auto")
-    ntools = len(app._tools)
-    context = "AGENTS.md ✓" if (app.cwd / "AGENTS.md").exists() else "AGENTS.md ·"
-    status = Text(
-        f"session: {session_label} · model: {model} · tools: {ntools} "
-        f"· context: {context} · theme: {current_theme()}",
-        style=muted,
-    )
-    hint = Text(
-        "type a prompt + Enter · ↑/↓ history · / browse commands · Shift+Tab thinking · Esc abort",
-        style=muted,
-    )
-    palette = Text("→ /commands  to open the full command palette", style=accent)
-
-    return Group(diagram, Text(""), title, sub, Text(""), status, hint, palette, Text(""))
+    accent, muted = t["accent"], t["muted"]
+    banner = Text(BANNER, style=f"bold {accent}")
+    subtitle = Text("CLI · cost-aware model routing", style=muted)
+    strap = Text(DIAGRAM, style=muted)
+    hint = Text("type a prompt, or / for commands", style=muted)
+    return Group(banner, Text(""), subtitle, Text(""), strap, hint)

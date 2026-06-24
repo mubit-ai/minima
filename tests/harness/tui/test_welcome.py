@@ -24,26 +24,39 @@ def test_diagram_contains_the_loop():
     assert "recommend" in DIAGRAM and "feedback" in DIAGRAM and "judge" in DIAGRAM
 
 
-def test_render_welcome_has_status_panel(tmp_path):
+def test_render_welcome_is_a_clean_splash(tmp_path):
     cfg = HarnessConfig(allow_offline=True)
     app = HarnessApp(
         cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
     )
     out = _render_text(app)
-    assert "minima-harness" in out
-    assert "session:" in out and "tools:" in out
-    assert "/commands" in out
+    assert "█" in out  # the ASCII MINIMA banner
+    assert "CLI" in out  # banner subtitle
+    assert "recommend" in out and "memory" in out  # workflow strap
+    assert "commands" in out  # onboarding hint kept
+    # live status now lives ONLY in the footer — no duplicate status line in the welcome
+    assert "session:" not in out
+    assert "tools:" not in out
+    assert "theme:" not in out
 
 
 @pytest.mark.asyncio
-async def test_welcome_mounted_on_startup(tmp_path):
+async def test_welcome_centered_then_dismissed(tmp_path):
     cfg = HarnessConfig(allow_offline=True)
     app = HarnessApp(
         cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
     )
+    from minima_harness.tui.widgets.messages import ChatLog
+
     async with app.run_test() as pilot:
         await pilot.pause()
+        chatlog = app.query_one(ChatLog)
         assert app.query_one("#welcome") is not None
+        assert chatlog.has_class("empty")  # centered splash, no void
+        app._dismiss_welcome()
+        await pilot.pause()
+        assert not app.query("#welcome")  # gone after the first turn
+        assert not chatlog.has_class("empty")
 
 
 @pytest.mark.asyncio

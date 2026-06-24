@@ -86,3 +86,7 @@ class RecommendResponse(BaseModel):
     selection_policy: str = Field(
         "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
     )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        description="near-free cost-saving actions to apply (e.g. enable_prompt_cache)",
+    )

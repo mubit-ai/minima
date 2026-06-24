@@ -19,28 +19,51 @@ def render_footer(
     ctx_pct: float,
     routing_offline: bool,
     route_mode: str = "auto",
+    thinking_level: str = "off",
 ) -> Text:
+    """The single canonical status surface. Per-segment colour by *meaning* (not blanket-dim):
+    model in user-colour, cost in amber, savings/ctx/route warnings in red — so Minima's
+    cost-routing value reads at a glance. Layout: MODES  |  METRICS.
+    """
     t = get_theme(current_theme())
+    dim = t.get("footer_dim", t["muted"])
+    accent = t.get("footer_accent", t["accent"])
+    user, warn = t["user"], t["warning"]
     totals = meter.totals()
-    tokens = f"↑{input_tokens} ↓{output_tokens}"
+    out = Text(no_wrap=True)
+
+    def seg(label: str, value: str, style: str) -> None:
+        out.append(label, style=dim)
+        out.append(value, style=style)
+
+    # --- modes block (what am I doing) ---
+    seg("model: ", f"{model} ▸ {basis}", warn if basis == "offline" else user)
+    out.append("  ·  ", style=dim)
+    seg("route: ", route_mode, warn if route_mode == "confirm" else dim)
+    out.append("  ·  ", style=dim)
+    think_style = warn if thinking_level == "high" else (dim if thinking_level == "off" else accent)
+    seg("think: ", thinking_level, think_style)
+
+    out.append("   |   ", style=dim)
+
+    # --- metrics block (what has it cost) ---
+    seg("ctx ", f"{ctx_pct:.0f}%", warn if ctx_pct > 80 else dim)
+    out.append("  ·  ", style=dim)
+    out.append(f"↑{input_tokens} ↓{output_tokens}", style=dim)
     if cache_read:
-        tokens += f" ⚡{cache_read}"  # tokens served from the prompt cache this turn
-    # Cost is Minima's whole pitch, so make savings-vs-baseline first-class: show the
-    # realized spend and, once any turn had a baseline to compare against, the % saved.
-    cost = f"${totals.actual_cost_usd:.4f}"
+        out.append(f" ⚡{cache_read}", style=accent)  # tokens served from the prompt cache
+    out.append("  ·  ", style=dim)
+    out.append(f"${totals.actual_cost_usd:.4f}", style=accent)
     if totals.baseline_rows:
         pct = totals.savings_pct
-        cost += f" ({'save' if pct >= 0 else 'over'} {abs(pct):.0f}% vs base)"
-    bits = [
-        f"model: {model} ▸ {basis}",
-        f"route: {route_mode}",
-        f"ctx {ctx_pct:.0f}%",
-        tokens,
-        cost,
-        f"sess {session_id[:24]}",
-    ]
+        out.append(
+            f" ({'save' if pct >= 0 else 'over'} {abs(pct):.0f}% vs base)",
+            style=accent if pct >= 0 else warn,
+        )
+    out.append("  ·  ", style=dim)
+    marker = "◈ " if session_id == "ephemeral" else ""
+    out.append(f"sess {marker}{session_id[:24]}", style=dim)
     if routing_offline:
-        bits.append("[routing offline]")
-    text = Text(" · ").join(Text(b) for b in bits)
-    text.stylize(f"fg {t['muted']}")
-    return text
+        out.append("   ")
+        out.append("[routing offline]", style=f"bold {warn}")
+    return out
