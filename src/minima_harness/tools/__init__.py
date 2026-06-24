@@ -3,5 +3,6 @@
 from __future__ import annotations
 
 from minima_harness.tools.builtin import default_toolset
+from minima_harness.tools.calc import calc_tool
 
-__all__ = ["default_toolset"]
+__all__ = ["default_toolset", "calc_tool"]
