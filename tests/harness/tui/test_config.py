@@ -155,6 +155,45 @@ def test_cli_doctor_reports_presence_only(file_store, monkeypatch, capsys):
     assert "mubit-doctor-secret" not in out  # never echoes the value
 
 
+def test_cli_doctor_auth_probe_ok(file_store, monkeypatch, capsys):
+    import httpx
+
+    monkeypatch.delenv("MUBIT_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMA_API_KEY", raising=False)
+    file_store.set_value("MUBIT_API_KEY", "mubit-valid-1234")
+
+    class _Resp:
+        status_code = 200
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "health: HTTP 200" in out
+    assert "auth: OK" in out
+    assert "mubit-valid-1234" not in out  # key never echoed
+
+
+def test_cli_doctor_auth_probe_rejects_bad_key(file_store, monkeypatch, capsys):
+    import httpx
+
+    monkeypatch.delenv("MUBIT_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMA_API_KEY", raising=False)
+    file_store.set_value("MUBIT_API_KEY", "bad-key")
+
+    class _R200:
+        status_code = 200
+
+    class _R401:
+        status_code = 401
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _R200())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R401())
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "auth: FAILED" in out and "401" in out
+
+
 # --- overlay ---------------------------------------------------------------------------
 
 

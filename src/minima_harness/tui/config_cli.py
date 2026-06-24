@@ -73,13 +73,39 @@ def _doctor() -> int:
 
     url = os.environ.get("MINIMA_URL", "https://api.minima.sh")
     print(f"\n  Minima endpoint: {url}")
-    try:
-        import httpx
+    import httpx
 
+    reachable = False
+    try:
         resp = httpx.get(url.rstrip("/") + "/v1/health", timeout=5.0)
         print(f"  health: HTTP {resp.status_code}")
+        reachable = True
     except Exception as exc:  # noqa: BLE001 - any failure is just 'unreachable'
         print(f"  health: unreachable ({type(exc).__name__})")
+
+    # Authenticated probe: /v1/health is unauthenticated, so it can't tell a valid key from a
+    # bad one. A minimal recommend with the key actually exercises the routing auth path.
+    key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")
+    if not reachable:
+        return 0
+    if not key:
+        print("  auth: no MUBIT_API_KEY/MINIMA_API_KEY set — routing falls back to offline")
+        return 0
+    try:
+        r = httpx.post(
+            url.rstrip("/") + "/v1/recommend",
+            headers={"authorization": f"Bearer {key}"},
+            json={"task": {"task": "minima config doctor probe"}, "cost_quality_tradeoff": 5},
+            timeout=15.0,
+        )
+        if r.status_code == 200:
+            print("  auth: OK — key accepted")
+        elif r.status_code in (401, 403):
+            print(f"  auth: FAILED — key rejected (HTTP {r.status_code})")
+        else:
+            print(f"  auth: HTTP {r.status_code}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  auth: probe failed ({type(exc).__name__})")
     return 0
 
 
