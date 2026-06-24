@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from minima_harness.minima.config import DEFAULT_MINIMA_URL
 from minima_harness.tui.customize import GLOBAL_DIR
 
 CONFIG_FILE = GLOBAL_DIR / "config.env"
@@ -74,7 +75,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Minima endpoint URL",
                 secret=False,
                 optional=True,
-                default="https://api.minima.sh",
+                default=DEFAULT_MINIMA_URL,
             ),
             Field(
                 "MINIMA_API_KEY",

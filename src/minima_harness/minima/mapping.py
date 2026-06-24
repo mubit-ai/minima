@@ -10,6 +10,7 @@ two catalogs.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from minima_harness.ai.registry import all_models, find_model_by_id, try_get_model
@@ -19,6 +20,24 @@ if TYPE_CHECKING:
     from minima.schemas.recommend import RankedModel
 
 _log = logging.getLogger("minima_harness.mapping")
+
+# Provider -> env vars that supply its key (mirrors each ai/providers/*.py resolve_api_key).
+# Used to pick an offline fallback the user can actually run, not just the globally cheapest.
+_PROVIDER_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"),
+    "openai": ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_COMPAT_API_KEY"),
+    "openrouter": ("OPENROUTER_API_KEY", "OPENAI_API_KEY"),
+}
+
+
+def _has_provider_key(model: Model) -> bool:
+    """True if a key for ``model``'s provider is set (or it needs none, e.g. a base_url stub)."""
+    env_vars = _PROVIDER_ENV_VARS.get(model.provider.lower())
+    if not env_vars:
+        return True  # unknown/keyless provider — don't exclude it
+    return any(os.environ.get(v) for v in env_vars)
 
 
 class ModelMapping:
@@ -46,11 +65,20 @@ class ModelMapping:
         )
 
     def default_model(self) -> Model:
-        """Cheapest registered model (a sensible offline placeholder)."""
+        """Offline fallback: the cheapest registered model the user can actually run.
+
+        Prefers the cheapest model whose provider key is configured, so an offline
+        fallback doesn't pick (say) gpt-4o-mini when only Anthropic/Gemini keys are set.
+        Falls back to the globally cheapest model if no provider key is present (the run
+        will then surface a clear provider-auth error rather than a silent mismatch)."""
         models = all_models()
         if not models:
             raise KeyError("harness model registry is empty")
-        return min(models, key=lambda m: (m.cost.input + m.cost.output, m.id))
+        by_cost = sorted(models, key=lambda m: (m.cost.input + m.cost.output, m.id))
+        for model in by_cost:
+            if _has_provider_key(model):
+                return model
+        return by_cost[0]
 
     def _resolve(self, provider: str, model_id: str) -> Model | None:
         # 1. exact (provider, id)

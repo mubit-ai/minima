@@ -4,6 +4,21 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-24
+
+### Fixed
+- **Published CLI defaulted routing to `localhost:8080`.** A freshly installed `minima` (no
+  project `.env.harness`) connected to a dev URL that isn't running, so every turn fell back to
+  OFFLINE with "Minima unreachable" — while `minima config doctor` misleadingly reported the
+  hosted endpoint. `DEFAULT_MINIMA_URL` is now `https://api.minima.sh` and is the single source
+  of truth shared by the runtime, the config store, and `config doctor` (they can no longer
+  drift). Local dev against `make run` sets `MINIMA_URL=http://localhost:8080` explicitly.
+- **Offline fallback could pick an unrunnable model.** The degraded-mode fallback chose the
+  globally cheapest model (gpt-4o-mini) regardless of configured keys, so an
+  Anthropic+Gemini-only setup hit a provider-auth error offline. It now prefers the cheapest
+  model whose provider key is actually set (e.g. `claude-haiku-4-5` / `gemini-2.5-flash`),
+  falling back to the global cheapest only when no key is present.
+
 ## [0.4.0] - 2026-06-24
 
 First public, source-available release. Headline theme: the **harness** becomes a

@@ -1,8 +1,9 @@
 """Harness configuration: where Minima lives, the candidate pool, and judge policy.
 
-Defaults target a local Minima (``make run`` on :8080) so the harness works out of the
-box against a dev instance. Point ``MINIMA_URL`` at ``https://api.minima.sh`` (and set
-``MINIMA_API_KEY`` to your Mubit key) for the hosted service.
+Defaults target the **hosted** Minima (``https://api.minima.sh``) so a freshly installed
+``minima`` works out of the box — set ``MUBIT_API_KEY`` (routing auth) and a provider key
+and routing just works. For local development against ``make run`` on :8080, set
+``MINIMA_URL=http://localhost:8080`` (the repo's ``.env.harness`` does this explicitly).
 """
 
 from __future__ import annotations
@@ -10,7 +11,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-DEFAULT_MINIMA_URL = "http://localhost:8080"
+# The hosted service is the product default. Local dev sets MINIMA_URL explicitly.
+DEFAULT_MINIMA_URL = "https://api.minima.sh"
 DEFAULT_JUDGE_MODEL = "claude-haiku-4-5"
 
 # Candidate set mirrors examples/agent_warmup.py so cold-start routing behaves the same.
