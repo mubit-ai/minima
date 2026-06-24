@@ -60,6 +60,15 @@ src/minima_harness/
 
 ## Quickstart
 
+### Install
+
+```bash
+pip install "minima[harness,tui]"          # or: uv tool install "minima[harness,tui]"
+brew install mubit-ai/minima/minima-harness  # Homebrew (see packaging/homebrew/README.md)
+```
+
+Then run `minima-harness config` to add your keys (see below).
+
 ### Demo mode (no keys, no services)
 
 ```bash
