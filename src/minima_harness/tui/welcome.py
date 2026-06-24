@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from rich.console import Group
@@ -11,18 +10,11 @@ from minima_harness.tui.theme import current_theme, get_theme
 if TYPE_CHECKING:
     from minima_harness.tui.app import HarnessApp
 
-# Without a provider key the harness can't run any model — surface a first-run nudge.
-_PROVIDER_KEYS = (
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY",
-)
-
-
 def _needs_setup() -> bool:
-    return not any(os.environ.get(k) for k in _PROVIDER_KEYS)
+    """No configured provider key (across the whole provider catalog) → first-run nudge."""
+    from minima_harness.ai.provider_catalog import configured_providers
+
+    return not configured_providers()
 
 # ANSI-Shadow-style block glyphs (6 rows). Built programmatically and joined row-wise so the
 # columns always line up — never hand-concatenate ASCII art. Each letter's rows are equal width.

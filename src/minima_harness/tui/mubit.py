@@ -28,7 +28,9 @@ def init_mubit(cwd: Path) -> bool:
     if not key:
         _log.warning("mubit_no_api_key")
         return False
-    endpoint = os.environ.get("MUBIT_ENDPOINT", _DEFAULT_ENDPOINT)
+    # `or` (not get-with-default) so a blank MUBIT_ENDPOINT="" — e.g. a stray empty line in a
+    # copied .env — falls back to the hosted default instead of passing "" to mubit.init().
+    endpoint = os.environ.get("MUBIT_ENDPOINT") or _DEFAULT_ENDPOINT
     try:
         import mubit
 

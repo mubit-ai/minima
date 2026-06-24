@@ -161,9 +161,10 @@ class MinimaAgent(Agent):
             if not self.config.allow_offline:
                 raise
             self._offline_reason = _classify_offline_reason(exc)
-            _log.warning(
-                "minima_recommend_failed_offline_fallback: %s", self._offline_reason, exc_info=True
-            )
+            # Expected, recoverable degradation — log the concise reason at WARNING and keep the
+            # full traceback at DEBUG so a healthy offline fallback doesn't dump a stack trace.
+            _log.warning("minima_recommend_failed_offline_fallback: %s", self._offline_reason)
+            _log.debug("offline_fallback_detail", exc_info=True)
             return None
         if self.before_route is not None:
             overridden = await self.before_route(routing, task_text)

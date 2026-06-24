@@ -105,6 +105,10 @@ class MinimaRouter:
         difficulty: str | None = None,
         expected_input_tokens: int | None = None,
     ) -> RoutingResult:
+        # Routing explicitly disabled (e.g. `--offline` sets minima_url=""). Fail fast with a
+        # clear reason instead of letting httpx raise UnsupportedProtocol on a scheme-less URL.
+        if not (self.config.minima_url or "").strip():
+            raise RuntimeError("routing disabled (offline mode)")
         constraints = (
             Constraints(candidate_models=list(self.config.candidates))
             if self.config.candidates

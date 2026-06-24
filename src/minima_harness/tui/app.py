@@ -815,7 +815,11 @@ class HarnessApp(App):
         async def _model(app: HarnessApp, args: str) -> None:
             from minima_harness.ai import all_models
 
+            # Offer the union of routing candidates + every registered model (candidates first,
+            # deduped) so a user can pin ANY provider's model — e.g. a Groq/DeepSeek model that
+            # isn't in the default routing pool. Pinning sets candidates=[chosen].
             cands = list(app.config.candidates or [])
+            cands = list(dict.fromkeys(cands + [m.id for m in all_models()]))
             providers = {m.id: m.provider for m in all_models()}
             active = app._footer_state.get("model")
             basis = app._footer_state.get("basis")

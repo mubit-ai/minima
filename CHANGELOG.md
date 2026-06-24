@@ -4,6 +4,40 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-06-24
+
+### Added
+- **Multi-provider support (open & closed source).** A new provider catalog
+  (`ai/provider_catalog.py`) integrates 21 LLM providers — closed-native (OpenAI, Anthropic,
+  Gemini, DeepSeek, Mistral, xAI, Cohere, Perplexity), the OpenRouter aggregator, open-weight
+  hosts (Groq, Together, Fireworks, DeepInfra, Cerebras, Hyperbolic, Novita), and local
+  runtimes (Ollama, vLLM, LM Studio, llama.cpp, LocalAI). All speak the OpenAI
+  chat-completions protocol, so a verified `base_url` + the right API-key env var is enough.
+  Model ids + pricing were verified against each provider's official docs (June 2026).
+- **Key-gated, provider-specific routing.** Each model resolves *its own* provider's key
+  (a Groq model uses `GROQ_API_KEY`, never an OpenRouter key on `api.openai.com`); a provider's
+  models are registered only when its key is configured (so the `/model` picker stays relevant);
+  routing candidates and the offline fallback are filtered to models the user can actually run.
+  The `/model` picker now lists every registered model so any provider's model can be pinned.
+- **`minima config`** now lists the popular providers (Anthropic, OpenAI, Gemini, xAI, DeepSeek,
+  Mistral, OpenRouter, Groq, Together); more providers work by exporting their env var, and
+  local runtimes need no key.
+- **Config overlay UX:** Enter walks the fields and lands on a visible **Save** button (Enter
+  saves — Ctrl+S still works); the save hint is pinned in an always-visible footer.
+
+### Fixed
+- **`.env.example` shipped `MUBIT_ENDPOINT=http://127.0.0.1:3000`** and the docs said
+  `cp .env.example .env`; the CLI auto-loads `./.env`, silently degrading Mubit memory to a
+  dead localhost. The localhost default is now commented out, and `init_mubit` treats an empty
+  endpoint as unset (hosted default applies).
+- **OpenRouter-only / single-provider setups mis-routed.** The earlier key-aware fallback could
+  pick `gpt-4o-mini` (which hits `api.openai.com`) for an OpenRouter key → guaranteed 401. Key
+  eligibility is now provider-specific and base_url-aware; an unpriced (cost-0) custom/local
+  model is no longer mistaken for the cheapest offline fallback.
+- **`--offline` no longer dumps an httpx traceback** — routing fails fast with a clear
+  "routing disabled (offline mode)" reason, and the expected offline-fallback log drops the
+  stack trace (kept at DEBUG).
+
 ## [0.4.1] - 2026-06-24
 
 ### Fixed
