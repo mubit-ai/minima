@@ -150,6 +150,9 @@ class HarnessApp(App):
     }
     ConfigOverlay #config-hint { color: $text-muted; padding: 0 1 1 1; }
     ConfigOverlay #config-body { height: auto; max-height: 26; padding: 0 1; }
+    ConfigOverlay #config-foot {
+        color: $text-muted; padding: 1 1 0 1; border-top: solid $panel-lighten-2;
+    }
     ConfigOverlay .cfg-section { text-style: bold; padding: 1 0 0 0; }
     ConfigOverlay .cfg-note { color: $text-muted; }
     ConfigOverlay .cfg-key { color: $text-muted; padding: 1 0 0 0; }
@@ -158,6 +161,7 @@ class HarnessApp(App):
         background: $boost; border: round $panel-lighten-2;
     }
     ConfigOverlay Input:focus { border: round $accent; }
+    ConfigOverlay #cfg-save { width: auto; margin: 1 0 0 0; }
     PromptOptimizationOverlay { align: center middle; }
     PromptOptimizationOverlay #opt-card {
         width: 92; height: auto; max-height: 85%;

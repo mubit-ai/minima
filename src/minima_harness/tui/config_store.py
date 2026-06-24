@@ -58,11 +58,22 @@ class Section:
 SECTIONS: tuple[Section, ...] = (
     Section(
         title="LLM provider keys",
-        note="Used by the harness to RUN the chosen model.",
+        note="Used by the harness to RUN the chosen model. Any one provider is enough.",
         fields=(
-            Field("ANTHROPIC_API_KEY", "Anthropic (Claude) API key"),
-            Field("GEMINI_API_KEY", "Google Gemini API key", aliases=("GOOGLE_API_KEY",)),
+            Field("ANTHROPIC_API_KEY", "Anthropic (Claude) API key", optional=True),
+            Field(
+                "GEMINI_API_KEY",
+                "Google Gemini API key",
+                optional=True,
+                aliases=("GOOGLE_API_KEY",),
+            ),
             Field("OPENAI_API_KEY", "OpenAI API key", optional=True),
+            Field(
+                "OPENROUTER_API_KEY",
+                "OpenRouter — open-weight & OpenAI-compatible models "
+                "(Llama, Qwen, DeepSeek, Mistral…)",
+                optional=True,
+            ),
         ),
     ),
     Section(

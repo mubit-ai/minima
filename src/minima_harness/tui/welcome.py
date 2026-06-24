@@ -12,7 +12,13 @@ if TYPE_CHECKING:
     from minima_harness.tui.app import HarnessApp
 
 # Without a provider key the harness can't run any model — surface a first-run nudge.
-_PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY")
+_PROVIDER_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+)
 
 
 def _needs_setup() -> bool:

@@ -240,3 +240,40 @@ async def test_config_overlay_cancel_returns_none(file_store):
         await pilot.pause()
 
     assert app.result is None
+
+
+@pytest.mark.asyncio
+async def test_config_overlay_enter_advances_and_save_button_commits(file_store):
+    """Enter walks fields (does not save mid-form); the Save button commits."""
+    from textual.app import App
+    from textual.widgets import Button, Input
+
+    from minima_harness.tui.overlays import ConfigOverlay
+
+    class _App(App):
+        result: dict | None = "sentinel"  # type: ignore[assignment]
+
+        def on_mount(self) -> None:
+            self.push_screen(ConfigOverlay(), callback=lambda r: setattr(self, "result", r))
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The open-source / OpenAI-compatible field exists.
+        router = app.screen.query_one("#cfg-OPENROUTER_API_KEY", Input)
+        first = app.screen.query_one("#cfg-ANTHROPIC_API_KEY", Input)
+        first.focus()
+        first.value = "sk-ant-1234"
+        await pilot.pause()
+        # Enter advances focus instead of saving (so multi-key entry isn't cut short).
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.result == "sentinel"  # nothing committed yet
+        assert not first.has_focus
+        # Fill the OpenRouter key too, then commit via the Save button.
+        router.value = "sk-or-9999"
+        app.screen.query_one("#cfg-save", Button).press()
+        await pilot.pause()
+
+    assert app.result == {"ANTHROPIC_API_KEY": "sk-ant-1234", "OPENROUTER_API_KEY": "sk-or-9999"}
+    assert file_store.get("OPENROUTER_API_KEY") == "sk-or-9999"
