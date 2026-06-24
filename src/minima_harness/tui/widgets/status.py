@@ -17,18 +17,30 @@ class StatusBar(Static):
         self._state = "idle"  # idle | routing | thinking | working
         self._frame = 0
         self._idle_text: Text | str = ""
+        self._timer = None
 
     def on_mount(self) -> None:
-        self.set_interval(0.1, self._tick)
+        # The spinner timer runs ONLY while the agent is busy — paused at idle so the event
+        # loop (and the terminal) can truly sleep instead of waking 10x/s for a no-op tick.
+        self._timer = self.set_interval(0.1, self._tick, pause=True)
 
     def _tick(self) -> None:
-        if self._state == "idle":
-            return
         self._frame = (self._frame + 1) % len(_FRAMES)
         self._display()
 
     def set_state(self, state: str) -> None:
+        # Idempotent: the streaming path calls this on every token delta with the same state,
+        # which would otherwise repaint the footer per token (50-100x/s) and spin fans. Only
+        # (re)render and toggle the spinner timer when the state actually changes.
+        if state == self._state:
+            return
         self._state = state
+        if self._timer is not None:
+            if state == "idle":
+                self._timer.pause()
+            else:
+                self._frame = 0
+                self._timer.resume()
         self._display()
 
     def set_idle_text(self, text: Text | str) -> None:

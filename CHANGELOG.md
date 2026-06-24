@@ -4,6 +4,18 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-06-24
+
+### Fixed
+- **High CPU / fans during use.** The status bar repainted on *every* streamed token —
+  `_append_stream` called `set_state("working")` per delta and `StatusBar.set_state`
+  re-rendered unconditionally, so a 600-token reply triggered ~616 footer repaints (the
+  terminal emulator repaints on each, which spins fans). `set_state` is now idempotent
+  (no-op when the state is unchanged), the live-stream flush eased from ~33 Hz to ~16 Hz,
+  and the spinner timer is **paused while idle** (no 10 Hz wake-ups when nothing is running).
+  Measured: a 600-token stream drops from ~666 to ~40 repaints (~94% fewer); idle is quiet.
+  Memory is unaffected (steady ~70 MB RSS, no leak).
+
 ## [0.4.2] - 2026-06-24
 
 ### Added
