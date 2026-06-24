@@ -10,9 +10,9 @@ two catalogs.
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING
 
+from minima_harness.ai.provider_catalog import provider_key_present
 from minima_harness.ai.registry import all_models, find_model_by_id, try_get_model
 from minima_harness.ai.types import Model
 
@@ -21,23 +21,22 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("minima_harness.mapping")
 
-# Provider -> env vars that supply its key (mirrors each ai/providers/*.py resolve_api_key).
-# Used to pick an offline fallback the user can actually run, not just the globally cheapest.
-_PROVIDER_ENV_VARS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"),
-    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"),
-    "openai": ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_COMPAT_API_KEY"),
-    "openrouter": ("OPENROUTER_API_KEY", "OPENAI_API_KEY"),
-}
-
 
 def _has_provider_key(model: Model) -> bool:
-    """True if a key for ``model``'s provider is set (or it needs none, e.g. a base_url stub)."""
-    env_vars = _PROVIDER_ENV_VARS.get(model.provider.lower())
-    if not env_vars:
-        return True  # unknown/keyless provider — don't exclude it
-    return any(os.environ.get(v) for v in env_vars)
+    """True if a key for ``model``'s OWN provider is set (or it needs none, e.g. a local runtime).
+
+    Provider-specific (via the provider catalog): a Groq model needs GROQ_API_KEY, an OpenAI
+    model needs OPENAI_API_KEY — an OpenRouter key never green-lights an api.openai.com model.
+    """
+    return provider_key_present(model.provider)
+
+
+def _fallback_cost(model: Model) -> float:
+    """Sort key for the offline fallback: combined per-token cost, but treat an unpriced
+    (cost 0) model as most-expensive so a local/custom 0-cost stub isn't mistaken for the
+    cheapest runnable default."""
+    total = model.cost.input + model.cost.output
+    return float("inf") if total <= 0 else total
 
 
 class ModelMapping:
@@ -74,7 +73,7 @@ class ModelMapping:
         models = all_models()
         if not models:
             raise KeyError("harness model registry is empty")
-        by_cost = sorted(models, key=lambda m: (m.cost.input + m.cost.output, m.id))
+        by_cost = sorted(models, key=lambda m: (_fallback_cost(m), m.id))
         for model in by_cost:
             if _has_provider_key(model):
                 return model

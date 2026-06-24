@@ -55,26 +55,25 @@ class Section:
     fields: tuple[Field, ...] = field(default_factory=tuple)
 
 
+def _provider_fields() -> tuple[Field, ...]:
+    """Build the LLM-provider key fields from the provider catalog (single source of truth)."""
+    from minima_harness.ai.provider_catalog import config_providers
+
+    fields: list[Field] = []
+    for p in config_providers():
+        primary, *alts = p.env_vars
+        label = f"{p.display_name} — {p.blurb}" if p.blurb else f"{p.display_name} API key"
+        fields.append(Field(primary, label, optional=True, aliases=tuple(alts)))
+    return tuple(fields)
+
+
 SECTIONS: tuple[Section, ...] = (
     Section(
         title="LLM provider keys",
-        note="Used by the harness to RUN the chosen model. Any one provider is enough.",
-        fields=(
-            Field("ANTHROPIC_API_KEY", "Anthropic (Claude) API key", optional=True),
-            Field(
-                "GEMINI_API_KEY",
-                "Google Gemini API key",
-                optional=True,
-                aliases=("GOOGLE_API_KEY",),
-            ),
-            Field("OPENAI_API_KEY", "OpenAI API key", optional=True),
-            Field(
-                "OPENROUTER_API_KEY",
-                "OpenRouter — open-weight & OpenAI-compatible models "
-                "(Llama, Qwen, DeepSeek, Mistral…)",
-                optional=True,
-            ),
-        ),
+        note="Keys to RUN the chosen model — set any one (or several). More providers "
+        "(Fireworks, DeepInfra, Cerebras, Perplexity, Cohere, …) work by exporting their env "
+        "var; local runtimes (Ollama, vLLM, LM Studio) need no key.",
+        fields=_provider_fields(),
     ),
     Section(
         title="Mubit / Minima routing",

@@ -91,10 +91,14 @@ def _tools_for(args: argparse.Namespace):
 
 
 def _register_providers(cwd: Path) -> None:
+    from minima_harness.ai.provider_catalog import register_catalog_models
     from minima_harness.ai.providers import ensure_providers_registered
     from minima_harness.tui.extra_models import register_extra_models
 
     ensure_providers_registered()
+    # Register the curated multi-provider catalog, but only for providers whose key is
+    # configured — so the model picker stays relevant (you see models you can actually run).
+    register_catalog_models()
     register_extra_models(cwd)
 
 
@@ -118,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         config.minima_url = ""
     cwd = Path.cwd()
     _register_providers(cwd)
+    # Gate the routing candidate pool to models whose provider key is configured (after
+    # registration so newly-added providers count) — Minima won't be offered a model the
+    # user can't run. No-op when keys for the defaults (Anthropic/Gemini) are present.
+    from minima_harness.ai.provider_catalog import runnable_candidates
+
+    config.candidates = runnable_candidates(config.candidates)
     tools = _tools_for(args)
 
     noninteractive = args.print or args.mode in ("print", "json")
