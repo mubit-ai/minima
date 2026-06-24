@@ -42,8 +42,11 @@ from minima_harness.tui.extensions import load_extensions
 from minima_harness.tui.history import History, append_history, load_history
 from minima_harness.tui.mubit import (
     effective_prompt,
+    get_prompt,
     init_mubit,
-    token_breakdown,
+    layer_token_breakdown,
+    prompt_layers,
+    propose_prompt_optimization,
 )
 from minima_harness.tui.mubit import (
     recall as mubit_recall,
@@ -55,8 +58,9 @@ from minima_harness.tui.overlays import (
     CommandPicker,
     ConfigOverlay,
     DiffApproval,
+    LayeredPromptInspector,
     ModelPicker,
-    PromptInspector,
+    PromptOptimizationOverlay,
     RoutingConfirm,
     SessionPicker,
     TreePicker,
@@ -108,6 +112,30 @@ class HarnessApp(App):
     CommandPicker OptionList:focus { border: round $accent; }
     PromptInspector { align: center middle; }
     PromptInspector TextArea { width: 80; height: 20; background: $panel; }
+    LayeredPromptInspector { align: center middle; }
+    LayeredPromptInspector #prompt-card {
+        width: 92; height: auto; max-height: 90%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    LayeredPromptInspector #prompt-hint { color: $text-muted; padding: 0 1 1 1; }
+    LayeredPromptInspector #prompt-body { height: auto; max-height: 30; padding: 0 1; }
+    LayeredPromptInspector Collapsible { background: $panel; border: none; padding: 0; }
+    LayeredPromptInspector TextArea {
+        height: 6; background: $boost; border: round $panel-lighten-2;
+    }
+    LayeredPromptInspector TextArea:focus { border: round $accent; }
+    LayeredPromptInspector TextArea.layer-view { height: 5; color: $text-muted; }
+    RoutingConfirm { align: center middle; }
+    RoutingConfirm #route-card {
+        width: 88; height: auto; max-height: 80%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    RoutingConfirm #route-reason { color: $text; padding: 0 1; }
+    RoutingConfirm #route-hint { color: $text-muted; padding: 0 1 1 1; }
+    RoutingConfirm OptionList {
+        height: auto; max-height: 16; background: $panel; border: round $panel-lighten-2;
+    }
+    RoutingConfirm OptionList:focus { border: round $accent; }
     TreePicker Tree {
         width: 72; height: auto; max-height: 20;
         background: $panel; border: round $accent; padding: 0 1;
@@ -130,6 +158,15 @@ class HarnessApp(App):
         background: $boost; border: round $panel-lighten-2;
     }
     ConfigOverlay Input:focus { border: round $accent; }
+    PromptOptimizationOverlay { align: center middle; }
+    PromptOptimizationOverlay #opt-card {
+        width: 92; height: auto; max-height: 85%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    PromptOptimizationOverlay #opt-reason { color: $text-muted; padding: 0 1 1 1; }
+    PromptOptimizationOverlay TextArea {
+        height: auto; max-height: 18; background: $boost; border: round $panel-lighten-2;
+    }
     """
 
     def __init__(
@@ -388,19 +425,27 @@ class HarnessApp(App):
     async def _route_hook(self, routing: Any, task_text: str) -> Any:
         """before_route hook: always emits a rationale line; shows confirm panel when on."""
         chatlog = self.query_one(ChatLog)
+        reason = ""
         if routing is not None:
             chosen = routing.chosen_model_id or routing.model.id
+            chosen_r = _chosen_ranking(routing)
             level, color = _confidence_band(routing)
             extra = _reasoner_note(routing)
+            cost = _fmt_cost_range(
+                routing.est_cost_usd, routing.est_cost_low, routing.est_cost_high
+            )
+            lat = _fmt_latency(chosen_r.est_latency_ms if chosen_r else None)
             line = (
-                f"● routed to {chosen} · basis {routing.decision_basis} "
-                f"· est ${routing.est_cost_usd:.4f} · conf {routing.confidence:.0%} "
-                f"({level}){extra}"
+                f"● routed to {chosen} · {routing.decision_basis} · {cost} · {lat} "
+                f"· conf {routing.confidence:.0%} ({level}){extra}"
             )
             await chatlog.add_system(line, color=color)
+            reason = _routing_reason(routing)
+            if reason:
+                await chatlog.add_system(f"   └ {reason}")  # cost/speed/predictability story
         if self._route_mode != "confirm" or routing is None:
             return None  # accept as-is
-        result = await self.push_screen(RoutingConfirm(routing), wait_for_dismiss=True)
+        result = await self.push_screen(RoutingConfirm(routing, reason), wait_for_dismiss=True)
         if result is None or result.get("action") == "cancel":
             routing.recommendation_id = None  # veto feedback
             return routing
@@ -563,6 +608,10 @@ class HarnessApp(App):
                     "in_tokens": _usage.input if _usage else 0,
                     "out_tokens": _usage.output if _usage else 0,
                     "cost": _usage.cost.total if _usage else 0.0,
+                    # est cost (+ band) so predictability (est-vs-actual) is computable later.
+                    "est_cost": routing.est_cost_usd if routing else 0.0,
+                    "est_cost_low": routing.est_cost_low if routing else None,
+                    "est_cost_high": routing.est_cost_high if routing else None,
                 },
             )
             self._stream_bubble = None
@@ -970,14 +1019,18 @@ class HarnessApp(App):
             app.push_screen(CommandPicker(app.commands.all()), callback=_picked)
 
         async def _prompt(app: HarnessApp, args: str) -> None:
-            tokens = token_breakdown(app.cwd, app.agent.state.messages)
-            prompt_text = effective_prompt(app.cwd, get_session_override(app.session))
+            so = get_session_override(app.session)
+            layers = prompt_layers(app.cwd, so)
+            breakdown = layer_token_breakdown(app.cwd, app.agent.state.messages, so)
+            project_text = get_prompt()  # current Mubit system prompt (may be empty)
 
             def _saved(result: dict | None) -> None:
                 if result:
                     app.run_worker(app._apply_prompt_edit(result), exclusive=True)
 
-            app.push_screen(PromptInspector(prompt_text, tokens), callback=_saved)
+            app.push_screen(
+                LayeredPromptInspector(layers, project_text, so, breakdown), callback=_saved
+            )
 
         async def _config(app: HarnessApp, args: str) -> None:
             def _saved(changes: dict | None) -> None:
@@ -1000,6 +1053,26 @@ class HarnessApp(App):
                 )
 
             app.push_screen(ConfigOverlay(), callback=_saved)
+
+        async def _optimize(app: HarnessApp, args: str) -> None:
+            opt = propose_prompt_optimization(app.cwd)
+            if opt is None:
+                await app.query_one(ChatLog).add_system(
+                    "no prompt optimization available "
+                    "(Mubit returned nothing and no local savings found)"
+                )
+                return
+
+            def _applied(result: dict | None) -> None:
+                if result and result.get("action") == "apply":
+                    app.run_worker(
+                        app._apply_prompt_edit(
+                            {"action": "project", "content": result["content"]}
+                        ),
+                        exclusive=True,
+                    )
+
+            app.push_screen(PromptOptimizationOverlay(opt), callback=_applied)
 
         async def _skills(app: HarnessApp, args: str) -> None:
             if not app._skills:
@@ -1091,6 +1164,7 @@ class HarnessApp(App):
             ("commands", _commands, "open the command palette"),
             ("config", _config, "manage API keys (LLM providers + Mubit)"),
             ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
+            ("optimize", _optimize, "optimize the system prompt via Mubit (save tokens)"),
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),
             ("escalate", _escalate, "toggle quality escalation"),
@@ -1213,6 +1287,69 @@ def _reasoner_note(routing: Any) -> str:
     if any(w.startswith("escalation_suggested") for w in routing.warnings):
         return " · evidence thin"
     return ""
+
+
+# ROI is "not significant" when a pricier model buys less than this much extra predicted
+# success — the cheaper pick is recommended and the premium is framed as poor value.
+_ROI_MIN_PP = 0.03  # 3 percentage points
+
+
+def _chosen_ranking(routing: Any) -> Any:
+    chosen_id = routing.chosen_model_id or routing.model.id
+    return next((r for r in routing.ranked if r.model_id == chosen_id), None)
+
+
+def _fmt_cost_range(est: float, low: float | None, high: float | None) -> str:
+    """``$0.0123 ($0.0080–$0.0180)`` when a data-grounded band exists, else a honest tag."""
+    if low is not None and high is not None:
+        return f"${est:.4f} (${low:.4f}–${high:.4f})"
+    return f"${est:.4f} (no range yet)"
+
+
+def _fmt_latency(ms: float | None) -> str:
+    return f"~{ms:.0f}ms" if ms else "~?ms"
+
+
+def _roi_line(routing: Any) -> str:
+    """Frame the next-pricier alternative as cost-vs-quality ROI vs the recommended pick."""
+    chosen = _chosen_ranking(routing)
+    if chosen is None:
+        return ""
+    pricier = [r for r in routing.ranked if r.est_cost_usd > chosen.est_cost_usd + 1e-9]
+    if not pricier:
+        return ""
+    alt = min(pricier, key=lambda r: r.est_cost_usd)
+    dcost = alt.est_cost_usd - chosen.est_cost_usd
+    dpp = (alt.predicted_success - chosen.predicted_success) * 100.0
+    verdict = "not-significant ROI" if dpp < _ROI_MIN_PP * 100.0 else "worth it for quality"
+    return f"{alt.model_id} +${dcost:.4f} for {dpp:+.0f}pp success → {verdict}"
+
+
+def _routing_reason(routing: Any) -> str:
+    """Hybrid reasoning: the reasoner's NL text when escalation fired and produced one;
+    otherwise a data-grounded line from the chosen candidate's evidence + an ROI comparison."""
+    escalated = any(
+        w == "reasoner_consulted" or w.startswith("escalation_suggested")
+        for w in routing.warnings
+    )
+    if escalated and routing.rationale.strip():
+        return routing.rationale.strip()
+    chosen = _chosen_ranking(routing)
+    if chosen is None:
+        return routing.rationale.strip()
+    n = chosen.evidence_count
+    if n > 0:
+        base = (
+            f"{n} similar task{'s' if n != 1 else ''} · {chosen.model_id} succeeds "
+            f"{chosen.predicted_success:.0%} at ~${chosen.est_cost_usd:.4f}"
+        )
+    else:
+        base = (
+            f"{chosen.model_id} · capability prior {chosen.predicted_success:.0%} "
+            f"at ~${chosen.est_cost_usd:.4f}"
+        )
+    roi = _roi_line(routing)
+    return f"{base} · {roi}" if roi else base
 
 
 def _args_repr(args: Any) -> str:

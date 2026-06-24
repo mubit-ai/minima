@@ -4,14 +4,13 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 `src/minima` (recommender API), `src/minima_harness` (TUI agent), `client_sdk/minima_client`
 (HTTP SDK). Entry points: `minima-harness`, `minima-seed`, `minima-calibration-report`.
 
-> **License is `Proprietary`.** Decide the distribution target *first* — public PyPI is almost
-> certainly **not** intended. Default assumption: a **private index** (or internal artifact
-> store) and/or a tagged Git release. Steps below are index-agnostic; the "Public PyPI only"
-> items are called out and should stay skipped unless the license changes.
+> **License is `FSL-1.1-Apache-2.0`** (source-available, non-compete; auto-converts to Apache-2.0
+> after 2 years). The repo is public, so **public PyPI is fine** — PyPI permits non-OSI licenses.
+> Note FSL is *not* OSI-"open source", so don't add `License :: OSI Approved` classifiers.
 
 ## 1. Decide & confirm
-- [ ] Distribution target chosen: private index / internal store / Git tag (NOT public PyPI while Proprietary).
-- [ ] Release scope agreed (what's in `harness_v1` going out: config command, overlay reworks, footer fixes, Phase 0–3 work).
+- [x] License: `FSL-1.1-Apache-2.0` (see `LICENSE`); repo + package public.
+- [ ] Release scope agreed (config command + prompt/routing/predictability phases + copy-paste/mouse fix + overlay reworks + banner).
 
 ## 2. Version & changelog
 - [ ] Bump `version` in `pyproject.toml` (currently `0.3.0`) per semver.

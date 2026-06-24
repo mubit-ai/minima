@@ -67,9 +67,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="run mode (interactive TUI, one-shot print, or JSON event stream)",
     )
     p.add_argument(
-        "--no-mouse",
+        "--mouse",
         action="store_true",
-        help="disable mouse capture so you can select/copy text (scroll then needs PageUp/Down).",
+        help="capture the mouse for scroll-wheel support. OFF by default so terminal text "
+        "selection + copy (drag, then Cmd/Ctrl+C) works; scroll with PageUp/PageDown.",
     )
     return p
 
@@ -155,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
     )
-    app.run(mouse=not args.no_mouse)
+    app.run(mouse=args.mouse)
     return 0
 
 

@@ -197,3 +197,17 @@ client_sdk/minima_client/   client (sync+async) · autocapture · errors
 docs/               full documentation       examples/   runnable examples
 tests/              unit · integration (FakeMemory) · live (-m live) · eval (-m eval)
 ```
+
+## License
+
+Minima is **source-available** under the [Functional Source License,
+Version 1.1, Apache 2.0 Future License](LICENSE) (`FSL-1.1-Apache-2.0`).
+
+You may use, copy, modify, and self-host Minima for any **Permitted Purpose** —
+internal use, non-commercial education/research, and professional services for a
+licensee. The one restriction is a **Competing Use**: you may not offer Minima
+(or a substantially similar product/service) to others as a commercial or hosted
+offering that competes with us. Two years after each version is published, that
+version automatically converts to the **Apache License 2.0**.
+
+Copyright 2026 Mubit.

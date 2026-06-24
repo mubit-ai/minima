@@ -32,6 +32,14 @@ class Ranking:
     est_cost_usd: float
     rationale: str = ""
     decision_basis: str = ""
+    # Speed + predictability axes (server provides these; the harness now surfaces them).
+    est_latency_ms: float | None = None
+    latency_basis: str = ""
+    est_cost_low: float | None = None
+    est_cost_high: float | None = None
+    cost_band_basis: str = ""
+    success_interval_width: float = 0.0
+    evidence_count: int = 0
 
 
 @dataclass(slots=True)
@@ -56,6 +64,10 @@ class RoutingResult:
     confidence: float = 0.0
     fallback_model_id: str | None = None
     baseline_cost_usd: float | None = None
+    # Predictable cost band for the chosen model (None when evidence is thin).
+    est_cost_low: float | None = None
+    est_cost_high: float | None = None
+    cost_band_basis: str = ""
 
 
 def _baseline_cost(ranked: list[Ranking], baseline_id: str | None) -> float | None:
@@ -130,6 +142,13 @@ class MinimaRouter:
                 est_cost_usd=r.est_cost_usd,
                 rationale=r.rationale,
                 decision_basis=str(r.decision_basis),
+                est_latency_ms=r.est_latency_ms,
+                latency_basis=r.latency_basis,
+                est_cost_low=r.est_cost_low,
+                est_cost_high=r.est_cost_high,
+                cost_band_basis=r.cost_band_basis,
+                success_interval_width=r.success_interval_width,
+                evidence_count=len(r.evidence),
             )
             for r in rec.ranked
         ]
@@ -146,6 +165,9 @@ class MinimaRouter:
             confidence=rec.confidence,
             fallback_model_id=rec.fallback_model.model_id if rec.fallback_model else None,
             baseline_cost_usd=_baseline_cost(ranking_list, self.config.baseline_model_id),
+            est_cost_low=ranked.est_cost_low,
+            est_cost_high=ranked.est_cost_high,
+            cost_band_basis=ranked.cost_band_basis,
         )
 
     async def feedback(

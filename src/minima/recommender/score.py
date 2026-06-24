@@ -140,6 +140,45 @@ def effective_cost(
     return estimate_cost(card, input_tokens, output_tokens, use_cache, cache_fraction)
 
 
+def effective_cost_band(
+    card: ModelCard,
+    agg: ModelAggregate | None,
+    input_tokens: int,
+    use_cache: bool,
+    basis: str,
+    min_cost_n: int,
+    q_low: float = 0.25,
+    q_high: float = 0.75,
+) -> tuple[tuple[float, float], str] | None:
+    """Data-grounded predictable cost band ``((low, high), basis_label)`` matching the ranking
+    ``basis`` — the honest range behind the point ``effective_cost``. ``"rescaled"`` re-prices
+    the observed output-token band for this request (input fixed, output the band); ``"observed"``
+    uses the realized $/call band directly. Returns ``None`` for the ``"estimate"`` basis or when
+    evidence is below ``min_cost_n`` — the caller renders "no range yet" rather than fabricating.
+    """
+    if agg is None:
+        return None
+    label = f"p{int(round(q_low * 100))}_p{int(round(q_high * 100))}"
+    if basis == "rescaled":
+        band = agg.observed_output_tokens_band(min_cost_n, q_low, q_high)
+        if band is not None:
+            lo_out, hi_out = band
+            in_price = (
+                card.cache_read_cost_per_mtok
+                if use_cache and card.cache_read_cost_per_mtok is not None
+                else card.input_cost_per_mtok
+            )
+            cost_in = (input_tokens / 1_000_000.0) * in_price
+            lo = cost_in + (lo_out / 1_000_000.0) * card.output_cost_per_mtok
+            hi = cost_in + (hi_out / 1_000_000.0) * card.output_cost_per_mtok
+            return (lo, hi), f"rescaled_{label}"
+    if basis == "observed":
+        band = agg.observed_cost_band(min_cost_n, q_low, q_high)
+        if band is not None:
+            return band, f"observed_{label}"
+    return None
+
+
 def threshold_from_slider(
     cost_quality_tradeoff: float, tau_min: float, tau_max: float, min_quality: float | None = None
 ) -> float:

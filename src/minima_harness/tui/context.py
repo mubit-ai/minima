@@ -51,16 +51,32 @@ def load_agents_md(cwd: Path) -> str:
     return "\n\n".join(chunks)
 
 
-def build_system_prompt(cwd: Path) -> str:
-    """Base prompt + AGENTS.md context + SYSTEM.md (replace) / APPEND_SYSTEM.md (append)."""
+def build_system_prompt_parts(cwd: Path) -> list[tuple[str, str]]:
+    """The local system prompt as labeled parts: always ``("base", ...)``, plus
+    ``("agents.md", ...)`` when project context exists.
+
+    ``build_system_prompt`` joins these into one string; splitting them lets the prompt
+    inspector show the base prompt and project context (AGENTS.md/CLAUDE.md) as distinct
+    layers without duplicating the assembly logic.
+    """
     replace = _read(cwd / "SYSTEM.md") or _read(GLOBAL_DIR / "SYSTEM.md")
     append = _read(cwd / "APPEND_SYSTEM.md") or _read(GLOBAL_DIR / "APPEND_SYSTEM.md")
-    prompt = replace if replace else BASE_SYSTEM
+    base = replace if replace else BASE_SYSTEM
     if append:
-        prompt = f"{prompt}\n\n{append}"
+        base = f"{base}\n\n{append}"
+    parts: list[tuple[str, str]] = [("base", base)]
     agents = load_agents_md(cwd)
     if agents:
-        prompt = f"{prompt}\n\n# Project context\n{agents}"
+        parts.append(("agents.md", agents))
+    return parts
+
+
+def build_system_prompt(cwd: Path) -> str:
+    """Base prompt + AGENTS.md context + SYSTEM.md (replace) / APPEND_SYSTEM.md (append)."""
+    parts = build_system_prompt_parts(cwd)
+    prompt = parts[0][1]
+    for _name, text in parts[1:]:  # only "agents.md" follows base today
+        prompt = f"{prompt}\n\n# Project context\n{text}"
     return prompt
 
 

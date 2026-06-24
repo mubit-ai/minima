@@ -4,12 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "minima"
-version = "0.3.0"
+version = "0.4.0"
 description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { text = "FSL-1.1-Apache-2.0" }
+license-files = ["LICENSE"]
 authors = [{ name = "Mubit" }]
+keywords = ["llm", "routing", "cost-optimization", "model-router", "mubit", "agent"]
+# No "License :: OSI Approved" classifier — FSL-1.1 is source-available, not OSI-open-source.
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
@@ -23,6 +36,12 @@ dependencies = [
   "psycopg2-binary>=2.9",
   "redis>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://docs.minima.sh"
+Documentation = "https://docs.minima.sh"
+Repository = "https://github.com/mubit-ai/minima"
+Issues = "https://github.com/mubit-ai/minima/issues"
 
 [project.optional-dependencies]
 reasoner-anthropic = ["anthropic>=0.40"]
