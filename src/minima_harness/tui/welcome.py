@@ -54,7 +54,7 @@ def render_welcome(app: HarnessApp) -> Group:
     if _needs_setup():
         parts.append(
             Text(
-                "no API keys found — run  minima-harness config  to add them",
+                "no API keys found — run  minima config  to add them",
                 style=t.get("warning", accent),
             )
         )

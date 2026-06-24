@@ -49,7 +49,7 @@ def test_welcome_nudges_when_no_provider_key(tmp_path, monkeypatch):
     )
     out = _render_text(app)
     assert "no API keys found" in out
-    assert "minima-harness config" in out
+    assert "minima config" in out
 
 
 def test_welcome_no_nudge_when_provider_key_present(tmp_path, monkeypatch):

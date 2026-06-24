@@ -42,7 +42,9 @@ def _load_env_files() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="minima-harness", description="PI-style agent on Minima.")
+    p = argparse.ArgumentParser(
+        prog="minima", description="Minima CLI — cost-aware model-routing coding agent."
+    )
     p.add_argument(
         "prompt", nargs="*", help="optional initial prompt (used by --print/--mode json)"
     )
