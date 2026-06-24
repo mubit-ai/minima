@@ -20,3 +20,13 @@ def get_client(url: str) -> _redis.Redis:
         if url not in _clients:
             _clients[url] = _redis.from_url(url, decode_responses=True)
         return _clients[url]
+
+
+def decode(value: bytes | str) -> str:
+    """Narrow a redis response to ``str``.
+
+    ``get_client`` always sets ``decode_responses=True``, so values are ``str`` at
+    runtime; the redis-py stubs still type them ``bytes | str``, which this helper
+    reconciles for callers (and decodes correctly if the flag ever flips).
+    """
+    return value.decode() if isinstance(value, bytes) else value

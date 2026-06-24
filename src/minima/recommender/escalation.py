@@ -30,6 +30,8 @@ def evaluate(
     ranked: list[CandidateScore],
     aggregates: dict[str, ModelAggregate],
     recommended_interval_width: float | None = None,
+    recommended_predicted_success: float = 0.0,
+    tau: float = 0.0,
 ) -> EscalationDecision:
     """Decide whether the cheap-LLM reasoner should be consulted.
 
@@ -58,6 +60,16 @@ def evaluate(
 
         if recommended_confidence < settings.minima_escalation_c_min:
             decision.reasons.append("low_confidence")
+
+    near_delta = settings.minima_escalation_near_threshold_delta
+    if (
+        near_delta > 0
+        and tau > 0
+        and recommended_predicted_success > 0
+        and recommended_confidence > 0.2  # only when there's actual evidence, not a cold prior
+        and (recommended_predicted_success - tau) < near_delta
+    ):
+        decision.reasons.append("near_threshold")
 
     if len(ranked) >= 2:
         gap = ranked[0].score - ranked[1].score

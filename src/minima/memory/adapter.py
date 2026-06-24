@@ -53,6 +53,32 @@ def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
     )
 
 
+def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
+    """Parse a single LookupResponse item (from POST /v2/core/lookup) into RecalledEvidence.
+
+    The lookup response shape differs from recall: no ANN scores, metadata is a dict
+    (not a JSON string), and id is a numeric node ID. Score and knowledge_confidence are
+    set to 1.0 — an exact keyed match is maximally certain.
+    """
+    raw_id = item.get("id")
+    if raw_id is None:
+        return None
+    record = OutcomeRecord.from_metadata(item.get("metadata"))
+    if record is None:
+        return None
+    entry_id = str(raw_id)
+    return RecalledEvidence(
+        entry_id=entry_id,
+        reference_id=entry_id,
+        score=1.0,
+        knowledge_confidence=1.0,
+        is_stale=False,
+        content="",
+        record=record,
+        referenceable=True,
+    )
+
+
 def _log_explain(lane: str, raw: object) -> None:
     """Diagnostic: per-evidence score components (server-side ExplainInfo)."""
     if not isinstance(raw, Mapping):
@@ -142,6 +168,14 @@ class Memory(Protocol):
     async def batch_insert(
         self, *, run_id: str, items: list[dict], deduplicate: bool = True
     ) -> dict: ...
+
+    async def lookup(
+        self,
+        *,
+        lane: str,
+        match: list[dict],
+        limit: int = 256,
+    ) -> list[RecalledEvidence]: ...
 
     async def dereference(
         self, *, lane: str, reference_id: str
@@ -278,6 +312,40 @@ class MubitMemory:
             degraded=bool(data.get("degraded", False)),
             raw_confidence=_f(data.get("confidence")),
         )
+
+    async def lookup(
+        self,
+        *,
+        lane: str,
+        match: list[dict],
+        limit: int = 256,
+    ) -> list[RecalledEvidence]:
+        """Deterministic keyed lookup via POST /v2/core/lookup.
+
+        Returns all non-deleted outcome records for the given (lane, match) filters
+        without touching ANN — results are stable across identical calls. Use for
+        (cluster, model) keyed reads where recall flicker is unacceptable.
+        """
+        try:
+            raw = await threadpool.run(
+                self._client.lookup,
+                session_id=lane,
+                match=match,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001 — lookup is additive; must not block a recommend
+            log.warning("lookup_error", lane=lane, error=str(exc))
+            return []
+        if not isinstance(raw, list):
+            return []
+        results: list[RecalledEvidence] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            parsed = _parse_lookup_record(item)
+            if parsed is not None:
+                results.append(parsed)
+        return results
 
     async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
         """Exact re-read of a known durable record (the (cluster, model) outcome upsert).
@@ -473,6 +541,7 @@ class MubitMemory:
         """Liveness probe via Mubit's core health route (no embedding, fast)."""
         base = self._endpoint.rstrip("/")
         url = f"{base}/v2/core/health"
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
             headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
             async with httpx.AsyncClient(timeout=3.0) as http:

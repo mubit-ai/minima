@@ -132,3 +132,34 @@ def classify(task: TaskInput) -> tuple[TaskType, Difficulty]:
     task_type = task.task_type or infer_task_type(task.task)
     difficulty = task.difficulty or infer_difficulty(task.task, task_type)
     return task_type, difficulty
+
+
+def classify_from_neighbors(
+    votes: list[tuple[str, float]], *, min_neighbors: int = 2, min_share: float = 0.5
+) -> TaskType | None:
+    """Disambiguate an `other` classification from ANN-recalled semantic neighbors.
+
+    ``votes`` is ``(neighbor_task_type, similarity)`` over recalled outcomes. Returns the
+    similarity-weighted plurality type when it is non-`other`, has >= ``min_neighbors``
+    supporters, and holds >= ``min_share`` of the weighted vote; else None. This is the free,
+    semantic alternative to a paid LLM-classify call for prompts the regex can't place.
+    """
+    weighted: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    total = 0.0
+    for tt, weight in votes:
+        if not tt or tt == TaskType.other.value:
+            continue
+        w = max(0.0, weight)
+        weighted[tt] = weighted.get(tt, 0.0) + w
+        counts[tt] = counts.get(tt, 0) + 1
+        total += w
+    if total <= 0.0:
+        return None
+    best = max(weighted, key=weighted.__getitem__)
+    if counts[best] < min_neighbors or (weighted[best] / total) < min_share:
+        return None
+    try:
+        return TaskType(best)
+    except ValueError:
+        return None

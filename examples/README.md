@@ -17,6 +17,7 @@ documented inline. Full prose docs live in [`../docs/`](../docs/).
 | 5 | [`05_autocapture.py`](05_autocapture.py) | Intermediate | Zero-code intake via `mubit.learn` (no call-site changes). |
 | 6 | [`06_routed_llm_call.py`](06_routed_llm_call.py) | Advanced | A reusable wrapper that routes a **real** Claude call and feeds the outcome back. |
 | 7 | [`07_multitenant_admin.py`](07_multitenant_admin.py) | Advanced | Provision an org via the admin API, then call as that tenant. |
+| 8 | [`harness_warmup.py`](harness_warmup.py) | Advanced | The `minima_harness` agent loop — **demo mode needs no keys** (in-process Minima + fake provider); `--live` uses real services. See [`../docs/harness.md`](../docs/harness.md). |
 
 ## Running
 

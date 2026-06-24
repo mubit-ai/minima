@@ -1,0 +1,124 @@
+{
+  "minima_url": "https://api.minima.sh",
+  "namespace": "warmup-vary-20260615",
+  "seed": 7,
+  "n_epochs": 6,
+  "families": [
+    "add-mult",
+    "spam-detect",
+    "csv-to-json",
+    "list-reverse",
+    "painted-cube",
+    "frac-add",
+    "mod-pow",
+    "big-o"
+  ],
+  "total_calls": 48,
+  "epochs": {
+    "1": {
+      "memory_driven_pct": 0.75,
+      "avg_quality": 1.0,
+      "cost_usd": 0.017212,
+      "avg_evidence": 2.5
+    },
+    "2": {
+      "memory_driven_pct": 1.0,
+      "avg_quality": 1.0,
+      "cost_usd": 0.012037,
+      "avg_evidence": 5.0
+    },
+    "3": {
+      "memory_driven_pct": 0.75,
+      "avg_quality": 1.0,
+      "cost_usd": 0.023012,
+      "avg_evidence": 3.75
+    },
+    "4": {
+      "memory_driven_pct": 1.0,
+      "avg_quality": 1.0,
+      "cost_usd": 0.012037,
+      "avg_evidence": 5.0
+    },
+    "5": {
+      "memory_driven_pct": 0.75,
+      "avg_quality": 1.0,
+      "cost_usd": 0.017212,
+      "avg_evidence": 3.75
+    },
+    "6": {
+      "memory_driven_pct": 1.0,
+      "avg_quality": 1.0,
+      "cost_usd": 0.012663,
+      "avg_evidence": 5.0
+    }
+  },
+  "by_family": {
+    "frac-add": {
+      "avg_quality": 1.0,
+      "total_cost": 0.02055,
+      "memory_driven_pct": 0.667,
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ]
+    },
+    "add-mult": {
+      "avg_quality": 1.0,
+      "total_cost": 0.0102,
+      "memory_driven_pct": 0.833,
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    "mod-pow": {
+      "avg_quality": 1.0,
+      "total_cost": 0.015375,
+      "memory_driven_pct": 0.833,
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ]
+    },
+    "painted-cube": {
+      "avg_quality": 1.0,
+      "total_cost": 0.015375,
+      "memory_driven_pct": 0.833,
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ]
+    },
+    "spam-detect": {
+      "avg_quality": 1.0,
+      "total_cost": 0.00645,
+      "memory_driven_pct": 0.833,
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    "big-o": {
+      "avg_quality": 1.0,
+      "total_cost": 0.01145,
+      "memory_driven_pct": 1.0,
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    "csv-to-json": {
+      "avg_quality": 1.0,
+      "total_cost": 0.00645,
+      "memory_driven_pct": 1.0,
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    },
+    "list-reverse": {
+      "avg_quality": 1.0,
+      "total_cost": 0.008325,
+      "memory_driven_pct": 1.0,
+      "models": [
+        "gemini-2.5-flash"
+      ]
+    }
+  }
+}

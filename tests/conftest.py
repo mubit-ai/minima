@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,7 +11,7 @@ from minima.config import Settings
 from minima.main import create_app
 from tests.factories import FakeMemory
 
-TEST_MUBIT_KEY = "mbt_test_kid_secret"
+TEST_MUBIT_KEY = os.getenv("TEST_MUBIT_KEY", "mbt_test_kid_secret")
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +30,7 @@ def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("MINIMA_REASONER_PROVIDER", "none")
     monkeypatch.setenv("MINIMA_REASONER_MODEL", "")
+    monkeypatch.setenv("MINIMA_DURABLE_FASTPATH", "off")
 
 
 @pytest.fixture

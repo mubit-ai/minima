@@ -1,0 +1,77 @@
+{
+  "minima_url": "https://api.minima.sh",
+  "namespace": "warmup-cold-20260615",
+  "seed": 13,
+  "candidates": [
+    "gemini-2.5-flash",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "gemini-2.5-pro",
+    "claude-opus-4-8"
+  ],
+  "n_runs": 5,
+  "n_tasks": 20,
+  "total_calls": 100,
+  "runs": {
+    "1": {
+      "avg_quality": 0.74,
+      "total_cost_usd": 0.12475,
+      "memory_driven_pct": 0.6,
+      "model_distribution": {
+        "gemini-2.5-flash": 10,
+        "claude-haiku-4-5": 0,
+        "claude-sonnet-4-6": 7,
+        "gemini-2.5-pro": 3,
+        "claude-opus-4-8": 0
+      }
+    },
+    "2": {
+      "avg_quality": 0.725,
+      "total_cost_usd": 0.099175,
+      "memory_driven_pct": 0.45,
+      "model_distribution": {
+        "gemini-2.5-flash": 9,
+        "claude-haiku-4-5": 0,
+        "claude-sonnet-4-6": 1,
+        "gemini-2.5-pro": 10,
+        "claude-opus-4-8": 0
+      }
+    },
+    "3": {
+      "avg_quality": 0.805,
+      "total_cost_usd": 0.09405,
+      "memory_driven_pct": 0.35,
+      "model_distribution": {
+        "gemini-2.5-flash": 9,
+        "claude-haiku-4-5": 0,
+        "claude-sonnet-4-6": 0,
+        "gemini-2.5-pro": 11,
+        "claude-opus-4-8": 0
+      }
+    },
+    "4": {
+      "avg_quality": 0.675,
+      "total_cost_usd": 0.088875,
+      "memory_driven_pct": 0.25,
+      "model_distribution": {
+        "gemini-2.5-flash": 10,
+        "claude-haiku-4-5": 0,
+        "claude-sonnet-4-6": 0,
+        "gemini-2.5-pro": 10,
+        "claude-opus-4-8": 0
+      }
+    },
+    "5": {
+      "avg_quality": 0.725,
+      "total_cost_usd": 0.096037,
+      "memory_driven_pct": 0.25,
+      "model_distribution": {
+        "gemini-2.5-flash": 8,
+        "claude-haiku-4-5": 1,
+        "claude-sonnet-4-6": 0,
+        "gemini-2.5-pro": 11,
+        "claude-opus-4-8": 0
+      }
+    }
+  }
+}

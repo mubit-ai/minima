@@ -36,6 +36,14 @@ class CandidateSnapshot:
     confidence: float
     est_cost_usd: float
     propensity: float
+    # Pre-calibration, pre-bonus Beta-posterior mean for the chosen candidate. Calibration
+    # is fit on THIS (not the deployed predicted_success) so the loop converges. Defaults
+    # to None for rows written before calibration existed (back-compat on deserialize).
+    raw_predicted_success: float | None = None
+    # Data-grounded predictable cost band at decision time; powers the cost-accuracy metric
+    # (within-band coverage). None for rows written before bands existed, or thin evidence.
+    est_cost_low: float | None = None
+    est_cost_high: float | None = None
 
 
 @dataclass(slots=True)
@@ -53,6 +61,9 @@ class DecisionRecord:
     epsilon: float
     chosen_model_id: str
     escalated: bool
+    # What the (advisory) shadow bandit would have picked; None when shadow is off. Logged
+    # for offline agreement/regret comparison — never affects the deployed decision.
+    shadow_chosen_model_id: str | None = None
     # True when the epsilon branch actually changed the pick away from the argmin
     # (distinct from policy == "epsilon_softmax", which only says exploration was POSSIBLE).
     explored: bool = False
@@ -84,6 +95,20 @@ class DecisionRecord:
     def predicted_success_chosen(self) -> float | None:
         for c in self.candidates:
             if c.model_id == self.chosen_model_id:
+                return c.predicted_success
+        return None
+
+    @property
+    def raw_predicted_success_chosen(self) -> float | None:
+        """Pre-calibration Beta mean for the chosen model (the quantity calibration fits on).
+
+        Falls back to the deployed ``predicted_success`` for rows logged before the raw
+        value was captured, so historical rows still contribute (slightly biased) pairs.
+        """
+        for c in self.candidates:
+            if c.model_id == self.chosen_model_id:
+                if c.raw_predicted_success is not None:
+                    return c.raw_predicted_success
                 return c.predicted_success
         return None
 

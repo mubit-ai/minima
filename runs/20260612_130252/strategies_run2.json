@@ -1,0 +1,37 @@
+{
+  "run": 2,
+  "timestamp": "2026-06-12T13:09:08.132097+00:00",
+  "strategy_count": 5,
+  "strategies": [
+    {
+      "id": "strat-af5be387-385c-46aa-ae6f-0533be4f3f2a",
+      "description": "Pattern around 'tasks': 117 lessons share this theme. Example: gemini-2.5-flash is highly efficient for trivial tasks (summarization, extraction, simple translation) but shows unrelia...",
+      "lessons": 117,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-aceb7104-4302-4bc7-b825-f378e03df513",
+      "description": "Pattern around 'coding': 75 lessons share this theme. Example: gpt-4o-mini is more consistent and reliable for complex, hard coding tasks and data structure implementations compared t...",
+      "lessons": 75,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-bb75f7c0-0873-4261-bb5b-d953dd08810c",
+      "description": "Pattern around 'choice': 66 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, cost-effective choice (verified in production at ~100% quality).",
+      "lessons": 66,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-c5acdef5-da19-4296-9172-e9d5e2c836f9",
+      "description": "Pattern around 'complex': 2 lessons share this theme. Example: Complex logic constraints can be reliably solved by mapping out all conditions systematically before constructing a fina...",
+      "lessons": 2,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-a00ee76d-c2c1-4be7-96b7-cfab7c781113",
+      "description": "Pattern around 'task': 2 lessons share this theme. Example: gemini-2.5-flash is suitable for trivial extraction, summarization, and easy tasks, but it is unreliable for classificat...",
+      "lessons": 2,
+      "confidence": -0.0
+    }
+  ]
+}

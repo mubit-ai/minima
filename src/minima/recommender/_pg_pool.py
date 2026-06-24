@@ -8,8 +8,8 @@ database regardless of how many store objects are instantiated.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Generator
 from threading import Lock
-from typing import Generator
 
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool

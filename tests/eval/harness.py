@@ -93,9 +93,9 @@ def _provider(model_id: str) -> str:
     return model_id.split("/")[0] if "/" in model_id else "other"
 
 
-def _task_type(eval_name: str) -> TaskType:
+def _task_type(eval_name: str, task_type_for=rb._task_type_for) -> TaskType:
     try:
-        return TaskType(rb._task_type_for(eval_name))
+        return TaskType(task_type_for(eval_name))
     except ValueError:
         return TaskType.other
 
@@ -164,13 +164,14 @@ class EvalResult:
     use_train_priors: bool
 
 
-def prepare_rows(df: Any, candidates: list[str], limit_rows: int) -> list[Row]:
+def prepare_rows(df: Any, candidates: list[str], limit_rows: int,
+                 task_type_for=rb._task_type_for) -> list[Row]:
     """Keep rows where every candidate has a usable (score, cost); de-dup by fingerprint."""
     columns = list(df.columns)
     model_cols = rb.detect_model_columns(columns)
     missing = [c for c in candidates if c not in model_cols]
     if missing:
-        raise RuntimeError(f"candidates missing RouterBench columns: {missing}")
+        raise RuntimeError(f"candidates missing score/cost columns: {missing}")
     prompt_col = "prompt" if "prompt" in columns else columns[0]
 
     seen: set[str] = set()
@@ -198,7 +199,7 @@ def prepare_rows(df: Any, candidates: list[str], limit_rows: int) -> list[Row]:
             continue
         seen.add(fp)
         en = str(rowd.get("eval_name", ""))
-        rows.append(Row(prompt, _task_type(en), scores, costs, fp, en))
+        rows.append(Row(prompt, _task_type(en, task_type_for), scores, costs, fp, en))
         if limit_rows and len(rows) >= limit_rows:
             break
     return rows
@@ -219,7 +220,9 @@ def _filter_neardup(holdout: list[Row], train: list[Row], thresh: float) -> tupl
 
 
 def build_catalog(settings: Settings, candidates: list[str], train: list[Row],
-                  use_train_priors: bool) -> CatalogStore:
+                  use_train_priors: bool, market_prices=None, provider_for=None) -> CatalogStore:
+    market_prices = _MARKET_PRICES if market_prices is None else market_prices
+    provider_for = _provider if provider_for is None else provider_for
     by_type: dict[str, dict[TaskType, list[float]]] = {m: {} for m in candidates}
     overall: dict[str, list[float]] = {m: [] for m in candidates}
     if use_train_priors:
@@ -233,10 +236,10 @@ def build_catalog(settings: Settings, candidates: list[str], train: list[Row],
 
     cards: list[ModelCard] = []
     for m in candidates:
-        in_p, out_p = _MARKET_PRICES.get(m, (1.0, 1.0))  # independent market prices
+        in_p, out_p = market_prices.get(m, (1.0, 1.0))  # independent market prices
         cards.append(
             ModelCard(
-                model_id=m, provider=_provider(m), display_name=m,
+                model_id=m, provider=provider_for(m), display_name=m,
                 input_cost_per_mtok=in_p, output_cost_per_mtok=out_p, context_window=8192,
                 # FLAT prior (0.5) by default → routing is driven by recalled memory, not a
                 # train-fitted per-task prior. use_train_priors=True is an ablation only.
@@ -255,7 +258,9 @@ def build_catalog(settings: Settings, candidates: list[str], train: list[Row],
     return store
 
 
-async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidates: list[str]) -> int:
+async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidates: list[str],
+                     provider_for=None, source_dataset: str = "routerbench") -> int:
+    provider_for = _provider if provider_for is None else provider_for
     items: list[dict] = []
     for i, row in enumerate(train):
         tt, diff = row.task_type.value, "medium"
@@ -263,10 +268,10 @@ async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidate
         for m in candidates:
             q = row.scores[m]
             rec = OutcomeRecord(
-                model_id=m, provider=_provider(m), task_type=tt, difficulty=diff,
+                model_id=m, provider=provider_for(m), task_type=tt, difficulty=diff,
                 task_fingerprint=row.fp, task_cluster=cluster, cost_usd=row.costs[m],
                 quality_score=q, outcome="success" if q >= 0.5 else "failure",
-                source_dataset="routerbench",
+                source_dataset=source_dataset,
             )
             items.append(build_item(SeedItem(f"rbtrain-{i}-{m}", content, rec, ["seed:rbeval"])))
     inserted = 0
@@ -432,6 +437,11 @@ async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidat
                            expected_input_tokens=_est_in_tokens(row.prompt),
                            expected_output_tokens=_OUT_TOKENS),
             namespace=ns, cost_quality_tradeoff=slider,
+            # The factored _pick scores ALL candidates; the engine truncates to max_candidates
+            # (default 8) AFTER sorting by capability_prior — which is flat in this eval, so the
+            # cut would be arbitrary. Lift it to the full set so the crosscheck compares like
+            # with like (and so the eval faithfully routes among every provided candidate).
+            max_candidates=len(candidates),
             constraints=Constraints(candidate_models=candidates), allow_llm_escalation=False))
         checked += 1
         matches += int(resp.recommended_model.model_id == factored)
@@ -478,9 +488,18 @@ async def evaluate(
     hard_key: str = "grade-school-math",
     hard_frac: float = 0.15,  # representative-ish mix (RB is mostly MMLU/commonsense, ~20% math)
     crosscheck_n: int = 12,
+    load_df=None,
+    task_type_for=None,
+    market_prices=None,
+    provider_for=None,
+    source_dataset: str = "routerbench",
 ) -> EvalResult:
-    df = rb.load_routerbench_df("0shot")
-    full = prepare_rows(df, candidates, limit_rows=0)  # scan all; we stratify below
+    # Pluggable backend: defaults preserve the RouterBench path; pass these to point the same
+    # eval machinery at another dataset (e.g. LLMRouterBench) that emits the wide contract.
+    load_df = (lambda: rb.load_routerbench_df("0shot")) if load_df is None else load_df
+    task_type_for = rb._task_type_for if task_type_for is None else task_type_for
+    df = load_df()
+    full = prepare_rows(df, candidates, limit_rows=0, task_type_for=task_type_for)  # scan all; stratify below
     # Stratify the pool into an EASY-for-cheap majority (e.g. MMLU) and a HARD-for-cheap
     # minority (grade-school math, where weak/cheap models fail). This gives the router
     # genuinely different task families to route between — the test of per-prompt routing,
@@ -506,7 +525,8 @@ async def evaluate(
     lane = f"{settings.minima_lane_prefix}:rbeval-{uuid.uuid4().hex[:8]}"
     # eval_name priors are train-derived; keep card task_type priors as the fallback.
     use_train_priors = use_train_priors or prior_grain == "eval_name"
-    catalog = build_catalog(settings, candidates, train, use_train_priors)
+    catalog = build_catalog(settings, candidates, train, use_train_priors,
+                            market_prices=market_prices, provider_for=provider_for)
     cards = {c.model_id: c for c in catalog.get().cards}
 
     # Per-benchmark-family prior (model -> mean train success on that eval_name). Finer than
@@ -524,7 +544,8 @@ async def evaluate(
             for en, md in acc_by.items()
         }
 
-    seeded = await seed_train(memory, lane, train, candidates)
+    seeded = await seed_train(memory, lane, train, candidates,
+                              provider_for=provider_for, source_dataset=source_dataset)
     await _barrier(memory, lane, train[0], settings)
 
     # One recall per val/test prompt; reuse for every slider.

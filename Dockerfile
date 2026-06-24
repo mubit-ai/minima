@@ -6,16 +6,17 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 WORKDIR /app
 
 # Install dependencies in a separate layer so source changes don't bust the cache.
+# --extra server: the API stack (fastapi/uvicorn/psycopg2/redis) lives in the server extra.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-dev --extra server --no-install-project
 
 # Copy source, then install the project itself.
 COPY README.md         ./
 COPY src/minima/       ./src/minima/
 COPY client_sdk/minima_client/ ./client_sdk/minima_client/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev --extra server
 
 # ── runtime ───────────────────────────────────────────────────────────────────
 FROM python:3.13-slim

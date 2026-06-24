@@ -7,13 +7,13 @@ org's Mubit key is never sent per call.
 Start the service in multi-tenant mode first:
 
     MINIMA_MULTITENANT=true \
-    MINIMA_PROVISIONING_KEY=dev-provisioning-secret \
+    MINIMA_PROVISIONING_KEY=<YOUR_SECURE_PROVISIONING_KEY_HERE>  # Replace with a strong, securely generated secret \
     MINIMA_TENANT_STORE=memory \
         uv run uvicorn minima.main:app --port 8080
 
 Then:
 
-    MINIMA_PROVISIONING_KEY=dev-provisioning-secret \
+    MINIMA_PROVISIONING_KEY=<YOUR_SECURE_PROVISIONING_KEY_HERE>  # Replace with a strong, securely generated secret \
     ACME_MUBIT_KEY=<acme-mubit-data-plane-key> \
         uv run python examples/07_multitenant_admin.py
 

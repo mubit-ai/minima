@@ -1,0 +1,30 @@
+{
+  "arm_A_escalation_on": {
+    "avg_quality": 0.8233,
+    "total_cost": 0.2252,
+    "llm_escalations": 0,
+    "memory_driven": 4,
+    "model_dist": {
+      "gemini-2.5-flash": 1,
+      "claude-haiku-4-5": 0,
+      "claude-sonnet-4-6": 3,
+      "gemini-2.5-pro": 26,
+      "claude-opus-4-8": 0
+    }
+  },
+  "arm_B_escalation_off": {
+    "avg_quality": 0.82,
+    "total_cost": 0.216475,
+    "llm_escalations": 0,
+    "memory_driven": 4,
+    "model_dist": {
+      "gemini-2.5-flash": 3,
+      "claude-haiku-4-5": 0,
+      "claude-sonnet-4-6": 1,
+      "gemini-2.5-pro": 25,
+      "claude-opus-4-8": 1
+    }
+  },
+  "quality_delta": 0.0033,
+  "cost_delta": 0.008725
+}

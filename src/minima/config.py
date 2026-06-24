@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # switching the default.
     minima_escalation_mode: str = "legacy"  # legacy | uncertainty
     minima_escalation_interval_width: float = 0.25
+    # "near_threshold" trigger: escalate when the recommended model's predicted success is
+    # within this margin above tau — a fragile pick that one more failure round would drop.
+    # 0.0 = disabled. Recommended starting value: 0.10.
+    minima_escalation_near_threshold_delta: float = 0.10
     minima_default_input_tokens: int = 1500
     minima_default_output_tokens: int = 500
     minima_reflect_every_n: int = 25
@@ -194,6 +198,12 @@ class Settings(BaseSettings):
     minima_epsilon_selection_orgs: str = ""
     minima_epsilon: float = 0.03
     minima_epsilon_softmax_temperature: float = 0.1
+    # Orgs (comma-separated) that opt into Thompson (posterior-sampling) selection instead of
+    # epsilon-softmax: each decision samples theta_m ~ Beta(alpha_m, beta_m) and picks the
+    # cheapest model clearing tau under the sample. Monte-Carlo selection frequencies are
+    # logged as propensities so IPW/OPE stay valid. Takes precedence over epsilon if both set.
+    minima_thompson_selection_orgs: str = ""
+    minima_thompson_samples: int = 128
 
     # --- Calibration monitoring ---
     minima_calibration_window_days: int = 30
@@ -205,6 +215,52 @@ class Settings(BaseSettings):
     # Smaller values flag every healthy stream.
     minima_cusum_k: float = 0.25
     minima_cusum_h: float = 2.0
+
+    # --- Calibration APPLY (remap predicted_success before the tau decision) ---
+    # The monitoring above MEASURES calibration; these control whether a fitted isotonic
+    # remap is actually applied so predicted_success is a truthful probability. Safe by
+    # construction: with < min_n reconciled outcomes the fit returns identity (no-op), and
+    # each slice shrinks toward identity by n/(n+shrinkage_k). Reuses the calibration
+    # window + shrinkage_k above. Refit is lazy and cached per Recommender (org).
+    minima_calibration_apply: bool = True
+    minima_calibration_min_n: int = 30
+    minima_calibration_refresh_seconds: int = 600
+
+    # --- Routing-collapse margin guard ---
+    # Scalar-score + cheapest-clearing-tau can collapse to the single most expensive model
+    # at high quality bars (arXiv 2602.03478). When the cheapest-eligible pick IS the
+    # priciest candidate, prefer a cheaper candidate whose success credible interval could
+    # still clear tau. The optimism is TAU-AWARE so it shrinks as the quality bar rises:
+    #   eligible_optimistic = predicted + margin * (1 - tau) * 0.5 * interval_width.
+    # margin >= 0: 0 disables the guard. The (1 - tau) factor keeps the guard gentle at high
+    # cost_quality (where the user wants quality) and active at low (cost-leaning). The judge
+    # / escalation loop is the safety net that catches an over-optimistic cheap pick.
+    minima_collapse_margin: float = 1.0
+
+    # --- Lever-aware cost (prompt caching) ---
+    # When on, the ESTIMATE cost tier prices a cache-supporting model's input at a blend of
+    # its cache-read and full rates (assuming the caller applies prompt caching, as the
+    # harness does), so ranking can favor a cache-friendly model that is cheaper in practice.
+    # Off by default (no behavior change). Observed/rescaled tiers stay evidence-based — they
+    # already reflect real caching via the realized cost in feedback, so they self-correct.
+    # recommend() also returns `recommended_actions` (e.g. enable_prompt_cache) regardless.
+    minima_cost_lever_aware: bool = False
+    minima_cost_cache_input_fraction: float = 0.5
+
+    # --- Neighbor-vote classification ---
+    # When the heuristic classifier returns `other`, disambiguate the task_type from the
+    # ANN-recalled semantic neighbors' types (free + semantic) instead of (or before) a paid
+    # LLM-classify call. Embedding-based routing already happens via recall; this just makes
+    # the cluster KEY semantically coherent for ambiguous prompts.
+    minima_neighbor_classify: bool = True
+
+    # --- Shadow bandit (advisory only) ---
+    # When on, a UCB contextual-bandit policy computes what it WOULD pick and logs it on the
+    # decision row (shadow_chosen_model_id) alongside the deployed conjugate pick. It NEVER
+    # overrides the recommendation — it exists so we can measure agreement / regret offline
+    # before considering promotion. alpha scales the exploration optimism.
+    minima_shadow_bandit: bool = False
+    minima_shadow_ucb_alpha: float = 1.0
 
     # --- Durable-record fast path ---
     # Dereference the durable (cluster, model) outcome records alongside ANN recall so the

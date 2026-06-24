@@ -88,6 +88,40 @@
       }
     },
     {
+      "model_id": "gemini-2.5-flash-lite",
+      "provider": "google",
+      "display_name": "Gemini 2.5 Flash-Lite",
+      "input_cost_per_mtok": 0.075,
+      "output_cost_per_mtok": 0.30,
+      "cache_read_cost_per_mtok": 0.018,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {"intelligence_index": 0.40},
+      "capability_by_task_type": {
+        "code": 0.62, "summarization": 0.80, "extraction": 0.84, "qa": 0.74,
+        "reasoning": 0.50, "classification": 0.86, "translation": 0.82,
+        "creative": 0.68, "rag": 0.78, "tool_use": 0.68, "other": 0.64
+      }
+    },
+    {
+      "model_id": "gemini-3.1-flash-lite",
+      "provider": "google",
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "input_cost_per_mtok": 0.08,
+      "output_cost_per_mtok": 0.35,
+      "cache_read_cost_per_mtok": 0.02,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {"intelligence_index": 0.48},
+      "capability_by_task_type": {
+        "code": 0.68, "summarization": 0.83, "extraction": 0.86, "qa": 0.78,
+        "reasoning": 0.58, "classification": 0.88, "translation": 0.84,
+        "creative": 0.72, "rag": 0.80, "tool_use": 0.72, "other": 0.68
+      }
+    },
+    {
       "model_id": "gemini-2.5-flash",
       "provider": "google",
       "display_name": "Gemini 2.5 Flash",
@@ -105,6 +139,40 @@
       }
     },
     {
+      "model_id": "gemini-3.5-flash",
+      "provider": "google",
+      "display_name": "Gemini 3.5 Flash",
+      "input_cost_per_mtok": 0.50,
+      "output_cost_per_mtok": 3.00,
+      "cache_read_cost_per_mtok": 0.125,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {"intelligence_index": 0.65},
+      "capability_by_task_type": {
+        "code": 0.85, "summarization": 0.88, "extraction": 0.90, "qa": 0.84,
+        "reasoning": 0.72, "classification": 0.91, "translation": 0.88,
+        "creative": 0.82, "rag": 0.87, "tool_use": 0.88, "other": 0.80
+      }
+    },
+    {
+      "model_id": "gemini-3-flash-preview",
+      "provider": "google",
+      "display_name": "Gemini 3 Flash (Preview)",
+      "input_cost_per_mtok": 0.35,
+      "output_cost_per_mtok": 2.50,
+      "cache_read_cost_per_mtok": 0.088,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {"intelligence_index": 0.62},
+      "capability_by_task_type": {
+        "code": 0.80, "summarization": 0.87, "extraction": 0.88, "qa": 0.83,
+        "reasoning": 0.70, "classification": 0.90, "translation": 0.87,
+        "creative": 0.80, "rag": 0.85, "tool_use": 0.84, "other": 0.78
+      }
+    },
+    {
       "model_id": "gemini-2.5-pro",
       "provider": "google",
       "display_name": "Gemini 2.5 Pro",
@@ -119,6 +187,23 @@
         "code": 0.9, "summarization": 0.92, "extraction": 0.92, "qa": 0.91,
         "reasoning": 0.88, "classification": 0.93, "translation": 0.92,
         "creative": 0.89, "rag": 0.91, "tool_use": 0.9, "other": 0.88
+      }
+    }
+    ,{
+      "model_id": "gemini-3.1-pro-preview",
+      "provider": "google",
+      "display_name": "Gemini 3.1 Pro (Preview)",
+      "input_cost_per_mtok": 2.00,
+      "output_cost_per_mtok": 12.00,
+      "cache_read_cost_per_mtok": 0.50,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {"intelligence_index": 0.90},
+      "capability_by_task_type": {
+        "code": 0.93, "summarization": 0.93, "extraction": 0.93, "qa": 0.93,
+        "reasoning": 0.95, "classification": 0.94, "translation": 0.93,
+        "creative": 0.91, "rag": 0.93, "tool_use": 0.92, "other": 0.91
       }
     }
   ]

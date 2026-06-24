@@ -78,6 +78,10 @@ class OutcomeRecord:
     recommendation_id: str | None = None
     verified_in_production: bool = False
     source_dataset: str | None = None
+    # Agent loop turns to resolution (token-yield signal; a cheap model that takes many
+    # turns to resolve can cost more than one frontier turn). Backward-compatible: None
+    # on legacy records.
+    iterations: int | None = None
     # Unix seconds when the outcome was observed. Powers evidence age decay; None on
     # legacy (schema v1) records, which fall back to the binary staleness penalty.
     recorded_at: float | None = None
@@ -123,6 +127,7 @@ class OutcomeRecord:
             recorded_at=(
                 _as_float(parsed.get("recorded_at")) if parsed.get("recorded_at") else None
             ),
+            iterations=(_as_int(parsed.get("iterations")) if parsed.get("iterations") else None),
         )
 
 

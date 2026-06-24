@@ -1,0 +1,37 @@
+{
+  "run": 5,
+  "timestamp": "2026-06-12T18:53:22.596243+00:00",
+  "strategy_count": 5,
+  "strategies": [
+    {
+      "id": "strat-ccd08068-8204-41e1-9db1-ce68ff9b02d4",
+      "description": "Pattern around 'coding': 312 lessons share this theme. Example: Gemini-2.5-pro is a reliable and stable choice for medium-complexity reasoning and coding tasks.",
+      "lessons": 312,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-1bfd5eb5-8e66-4147-a94b-365ac72964a0",
+      "description": "Pattern around 'tasks': 195 lessons share this theme. Example: gemini-2.5-flash is highly efficient for trivial tasks like extraction and summarization, but it performs unreliably on ...",
+      "lessons": 195,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-b237e8c3-39a0-4d39-88fc-82d7a78d9c3e",
+      "description": "Pattern around 'choice': 172 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, cost-effective choice (verified in production at ~100% quality).",
+      "lessons": 172,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-7c50826c-6d85-4198-a52e-df19c11755a3",
+      "description": "Pattern around 'classification': 14 lessons share this theme. Example: Gemini-2.5-flash is efficient for trivial tasks but unreliable for classification.",
+      "lessons": 14,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-8cb0b9c6-9c43-4490-af0f-d44db8ee4765",
+      "description": "Pattern around 'data': 10 lessons share this theme. Example: gpt-4o-mini demonstrates superior consistency for complex coding tasks and data structure implementations.",
+      "lessons": 10,
+      "confidence": -0.0
+    }
+  ]
+}

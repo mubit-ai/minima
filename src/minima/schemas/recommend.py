@@ -67,6 +67,18 @@ class RankedModel(BaseModel):
         None, description="observed latency percentile from similar past outcomes (ms)"
     )
     latency_basis: str = Field("", description='e.g. "observed_p75"; empty without evidence')
+    est_cost_low: float | None = Field(
+        None, ge=0, description="low end of the data-grounded predictable cost band ($)"
+    )
+    est_cost_high: float | None = Field(
+        None, ge=0, description="high end of the data-grounded predictable cost band ($)"
+    )
+    cost_band_basis: str = Field(
+        "", description='e.g. "observed_p25_p75" | "rescaled_p25_p75"; empty without a band'
+    )
+    success_interval_width: float = Field(
+        0.0, ge=0, le=1, description="95% credible-interval width of predicted_success"
+    )
 
 
 class RecommendResponse(BaseModel):
@@ -85,4 +97,8 @@ class RecommendResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     selection_policy: str = Field(
         "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
+    )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        description="near-free cost-saving actions to apply (e.g. enable_prompt_cache)",
     )
