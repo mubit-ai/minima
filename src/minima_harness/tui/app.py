@@ -315,7 +315,7 @@ class HarnessApp(App):
         return "+".join([*modifiers, key])
 
     def on_mount(self) -> None:
-        self.title = "minima-harness"
+        self.title = "Minima CLI"
         self.agent.subscribe(self.bridge)
         self.agent.subscribe(self._extension_fanout)
         self.bridge.bind(on_text=self._append_stream, on_thinking=self._on_thinking)
@@ -748,7 +748,7 @@ class HarnessApp(App):
         session_label = self.session.display_name or (
             self.session.path.stem if self.session.path else "ephemeral"
         )
-        self.title = "minima-harness"
+        self.title = "Minima CLI"
         self.sub_title = ""
         footer = render_footer(
             cwd=str(self.cwd),

@@ -1244,7 +1244,7 @@ wheels = [
 ]
 
 [[package]]
-name = "minima"
+name = "minima-cli"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
@@ -1310,7 +1310,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
     { name = "keyring", marker = "extra == 'tui'", specifier = ">=24" },
-    { name = "minima", extras = ["server", "harness", "tui"], marker = "extra == 'dev'" },
+    { name = "minima-cli", extras = ["server", "harness", "tui"], marker = "extra == 'dev'" },
     { name = "mubit-sdk", specifier = ">=0.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },

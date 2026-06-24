@@ -55,5 +55,5 @@ def packages_cli(cmd: str, args: list[str]) -> int:
         return list_packages()
     if cmd == "remove" and args:
         return remove(args[0])
-    print("usage: minima-harness install <git-url|repo> | list | remove <name>")
+    print("usage: minima install <git-url|repo> | list | remove <name>")
     return 2
