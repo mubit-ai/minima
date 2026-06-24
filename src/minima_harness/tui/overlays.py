@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Collapsible, Input, OptionList, Static, TextArea, Tree
+from textual.widgets import Button, Collapsible, Input, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
@@ -404,9 +404,7 @@ class ConfigOverlay(ModalScreen[dict | None]):
         backend = config_store.backend_name()
         with Vertical(id="config-card"):
             yield Static(
-                Text(
-                    f"blank keeps current · Ctrl+S save · Esc cancel · secrets → {backend}",
-                ),
+                Text("Enter your keys — blank keeps the current value. Any one provider works."),
                 id="config-hint",
             )
             with VerticalScroll(id="config-body"):
@@ -422,12 +420,30 @@ class ConfigOverlay(ModalScreen[dict | None]):
                         tag = "   optional" if f.optional else ""
                         yield Static(Text(f"{f.key}{tag}"), classes="cfg-key")
                         yield Input(placeholder=placeholder, password=f.secret, id=f"cfg-{f.key}")
+                yield Button("Save", id="cfg-save", variant="primary")
+            # Always-visible footer (outside the scroll) so the save affordance never
+            # scrolls out of sight while filling lower fields.
+            yield Static(
+                Text(f"Enter ▸ next field (lands on Save) · Ctrl+S ▸ save · Esc ▸ cancel  ·  "
+                     f"secrets → {backend}"),
+                id="config-foot",
+            )
 
     def on_mount(self) -> None:
         self.query_one("#config-card").border_title = "config"
         inputs = self.query(Input)
         if inputs:
             inputs.first().focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter walks through the fields and lands on the Save button, so a user can fill
+        # every key with Enter and the final Enter (on Save) commits — no Ctrl+S needed.
+        event.stop()
+        self.focus_next()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cfg-save":
+            self.action_save()
 
     def action_save(self) -> None:
         changes: dict[str, str] = {}
