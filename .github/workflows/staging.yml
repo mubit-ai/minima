@@ -30,7 +30,7 @@ jobs:
   # ── 1. Minima service ───────────────────────────────────────────────────────
   deploy-service:
     name: Service → Cloud Run (staging)
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -92,7 +92,7 @@ jobs:
   # ── 2. Docs site ────────────────────────────────────────────────────────────
   deploy-docs:
     name: Docs → Cloud Run (staging)
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout

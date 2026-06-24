@@ -30,7 +30,7 @@ jobs:
   # ── 1. Minima service ───────────────────────────────────────────────────────
   deploy-service:
     name: Service → Cloud Run (prod)
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout @ release tag
@@ -94,7 +94,7 @@ jobs:
   # ── 2. Docs site ────────────────────────────────────────────────────────────
   deploy-docs:
     name: Docs → Cloud Run (prod)
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout @ release tag
