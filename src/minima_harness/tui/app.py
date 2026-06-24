@@ -10,6 +10,7 @@ import anyio
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.keys import format_key
 from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -96,15 +97,22 @@ class HarnessApp(App):
     }
     #cmd-popup.visible { display: block; }
     ModelPicker, TreePicker, SessionPicker, CommandPicker { align: center middle; }
-    ModelPicker OptionList, SessionPicker OptionList, CommandPicker OptionList, TreePicker Tree {
-        background: $panel; padding: 0 1;
+    /* All single-widget pickers share the rounded accent card framing (matches #editor /
+       ConfigOverlay). The :focus rule must be explicit — OptionList/Tree set a 'tall' focus
+       border in their own CSS that out-specifies a plain descendant selector. */
+    ModelPicker OptionList, SessionPicker OptionList, CommandPicker OptionList {
+        width: 66; height: auto; max-height: 18;
+        background: $panel; border: round $accent; padding: 0 1;
     }
-    ModelPicker OptionList { width: 60; height: 14; }
-    SessionPicker OptionList { width: 60; height: 14; }
-    CommandPicker OptionList { width: 64; height: 16; }
+    ModelPicker OptionList:focus, SessionPicker OptionList:focus,
+    CommandPicker OptionList:focus { border: round $accent; }
     PromptInspector { align: center middle; }
     PromptInspector TextArea { width: 80; height: 20; background: $panel; }
-    TreePicker Tree { width: 70; height: 16; }
+    TreePicker Tree {
+        width: 72; height: auto; max-height: 20;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    TreePicker Tree:focus { border: round $accent; }
     DiffApproval { align: center middle; }
     DiffApproval TextArea { width: 90; height: 24; background: $panel; }
     ConfigOverlay { align: center middle; }
@@ -252,6 +260,22 @@ class HarnessApp(App):
         yield Editor()
         yield StatusBar(id="status")
         yield TextualFooter()
+
+    def get_key_display(self, binding: Binding) -> str:
+        """Spell out ``ctrl+x`` in the footer instead of Textual's default ``^x`` caret.
+
+        Mirrors the stock implementation byte-for-byte except the ctrl modifier renders as a
+        literal ``ctrl+`` prefix — other modifiers (shift/alt) and bare keys (esc, pgup) keep
+        their normal display.
+        """
+        if binding.key_display:
+            return binding.key_display
+        modifiers, key = binding.parse_key()
+        key = format_key(key)
+        if "ctrl" in modifiers:
+            modifiers.pop(modifiers.index("ctrl"))
+            key = f"ctrl+{key}"
+        return "+".join([*modifiers, key])
 
     def on_mount(self) -> None:
         self.title = "minima-harness"

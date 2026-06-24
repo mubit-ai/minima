@@ -42,13 +42,6 @@ class ModelPicker(ModalScreen[str | None]):
         self._providers = providers or {}
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            Text(
-                f"active: {self._active or '—'} · basis: {self._basis or '-'} "
-                f"· pinned: {self._pinned or 'none'}",
-                style="bold",
-            )
-        )
         options = []
         for c in self._candidates:
             mark = "●" if c == self._active else "○"
@@ -56,6 +49,11 @@ class ModelPicker(ModalScreen[str | None]):
             last = "  ◂ last" if c == self._active else ""
             options.append(Option(f"{mark} {c}  {prov}{last}".rstrip(), id=c))
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        ol = self.query_one(OptionList)
+        ol.border_title = "model"
+        ol.border_subtitle = f"basis {self._basis or '-'} · pinned {self._pinned or 'none'}"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
@@ -89,6 +87,9 @@ class TreePicker(ModalScreen[None]):
         tree.show_root = True
         yield tree
 
+    def on_mount(self) -> None:
+        self.query_one(Tree).border_title = "session tree"
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -111,6 +112,9 @@ class SessionPicker(ModalScreen[str | None]):
             for s in self._summaries
         ]
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).border_title = "resume session"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)
@@ -324,6 +328,9 @@ class CommandPicker(ModalScreen[str | None]):
             return
         options = [Option(f"{c.name}  {c.description}".rstrip(), id=c.name) for c in self._commands]
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).border_title = "commands"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)
