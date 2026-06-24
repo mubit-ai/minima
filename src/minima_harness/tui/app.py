@@ -65,7 +65,7 @@ from minima_harness.tui.overlays import (
     SessionPicker,
     TreePicker,
 )
-from minima_harness.tui.widgets.banner import render_banner
+from minima_harness.tui.widgets.banner import render_banner, render_notice
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
@@ -697,20 +697,23 @@ class HarnessApp(App):
 
     def _after_turn(self, routing: Any) -> None:
         if routing is None:
+            # Genuine offline fallback: Minima was unreachable. render_banner adds the
+            # "routing offline … /reconnect" framing, so pass only the concise reason.
             self._routing_offline = True
             reason = getattr(self.agent, "_offline_reason", None) or "Minima unreachable"
             model = self.agent.state.model.id if self.agent.state.model else "default model"
             self._footer_state["model"] = model
             self._footer_state["basis"] = "offline"
-            self._set_banner(
-                f"routing offline ({reason}) — ran {model} unrouted; /reconnect to retry Minima"
-            )
+            self._set_banner(f"{reason} — ran {model} unrouted")
         else:
+            # Routing SUCCEEDED. Surface only actionable, not-already-inline conditions —
+            # never the "routing offline/reconnect" framing (that's a false alarm here).
             self._footer_state = self._routing_footer_state(routing)
-            if routing.warnings:
-                self._set_banner("; ".join(routing.warnings[:2]))
+            notices = _banner_warnings(routing.warnings)
+            if notices:
+                self._set_notice("; ".join(notices[:2]))
             elif self._footer_state["ctx_pct"] > 80:
-                self._set_banner("context near limit — /compact to free space")
+                self._set_notice("context near limit — /compact to free space")
             else:
                 self.query_one("#banner", Static).update(Text(""))
         self._refresh_footer()
@@ -735,6 +738,10 @@ class HarnessApp(App):
     # ------------------------------------------------------------- overlay
     def _set_banner(self, reason: str) -> None:
         self.query_one("#banner", Static).update(render_banner(reason))
+
+    def _set_notice(self, reason: str) -> None:
+        """A non-offline heads-up (no '/reconnect' framing — routing succeeded)."""
+        self.query_one("#banner", Static).update(render_notice(reason))
 
     def _refresh_footer(self) -> None:
         meter = self.agent.meter or CostMeter()
@@ -1287,6 +1294,21 @@ def _reasoner_note(routing: Any) -> str:
     if any(w.startswith("escalation_suggested") for w in routing.warnings):
         return " · evidence thin"
     return ""
+
+
+# Warnings already explained inline on the rationale line (via _reasoner_note / _confidence_band)
+# or that are benign config state — kept OFF the top banner so it never falsely reads as
+# "routing offline" on a successful route, and only fires on unexpected/actionable conditions.
+_INLINE_WARNINGS = (
+    "escalation_suggested",
+    "reasoner_consulted",
+    "reasoner_disabled",
+    "no_model_meets_threshold",
+)
+
+
+def _banner_warnings(warnings: list[str]) -> list[str]:
+    return [w for w in warnings if not w.startswith(_INLINE_WARNINGS)]
 
 
 # ROI is "not significant" when a pricier model buys less than this much extra predicted
