@@ -3,6 +3,8 @@ name: Deploy — Staging
 on:
   push:
     branches: [staging]
+  # Manual deploy of any branch/ref to staging (dispatch on the ref you want deployed).
+  workflow_dispatch:
 
 concurrency:
   group: deploy-minima-staging

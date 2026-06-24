@@ -3,6 +3,14 @@ name: Deploy — Production
 on:
   release:
     types: [published]
+  # Manual re-deploy of any tag (e.g. when a tag predates a workflow fix, or to redeploy).
+  # Dispatch from the default branch so it uses the current workflow definition/runner.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build & deploy (e.g. v0.4.3)"
+        required: true
+        type: string
 
 concurrency:
   group: deploy-minima-prod
@@ -14,7 +22,7 @@ env:
   REGISTRY:        europe-west4-docker.pkg.dev/mubit-prod/minima
   SERVICE_NAME:    minima-prod
   DOCS_SERVICE:    minima-docs-prod
-  RELEASE_TAG:     ${{ github.event.release.tag_name }}
+  RELEASE_TAG:     ${{ github.event.release.tag_name || inputs.tag }}
   # Cloud SQL Auth Proxy — new dedicated Minima instance (not shared with console-db)
   CLOUDSQL_INSTANCE: mubit-prod:europe-west4:minima-prod-db
   # VPC for Cloud Memorystore (Redis) connectivity
@@ -36,7 +44,7 @@ jobs:
       - name: Checkout @ release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -100,7 +108,7 @@ jobs:
       - name: Checkout @ release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
