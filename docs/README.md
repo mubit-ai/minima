@@ -55,6 +55,8 @@ POST /v1/recommend/workflow   recommend a model per step of a workflow
 POST /v1/feedback             report an outcome, close the learning loop
 GET  /v1/models               the current model catalog (cost + capability priors)
 GET  /v1/strategies           rules Mubit has promoted for a namespace (explainability)
-GET  /v1/health               service, Mubit, catalog, and reasoner status
+GET  /v1/savings              counterfactual savings + routing health (estimated and realized)
+GET  /v1/calibration          is predicted_success telling the truth? ECE, reliability, drift
+GET  /v1/health                service, Mubit, catalog, and reasoner status
 POST /v1/admin/tenants        provision a tenant (multi-tenant mode only)
 ```

@@ -54,6 +54,7 @@ asyncio_mode = "auto"
 markers = [
   "live: requires a running Mubit runtime (make run-mubit)",
   "eval: slow offline evaluation (RouterBench)",
+  "backends: requires live Postgres + Redis containers (make test-backends)",
 ]
 
 [tool.ruff]

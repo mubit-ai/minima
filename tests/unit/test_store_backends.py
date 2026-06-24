@@ -13,14 +13,41 @@ Or via the Makefile target:
 
 from __future__ import annotations
 
+import socket
 import time
 import uuid
 
 import pytest
 
+# Needs both client libs AND live Postgres (:55432) + Redis (:6379) containers. Skips
+# cleanly otherwise so the default hermetic `uv run pytest` / `make test` stay green
+# offline; run explicitly with `make test-backends`.
+pytest.importorskip("asyncpg")
+pytest.importorskip("redis")
+
 # ── connection strings ────────────────────────────────────────────────────────
 PG_URL = "postgresql://minima_app:minima_local@localhost:55432/minima_test"
 REDIS_URL = "redis://localhost:6379/1"  # DB 1 to avoid clobbering other local data
+
+PG_PORT = int(PG_URL.rsplit(":", 1)[1].split("/")[0])
+REDIS_PORT = int(REDIS_URL.rsplit(":", 1)[1].split("/")[0])
+
+
+def _reachable(port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection(("localhost", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = [
+    pytest.mark.backends,
+    pytest.mark.skipif(
+        not (_reachable(PG_PORT) and _reachable(REDIS_PORT)),
+        reason=f"needs Postgres :{PG_PORT} + Redis :{REDIS_PORT} (run: make test-backends)",
+    ),
+]
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

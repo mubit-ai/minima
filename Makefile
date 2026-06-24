@@ -1,4 +1,4 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
+.PHONY: install run test test-backends lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
 
 install:
 	uv sync --extra dev --extra harness
@@ -7,7 +7,10 @@ run:
 	uv run uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
 
 test:
-	uv run pytest -m "not live and not eval" -q
+	uv run pytest -m "not live and not eval and not backends" -q
+
+test-backends:
+	uv run pytest tests/unit/test_store_backends.py -v
 
 lint:
 	uv run ruff check src client_sdk tests

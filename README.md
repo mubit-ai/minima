@@ -48,6 +48,8 @@ realized tokens and cost. See [Concepts → Cost-basis tiers](docs/concepts.md#c
 | `POST /v1/feedback` | Report an outcome and close the learning loop. |
 | `GET  /v1/models` | The current model catalog (cost + capability priors). |
 | `GET  /v1/strategies` | Rules Mubit has promoted for a namespace (explainability). |
+| `GET  /v1/savings` | Counterfactual savings + routing health (estimated and realized). |
+| `GET  /v1/calibration` | Is predicted_success telling the truth? ECE, reliability, drift. |
 | `GET  /v1/health` | Service, Mubit, catalog, and reasoner status. |
 | `POST\|GET\|DELETE /v1/admin/tenants` | Tenant provisioning (multi-tenant mode only). |
 
