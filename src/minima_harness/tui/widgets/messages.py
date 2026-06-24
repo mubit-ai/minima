@@ -8,7 +8,10 @@ from textual.widgets import Static
 
 from minima_harness.tui.theme import current_theme, get_theme
 
-THROTTLE_S = 0.03
+# Min seconds between live-stream repaints (~16 Hz). The terminal emulator repaints the whole
+# chat region on each flush, so a tighter cadence (e.g. 0.03 = 33 Hz) drives terminal CPU/fans
+# hard for no readability gain. 16 Hz still reads as smooth streaming.
+THROTTLE_S = 0.06
 
 _ROLE_COLOR = {"user": "user", "assistant": "assistant", "tool": "tool"}
 _ROLE_PREFIX = {"user": "▸ ", "assistant": "", "tool": "", "error": "✗ ", "system": ""}
