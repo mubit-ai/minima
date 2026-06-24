@@ -70,6 +70,27 @@ Spins an in-process Minima (`FakeMemory`) + a fake Anthropic provider and runs t
 corpus through `MinimaAgent` end to end. Prints the per-task routing decision, quality,
 outcome, realized tokens/cost, and how many outcomes landed in memory.
 
+### Configure credentials (`minima-harness config`)
+
+For an installed CLI, store keys **per-user** instead of a per-directory `.env`:
+
+```bash
+minima-harness config            # guided setup, two sections: LLM keys + Mubit/Minima
+minima-harness config list       # masked view of what's set + where (keyring | file)
+minima-harness config set MUBIT_API_KEY <key>
+minima-harness config doctor     # presence check + Minima /v1/health ping (no secrets printed)
+```
+
+Secrets go to the **OS keyring** (macOS Keychain / Windows Credential Manager / libsecret)
+when available, falling back to `~/.minima-harness/config.env` at mode `0600`. Non-secret
+config (`MINIMA_URL`) always lives in the file. At launch the store is loaded into the
+environment with **lowest precedence** — a shell `export`, a project `./.env.harness`, or
+`./.env` still override it. The same surface is available in-TUI via `/config`.
+
+Sections: **LLM provider keys** (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) ·
+**Mubit / Minima routing** (`MUBIT_API_KEY`, `MINIMA_URL`, optional `MINIMA_API_KEY` →
+falls back to `MUBIT_API_KEY`, `MUBIT_ENDPOINT`).
+
 ### Live mode (real Minima + real providers)
 
 ```bash

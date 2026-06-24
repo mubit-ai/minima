@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Static
+from textual.widgets import OptionList, Static
 
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.meter import CostMeter
@@ -70,7 +70,7 @@ async def test_scroll_actions_run_without_error(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_model_picker_header_and_active_selectable():
+async def test_model_picker_titled_and_active_selectable():
     class _App(App):
         result: str | None = None
 
@@ -92,8 +92,10 @@ async def test_model_picker_header_and_active_selectable():
     app = _App()
     async with app.run_test() as pilot:
         await pilot.pause()
-        # header Static + OptionList both mounted
-        assert len(app.screen.query(Static)) >= 1
+        # bordered OptionList card titled "model"; status moved to the border subtitle
+        ol = app.screen.query_one(OptionList)
+        assert ol.border_title == "model"
+        assert "basis memory" in str(ol.border_subtitle)
         await pilot.press("enter")  # select highlighted first option ("a")
         await pilot.pause()
     assert app.result == "a"

@@ -6,12 +6,14 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static, TextArea, Tree
+from textual.widgets import Input, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.store import SessionSummary
+from minima_harness.tui import config_store
 from minima_harness.tui.commands import Command
 
 
@@ -40,13 +42,6 @@ class ModelPicker(ModalScreen[str | None]):
         self._providers = providers or {}
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            Text(
-                f"active: {self._active or '—'} · basis: {self._basis or '-'} "
-                f"· pinned: {self._pinned or 'none'}",
-                style="bold",
-            )
-        )
         options = []
         for c in self._candidates:
             mark = "●" if c == self._active else "○"
@@ -54,6 +49,11 @@ class ModelPicker(ModalScreen[str | None]):
             last = "  ◂ last" if c == self._active else ""
             options.append(Option(f"{mark} {c}  {prov}{last}".rstrip(), id=c))
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        ol = self.query_one(OptionList)
+        ol.border_title = "model"
+        ol.border_subtitle = f"basis {self._basis or '-'} · pinned {self._pinned or 'none'}"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
@@ -87,6 +87,9 @@ class TreePicker(ModalScreen[None]):
         tree.show_root = True
         yield tree
 
+    def on_mount(self) -> None:
+        self.query_one(Tree).border_title = "session tree"
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -109,6 +112,9 @@ class SessionPicker(ModalScreen[str | None]):
             for s in self._summaries
         ]
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).border_title = "resume session"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)
@@ -247,6 +253,62 @@ class DiffApproval(ModalScreen[dict | None]):
         self.dismiss({"action": "reject"})
 
 
+class ConfigOverlay(ModalScreen[dict | None]):
+    """Edit stored credentials, grouped into sections. Ctrl+S saves, Esc cancels.
+
+    Returns ``{key: value}`` for fields that were changed (already persisted to the store),
+    or ``None`` on cancel. Secret inputs are password-masked and show the masked *current*
+    value as a placeholder — the real secret is never pre-filled into an editable field.
+    Leaving a field blank keeps its current value.
+    """
+
+    BINDINGS = [
+        Binding("ctrl+s", "save", "Save", priority=True),
+        ("escape", "cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        backend = config_store.backend_name()
+        with Vertical(id="config-card"):
+            yield Static(
+                Text(
+                    f"blank keeps current · Ctrl+S save · Esc cancel · secrets → {backend}",
+                ),
+                id="config-hint",
+            )
+            with VerticalScroll(id="config-body"):
+                for section in config_store.SECTIONS:
+                    yield Static(Text(section.title), classes="cfg-section")
+                    yield Static(Text(section.note), classes="cfg-note")
+                    for f in section.fields:
+                        cur = config_store.get(f.key) or ""
+                        if cur:
+                            placeholder = config_store.mask(cur) if f.secret else cur
+                        else:
+                            placeholder = f.default or "(unset)"
+                        tag = "   optional" if f.optional else ""
+                        yield Static(Text(f"{f.key}{tag}"), classes="cfg-key")
+                        yield Input(placeholder=placeholder, password=f.secret, id=f"cfg-{f.key}")
+
+    def on_mount(self) -> None:
+        self.query_one("#config-card").border_title = "config"
+        inputs = self.query(Input)
+        if inputs:
+            inputs.first().focus()
+
+    def action_save(self) -> None:
+        changes: dict[str, str] = {}
+        for f in config_store.all_fields():
+            val = self.query_one(f"#cfg-{f.key}", Input).value.strip()
+            if val:  # only non-empty entries change anything
+                config_store.set_value(f.key, val)
+                changes[f.key] = val
+        self.dismiss(changes)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def list_sessions_for_picker(cwd: Path | None) -> list[SessionSummary]:
     return SessionManager().list_sessions(cwd) if cwd is not None else []
 
@@ -266,6 +328,9 @@ class CommandPicker(ModalScreen[str | None]):
             return
         options = [Option(f"{c.name}  {c.description}".rstrip(), id=c.name) for c in self._commands]
         yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).border_title = "commands"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id or None)

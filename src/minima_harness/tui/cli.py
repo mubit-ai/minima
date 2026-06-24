@@ -31,6 +31,14 @@ def _load_env_files() -> None:
             key, _, val = line.partition("=")
             val = val.strip().strip('"').strip("'")
             os.environ.setdefault(key.strip(), val)  # real env / --env-file wins
+    # Per-user store (OS keyring + ~/.minima-harness/config.env) — lowest precedence, so the
+    # CLI works from any directory while shell env and project .env files still override it.
+    try:
+        from minima_harness.tui.config_store import hydrate_env
+
+        hydrate_env()
+    except Exception:  # noqa: BLE001 - config must never block startup
+        pass
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -90,6 +98,12 @@ def _register_providers(cwd: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     _load_env_files()
     raw = sys.argv[1:] if argv is None else list(argv)
+
+    # `minima-harness config …` — credential setup (no TUI; works before any keys exist).
+    if raw and raw[0] == "config":
+        from minima_harness.tui.config_cli import config_cli
+
+        return config_cli(raw[1:])
 
     # `minima-harness install|list|remove …` — package management (no TUI).
     if raw and raw[0] in _PKG_COMMANDS:

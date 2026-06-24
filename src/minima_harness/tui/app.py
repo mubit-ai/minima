@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import anyio
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.keys import format_key
 from textual.widgets import Footer as TextualFooter
 from textual.widgets import Header, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -28,6 +30,7 @@ from minima_harness.minima.runtime import MinimaAgent
 from minima_harness.session import SessionManager, SessionStore
 from minima_harness.session.format import EntryType
 from minima_harness.tools import default_toolset
+from minima_harness.tui import config_store
 from minima_harness.tui.analytics import aggregate_sessions, format_stats
 from minima_harness.tui.bridge import EventBridge
 from minima_harness.tui.clipboard import copy_to_clipboard
@@ -50,6 +53,7 @@ from minima_harness.tui.mubit import (
 )
 from minima_harness.tui.overlays import (
     CommandPicker,
+    ConfigOverlay,
     DiffApproval,
     ModelPicker,
     PromptInspector,
@@ -93,17 +97,39 @@ class HarnessApp(App):
     }
     #cmd-popup.visible { display: block; }
     ModelPicker, TreePicker, SessionPicker, CommandPicker { align: center middle; }
-    ModelPicker OptionList, SessionPicker OptionList, CommandPicker OptionList, TreePicker Tree {
-        background: $panel; padding: 0 1;
+    /* All single-widget pickers share the rounded accent card framing (matches #editor /
+       ConfigOverlay). The :focus rule must be explicit — OptionList/Tree set a 'tall' focus
+       border in their own CSS that out-specifies a plain descendant selector. */
+    ModelPicker OptionList, SessionPicker OptionList, CommandPicker OptionList {
+        width: 66; height: auto; max-height: 18;
+        background: $panel; border: round $accent; padding: 0 1;
     }
-    ModelPicker OptionList { width: 60; height: 14; }
-    SessionPicker OptionList { width: 60; height: 14; }
-    CommandPicker OptionList { width: 64; height: 16; }
+    ModelPicker OptionList:focus, SessionPicker OptionList:focus,
+    CommandPicker OptionList:focus { border: round $accent; }
     PromptInspector { align: center middle; }
     PromptInspector TextArea { width: 80; height: 20; background: $panel; }
-    TreePicker Tree { width: 70; height: 16; }
+    TreePicker Tree {
+        width: 72; height: auto; max-height: 20;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    TreePicker Tree:focus { border: round $accent; }
     DiffApproval { align: center middle; }
     DiffApproval TextArea { width: 90; height: 24; background: $panel; }
+    ConfigOverlay { align: center middle; }
+    ConfigOverlay #config-card {
+        width: 84; height: auto; max-height: 88%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    ConfigOverlay #config-hint { color: $text-muted; padding: 0 1 1 1; }
+    ConfigOverlay #config-body { height: auto; max-height: 26; padding: 0 1; }
+    ConfigOverlay .cfg-section { text-style: bold; padding: 1 0 0 0; }
+    ConfigOverlay .cfg-note { color: $text-muted; }
+    ConfigOverlay .cfg-key { color: $text-muted; padding: 1 0 0 0; }
+    ConfigOverlay Input {
+        width: 1fr; height: 3; margin: 0;
+        background: $boost; border: round $panel-lighten-2;
+    }
+    ConfigOverlay Input:focus { border: round $accent; }
     """
 
     def __init__(
@@ -234,6 +260,22 @@ class HarnessApp(App):
         yield Editor()
         yield StatusBar(id="status")
         yield TextualFooter()
+
+    def get_key_display(self, binding: Binding) -> str:
+        """Spell out ``ctrl+x`` in the footer instead of Textual's default ``^x`` caret.
+
+        Mirrors the stock implementation byte-for-byte except the ctrl modifier renders as a
+        literal ``ctrl+`` prefix — other modifiers (shift/alt) and bare keys (esc, pgup) keep
+        their normal display.
+        """
+        if binding.key_display:
+            return binding.key_display
+        modifiers, key = binding.parse_key()
+        key = format_key(key)
+        if "ctrl" in modifiers:
+            modifiers.pop(modifiers.index("ctrl"))
+            key = f"ctrl+{key}"
+        return "+".join([*modifiers, key])
 
     def on_mount(self) -> None:
         self.title = "minima-harness"
@@ -937,6 +979,28 @@ class HarnessApp(App):
 
             app.push_screen(PromptInspector(prompt_text, tokens), callback=_saved)
 
+        async def _config(app: HarnessApp, args: str) -> None:
+            def _saved(changes: dict | None) -> None:
+                if not changes:
+                    return
+                # Live-apply to the running session so provider calls pick keys up at once
+                # (provider keys resolve from os.environ per call). Routing auth / MINIMA_URL
+                # are read when the Minima client is built — those take a /reconnect or restart.
+                for key, val in changes.items():
+                    os.environ[key] = val
+                    f = config_store.field_for(key)
+                    for alias in f.aliases if f else ():
+                        os.environ[alias] = val
+                app.run_worker(
+                    app.query_one(ChatLog).add_system(
+                        f"config: updated {', '.join(sorted(changes))} "
+                        "— provider keys apply now; MINIMA_URL/auth on /reconnect or restart"
+                    ),
+                    exclusive=False,
+                )
+
+            app.push_screen(ConfigOverlay(), callback=_saved)
+
         async def _skills(app: HarnessApp, args: str) -> None:
             if not app._skills:
                 await app.query_one(ChatLog).add_system("no skills loaded (local or Mubit)")
@@ -1025,6 +1089,7 @@ class HarnessApp(App):
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
             ("export", _export, "export the conversation to a Markdown file"),
             ("commands", _commands, "open the command palette"),
+            ("config", _config, "manage API keys (LLM providers + Mubit)"),
             ("prompt", _prompt, "inspect/edit the system prompt (Mubit + local)"),
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),

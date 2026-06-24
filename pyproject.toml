@@ -29,12 +29,15 @@ reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
 harness = ["anthropic>=0.40", "google-genai>=0.3"]
-tui = ["textual>=0.79"]
+# keyring: OS-keychain credential storage for `minima-harness config` (graceful 0600-file
+# fallback when no backend is present, so it stays optional).
+tui = ["textual>=0.79", "keyring>=24"]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
   "textual>=0.79",
+  "keyring>=24",
   "ruff>=0.5",
   "mypy>=1.10",
 ]
