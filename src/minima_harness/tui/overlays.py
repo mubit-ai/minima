@@ -20,8 +20,11 @@ from minima_harness.tui.commands import Command
 class ModelPicker(ModalScreen[str | None]):
     """Modal model picker. Returns the chosen model id, or None on cancel.
 
-    Selecting a model pins it as the only candidate so Minima routes to it.
+    Selecting a model pins it as the only candidate so Minima routes to it. The first entry is
+    always ``AUTO`` — selecting it releases any pin and hands routing back to Minima.
     """
+
+    AUTO = "__auto__"  # sentinel id for the "let Minima route (unpin)" entry
 
     BINDINGS = [("escape", "cancel")]
 
@@ -43,11 +46,15 @@ class ModelPicker(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         options = []
+        # Always offer "auto" first so a pinned model can be released back to Minima routing.
+        # It is the active row when nothing is pinned; otherwise it is the unpin affordance.
+        auto_mark = "○" if self._pinned else "●"
+        options.append(Option(f"{auto_mark} auto  ◂ let Minima route (unpin)", id=self.AUTO))
         for c in self._candidates:
-            mark = "●" if c == self._active else "○"
+            mark = "●" if c == self._pinned else ("◦" if c == self._active else "○")
             prov = self._providers.get(c, "")
-            last = "  ◂ last" if c == self._active else ""
-            options.append(Option(f"{mark} {c}  {prov}{last}".rstrip(), id=c))
+            tag = "  ◂ pinned" if c == self._pinned else ("  ◂ last" if c == self._active else "")
+            options.append(Option(f"{mark} {c}  {prov}{tag}".rstrip(), id=c))
         yield OptionList(*options)
 
     def on_mount(self) -> None:

@@ -198,3 +198,34 @@ async def test_route_hook_warns_when_pick_unresolved():
     assert "ghost-model" in texts  # warned about the unrunnable pick
     assert result.model is model  # kept the originally-routed model
     assert result.chosen_model_id == "claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_model_auto_command_unpins(monkeypatch):
+    # `/model auto` releases a pin and restores the full runnable candidate pool. Clear provider
+    # keys so runnable_candidates is deterministic (falls back to all DEFAULT_CANDIDATES).
+    from minima_harness.ai import get_model
+    from minima_harness.ai.provider_catalog import PROVIDERS, runnable_candidates
+    from minima_harness.ai.providers import ensure_providers_registered
+    from minima_harness.minima.config import DEFAULT_CANDIDATES, HarnessConfig
+    from minima_harness.minima.runtime import MinimaAgent
+    from minima_harness.session import SessionStore
+    from minima_harness.tui.app import HarnessApp
+
+    for p in PROVIDERS:
+        for var in p.env_vars:
+            monkeypatch.delenv(var, raising=False)
+
+    ensure_providers_registered()
+    model = get_model("anthropic", "claude-haiku-4-5")
+    cfg = HarnessConfig(minima_url="", candidates=["claude-haiku-4-5"], allow_offline=True)
+    agent = MinimaAgent(cfg, model=model)
+    app = HarnessApp(cfg, session=SessionStore.in_memory(), agent=agent)
+
+    async with app.run_test() as pilot:
+        assert app.config.candidates == ["claude-haiku-4-5"]  # pinned
+        await app._dispatch_command("model", "auto")
+        await pilot.pause()
+
+    assert app.config.candidates == runnable_candidates(list(DEFAULT_CANDIDATES))
+    assert len(app.config.candidates) > 1  # restored to the routing pool, not the single pin

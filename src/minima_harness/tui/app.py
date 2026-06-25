@@ -837,6 +837,21 @@ class HarnessApp(App):
 
         async def _model(app: HarnessApp, args: str) -> None:
             from minima_harness.ai import all_models
+            from minima_harness.ai.provider_catalog import runnable_candidates
+            from minima_harness.minima.config import DEFAULT_CANDIDATES
+
+            def _unpin() -> None:
+                # Release any pin: restore the full runnable candidate pool so Minima routes.
+                app.config.candidates = runnable_candidates(list(DEFAULT_CANDIDATES))
+                app._footer_state["model"] = "auto"
+                app._footer_state["basis"] = "minima"
+                app._refresh_footer()
+
+            # `/model auto` (or unpin/clear) releases the pin without opening the picker.
+            if args.strip().lower() in ("auto", "unpin", "clear"):
+                _unpin()
+                await app.query_one(ChatLog).add_system("model: auto — Minima routes each turn")
+                return
 
             # Offer the union of routing candidates + every registered model (candidates first,
             # deduped) so a user can pin ANY provider's model — e.g. a Groq/DeepSeek model that
@@ -846,14 +861,22 @@ class HarnessApp(App):
             providers = {m.id: m.provider for m in all_models()}
             active = app._footer_state.get("model")
             basis = app._footer_state.get("basis")
-            pinned = cands[0] if len(cands) == 1 else None
+            # Pinned iff the config holds exactly one candidate (check the CONFIG, not the
+            # union `cands` above which is always >1 — the old check could never detect a pin).
+            pinned = (
+                app.config.candidates[0] if len(app.config.candidates or []) == 1 else None
+            )
 
             def _picked(chosen: str | None) -> None:
-                if chosen:
-                    app.config.candidates = [chosen]  # pin: Minima must route to this model
-                    app._footer_state["model"] = chosen
-                    app._footer_state["basis"] = "pinned"
-                    app._refresh_footer()  # reflect the pin immediately
+                if not chosen:
+                    return
+                if chosen == ModelPicker.AUTO:
+                    _unpin()  # explicit "auto" entry: unpin back to Minima routing
+                    return
+                app.config.candidates = [chosen]  # pin: Minima must route to this model
+                app._footer_state["model"] = chosen
+                app._footer_state["basis"] = "pinned"
+                app._refresh_footer()  # reflect the pin immediately
 
             app.push_screen(
                 ModelPicker(
@@ -1337,9 +1360,35 @@ _INLINE_WARNINGS = (
     "no_model_meets_threshold",
 )
 
+# Internal routing/recall diagnostics that mean "routing succeeded, just a side-note" — NOT
+# user-actionable. These must never render as an alarming red banner (they read exactly like an
+# offline/auth error and scared users). Routing still happened; the decision card already shows
+# the relevant context ("evidence thin", the chosen model, confidence). Anything NOT listed here
+# (or in _INLINE_WARNINGS) is still surfaced, so a genuinely actionable signal — e.g.
+# no_model_within_cost_budget / latency_budget, or a future unknown warning — is never hidden.
+_BENIGN_WARNINGS = (
+    "cold_start",
+    "recall_timeout",
+    "memory_unavailable",
+    "neighbor_classified",
+    "llm_classified",
+    "prices_stale",
+    "thompson_pick",
+    "exploration_pick",
+    "collapse_guard_applied",
+    "thin_evidence",
+    "capability_prior",
+    "shadow_disagree",
+    "durable_fastpath_timeout",
+    "reasoner_failed",
+)
+
+_HIDDEN_WARNINGS = _INLINE_WARNINGS + _BENIGN_WARNINGS
+
 
 def _banner_warnings(warnings: list[str]) -> list[str]:
-    return [w for w in warnings if not w.startswith(_INLINE_WARNINGS)]
+    """Warnings worth surfacing: drop inline-handled + benign diagnostics; keep the rest."""
+    return [w for w in warnings if not w.startswith(_HIDDEN_WARNINGS)]
 
 
 # ROI is "not significant" when a pricier model buys less than this much extra predicted

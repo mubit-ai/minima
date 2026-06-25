@@ -24,11 +24,43 @@ async def test_model_picker_dismisses_with_selection():
     app = _App()
     async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.press("down")  # highlight "b"
+        # options are [auto, a, b]; two downs from the top lands on "b"
+        await pilot.press("down")
+        await pilot.press("down")
         await pilot.pause()
         await pilot.press("enter")  # select -> dismiss("b")
         await pilot.pause()
     assert app.result == "b"
+
+
+@pytest.mark.asyncio
+async def test_model_picker_offers_auto_unpin_first():
+    from minima_harness.tui.overlays import ModelPicker
+
+    class _App(App):
+        result: str | None = "unset"
+
+        def compose(self) -> ComposeResult:
+            yield Static()
+
+        def on_mount(self) -> None:
+            # a model is pinned -> the first row is the unpin/auto affordance
+            self.push_screen(
+                ModelPicker(["a", "b"], pinned="a"),
+                callback=lambda r: setattr(self, "result", r),
+            )
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import OptionList
+
+        ol = app.screen.query_one(OptionList)
+        assert ol.get_option_at_index(0).id == ModelPicker.AUTO
+        assert "auto" in str(ol.get_option_at_index(0).prompt)
+        await pilot.press("enter")  # top row = auto -> dismiss(AUTO)
+        await pilot.pause()
+    assert app.result == ModelPicker.AUTO
 
 
 @pytest.mark.asyncio
