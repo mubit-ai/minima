@@ -91,7 +91,7 @@ def _tools_for(args: argparse.Namespace):
 
 
 def _register_providers(cwd: Path) -> None:
-    from minima_harness.ai.provider_catalog import register_catalog_models
+    from minima_harness.ai.provider_catalog import provider_key_present, register_catalog_models
     from minima_harness.ai.providers import ensure_providers_registered
     from minima_harness.tui.extra_models import register_extra_models
 
@@ -99,6 +99,15 @@ def _register_providers(cwd: Path) -> None:
     # Register the curated multi-provider catalog, but only for providers whose key is
     # configured — so the model picker stays relevant (you see models you can actually run).
     register_catalog_models()
+    # OpenRouter is an aggregator: one key unlocks its *entire* live model list (cached +
+    # offline-safe), not just a few curated ids. Register it when the key is present.
+    if provider_key_present("openrouter"):
+        try:
+            from minima_harness.ai.openrouter_catalog import register_openrouter_models
+
+            register_openrouter_models()
+        except Exception:  # noqa: BLE001 - never block startup on the OpenRouter catalog
+            pass
     register_extra_models(cwd)
 
 
