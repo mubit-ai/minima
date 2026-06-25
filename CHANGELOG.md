@@ -4,30 +4,56 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.4] - 2026-06-25
 
 ### Added
 - **OpenRouter is now a full provider, not 4 hardcoded models.** Setting `OPENROUTER_API_KEY`
   fetches OpenRouter's entire live model list (`GET /api/v1/models`, ~340 models) with live
   pricing / context / modalities / reasoning, so any OpenRouter model is callable, pinnable, and
-  routable. The list is cached to `~/.minima-harness/cache` with a 24h TTL and degrades
-  gracefully (live → stale cache → curated) so startup never blocks or breaks offline.
+  routable. Cached to `~/.minima-harness/cache` with a 24h TTL; degrades live → stale cache →
+  curated so startup never blocks or breaks offline.
+- **`/ledger` — cost-aware goals.** Set a budgeted objective (`/ledger set <title>`,
+  `/ledger budget <usd>`); the agent maintains a task checklist (the `tasks` tool, footer `N/M`,
+  re-anchored into the prompt each turn and persisted across `--continue`/`--resume`). The goal
+  conditions routing (its turns cluster in Minima's memory) and each turn's realized cost is
+  attributed to it — `└ ledger · spent $X · ~$Y projected · budget $B` — the cost-to-goal view no
+  other agent has. (`/goals` remains as a hidden alias.)
+- **Permission prompts before sensitive ops (default on).** write / edit / bash now ask first
+  (Enter approve · `a` always-allow this tool · Esc reject), previewing a diff or the command.
+  `/yolo` or `--dangerously-skip-permissions` disables prompting; `/edits` forces a diff review.
+- **`/thoughts`** streams the model's reasoning into a muted bubble above each answer; **`/exit`**
+  (and `/quit`) quit the TUI.
 
 ### Fixed
-- **Provider failures are no longer silent.** A failed model call (bad/missing key, 404, 429,
-  402, network) was swallowed by the provider into an *empty* assistant message; the TUI rendered
-  a blank bubble and `--print` printed an empty line. The harness now classifies the failure and
-  surfaces an actionable, provider-aware message (e.g. "Authentication failed for Anthropic
-  running claude-opus-4-8 — set ANTHROPIC_API_KEY (/config)") in the TUI, on `--print` stderr
-  (exit 1), and in `--mode json`. The blank bubble is removed.
+- **Provider failures are no longer silent.** A failed model call (bad/missing key, 401/403/404/
+  429/402, network) was swallowed into an *empty* assistant message — a blank bubble in the TUI,
+  an empty line on `--print`. The harness now classifies it and surfaces an actionable,
+  provider-aware message (e.g. "Authentication failed for Anthropic running claude-opus-4-8 — set
+  ANTHROPIC_API_KEY (/config)") in the TUI, on `--print` stderr (exit 1), and in `--mode json`.
+  Tool failures (incl. permission denials) render prominently instead of a faint line.
 - **OpenAI GPT-5 / o-series models 400'd on every call.** They reject `max_tokens` and require
-  `max_completion_tokens`; the OpenAI-compatible provider always sent `max_tokens`. It now sends
-  the right param for the `openai` provider (other OpenAI-compatible hosts keep `max_tokens`).
-- **`/confirm` could silently ignore your pick.** Selecting a model the harness couldn't resolve
-  quietly kept the routed model; it now warns. The decision card also marks candidates whose
-  provider key is missing with `⚠ no key`.
+  `max_completion_tokens`; the OpenAI-compatible provider now sends the right param for the
+  `openai` provider (other OpenAI-compatible hosts keep `max_tokens`). Encoded as a small
+  per-provider request-quirks table rather than a hardcoded branch.
+- **`/confirm` could silently ignore your pick** (kept the routed model when a pick didn't
+  resolve) — now warns; the decision card marks candidates with no provider key as `⚠ no key`.
+- **`/model` had no way to unpin** — added an "auto (unpin)" entry + `/model auto` that restore
+  the full routing pool.
+- **Scary red banners for benign routing diagnostics** (`neighbor_classified`, `recall_timeout`,
+  `cold_start`, …) — these are now suppressed; the banner is reserved for actionable issues.
+- **Tool calls dumped raw JSON args** — now rendered IDE-style (diffs for edit/write, `$ cmd` for
+  bash, a clean summary otherwise) with colorized diffs.
 - **Errored turns were sometimes reported to Minima as successes** (when judging was off),
-  poisoning the routing feedback loop; a provider-error turn is now recorded as a failure.
+  poisoning the routing loop — now recorded as failures.
+- **The launch splash was pinned to the left** instead of centered.
+- **`/v1/models` price overlay** — the harness now overlays Minima's authoritative live pricing
+  onto the registry at startup, so reported cost matches what the server routed against.
+
+### Performance
+- **`brew install minima` drops from ~5 min to ~3 s.** The Homebrew formula now installs
+  dependencies from prebuilt wheels instead of compiling grpcio / cryptography / pydantic-core /
+  jiter / cffi from source. (Apple Silicon + Linux compile nothing; macOS-Intel still builds only
+  `cryptography`, which publishes no x86_64 wheel.)
 
 ## [0.4.3] - 2026-06-24
 
