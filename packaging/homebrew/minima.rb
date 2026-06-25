@@ -20,6 +20,10 @@ class Minima < Formula
     end
   end
 
+  # jiter / pydantic-core wheels ship `.so` modules with `@rpath` dylib IDs and no header
+  # padding, so Homebrew's relocation pass fails on them — preserve_rpath skips it.
+  preserve_rpath
+
   resource "annotated-types" do  # wheel (pure)
     url "https://files.pythonhosted.org/packages/78/b6/6307fbef88d9b5ee7421e68d78a9f162e0da4900bc5f5793f6d3d0e34fb8/annotated_types-0.7.0-py3-none-any.whl"
     sha256 "1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53"
@@ -304,7 +308,29 @@ class Minima < Formula
   end
 
   def install
-    virtualenv_install_with_resources
+    python = "python3.13"
+    venv = virtualenv_create(libexec, python)
+
+    # Homebrew's std_pip_args hardcodes `--no-binary=:all:`, which would refuse/recompile our
+    # vendored wheels — so install every wheel resource via an explicit pip call WITHOUT that
+    # flag. brew caches each download as `<sha256>--<name>`; pip's wheel-name parser rejects that
+    # prefix, so copy each wheel back to its clean filename first. Any sdist resource (today just
+    # cryptography on macOS-Intel, which publishes no x86_64 wheel) installs normally — building
+    # from source there, which is why rust + openssl@3 are scoped to that branch above.
+    wheelhouse = buildpath/"wheelhouse"
+    wheelhouse.mkpath
+    wheels, sdists = resources.partition { |r| r.url.end_with?(".whl") }
+    wheel_files = wheels.map do |r|
+      dest = wheelhouse/File.basename(r.url)
+      cp r.cached_download, dest
+      dest
+    end
+    unless wheel_files.empty?
+      system python, "-m", "pip", "--python=#{libexec}/bin/python", "install",
+             "--no-deps", "--no-index", "--ignore-installed", "--no-compile", *wheel_files
+    end
+    venv.pip_install sdists unless sdists.empty?
+    venv.pip_install_and_link "#{buildpath}[harness,tui]"
   end
 
   test do
