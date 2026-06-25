@@ -57,9 +57,9 @@ from minima_harness.tui.mubit import (
 from minima_harness.tui.overlays import (
     CommandPicker,
     ConfigOverlay,
-    DiffApproval,
     LayeredPromptInspector,
     ModelPicker,
+    PermissionRequest,
     PromptOptimizationOverlay,
     RoutingConfirm,
     SessionPicker,
@@ -75,6 +75,8 @@ _log = logging.getLogger("minima_harness.tui.app")
 
 # Tools whose effects are gated behind diff approval when /edits is on.
 _MUTATING_TOOLS = frozenset({"edit", "write"})
+# Tools that touch the user's machine/network and so require approval by default.
+_SENSITIVE_TOOLS = frozenset({"edit", "write", "bash"})
 
 
 class HarnessApp(App):
@@ -141,8 +143,16 @@ class HarnessApp(App):
         background: $panel; border: round $accent; padding: 0 1;
     }
     TreePicker Tree:focus { border: round $accent; }
-    DiffApproval { align: center middle; }
-    DiffApproval TextArea { width: 90; height: 24; background: $panel; }
+    PermissionRequest { align: center middle; }
+    PermissionRequest #perm-card {
+        width: 92; height: auto; max-height: 85%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    PermissionRequest #perm-hint { color: $text-muted; padding: 0 1 1 1; }
+    PermissionRequest #perm-view {
+        width: 1fr; height: auto; max-height: 24; background: $boost;
+        border: round $panel-lighten-2;
+    }
     ConfigOverlay { align: center middle; }
     ConfigOverlay #config-card {
         width: 84; height: auto; max-height: 88%;
@@ -184,6 +194,7 @@ class HarnessApp(App):
         cwd: Path | None = None,
         system_prompt: str | None = None,
         load_session: bool = False,
+        skip_permissions: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -192,7 +203,12 @@ class HarnessApp(App):
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
         self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
-        self._confirm_edits = False  # /edits: review edit/write diffs before applying
+        self._confirm_edits = False  # /edits: force a diff review for every edit/write
+        # Ask before sensitive ops (write/edit/bash) by default; /yolo or
+        # --dangerously-skip-permissions turns it off. _allow_always holds tools the user chose
+        # to always-allow this session.
+        self._ask_permission = not skip_permissions
+        self._allow_always: set[str] = set()
         self._cache_enabled = config.cache_enabled  # /cache: serve near-duplicate prompts free
         self._cache = SemanticCache(threshold=config.cache_threshold)
         self._escalate = False
@@ -472,32 +488,49 @@ class HarnessApp(App):
             self.config.candidates = [chosen_id]
         return routing
 
-    async def _tool_hook(self, ctx: Any) -> Any:
-        """before_tool_call hook: when /edits is on, review edit/write diffs before applying.
+    def _tool_preview(self, name: str, args: Any) -> str:
+        """What a sensitive tool call will do, for the permission modal: a diff for write/edit,
+        the command for bash, else a compact summary."""
+        if name in _MUTATING_TOOLS:
+            from minima_harness.tui.diff import render_tool_diff
 
-        A rejected edit is blocked (the model sees the rejection) AND recorded as a
-        ground-truth negative outcome fed back to Minima.
+            return render_tool_diff(name, args)
+        if name == "bash":
+            return f"$ {getattr(args, 'command', '') or ''}"
+        return _format_tool_call(name, args)
+
+    async def _tool_hook(self, ctx: Any) -> Any:
+        """before_tool_call hook: ask the user to approve sensitive ops (write/edit/bash) before
+        they run — Claude-Code-style. Approval is needed when permission-asking is on and the
+        tool isn't already always-allowed, OR when /edits forces a diff review for edits.
+
+        A rejected call is blocked (the model sees the rejection) AND recorded as a ground-truth
+        negative outcome fed back to Minima.
         """
         from minima_harness.agent.tools import BeforeToolCallResult
-        from minima_harness.tui.diff import render_tool_diff
 
-        if not self._confirm_edits or ctx.tool_call.name not in _MUTATING_TOOLS:
+        name = ctx.tool_call.name
+        forced = self._confirm_edits and name in _MUTATING_TOOLS
+        gated = self._ask_permission and name in _SENSITIVE_TOOLS and name not in self._allow_always
+        if not (forced or gated):
             return None
-        target = getattr(ctx.args, "path", "")
-        diff = render_tool_diff(ctx.tool_call.name, ctx.args)
+        target = getattr(ctx.args, "path", "") or ""
+        preview = self._tool_preview(name, ctx.args)
         result = await self.push_screen(
-            DiffApproval(ctx.tool_call.name, diff, target), wait_for_dismiss=True
+            PermissionRequest(name, preview, target), wait_for_dismiss=True
         )
-        if result and result.get("action") == "approve":
+        action = (result or {}).get("action", "reject")
+        if action == "always":
+            self._allow_always.add(name)  # don't ask again for this tool this session
+            return None
+        if action == "approve":
             return None
         self.agent.record_tool_rejection()
-        await self.query_one(ChatLog).add_system(
-            f"✗ rejected {ctx.tool_call.name} {target}".rstrip(), color="red"
-        )
+        await self.query_one(ChatLog).add_error(f"rejected {name} {target}".rstrip())
         return BeforeToolCallResult(
             block=True,
-            reason="The user rejected this edit. Do not retry it verbatim — propose a "
-            "different approach or ask what they want changed.",
+            reason="The user rejected this tool call. Do not retry it verbatim — propose a "
+            "different approach or ask what they want.",
         )
 
     # ------------------------------------------------------------- input
@@ -695,7 +728,10 @@ class HarnessApp(App):
                 for call in msg.tool_calls:
                     await chatlog.add_tool(call.name, _format_tool_call(call.name, call.arguments))
             elif msg.role == "toolResult":
-                await chatlog.add_tool_result(_snippet(msg.text), msg.is_error)
+                # Errors (incl. permission/sandbox failures) get more room + a prominent ✗ so a
+                # failed tool is never an easy-to-miss faint line.
+                limit = 400 if msg.is_error else 120
+                await chatlog.add_tool_result(_snippet(msg.text, limit), msg.is_error)
         self._rendered_msgs = len(self.agent.state.messages)
 
     async def _load_session(self, store: SessionStore) -> None:
@@ -1181,6 +1217,23 @@ class HarnessApp(App):
                 + ("ON (review each edit/write diff before it applies)" if on else "off")
             )
 
+        async def _yolo(app: HarnessApp, args: str) -> None:
+            a = args.strip().lower()
+            if a in {"on", "1", "true", "yes"}:  # YOLO ON = skip permission prompts
+                app._ask_permission = False
+            elif a in {"off", "0", "false", "no"}:
+                app._ask_permission = True
+            else:
+                app._ask_permission = not app._ask_permission
+            if app._ask_permission:
+                await app.query_one(ChatLog).add_system(
+                    "permissions: ON — you'll be asked before write/edit/bash"
+                )
+            else:
+                await app.query_one(ChatLog).add_error(
+                    "YOLO mode: permissions OFF — sensitive tools run without asking"
+                )
+
         async def _cache(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
@@ -1229,7 +1282,8 @@ class HarnessApp(App):
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),
             ("escalate", _escalate, "toggle quality escalation"),
-            ("edits", _edits, "toggle edit/write diff confirmation"),
+            ("edits", _edits, "force a diff review for every edit/write"),
+            ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
             ("cache", _cache, "toggle semantic response cache"),
             ("stats", _stats, "show session analytics (last 10)"),
             ("recall", _recall, "Mubit cross-session recall"),

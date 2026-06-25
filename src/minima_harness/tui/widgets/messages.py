@@ -117,8 +117,11 @@ class ChatLog(ScrollableContainer):
         return await self._add(MessageBubble("tool", args_repr, prefix=f"◆ {name}  "))
 
     async def add_tool_result(self, summary: str, is_error: bool) -> MessageBubble:
+        # A failed tool (incl. permission/sandbox denials) reads as a prominent red ✗ line, not
+        # a faint "→" that's easy to miss; a success stays a quiet dim snippet.
         role = "error" if is_error else "system"
-        return await self._add(MessageBubble(role, summary, prefix="   → "))
+        prefix = "   ✗ " if is_error else "   → "
+        return await self._add(MessageBubble(role, summary, prefix=prefix))
 
     async def add_error(self, message: str) -> MessageBubble:
         return await self._add(MessageBubble("error", message))

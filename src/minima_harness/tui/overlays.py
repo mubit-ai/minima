@@ -398,6 +398,54 @@ class DiffApproval(ModalScreen[dict | None]):
         self.dismiss({"action": "reject"})
 
 
+class PermissionRequest(ModalScreen[dict | None]):
+    """Approve a sensitive tool call (write/edit/bash) before it runs.
+
+    Enter approves once · ``a`` always-allows this tool for the session · Esc/``r`` rejects.
+    The body previews exactly what will happen (a diff for write/edit, the command for bash).
+    Returns ``{"action": "approve"|"always"|"reject"}``. A reject blocks the tool and feeds a
+    ground-truth negative back to Minima.
+    """
+
+    BINDINGS = [
+        Binding("enter", "approve", "Approve", priority=True),
+        Binding("a", "always", "Always", priority=True),
+        Binding("escape", "reject", "Reject", priority=True),
+        Binding("r", "reject", "Reject", priority=True),
+    ]
+
+    def __init__(self, tool_name: str, preview: str, target: str = "") -> None:
+        super().__init__()
+        self._name = tool_name
+        self._preview = preview
+        self._target = target
+
+    def compose(self) -> ComposeResult:
+        head = f"{self._name}  {self._target}".strip()
+        with Vertical(id="perm-card"):
+            yield Static(Text(head, style="bold"), id="perm-head")
+            yield Static(
+                Text("Enter approve · a always-allow · Esc reject", style="dim"), id="perm-hint"
+            )
+            yield TextArea(
+                self._preview, id="perm-view", read_only=True, soft_wrap=False,
+                show_line_numbers=False,
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#perm-card").border_title = "permission"
+        self.query_one("#perm-view", TextArea).focus()
+
+    def action_approve(self) -> None:
+        self.dismiss({"action": "approve"})
+
+    def action_always(self) -> None:
+        self.dismiss({"action": "always"})
+
+    def action_reject(self) -> None:
+        self.dismiss({"action": "reject"})
+
+
 class ConfigOverlay(ModalScreen[dict | None]):
     """Edit stored credentials, grouped into sections. Ctrl+S saves, Esc cancels.
 

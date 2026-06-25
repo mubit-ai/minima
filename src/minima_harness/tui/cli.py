@@ -74,6 +74,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="capture the mouse for scroll-wheel support. OFF by default so terminal text "
         "selection + copy (drag, then Cmd/Ctrl+C) works; scroll with PageUp/PageDown.",
     )
+    p.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        help="don't ask before write/edit/bash (YOLO). Off by default — the TUI asks first.",
+    )
     return p
 
 
@@ -198,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         cwd=cwd,
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
+        skip_permissions=args.dangerously_skip_permissions,
     )
     app.run(mouse=args.mouse)
     return 0
