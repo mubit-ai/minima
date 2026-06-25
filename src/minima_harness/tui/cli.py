@@ -111,6 +111,27 @@ def _register_providers(cwd: Path) -> None:
     register_extra_models(cwd)
 
 
+def _overlay_minima_prices(config: HarnessConfig) -> None:
+    """Best-effort: overlay Minima's authoritative live pricing onto the registered models.
+
+    So the cost the harness reports for a call matches the cost the server routed against
+    (keeps est-vs-actual honest). Offline-safe and quick: skipped without a Minima URL, short
+    timeout, and any failure is swallowed (the seeded prices stand)."""
+    if not (config.minima_url or "").strip():
+        return
+    try:
+        from minima_client import MinimaClient
+
+        from minima_harness.minima.mapping import sync_catalog
+
+        with MinimaClient(
+            config.minima_url, config.minima_api_key, timeout=min(config.timeout, 8.0)
+        ) as client:
+            sync_catalog(client)
+    except Exception:  # noqa: BLE001 - pricing overlay must never block startup
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     _load_env_files()
     raw = sys.argv[1:] if argv is None else list(argv)
@@ -137,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     from minima_harness.ai.provider_catalog import runnable_candidates
 
     config.candidates = runnable_candidates(config.candidates)
+    _overlay_minima_prices(config)
     tools = _tools_for(args)
 
     noninteractive = args.print or args.mode in ("print", "json")

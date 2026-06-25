@@ -99,10 +99,49 @@ class ModelMapping:
         return None
 
 
-def sync_catalog(client: object, mapping: ModelMapping | None = None) -> None:
-    """Pull ``GET /v1/models`` from Minima and (future) reconcile prices into the registry.
+def sync_catalog(client: object, mapping: ModelMapping | None = None) -> int:
+    """Overlay Minima's authoritative live pricing onto the registered harness models.
 
-    Phase 3 stub: the harness registry remains authoritative for calling. Real catalog
-    merging lands when the price-drift reconciliation rules are settled.
+    Minima's ``GET /v1/models`` carries cost/context that the server overlays from live
+    LiteLLM pricing and *scores routing against*. The harness registry is hand-seeded and can
+    drift from it, so the cost the harness reports for a call can disagree with the cost the
+    server routed on — which corrupts the est-vs-actual loop. This pulls the catalog and
+    overlays cost/context/max_output onto each matching registered model (tolerant id match,
+    reusing :meth:`ModelMapping._resolve`). Returns the number of models updated.
+
+    Offline-safe: any failure (unreachable Minima, bad shape) is logged at DEBUG and returns 0,
+    leaving the seeded prices in place. ``client`` is duck-typed on a sync ``.models()``.
     """
-    _ = client, mapping  # placeholder; intentionally a no-op for now
+    from minima_harness.ai.registry import register_model
+    from minima_harness.ai.types import ModelCost
+
+    mapping = mapping or ModelMapping()
+    try:
+        resp = client.models(include_stale=True)  # type: ignore[attr-defined]
+        cards = list(getattr(resp, "models", None) or [])
+    except Exception:  # noqa: BLE001 - the harness must run on the seeded catalog if this fails
+        _log.debug("catalog_overlay_skipped", exc_info=True)
+        return 0
+    updated = 0
+    for card in cards:
+        model = mapping._resolve(card.provider, card.model_id)
+        if model is None:
+            continue
+        model.cost = ModelCost(
+            input=card.input_cost_per_mtok,
+            output=card.output_cost_per_mtok,
+            cache_read=(
+                card.cache_read_cost_per_mtok
+                if card.cache_read_cost_per_mtok is not None
+                else model.cost.cache_read
+            ),
+            cache_write=model.cost.cache_write,
+        )
+        if card.context_window:
+            model.context_window = card.context_window
+        if card.max_output_tokens:
+            model.max_tokens = card.max_output_tokens
+        register_model(model)  # re-register (same instance) so the overlay is authoritative
+        updated += 1
+    _log.debug("catalog_overlay matched %d of %d minima catalog models", updated, len(cards))
+    return updated
