@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from minima_harness.ai.provider_catalog import provider_key_present
 from minima_harness.ai.registry import all_models, find_model_by_id, try_get_model
 from minima_harness.ai.types import Model
 
@@ -19,6 +20,23 @@ if TYPE_CHECKING:
     from minima.schemas.recommend import RankedModel
 
 _log = logging.getLogger("minima_harness.mapping")
+
+
+def _has_provider_key(model: Model) -> bool:
+    """True if a key for ``model``'s OWN provider is set (or it needs none, e.g. a local runtime).
+
+    Provider-specific (via the provider catalog): a Groq model needs GROQ_API_KEY, an OpenAI
+    model needs OPENAI_API_KEY — an OpenRouter key never green-lights an api.openai.com model.
+    """
+    return provider_key_present(model.provider)
+
+
+def _fallback_cost(model: Model) -> float:
+    """Sort key for the offline fallback: combined per-token cost, but treat an unpriced
+    (cost 0) model as most-expensive so a local/custom 0-cost stub isn't mistaken for the
+    cheapest runnable default."""
+    total = model.cost.input + model.cost.output
+    return float("inf") if total <= 0 else total
 
 
 class ModelMapping:
@@ -46,11 +64,20 @@ class ModelMapping:
         )
 
     def default_model(self) -> Model:
-        """Cheapest registered model (a sensible offline placeholder)."""
+        """Offline fallback: the cheapest registered model the user can actually run.
+
+        Prefers the cheapest model whose provider key is configured, so an offline
+        fallback doesn't pick (say) gpt-4o-mini when only Anthropic/Gemini keys are set.
+        Falls back to the globally cheapest model if no provider key is present (the run
+        will then surface a clear provider-auth error rather than a silent mismatch)."""
         models = all_models()
         if not models:
             raise KeyError("harness model registry is empty")
-        return min(models, key=lambda m: (m.cost.input + m.cost.output, m.id))
+        by_cost = sorted(models, key=lambda m: (_fallback_cost(m), m.id))
+        for model in by_cost:
+            if _has_provider_key(model):
+                return model
+        return by_cost[0]
 
     def _resolve(self, provider: str, model_id: str) -> Model | None:
         # 1. exact (provider, id)

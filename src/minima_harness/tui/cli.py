@@ -42,7 +42,9 @@ def _load_env_files() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="minima-harness", description="PI-style agent on Minima.")
+    p = argparse.ArgumentParser(
+        prog="minima", description="Minima CLI — cost-aware model-routing coding agent."
+    )
     p.add_argument(
         "prompt", nargs="*", help="optional initial prompt (used by --print/--mode json)"
     )
@@ -67,9 +69,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="run mode (interactive TUI, one-shot print, or JSON event stream)",
     )
     p.add_argument(
-        "--no-mouse",
+        "--mouse",
         action="store_true",
-        help="disable mouse capture so you can select/copy text (scroll then needs PageUp/Down).",
+        help="capture the mouse for scroll-wheel support. OFF by default so terminal text "
+        "selection + copy (drag, then Cmd/Ctrl+C) works; scroll with PageUp/PageDown.",
     )
     return p
 
@@ -88,10 +91,14 @@ def _tools_for(args: argparse.Namespace):
 
 
 def _register_providers(cwd: Path) -> None:
+    from minima_harness.ai.provider_catalog import register_catalog_models
     from minima_harness.ai.providers import ensure_providers_registered
     from minima_harness.tui.extra_models import register_extra_models
 
     ensure_providers_registered()
+    # Register the curated multi-provider catalog, but only for providers whose key is
+    # configured — so the model picker stays relevant (you see models you can actually run).
+    register_catalog_models()
     register_extra_models(cwd)
 
 
@@ -115,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
         config.minima_url = ""
     cwd = Path.cwd()
     _register_providers(cwd)
+    # Gate the routing candidate pool to models whose provider key is configured (after
+    # registration so newly-added providers count) — Minima won't be offered a model the
+    # user can't run. No-op when keys for the defaults (Anthropic/Gemini) are present.
+    from minima_harness.ai.provider_catalog import runnable_candidates
+
+    config.candidates = runnable_candidates(config.candidates)
     tools = _tools_for(args)
 
     noninteractive = args.print or args.mode in ("print", "json")
@@ -155,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
     )
-    app.run(mouse=not args.no_mouse)
+    app.run(mouse=args.mouse)
     return 0
 
 

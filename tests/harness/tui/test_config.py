@@ -155,6 +155,45 @@ def test_cli_doctor_reports_presence_only(file_store, monkeypatch, capsys):
     assert "mubit-doctor-secret" not in out  # never echoes the value
 
 
+def test_cli_doctor_auth_probe_ok(file_store, monkeypatch, capsys):
+    import httpx
+
+    monkeypatch.delenv("MUBIT_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMA_API_KEY", raising=False)
+    file_store.set_value("MUBIT_API_KEY", "mubit-valid-1234")
+
+    class _Resp:
+        status_code = 200
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "health: HTTP 200" in out
+    assert "auth: OK" in out
+    assert "mubit-valid-1234" not in out  # key never echoed
+
+
+def test_cli_doctor_auth_probe_rejects_bad_key(file_store, monkeypatch, capsys):
+    import httpx
+
+    monkeypatch.delenv("MUBIT_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMA_API_KEY", raising=False)
+    file_store.set_value("MUBIT_API_KEY", "bad-key")
+
+    class _R200:
+        status_code = 200
+
+    class _R401:
+        status_code = 401
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _R200())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R401())
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "auth: FAILED" in out and "401" in out
+
+
 # --- overlay ---------------------------------------------------------------------------
 
 
@@ -201,3 +240,40 @@ async def test_config_overlay_cancel_returns_none(file_store):
         await pilot.pause()
 
     assert app.result is None
+
+
+@pytest.mark.asyncio
+async def test_config_overlay_enter_advances_and_save_button_commits(file_store):
+    """Enter walks fields (does not save mid-form); the Save button commits."""
+    from textual.app import App
+    from textual.widgets import Button, Input
+
+    from minima_harness.tui.overlays import ConfigOverlay
+
+    class _App(App):
+        result: dict | None = "sentinel"  # type: ignore[assignment]
+
+        def on_mount(self) -> None:
+            self.push_screen(ConfigOverlay(), callback=lambda r: setattr(self, "result", r))
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The open-source / OpenAI-compatible field exists.
+        router = app.screen.query_one("#cfg-OPENROUTER_API_KEY", Input)
+        first = app.screen.query_one("#cfg-ANTHROPIC_API_KEY", Input)
+        first.focus()
+        first.value = "sk-ant-1234"
+        await pilot.pause()
+        # Enter advances focus instead of saving (so multi-key entry isn't cut short).
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.result == "sentinel"  # nothing committed yet
+        assert not first.has_focus
+        # Fill the OpenRouter key too, then commit via the Save button.
+        router.value = "sk-or-9999"
+        app.screen.query_one("#cfg-save", Button).press()
+        await pilot.pause()
+
+    assert app.result == {"ANTHROPIC_API_KEY": "sk-ant-1234", "OPENROUTER_API_KEY": "sk-or-9999"}
+    assert file_store.get("OPENROUTER_API_KEY") == "sk-or-9999"

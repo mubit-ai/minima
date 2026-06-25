@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, Static, TextArea, Tree
+from textual.widgets import Button, Collapsible, Input, OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
@@ -164,42 +164,175 @@ class PromptInspector(ModalScreen[dict | None]):
         self.dismiss(None)
 
 
+class LayeredPromptInspector(ModalScreen[dict | None]):
+    """Transparent, per-layer view of the assembled system prompt + edit control.
+
+    Each layer (base, project context, session override, Mubit lessons, …) renders in its
+    own collapsible with a token count, so the user can see exactly what's sent and which
+    layer costs what. Two editable areas let them control the layers they own: Ctrl+P saves
+    the system prompt to Mubit (project, versioned), Ctrl+S saves the session override. Esc
+    cancels. Returns the same ``{"action","content"}`` dict as PromptInspector so
+    ``_apply_prompt_edit`` is reused unchanged.
+    """
+
+    BINDINGS = [
+        Binding("ctrl+p", "save_project", "Save→Mubit", priority=True),
+        Binding("ctrl+s", "save_session", "Save session", priority=True),
+        ("escape", "cancel"),
+    ]
+
+    def __init__(
+        self, layers: list[Any], project_text: str, session_text: str, breakdown: dict
+    ) -> None:
+        super().__init__()
+        self._layers = layers
+        self._project_text = project_text
+        self._session_text = session_text
+        self._breakdown = breakdown
+
+    def compose(self) -> ComposeResult:
+        b = self._breakdown
+        with Vertical(id="prompt-card"):
+            yield Static(
+                Text(
+                    f"total ~{b['total']} tok · system ~{b['system']} · history ~{b['history']}"
+                    "   ·   Ctrl+P save system→Mubit · Ctrl+S save session · Esc cancel",
+                ),
+                id="prompt-hint",
+            )
+            with VerticalScroll(id="prompt-body"):
+                for layer in self._layers:
+                    title = f"{layer.name}  ~{layer.tokens} tok  ({layer.source})"
+                    with Collapsible(title=title, collapsed=True):
+                        yield TextArea(
+                            layer.text, read_only=True, soft_wrap=True, classes="layer-view"
+                        )
+                with Collapsible(title="✎ system prompt → Mubit (project)", collapsed=False):
+                    yield TextArea(
+                        self._project_text, id="edit-project", soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Collapsible(title="✎ session override → session", collapsed=False):
+                    yield TextArea(
+                        self._session_text, id="edit-session", soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt-card").border_title = "prompt"
+        self.query_one("#edit-project", TextArea).focus()
+
+    def action_save_project(self) -> None:
+        text = self.query_one("#edit-project", TextArea).text
+        self.dismiss({"action": "project", "content": text})
+
+    def action_save_session(self) -> None:
+        text = self.query_one("#edit-session", TextArea).text
+        self.dismiss({"action": "session", "content": text})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PromptOptimizationOverlay(ModalScreen[dict | None]):
+    """Preview a proposed system-prompt optimization: current → proposed tokens, the
+    rationale, and the new prompt. Ctrl+S applies it (→ Mubit project, versioned), Esc cancels.
+    Returns ``{"action": "apply", "content": str}`` or None."""
+
+    BINDINGS = [
+        Binding("ctrl+s", "apply", "Apply", priority=True),
+        ("escape", "cancel"),
+    ]
+
+    def __init__(self, opt: Any) -> None:
+        super().__init__()
+        self._opt = opt
+
+    def compose(self) -> ComposeResult:
+        o = self._opt
+        if o.est_savings > 0:
+            change = f"save {o.est_savings} tok"
+        elif o.est_savings < 0:
+            change = f"grow {abs(o.est_savings)} tok (quality over size)"
+        else:
+            change = "no token change"
+        with Vertical(id="opt-card"):
+            yield Static(
+                Text(
+                    f"{o.source} · ~{o.current_tokens} → ~{o.new_tokens} tok · {change}"
+                    "   ·   Ctrl+S apply · Esc cancel",
+                    style="bold",
+                ),
+                id="opt-head",
+            )
+            if o.rationale:
+                yield Static(Text(o.rationale), id="opt-reason")
+            yield TextArea(o.new_prompt, read_only=True, soft_wrap=True, id="opt-view")
+
+    def on_mount(self) -> None:
+        self.query_one("#opt-card").border_title = "optimize"
+
+    def action_apply(self) -> None:
+        self.dismiss({"action": "apply", "content": self._opt.new_prompt})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class RoutingConfirm(ModalScreen[dict | None]):
-    """Modal routing confirmation: shows ranked candidates with predicted success /
-    estimated cost tradeoffs. Enter selects, 'p' pins, Esc cancels."""
+    """The routing decision card: each candidate framed as cost (with range) / speed /
+    predictability, the recommended pick's reasoning, and ROI vs the next-pricier model.
+    ↑↓ navigate · Enter select · p pin · Esc cancel. Returns {"action","model_id"}."""
 
     BINDINGS = [
         ("escape", "cancel"),
         Binding("p", "pin", "Pin", priority=True),
     ]
 
-    def __init__(self, routing: Any) -> None:
+    def __init__(self, routing: Any, reason: str = "") -> None:
         super().__init__()
         self._routing = routing
+        self._reason = reason
 
     def compose(self) -> ComposeResult:
-        chosen = self._routing.chosen_model_id or self._routing.model.id
-        yield Static(
-            Text(
-                f"Recommended: {chosen} · basis {self._routing.decision_basis} · "
-                f"confidence {self._routing.confidence:.0%}\n↑↓ navigate · Enter select · "
-                f"p pin · Esc cancel",
-                style="bold",
+        r = self._routing
+        chosen_id = r.chosen_model_id or r.model.id
+        with Vertical(id="route-card"):
+            yield Static(
+                Text(
+                    f"recommended {chosen_id} · {r.decision_basis} · conf {r.confidence:.0%}",
+                    style="bold",
+                ),
+                id="route-head",
             )
-        )
-        ranked = self._routing.ranked or []
-        cheapest = min((r.est_cost_usd for r in ranked), default=0.0)
-        options = []
-        for r in ranked:
-            mark = "●" if r.model_id == self._routing.chosen_model_id else "○"
-            delta = r.est_cost_usd - cheapest
-            dstr = "cheapest" if delta <= 0 else f"+${delta:.4f}"
-            label = (
-                f"{mark} {r.model_id}  {r.provider}  {r.predicted_success:.0%}  "
-                f"${r.est_cost_usd:.4f}  {dstr}"
+            if self._reason:
+                yield Static(Text(self._reason), id="route-reason")
+            yield Static(
+                Text("cost (range) · speed · predictability   —   ↑↓ Enter select · p pin · Esc"),
+                id="route-hint",
             )
-            options.append(Option(label, id=r.model_id))
-        yield OptionList(*options)
+            ranked = r.ranked or []
+            cheapest = min((c.est_cost_usd for c in ranked), default=0.0)
+            options = []
+            for c in ranked:
+                mark = "●" if c.model_id == chosen_id else "○"
+                hw = c.success_interval_width / 2.0
+                if c.est_cost_low is not None and c.est_cost_high is not None:
+                    cost = f"${c.est_cost_usd:.4f} (${c.est_cost_low:.4f}–${c.est_cost_high:.4f})"
+                else:
+                    cost = f"${c.est_cost_usd:.4f} (no range)"
+                lat = f"~{c.est_latency_ms:.0f}ms" if c.est_latency_ms else "~?ms"
+                delta = c.est_cost_usd - cheapest
+                dstr = "cheapest" if delta <= 0 else f"+${delta:.4f}"
+                label = (
+                    f"{mark} {c.model_id}  succ {c.predicted_success:.0%}±{hw:.0%}  "
+                    f"{cost}  {lat}  {dstr}"
+                )
+                options.append(Option(label, id=c.model_id))
+            yield OptionList(*options)
+
+    def on_mount(self) -> None:
+        self.query_one("#route-card").border_title = "routing"
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss({"action": "select", "model_id": event.option.id})
@@ -271,9 +404,7 @@ class ConfigOverlay(ModalScreen[dict | None]):
         backend = config_store.backend_name()
         with Vertical(id="config-card"):
             yield Static(
-                Text(
-                    f"blank keeps current · Ctrl+S save · Esc cancel · secrets → {backend}",
-                ),
+                Text("Enter your keys — blank keeps the current value. Any one provider works."),
                 id="config-hint",
             )
             with VerticalScroll(id="config-body"):
@@ -289,12 +420,30 @@ class ConfigOverlay(ModalScreen[dict | None]):
                         tag = "   optional" if f.optional else ""
                         yield Static(Text(f"{f.key}{tag}"), classes="cfg-key")
                         yield Input(placeholder=placeholder, password=f.secret, id=f"cfg-{f.key}")
+                yield Button("Save", id="cfg-save", variant="primary")
+            # Always-visible footer (outside the scroll) so the save affordance never
+            # scrolls out of sight while filling lower fields.
+            yield Static(
+                Text(f"Enter ▸ next field (lands on Save) · Ctrl+S ▸ save · Esc ▸ cancel  ·  "
+                     f"secrets → {backend}"),
+                id="config-foot",
+            )
 
     def on_mount(self) -> None:
         self.query_one("#config-card").border_title = "config"
         inputs = self.query(Input)
         if inputs:
             inputs.first().focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter walks through the fields and lands on the Save button, so a user can fill
+        # every key with Enter and the final Enter (on Save) commits — no Ctrl+S needed.
+        event.stop()
+        self.focus_next()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cfg-save":
+            self.action_save()
 
     def action_save(self) -> None:
         changes: dict[str, str] = {}

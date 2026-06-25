@@ -40,6 +40,31 @@ def test_render_welcome_is_a_clean_splash(tmp_path):
     assert "theme:" not in out
 
 
+def test_welcome_nudges_when_no_provider_key(tmp_path, monkeypatch):
+    from minima_harness.ai.provider_catalog import PROVIDERS
+
+    for p in PROVIDERS:
+        for var in p.env_vars:
+            monkeypatch.delenv(var, raising=False)
+    cfg = HarnessConfig(allow_offline=True)
+    app = HarnessApp(
+        cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
+    )
+    out = _render_text(app)
+    assert "no API keys found" in out
+    assert "minima config" in out
+
+
+def test_welcome_no_nudge_when_provider_key_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-present")
+    cfg = HarnessConfig(allow_offline=True)
+    app = HarnessApp(
+        cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
+    )
+    out = _render_text(app)
+    assert "no API keys found" not in out
+
+
 @pytest.mark.asyncio
 async def test_welcome_centered_then_dismissed(tmp_path):
     cfg = HarnessConfig(allow_offline=True)

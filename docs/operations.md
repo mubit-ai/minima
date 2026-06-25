@@ -5,16 +5,19 @@ durability, and what to watch.
 
 ## Running the service
 
-Minima is an ASGI app (`minima.main:app`). For local/dev:
+Minima is an ASGI app (`minima.main:app`). The server stack (fastapi/uvicorn/psycopg2/redis)
+lives in the **`server`** optional-dependency group — install it with `pip install
+"minima[server]"` (or `uv sync --extra server`); `make run` and the dev extra include it. For
+local/dev:
 
 ```bash
-make run        # uvicorn with --reload
+make run        # uvicorn with --reload (uv run --extra server …)
 ```
 
 For production, run uvicorn without reload (or behind Gunicorn with uvicorn workers):
 
 ```bash
-uv run uvicorn minima.main:app --host 0.0.0.0 --port 8080 --workers 4
+uv run --extra server uvicorn minima.main:app --host 0.0.0.0 --port 8080 --workers 4
 ```
 
 > **Worker note:** the default recommendation store (`memory`) and propensity tracking are

@@ -59,7 +59,7 @@ See **[Cold-Start Seeding](seeding.md)** for details.
 
 ```bash
 make run
-# == uv run uvicorn minima.main:app --reload --host 0.0.0.0 --port 8080
+# == uv run --extra server uvicorn minima.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 Interactive API docs are served at `http://localhost:8080/docs` (OpenAPI/Swagger).

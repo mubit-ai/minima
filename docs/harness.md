@@ -60,6 +60,16 @@ src/minima_harness/
 
 ## Quickstart
 
+### Install
+
+```bash
+pip install "minima-cli[harness,tui]"      # or: uv tool install "minima-cli[harness,tui]"
+brew install mubit-ai/minima/minima         # Homebrew (see packaging/homebrew/README.md)
+```
+
+The command is **`minima`** (`minima-harness` stays as an alias). Then run `minima config`
+to add your keys (see below).
+
 ### Demo mode (no keys, no services)
 
 ```bash
@@ -70,15 +80,15 @@ Spins an in-process Minima (`FakeMemory`) + a fake Anthropic provider and runs t
 corpus through `MinimaAgent` end to end. Prints the per-task routing decision, quality,
 outcome, realized tokens/cost, and how many outcomes landed in memory.
 
-### Configure credentials (`minima-harness config`)
+### Configure credentials (`minima config`)
 
 For an installed CLI, store keys **per-user** instead of a per-directory `.env`:
 
 ```bash
-minima-harness config            # guided setup, two sections: LLM keys + Mubit/Minima
-minima-harness config list       # masked view of what's set + where (keyring | file)
-minima-harness config set MUBIT_API_KEY <key>
-minima-harness config doctor     # presence check + Minima /v1/health ping (no secrets printed)
+minima config            # guided setup, two sections: LLM keys + Mubit/Minima
+minima config list       # masked view of what's set + where (keyring | file)
+minima config set MUBIT_API_KEY <key>
+minima config doctor     # presence check + authenticated Minima probe (no secrets printed)
 ```
 
 Secrets go to the **OS keyring** (macOS Keychain / Windows Credential Manager / libsecret)

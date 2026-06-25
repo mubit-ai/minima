@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,9 @@ def init_mubit(cwd: Path) -> bool:
     if not key:
         _log.warning("mubit_no_api_key")
         return False
-    endpoint = os.environ.get("MUBIT_ENDPOINT", _DEFAULT_ENDPOINT)
+    # `or` (not get-with-default) so a blank MUBIT_ENDPOINT="" — e.g. a stray empty line in a
+    # copied .env — falls back to the hosted default instead of passing "" to mubit.init().
+    endpoint = os.environ.get("MUBIT_ENDPOINT") or _DEFAULT_ENDPOINT
     try:
         import mubit
 
@@ -72,6 +75,88 @@ def set_prompt(content: str) -> bool:
     except Exception:  # noqa: BLE001
         _log.warning("mubit_set_prompt_failed", exc_info=True)
         return False
+
+
+def optimize_prompt() -> dict[str, Any] | None:
+    """Ask Mubit to optimize this agent's system prompt from accumulated lessons + outcomes.
+
+    Returns the raw response ``{success, activated, candidate, confidence,
+    optimization_summary}`` (the candidate is a non-activated suggestion), or None on any
+    failure. Verified live: ``activated`` is False, so this never changes the active prompt.
+    """
+    if not _initialized:
+        return None
+    try:
+        from mubit._helpers import require_context
+
+        return require_context().client.optimize_prompt({"agent_id": _AGENT_ID})
+    except Exception:  # noqa: BLE001 - Mubit must never block the TUI
+        _log.warning("mubit_optimize_prompt_failed", exc_info=True)
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class Optimization:
+    """A proposed system-prompt optimization, for the /optimize preview."""
+
+    new_prompt: str
+    current_tokens: int
+    new_tokens: int
+    est_savings: int  # current - new; negative means the prompt grew (quality over size)
+    rationale: str
+    source: str  # "mubit" | "local"
+
+
+def _local_optimization(cwd: Path) -> Optimization | None:
+    """Fallback when Mubit is unreachable: conservatively drop exact-duplicate lines from the
+    current Mubit prompt. Suggestion only; returns None when there's nothing safe to remove."""
+    current = get_prompt().strip()
+    if not current:
+        return None
+    lines = current.splitlines()
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for ln in lines:
+        key = ln.strip()
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(ln)
+    new_prompt = "\n".join(deduped)
+    savings = estimate_tokens(current) - estimate_tokens(new_prompt)
+    if savings <= 0:
+        return None
+    removed = len(lines) - len(deduped)
+    return Optimization(
+        new_prompt=new_prompt,
+        current_tokens=estimate_tokens(current),
+        new_tokens=estimate_tokens(new_prompt),
+        est_savings=savings,
+        rationale=f"removed {removed} duplicate line(s)",
+        source="local",
+    )
+
+
+def propose_prompt_optimization(cwd: Path, n_sessions: int = 10) -> Optimization | None:
+    """Propose a system-prompt optimization: Mubit's lesson-grounded candidate (Path A) when
+    available, else a local dedup (Path B). Never auto-applies — the caller previews + confirms."""
+    current = get_prompt()
+    resp = optimize_prompt()
+    if isinstance(resp, dict) and resp.get("success"):
+        cand = resp.get("candidate")
+        new_prompt = cand.get("content", "") if isinstance(cand, dict) else ""
+        if new_prompt.strip():
+            summary = (resp.get("optimization_summary") or "").strip()
+            return Optimization(
+                new_prompt=new_prompt.strip(),
+                current_tokens=estimate_tokens(current),
+                new_tokens=estimate_tokens(new_prompt),
+                est_savings=estimate_tokens(current) - estimate_tokens(new_prompt),
+                rationale=summary or "Mubit consolidated lessons + outcomes into the prompt.",
+                source="mubit",
+            )
+    return _local_optimization(cwd)
 
 
 def get_skills(cwd: Path) -> list[dict[str, Any]]:
@@ -122,26 +207,70 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def effective_prompt(cwd: Path, session_override: str = "") -> str:
-    """The system prompt sent to the model: Mubit prompt (if set) or the local compose,
-    plus local AGENTS.md context, a session override, and Mubit-injected lessons."""
-    from minima_harness.tui.context import build_system_prompt, load_agents_md
+@dataclass(frozen=True, slots=True)
+class PromptLayer:
+    """One layer of the assembled system prompt, for transparent display + control.
 
-    mubit_prompt = get_prompt()
-    parts: list[str] = []
-    if mubit_prompt.strip():
-        parts.append(mubit_prompt.strip())
+    ``header`` is the section prefix used in the joined prompt (empty for the leading
+    layer); ``rendered`` reproduces exactly how the layer appears in ``effective_prompt``.
+    ``editable_target`` is ``"project"`` (→ Mubit), ``"session"`` (→ override), or ``None``.
+    """
+
+    name: str
+    text: str
+    header: str = ""
+    source: str = ""
+    editable_target: str | None = None
+
+    @property
+    def rendered(self) -> str:
+        return f"{self.header}\n{self.text}" if self.header else self.text
+
+    @property
+    def tokens(self) -> int:
+        return estimate_tokens(self.rendered)
+
+
+def prompt_layers(cwd: Path, session_override: str = "") -> list[PromptLayer]:
+    """The ordered layers that compose the system prompt. Single source of truth —
+    ``effective_prompt`` is a thin join over this, so the inspector can never drift."""
+    from minima_harness.tui.context import build_system_prompt_parts, load_agents_md
+
+    layers: list[PromptLayer] = []
+    mubit_prompt = get_prompt().strip()
+    if mubit_prompt:
+        layers.append(
+            PromptLayer("system prompt", mubit_prompt, source="mubit", editable_target="project")
+        )
         agents = load_agents_md(cwd)
         if agents:
-            parts.append(f"# Project context\n{agents}")
+            layers.append(
+                PromptLayer("project context", agents, "# Project context", "agents.md")
+            )
     else:
-        parts.append(build_system_prompt(cwd))
-    if session_override.strip():
-        parts.append(f"# Session override\n{session_override.strip()}")
-    lessons = learned()
-    if lessons.strip():
-        parts.append(f"# Lessons (Mubit)\n{lessons.strip()}")
-    return "\n\n".join(parts)
+        for name, text in build_system_prompt_parts(cwd):
+            if name == "base":
+                layers.append(PromptLayer("base prompt", text, source="local"))
+            else:  # agents.md
+                layers.append(
+                    PromptLayer("project context", text, "# Project context", "agents.md")
+                )
+    override = session_override.strip()
+    if override:
+        layers.append(
+            PromptLayer(
+                "session override", override, "# Session override", "session", "session"
+            )
+        )
+    lessons = learned().strip()
+    if lessons:
+        layers.append(PromptLayer("lessons (Mubit)", lessons, "# Lessons (Mubit)", "mubit"))
+    return layers
+
+
+def effective_prompt(cwd: Path, session_override: str = "") -> str:
+    """The system prompt sent to the model: the rendered join of :func:`prompt_layers`."""
+    return "\n\n".join(layer.rendered for layer in prompt_layers(cwd, session_override))
 
 
 def token_breakdown(cwd: Path, messages: list) -> dict[str, int]:
@@ -153,3 +282,14 @@ def token_breakdown(cwd: Path, messages: list) -> dict[str, int]:
         "history": estimate_tokens(history),
         "total": estimate_tokens(system) + estimate_tokens(history),
     }
+
+
+def layer_token_breakdown(
+    cwd: Path, messages: list, session_override: str = ""
+) -> dict[str, Any]:
+    """Per-layer token counts + history + total, for the layered prompt inspector."""
+    layers = prompt_layers(cwd, session_override)
+    history = estimate_tokens("\n".join(getattr(m, "text", "") for m in messages))
+    layer_tokens = [(layer.name, layer.tokens) for layer in layers]
+    system = sum(t for _, t in layer_tokens)
+    return {"layers": layer_tokens, "system": system, "history": history, "total": system + history}

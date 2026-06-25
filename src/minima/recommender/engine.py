@@ -570,6 +570,8 @@ class Recommender:
                                 if c.raw_predicted_success is not None
                                 else None
                             ),
+                            est_cost_low=c.est_cost_low,
+                            est_cost_high=c.est_cost_high,
                         )
                         for c in ranked
                     ],
@@ -773,6 +775,14 @@ class Recommender:
                 card, agg, input_tokens, output_tokens, use_cache, cost_basis, min_cost_n,
                 cache_fraction,
             )
+            cost_band = score.effective_cost_band(
+                card, agg, input_tokens, use_cache, cost_basis, min_cost_n
+            )
+            est_cost_low, est_cost_high, cost_band_basis = (
+                (cost_band[0][0], cost_band[0][1], cost_band[1])
+                if cost_band is not None
+                else (None, None, "")
+            )
             cost_word = "obs" if ("observed_avg" in breakdown or "rescaled" in breakdown) else "est"
             est_latency = (
                 agg.observed_latency_ms(
@@ -817,6 +827,9 @@ class Recommender:
                         if est_latency is not None
                         else ""
                     ),
+                    est_cost_low=est_cost_low,
+                    est_cost_high=est_cost_high,
+                    cost_band_basis=cost_band_basis,
                 )
             )
         return scored
@@ -977,4 +990,8 @@ def _to_ranked_model(c: CandidateScore, explain: bool) -> RankedModel:
         context_window=c.card.context_window,
         est_latency_ms=round(c.est_latency_ms, 1) if c.est_latency_ms is not None else None,
         latency_basis=c.latency_basis,
+        est_cost_low=round(c.est_cost_low, 8) if c.est_cost_low is not None else None,
+        est_cost_high=round(c.est_cost_high, 8) if c.est_cost_high is not None else None,
+        cost_band_basis=c.cost_band_basis,
+        success_interval_width=round(c.interval_width, 4),
     )

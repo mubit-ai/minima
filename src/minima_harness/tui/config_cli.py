@@ -1,4 +1,4 @@
-"""``minima-harness config`` — the pre-TUI credential setup command.
+"""``minima config`` — the pre-TUI credential setup command.
 
 Sectioned guided setup plus non-interactive ``list``/``get``/``set``/``unset``/``doctor``/
 ``path``. Secrets are never echoed: interactive entry uses ``getpass``, and ``list``/``get``
@@ -11,12 +11,13 @@ import getpass
 import os
 import sys
 
+from minima_harness.minima.config import DEFAULT_MINIMA_URL
 from minima_harness.tui import config_store as store
 
 _USAGE = (
-    "usage: minima-harness config "
+    "usage: minima config "
     "[list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | doctor | path]\n"
-    "       minima-harness config            # interactive guided setup"
+    "       minima config            # interactive guided setup"
 )
 
 
@@ -37,7 +38,7 @@ def _list() -> int:
 
 
 def _interactive() -> int:
-    print("minima-harness config — press Enter to keep the current value.\n")
+    print("minima config — press Enter to keep the current value.\n")
     for section in store.SECTIONS:
         print(f"# {section.title} — {section.note}")
         for f in section.fields:
@@ -54,7 +55,7 @@ def _interactive() -> int:
                 store.set_value(f.key, f.default)
                 print(f"    saved default → {f.default}")
         print()
-    print("done. Run `minima-harness config doctor` to verify.")
+    print("done. Run `minima config doctor` to verify.")
     return 0
 
 
@@ -71,15 +72,41 @@ def _doctor() -> int:
         ok = bool(os.environ.get(key))
         print(f"  [{'ok' if ok else '  '}] {label:<10} {key:<18} {'present' if ok else 'missing'}")
 
-    url = os.environ.get("MINIMA_URL", "https://api.minima.sh")
+    url = os.environ.get("MINIMA_URL", DEFAULT_MINIMA_URL)
     print(f"\n  Minima endpoint: {url}")
-    try:
-        import httpx
+    import httpx
 
+    reachable = False
+    try:
         resp = httpx.get(url.rstrip("/") + "/v1/health", timeout=5.0)
         print(f"  health: HTTP {resp.status_code}")
+        reachable = True
     except Exception as exc:  # noqa: BLE001 - any failure is just 'unreachable'
         print(f"  health: unreachable ({type(exc).__name__})")
+
+    # Authenticated probe: /v1/health is unauthenticated, so it can't tell a valid key from a
+    # bad one. A minimal recommend with the key actually exercises the routing auth path.
+    key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")
+    if not reachable:
+        return 0
+    if not key:
+        print("  auth: no MUBIT_API_KEY/MINIMA_API_KEY set — routing falls back to offline")
+        return 0
+    try:
+        r = httpx.post(
+            url.rstrip("/") + "/v1/recommend",
+            headers={"authorization": f"Bearer {key}"},
+            json={"task": {"task": "minima config doctor probe"}, "cost_quality_tradeoff": 5},
+            timeout=15.0,
+        )
+        if r.status_code == 200:
+            print("  auth: OK — key accepted")
+        elif r.status_code in (401, 403):
+            print(f"  auth: FAILED — key rejected (HTTP {r.status_code})")
+        else:
+            print(f"  auth: HTTP {r.status_code}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  auth: probe failed ({type(exc).__name__})")
     return 0
 
 

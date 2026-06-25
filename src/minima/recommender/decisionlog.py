@@ -40,6 +40,10 @@ class CandidateSnapshot:
     # is fit on THIS (not the deployed predicted_success) so the loop converges. Defaults
     # to None for rows written before calibration existed (back-compat on deserialize).
     raw_predicted_success: float | None = None
+    # Data-grounded predictable cost band at decision time; powers the cost-accuracy metric
+    # (within-band coverage). None for rows written before bands existed, or thin evidence.
+    est_cost_low: float | None = None
+    est_cost_high: float | None = None
 
 
 @dataclass(slots=True)

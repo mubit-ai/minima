@@ -48,6 +48,10 @@ def aggregate_sessions(cwd: Path, n: int = 10) -> dict[str, Any]:
         "total_cost": 0.0,
         "per_model": {},
     }
+    ape_sum = 0.0  # Σ |actual−est| / actual  (mean absolute percentage error)
+    pred_n = 0  # rows with both an estimate and a realized cost
+    band_n = 0  # rows that carried a predicted cost band
+    band_hits = 0  # rows where the realized cost landed inside the band
     for s in summaries[-n:]:
         store = SessionStore.file_backed(s.path)
         stats["sessions"] += 1
@@ -58,10 +62,25 @@ def aggregate_sessions(cwd: Path, n: int = 10) -> dict[str, Any]:
                 p = e.payload
                 stats["total_in"] += p.get("in_tokens", 0)
                 stats["total_out"] += p.get("out_tokens", 0)
-                stats["total_cost"] += p.get("cost", 0.0)
+                actual = p.get("cost", 0.0)
+                stats["total_cost"] += actual
                 model = p.get("model", "?")
                 stats["per_model"][model] = stats["per_model"].get(model, 0) + 1
+                # Predictability (guard with .get so pre-Phase-4 rows are simply skipped).
+                est = p.get("est_cost")
+                if est is not None and actual > 0:
+                    ape_sum += abs(actual - est) / max(actual, 1e-9)
+                    pred_n += 1
+                low, high = p.get("est_cost_low"), p.get("est_cost_high")
+                if low is not None and high is not None and actual > 0:
+                    band_n += 1
+                    if low <= actual <= high:
+                        band_hits += 1
     stats["cost_position"] = cost_position_for(stats["per_model"])
+    stats["pred_n"] = pred_n
+    stats["cost_mape"] = round(ape_sum / pred_n, 4) if pred_n else None
+    stats["band_n"] = band_n
+    stats["band_hit_rate"] = round(band_hits / band_n, 4) if band_n else None
     return stats
 
 
@@ -78,5 +97,15 @@ def format_stats(stats: dict[str, Any]) -> str:
     if stats.get("cost_position") is not None:
         lines.append(
             f"cost position: {stats['cost_position']:.2f} (0=cheapest · 1=priciest in pool)"
+        )
+    if stats.get("cost_mape") is not None:
+        lines.append(
+            f"cost predictability: MAPE {stats['cost_mape']:.0%} "
+            f"over {stats['pred_n']} est-vs-actual turn(s)"
+        )
+    if stats.get("band_hit_rate") is not None:
+        lines.append(
+            f"in-range: {stats['band_hit_rate']:.0%} of actuals landed in the predicted "
+            f"band ({stats['band_n']} turn(s))"
         )
     return "\n".join(lines)

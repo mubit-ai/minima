@@ -69,9 +69,12 @@ class OpenAICompatProvider:
         signal: object | None = None,
     ) -> AsyncIterator[Event]:
         options = options or {}
-        api_key = resolve_api_key(
-            options, "OPENAI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_COMPAT_API_KEY"
-        )
+        # Resolve the key for THIS model's provider (e.g. a Groq model -> GROQ_API_KEY), so a
+        # key for one provider can't be sent to another provider's endpoint. Unknown/custom
+        # providers fall back to the generic OpenAI-compat vars via env_vars_for_provider.
+        from minima_harness.ai.provider_catalog import env_vars_for_provider
+
+        api_key = resolve_api_key(options, *env_vars_for_provider(model.provider))
         base = (model.base_url or _DEFAULT_BASE).rstrip("/")
         url = f"{base}/chat/completions"
         payload = _build_payload(model, context, options)

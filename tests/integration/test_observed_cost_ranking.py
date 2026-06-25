@@ -111,3 +111,43 @@ async def test_rescaled_cost_uses_request_input_and_observed_output():
     # request-size sensitive: a larger input prompt costs more (the residual the rescale fixes)
     bigger = await engine.recommend(_req(10_000))
     assert bigger.recommended_model.est_cost_usd > rec.est_cost_usd
+
+
+async def test_recommend_emits_observed_cost_band(tmp_path):
+    """Phase 2a: the response carries a data-grounded p25–p75 band on the observed basis."""
+    settings = Settings(mubit_api_key="t")
+    evidence = [
+        make_evidence("m", 1.0, entry_id=f"e{i}", cost_usd=c)
+        for i, c in enumerate([0.01, 0.02, 0.03, 0.04, 0.05])
+    ]
+    engine = Recommender(
+        settings, FakeMemory(evidence), _one_card_catalog(settings), RecommendationStore()
+    )
+    req = RecommendRequest(
+        task=TaskInput(task="do a thing", task_type="code", difficulty="hard"),
+        constraints=Constraints(candidate_models=["m"]),
+        cost_quality_tradeoff=0.0,
+        allow_llm_escalation=False,
+    )
+    rec = (await engine.recommend(req)).recommended_model
+    assert rec.cost_band_basis.startswith("observed_")
+    assert rec.est_cost_low is not None and rec.est_cost_high is not None
+    # observed basis: point estimate is the weighted median, inside the p25–p75 band
+    assert rec.est_cost_low <= rec.est_cost_usd <= rec.est_cost_high
+    assert 0.0 <= rec.success_interval_width <= 1.0
+
+
+async def test_recommend_band_none_without_enough_evidence():
+    """Honest fallback: too few cost observations -> no band (estimate basis)."""
+    settings = Settings(mubit_api_key="t")
+    engine = Recommender(
+        settings, FakeMemory([]), _one_card_catalog(settings), RecommendationStore()
+    )
+    req = RecommendRequest(
+        task=TaskInput(task="do a thing", task_type="code"),
+        constraints=Constraints(candidate_models=["m"]),
+        allow_llm_escalation=False,
+    )
+    rec = (await engine.recommend(req)).recommended_model
+    assert rec.est_cost_low is None and rec.est_cost_high is None
+    assert rec.cost_band_basis == ""

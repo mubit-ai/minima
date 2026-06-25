@@ -4,14 +4,13 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 `src/minima` (recommender API), `src/minima_harness` (TUI agent), `client_sdk/minima_client`
 (HTTP SDK). Entry points: `minima-harness`, `minima-seed`, `minima-calibration-report`.
 
-> **License is `Proprietary`.** Decide the distribution target *first* — public PyPI is almost
-> certainly **not** intended. Default assumption: a **private index** (or internal artifact
-> store) and/or a tagged Git release. Steps below are index-agnostic; the "Public PyPI only"
-> items are called out and should stay skipped unless the license changes.
+> **License is `FSL-1.1-Apache-2.0`** (source-available, non-compete; auto-converts to Apache-2.0
+> after 2 years). The repo is public, so **public PyPI is fine** — PyPI permits non-OSI licenses.
+> Note FSL is *not* OSI-"open source", so don't add `License :: OSI Approved` classifiers.
 
 ## 1. Decide & confirm
-- [ ] Distribution target chosen: private index / internal store / Git tag (NOT public PyPI while Proprietary).
-- [ ] Release scope agreed (what's in `harness_v1` going out: config command, overlay reworks, footer fixes, Phase 0–3 work).
+- [x] License: `FSL-1.1-Apache-2.0` (see `LICENSE`); repo + package public.
+- [ ] Release scope agreed (config command + prompt/routing/predictability phases + copy-paste/mouse fix + overlay reworks + banner).
 
 ## 2. Version & changelog
 - [ ] Bump `version` in `pyproject.toml` (currently `0.3.0`) per semver.
@@ -40,15 +39,15 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 - [ ] `uvx twine check dist/*` passes (metadata/readme render).
 - [ ] Inspect wheel contents: `python -m zipfile -l dist/*.whl` includes `minima/`, `minima_harness/`, `minima_client/`, and required data files.
 - [ ] Clean-room smoke test (fresh venv, install from the built wheel with `[tui]`):
-  - [ ] `minima-harness --help` and `minima-seed --help` run.
-  - [ ] `minima-harness config list` shows both sections (all MISSING) without error.
-  - [ ] `minima-harness config set ANTHROPIC_API_KEY <dummy>` → `config list` masks it; `config path` prints the location.
-  - [ ] `minima-harness config doctor` reports presence + Minima `/v1/health` reachability (no secret values printed).
+  - [ ] `minima --help` and `minima-seed --help` run.
+  - [ ] `minima config list` shows both sections (all MISSING) without error.
+  - [ ] `minima config set ANTHROPIC_API_KEY <dummy>` → `config list` masks it; `config path` prints the location.
+  - [ ] `minima config doctor` reports presence + Minima `/v1/health` reachability (no secret values printed).
   - [ ] Demo mode runs offline: `python examples/harness_warmup.py`.
   - [ ] TUI launches and quits cleanly; `/config` overlay opens.
 
 ## 7. Docs
-- [ ] `README.md` quickstart current; `docs/harness.md` documents `minima-harness config` (done) + keyring/0600 fallback + precedence.
+- [ ] `README.md` quickstart current; `docs/harness.md` documents `minima config` (done) + keyring/0600 fallback + precedence.
 - [ ] First-run path documented: where `MUBIT_API_KEY` + provider keys go (config command → keyring/`~/.minima-harness/config.env`).
 - [ ] `docs/configuration.md` lists any new env vars; links not broken.
 
@@ -61,5 +60,5 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 
 ## 9. Post-publish verification
 - [ ] Install the *published* artifact in a clean venv (not the local wheel) and re-run the step-6 smoke tests.
-- [ ] Confirm `minima-harness config` works against the hosted Minima (`MINIMA_URL=https://api.minima.sh`) end to end.
+- [ ] Confirm `minima config` works against the hosted Minima (`MINIMA_URL=https://api.minima.sh`) end to end.
 - [ ] Announce / update any install docs with the new version + the config-first setup flow.

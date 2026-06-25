@@ -10,6 +10,12 @@ from minima_harness.tui.theme import current_theme, get_theme
 if TYPE_CHECKING:
     from minima_harness.tui.app import HarnessApp
 
+def _needs_setup() -> bool:
+    """No configured provider key (across the whole provider catalog) → first-run nudge."""
+    from minima_harness.ai.provider_catalog import configured_providers
+
+    return not configured_providers()
+
 # ANSI-Shadow-style block glyphs (6 rows). Built programmatically and joined row-wise so the
 # columns always line up — never hand-concatenate ASCII art. Each letter's rows are equal width.
 _GLYPHS: dict[str, list[str]] = {
@@ -42,5 +48,13 @@ def render_welcome(app: HarnessApp) -> Group:
     banner = Text(BANNER, style=f"bold {accent}")
     subtitle = Text("CLI · cost-aware model routing", style=muted)
     strap = Text(DIAGRAM, style=muted)
-    hint = Text("type a prompt, or / for commands", style=muted)
-    return Group(banner, Text(""), subtitle, Text(""), strap, hint)
+    parts = [banner, Text(""), subtitle, Text(""), strap]
+    if _needs_setup():
+        parts.append(
+            Text(
+                "no API keys found — run  minima config  to add them",
+                style=t.get("warning", accent),
+            )
+        )
+    parts.append(Text("type a prompt, or / for commands", style=muted))
+    return Group(*parts)
