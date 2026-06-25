@@ -33,6 +33,7 @@ from minima_harness.ai.events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from minima_harness.ai.provider_quirks import quirks_for
 from minima_harness.ai.providers._common import resolve_api_key, to_json_schema
 from minima_harness.ai.types import (
     AssistantMessage,
@@ -115,7 +116,9 @@ def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> d
         "messages": out,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": options.get("max_tokens", model.max_tokens),
+        # Per-provider request quirks (e.g. OpenAI GPT-5 needs max_completion_tokens) come from
+        # the quirks table, not a growing chain of `if model.provider == ...` branches here.
+        quirks_for(model.provider).token_param: options.get("max_tokens", model.max_tokens),
     }
     if context.tools:
         payload["tools"] = [

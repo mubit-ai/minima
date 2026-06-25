@@ -91,3 +91,17 @@ def test_banner_warnings_suppresses_inline_warnings():
     assert _banner_warnings(["reasoner_consulted", "no_model_meets_threshold:x"]) == []
     # an unexpected warning still surfaces
     assert _banner_warnings(["catalog_stale", "escalation_suggested:tie"]) == ["catalog_stale"]
+
+
+def test_banner_warnings_suppresses_benign_routing_diagnostics():
+    from minima_harness.tui.app import _banner_warnings
+
+    # the exact signals from the bug report — benign internal diagnostics, never a red banner
+    assert _banner_warnings(["neighbor_classified"]) == []
+    assert _banner_warnings(["recall_timeout", "cold_start"]) == []
+    assert _banner_warnings(["prices_stale", "thompson_pick", "llm_classified"]) == []
+    # genuinely actionable signals (budget excluded all models) STILL surface
+    assert _banner_warnings(["no_model_within_cost_budget"]) == ["no_model_within_cost_budget"]
+    assert _banner_warnings(["cold_start", "no_model_within_latency_budget"]) == [
+        "no_model_within_latency_budget"
+    ]

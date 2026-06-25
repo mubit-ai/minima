@@ -96,6 +96,7 @@ async def test_model_picker_titled_and_active_selectable():
         ol = app.screen.query_one(OptionList)
         assert ol.border_title == "model"
         assert "basis memory" in str(ol.border_subtitle)
-        await pilot.press("enter")  # select highlighted first option ("a")
+        await pilot.press("down")  # row 0 is the auto/unpin entry; step to "a"
+        await pilot.press("enter")
         await pilot.pause()
     assert app.result == "a"

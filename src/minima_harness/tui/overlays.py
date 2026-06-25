@@ -20,8 +20,11 @@ from minima_harness.tui.commands import Command
 class ModelPicker(ModalScreen[str | None]):
     """Modal model picker. Returns the chosen model id, or None on cancel.
 
-    Selecting a model pins it as the only candidate so Minima routes to it.
+    Selecting a model pins it as the only candidate so Minima routes to it. The first entry is
+    always ``AUTO`` — selecting it releases any pin and hands routing back to Minima.
     """
+
+    AUTO = "__auto__"  # sentinel id for the "let Minima route (unpin)" entry
 
     BINDINGS = [("escape", "cancel")]
 
@@ -43,11 +46,15 @@ class ModelPicker(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         options = []
+        # Always offer "auto" first so a pinned model can be released back to Minima routing.
+        # It is the active row when nothing is pinned; otherwise it is the unpin affordance.
+        auto_mark = "○" if self._pinned else "●"
+        options.append(Option(f"{auto_mark} auto  ◂ let Minima route (unpin)", id=self.AUTO))
         for c in self._candidates:
-            mark = "●" if c == self._active else "○"
+            mark = "●" if c == self._pinned else ("◦" if c == self._active else "○")
             prov = self._providers.get(c, "")
-            last = "  ◂ last" if c == self._active else ""
-            options.append(Option(f"{mark} {c}  {prov}{last}".rstrip(), id=c))
+            tag = "  ◂ pinned" if c == self._pinned else ("  ◂ last" if c == self._active else "")
+            options.append(Option(f"{mark} {c}  {prov}{tag}".rstrip(), id=c))
         yield OptionList(*options)
 
     def on_mount(self) -> None:
@@ -311,6 +318,8 @@ class RoutingConfirm(ModalScreen[dict | None]):
                 Text("cost (range) · speed · predictability   —   ↑↓ Enter select · p pin · Esc"),
                 id="route-hint",
             )
+            from minima_harness.ai.provider_catalog import provider_key_present
+
             ranked = r.ranked or []
             cheapest = min((c.est_cost_usd for c in ranked), default=0.0)
             options = []
@@ -324,9 +333,12 @@ class RoutingConfirm(ModalScreen[dict | None]):
                 lat = f"~{c.est_latency_ms:.0f}ms" if c.est_latency_ms else "~?ms"
                 delta = c.est_cost_usd - cheapest
                 dstr = "cheapest" if delta <= 0 else f"+${delta:.4f}"
+                # Flag a pick the user can't actually run (no provider key) so it's obvious why
+                # selecting it would fail — the run itself then reports the exact auth error.
+                nokey = "" if provider_key_present(c.provider) else "  ⚠ no key"
                 label = (
                     f"{mark} {c.model_id}  succ {c.predicted_success:.0%}±{hw:.0%}  "
-                    f"{cost}  {lat}  {dstr}"
+                    f"{cost}  {lat}  {dstr}{nokey}"
                 )
                 options.append(Option(label, id=c.model_id))
             yield OptionList(*options)
@@ -381,6 +393,95 @@ class DiffApproval(ModalScreen[dict | None]):
 
     def action_approve(self) -> None:
         self.dismiss({"action": "approve"})
+
+    def action_reject(self) -> None:
+        self.dismiss({"action": "reject"})
+
+
+class GoalsOverlay(ModalScreen[None]):
+    """Read-only view of the active goal + its task checklist. Esc/Enter closes.
+
+    The model maintains the task list via the ``tasks`` tool; the user sets/clears the goal with
+    ``/goals set <title>`` / ``/goals clear``.
+    """
+
+    BINDINGS = [("escape", "cancel"), ("enter", "cancel")]
+
+    _MARK = {"completed": "✓", "in_progress": "▸", "blocked": "✗", "pending": "○"}
+
+    def __init__(self, goal: Any) -> None:
+        super().__init__()
+        self._goal = goal
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="goals-card"):
+            g = self._goal
+            if g is None or (not g.title and not g.tasks):
+                hint = "no open ledger — set one with  /ledger set <title>"
+                yield Static(Text(hint, style="dim"))
+                return
+            done, total = g.progress()
+            head = f"{g.title}   ·   {done}/{total} done" if g.title else f"{done}/{total} done"
+            yield Static(Text(head, style="bold"), id="goals-head")
+            if g.budget_usd:
+                yield Static(
+                    Text(f"budget ${g.budget_usd:.4f} · spent ${g.spent_usd():.4f}", style="dim"),
+                    id="goals-budget",
+                )
+            with VerticalScroll(id="goals-body"):
+                for t in g.tasks:
+                    yield Static(Text(f"  {self._MARK.get(t.status, '○')} {t.content}"))
+
+    def on_mount(self) -> None:
+        self.query_one("#goals-card").border_title = "ledger"
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PermissionRequest(ModalScreen[dict | None]):
+    """Approve a sensitive tool call (write/edit/bash) before it runs.
+
+    Enter approves once · ``a`` always-allows this tool for the session · Esc/``r`` rejects.
+    The body previews exactly what will happen (a diff for write/edit, the command for bash).
+    Returns ``{"action": "approve"|"always"|"reject"}``. A reject blocks the tool and feeds a
+    ground-truth negative back to Minima.
+    """
+
+    BINDINGS = [
+        Binding("enter", "approve", "Approve", priority=True),
+        Binding("a", "always", "Always", priority=True),
+        Binding("escape", "reject", "Reject", priority=True),
+        Binding("r", "reject", "Reject", priority=True),
+    ]
+
+    def __init__(self, tool_name: str, preview: str, target: str = "") -> None:
+        super().__init__()
+        self._name = tool_name
+        self._preview = preview
+        self._target = target
+
+    def compose(self) -> ComposeResult:
+        head = f"{self._name}  {self._target}".strip()
+        with Vertical(id="perm-card"):
+            yield Static(Text(head, style="bold"), id="perm-head")
+            yield Static(
+                Text("Enter approve · a always-allow · Esc reject", style="dim"), id="perm-hint"
+            )
+            yield TextArea(
+                self._preview, id="perm-view", read_only=True, soft_wrap=False,
+                show_line_numbers=False,
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#perm-card").border_title = "permission"
+        self.query_one("#perm-view", TextArea).focus()
+
+    def action_approve(self) -> None:
+        self.dismiss({"action": "approve"})
+
+    def action_always(self) -> None:
+        self.dismiss({"action": "always"})
 
     def action_reject(self) -> None:
         self.dismiss({"action": "reject"})

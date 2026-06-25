@@ -45,16 +45,20 @@ def render_welcome(app: HarnessApp) -> Group:
     """
     t = get_theme(current_theme())
     accent, muted = t["accent"], t["muted"]
-    banner = Text(BANNER, style=f"bold {accent}")
-    subtitle = Text("CLI · cost-aware model routing", style=muted)
-    strap = Text(DIAGRAM, style=muted)
+    # justify="center" centers each line within the (auto-width = banner-width) splash widget, so
+    # the subtitle/strap/hint sit centered under the banner. The banner's 6 rows are equal width,
+    # so centering them keeps the ASCII art aligned.
+    banner = Text(BANNER, style=f"bold {accent}", justify="center")
+    subtitle = Text("CLI · cost-aware model routing", style=muted, justify="center")
+    strap = Text(DIAGRAM, style=muted, justify="center")
     parts = [banner, Text(""), subtitle, Text(""), strap]
     if _needs_setup():
         parts.append(
             Text(
                 "no API keys found — run  minima config  to add them",
                 style=t.get("warning", accent),
+                justify="center",
             )
         )
-    parts.append(Text("type a prompt, or / for commands", style=muted))
+    parts.append(Text("type a prompt, or / for commands", style=muted, justify="center"))
     return Group(*parts)

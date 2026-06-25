@@ -33,17 +33,37 @@ brew install mubit-ai/minima/minima
    curl -sL https://files.pythonhosted.org/packages/source/m/minima-cli/minima_cli-<version>.tar.gz \
      | shasum -a 256
    ```
-3. **Generate the vendored resources** (the transitive dependency closure):
+3. **Generate the vendored resources as WHEELS** (not sdists — this is what keeps install fast):
    ```bash
-   brew update-python-resources Formula/minima.rb
-   ```
-   `update-python-resources` only follows the package's **core** dependencies. The harness CLI
-   also needs the `harness` + `tui` extras (anthropic, google-genai, textual, keyring, and their
-   deps) — make sure those `resource` blocks are present. The reliable way is to generate from a
-   spec that includes the extras, e.g. with a venv:
-   ```bash
+   # First get the sdist closure (versions) once, e.g. via homebrew-pypi-poet on the extras:
    python -m venv /tmp/poet && /tmp/poet/bin/pip install homebrew-pypi-poet "minima-cli[harness,tui]==<version>"
-   /tmp/poet/bin/poet minima > resources.rb   # then paste the resource blocks into the formula
+   /tmp/poet/bin/poet minima > /tmp/sdist-resources.rb   # paste these into the formula ONCE
+
+   # Then convert every resource to a prebuilt wheel (per-arch) so users don't compile from source:
+   python packaging/homebrew/gen_resources.py Formula/minima.rb > /tmp/wheel-resources.rb
+   # paste /tmp/wheel-resources.rb in place of the resource blocks.
+   ```
+   **Why wheels:** with sdists, `grpcio` (C++), `cryptography`/`pydantic-core`/`jiter` (Rust) and
+   `cffi` compile **on each user's machine** — ~5 minutes. Wheels are prebuilt, so install drops to
+   seconds. `gen_resources.py` emits the universal `*-none-any.whl` for pure-Python deps and
+   per-arch (`on_macos`/`on_linux` × `on_arm`/`on_intel`) cp313 wheels for compiled ones, falling
+   back to the sdist only where no wheel is published (today: `cryptography` on macOS-Intel). Run it
+   with `--check` to print a coverage report first.
+
+   Because Apple Silicon + Linux install entirely from wheels, the `rust`/`openssl@3` **build deps
+   are scoped to macOS-Intel only** (the one branch that still builds `cryptography` from source).
+   Re-run the generator on every release so the pins/wheels track the new dependency closure.
+
+   **CRITICAL — the custom `install` block (do not revert to `virtualenv_install_with_resources`):**
+   Homebrew's `std_pip_args` hardcodes `--no-binary=:all:`, so the default install path would
+   *refuse/recompile* every wheel resource, defeating the point. The formula therefore installs
+   wheels with an explicit `pip install --no-index --no-deps` (no `--no-binary`), copying each
+   cached download back to its clean filename first (brew caches as `<sha256>--<name>`, which
+   pip's wheel parser rejects). It also sets `preserve_rpath` (jiter/pydantic-core `.so` files
+   carry `@rpath` IDs that Homebrew's relocation pass fails on). Verified with:
+   ```bash
+   brew reinstall --formula ./Formula/minima.rb        # "built in N seconds", no compile
+   pgrep -fl 'rustc|cargo|clang'                        # must print nothing on Apple Silicon
    ```
 4. **Audit + test locally** before pushing the tap:
    ```bash
