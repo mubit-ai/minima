@@ -311,6 +311,8 @@ class RoutingConfirm(ModalScreen[dict | None]):
                 Text("cost (range) · speed · predictability   —   ↑↓ Enter select · p pin · Esc"),
                 id="route-hint",
             )
+            from minima_harness.ai.provider_catalog import provider_key_present
+
             ranked = r.ranked or []
             cheapest = min((c.est_cost_usd for c in ranked), default=0.0)
             options = []
@@ -324,9 +326,12 @@ class RoutingConfirm(ModalScreen[dict | None]):
                 lat = f"~{c.est_latency_ms:.0f}ms" if c.est_latency_ms else "~?ms"
                 delta = c.est_cost_usd - cheapest
                 dstr = "cheapest" if delta <= 0 else f"+${delta:.4f}"
+                # Flag a pick the user can't actually run (no provider key) so it's obvious why
+                # selecting it would fail — the run itself then reports the exact auth error.
+                nokey = "" if provider_key_present(c.provider) else "  ⚠ no key"
                 label = (
                     f"{mark} {c.model_id}  succ {c.predicted_success:.0%}±{hw:.0%}  "
-                    f"{cost}  {lat}  {dstr}"
+                    f"{cost}  {lat}  {dstr}{nokey}"
                 )
                 options.append(Option(label, id=c.model_id))
             yield OptionList(*options)

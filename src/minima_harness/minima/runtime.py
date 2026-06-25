@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from minima_harness.agent.agent import Agent
 from minima_harness.agent.tools import ThinkingLevel
+from minima_harness.ai.errors import classify_provider_error
 from minima_harness.ai.types import AssistantMessage, ContentBlock, Message, Model, Usage
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.judge import (
@@ -78,6 +79,10 @@ class MinimaAgent(Agent):
         # Why the last route fell back to offline (None = routed fine). Surfaced by the TUI
         # so a degraded-to-offline turn is visible, not silent.
         self._offline_reason: str | None = None
+        # Classified reason the last turn's model call failed (None = ran fine). A provider
+        # error (bad key, 404, network) is swallowed into an empty assistant — this exposes it
+        # so the TUI / --print can show *why* a turn produced no output, not a blank bubble.
+        self._last_error: str | None = None
         initial = model or self.mapping.default_model()
         super().__init__(
             model=initial,
@@ -99,6 +104,7 @@ class MinimaAgent(Agent):
         effective_task_type = task_type or self._task_type_hint
         self._prompts_run += 1
         self._rejected_tools = 0  # reset per-turn reject tally
+        self._last_error = None  # reset per-turn error
 
         routing = await self._route(task_text, effective_task_type, slider, files=files)
         start = monotonic()
@@ -110,21 +116,29 @@ class MinimaAgent(Agent):
 
         latency_ms = int((monotonic() - start) * 1000)
         turns_taken = self.state.turns_taken
+        last = self._last_assistant()
+        # A provider call that failed (bad/missing key, 404, network) is swallowed by the
+        # provider into an empty-text assistant with stop_reason="error" — NOT a raised
+        # exception. Treat that as a failed turn so (a) Minima is never told a broken turn
+        # "succeeded" (which would poison routing), and (b) the caller can surface why.
+        provider_error = last is not None and getattr(last, "stop_reason", None) == "error"
+        if provider_error and last is not None:
+            self._last_error = classify_provider_error(last.error_message, last.model)
+        failed = run_error is not None or provider_error
         quality: float | None = None
         outcome = "success"
         if routing is not None:
             quality, outcome = await self._feedback_safely(
-                task_text, routing, latency_ms, run_error, turns_taken
+                task_text, routing, latency_ms, failed, turns_taken
             )
         if self.meter is not None:
-            last = self._last_assistant()
             actual = last.usage.cost.total if last is not None else 0.0
             self.meter.record(
                 label=_short_label(task_text),
                 routing=routing,
                 actual_cost_usd=actual,
-                quality=quality if run_error is None else 0.0,
-                outcome=("failure" if run_error is not None else outcome),
+                quality=quality if not failed else 0.0,
+                outcome=("failure" if failed else outcome),
                 turns=turns_taken,
             )
         if run_error is not None:
@@ -178,10 +192,14 @@ class MinimaAgent(Agent):
         task_text: str,
         routing: RoutingResult,
         latency_ms: int,
-        run_error: BaseException | None,
+        failed: bool,
         turns_taken: int = 0,
     ) -> tuple[float | None, str]:
-        """Send feedback; return the (quality, outcome) used (for the meter). Never raises."""
+        """Send feedback; return the (quality, outcome) used (for the meter). Never raises.
+
+        ``failed`` is True when the turn raised OR the model returned a provider error
+        (empty output) — either way the turn is a ground-truth failure, regardless of judging.
+        """
         if routing.recommendation_id is None or routing.chosen_model_id is None:
             return None, "success"
         quality: float | None = None
@@ -189,7 +207,7 @@ class MinimaAgent(Agent):
         try:
             last = self._last_assistant()
             usage = last.usage if last is not None else Usage()
-            if run_error is not None:
+            if failed:
                 quality = 0.0
                 outcome = "failure"
             elif not self._should_judge():
@@ -206,7 +224,7 @@ class MinimaAgent(Agent):
                 else:
                     quality = clamp01(graded)
                     outcome = grade_outcome(quality)
-            if run_error is None and self._rejected_tools > 0:
+            if not failed and self._rejected_tools > 0:
                 # A human rejected the model's edit(s): a strong ground-truth negative that
                 # overrides the judge (applies even when judging is off).
                 quality = min(quality if quality is not None else 0.25, 0.25)

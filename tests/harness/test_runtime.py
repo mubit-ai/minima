@@ -154,11 +154,31 @@ def test_rejected_edit_overrides_to_failure():
             decision_basis="memory",
         )
         quality, outcome = asyncio.run(
-            agent._feedback_safely("task", routing, 10, None, 1)  # noqa: SLF001
+            agent._feedback_safely("task", routing, 10, False, 1)  # noqa: SLF001
         )
     assert outcome == "failure"
     assert quality is not None and quality <= 0.25
     assert router.feedback_calls[0]["outcome"] == "failure"
+
+
+def test_provider_error_turn_is_failure_and_sets_last_error():
+    # The faux provider yields a provider ErrorEvent (empty output, stop_reason="error") when
+    # its response queue is empty — the same shape a real 401/404/network error produces. Such
+    # a turn must be reported to Minima as a FAILURE (not success) even when judging is off,
+    # and the classified reason must be exposed for the UI.
+    with register_faux_provider() as reg:
+        faux_model = reg.get_model()  # no responses queued -> error turn
+        router = FakeRouter(faux_model)
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], judge_every=0),  # judging OFF
+            router=router,
+            judge=DeterministicJudge(lambda t: 0.99),  # would say "success" if consulted
+            model=faux_model,
+        )
+        asyncio.run(agent.prompt("hi"))
+    assert router.feedback_calls[0]["outcome"] == "failure"
+    assert router.feedback_calls[0]["quality"] == 0.0
+    assert agent._last_error  # classified reason exposed for the TUI / --print
 
 
 def test_offline_fallback_runs_without_feedback():

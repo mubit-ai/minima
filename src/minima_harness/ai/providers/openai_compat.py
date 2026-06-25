@@ -104,6 +104,18 @@ class OpenAICompatProvider:
             yield ErrorEvent(reason="error", error=err)
 
 
+def _token_param(model: Model) -> str:
+    """Which max-output param this endpoint expects.
+
+    OpenAI's GPT-5 / o-series models REJECT ``max_tokens`` with a 400 and require
+    ``max_completion_tokens``; OpenAI accepts ``max_completion_tokens`` for its older models
+    (gpt-4o, …) too, so it's safe to use for the whole ``openai`` provider. Other
+    OpenAI-compatible hosts (groq, openrouter, together, deepseek, …) still expect the
+    classic ``max_tokens``.
+    """
+    return "max_completion_tokens" if model.provider == "openai" else "max_tokens"
+
+
 def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> dict[str, Any]:
     messages = normalize_for_target(context.messages, "openai-completions")
     out: list[dict[str, Any]] = []
@@ -115,7 +127,7 @@ def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> d
         "messages": out,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": options.get("max_tokens", model.max_tokens),
+        _token_param(model): options.get("max_tokens", model.max_tokens),
     }
     if context.tools:
         payload["tools"] = [

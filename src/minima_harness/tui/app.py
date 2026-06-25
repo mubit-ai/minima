@@ -461,6 +461,13 @@ class HarnessApp(App):
             if model is not None:
                 routing.model = model
                 routing.chosen_model_id = chosen_id
+            else:
+                # The pick isn't a model the harness can actually call (id unknown to the
+                # registry) — say so instead of silently running the originally-routed model.
+                await chatlog.add_error(
+                    f"can't switch to {chosen_id} — not a registered model; "
+                    f"running {routing.chosen_model_id or routing.model.id}"
+                )
         if action == "pin" and chosen_id:
             self.config.candidates = [chosen_id]
         return routing
@@ -594,31 +601,47 @@ class HarnessApp(App):
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
             self._set_state("idle")
+            if self._stream_bubble is not None:
+                await self._stream_bubble.remove()  # never leave an empty bubble behind
+                self._stream_bubble = None
             await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
-            self._stream_bubble = None
             return
         await self._render_tools_post_turn()
+        # A provider call that failed (bad/missing key, 404, rate limit, network) is swallowed
+        # into an empty assistant (stop_reason="error"); the agent classifies it as _last_error.
+        # Surface that reason instead of leaving a silent blank bubble.
+        turn_error = getattr(self.agent, "_last_error", None)
         if self._stream_bubble is not None:
-            self._stream_bubble.render_markdown()
-            resp_text = self._stream_bubble.buffer
-            _last = self.agent._last_assistant()
-            _usage = _last.usage if _last is not None else None
-            self.session.append(
-                EntryType.ASSISTANT,
-                {
-                    "text": self._stream_bubble.buffer,
-                    "model": routing.chosen_model_id if routing else None,
-                    "in_tokens": _usage.input if _usage else 0,
-                    "out_tokens": _usage.output if _usage else 0,
-                    "cost": _usage.cost.total if _usage else 0.0,
-                    # est cost (+ band) so predictability (est-vs-actual) is computable later.
-                    "est_cost": routing.est_cost_usd if routing else 0.0,
-                    "est_cost_low": routing.est_cost_low if routing else None,
-                    "est_cost_high": routing.est_cost_high if routing else None,
-                },
-            )
+            if turn_error and not self._stream_bubble.buffer.strip():
+                await self._stream_bubble.remove()  # no output at all → drop the blank bubble
+            else:
+                self._stream_bubble.render_markdown()
+                resp_text = self._stream_bubble.buffer
+                _last = self.agent._last_assistant()
+                _usage = _last.usage if _last is not None else None
+                self.session.append(
+                    EntryType.ASSISTANT,
+                    {
+                        "text": self._stream_bubble.buffer,
+                        "model": routing.chosen_model_id if routing else None,
+                        "in_tokens": _usage.input if _usage else 0,
+                        "out_tokens": _usage.output if _usage else 0,
+                        "cost": _usage.cost.total if _usage else 0.0,
+                        # est cost (+ band) so predictability (est-vs-actual) is computable later.
+                        "est_cost": routing.est_cost_usd if routing else 0.0,
+                        "est_cost_low": routing.est_cost_low if routing else None,
+                        "est_cost_high": routing.est_cost_high if routing else None,
+                    },
+                )
             self._stream_bubble = None
+        if turn_error:
+            await chatlog.add_error(turn_error)
+            self._set_banner(turn_error)
+            self._scroll_bottom()
+            self._refresh_footer()
+            self._set_state("idle")
+            return
         self._scroll_bottom()
         await self._emit_cost_line()
         if self._escalate and routing is not None:

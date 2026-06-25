@@ -4,6 +4,31 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **OpenRouter is now a full provider, not 4 hardcoded models.** Setting `OPENROUTER_API_KEY`
+  fetches OpenRouter's entire live model list (`GET /api/v1/models`, ~340 models) with live
+  pricing / context / modalities / reasoning, so any OpenRouter model is callable, pinnable, and
+  routable. The list is cached to `~/.minima-harness/cache` with a 24h TTL and degrades
+  gracefully (live → stale cache → curated) so startup never blocks or breaks offline.
+
+### Fixed
+- **Provider failures are no longer silent.** A failed model call (bad/missing key, 404, 429,
+  402, network) was swallowed by the provider into an *empty* assistant message; the TUI rendered
+  a blank bubble and `--print` printed an empty line. The harness now classifies the failure and
+  surfaces an actionable, provider-aware message (e.g. "Authentication failed for Anthropic
+  running claude-opus-4-8 — set ANTHROPIC_API_KEY (/config)") in the TUI, on `--print` stderr
+  (exit 1), and in `--mode json`. The blank bubble is removed.
+- **OpenAI GPT-5 / o-series models 400'd on every call.** They reject `max_tokens` and require
+  `max_completion_tokens`; the OpenAI-compatible provider always sent `max_tokens`. It now sends
+  the right param for the `openai` provider (other OpenAI-compatible hosts keep `max_tokens`).
+- **`/confirm` could silently ignore your pick.** Selecting a model the harness couldn't resolve
+  quietly kept the routed model; it now warns. The decision card also marks candidates whose
+  provider key is missing with `⚠ no key`.
+- **Errored turns were sometimes reported to Minima as successes** (when judging was off),
+  poisoning the routing feedback loop; a provider-error turn is now recorded as a failure.
+
 ## [0.4.3] - 2026-06-24
 
 ### Fixed
