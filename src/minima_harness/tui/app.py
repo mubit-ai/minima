@@ -213,6 +213,10 @@ class HarnessApp(App):
         self._cache = SemanticCache(threshold=config.cache_threshold)
         self._escalate = False
         self._escalate_threshold = 0.7
+        # /thoughts: stream the model's reasoning into the log (off by default). The live
+        # thinking bubble is (re)created per turn; empty ones are dropped after the turn.
+        self._show_thinking = False
+        self._thinking_bubble: Any = None
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
@@ -399,6 +403,18 @@ class HarnessApp(App):
 
     def _on_thinking(self, delta: str) -> None:
         self._set_state("thinking")
+        if self._thinking_bubble is not None:
+            self._thinking_bubble.append(delta)
+
+    async def _finalize_thinking(self) -> None:
+        """Drop the per-turn thinking bubble if the model produced no thoughts; else keep it."""
+        if self._thinking_bubble is None:
+            return
+        if not self._thinking_bubble.buffer.strip():
+            await self._thinking_bubble.remove()
+        else:
+            self._thinking_bubble.flush()
+        self._thinking_bubble = None
 
     async def _check_escalate(self, routing: Any, task_text: str) -> None:
         """Judge the output and suggest escalating if quality < threshold."""
@@ -626,6 +642,8 @@ class HarnessApp(App):
             if hit is not None:
                 await self._serve_cache_hit(text, hit)
                 return
+        # A live "thinking" bubble (above the answer) when /thoughts is on; dropped if empty.
+        self._thinking_bubble = await chatlog.add_thinking_stream() if self._show_thinking else None
         self._stream_bubble = await chatlog.add_assistant_stream()
         self._set_state("routing")
         routing = None
@@ -634,12 +652,14 @@ class HarnessApp(App):
             routing = await self.agent.prompt(text)
         except Exception as exc:  # noqa: BLE001
             self._set_state("idle")
+            await self._finalize_thinking()
             if self._stream_bubble is not None:
                 await self._stream_bubble.remove()  # never leave an empty bubble behind
                 self._stream_bubble = None
             await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
             return
+        await self._finalize_thinking()
         await self._render_tools_post_turn()
         # A provider call that failed (bad/missing key, 404, rate limit, network) is swallowed
         # into an empty assistant (stop_reason="error"); the agent classifies it as _last_error.
@@ -1234,6 +1254,31 @@ class HarnessApp(App):
                     "YOLO mode: permissions OFF — sensitive tools run without asking"
                 )
 
+        async def _thoughts(app: HarnessApp, args: str) -> None:
+            a = args.strip().lower()
+            if a in {"on", "1", "true", "yes"}:
+                on = True
+            elif a in {"off", "0", "false", "no"}:
+                on = False
+            else:
+                on = not app._show_thinking
+            app._show_thinking = on
+            extra = ""
+            # Showing thoughts is pointless if the model isn't asked to think — bump the level.
+            if on and app.agent.state.thinking_level == "off":
+                app.agent.state.thinking_level = "medium"
+                app._refresh_footer()
+                extra = " (thinking set to medium)"
+            msg = (
+                f"thoughts: ON — the model's reasoning streams above each answer{extra}"
+                if on
+                else "thoughts: off"
+            )
+            await app.query_one(ChatLog).add_system(msg)
+
+        async def _exit(app: HarnessApp, args: str) -> None:
+            app.exit()
+
         async def _cache(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
@@ -1284,7 +1329,10 @@ class HarnessApp(App):
             ("escalate", _escalate, "toggle quality escalation"),
             ("edits", _edits, "force a diff review for every edit/write"),
             ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
+            ("thoughts", _thoughts, "toggle streaming the model's thinking"),
             ("cache", _cache, "toggle semantic response cache"),
+            ("exit", _exit, "quit Minima"),
+            ("quit", _exit, "quit Minima"),
             ("stats", _stats, "show session analytics (last 10)"),
             ("recall", _recall, "Mubit cross-session recall"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),

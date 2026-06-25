@@ -13,8 +13,15 @@ from minima_harness.tui.theme import current_theme, get_theme
 # hard for no readability gain. 16 Hz still reads as smooth streaming.
 THROTTLE_S = 0.06
 
-_ROLE_COLOR = {"user": "user", "assistant": "assistant", "tool": "tool"}
-_ROLE_PREFIX = {"user": "▸ ", "assistant": "", "tool": "", "error": "✗ ", "system": ""}
+_ROLE_COLOR = {"user": "user", "assistant": "assistant", "tool": "tool", "thinking": "muted"}
+_ROLE_PREFIX = {
+    "user": "▸ ",
+    "assistant": "",
+    "tool": "",
+    "error": "✗ ",
+    "system": "",
+    "thinking": "💭 ",
+}
 
 
 def _color_for(role: str) -> str:
@@ -26,16 +33,26 @@ class MessageBubble(Static):
     """A single chat message. Appendable + throttled for live assistant streaming."""
 
     def __init__(
-        self, role: str, text: str = "", *, prefix: str | None = None, color: str | None = None
+        self,
+        role: str,
+        text: str = "",
+        *,
+        prefix: str | None = None,
+        color: str | None = None,
+        italic: bool = False,
     ) -> None:
         self._role = role
         self._color_override = color
         self._color = color or _color_for(role)
+        self._italic = italic
         self._prefix = prefix if prefix is not None else _ROLE_PREFIX.get(role, "")
         self._buf = text
         self._last_flush = 0.0
         self._markdown = False
         super().__init__(self._content_text())
+
+    def _style(self) -> str:
+        return f"italic {self._color}" if self._italic else self._color
 
     @property
     def buffer(self) -> str:
@@ -79,7 +96,7 @@ class MessageBubble(Static):
     def _content_text(self) -> Text:
         if self._role == "tool" and "\n" in self._buf:
             return self._tool_diff_text()
-        return Text(f"{self._prefix}{self._buf}", style=self._color)
+        return Text(f"{self._prefix}{self._buf}", style=self._style())
 
     def _tool_diff_text(self) -> Text:
         """Colorize a multi-line tool-call body like an IDE diff: + green, - red, @@ cyan."""
@@ -112,6 +129,10 @@ class ChatLog(ScrollableContainer):
 
     async def add_assistant_stream(self) -> MessageBubble:
         return await self._add(MessageBubble("assistant"))
+
+    async def add_thinking_stream(self) -> MessageBubble:
+        """A muted, 💭-prefixed bubble that streams the model's reasoning (when /thoughts is on)."""
+        return await self._add(MessageBubble("thinking", italic=True))
 
     async def add_tool(self, name: str, args_repr: str = "") -> MessageBubble:
         return await self._add(MessageBubble("tool", args_repr, prefix=f"◆ {name}  "))
