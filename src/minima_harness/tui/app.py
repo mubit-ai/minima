@@ -693,7 +693,7 @@ class HarnessApp(App):
         for msg in self.agent.state.messages[self._rendered_msgs :]:
             if isinstance(msg, AssistantMessage):
                 for call in msg.tool_calls:
-                    await chatlog.add_tool(call.name, _args_repr(call.arguments))
+                    await chatlog.add_tool(call.name, _format_tool_call(call.name, call.arguments))
             elif msg.role == "toolResult":
                 await chatlog.add_tool_result(_snippet(msg.text), msg.is_error)
         self._rendered_msgs = len(self.agent.state.messages)
@@ -1461,6 +1461,77 @@ def _args_repr(args: Any) -> str:
         return str(args)
     except Exception:  # noqa: BLE001
         return ""
+
+
+_TOOL_PREVIEW_LINES = 18
+
+
+def _as_dict(args: Any) -> dict:
+    if isinstance(args, dict):
+        return args
+    if hasattr(args, "model_dump"):
+        try:
+            return args.model_dump()
+        except Exception:  # noqa: BLE001
+            return {}
+    return getattr(args, "__dict__", {}) or {}
+
+
+def _clip(text: str, limit: int = 200) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _preview(body: str, prefix: str, *, max_lines: int = _TOOL_PREVIEW_LINES) -> str:
+    lines = body.splitlines()
+    shown = "\n".join(f"{prefix}{ln}" for ln in lines[:max_lines])
+    extra = len(lines) - max_lines
+    if extra > 0:
+        shown += f"\n  … (+{extra} more line{'s' if extra != 1 else ''})"
+    return shown
+
+
+def _format_tool_call(name: str, args: Any) -> str:
+    """Render a tool call as a clean, IDE-like summary instead of a raw JSON args dump.
+
+    write -> "path (new file, N lines)" + a + prefixed preview; edit -> a unified diff of the
+    change; read -> path + range; bash -> the command; others -> compact key=value. Falls back
+    to the raw repr for anything unexpected so nothing is ever hidden."""
+    a = _as_dict(args)
+    if not a:
+        return _clip(_args_repr(args), 300)
+    if name == "write":
+        path = a.get("path", "?")
+        lines = (a.get("content") or "").splitlines()
+        n = len(lines)
+        head = f"{path}  (new file, {n} line{'s' if n != 1 else ''})"
+        return f"{head}\n{_preview(a.get('content') or '', '+')}" if n else head
+    if name == "edit":
+        from types import SimpleNamespace
+
+        from minima_harness.tui.diff import render_tool_diff
+
+        path = a.get("path", "?")
+        diff = render_tool_diff("edit", SimpleNamespace(**a))
+        body = "\n".join(
+            ln for ln in diff.splitlines() if not ln.startswith(("--- ", "+++ "))
+        )
+        tag = "  (replace all)" if a.get("replace_all") else ""
+        return f"{path}{tag}\n{_preview(body, '', max_lines=24)}"
+    if name == "read":
+        path = a.get("path", "?")
+        off = a.get("offset") or 1
+        return f"{path}" + (f"  (from line {off})" if off and off != 1 else "")
+    if name == "bash":
+        return f"$ {_clip(a.get('command') or '', 200)}"
+    if name in ("ls", "grep", "find"):
+        salient = a.get("pattern") or a.get("path") or a.get("query") or ""
+        return _clip(str(salient), 160) if salient else _kv(a)
+    return _kv(a)
+
+
+def _kv(a: dict) -> str:
+    return " · ".join(f"{k}={_clip(str(v), 80)}" for k, v in a.items())
 
 
 def _snippet(text: str, limit: int = 120) -> str:

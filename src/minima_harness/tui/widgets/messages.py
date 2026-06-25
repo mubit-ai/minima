@@ -77,7 +77,26 @@ class MessageBubble(Static):
             self.flush()
 
     def _content_text(self) -> Text:
+        if self._role == "tool" and "\n" in self._buf:
+            return self._tool_diff_text()
         return Text(f"{self._prefix}{self._buf}", style=self._color)
+
+    def _tool_diff_text(self) -> Text:
+        """Colorize a multi-line tool-call body like an IDE diff: + green, - red, @@ cyan."""
+        t = Text()
+        lines = f"{self._prefix}{self._buf}".split("\n")
+        for i, line in enumerate(lines):
+            body = line + ("" if i == len(lines) - 1 else "\n")
+            s = line.lstrip()
+            if s.startswith("+") and not s.startswith("+++"):
+                t.append(body, style="green")
+            elif s.startswith("-") and not s.startswith("---"):
+                t.append(body, style="red")
+            elif s.startswith("@@"):
+                t.append(body, style="cyan")
+            else:
+                t.append(body, style=self._color)
+        return t
 
 
 class ChatLog(ScrollableContainer):
