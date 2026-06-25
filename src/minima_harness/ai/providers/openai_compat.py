@@ -33,6 +33,7 @@ from minima_harness.ai.events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from minima_harness.ai.provider_quirks import quirks_for
 from minima_harness.ai.providers._common import resolve_api_key, to_json_schema
 from minima_harness.ai.types import (
     AssistantMessage,
@@ -104,18 +105,6 @@ class OpenAICompatProvider:
             yield ErrorEvent(reason="error", error=err)
 
 
-def _token_param(model: Model) -> str:
-    """Which max-output param this endpoint expects.
-
-    OpenAI's GPT-5 / o-series models REJECT ``max_tokens`` with a 400 and require
-    ``max_completion_tokens``; OpenAI accepts ``max_completion_tokens`` for its older models
-    (gpt-4o, …) too, so it's safe to use for the whole ``openai`` provider. Other
-    OpenAI-compatible hosts (groq, openrouter, together, deepseek, …) still expect the
-    classic ``max_tokens``.
-    """
-    return "max_completion_tokens" if model.provider == "openai" else "max_tokens"
-
-
 def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> dict[str, Any]:
     messages = normalize_for_target(context.messages, "openai-completions")
     out: list[dict[str, Any]] = []
@@ -127,7 +116,9 @@ def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> d
         "messages": out,
         "stream": True,
         "stream_options": {"include_usage": True},
-        _token_param(model): options.get("max_tokens", model.max_tokens),
+        # Per-provider request quirks (e.g. OpenAI GPT-5 needs max_completion_tokens) come from
+        # the quirks table, not a growing chain of `if model.provider == ...` branches here.
+        quirks_for(model.provider).token_param: options.get("max_tokens", model.max_tokens),
     }
     if context.tools:
         payload["tools"] = [
