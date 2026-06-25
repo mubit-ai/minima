@@ -20,7 +20,7 @@ _ROLE_PREFIX = {
     "tool": "",
     "error": "✗ ",
     "system": "",
-    "thinking": "💭 ",
+    "thinking": "thoughts  ",
 }
 
 
