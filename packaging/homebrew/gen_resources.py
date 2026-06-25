@@ -107,6 +107,11 @@ def resolve_wheels(name: str, version: str) -> Wheels:
     return w
 
 
+def _norm(name: str) -> str:
+    """PEP 503 resource name (lowercase, runs of -_. → single -) — what `brew audit` requires."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def _block(url: str, sha: str, indent: str) -> str:
     return f'{indent}url "{url}"\n{indent}sha256 "{sha}"'
 
@@ -114,13 +119,14 @@ def _block(url: str, sha: str, indent: str) -> str:
 def emit(e: Existing, w: Wheels) -> tuple[str, set[str]]:
     """Return (ruby resource block, set of platforms that fell back to sdist)."""
     fallbacks: set[str] = set()
+    name = _norm(e.name)  # brew audit requires PEP 503 names (no _ / . / uppercase)
     if w.pure:  # pure-Python: one universal wheel everywhere
         body = _block(*w.pure, "    ")
-        return f'  resource "{e.name}" do  # wheel (pure)\n{body}\n  end', fallbacks
+        return f'  resource "{name}" do # wheel (pure)\n{body}\n  end', fallbacks
 
     if not w.by_plat:  # not on PyPI / no wheels at all -> keep original (sdist) verbatim
         body = _block(e.url, e.sha, "    ")
-        return f'  resource "{e.name}" do  # sdist (no wheel)\n{body}\n  end', {"all"}
+        return f'  resource "{name}" do # sdist (no wheel)\n{body}\n  end', {"all"}
 
     def per(plat: str) -> str:
         if plat in w.by_plat:
@@ -129,7 +135,7 @@ def emit(e: Existing, w: Wheels) -> tuple[str, set[str]]:
         return _block(e.url, e.sha, "        ")  # build from sdist on this platform
 
     block = (
-        f'  resource "{e.name}" do  # wheel (compiled)\n'
+        f'  resource "{name}" do # wheel (compiled)\n'
         f"    on_arm do\n"
         f"      on_macos do\n{per('macos_arm')}\n      end\n"
         f"      on_linux do\n{per('linux_arm')}\n      end\n"
