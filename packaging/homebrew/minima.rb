@@ -21,22 +21,52 @@ class Minima < Formula
 
   depends_on "python@3.13"
 
+  # rust + openssl are only needed on Intel, where `cryptography` has no published x86_64
+  # wheel and must build from source. Apple Silicon installs entirely from wheels (below).
+  on_intel do
+    depends_on "rust" => :build
+    depends_on "openssl@3"
+  end
+
+  # jiter/pydantic-core wheels ship `.so` modules with `@rpath` dylib IDs and no header
+  # padding; preserve_rpath stops Homebrew's relocation from failing on them. See README.md.
+  preserve_rpath
+
   # Generate/refresh AFTER setting url + sha256:  brew update-python-resources Formula/minima.rb
   # The CLI needs the `harness` + `tui` extras (anthropic, google-genai, textual, keyring, deps) —
   # ensure those resources are present (generate against `minima-cli[harness,tui]`).
-  # resource "httpx" do ... end
-  # resource "pydantic" do ... end
-  # resource "mubit-sdk" do ... end
-  # resource "textual" do ... end
-  # resource "anthropic" do ... end
-  # resource "google-genai" do ... end
-  # resource "keyring" do ... end
+  #
+  # CRITICAL: the six compiled deps (grpcio, protobuf, cffi, jiter, pydantic-core, cryptography)
+  # MUST be vendored as prebuilt WHEELS, not the sdists update-python-resources emits — otherwise
+  # Homebrew's `--no-binary=:all:` compiles them from source (~5 min install + RAM spike). Get the
+  # wheel resource blocks from `python packaging/homebrew/wheel_urls.py <pkg>==<ver> ...`.
+  # resource "httpx" do ... end          # pure-Python → sdist is fine
+  # resource "grpcio" do ... end          # COMPILED → wheel (see wheel_urls.py)
+  # resource "pydantic-core" do ... end    # COMPILED → wheel (on_arm/on_intel)
   # ... (full transitive closure) ...
 
   def install
-    venv = virtualenv_create(libexec, "python3.13")
-    venv.pip_install resources
-    # install the CLI extras; provides the `minima` (and `minima-harness`) console scripts.
+    python = "python3.13"
+    venv = virtualenv_create(libexec, python)
+
+    # Install the compiled deps from their vendored wheels WITHOUT --no-binary (Homebrew's
+    # std_pip_args forces --no-binary=:all:, which would recompile them). brew caches downloads
+    # as `<sha256>--<name>`; pip's wheel parser rejects that prefix, so copy to a clean name.
+    wheels = %w[grpcio protobuf cffi jiter pydantic-core websockets]
+    wheels << "cryptography" if Hardware::CPU.arm? # Intel has no x86_64 wheel → builds from source
+    wheelhouse = buildpath/"wheelhouse"
+    wheelhouse.mkpath
+    wheel_files = wheels.map do |name|
+      r = resource(name)
+      dest = wheelhouse/File.basename(r.url)
+      cp r.cached_download, dest
+      dest
+    end
+    system python, "-m", "pip", "--python=#{libexec}/bin/python", "install",
+           "--no-deps", "--no-index", "--ignore-installed", "--no-compile", *wheel_files
+
+    # Everything else is pure-Python; then the CLI (provides `minima` / `minima-harness`).
+    venv.pip_install resources.reject { |r| wheels.include?(r.name) }
     venv.pip_install_and_link "#{buildpath}[harness,tui]"
   end
 
