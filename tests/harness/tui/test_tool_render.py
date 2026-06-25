@@ -44,6 +44,20 @@ def test_unknown_tool_is_compact_kv_not_json():
     assert "{" not in out  # not a JSON/dict dump
 
 
+def test_tasks_tool_renders_as_checklist():
+    out = _format_tool_call(
+        "tasks",
+        {"op": "set", "tasks": [{"content": "do a"}, {"content": "do b", "status": "completed"}]},
+    )
+    assert "plan 2 tasks" in out
+    assert "[ ] do a" in out and "[x] do b" in out
+    assert "'content'" not in out  # not the raw args dict
+    assert _format_tool_call("tasks", {"op": "update", "task_id": "x", "status": "completed"}) == (
+        "x → completed"
+    )
+    assert _format_tool_call("tasks", {"op": "list"}) == "list tasks"
+
+
 def test_handles_pydantic_like_args():
     from types import SimpleNamespace
 

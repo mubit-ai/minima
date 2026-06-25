@@ -116,6 +116,35 @@ async def test_emit_goal_cost_line_attributes_and_renders():
 
 
 @pytest.mark.asyncio
+async def test_goal_cost_distributes_across_batched_completions():
+    # The E2E case: model plans + completes several tasks in one turn with no in_progress step.
+    from types import SimpleNamespace
+
+    from minima_harness.minima.meter import CostRow
+
+    app = _app()
+    async with app.run_test() as pilot:
+        app._goals.start("g")
+        app._goals.set_tasks([{"content": "a"}, {"content": "b"}])
+        app._goal_completed_before = app._goals.completed_ids()  # none completed before the turn
+        for t in app._goals.goal.tasks:  # model marks both done at once
+            t.status = "completed"
+        app.agent.meter.rows.append(
+            CostRow(
+                label="t", model="m", decision_basis="memory",
+                est_cost_usd=0.01, actual_cost_usd=0.02, baseline_cost_usd=None,
+                quality=None, outcome="success",
+            )
+        )
+        await app._emit_goal_cost_line(SimpleNamespace())
+        await pilot.pause()
+
+    costs = [t.actual_cost_usd for t in app._goals.goal.tasks]
+    assert all(c == pytest.approx(0.01) for c in costs)  # $0.02 split across the 2 completed
+    assert app._goals.goal.spent_extra_usd == 0.0  # nothing fell through to goal-level
+
+
+@pytest.mark.asyncio
 async def test_goal_budget_command():
     app = _app()
     async with app.run_test() as pilot:

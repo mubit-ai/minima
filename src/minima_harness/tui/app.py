@@ -446,7 +446,11 @@ class HarnessApp(App):
         if meter is None or not meter.rows:
             return
         row = meter.rows[-1]
-        self._goals.record_turn_cost(row.actual_cost_usd, row.est_cost_usd)
+        # Tasks the model flipped to completed THIS turn get the cost split across them (covers
+        # the common case: model plans, works, then marks several done with no in_progress step).
+        before: set[str] = getattr(self, "_goal_completed_before", set())
+        newly_completed = [tid for tid in self._goals.completed_ids() if tid not in before]
+        self._goals.record_turn_cost(row.actual_cost_usd, row.est_cost_usd, newly_completed)
         g = self._goals.goal
         spent = g.spent_usd()
         parts = [f"spent ${spent:.4f}"]
@@ -698,6 +702,7 @@ class HarnessApp(App):
         # Goal-conditioned routing: an active goal supplies task_type + a goal tag so the whole
         # goal routes coherently and clusters in Minima's memory.
         g_type, g_tags = (None, None)
+        self._goal_completed_before = self._goals.completed_ids()  # for per-task cost attribution
         if self._goals.active and self._goals.goal is not None:
             g_type, g_tags = self._goals.goal.routing_signals()
         try:
@@ -1733,6 +1738,21 @@ def _format_tool_call(name: str, args: Any) -> str:
         return f"{path}" + (f"  (from line {off})" if off and off != 1 else "")
     if name == "bash":
         return f"$ {_clip(a.get('command') or '', 200)}"
+    if name == "tasks":
+        op = a.get("op", "")
+        if op == "set":
+            items = a.get("tasks") or []
+            marks = {"completed": "[x]", "in_progress": "[~]", "blocked": "[!]"}
+            head = f"plan {len(items)} task{'s' if len(items) != 1 else ''}:"
+            rows = [
+                f"  {marks.get(str(it.get('status', '')), '[ ]')} "
+                f"{_clip(str(it.get('content', '')), 80)}"
+                for it in items[:_TOOL_PREVIEW_LINES]
+            ]
+            return "\n".join([head, *rows])
+        if op == "update":
+            return f"{a.get('task_id', '?')} → {a.get('status', '?')}"
+        return "list tasks"
     if name in ("ls", "grep", "find"):
         salient = a.get("pattern") or a.get("path") or a.get("query") or ""
         return _clip(str(salient), 160) if salient else _kv(a)

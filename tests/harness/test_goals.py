@@ -112,10 +112,23 @@ def test_record_turn_cost_attributes_to_in_progress_task():
 
 
 def test_record_turn_cost_falls_back_to_goal_when_no_active_task():
-    g = Goal(title="g", tasks=[GoalTask.make("a")])  # none in_progress
+    g = Goal(title="g", tasks=[GoalTask.make("a")])  # none in_progress, none newly completed
     g.record_turn_cost(0.05, 0.04)
     assert g.spent_extra_usd == pytest.approx(0.05)
     assert g.spent_usd() == pytest.approx(0.05)
+
+
+def test_record_turn_cost_distributes_across_newly_completed():
+    # The batched case: model plans, does the work, marks several done — no in_progress step.
+    g = Goal(title="g", tasks=[GoalTask.make("a"), GoalTask.make("b"), GoalTask.make("c")])
+    g.tasks[0].status = "completed"
+    g.tasks[1].status = "completed"
+    g.record_turn_cost(0.03, 0.024, newly_completed_ids=[g.tasks[0].id, g.tasks[1].id])
+    assert g.tasks[0].actual_cost_usd == pytest.approx(0.015)  # 0.03 split across the 2
+    assert g.tasks[1].actual_cost_usd == pytest.approx(0.015)
+    assert g.tasks[2].actual_cost_usd == 0.0  # untouched
+    assert g.spent_extra_usd == 0.0  # nothing fell through to goal-level
+    assert g.spent_usd() == pytest.approx(0.03)
 
 
 def test_projected_total_extrapolates_from_progress():

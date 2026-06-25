@@ -70,15 +70,31 @@ class Goal:
             tags = [f"goal:{_slug(self.title)}", *tags]
         return self.task_type, tags
 
-    def record_turn_cost(self, actual_usd: float, est_usd: float) -> None:
-        """Attribute a turn's realized cost to the in_progress task (or the goal at large)."""
+    def record_turn_cost(
+        self, actual_usd: float, est_usd: float, newly_completed_ids: list[str] | None = None
+    ) -> None:
+        """Attribute a turn's realized cost. Order of preference:
+
+        1. the in_progress task (the model marked one — ideal);
+        2. else split evenly across tasks that flipped to completed THIS turn (the common case
+           where a model batches: plan → do the work → mark several done at once);
+        3. else the goal at large (``spent_extra_usd``), so goal-level spend is always accurate.
+        """
         task = self.active()
         if task is not None:
             task.actual_cost_usd += actual_usd
             if task.est_cost_usd == 0.0:
                 task.est_cost_usd = est_usd
-        else:
-            self.spent_extra_usd += actual_usd
+            return
+        targets = [t for t in self.tasks if t.id in (newly_completed_ids or [])]
+        if targets:
+            share_a, share_e = actual_usd / len(targets), est_usd / len(targets)
+            for t in targets:
+                t.actual_cost_usd += share_a
+                if t.est_cost_usd == 0.0:
+                    t.est_cost_usd = share_e
+            return
+        self.spent_extra_usd += actual_usd
 
     def spent_usd(self) -> float:
         return sum(t.actual_cost_usd for t in self.tasks) + self.spent_extra_usd
@@ -135,9 +151,14 @@ class GoalStore:
         if self.goal is not None:
             self.goal.budget_usd = amount
 
-    def record_turn_cost(self, actual_usd: float, est_usd: float) -> None:
+    def completed_ids(self) -> set[str]:
+        return {t.id for t in self.goal.tasks if t.status == "completed"} if self.goal else set()
+
+    def record_turn_cost(
+        self, actual_usd: float, est_usd: float, newly_completed_ids: list[str] | None = None
+    ) -> None:
         if self.active and self.goal is not None:
-            self.goal.record_turn_cost(actual_usd, est_usd)
+            self.goal.record_turn_cost(actual_usd, est_usd, newly_completed_ids)
 
     def set_tasks(self, items: list[dict[str, Any]]) -> None:
         """Replace the task list (the model's `tasks set` op)."""
