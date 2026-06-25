@@ -20,6 +20,7 @@ def render_footer(
     routing_offline: bool,
     route_mode: str = "auto",
     thinking_level: str = "off",
+    goal: str = "",
 ) -> Text:
     """The single canonical status surface. Per-segment colour by *meaning* (not blanket-dim):
     model in user-colour, cost in amber, savings/ctx/route warnings in red — so Minima's
@@ -43,6 +44,9 @@ def render_footer(
     out.append("  ·  ", style=dim)
     think_style = warn if thinking_level == "high" else (dim if thinking_level == "off" else accent)
     seg("think: ", thinking_level, think_style)
+    if goal:
+        out.append("  ·  ", style=dim)
+        seg("goal: ", goal, accent)
 
     out.append("   |   ", style=dim)
 

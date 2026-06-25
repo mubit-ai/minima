@@ -57,6 +57,7 @@ from minima_harness.tui.mubit import (
 from minima_harness.tui.overlays import (
     CommandPicker,
     ConfigOverlay,
+    GoalsOverlay,
     LayeredPromptInspector,
     ModelPicker,
     PermissionRequest,
@@ -143,6 +144,13 @@ class HarnessApp(App):
         background: $panel; border: round $accent; padding: 0 1;
     }
     TreePicker Tree:focus { border: round $accent; }
+    GoalsOverlay { align: center middle; }
+    GoalsOverlay #goals-card {
+        width: 84; height: auto; max-height: 80%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    GoalsOverlay #goals-budget { color: $text-muted; padding: 0 1 1 1; }
+    GoalsOverlay #goals-body { height: auto; max-height: 22; padding: 0 1; }
     PermissionRequest { align: center middle; }
     PermissionRequest #perm-card {
         width: 92; height: auto; max-height: 85%;
@@ -202,6 +210,15 @@ class HarnessApp(App):
         self.session = session
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
+        # /goals: the agent's live task checklist + (Phase 2) cost-to-goal. The `tasks` tool is
+        # appended here so it reaches the agent via _apply_extensions; the goal is loaded from
+        # the session so it survives resume.
+        from minima_harness.minima.goals import GoalStore
+        from minima_harness.tools.tasks import tasks_tool
+
+        self._goals = GoalStore()
+        self._goals.load(self.session)
+        self._tools.append(tasks_tool(self._goals))
         self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
         self._confirm_edits = False  # /edits: force a diff review for every edit/write
         # Ask before sensitive ops (write/edit/bash) by default; /yolo or
@@ -350,10 +367,11 @@ class HarnessApp(App):
         self.run_worker(self._show_welcome(), exclusive=True)
 
     def _apply_effective_prompt(self) -> None:
-        """Recompute and apply the Mubit+local+session system prompt to the agent."""
-        self.agent.state.system_prompt = effective_prompt(
-            self.cwd, get_session_override(self.session)
-        )
+        """Recompute and apply the Mubit+local+session system prompt to the agent, with the
+        active goal + open tasks appended so the model is re-anchored to the goal each turn."""
+        base = effective_prompt(self.cwd, get_session_override(self.session))
+        goal_block = self._goals.prompt_block()
+        self.agent.state.system_prompt = f"{base}\n\n{goal_block}" if goal_block else base
 
     async def _apply_prompt_edit(self, result: dict) -> None:
         action, content = result["action"], result["content"]
@@ -635,6 +653,7 @@ class HarnessApp(App):
     async def run_turn(self, text: str) -> None:
         chatlog = self.query_one(ChatLog)
         self._dismiss_welcome()  # first prompt: drop the splash, let the conversation flow top-down
+        self._apply_effective_prompt()  # re-anchor the goal/tasks into the system prompt
         await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
         if self._cache_enabled:
@@ -757,6 +776,7 @@ class HarnessApp(App):
     async def _load_session(self, store: SessionStore) -> None:
         """Switch the active session and rebuild the agent context + transcript from it."""
         self.session = store
+        self._goals.load(store)  # restore the session's goal/task list
         chatlog = self.query_one(ChatLog)
         await chatlog.remove_children()
         chatlog.remove_class("empty")
@@ -799,6 +819,8 @@ class HarnessApp(App):
                 self._set_notice("context near limit — /compact to free space")
             else:
                 self.query_one("#banner", Static).update(Text(""))
+        # Persist any goal/task changes the model made via the `tasks` tool this turn.
+        self._goals.save(self.session)
         self._refresh_footer()
         self._set_state("idle")
 
@@ -826,6 +848,13 @@ class HarnessApp(App):
         """A non-offline heads-up (no '/reconnect' framing — routing succeeded)."""
         self.query_one("#banner", Static).update(render_notice(reason))
 
+    def _goal_footer(self) -> str:
+        """`N/M` progress for the active goal (empty when none) — shown in the footer."""
+        if not self._goals.active or self._goals.goal is None:
+            return ""
+        done, total = self._goals.goal.progress()
+        return f"{done}/{total}"
+
     def _refresh_footer(self) -> None:
         meter = self.agent.meter or CostMeter()
         session_label = self.session.display_name or (
@@ -847,6 +876,7 @@ class HarnessApp(App):
             routing_offline=self._routing_offline,
             route_mode=self._route_mode,
             thinking_level=str(self.agent.state.thinking_level),
+            goal=self._goal_footer(),
         )
         self.sub_title = ""
         try:
@@ -1279,6 +1309,33 @@ class HarnessApp(App):
         async def _exit(app: HarnessApp, args: str) -> None:
             app.exit()
 
+        async def _goals(app: HarnessApp, args: str) -> None:
+            import time
+
+            a = args.strip()
+            low = a.lower()
+            if low in ("clear", "done", "stop", "off"):
+                app._goals.clear()
+                app._goals.save(app.session)
+                app._apply_effective_prompt()
+                app._refresh_footer()
+                await app.query_one(ChatLog).add_system("goal cleared — back to ad-hoc routing")
+                return
+            if low.startswith("set ") or low.startswith("set\t"):
+                title = a[3:].strip()
+                if not title:
+                    await app.query_one(ChatLog).add_error("usage: /goals set <title>")
+                    return
+                app._goals.start(title, now=time.time())
+                app._goals.save(app.session)
+                app._apply_effective_prompt()
+                app._refresh_footer()
+                await app.query_one(ChatLog).add_system(
+                    f"goal set: {title} — describe the work; I'll plan it into tasks and track it"
+                )
+                return
+            app.push_screen(GoalsOverlay(app._goals.goal))  # no/other args -> view the checklist
+
         async def _cache(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
@@ -1330,6 +1387,7 @@ class HarnessApp(App):
             ("edits", _edits, "force a diff review for every edit/write"),
             ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
             ("thoughts", _thoughts, "toggle streaming the model's thinking"),
+            ("goals", _goals, "set/track a goal + task list (/goals set <title> · clear)"),
             ("cache", _cache, "toggle semantic response cache"),
             ("exit", _exit, "quit Minima"),
             ("quit", _exit, "quit Minima"),

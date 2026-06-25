@@ -12,6 +12,7 @@ class EntryType(StrEnum):
     ASSISTANT = "assistant"
     TOOL = "tool"
     SYSTEM = "system"
+    GOAL = "goal"  # serialized Goal snapshot (latest wins); powers /goals across resume
 
 
 def new_id() -> str:

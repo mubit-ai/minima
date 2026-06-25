@@ -398,6 +398,46 @@ class DiffApproval(ModalScreen[dict | None]):
         self.dismiss({"action": "reject"})
 
 
+class GoalsOverlay(ModalScreen[None]):
+    """Read-only view of the active goal + its task checklist. Esc/Enter closes.
+
+    The model maintains the task list via the ``tasks`` tool; the user sets/clears the goal with
+    ``/goals set <title>`` / ``/goals clear``.
+    """
+
+    BINDINGS = [("escape", "cancel"), ("enter", "cancel")]
+
+    _MARK = {"completed": "✓", "in_progress": "▸", "blocked": "✗", "pending": "○"}
+
+    def __init__(self, goal: Any) -> None:
+        super().__init__()
+        self._goal = goal
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="goals-card"):
+            g = self._goal
+            if g is None or (not g.title and not g.tasks):
+                yield Static(Text("no active goal — set one with  /goals set <title>", style="dim"))
+                return
+            done, total = g.progress()
+            head = f"{g.title}   ·   {done}/{total} done" if g.title else f"{done}/{total} done"
+            yield Static(Text(head, style="bold"), id="goals-head")
+            if g.budget_usd:
+                yield Static(
+                    Text(f"budget ${g.budget_usd:.4f} · spent ${g.spent_usd():.4f}", style="dim"),
+                    id="goals-budget",
+                )
+            with VerticalScroll(id="goals-body"):
+                for t in g.tasks:
+                    yield Static(Text(f"  {self._MARK.get(t.status, '○')} {t.content}"))
+
+    def on_mount(self) -> None:
+        self.query_one("#goals-card").border_title = "goals"
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class PermissionRequest(ModalScreen[dict | None]):
     """Approve a sensitive tool call (write/edit/bash) before it runs.
 

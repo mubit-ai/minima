@@ -1,0 +1,174 @@
+"""Goal / task tracking for the harness — the data model behind ``/goals``.
+
+A :class:`Goal` is a high-level objective plus a checklist of :class:`GoalTask` items the agent
+maintains as it works (one ``in_progress`` at a time). Phase 1 uses this purely to keep the
+agent on-track and show progress; Phase 2 adds cost fields (``est_cost_usd`` / ``actual_cost_usd``
+/ ``budget_usd``) so a goal can be tracked against a budget — Minima's differentiator.
+
+State is owned by :class:`GoalStore`, which (de)serializes to the per-session store so a goal
+survives ``--continue`` / ``--resume``.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+_STATUSES = ("pending", "in_progress", "completed", "blocked")
+
+
+def _slug(text: str, n: int = 24) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return (s[:n].rstrip("-")) or "task"
+
+
+@dataclass
+class GoalTask:
+    id: str
+    content: str  # imperative form ("Add OAuth login")
+    active_form: str = ""  # present-continuous ("Adding OAuth login"); falls back to content
+    status: str = "pending"  # pending | in_progress | completed | blocked
+    est_cost_usd: float = 0.0  # routing estimate captured while worked (Phase 2)
+    actual_cost_usd: float = 0.0  # realized cost attributed to this task (Phase 2)
+
+    @property
+    def label(self) -> str:
+        if self.status == "in_progress" and self.active_form:
+            return self.active_form
+        return self.content
+
+    @classmethod
+    def make(cls, content: str, active_form: str = "", status: str = "pending") -> GoalTask:
+        status = status if status in _STATUSES else "pending"
+        return cls(id=_slug(content), content=content, active_form=active_form, status=status)
+
+
+@dataclass
+class Goal:
+    title: str
+    tasks: list[GoalTask] = field(default_factory=list)
+    task_type: str | None = None
+    tags: list[str] = field(default_factory=list)
+    budget_usd: float | None = None
+    started_ts: float = 0.0
+    done: bool = False
+
+    def progress(self) -> tuple[int, int]:
+        """(completed, total)."""
+        return (sum(1 for t in self.tasks if t.status == "completed"), len(self.tasks))
+
+    def active(self) -> GoalTask | None:
+        return next((t for t in self.tasks if t.status == "in_progress"), None)
+
+    def spent_usd(self) -> float:
+        return sum(t.actual_cost_usd for t in self.tasks)
+
+    def projected_remaining_usd(self) -> float:
+        """Sum of estimates for not-yet-done tasks (Phase 2 cost-to-goal)."""
+        return sum(t.est_cost_usd for t in self.tasks if t.status not in ("completed",))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Goal:
+        tasks = [GoalTask(**t) for t in data.get("tasks", [])]
+        return cls(
+            title=data.get("title", ""),
+            tasks=tasks,
+            task_type=data.get("task_type"),
+            tags=list(data.get("tags", [])),
+            budget_usd=data.get("budget_usd"),
+            started_ts=float(data.get("started_ts", 0.0)),
+            done=bool(data.get("done", False)),
+        )
+
+
+class GoalStore:
+    """Owns the active goal and (de)serializes it to/from the session store.
+
+    The session store is the single source of truth: :meth:`save` appends a GOAL entry and
+    :meth:`load` reads the latest one, so a goal survives resume with no extra storage.
+    """
+
+    def __init__(self, goal: Goal | None = None) -> None:
+        self.goal = goal
+
+    @property
+    def active(self) -> bool:
+        return self.goal is not None and not self.goal.done
+
+    # ---- mutation (driven by the `tasks` tool and the /goals command) ----
+    def start(self, title: str, *, now: float = 0.0) -> Goal:
+        self.goal = Goal(title=title, started_ts=now)
+        return self.goal
+
+    def clear(self) -> None:
+        if self.goal is not None:
+            self.goal.done = True
+
+    def set_tasks(self, items: list[dict[str, Any]]) -> None:
+        """Replace the task list (the model's `tasks set` op)."""
+        if self.goal is None:
+            self.goal = Goal(title="")
+        self.goal.tasks = [
+            GoalTask.make(
+                str(it.get("content", "")).strip(),
+                str(it.get("active_form", "")).strip(),
+                str(it.get("status", "pending")),
+            )
+            for it in items
+            if str(it.get("content", "")).strip()
+        ]
+
+    def update_task(self, task_id: str, status: str) -> bool:
+        """Set one task's status; enforces the single-in_progress invariant. Returns matched."""
+        if self.goal is None or status not in _STATUSES:
+            return False
+        match = next((t for t in self.goal.tasks if t.id == task_id), None)
+        if match is None:
+            return False
+        if status == "in_progress":  # demote any other in_progress task
+            for t in self.goal.tasks:
+                if t.status == "in_progress":
+                    t.status = "pending"
+        match.status = status
+        return True
+
+    # ---- persistence ----
+    def save(self, session: Any) -> None:
+        if self.goal is None:
+            return
+        try:
+            from minima_harness.session.format import EntryType
+
+            session.append(EntryType.GOAL, self.goal.to_dict())
+        except Exception:  # noqa: BLE001 - goal persistence must never break a turn
+            pass
+
+    def load(self, session: Any) -> None:
+        try:
+            from minima_harness.session.format import EntryType
+
+            latest = None
+            for entry in getattr(session, "entries", []):
+                if entry.type == EntryType.GOAL:
+                    latest = entry
+            if latest is not None:
+                self.goal = Goal.from_dict(latest.payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---- prompt rendering ----
+    def prompt_block(self) -> str:
+        """The goal + open tasks, injected into the system prompt each turn to re-anchor."""
+        if not self.active or self.goal is None:
+            return ""
+        lines = [f"# Current goal: {self.goal.title}".rstrip()]
+        if self.goal.tasks:
+            lines.append("Task list (keep it current via the `tasks` tool; one in_progress):")
+            mark = {"completed": "[x]", "in_progress": "[~]", "blocked": "[!]", "pending": "[ ]"}
+            for t in self.goal.tasks:
+                lines.append(f"  {mark.get(t.status, '[ ]')} {t.content}")
+        return "\n".join(lines)
