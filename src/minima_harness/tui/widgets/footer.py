@@ -46,7 +46,7 @@ def render_footer(
     seg("think: ", thinking_level, think_style)
     if goal:
         out.append("  ·  ", style=dim)
-        seg("goal: ", goal, accent)
+        seg("ledger: ", goal, accent)
 
     out.append("   |   ", style=dim)
 

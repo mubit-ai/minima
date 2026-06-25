@@ -27,7 +27,7 @@ async def test_goals_set_clear_and_footer():
     app = _app()
     async with app.run_test() as pilot:
         assert app._goal_footer() == ""  # no goal initially
-        await app._dispatch_command("goals", "set Ship the OAuth flow")
+        await app._dispatch_command("ledger", "set Ship the OAuth flow")
         await pilot.pause()
         assert app._goals.active is True
         assert app._goals.goal.title == "Ship the OAuth flow"
@@ -37,11 +37,24 @@ async def test_goals_set_clear_and_footer():
         app._goals.set_tasks([{"content": "a", "status": "completed"}, {"content": "b"}])
         assert app._goal_footer() == "1/2"
         # clear
-        await app._dispatch_command("goals", "clear")
+        await app._dispatch_command("ledger", "clear")
         await pilot.pause()
         assert app._goals.active is False
         assert app._goal_footer() == ""
         assert "Ship the OAuth flow" not in app.agent.state.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_goals_is_hidden_alias_of_ledger():
+    app = _app()
+    async with app.run_test() as pilot:
+        # /goals still works (hidden alias)...
+        await app._dispatch_command("goals", "set Legacy name")
+        await pilot.pause()
+        assert app._goals.goal.title == "Legacy name"
+        # ...but it's not advertised in the palette/help (only /ledger is).
+        listed = {c.name for c in app.commands.all()}
+        assert "ledger" in listed and "goals" not in listed
 
 
 @pytest.mark.asyncio
@@ -60,10 +73,10 @@ async def test_goals_overlay_opens():
     async with app.run_test() as pilot:
         app._goals.start("Demo goal")
         app._goals.set_tasks([{"content": "task one"}])
-        await app._dispatch_command("goals", "")  # no args -> overlay
+        await app._dispatch_command("ledger", "")  # no args -> overlay
         await pilot.pause()
         assert isinstance(app.screen, GoalsOverlay)
-        assert app.screen.query_one("#goals-card").border_title == "goals"
+        assert app.screen.query_one("#goals-card").border_title == "ledger"
         await pilot.press("escape")
         await pilot.pause()
 
@@ -112,7 +125,7 @@ async def test_emit_goal_cost_line_attributes_and_renders():
         texts = " ".join(b.buffer for b in app.query_one(ChatLog).query(MessageBubble))
 
     assert app._goals.goal.spent_usd() == pytest.approx(0.012)  # attributed to the in_progress task
-    assert "goal ·" in texts and "spent $0.0120" in texts
+    assert "ledger ·" in texts and "spent $0.0120" in texts
 
 
 @pytest.mark.asyncio
@@ -149,7 +162,7 @@ async def test_goal_budget_command():
     app = _app()
     async with app.run_test() as pilot:
         app._goals.start("g")
-        await app._dispatch_command("goals", "budget 2.50")
+        await app._dispatch_command("ledger", "budget 2.50")
         await pilot.pause()
         assert app._goals.goal.budget_usd == pytest.approx(2.50)
 
@@ -158,7 +171,7 @@ async def test_goal_budget_command():
 async def test_goal_survives_session_reload():
     app = _app()
     async with app.run_test() as pilot:
-        await app._dispatch_command("goals", "set Persisted goal")
+        await app._dispatch_command("ledger", "set Persisted goal")
         app._goals.set_tasks([{"content": "x"}])
         app._goals.save(app.session)
         await pilot.pause()

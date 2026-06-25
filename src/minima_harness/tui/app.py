@@ -466,7 +466,7 @@ class HarnessApp(App):
             over = spent > g.budget_usd
             parts.append(f"budget ${g.budget_usd:.4f} ({pct:.0f}%)")
         await self.query_one(ChatLog).add_system(
-            "   └ goal · " + " · ".join(parts), color="red" if over else None
+            "   └ ledger · " + " · ".join(parts), color="red" if over else None
         )
 
     async def _check_escalate(self, routing: Any, task_text: str) -> None:
@@ -1361,11 +1361,11 @@ class HarnessApp(App):
                 app._goals.save(app.session)
                 app._apply_effective_prompt()
                 app._refresh_footer()
-                await app.query_one(ChatLog).add_system("goal cleared — back to ad-hoc routing")
+                await app.query_one(ChatLog).add_system("ledger cleared — back to ad-hoc routing")
                 return
             if low.startswith("budget"):
                 if not app._goals.active:
-                    await app.query_one(ChatLog).add_error("no active goal — /goals set <title>")
+                    await app.query_one(ChatLog).add_error("no open ledger — /ledger set <title>")
                     return
                 raw = a[6:].strip().lstrip("$")
                 try:
@@ -1375,7 +1375,7 @@ class HarnessApp(App):
                     return
                 app._goals.set_budget(amount)
                 app._goals.save(app.session)
-                msg = f"goal budget set to ${amount:.4f}" if amount else "goal budget cleared"
+                msg = f"ledger budget set to ${amount:.4f}" if amount else "ledger budget cleared"
                 await app.query_one(ChatLog).add_system(msg)
                 return
             if low.startswith("set ") or low.startswith("set\t"):
@@ -1388,7 +1388,7 @@ class HarnessApp(App):
                 app._apply_effective_prompt()
                 app._refresh_footer()
                 await app.query_one(ChatLog).add_system(
-                    f"goal set: {title} — describe the work; I'll plan it into tasks and track it"
+                    f"ledger opened: {title} — describe the work; I'll plan + track it (with cost)"
                 )
                 return
             app.push_screen(GoalsOverlay(app._goals.goal))  # no/other args -> view the checklist
@@ -1444,7 +1444,7 @@ class HarnessApp(App):
             ("edits", _edits, "force a diff review for every edit/write"),
             ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
             ("thoughts", _thoughts, "toggle streaming the model's thinking"),
-            ("goals", _goals, "set/track a goal + task list (/goals set <title> · clear)"),
+            ("ledger", _goals, "set/track a budgeted goal + tasks (set <title> · clear · budget)"),
             ("cache", _cache, "toggle semantic response cache"),
             ("exit", _exit, "quit Minima"),
             ("quit", _exit, "quit Minima"),
@@ -1464,6 +1464,8 @@ class HarnessApp(App):
             ("reload", _reload, "reload extensions + customization"),
         ]:
             reg.register(name, description=desc)(fn)
+        # /goals stays as a hidden alias for /ledger (the feature was originally named goals).
+        reg.register("goals", description="alias of /ledger", hidden=True)(_goals)
         return reg
 
     async def _dispatch_command(self, name: str, args: str) -> None:

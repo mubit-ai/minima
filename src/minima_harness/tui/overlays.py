@@ -417,7 +417,8 @@ class GoalsOverlay(ModalScreen[None]):
         with Vertical(id="goals-card"):
             g = self._goal
             if g is None or (not g.title and not g.tasks):
-                yield Static(Text("no active goal — set one with  /goals set <title>", style="dim"))
+                hint = "no open ledger — set one with  /ledger set <title>"
+                yield Static(Text(hint, style="dim"))
                 return
             done, total = g.progress()
             head = f"{g.title}   ·   {done}/{total} done" if g.title else f"{done}/{total} done"
@@ -432,7 +433,7 @@ class GoalsOverlay(ModalScreen[None]):
                     yield Static(Text(f"  {self._MARK.get(t.status, '○')} {t.content}"))
 
     def on_mount(self) -> None:
-        self.query_one("#goals-card").border_title = "goals"
+        self.query_one("#goals-card").border_title = "ledger"
 
     def action_cancel(self) -> None:
         self.dismiss(None)

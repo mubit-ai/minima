@@ -12,15 +12,20 @@ class Command:
     name: str
     handler: Handler
     description: str = ""
+    hidden: bool = False  # dispatchable via get(), but omitted from listings (aliases)
 
 
 @dataclass(slots=True)
 class CommandRegistry:
     _cmds: dict[str, Command] = field(default_factory=dict)
 
-    def register(self, name: str, *, description: str = "") -> Callable[[Handler], Handler]:
+    def register(
+        self, name: str, *, description: str = "", hidden: bool = False
+    ) -> Callable[[Handler], Handler]:
         def deco(fn: Handler) -> Handler:
-            self._cmds[name] = Command(name=name, handler=fn, description=description)
+            self._cmds[name] = Command(
+                name=name, handler=fn, description=description, hidden=hidden
+            )
             return fn
 
         return deco
@@ -35,7 +40,8 @@ class CommandRegistry:
         self._cmds.pop(name, None)
 
     def all(self) -> list[Command]:
-        return sorted(self._cmds.values(), key=lambda c: c.name)
+        # Hidden aliases stay dispatchable (via get) but out of the palette/help/completion.
+        return sorted((c for c in self._cmds.values() if not c.hidden), key=lambda c: c.name)
 
     def help_text(self) -> str:
         width = max((len(c.name) for c in self._cmds.values()), default=4)
