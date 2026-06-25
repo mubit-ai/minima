@@ -95,6 +95,9 @@ class HarnessApp(App):
     Screen { layout: vertical; }
     #chatlog { height: 1fr; background: $boost; padding: 0 1; }
     #chatlog.empty { align: center middle; }  /* fresh session: center the splash, no void */
+    /* The splash must shrink to its content (the banner) so the parent's center-align actually
+       centers it — a full-width Static would pin the art to the left edge. */
+    #welcome { width: auto; height: auto; }
     #banner { height: auto; padding: 0 1; }
     #editor { height: 6; background: $panel; border: round $accent; padding: 0 1; }
     #status { height: 1; background: $panel; padding: 0 1; color: $text-muted; }
