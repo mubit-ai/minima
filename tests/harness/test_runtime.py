@@ -39,7 +39,9 @@ class FakeRouter:
         difficulty=None,
         expected_input_tokens=None,
     ):
-        self.recommend_calls.append({"task": task, "task_type": task_type, "slider": slider})
+        self.recommend_calls.append(
+            {"task": task, "task_type": task_type, "slider": slider, "tags": tags}
+        )
         if self._fail:
             raise RuntimeError("minima unreachable")
         return RoutingResult(
@@ -98,6 +100,19 @@ def test_routes_sets_model_and_feeds_back():
     assert fb["output_tokens"] == 5
     assert fb["cost"] >= 0.0
     assert fb["latency_ms"] >= 0
+
+
+def test_prompt_merges_caller_tags_into_recommend():
+    # A goal's tags (passed to prompt) must reach recommend so the goal clusters in memory.
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("ok")])
+        faux_model = reg.get_model()
+        router = FakeRouter(faux_model)
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], judge_every=0), router=router, model=faux_model
+        )
+        asyncio.run(agent.prompt("do x", tags=["goal:ship-oauth"]))
+    assert "goal:ship-oauth" in (router.recommend_calls[0]["tags"] or [])
 
 
 def test_judge_every_zero_sends_neutral_quality():

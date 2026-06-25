@@ -434,6 +434,34 @@ class HarnessApp(App):
             self._thinking_bubble.flush()
         self._thinking_bubble = None
 
+    async def _emit_goal_cost_line(self, routing: Any) -> None:
+        """Attribute this turn's realized cost to the active goal and show spent/projected/budget.
+
+        The one thing no other agent does: frame the goal as a budget. spent = realized cost since
+        the goal started; projected = linear extrapolation from task progress; budget warns (never
+        blocks) when exceeded."""
+        if routing is None or not self._goals.active or self._goals.goal is None:
+            return
+        meter = self.agent.meter
+        if meter is None or not meter.rows:
+            return
+        row = meter.rows[-1]
+        self._goals.record_turn_cost(row.actual_cost_usd, row.est_cost_usd)
+        g = self._goals.goal
+        spent = g.spent_usd()
+        parts = [f"spent ${spent:.4f}"]
+        proj = g.projected_total_usd()
+        if proj is not None:
+            parts.append(f"~${proj:.4f} projected")
+        over = False
+        if g.budget_usd:
+            pct = (100.0 * spent / g.budget_usd) if g.budget_usd > 0 else 0.0
+            over = spent > g.budget_usd
+            parts.append(f"budget ${g.budget_usd:.4f} ({pct:.0f}%)")
+        await self.query_one(ChatLog).add_system(
+            "   └ goal · " + " · ".join(parts), color="red" if over else None
+        )
+
     async def _check_escalate(self, routing: Any, task_text: str) -> None:
         """Judge the output and suggest escalating if quality < threshold."""
         chatlog = self.query_one(ChatLog)
@@ -667,8 +695,13 @@ class HarnessApp(App):
         self._set_state("routing")
         routing = None
         resp_text = ""
+        # Goal-conditioned routing: an active goal supplies task_type + a goal tag so the whole
+        # goal routes coherently and clusters in Minima's memory.
+        g_type, g_tags = (None, None)
+        if self._goals.active and self._goals.goal is not None:
+            g_type, g_tags = self._goals.goal.routing_signals()
         try:
-            routing = await self.agent.prompt(text)
+            routing = await self.agent.prompt(text, task_type=g_type, tags=g_tags)
         except Exception as exc:  # noqa: BLE001
             self._set_state("idle")
             await self._finalize_thinking()
@@ -716,6 +749,7 @@ class HarnessApp(App):
             return
         self._scroll_bottom()
         await self._emit_cost_line()
+        await self._emit_goal_cost_line(routing)
         if self._escalate and routing is not None:
             await self._check_escalate(routing, text)
         # Cache a clean, successful answer so a near-duplicate prompt is free next time.
@@ -1320,6 +1354,21 @@ class HarnessApp(App):
                 app._apply_effective_prompt()
                 app._refresh_footer()
                 await app.query_one(ChatLog).add_system("goal cleared — back to ad-hoc routing")
+                return
+            if low.startswith("budget"):
+                if not app._goals.active:
+                    await app.query_one(ChatLog).add_error("no active goal — /goals set <title>")
+                    return
+                raw = a[6:].strip().lstrip("$")
+                try:
+                    amount = float(raw) if raw else None
+                except ValueError:
+                    await app.query_one(ChatLog).add_error("usage: /goals budget <usd> (or blank)")
+                    return
+                app._goals.set_budget(amount)
+                app._goals.save(app.session)
+                msg = f"goal budget set to ${amount:.4f}" if amount else "goal budget cleared"
+                await app.query_one(ChatLog).add_system(msg)
                 return
             if low.startswith("set ") or low.startswith("set\t"):
                 title = a[3:].strip()

@@ -99,6 +99,7 @@ class MinimaAgent(Agent):
         task_type: str | None = None,
         slider: float | None = None,
         files: list[str | Path] | None = None,
+        tags: list[str] | None = None,
     ) -> RoutingResult | None:
         task_text = _text_of(content)
         effective_task_type = task_type or self._task_type_hint
@@ -106,7 +107,9 @@ class MinimaAgent(Agent):
         self._rejected_tools = 0  # reset per-turn reject tally
         self._last_error = None  # reset per-turn error
 
-        routing = await self._route(task_text, effective_task_type, slider, files=files)
+        routing = await self._route(
+            task_text, effective_task_type, slider, files=files, tags=tags
+        )
         start = monotonic()
         run_error: BaseException | None = None
         try:
@@ -154,11 +157,15 @@ class MinimaAgent(Agent):
         slider: float | None,
         *,
         files: list[str | Path] | None = None,
+        tags: list[str] | None = None,
     ) -> RoutingResult | None:
         bundle = await extract_or_none(
             self.extractor, task_text, [Path(f) for f in files] if files else None
         )
-        tags = bundle.tags if bundle else None
+        # Merge caller-supplied tags (e.g. a goal tag, so a goal's turns cluster in Minima's
+        # memory) with the code-derived signal tags.
+        merged_tags = (bundle.tags if bundle else []) + (tags or [])
+        tags = merged_tags or None
         difficulty = bundle.difficulty if bundle else None
         exp_tokens = bundle.expected_input_tokens if bundle else None
         try:

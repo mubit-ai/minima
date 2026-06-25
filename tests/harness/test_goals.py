@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from minima_harness.minima.goals import Goal, GoalStore, GoalTask
 from minima_harness.session import SessionStore
 from minima_harness.tools.tasks import TasksParams, tasks_tool
@@ -91,6 +93,42 @@ def test_tasks_tool_set_update_list():
 
     res = asyncio.run(run(TasksParams(op="update", task_id="ghost", status="completed")))
     assert "no task" in res.content[0].text  # unknown id reported to the model
+
+
+def test_routing_signals_include_goal_tag():
+    g = Goal(title="Ship OAuth login", task_type="code", tags=["auth"])
+    task_type, tags = g.routing_signals()
+    assert task_type == "code"
+    assert tags[0].startswith("goal:") and "auth" in tags
+
+
+def test_record_turn_cost_attributes_to_in_progress_task():
+    g = Goal(title="g", tasks=[GoalTask.make("a", status="in_progress"), GoalTask.make("b")])
+    g.record_turn_cost(0.01, 0.008)
+    g.record_turn_cost(0.02, 0.009)
+    assert g.tasks[0].actual_cost_usd == pytest.approx(0.03)
+    assert g.tasks[0].est_cost_usd == pytest.approx(0.008)  # captured once, not overwritten
+    assert g.spent_usd() == pytest.approx(0.03)
+
+
+def test_record_turn_cost_falls_back_to_goal_when_no_active_task():
+    g = Goal(title="g", tasks=[GoalTask.make("a")])  # none in_progress
+    g.record_turn_cost(0.05, 0.04)
+    assert g.spent_extra_usd == pytest.approx(0.05)
+    assert g.spent_usd() == pytest.approx(0.05)
+
+
+def test_projected_total_extrapolates_from_progress():
+    g = Goal(
+        title="g",
+        tasks=[GoalTask.make(f"t{i}") for i in range(5)],
+    )
+    assert g.projected_total_usd() is None  # nothing done yet
+    g.tasks[0].status = "completed"
+    g.tasks[1].status = "completed"
+    g.tasks[0].actual_cost_usd = 0.02
+    g.tasks[1].actual_cost_usd = 0.02  # $0.04 spent at 2/5 done
+    assert g.projected_total_usd() == pytest.approx(0.04 / 2 * 5)  # ~$0.10
 
 
 def test_tasks_tool_update_requires_fields():

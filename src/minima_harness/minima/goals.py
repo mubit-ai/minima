@@ -53,6 +53,8 @@ class Goal:
     budget_usd: float | None = None
     started_ts: float = 0.0
     done: bool = False
+    # Cost attributed to turns that ran while no task was in_progress (Phase 2).
+    spent_extra_usd: float = 0.0
 
     def progress(self) -> tuple[int, int]:
         """(completed, total)."""
@@ -61,12 +63,32 @@ class Goal:
     def active(self) -> GoalTask | None:
         return next((t for t in self.tasks if t.status == "in_progress"), None)
 
-    def spent_usd(self) -> float:
-        return sum(t.actual_cost_usd for t in self.tasks)
+    def routing_signals(self) -> tuple[str | None, list[str]]:
+        """(task_type, tags) to feed the router so a goal's turns cluster + route coherently."""
+        tags = list(self.tags)
+        if self.title:
+            tags = [f"goal:{_slug(self.title)}", *tags]
+        return self.task_type, tags
 
-    def projected_remaining_usd(self) -> float:
-        """Sum of estimates for not-yet-done tasks (Phase 2 cost-to-goal)."""
-        return sum(t.est_cost_usd for t in self.tasks if t.status not in ("completed",))
+    def record_turn_cost(self, actual_usd: float, est_usd: float) -> None:
+        """Attribute a turn's realized cost to the in_progress task (or the goal at large)."""
+        task = self.active()
+        if task is not None:
+            task.actual_cost_usd += actual_usd
+            if task.est_cost_usd == 0.0:
+                task.est_cost_usd = est_usd
+        else:
+            self.spent_extra_usd += actual_usd
+
+    def spent_usd(self) -> float:
+        return sum(t.actual_cost_usd for t in self.tasks) + self.spent_extra_usd
+
+    def projected_total_usd(self) -> float | None:
+        """Linear extrapolation of total goal cost from progress (None until ≥1 task done)."""
+        done, total = self.progress()
+        if done <= 0 or total <= 0:
+            return None
+        return self.spent_usd() / done * total
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,6 +104,7 @@ class Goal:
             budget_usd=data.get("budget_usd"),
             started_ts=float(data.get("started_ts", 0.0)),
             done=bool(data.get("done", False)),
+            spent_extra_usd=float(data.get("spent_extra_usd", 0.0)),
         )
 
 
@@ -107,6 +130,14 @@ class GoalStore:
     def clear(self) -> None:
         if self.goal is not None:
             self.goal.done = True
+
+    def set_budget(self, amount: float | None) -> None:
+        if self.goal is not None:
+            self.goal.budget_usd = amount
+
+    def record_turn_cost(self, actual_usd: float, est_usd: float) -> None:
+        if self.active and self.goal is not None:
+            self.goal.record_turn_cost(actual_usd, est_usd)
 
     def set_tasks(self, items: list[dict[str, Any]]) -> None:
         """Replace the task list (the model's `tasks set` op)."""
