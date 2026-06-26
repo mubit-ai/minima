@@ -21,13 +21,18 @@ from minima_harness.minima.judge import DeterministicJudge
 
 
 class FakeRouter:
-    def __init__(self, model, *, recommend_model_id="faux", fail_recommend=False):
+    def __init__(self, model, *, recommend_model_id="faux", fail_recommend=False, fail_exc=None):
         self.model = model
         self.mapping = ModelMapping()
         self.recommend_calls: list[dict] = []
         self.feedback_calls: list[dict] = []
-        self._fail = fail_recommend
+        self._fail = fail_recommend or fail_exc is not None
+        self._fail_exc = fail_exc or RuntimeError("minima unreachable")
         self._recommend_model_id = recommend_model_id
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
 
     async def recommend(
         self,
@@ -43,7 +48,7 @@ class FakeRouter:
             {"task": task, "task_type": task_type, "slider": slider, "tags": tags}
         )
         if self._fail:
-            raise RuntimeError("minima unreachable")
+            raise self._fail_exc
         return RoutingResult(
             recommendation_id="rec-1",
             chosen_model_id=self._recommend_model_id,
@@ -241,6 +246,8 @@ def test_from_env_reads_minima_timeout(monkeypatch):
 
 
 def test_classify_offline_reason():
+    from minima_client.errors import MinimaError
+
     from minima_harness.minima.runtime import _classify_offline_reason
 
     class ReadTimeout(Exception):
@@ -249,9 +256,19 @@ def test_classify_offline_reason():
     class ConnectError(Exception):
         pass
 
-    assert "timed out" in _classify_offline_reason(ReadTimeout())
-    assert "unreachable" in _classify_offline_reason(ConnectError())
-    assert _classify_offline_reason(RuntimeError("boom")) == "boom"
+    # transient causes are retryable (/reconnect framing)
+    assert _classify_offline_reason(ReadTimeout()) == ("Minima timed out", True)
+    assert _classify_offline_reason(ConnectError()) == ("Minima unreachable", True)
+    assert _classify_offline_reason(RuntimeError("boom")) == ("boom", True)
+
+    # auth/config causes are NOT retryable — the reason carries the actionable next step
+    no_key_reason, retryable = _classify_offline_reason(MinimaError(401, "x"), has_key=False)
+    assert retryable is False
+    assert "MUBIT_API_KEY" in no_key_reason and "/config" in no_key_reason
+    bad_key_reason, retryable = _classify_offline_reason(MinimaError(401, "x"), has_key=True)
+    assert retryable is False
+    assert "rejected" in bad_key_reason
+    assert _classify_offline_reason(MinimaError(403, "x"), has_key=True)[1] is False
 
 
 def test_offline_fallback_records_reason():
@@ -281,6 +298,77 @@ def test_offline_reason_cleared_on_successful_route():
         agent._offline_reason = "stale"  # simulate a prior offline turn
         asyncio.run(agent.prompt("hi"))
     assert agent._offline_reason is None
+
+
+def test_recommend_short_circuits_without_key_on_hosted():
+    """A hosted Minima with no key never makes the doomed 401 round-trip."""
+    from minima_client.errors import MinimaError
+
+    from minima_harness.minima.router import MinimaRouter, _needs_auth
+
+    # remote hosts need auth; loopback / empty do not (keyless local servers stay allowed)
+    assert _needs_auth("https://api.minima.sh") is True
+    assert _needs_auth("http://localhost:8080") is False
+    assert _needs_auth("http://127.0.0.1:8080") is False
+    assert _needs_auth("") is False
+
+    cfg = HarnessConfig(minima_url="https://example.invalid", minima_api_key=None)
+    router = MinimaRouter.for_config(cfg)
+    try:
+        asyncio.run(router.recommend("hi"))
+        raise AssertionError("expected a MinimaError 401 short-circuit")
+    except MinimaError as exc:
+        assert exc.status == 401
+    finally:
+        asyncio.run(router.aclose())
+
+
+def test_offline_without_key_is_not_retryable():
+    """No-key 401 → offline fallback flagged non-retryable with an actionable reason."""
+    from minima_client.errors import MinimaError
+
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("ans")])
+        faux_model = reg.get_model()
+        router = FakeRouter(faux_model, fail_exc=MinimaError(401, "no Mubit API key configured"))
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], minima_api_key=None, allow_offline=True),
+            router=router,
+            judge=DeterministicJudge(lambda t: 0.9),
+            model=faux_model,
+        )
+        asyncio.run(agent.prompt("hi"))
+    assert agent._offline_retryable is False
+    assert "MUBIT_API_KEY" in (agent._offline_reason or "")
+
+
+def test_reconnect_rebuilds_client_with_current_key(monkeypatch):
+    """A key set after launch (via /config) takes effect on reconnect — no restart."""
+    from minima_harness.minima.router import MinimaRouter
+
+    monkeypatch.delenv("MINIMA_API_KEY", raising=False)
+    monkeypatch.setenv("MUBIT_API_KEY", "test-key-xyz")
+    monkeypatch.setenv("MINIMA_URL", "https://api.minima.sh")
+
+    with register_faux_provider() as reg:
+        faux_model = reg.get_model()
+        stale = FakeRouter(faux_model)
+        agent = MinimaAgent(
+            HarnessConfig(
+                minima_url="https://api.minima.sh", minima_api_key=None, candidates=["faux"]
+            ),
+            router=stale,
+            model=faux_model,
+        )
+        asyncio.run(agent.reconnect())
+
+    assert stale.closed is True  # old client disposed
+    assert isinstance(agent.router, MinimaRouter)
+    assert agent.config.minima_api_key == "test-key-xyz"
+    # the rebuilt client carries the Authorization header the prior one lacked
+    auth = agent.router._client._client.headers.get("authorization")
+    assert auth == "Bearer test-key-xyz"
+    asyncio.run(agent.router.aclose())
 
 
 def test_multi_turn_tool_run_judges_final_answer():

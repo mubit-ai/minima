@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from minima_client import AsyncMinimaClient
+from minima_client.errors import MinimaError
 
 from minima.schemas.common import Constraints
 from minima_harness.ai.types import Model, Usage
@@ -70,6 +72,13 @@ class RoutingResult:
     cost_band_basis: str = ""
 
 
+def _needs_auth(url: str) -> bool:
+    """True for a hosted/remote Minima (always requires a Bearer key). A local server
+    (localhost/loopback) may be keyless, so we don't pre-judge a missing key there."""
+    host = (urlsplit(url).hostname or "").lower()
+    return bool(host) and host not in ("localhost", "127.0.0.1", "::1")
+
+
 def _baseline_cost(ranked: list[Ranking], baseline_id: str | None) -> float | None:
     if not baseline_id:
         return None
@@ -95,6 +104,13 @@ class MinimaRouter:
         client = AsyncMinimaClient(config.minima_url, config.minima_api_key, config.timeout)
         return cls(client, config, mapping)
 
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client (called when a reconnect replaces this router)."""
+        try:
+            await self._client.aclose()
+        except Exception:  # noqa: BLE001 - best-effort cleanup; never block a reconnect
+            pass
+
     async def recommend(
         self,
         task: str,
@@ -109,6 +125,11 @@ class MinimaRouter:
         # clear reason instead of letting httpx raise UnsupportedProtocol on a scheme-less URL.
         if not (self.config.minima_url or "").strip():
             raise RuntimeError("routing disabled (offline mode)")
+        # A hosted Minima always needs a Bearer key; with none configured the request is a
+        # guaranteed 401. Skip the doomed round-trip and surface the actionable reason (the
+        # client's auth header is fixed at build time, so this also can't be a stale-key race).
+        if not (self.config.minima_api_key or "").strip() and _needs_auth(self.config.minima_url):
+            raise MinimaError(401, "no Mubit API key configured")
         constraints = (
             Constraints(candidate_models=list(self.config.candidates))
             if self.config.candidates

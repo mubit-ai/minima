@@ -58,8 +58,7 @@ class HarnessConfig:
     @classmethod
     def from_env(cls, **overrides: object) -> HarnessConfig:
         cfg = cls()
-        cfg.minima_url = os.environ.get("MINIMA_URL", cfg.minima_url)
-        cfg.minima_api_key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")
+        cfg.refresh_routing_env()
         timeout_env = os.environ.get("MINIMA_TIMEOUT")
         if timeout_env:
             try:
@@ -69,3 +68,14 @@ class HarnessConfig:
         for key, value in overrides.items():
             setattr(cfg, key, value)
         return cfg
+
+    def refresh_routing_env(self) -> None:
+        """Re-read just the Minima endpoint + routing auth from the environment, in place.
+
+        Used when a key/URL is set via the ``/config`` overlay mid-session: those land in
+        ``os.environ`` but this dataclass (and the live Minima client built from it) were
+        captured at startup. Refreshing here lets ``/reconnect`` rebuild a working client
+        without a restart. Leaves the candidate pool, namespace, judge policy, etc. untouched.
+        """
+        self.minima_url = os.environ.get("MINIMA_URL", self.minima_url)
+        self.minima_api_key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")

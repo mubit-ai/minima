@@ -65,7 +65,9 @@ def _fake_minima_client(ranked_models: list[RankedModel]) -> object:
 def test_router_maps_full_recommend_response():
     ranked_models = [_ranked("claude-haiku-4-5", 0.001), _ranked("claude-opus-4-8", 0.05)]
     config = HarnessConfig(
-        candidates=["claude-haiku-4-5", "claude-opus-4-8"], baseline_model_id="claude-opus-4-8"
+        candidates=["claude-haiku-4-5", "claude-opus-4-8"],
+        baseline_model_id="claude-opus-4-8",
+        minima_api_key="test",  # authenticated session (fake client) — past the no-key gate
     )
     router = MinimaRouter(_fake_minima_client(ranked_models), config)  # type: ignore[arg-type]
     result = asyncio.run(router.recommend("refactor foo", task_type="code"))
@@ -87,7 +89,7 @@ def test_router_maps_full_recommend_response():
 
 def test_baseline_cost_none_without_baseline_id():
     ranked_models = [_ranked("claude-haiku-4-5", 0.001)]
-    config = HarnessConfig(candidates=["claude-haiku-4-5"])  # no baseline_model_id
+    config = HarnessConfig(candidates=["claude-haiku-4-5"], minima_api_key="test")  # no baseline_id
     router = MinimaRouter(_fake_minima_client(ranked_models), config)  # type: ignore[arg-type]
     result = asyncio.run(router.recommend("task"))
     assert result.baseline_cost_usd is None
