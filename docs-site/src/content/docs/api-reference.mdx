@@ -310,7 +310,7 @@ Two baselines are always reported side by side, explicitly labeled: **`vs premiu
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
 | `namespace` | string | — | Restrict to one namespace. |
-| `days` | float `0–365` | `30` | Lookback window. |
+| `days` | float `>0–365` | `30` | Lookback window (must be greater than 0). |
 | `group_by` | enum | — | `cluster` \| `task_type` \| `lane` — optional breakdown. |
 
 ### Response
@@ -318,7 +318,7 @@ Two baselines are always reported side by side, explicitly labeled: **`vs premiu
 | Field | Type | Notes |
 |-------|------|-------|
 | `summary.estimated` | object | `n`, `cost_recommended_usd`, `cost_premium_usd`, `savings_vs_premium_usd`, plus `n_declared` / `cost_declared_usd` / `savings_vs_declared_usd` over the declared-baseline subset. |
-| `summary.realized` | object | Same shape over the **reconciled** subset (feedback received with `actual_cost_usd`), using your realized cost against the estimated baselines. |
+| `summary.realized` | object | A **different** field set over the **reconciled** subset (feedback received with `actual_cost_usd`): `n_reconciled`, `realized_cost_usd`, `est_cost_recommended_usd`, `est_cost_premium_usd`, `savings_vs_premium_est_usd`, plus `n_declared` / `est_cost_declared_usd` / `savings_vs_declared_est_usd` — your realized cost measured against the estimated baselines. |
 | `health` | object | `recommendations`, `feedback_coverage` (share of recommendations that ever got feedback — the number that decides how much to trust `realized`), `late_feedback_share`, `escalation_rate`, `exploration_share`, `epsilon_policy_share`. |
 | `groups` | array | Per-`group_by` key: the same `summary` + `health`. |
 
@@ -342,7 +342,7 @@ Is `predicted_success` telling the truth for your traffic? Compares each recomme
 | Param | Type | Default | Notes |
 |-------|------|---------|-------|
 | `namespace` | string | — | Restrict to one namespace. |
-| `days` | float `0–365` | `30` | Lookback window. |
+| `days` | float `>0–365` | `30` | Lookback window (must be greater than 0). |
 
 ### Response
 
@@ -366,10 +366,12 @@ Always returns `200`; reports degraded state in the body. The only endpoint that
 ```json
 {
   "status": "ok",
-  "memory": {"reachable": true, "latency_ms": 12},
-  "catalog": {"version": "…", "stale": false, "models": 42},
-  "version": "0.1.0"
+  "mubit": {"reachable": true, "latency_ms": 12, "endpoint": "https://api.mubit.ai", "org_id": "…"},
+  "auth": "passthrough",
+  "catalog": {"version": "…", "cost_source": "litellm", "stale": false, "models": 42},
+  "reasoner": {"provider": "gemini", "configured": true},
+  "version": "0.4.9"
 }
 ```
 
-`status` is `degraded` when the memory backend is unreachable. In that state `/recommend` still serves prior-only recommendations.
+An unauthenticated probe (no key) returns `"mubit": {"reachable": null, "scope": "unauthenticated"}` and `status: "ok"` — liveness only. `status` is `degraded` only when a **key-bearing** probe finds your memory backend unreachable (`mubit.reachable == false`); in that state `/recommend` still serves prior-only recommendations.
