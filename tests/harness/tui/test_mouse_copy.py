@@ -19,23 +19,39 @@ from minima_harness.session import SessionStore
 from minima_harness.tui.app import HarnessApp
 
 
-def test_mouse_defaults_on_and_no_mouse_disables():
+def test_mouse_flag_is_tristate_and_explicit_wins():
     from minima_harness.tui.cli import _build_parser
 
     p = _build_parser()
-    assert p.parse_args([]).mouse is True  # capture ON by default → scroll-wheel works
+    assert p.parse_args([]).mouse is None  # unset → resolved per-terminal
     assert p.parse_args(["--mouse"]).mouse is True
-    assert p.parse_args(["--no-mouse"]).mouse is False  # opt into terminal-native selection
+    assert p.parse_args(["--no-mouse"]).mouse is False
 
 
-def test_selection_hint_is_mode_and_os_aware(monkeypatch):
-    monkeypatch.setattr(welcomemod.sys, "platform", "darwin")
-    on_mac = welcomemod.selection_hint(True)
-    assert "Option" in on_mac and "/mouse" in on_mac  # macOS bypass modifier
-    monkeypatch.setattr(welcomemod.sys, "platform", "linux")
-    assert "Shift" in welcomemod.selection_hint(True)  # Linux bypass modifier
+def test_resolve_mouse_defaults_off_on_apple_terminal(monkeypatch):
+    from minima_harness.tui.cli import _resolve_mouse
+
+    # Explicit flag always wins, regardless of terminal.
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    assert _resolve_mouse(True) is True
+    assert _resolve_mouse(False) is False
+    # Unset → OFF on macOS Terminal.app (can't drag-select), ON elsewhere.
+    assert _resolve_mouse(None) is False
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert _resolve_mouse(None) is True
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    assert _resolve_mouse(None) is True
+
+
+def test_selection_hint_is_mode_and_terminal_aware(monkeypatch):
     off = welcomemod.selection_hint(False)
-    assert "PageUp" in off  # mouse off → scroll via keyboard, native selection
+    assert "PageUp" in off and "/mouse" in off  # mouse off → native selection + keyboard scroll
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    on_term = welcomemod.selection_hint(True)
+    assert "Terminal.app" in on_term and "/mouse off" in on_term  # honest about the limitation
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    on_iterm = welcomemod.selection_hint(True)
+    assert "Ctrl+C" in on_iterm  # in-app drag-select + copy works in motion-reporting terminals
 
 
 def _app(tmp_path, *, mouse=True):
