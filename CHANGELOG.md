@@ -4,6 +4,21 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.10] - 2026-06-26
+
+### Changed
+- **`minima-cli` is now published to PyPI automatically on every release** — `pip install minima-cli`
+  is the official install (it bundles the `minima_client` SDK). A new CI job builds + uploads the
+  sdist/wheel alongside the GitHub release and prod deploy.
+
+### Fixed
+- **Docs (API reference):** corrected the `GET /v1/health` response example (it returns `mubit`
+  not `memory`, `version 0.4.9`, plus `auth`/`reasoner` blocks and `catalog.cost_source`) and
+  clarified `status` is only `degraded` on a key-bearing probe; documented the real
+  `summary.realized` field set (it differs from `summary.estimated`); and fixed the `days`
+  parameter bound (`>0–365`) on `/v1/savings` and `/v1/calibration`. Added a PyPI install link to
+  the Client SDK page.
+
 ## [0.4.9] - 2026-06-26
 
 ### Fixed
