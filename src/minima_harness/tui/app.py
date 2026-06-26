@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from minima_harness.tools import default_toolset
 from minima_harness.tui import config_store
 from minima_harness.tui.analytics import aggregate_sessions, format_stats
 from minima_harness.tui.bridge import EventBridge
-from minima_harness.tui.clipboard import copy_to_clipboard
+from minima_harness.tui.clipboard import copy_to_clipboard as _os_clipboard_copy
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
 from minima_harness.tui.context import get_session_override, set_session_override
@@ -211,9 +212,15 @@ class HarnessApp(App):
         system_prompt: str | None = None,
         load_session: bool = False,
         skip_permissions: bool = False,
+        mouse: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
+        # Whether the app is capturing the mouse (scroll-wheel + in-app drag-select). Mirrors the
+        # value passed to .run(mouse=...); /mouse flips it live. When on, the terminal's own
+        # click-drag selection is suppressed (hold Option/Shift to bypass); when off, native
+        # selection works but the wheel no longer scrolls the app (use PageUp/PageDown).
+        self._mouse_enabled = mouse
         self.config.judge_every = judge_every  # default OFF in interactive mode
         self.session = session
         self.cwd = cwd or Path.cwd()
@@ -414,6 +421,43 @@ class HarnessApp(App):
         for w in chatlog.query("#welcome"):
             w.remove()
         chatlog.remove_class("empty")
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy ``text`` to the clipboard. Textual's built-in copy (triggered by the in-app
+        text selection + ⌘/Ctrl+C) emits *only* OSC 52, which macOS Terminal.app silently
+        ignores — so a selection looked copied but wasn't. Also push to the OS clipboard tool
+        (pbcopy/xclip/wl-copy) so selection-copy lands on the real clipboard everywhere, and
+        through tmux/SSH. Run off the UI thread so a slow subprocess never stalls the app."""
+        super().copy_to_clipboard(text)  # Textual: track _clipboard + emit OSC 52
+        if not text:
+            return
+        try:
+            self.run_worker(
+                partial(_os_clipboard_copy, text),
+                thread=True,
+                group="clipboard",
+                exclusive=True,
+            )
+        except Exception:  # noqa: BLE001 - copy must never crash the app
+            _log.debug("clipboard_worker_failed", exc_info=True)
+
+    def _set_mouse_capture(self, enabled: bool) -> bool:
+        """Turn mouse capture on/off live via the driver. Returns True on success. Mouse capture
+        is what trades terminal-native selection for scroll-wheel + in-app selection, so this lets
+        a user flip between the two without restarting."""
+        driver = getattr(self, "_driver", None)
+        if driver is None:
+            return False
+        try:
+            if enabled:
+                driver._enable_mouse_support()
+            else:
+                driver._disable_mouse_support()
+        except Exception:  # noqa: BLE001 - never crash on a terminal that can't toggle
+            _log.debug("mouse_toggle_failed", exc_info=True)
+            return False
+        self._mouse_enabled = enabled
+        return True
 
     # ------------------------------------------------------------- streaming
     def _set_state(self, state: str) -> None:
@@ -1226,7 +1270,7 @@ class HarnessApp(App):
                 await app.query_one(ChatLog).add_system("nothing to copy yet (run a prompt first)")
                 return
             # run the clipboard call off the event loop for a clean subprocess context
-            ok = await anyio.to_thread.run_sync(copy_to_clipboard, text)
+            ok = await anyio.to_thread.run_sync(_os_clipboard_copy, text)
             if ok:
                 await app.query_one(ChatLog).add_system(f"copied {len(text)} char(s) to clipboard")
             else:
@@ -1236,6 +1280,25 @@ class HarnessApp(App):
                 await app.query_one(ChatLog).add_error(
                     f"clipboard unavailable — wrote {len(text)} char(s) to {path}"
                 )
+
+        async def _mouse(app: HarnessApp, args: str) -> None:
+            from minima_harness.tui.welcome import selection_hint
+
+            arg = args.strip().lower()
+            if arg in ("on", "1", "true", "yes"):
+                want = True
+            elif arg in ("off", "0", "false", "no"):
+                want = False
+            else:
+                want = not app._mouse_enabled  # bare /mouse toggles
+            if not app._set_mouse_capture(want):
+                await app.query_one(ChatLog).add_error(
+                    "couldn't change mouse capture on this terminal"
+                )
+                return
+            await app.query_one(ChatLog).add_system(
+                f"mouse {'ON' if want else 'OFF'} · {selection_hint(want)}"
+            )
 
         async def _export(app: HarnessApp, args: str) -> None:
             target = (
@@ -1503,6 +1566,7 @@ class HarnessApp(App):
             ("help", _help, "list commands"),
             ("model", _model, "pick / pin the model"),
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
+            ("mouse", _mouse, "toggle mouse capture (scroll-wheel vs native text selection)"),
             ("export", _export, "export the conversation to a Markdown file"),
             ("commands", _commands, "open the command palette"),
             ("config", _config, "manage API keys (LLM providers + Mubit)"),

@@ -70,9 +70,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mouse",
-        action="store_true",
-        help="capture the mouse for scroll-wheel support. OFF by default so terminal text "
-        "selection + copy (drag, then Cmd/Ctrl+C) works; scroll with PageUp/PageDown.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="capture the mouse (default ON): scroll-wheel + in-app drag-select & copy. "
+        "Hold Option (macOS) / Shift (Linux) and drag for native terminal selection while it's on. "
+        "Pass --no-mouse for full terminal-native selection (scroll with PageUp/PageDown). "
+        "Toggle live with /mouse.",
     )
     p.add_argument(
         "--dangerously-skip-permissions",
@@ -204,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
         skip_permissions=args.dangerously_skip_permissions,
+        mouse=args.mouse,
     )
     app.run(mouse=args.mouse)
     return 0

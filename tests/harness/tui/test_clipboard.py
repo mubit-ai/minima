@@ -51,7 +51,7 @@ async def test_copy_command_copies_last_reply(monkeypatch):
     app = HarnessApp(cfg, session=SessionStore.in_memory(), agent=agent)
     seen: dict = {}
     monkeypatch.setattr(
-        "minima_harness.tui.app.copy_to_clipboard",
+        "minima_harness.tui.app._os_clipboard_copy",
         lambda t: (seen.__setitem__("t", t), True)[1],
     )
     async with app.run_test() as pilot:
@@ -71,7 +71,7 @@ async def test_copy_command_with_args_copies_literal(monkeypatch):
     app = HarnessApp(cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]))
     seen: dict = {}
     monkeypatch.setattr(
-        "minima_harness.tui.app.copy_to_clipboard",
+        "minima_harness.tui.app._os_clipboard_copy",
         lambda t: (seen.__setitem__("t", t), True)[1],
     )
     async with app.run_test() as pilot:
