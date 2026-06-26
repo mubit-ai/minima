@@ -59,7 +59,9 @@ seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
 harness = ["anthropic>=0.40", "google-genai>=0.3"]
 # keyring: OS-keychain credential storage for `minima-harness config` (graceful 0600-file
 # fallback when no backend is present, so it stays optional).
-tui = ["textual>=0.79", "keyring>=24"]
+# textual>=3.0 for app-wide text selection + copy_to_clipboard (so in-app drag-select & ⌘/Ctrl+C
+# copy work while the mouse is captured for scroll).
+tui = ["textual>=3.0", "keyring>=24"]
 # dev pulls every runtime extra so the full test suite (server API tests, TUI, providers) runs.
 dev = [
   "minima-cli[server,harness,tui]",
