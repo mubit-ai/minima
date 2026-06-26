@@ -9,6 +9,14 @@ import { Aside, Code } from '@astrojs/starlight/components';
 
 The `minima_client` package is the official thin, typed Python client for the hosted Minima API, plus an optional zero-code intake helper.
 
+## Install
+
+```bash
+pip install minima-cli
+```
+
+The SDK is published on PyPI as part of [**`minima-cli`**](https://pypi.org/project/minima-cli/) — one package that ships both the CLI agent and the `minima_client` SDK (also available via `brew install mubit-ai/minima/minima`). Import it as `minima_client`:
+
 ```python
 from minima_client import MinimaClient, AsyncMinimaClient, MinimaError, autocapture
 ```
