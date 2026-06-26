@@ -12,7 +12,7 @@ from textual.widgets import Button, Collapsible, Input, OptionList, Static, Text
 from textual.widgets.option_list import Option
 
 from minima_harness.session import SessionManager, SessionStore
-from minima_harness.session.store import SessionSummary
+from minima_harness.session.store import SessionSummary, format_age
 from minima_harness.tui import config_store
 from minima_harness.tui.commands import Command
 
@@ -115,7 +115,11 @@ class SessionPicker(ModalScreen[str | None]):
             yield OptionList(Option("(no saved sessions)", id=""))
             return
         options = [
-            Option(f"{s.session_id[:8]}  ·  {s.n_entries} entries", id=str(s.path))
+            Option(
+                f"{s.session_id[:8]}  ·  {s.n_entries} entries"
+                f"  ·  used {format_age(s.mtime)}  ·  created {format_age(s.created)}",
+                id=str(s.path),
+            )
             for s in self._summaries
         ]
         yield OptionList(*options)

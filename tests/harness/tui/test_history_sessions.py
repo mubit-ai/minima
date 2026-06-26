@@ -113,3 +113,39 @@ async def test_session_picker_dismisses_with_chosen_path(tmp_path):
         await pilot.press("enter")  # select the first (only) session
         await pilot.pause()
     assert app.result == str(tmp_path / "abc.jsonl")
+
+
+@pytest.mark.asyncio
+async def test_session_picker_row_shows_created_and_used_timestamps(tmp_path):
+    import time
+
+    from textual.app import App
+    from textual.widgets import OptionList, Static
+
+    from minima_harness.session.store import SessionSummary
+    from minima_harness.tui.overlays import SessionPicker
+
+    now = time.time()
+    summary = SessionSummary(
+        session_id="abc12345",
+        path=tmp_path / "abc.jsonl",
+        display_name=None,
+        mtime=now - 2 * 3600,  # used 2h ago
+        n_entries=3,
+        created=now - 3 * 86400,  # created 3d ago
+    )
+
+    class _App(App):
+        def compose(self) -> ComposeResult:
+            yield Static()
+
+        def on_mount(self) -> None:
+            self.push_screen(SessionPicker([summary]))
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        label = str(app.screen.query_one(OptionList).get_option_at_index(0).prompt)
+    assert "3 entries" in label
+    assert "used 2h ago" in label
+    assert "created 3d ago" in label
