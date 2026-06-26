@@ -122,6 +122,80 @@ async def test_reconnect_command_rebuilds_client(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_switching_model_clears_stale_banner(tmp_path):
+    """Pinning/unpinning a model clears a prior model's error banner (no longer relevant)."""
+    from textual.widgets import Static
+
+    from minima_harness.tui.app import HarnessApp
+
+    cfg = HarnessConfig(allow_offline=True)
+    app = HarnessApp(
+        cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
+    )
+    async with app.run_test() as pilot:
+        app._set_model_error_banner("Access denied by Google Gemini … /model")
+        app._routing_offline = True
+        assert "Access denied" in str(app.query_one("#banner", Static).render())
+        await app._dispatch_command("model", "auto")  # switch away from the failing model
+        await pilot.pause()
+        assert str(app.query_one("#banner", Static).render()).strip() == ""
+        assert app._routing_offline is False
+
+
+@pytest.mark.asyncio
+async def test_provider_error_uses_model_error_banner_not_offline(tmp_path):
+    """When routing SUCCEEDS but the model *call* fails (the Gemini-403 case), the banner must
+    be the model-error one — not 'routing offline … /reconnect to retry Minima'."""
+    from textual.widgets import Static
+
+    from minima_harness.ai import AssistantMessage, TextContent
+    from minima_harness.ai.providers import register_faux_provider
+    from minima_harness.minima.mapping import ModelMapping
+    from minima_harness.minima.router import RoutingResult
+    from minima_harness.tui.app import HarnessApp
+
+    with register_faux_provider() as reg:
+        faux = reg.get_model()
+        reg.set_responses(  # the model call returns a 403 (empty body, stop_reason="error")
+            [
+                AssistantMessage(
+                    content=[TextContent(text="")],
+                    stop_reason="error",
+                    error_message="Client error '403 Forbidden'",
+                )
+            ]
+        )
+
+        class _OkRouter:  # routing succeeds → not the offline path
+            mapping = ModelMapping()
+
+            async def recommend(self, *a, **k):
+                return RoutingResult(
+                    recommendation_id="r1",
+                    chosen_model_id=faux.id,
+                    model=faux,
+                    est_cost_usd=0.0,
+                    decision_basis="memory",
+                )
+
+            async def feedback(self, *a, **k):
+                pass
+
+        cfg = HarnessConfig(candidates=["faux"], minima_api_key="test", judge_every=0)
+        agent = MinimaAgent(cfg, router=_OkRouter(), model=faux)  # type: ignore[arg-type]
+        app = HarnessApp(cfg, session=SessionStore.in_memory(), agent=agent, cwd=tmp_path)
+        async with app.run_test() as pilot:
+            await app.run_turn("which is quickest?")
+            await pilot.pause()
+            banner = str(app.query_one("#banner", Static).render())
+
+    assert app._routing_offline is False  # routing was fine; the model call failed
+    assert "routing offline" not in banner.lower()
+    assert "reconnect" not in banner.lower()
+    assert "Access denied" in banner  # the actionable provider-error message is surfaced
+
+
+@pytest.mark.asyncio
 async def test_model_picker_titled_and_active_selectable():
     class _App(App):
         result: str | None = None

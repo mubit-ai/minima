@@ -31,7 +31,7 @@ from minima_harness.minima.judge import (
 )
 from minima_harness.minima.mapping import ModelMapping
 from minima_harness.minima.meter import CostMeter
-from minima_harness.minima.router import MinimaRouter, RoutingResult
+from minima_harness.minima.router import MinimaRouter, Ranking, RoutingResult
 from minima_harness.minima.signals import ContextExtractor, extract_or_none
 from minima_harness.tasks.task_set import grade_outcome
 
@@ -87,6 +87,11 @@ class MinimaAgent(Agent):
         # error (bad key, 404, network) is swallowed into an empty assistant — this exposes it
         # so the TUI / --print can show *why* a turn produced no output, not a blank bubble.
         self._last_error: str | None = None
+        # The provider's RAW error body (unclassified) for the last failed turn. The classified
+        # `_last_error` is the clean headline; this preserves the provider's exact words (e.g.
+        # Gemini's "RESOURCE_EXHAUSTED … quota …" vs "PERMISSION_DENIED …") so an ambiguous
+        # 403/429 is self-diagnosing instead of guesswork.
+        self._last_error_raw: str | None = None
         initial = model or self.mapping.default_model()
         super().__init__(
             model=initial,
@@ -110,10 +115,14 @@ class MinimaAgent(Agent):
         self._prompts_run += 1
         self._rejected_tools = 0  # reset per-turn reject tally
         self._last_error = None  # reset per-turn error
+        self._last_error_raw = None
 
         routing = await self._route(
             task_text, effective_task_type, slider, files=files, tags=tags
         )
+        # Snapshot history so a failed turn can be rolled back out of the agent's context
+        # entirely (see the rollback below).
+        msgs_before = len(self.state.messages)
         start = monotonic()
         run_error: BaseException | None = None
         try:
@@ -131,6 +140,9 @@ class MinimaAgent(Agent):
         provider_error = last is not None and getattr(last, "stop_reason", None) == "error"
         if provider_error and last is not None:
             self._last_error = classify_provider_error(last.error_message, last.model)
+            self._last_error_raw = last.error_message
+            # Always log the raw provider error so it's recoverable even off the TUI (--print).
+            _log.warning("provider_error_raw model=%s: %s", last.model, last.error_message)
         failed = run_error is not None or provider_error
         quality: float | None = None
         outcome = "success"
@@ -148,6 +160,13 @@ class MinimaAgent(Agent):
                 outcome=("failure" if failed else outcome),
                 turns=turns_taken,
             )
+        # Roll a failed turn fully out of the agent's context — both the empty error-assistant
+        # AND the user message that triggered it. A failed turn produced no usable exchange, so
+        # leaving it in history only poisons the NEXT turn (the loop's _drop_failed_calls guard
+        # already strips the empty assistant; this also avoids a dangling user turn). Done after
+        # feedback/meter so they still see the failed turn's signal.
+        if failed:
+            del self.state.messages[msgs_before:]
         if run_error is not None:
             raise run_error
         return routing
@@ -163,6 +182,21 @@ class MinimaAgent(Agent):
         files: list[str | Path] | None = None,
         tags: list[str] | None = None,
     ) -> RoutingResult | None:
+        # A hard pin (exactly one candidate, set via /model) bypasses Minima entirely: run that
+        # model directly. Sending a single-model constraint to Minima fails with 422 when the
+        # pinned id isn't in Minima's routing catalog (e.g. an OpenRouter-namespaced model like
+        # `google/gemini-2.5-flash`), which then degraded to a *different* offline model. A pin
+        # is a deliberate override — there's nothing to route — so we skip recommend.
+        pinned = self._pinned_route()
+        if pinned is not None:
+            self._offline_reason = None
+            self._offline_retryable = True
+            if self.before_route is not None:
+                overridden = await self.before_route(pinned, task_text)
+                if overridden is not None:
+                    pinned = overridden
+            self.state.model = pinned.model
+            return pinned
         bundle = await extract_or_none(
             self.extractor, task_text, [Path(f) for f in files] if files else None
         )
@@ -199,6 +233,39 @@ class MinimaAgent(Agent):
                 routing = overridden
         self.state.model = routing.model
         return routing
+
+    def _pinned_route(self) -> RoutingResult | None:
+        """If a single model is pinned (via /model), build a routing result for it directly —
+        no Minima call. Returns None when not pinned or the pinned id can't be resolved to a
+        registered model (then normal routing runs)."""
+        from minima_harness.ai.registry import find_model_by_id
+
+        cands = self.config.candidates or []
+        if not self.config.pinned or len(cands) != 1:
+            return None
+        pinned_id = cands[0]
+        model = find_model_by_id(pinned_id)
+        if model is None and "/" in pinned_id:
+            # tolerant resolve for openrouter-style "provider/model" ids
+            model = self.mapping._resolve(pinned_id.split("/", 1)[0], pinned_id)
+        if model is None:
+            return None
+        ranking = Ranking(
+            model_id=pinned_id,
+            provider=model.provider,
+            predicted_success=1.0,
+            est_cost_usd=0.0,
+            decision_basis="pinned",
+        )
+        return RoutingResult(
+            recommendation_id=None,  # manual pin — not a Minima recommendation to learn from
+            chosen_model_id=pinned_id,
+            model=model,
+            est_cost_usd=0.0,
+            decision_basis="pinned",
+            ranked=[ranking],
+            confidence=1.0,
+        )
 
     async def reconnect(self) -> None:
         """Rebuild the Minima client from the current environment.

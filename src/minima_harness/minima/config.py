@@ -33,6 +33,10 @@ class HarnessConfig:
     minima_api_key: str | None = None
     # Model ids Minima is allowed to pick from (-> Constraints.candidate_models).
     candidates: list[str] = field(default_factory=lambda: list(DEFAULT_CANDIDATES))
+    # True when the user explicitly pinned a single model via /model: routing is bypassed and
+    # that model (candidates[0]) runs directly. Distinct from "candidates happens to be length
+    # 1" (which can occur from key-gating) — only an explicit pin skips Minima.
+    pinned: bool = False
     # Memory isolation lane (-> namespace). None = default lane.
     namespace: str | None = None
     # cost/quality slider: 0=cheapest acceptable, 10=highest quality.
