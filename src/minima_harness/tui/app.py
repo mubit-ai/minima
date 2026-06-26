@@ -768,6 +768,12 @@ class HarnessApp(App):
             self._refresh_footer()
             self._set_state("idle")
             return
+        # If a dead-key provider was auto-rerouted around, say so (the turn otherwise looks like a
+        # normal success on the fallback model — the user should know their key was rejected).
+        reroute = getattr(self.agent, "_reroute_note", None)
+        if reroute and resp_text.strip():
+            model = routing.chosen_model_id if routing else "an available model"
+            await chatlog.add_system(f"⚠ {reroute} · re-routed to {model}", color="yellow")
         self._scroll_bottom()
         await self._emit_cost_line()
         await self._emit_goal_cost_line(routing)

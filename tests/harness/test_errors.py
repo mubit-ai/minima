@@ -2,7 +2,27 @@
 
 from __future__ import annotations
 
-from minima_harness.ai.errors import classify_provider_error
+from minima_harness.ai.errors import classify_provider_error, is_auth_error
+
+
+def test_is_auth_error_detects_credential_failures():
+    assert is_auth_error("Error code: 401 - {'message': 'invalid x-api-key'}")
+    assert is_auth_error("Client error '401 Unauthorized'")
+    assert is_auth_error("openai.AuthenticationError: invalid_api_key")
+    assert is_auth_error("ValueError: No API key was provided")
+    assert is_auth_error("missing ANTHROPIC_API_KEY")
+
+
+def test_is_auth_error_ignores_non_auth_and_schema():
+    assert not is_auth_error(None)
+    assert not is_auth_error("429 Too Many Requests")
+    assert not is_auth_error("Error 404: model not found")
+    # a pydantic schema rejection contains 'are not permitted' but is NOT a credential failure —
+    # blacklisting a provider over a tool-schema problem would be wrong.
+    assert not is_auth_error(
+        "6 validation errors for GenerateContentConfig ... Extra inputs are not permitted "
+        "[type=extra_forbidden, input_value='#/$defs/TaskItem']"
+    )
 
 
 def test_auth_error_names_provider_and_key_var():

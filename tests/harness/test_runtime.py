@@ -43,9 +43,16 @@ class FakeRouter:
         tags=None,
         difficulty=None,
         expected_input_tokens=None,
+        candidates=None,
     ):
         self.recommend_calls.append(
-            {"task": task, "task_type": task_type, "slider": slider, "tags": tags}
+            {
+                "task": task,
+                "task_type": task_type,
+                "slider": slider,
+                "tags": tags,
+                "candidates": candidates,
+            }
         )
         if self._fail:
             raise self._fail_exc

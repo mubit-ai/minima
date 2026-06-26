@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from minima_harness.agent.agent import Agent
 from minima_harness.agent.tools import ThinkingLevel
-from minima_harness.ai.errors import classify_provider_error
+from minima_harness.ai.errors import classify_provider_error, is_auth_error
 from minima_harness.ai.types import AssistantMessage, ContentBlock, Message, Model, Usage
 from minima_harness.minima.config import HarnessConfig
 from minima_harness.minima.judge import (
@@ -92,6 +92,13 @@ class MinimaAgent(Agent):
         # Gemini's "RESOURCE_EXHAUSTED … quota …" vs "PERMISSION_DENIED …") so an ambiguous
         # 403/429 is self-diagnosing instead of guesswork.
         self._last_error_raw: str | None = None
+        # Providers whose key hard-failed auth this session (bad/invalid key). Routing drops them
+        # from the candidate set so it stops re-recommending a provider that can't run, and the
+        # current turn is re-routed onto one that works. Cleared by /reconnect (key may be fixed).
+        self._excluded_providers: set[str] = set()
+        # One-line, user-facing note when a turn was auto-rerouted off a dead-key provider (None =
+        # no reroute this turn). The TUI surfaces it so the silent provider switch is explained.
+        self._reroute_note: str | None = None
         initial = model or self.mapping.default_model()
         super().__init__(
             model=initial,
@@ -116,37 +123,90 @@ class MinimaAgent(Agent):
         self._rejected_tools = 0  # reset per-turn reject tally
         self._last_error = None  # reset per-turn error
         self._last_error_raw = None
+        self._reroute_note = None  # reset per-turn auto-reroute note
 
-        routing = await self._route(
-            task_text, effective_task_type, slider, files=files, tags=tags
-        )
-        # Snapshot history so a failed turn can be rolled back out of the agent's context
-        # entirely (see the rollback below).
-        msgs_before = len(self.state.messages)
-        start = monotonic()
+        routing: RoutingResult | None = None
+        last: AssistantMessage | None = None
         run_error: BaseException | None = None
-        try:
-            await super().prompt(content)
-        except BaseException as exc:  # noqa: BLE001 - capture, then re-raise after feedback
-            run_error = exc
+        latency_ms = 0
+        turns_taken = 0
+        # Snapshot history so a failed turn can be rolled back out of the agent's context entirely.
+        msgs_before = len(self.state.messages)
+        # A hard auth failure (bad/invalid/missing key) is deterministic — the same provider fails
+        # identically on every call. So when one occurs and a *different* provider's key works,
+        # blacklist the dead provider for the session and re-run the SAME message on an alternative,
+        # rescuing this turn instead of wasting it. The exclusion set grows by one per pass, so the
+        # loop always terminates; range() is a hard backstop.
+        for _attempt in range(self._reroute_budget() + 1):
+            routing = await self._route(
+                task_text, effective_task_type, slider, files=files, tags=tags, reroute=_attempt > 0
+            )
+            # On a RErouTE pass: if routing handed back a provider already blacklisted this turn,
+            # re-running it would just fail identically — stop and surface the prior error. This
+            # catches the cases the candidate filter can't: an offline route (which can't switch
+            # models) and a recommender that ignores the candidate constraint and re-picks the dead
+            # model. Gated to reroute passes so the FIRST attempt always runs (and surfaces a real
+            # error) even when the only model's provider was excluded on a previous turn.
+            run_provider = _provider_of(self.state.model.id if self.state.model else None)
+            already_dead = run_provider is not None and run_provider in self._excluded_providers
+            if _attempt > 0 and already_dead:
+                break
+            msgs_before = len(self.state.messages)
+            start = monotonic()
+            run_error = None
+            try:
+                await super().prompt(content)
+            except BaseException as exc:  # noqa: BLE001 - capture, then re-raise after feedback
+                run_error = exc
+            latency_ms = int((monotonic() - start) * 1000)
+            turns_taken = self.state.turns_taken
+            last = self._last_assistant()
+            # A provider call that failed (bad/missing key, 404, network) is swallowed by the
+            # provider into an empty-text assistant with stop_reason="error" — NOT a raised
+            # exception. Treat that as a failed turn so (a) Minima is never told a broken turn
+            # "succeeded" (which would poison routing), and (b) the caller can surface why.
+            provider_error = last is not None and getattr(last, "stop_reason", None) == "error"
+            if provider_error and last is not None:
+                self._last_error = classify_provider_error(last.error_message, last.model)
+                self._last_error_raw = last.error_message
+                # Log the raw provider error so it's recoverable even off the TUI (--print).
+                _log.warning("provider_error_raw model=%s: %s", last.model, last.error_message)
+            # Auto-reroute off a dead-key provider — but never second-guess an explicit pin.
+            if (
+                provider_error
+                and run_error is None
+                and last is not None
+                and not self.config.pinned
+                and is_auth_error(last.error_message)
+            ):
+                provider = _provider_of(last.model)
+                if provider:
+                    self._excluded_providers.add(provider)
+                    if self._has_runnable_candidate():
+                        self._note_reroute(provider)
+                        del self.state.messages[msgs_before:]  # drop failed attempt, then retry
+                        self._last_error = self._last_error_raw = None
+                        continue
+            break
 
-        latency_ms = int((monotonic() - start) * 1000)
-        turns_taken = self.state.turns_taken
-        last = self._last_assistant()
-        # A provider call that failed (bad/missing key, 404, network) is swallowed by the
-        # provider into an empty-text assistant with stop_reason="error" — NOT a raised
-        # exception. Treat that as a failed turn so (a) Minima is never told a broken turn
-        # "succeeded" (which would poison routing), and (b) the caller can surface why.
         provider_error = last is not None and getattr(last, "stop_reason", None) == "error"
         if provider_error and last is not None:
+            # The final loop pass may have cleared these on a reroute `continue` that then couldn't
+            # actually switch providers (offline, or a recommender that re-picked the dead model).
+            # Re-derive so a still-failing turn surfaces the real error (not a blank "success") and
+            # drop the optimistic reroute note (the reroute did NOT rescue the turn).
             self._last_error = classify_provider_error(last.error_message, last.model)
             self._last_error_raw = last.error_message
-            # Always log the raw provider error so it's recoverable even off the TUI (--print).
-            _log.warning("provider_error_raw model=%s: %s", last.model, last.error_message)
+            self._reroute_note = None
+        # An auth/infra failure is a credential problem, not a model-quality signal — don't feed it
+        # back to Minima (it would poison the model's success estimate in this namespace).
+        auth_failed = bool(
+            provider_error and last is not None and is_auth_error(last.error_message)
+        )
         failed = run_error is not None or provider_error
         quality: float | None = None
         outcome = "success"
-        if routing is not None:
+        if routing is not None and not auth_failed:
             quality, outcome = await self._feedback_safely(
                 task_text, routing, latency_ms, failed, turns_taken
             )
@@ -181,7 +241,13 @@ class MinimaAgent(Agent):
         *,
         files: list[str | Path] | None = None,
         tags: list[str] | None = None,
+        reroute: bool = False,
     ) -> RoutingResult | None:
+        # On a reroute pass the before_route hook (which emits the routing rationale line and, in
+        # confirm mode, the confirmation modal) is skipped: a single user turn must produce ONE
+        # routing line / ONE confirm, not one per auth-failed attempt. The auto-reroute note
+        # explains the silent switch instead.
+        run_hook = self.before_route is not None and not reroute
         # A hard pin (exactly one candidate, set via /model) bypasses Minima entirely: run that
         # model directly. Sending a single-model constraint to Minima fails with 422 when the
         # pinned id isn't in Minima's routing catalog (e.g. an OpenRouter-namespaced model like
@@ -191,7 +257,7 @@ class MinimaAgent(Agent):
         if pinned is not None:
             self._offline_reason = None
             self._offline_retryable = True
-            if self.before_route is not None:
+            if run_hook:
                 overridden = await self.before_route(pinned, task_text)
                 if overridden is not None:
                     pinned = overridden
@@ -214,6 +280,7 @@ class MinimaAgent(Agent):
                 tags=tags,
                 difficulty=difficulty,
                 expected_input_tokens=exp_tokens,
+                candidates=self._effective_candidates(),
             )
             self._offline_reason = None
             self._offline_retryable = True
@@ -227,7 +294,7 @@ class MinimaAgent(Agent):
             _log.warning("minima_recommend_failed_offline_fallback: %s", self._offline_reason)
             _log.debug("offline_fallback_detail", exc_info=True)
             return None
-        if self.before_route is not None:
+        if run_hook:
             overridden = await self.before_route(routing, task_text)
             if overridden is not None:
                 routing = overridden
@@ -267,6 +334,50 @@ class MinimaAgent(Agent):
             confidence=1.0,
         )
 
+    # ------------------------------------------------------ key-aware candidates
+
+    def _effective_candidates(self) -> list[str]:
+        """Candidate model ids minus providers that can't run: those with no key configured at all
+        (presence filter) and those whose key auth-failed this session. Never returns empty — if
+        every provider is excluded, fall back to the key-present set so routing still attempts a
+        model (and the auth banner explains the situation) rather than locking the user out."""
+        from minima_harness.ai.provider_catalog import runnable_candidates
+
+        eff = runnable_candidates(self.config.candidates)
+        if self._excluded_providers:
+            pruned = [c for c in eff if _provider_of(c) not in self._excluded_providers]
+            eff = pruned or eff
+        return eff
+
+    def _reroute_budget(self) -> int:
+        """Max auto-reroute passes for a turn = the number of distinct candidate providers, so each
+        can be tried at most once before giving up."""
+        provs = {_provider_of(c) for c in (self.config.candidates or [])}
+        provs.discard(None)
+        return max(1, len(provs))
+
+    def _has_runnable_candidate(self) -> bool:
+        """True if some candidate's provider has a key configured and isn't excluded this turn."""
+        from minima_harness.ai.provider_catalog import provider_key_present
+
+        for c in self.config.candidates or []:
+            p = _provider_of(c)
+            if p is None or p in self._excluded_providers:
+                continue
+            if provider_key_present(p):
+                return True
+        return False
+
+    def _note_reroute(self, provider: str) -> None:
+        """Record a one-line, user-facing explanation for an auto-reroute off a dead key."""
+        from minima_harness.ai.provider_catalog import env_vars_for_provider, spec_for
+
+        spec = spec_for(provider)
+        pname = spec.display_name if spec else provider
+        keyvar = env_vars_for_provider(provider)[0] if provider else ""
+        hint = f" — fix {keyvar} (/config) to re-enable" if keyvar else ""
+        self._reroute_note = f"{pname} key rejected; excluded this session{hint}"
+
     async def reconnect(self) -> None:
         """Rebuild the Minima client from the current environment.
 
@@ -280,6 +391,9 @@ class MinimaAgent(Agent):
         self.router = MinimaRouter.for_config(self.config, self.mapping)
         self._offline_reason = None
         self._offline_retryable = True
+        # A key fixed via /config (which triggers reconnect) may revive an auth-failed provider —
+        # clear the session blacklist so routing can choose it again.
+        self._excluded_providers.clear()
         await old.aclose()
 
     async def _feedback_safely(
@@ -418,3 +532,13 @@ def _short_label(task_text: str) -> str:
     if len(first) > 48:
         first = first[:45] + "..."
     return first or "(empty)"
+
+
+def _provider_of(model_id: str | None) -> str | None:
+    """Provider name for a model id, or None if unknown/unregistered."""
+    if not model_id:
+        return None
+    from minima_harness.ai.registry import find_model_by_id
+
+    m = find_model_by_id(model_id)
+    return m.provider if m else None

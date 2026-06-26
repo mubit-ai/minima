@@ -120,6 +120,7 @@ class MinimaRouter:
         tags: list[str] | None = None,
         difficulty: str | None = None,
         expected_input_tokens: int | None = None,
+        candidates: list[str] | None = None,
     ) -> RoutingResult:
         # Routing explicitly disabled (e.g. `--offline` sets minima_url=""). Fail fast with a
         # clear reason instead of letting httpx raise UnsupportedProtocol on a scheme-less URL.
@@ -130,11 +131,10 @@ class MinimaRouter:
         # client's auth header is fixed at build time, so this also can't be a stale-key race).
         if not (self.config.minima_api_key or "").strip() and _needs_auth(self.config.minima_url):
             raise MinimaError(401, "no Mubit API key configured")
-        constraints = (
-            Constraints(candidate_models=list(self.config.candidates))
-            if self.config.candidates
-            else None
-        )
+        # Caller may pass an already-narrowed candidate set (e.g. the runtime drops providers whose
+        # key is absent or has auth-failed this session); otherwise fall back to the configured set.
+        effective = candidates if candidates is not None else list(self.config.candidates)
+        constraints = Constraints(candidate_models=list(effective)) if effective else None
         # Build a TaskInput only when code-quality signals (or a task_type) enrich it;
         # otherwise pass the bare prompt string (the cheaper wire shape).
         task_input: dict | str = task

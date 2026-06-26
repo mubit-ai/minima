@@ -11,6 +11,28 @@ names the provider and the env var to set — so "other LLMs don't work" becomes
 from __future__ import annotations
 
 
+def is_auth_error(raw: str | None) -> bool:
+    """True when a provider's raw error is a credential failure — a bad/invalid/missing API key
+    (401, ``invalid x-api-key``, ``invalid_api_key``, ``authentication``…). Single source of truth
+    for both the user-facing banner (:func:`classify_provider_error`) and the runtime's decision to
+    blacklist a provider whose key doesn't work for the rest of the session. A schema-rejection
+    (pydantic ``extra_forbidden`` / ``are not permitted``) is NOT an auth error — exclude it so a
+    tool-schema problem never gets misread as a dead key."""
+    low = (raw or "").lower()
+    if "extra_forbidden" in low or "are not permitted" in low or "validation error" in low:
+        return False
+    return (
+        "401" in low
+        or "unauthor" in low
+        or "invalid_api_key" in low
+        or "invalid api key" in low
+        or "invalid x-api-key" in low
+        or "no api key" in low
+        or ("missing" in low and "key" in low)
+        or "authentication" in low
+    )
+
+
 def classify_provider_error(raw: str | None, model_id: str | None) -> str:
     """Human-readable, actionable summary of a provider failure.
 
@@ -45,17 +67,7 @@ def classify_provider_error(raw: str | None, model_id: str | None) -> str:
             "model; pin another model (/model) or report it"
         )
 
-    auth_hit = (
-        "401" in low
-        or "unauthor" in low
-        or "invalid_api_key" in low
-        or "invalid api key" in low
-        or "no api key" in low
-        or "missing" in low
-        and "key" in low
-        or "authentication" in low
-    )
-    if auth_hit:
+    if is_auth_error(raw):
         hint = f" — set {keyvar} (/config)" if keyvar else " — check the API key (/config)"
         return f"Authentication failed for {pname}{where}{hint}"
     if "402" in low or "payment required" in low or "insufficient" in low and "credit" in low:
