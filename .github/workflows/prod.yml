@@ -156,3 +156,36 @@ jobs:
             --region ${{ env.REGION }} \
             --format 'value(status.url)')
           echo "::notice::Minima docs (prod) deployed to: $URL"
+
+  # ── 3. Publish minima-cli to PyPI ────────────────────────────────────────────
+  # Builds the sdist+wheel at the release tag and uploads to PyPI (the dist bundles the
+  # `minima_client` SDK). --skip-existing makes a manual re-deploy of an already-published
+  # version a no-op instead of an error. Needs no GCP — only the PYPI_API_TOKEN secret.
+  publish-pypi:
+    name: Publish → PyPI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout @ release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      - name: Check metadata
+        run: python -m twine check dist/*
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --skip-existing dist/*
