@@ -110,6 +110,10 @@ class ImageContent(BaseModel):
 class ThinkingContent(BaseModel):
     type: Literal["thinking"] = "thinking"
     thinking: str
+    # Anthropic signs every thinking block; the signature MUST be echoed back verbatim when the
+    # block is replayed in history (incl. within a tool-use turn), or the API 400s with
+    # "thinking.signature: Field required". Empty for providers that don't sign (e.g. Gemini).
+    signature: str = ""
 
 
 class ToolCall(BaseModel):
