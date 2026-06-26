@@ -66,7 +66,7 @@ from minima_harness.tui.overlays import (
     SessionPicker,
     TreePicker,
 )
-from minima_harness.tui.widgets.banner import render_banner, render_notice
+from minima_harness.tui.widgets.banner import render_banner, render_config_banner, render_notice
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
@@ -842,14 +842,19 @@ class HarnessApp(App):
 
     def _after_turn(self, routing: Any) -> None:
         if routing is None:
-            # Genuine offline fallback: Minima was unreachable. render_banner adds the
-            # "routing offline … /reconnect" framing, so pass only the concise reason.
+            # Offline fallback. A retryable cause (unreachable/timeout) gets the
+            # "routing offline … /reconnect" framing; a config/auth cause (no/invalid key)
+            # gets the actionable banner instead — /reconnect alone wouldn't fix it.
             self._routing_offline = True
             reason = getattr(self.agent, "_offline_reason", None) or "Minima unreachable"
+            retryable = getattr(self.agent, "_offline_retryable", True)
             model = self.agent.state.model.id if self.agent.state.model else "default model"
             self._footer_state["model"] = model
             self._footer_state["basis"] = "offline"
-            self._set_banner(f"{reason} — ran {model} unrouted")
+            if retryable:
+                self._set_banner(f"{reason} — ran {model} unrouted")
+            else:
+                self._set_config_banner(f"{reason} (ran {model} unrouted)")
         else:
             # Routing SUCCEEDED. Surface only actionable, not-already-inline conditions —
             # never the "routing offline/reconnect" framing (that's a false alarm here).
@@ -885,6 +890,10 @@ class HarnessApp(App):
     # ------------------------------------------------------------- overlay
     def _set_banner(self, reason: str) -> None:
         self.query_one("#banner", Static).update(render_banner(reason))
+
+    def _set_config_banner(self, reason: str) -> None:
+        """Offline due to a config/auth issue — actionable, without '/reconnect' framing."""
+        self.query_one("#banner", Static).update(render_config_banner(reason))
 
     def _set_notice(self, reason: str) -> None:
         """A non-offline heads-up (no '/reconnect' framing — routing succeeded)."""
@@ -1018,9 +1027,20 @@ class HarnessApp(App):
             )
 
         async def _reconnect(app: HarnessApp, args: str) -> None:
+            # Rebuild the Minima client from the current env so a key/URL set via /config (or
+            # exported since launch) actually takes effect — the old client's auth header was
+            # fixed at build time, which is why a plain banner-clear wasn't enough before.
+            await app.agent.reconnect()
             app._routing_offline = False
             app.query_one("#banner", Static).update(Text(""))
-            await app.query_one(ChatLog).add_system("reconnected (next turn routes via Minima)")
+            if (app.agent.config.minima_api_key or "").strip():
+                msg = "reconnected (next turn routes via Minima)"
+            else:
+                msg = (
+                    "reconnected — but no Mubit API key set, so routing stays offline; "
+                    "add MUBIT_API_KEY via /config"
+                )
+            await app.query_one(ChatLog).add_system(msg)
 
         async def _new(app: HarnessApp, args: str) -> None:
             app.session = SessionManager().new(app.cwd, name=args or None)
@@ -1222,24 +1242,39 @@ class HarnessApp(App):
             )
 
         async def _config(app: HarnessApp, args: str) -> None:
+            # Changing any of these requires rebuilding the Minima client (its auth header +
+            # base URL are fixed at build time); provider keys, by contrast, resolve from
+            # os.environ on each call, so they apply immediately.
+            routing_keys = {"MUBIT_API_KEY", "MINIMA_API_KEY", "MINIMA_URL", "MUBIT_ENDPOINT"}
+
             def _saved(changes: dict | None) -> None:
                 if not changes:
                     return
-                # Live-apply to the running session so provider calls pick keys up at once
-                # (provider keys resolve from os.environ per call). Routing auth / MINIMA_URL
-                # are read when the Minima client is built — those take a /reconnect or restart.
+                # Live-apply to the running session so provider calls pick keys up at once.
                 for key, val in changes.items():
                     os.environ[key] = val
                     f = config_store.field_for(key)
                     for alias in f.aliases if f else ():
                         os.environ[alias] = val
-                app.run_worker(
-                    app.query_one(ChatLog).add_system(
-                        f"config: updated {', '.join(sorted(changes))} "
-                        "— provider keys apply now; MINIMA_URL/auth on /reconnect or restart"
-                    ),
-                    exclusive=False,
-                )
+
+                async def _apply() -> None:
+                    note = "provider keys apply now"
+                    if routing_keys & set(changes):
+                        # Rebuild the routing client so a just-entered Mubit key / URL works
+                        # this session — no restart, no separate /reconnect needed.
+                        await app.agent.reconnect()
+                        app._routing_offline = False
+                        app.query_one("#banner", Static).update(Text(""))
+                        note = (
+                            "routing reconnected"
+                            if (app.agent.config.minima_api_key or "").strip()
+                            else "still no Mubit API key — routing stays offline"
+                        )
+                    await app.query_one(ChatLog).add_system(
+                        f"config: updated {', '.join(sorted(changes))} — {note}"
+                    )
+
+                app.run_worker(_apply(), exclusive=False)
 
             app.push_screen(ConfigOverlay(), callback=_saved)
 

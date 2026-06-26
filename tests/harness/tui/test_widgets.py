@@ -74,6 +74,15 @@ def test_render_banner_contains_reason():
     assert "reconnect" in out.lower()
 
 
+def test_render_config_banner_omits_reconnect_framing():
+    from minima_harness.tui.widgets.banner import render_config_banner
+
+    out = str(render_config_banner("no Mubit API key — add MUBIT_API_KEY via /config"))
+    assert "MUBIT_API_KEY" in out and "/config" in out
+    # the actionable banner must NOT tell the user to /reconnect (that wouldn't help)
+    assert "reconnect" not in out.lower()
+
+
 def test_render_notice_is_not_offline_framed():
     from minima_harness.tui.widgets.banner import render_notice
 

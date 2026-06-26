@@ -4,6 +4,26 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] - 2026-06-26
+
+### Fixed
+- **Routing 401'd for the whole session when the Mubit key wasn't resolvable at launch.**
+  The `AsyncMinimaClient`'s `Authorization` header is fixed when the client is built, so a
+  Mubit key added via the `/config` overlay (or exported after launch) never took effect —
+  `/reconnect` only cleared the banner without rebuilding the client, leaving every turn
+  routing offline with `minima error 401: pass your Mubit API key …` until a full restart.
+  Now `/reconnect` (and saving a routing key/URL in `/config`) re-reads the environment and
+  rebuilds the Minima client in place, so the fix applies immediately — no restart.
+- **Offline-fallback banner for an auth/config problem misleadingly said "/reconnect to
+  retry."** A no-key or rejected-key 401/403 is now classified separately from a transient
+  outage: the banner shows the actionable step ("no Mubit API key — add MUBIT_API_KEY via
+  /config") and drops the "/reconnect" framing (retrying alone wouldn't help). Transient
+  causes (timeout/unreachable) keep the "/reconnect to retry" banner.
+- **No-key + hosted Minima made a guaranteed-401 round-trip every turn.** With no key
+  configured against a remote endpoint, routing now short-circuits instantly instead of
+  waiting on a doomed request (local/loopback endpoints still attempt, so keyless local
+  servers are unaffected).
+
 ## [0.4.4] - 2026-06-25
 
 ### Added

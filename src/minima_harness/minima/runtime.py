@@ -79,6 +79,10 @@ class MinimaAgent(Agent):
         # Why the last route fell back to offline (None = routed fine). Surfaced by the TUI
         # so a degraded-to-offline turn is visible, not silent.
         self._offline_reason: str | None = None
+        # Whether that offline fallback is worth retrying via /reconnect. False for config/auth
+        # problems (no/invalid Mubit key) where retrying changes nothing — the user must fix a
+        # credential. Lets the TUI show the right action instead of a misleading "/reconnect".
+        self._offline_retryable: bool = True
         # Classified reason the last turn's model call failed (None = ran fine). A provider
         # error (bad key, 404, network) is swallowed into an empty assistant — this exposes it
         # so the TUI / --print can show *why* a turn produced no output, not a blank bubble.
@@ -178,10 +182,12 @@ class MinimaAgent(Agent):
                 expected_input_tokens=exp_tokens,
             )
             self._offline_reason = None
+            self._offline_retryable = True
         except Exception as exc:  # noqa: BLE001
             if not self.config.allow_offline:
                 raise
-            self._offline_reason = _classify_offline_reason(exc)
+            has_key = bool((self.config.minima_api_key or "").strip())
+            self._offline_reason, self._offline_retryable = _classify_offline_reason(exc, has_key)
             # Expected, recoverable degradation — log the concise reason at WARNING and keep the
             # full traceback at DEBUG so a healthy offline fallback doesn't dump a stack trace.
             _log.warning("minima_recommend_failed_offline_fallback: %s", self._offline_reason)
@@ -193,6 +199,21 @@ class MinimaAgent(Agent):
                 routing = overridden
         self.state.model = routing.model
         return routing
+
+    async def reconnect(self) -> None:
+        """Rebuild the Minima client from the current environment.
+
+        Routing auth + the endpoint URL are captured when the client is built, so a key or
+        ``MINIMA_URL`` set via ``/config`` mid-session doesn't take effect until the client is
+        rebuilt. ``/reconnect`` (and a routing-key change in ``/config``) call this so the fix
+        applies without restarting the app. The stale client is closed best-effort.
+        """
+        self.config.refresh_routing_env()
+        old = self.router
+        self.router = MinimaRouter.for_config(self.config, self.mapping)
+        self._offline_reason = None
+        self._offline_retryable = True
+        await old.aclose()
 
     async def _feedback_safely(
         self,
@@ -285,15 +306,25 @@ def _default_judge(config: HarnessConfig) -> QualityJudge:
     return ConstJudge(None)
 
 
-def _classify_offline_reason(exc: BaseException) -> str:
-    """A short, human-readable reason a route fell back to offline (for the TUI banner)."""
+def _classify_offline_reason(exc: BaseException, has_key: bool = True) -> tuple[str, bool]:
+    """Why a route fell back to offline, plus whether retrying is worthwhile.
+
+    Returns ``(reason, retryable)``. ``retryable`` is False for config/auth problems where
+    ``/reconnect`` won't help on its own — the user must add or fix a credential first; the
+    TUI uses this to show the actionable next step instead of a misleading "/reconnect".
+    """
+    status = getattr(exc, "status", None)
+    if status in (401, 403):
+        if not has_key:
+            return ("no Mubit API key — add MUBIT_API_KEY via /config to enable routing", False)
+        return ("Mubit API key rejected — check MUBIT_API_KEY (/config)", False)
     name = type(exc).__name__
     if "Timeout" in name:
-        return "Minima timed out"
+        return ("Minima timed out", True)
     if "Connect" in name:
-        return "Minima unreachable"
+        return ("Minima unreachable", True)
     detail = str(exc).strip().splitlines()[0] if str(exc).strip() else name
-    return detail[:80]
+    return (detail[:80], True)
 
 
 def _text_of(content: str | list[ContentBlock] | Message | list[Any]) -> str:

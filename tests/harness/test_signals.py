@@ -226,7 +226,8 @@ def _client_recording(payloads: list) -> object:
 def test_router_passes_bare_string_when_no_signals():
     payloads: list = []
     router = MinimaRouter(
-        _client_recording(payloads), HarnessConfig(candidates=["claude-haiku-4-5"])
+        _client_recording(payloads),
+        HarnessConfig(candidates=["claude-haiku-4-5"], minima_api_key="test"),
     )  # type: ignore[arg-type]
     asyncio.run(router.recommend("just text", task_type=None))
     assert payloads == ["just text"]
@@ -235,7 +236,8 @@ def test_router_passes_bare_string_when_no_signals():
 def test_router_passes_enriched_dict_with_signals(tmp_path):
     payloads: list = []
     router = MinimaRouter(
-        _client_recording(payloads), HarnessConfig(candidates=["claude-haiku-4-5"])
+        _client_recording(payloads),
+        HarnessConfig(candidates=["claude-haiku-4-5"], minima_api_key="test"),
     )  # type: ignore[arg-type]
     src = _write(tmp_path, "svc.py", _COMPLEX)
     bundle = asyncio.run(CodeHealthExtractor().extract("refactor", [src]))
