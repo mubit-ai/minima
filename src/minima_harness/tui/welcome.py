@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys
+import os
 from typing import TYPE_CHECKING
 
 from rich.console import Group
@@ -16,13 +16,15 @@ def selection_hint(mouse_on: bool) -> str:
     """One-line guidance for selecting/copying text given the current mouse mode.
 
     With mouse capture ON the wheel scrolls but the terminal's own click-drag selection is
-    suppressed — so to copy you either use the in-app selection (drag + ⌘/Ctrl+C) or hold the
-    terminal's bypass modifier (Option on macOS, Shift on Linux) to force native selection.
+    suppressed; you select in-app instead (drag + Ctrl+C). macOS Terminal.app can't do in-app
+    drag-select (it doesn't report mouse motion), so capture there only blocks native selection —
+    `/mouse off` is the way to select+copy.
     """
     if not mouse_on:
         return "native mouse select & copy · scroll with PageUp/PageDown · /mouse to toggle"
-    modifier = "⌥ Option" if sys.platform == "darwin" else "Shift"
-    return f"scroll: wheel/PgUp · to select+copy hold {modifier} & drag · /mouse toggles"
+    if os.environ.get("TERM_PROGRAM") == "Apple_Terminal":
+        return "Terminal.app can't drag-select while scrolling — /mouse off to select & copy"
+    return "scroll: wheel/PgUp · select+copy: drag then Ctrl+C · /mouse off for native selection"
 
 def _needs_setup() -> bool:
     """No configured provider key (across the whole provider catalog) → first-run nudge."""

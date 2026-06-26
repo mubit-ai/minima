@@ -78,6 +78,7 @@ class AnthropicProvider:
         assistant = AssistantMessage(content=[], model=model.id, stop_reason="stop")
         text_buf: dict[int, list[str]] = {}
         think_buf: dict[int, list[str]] = {}
+        sig_buf: dict[int, list[str]] = {}  # signature_delta chunks per thinking block
         tools_acc: dict[int, dict[str, str]] = {}
         in_tokens = out_tokens = cache_read = cache_write = 0
 
@@ -122,6 +123,11 @@ class AnthropicProvider:
                             txt = getattr(delta, "thinking", "") or ""
                             think_buf.setdefault(idx, []).append(txt)
                             yield ThinkingDeltaEvent(delta=txt, content_index=idx)
+                        elif dtype == "signature_delta":
+                            # Anthropic signs each thinking block; capture it so it can be echoed
+                            # back when the block is replayed (required, or the API 400s).
+                            sig = getattr(delta, "signature", "") or ""
+                            sig_buf.setdefault(idx, []).append(sig)
                         elif dtype == "input_json_delta":
                             partial = getattr(delta, "partial_json", "") or ""
                             if idx in tools_acc:
@@ -143,7 +149,10 @@ class AnthropicProvider:
                             yield ToolCallEndEvent(tool_call=call, content_index=idx)
                         elif idx in think_buf:
                             thinking = "".join(think_buf[idx])
-                            assistant.content.append(ThinkingContent(thinking=thinking))
+                            signature = "".join(sig_buf.get(idx, []))
+                            assistant.content.append(
+                                ThinkingContent(thinking=thinking, signature=signature)
+                            )
                             yield ThinkingEndEvent(content=thinking, content_index=idx)
                         elif idx in text_buf:
                             text = "".join(text_buf[idx])
@@ -260,7 +269,14 @@ def _to_wire(m: Message) -> dict[str, Any]:
                 }
             )
         elif isinstance(b, ThinkingContent):
-            content.append({"type": "thinking", "thinking": b.thinking})
+            # A thinking block can only be replayed WITH its signature — Anthropic 400s on
+            # "thinking.signature: Field required" otherwise. We only have a signature for blocks
+            # this provider produced; drop any unsigned thinking (e.g. from another provider or an
+            # older session) rather than send an invalid block.
+            if b.signature:
+                content.append(
+                    {"type": "thinking", "thinking": b.thinking, "signature": b.signature}
+                )
         elif isinstance(b, ToolCall):
             content.append(
                 {"type": "tool_use", "id": b.id, "name": b.name, "input": b.arguments or {}}

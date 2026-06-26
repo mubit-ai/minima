@@ -71,11 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--mouse",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="capture the mouse (default ON): scroll-wheel + in-app drag-select & copy. "
-        "Hold Option (macOS) / Shift (Linux) and drag for native terminal selection while it's on. "
-        "Pass --no-mouse for full terminal-native selection (scroll with PageUp/PageDown). "
-        "Toggle live with /mouse.",
+        default=None,  # resolved per-terminal below (see _resolve_mouse)
+        help="capture the mouse: scroll-wheel + in-app drag-select & copy. Default ON, except "
+        "macOS Terminal.app — it doesn't report mouse motion (xterm 1003), so in-app drag-select "
+        "can't work and capture would only block its native selection; defaults OFF there (select "
+        "natively, scroll with PageUp/PageDown). Override with --mouse/--no-mouse; /mouse toggles.",
     )
     p.add_argument(
         "--dangerously-skip-permissions",
@@ -83,6 +83,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="don't ask before write/edit/bash (YOLO). Off by default — the TUI asks first.",
     )
     return p
+
+
+def _resolve_mouse(flag: bool | None) -> bool:
+    """Resolve the mouse-capture default. Explicit --mouse/--no-mouse wins. Otherwise ON,
+    except macOS Terminal.app, which doesn't report mouse motion (xterm mode 1003) — so in-app
+    drag-select can't work there and capturing the mouse would only suppress its rock-solid native
+    selection. Default OFF there so users can select+copy out of the box."""
+    if flag is not None:
+        return flag
+    return os.environ.get("TERM_PROGRAM") != "Apple_Terminal"
 
 
 def _tools_for(args: argparse.Namespace):
@@ -207,9 +217,9 @@ def main(argv: list[str] | None = None) -> int:
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
         skip_permissions=args.dangerously_skip_permissions,
-        mouse=args.mouse,
+        mouse=(mouse := _resolve_mouse(args.mouse)),
     )
-    app.run(mouse=args.mouse)
+    app.run(mouse=mouse)
     return 0
 
 

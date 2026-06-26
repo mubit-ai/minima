@@ -189,6 +189,108 @@ def test_prompt_caching_can_be_disabled():
     assert "cache_control" not in kw["messages"][-1]["content"][-1]
 
 
+def _run_events(events: list[Any]):
+    """Drive complete() with a custom event stream; return the assembled assistant message."""
+    ensure_providers_registered()
+    original = get_provider("anthropic-messages")
+    fake = _FakeClient(events)
+    register_provider("anthropic-messages", AnthropicProvider(client=fake))
+    try:
+        return asyncio.run(
+            complete(_model(), Context(messages=[Message(role="user", content="hi")]))
+        )
+    finally:
+        register_provider("anthropic-messages", original)
+
+
+def test_stream_captures_thinking_signature():
+    # Anthropic streams the thinking block's cryptographic signature as a signature_delta; the
+    # provider must capture it onto ThinkingContent (or the block can't be replayed later).
+    from minima_harness.ai.types import ThinkingContent
+
+    ev = [
+        SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0
+                )
+            ),
+        ),
+        SimpleNamespace(
+            type="content_block_start", index=0, content_block=SimpleNamespace(type="thinking")
+        ),
+        SimpleNamespace(
+            type="content_block_delta",
+            index=0,
+            delta=SimpleNamespace(type="thinking_delta", thinking="let me think"),
+        ),
+        SimpleNamespace(
+            type="content_block_delta",
+            index=0,
+            delta=SimpleNamespace(type="signature_delta", signature="sig-xyz"),
+        ),
+        SimpleNamespace(type="content_block_stop", index=0),
+        SimpleNamespace(type="message_delta", delta=SimpleNamespace(stop_reason="end_turn")),
+        SimpleNamespace(type="message_stop"),
+    ]
+    msg = _run_events(ev)
+    thinks = [b for b in msg.content if isinstance(b, ThinkingContent)]
+    assert thinks and thinks[0].thinking == "let me think"
+    assert thinks[0].signature == "sig-xyz"
+
+
+def test_signed_thinking_block_is_replayed_with_signature():
+    # A prior assistant thinking block must be sent back WITH its signature, or Anthropic 400s
+    # ("thinking.signature: Field required").
+    from minima_harness.ai.types import AssistantMessage, TextContent, ThinkingContent
+
+    ctx = Context(
+        messages=[
+            Message(role="user", content="hi"),
+            AssistantMessage(
+                role="assistant",
+                model="claude-haiku-4-5",
+                content=[
+                    ThinkingContent(thinking="ponder", signature="abc123"),
+                    TextContent(text="the answer"),
+                ],
+            ),
+            Message(role="user", content="continue"),
+        ]
+    )
+    kw = _run_with_context(ctx, options={"prompt_cache": False})
+    asst = next(m for m in kw["messages"] if m["role"] == "assistant")
+    think = [b for b in asst["content"] if b.get("type") == "thinking"]
+    assert think and think[0]["thinking"] == "ponder" and think[0]["signature"] == "abc123"
+
+
+def test_unsigned_thinking_block_is_dropped_not_sent_unsigned():
+    # An unsigned thinking block (e.g. from another provider, or an older session) is dropped
+    # rather than sent without a signature — sending it unsigned is the exact 400 we're fixing.
+    from minima_harness.ai.types import AssistantMessage, TextContent, ThinkingContent
+
+    ctx = Context(
+        messages=[
+            Message(role="user", content="hi"),
+            AssistantMessage(
+                role="assistant",
+                model="claude-haiku-4-5",
+                content=[
+                    ThinkingContent(thinking="ponder", signature=""),  # unsigned
+                    TextContent(text="the answer"),
+                ],
+            ),
+            Message(role="user", content="continue"),
+        ]
+    )
+    kw = _run_with_context(ctx, options={"prompt_cache": False})
+    asst = next(m for m in kw["messages"] if m["role"] == "assistant")
+    types = [b.get("type") for b in asst["content"]]
+    assert "thinking" not in types  # dropped — never sent unsigned
+    assert "text" in types  # the rest of the turn survives
+
+
 def test_cost_for_includes_cache_components():
     model = Model(
         id="claude-haiku-4-5",
