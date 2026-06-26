@@ -29,6 +29,22 @@ def classify_provider_error(raw: str | None, model_id: str | None) -> str:
     where = f" running {model_id}" if model_id else ""
     low = (raw or "").lower()
 
+    # Client-side request/schema rejection (NOT a provider auth/quota problem). Catch this
+    # first: a pydantic ValidationError's "extra_forbidden" / "is not permitted" text would
+    # otherwise match the "forbidden"/"permission" branch below and masquerade as a 403. The
+    # usual cause is a tool whose JSON schema a given model won't accept.
+    schema_hit = (
+        "validation error" in low
+        or "extra_forbidden" in low
+        or "are not permitted" in low
+        or "generatecontentconfig" in low
+    )
+    if schema_hit:
+        return (
+            f"{pname} rejected the request{where} — a tool's schema isn't accepted by this "
+            "model; pin another model (/model) or report it"
+        )
+
     auth_hit = (
         "401" in low
         or "unauthor" in low

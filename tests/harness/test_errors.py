@@ -33,6 +33,20 @@ def test_rate_limit_is_429():
     assert "rate-limited" in msg
 
 
+def test_validation_error_not_misclassified_as_403():
+    # The real Gemini bug: the SDK raises a pydantic ValidationError when a tool's schema has a
+    # $ref (e.g. the `tasks` tool's nested TaskItem). Its text contains "extra_forbidden" /
+    # "are not permitted" — which must NOT be read as a 403/permission denial.
+    raw = (
+        "6 validation errors for GenerateContentConfig tools.0.Tool.function_declarations.7."
+        "parameters.properties.tasks.anyOf.0.items.$ref Extra inputs are not permitted "
+        "[type=extra_forbidden, input_value='#/$defs/TaskItem', input_type=str]"
+    )
+    msg = classify_provider_error(raw, "gemini-2.5-flash")
+    assert "Access denied" not in msg and "permission" not in msg  # not a 403
+    assert "schema" in msg and "/model" in msg  # actionable: it's a tool-schema problem
+
+
 def test_forbidden_403_is_actionable():
     # The Gemini case the user hit: 403 can be a key-permission OR a quota problem, so the
     # message must offer both fixes (check the key, or pin another model).

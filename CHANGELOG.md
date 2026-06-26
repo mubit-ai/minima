@@ -4,6 +4,24 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.7] - 2026-06-26
+
+### Fixed
+- **Gemini calls failed whenever a tool with a nested-model schema was attached** — including
+  the `/ledger` `tasks` tool (its `TaskItem` list). Pydantic emits `$ref`/`$defs` for nested
+  models, and the google-genai SDK's strict `Schema` model rejects those with a
+  `ValidationError` (`extra_forbidden` on `$ref`), failing the entire call. Because the error
+  text contains `extra_forbidden`, it was *misclassified* as a `403` "Access denied (key lacks
+  permission, or no quota)" — so it looked like a key/quota problem when it was a client-side
+  schema issue. (This is why Gemini "stopped working" once a ledger goal was active; introduced
+  with the `tasks` tool in 0.4.4.) The Google provider now sends tool schemas via
+  `parameters_json_schema` (the SDK's standard-JSON-Schema path, which inlines/converts `$ref`
+  itself per Gemini's function-declaration rules) instead of the strict `parameters` model.
+- **Client-side validation errors are no longer misread as provider auth failures.**
+  `classify_provider_error` now detects a pydantic/schema `ValidationError` first and reports it
+  as a tool-schema problem ("pin another model / report it"), so a `extra_forbidden` can never
+  again masquerade as a `403`/permission denial.
+
 ## [0.4.6] - 2026-06-26
 
 ### Added
