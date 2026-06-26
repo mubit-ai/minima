@@ -47,6 +47,25 @@ def test_aggregate_computes_mape_and_band_hit_rate(tmp_path, monkeypatch):
     assert "in-range: 50%" in out
 
 
+def test_aggregate_uses_most_recent_n_after_desc_sort(tmp_path, monkeypatch):
+    # list_sessions is now sorted most-recent-first, so aggregate must take the FRONT n, not the
+    # tail (which would deterministically pick the OLDEST sessions).
+    def _mk(name, cost):
+        p = tmp_path / f"{name}.jsonl"
+        st = SessionStore.file_backed(p)
+        st.append(EntryType.USER, {"text": "t"})
+        st.append(EntryType.ASSISTANT, {"model": "m", "cost": cost})
+        return SessionSummary(session_id=name, path=p, display_name=name, mtime=0.0, n_entries=2)
+
+    recent, mid, old = _mk("recent", 1.0), _mk("mid", 2.0), _mk("old", 4.0)
+    monkeypatch.setattr(
+        analytics.SessionManager, "list_sessions", lambda self, cwd: [recent, mid, old]
+    )
+    stats = analytics.aggregate_sessions(tmp_path, n=2)
+    assert stats["sessions"] == 2
+    assert stats["total_cost"] == 3.0  # recent(1.0)+mid(2.0), NOT old(4.0)
+
+
 def test_aggregate_back_compat_legacy_rows(tmp_path, monkeypatch):
     summ = _session_with_rows(tmp_path, [{"model": "flash", "cost": 0.002}])  # no est fields
     monkeypatch.setattr(analytics.SessionManager, "list_sessions", lambda self, cwd: [summ])

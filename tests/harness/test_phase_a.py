@@ -176,6 +176,7 @@ class _FakeRouter:
         tags=None,
         difficulty=None,
         expected_input_tokens=None,
+        candidates=None,
     ):
         return RoutingResult(
             recommendation_id="rec-1",

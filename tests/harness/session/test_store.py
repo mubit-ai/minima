@@ -3,7 +3,23 @@ from __future__ import annotations
 import pytest
 
 from minima_harness.session.format import EntryType
-from minima_harness.session.store import SessionStore
+from minima_harness.session.store import SessionStore, format_age
+
+
+def test_format_age_buckets():
+    now = 100_000_000.0
+    assert format_age(now, now) == "just now"
+    assert format_age(now - 30, now) == "just now"
+    assert format_age(now - 120, now) == "2m ago"
+    assert format_age(now - 2 * 3600, now) == "2h ago"
+    assert format_age(now - 3 * 86400, now) == "3d ago"
+    assert format_age(now - 14 * 86400, now) == "2w ago"
+
+
+def test_format_age_handles_missing_or_future():
+    assert format_age(0.0, 100_000_000.0) == "?"
+    assert format_age(-1.0, 100_000_000.0) == "?"
+    assert format_age(100_000_100.0, 100_000_000.0) == "just now"  # clock skew → clamp
 
 
 def test_in_memory_append_tracks_tip():
