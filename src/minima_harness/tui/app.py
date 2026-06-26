@@ -66,7 +66,12 @@ from minima_harness.tui.overlays import (
     SessionPicker,
     TreePicker,
 )
-from minima_harness.tui.widgets.banner import render_banner, render_config_banner, render_notice
+from minima_harness.tui.widgets.banner import (
+    render_banner,
+    render_config_banner,
+    render_model_error_banner,
+    render_notice,
+)
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
@@ -749,8 +754,16 @@ class HarnessApp(App):
                 )
             self._stream_bubble = None
         if turn_error:
+            # The *model call* failed (routing succeeded) — surface it as a model error, NOT
+            # the "routing offline … /reconnect to retry Minima" banner (reconnecting won't fix
+            # a bad provider key / quota / 404). The message already names the next step.
             await chatlog.add_error(turn_error)
-            self._set_banner(turn_error)
+            # Show the provider's RAW words too (muted) — an ambiguous 403/429 ("permission, or
+            # no quota") is only diagnosable from the provider's exact reason.
+            raw = getattr(self.agent, "_last_error_raw", None)
+            if raw and raw.strip() and raw.strip() not in turn_error:
+                await chatlog.add_system(f"   └ provider said: {_snippet(raw, 300)}")
+            self._set_model_error_banner(turn_error)
             self._scroll_bottom()
             self._refresh_footer()
             self._set_state("idle")
@@ -895,6 +908,16 @@ class HarnessApp(App):
         """Offline due to a config/auth issue — actionable, without '/reconnect' framing."""
         self.query_one("#banner", Static).update(render_config_banner(reason))
 
+    def _set_model_error_banner(self, reason: str) -> None:
+        """The model call failed (routing was fine) — actionable, no '/reconnect' framing."""
+        self.query_one("#banner", Static).update(render_model_error_banner(reason))
+
+    def _clear_banner(self) -> None:
+        """Drop any standing banner (e.g. after switching models — a prior model's error or
+        offline state no longer applies)."""
+        self._routing_offline = False
+        self.query_one("#banner", Static).update(Text(""))
+
     def _set_notice(self, reason: str) -> None:
         """A non-offline heads-up (no '/reconnect' framing — routing succeeded)."""
         self.query_one("#banner", Static).update(render_notice(reason))
@@ -980,8 +1003,10 @@ class HarnessApp(App):
             def _unpin() -> None:
                 # Release any pin: restore the full runnable candidate pool so Minima routes.
                 app.config.candidates = runnable_candidates(list(DEFAULT_CANDIDATES))
+                app.config.pinned = False
                 app._footer_state["model"] = "auto"
                 app._footer_state["basis"] = "minima"
+                app._clear_banner()  # a prior model's error/offline banner no longer applies
                 app._refresh_footer()
 
             # `/model auto` (or unpin/clear) releases the pin without opening the picker.
@@ -1010,9 +1035,13 @@ class HarnessApp(App):
                 if chosen == ModelPicker.AUTO:
                     _unpin()  # explicit "auto" entry: unpin back to Minima routing
                     return
-                app.config.candidates = [chosen]  # pin: Minima must route to this model
+                app.config.candidates = [chosen]  # pin → run this model directly (bypass Minima)
+                app.config.pinned = True
                 app._footer_state["model"] = chosen
                 app._footer_state["basis"] = "pinned"
+                # Clear any banner from the previous model — switching to `chosen` makes a
+                # prior model's "access denied"/offline banner stale and misleading.
+                app._clear_banner()
                 app._refresh_footer()  # reflect the pin immediately
 
             app.push_screen(

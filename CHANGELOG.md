@@ -4,6 +4,41 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] - 2026-06-26
+
+### Added
+- **Raw provider errors are now surfaced and logged.** Alongside the clean classified message,
+  a failed model call now shows the provider's exact words (`└ provider said: …`) in the TUI and
+  logs them at WARNING, so an ambiguous `403/429` ("key lacks permission, or no quota") is
+  self-diagnosing — you can see whether it's `RESOURCE_EXHAUSTED`, `PERMISSION_DENIED`, a project
+  issue, or model availability, instead of guessing.
+
+### Fixed
+- **One provider hiccup wedged the entire session.** A failed model call (bad key, 403/429,
+  network) is swallowed into an *empty* assistant message with `stop_reason="error"`, which the
+  agent loop appended to history. On the *next* turn — even to a healthy provider — that empty
+  text block made the request invalid (Anthropic `400 "messages: text content blocks must be
+  non-empty"`), so a single hiccup broke every subsequent turn until the session was cleared.
+  Now (1) the loop never sends a failed call's assistant to a provider, and (2) a failed turn is
+  rolled fully out of the agent's context (assistant + the user message that triggered it), so
+  the next turn starts clean. Regression introduced in 0.4.4 (when provider errors began being
+  swallowed into an empty assistant rather than raised). Verified against the live Anthropic API.
+- **A failed model call was framed as "routing offline … /reconnect to retry Minima."** When
+  routing *succeeds* but the model *call* fails, the banner now reads e.g. `⚠ Access denied by
+  Google Gemini … — check GEMINI_API_KEY (/config) or pin another model (/model)` instead of the
+  misleading routing/reconnect framing. The provider-403 message also gained an actionable next
+  step (it was the only `classify_provider_error` branch without one).
+- **Switching models left a stale error banner up.** After a model's call failed, pinning or
+  unpinning a different model (`/model …`, `/model auto`) now clears the banner — a prior
+  model's "access denied"/offline message no longer lingers as if it were still happening.
+- **Pinning a model not in Minima's routing catalog 422'd and ran the wrong model.** Pinning
+  e.g. an OpenRouter-namespaced model (`google/gemini-2.5-flash`) sent it to Minima as a routing
+  constraint; Minima didn't recognize the id → `422 no models match the supplied constraints` →
+  routing degraded offline and ran a *different* fallback model, while the footer/banner
+  disagreed with what actually ran. A pin is now a true override: it bypasses Minima entirely
+  and runs exactly the pinned model (basis `pinned`), so any registered model — OpenRouter,
+  local, custom — can be pinned and runs as-is.
+
 ## [0.4.5] - 2026-06-26
 
 ### Fixed

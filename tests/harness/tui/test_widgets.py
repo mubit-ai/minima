@@ -83,6 +83,16 @@ def test_render_config_banner_omits_reconnect_framing():
     assert "reconnect" not in out.lower()
 
 
+def test_render_model_error_banner_is_not_routing_framed():
+    from minima_harness.tui.widgets.banner import render_model_error_banner
+
+    # a failed model call (routing succeeded) must not be framed as a routing/Minima problem
+    out = str(render_model_error_banner("Access denied by Google Gemini … /model"))
+    assert "Access denied" in out
+    assert "routing offline" not in out.lower()
+    assert "reconnect" not in out.lower()
+
+
 def test_render_notice_is_not_offline_framed():
     from minima_harness.tui.widgets.banner import render_notice
 

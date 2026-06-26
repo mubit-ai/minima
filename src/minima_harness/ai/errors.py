@@ -45,7 +45,11 @@ def classify_provider_error(raw: str | None, model_id: str | None) -> str:
     if "402" in low or "payment required" in low or "insufficient" in low and "credit" in low:
         return f"{pname} needs credits{where} (402) — top up billing or pick a free/cheaper model"
     if "403" in low or "forbidden" in low or "permission" in low:
-        return f"Access denied by {pname}{where} (key lacks permission, or no quota)"
+        fix = f"check {keyvar} (/config)" if keyvar else "check the API key (/config)"
+        return (
+            f"Access denied by {pname}{where} (key lacks permission, or no quota) "
+            f"— {fix} or pin another model (/model)"
+        )
     if "429" in low or "rate limit" in low or "rate_limit" in low or "quota" in low:
         return f"{pname} rate-limited{where} (429) — wait a moment and retry"
     if "404" in low or "not found" in low or "does not exist" in low or "no such model" in low:

@@ -199,6 +199,8 @@ def test_provider_error_turn_is_failure_and_sets_last_error():
     assert router.feedback_calls[0]["outcome"] == "failure"
     assert router.feedback_calls[0]["quality"] == 0.0
     assert agent._last_error  # classified reason exposed for the TUI / --print
+    # the provider's RAW words are preserved too, for diagnosing ambiguous 403/429s
+    assert agent._last_error_raw == "No more faux responses queued"
 
 
 def test_offline_fallback_runs_without_feedback():
@@ -340,6 +342,84 @@ def test_offline_without_key_is_not_retryable():
         asyncio.run(agent.prompt("hi"))
     assert agent._offline_retryable is False
     assert "MUBIT_API_KEY" in (agent._offline_reason or "")
+
+
+def test_failed_turn_rolls_back_and_does_not_poison_next():
+    """A failed turn must leave NO trace in history, so the NEXT turn's request is valid.
+
+    Regression for the cascade where a provider error left an empty assistant in context →
+    the next call (even to a healthy provider) got 400 'text content blocks must be non-empty'.
+    """
+    from minima_harness.ai import AssistantMessage, TextContent
+
+    with register_faux_provider() as reg:
+        faux = reg.get_model()
+        reg.set_responses(
+            [
+                # turn 1: provider error (empty assistant, like a swallowed 403)
+                AssistantMessage(
+                    content=[TextContent(text="")], stop_reason="error", error_message="403"
+                ),
+                _text_msg("the answer"),  # turn 2: a healthy response
+            ]
+        )
+        agent = MinimaAgent(
+            HarnessConfig(candidates=["faux"], judge_every=0),
+            router=FakeRouter(faux),
+            model=faux,
+        )
+        asyncio.run(agent.prompt("q1"))  # fails
+        assert agent._last_error is not None  # the failure is still surfaced
+        assert agent.state.messages == []  # …but fully rolled out of context
+
+        asyncio.run(agent.prompt("q2"))  # succeeds on clean history
+    assert [m.role for m in agent.state.messages] == ["user", "assistant"]
+    # no empty error-assistant lingering to poison a future turn
+    assert all(getattr(m, "stop_reason", None) != "error" for m in agent.state.messages)
+
+
+def test_pinned_model_bypasses_minima_routing():
+    """A hard pin runs that model directly — no recommend call (so no 422 on an OpenRouter id),
+    and the pinned model (not an offline fallback) is what runs."""
+    from minima_harness.ai.registry import _MODELS, register_model
+
+    with register_faux_provider() as reg:
+        reg.set_responses([_text_msg("ok")])
+        faux = reg.get_model()  # id "faux"
+        register_model(faux)  # the picker only offers registered models, so a pin resolves
+        try:
+            # This router RAISES if recommend is consulted — proves the pin bypasses it.
+            router = FakeRouter(faux, fail_recommend=True)
+            agent = MinimaAgent(
+                HarnessConfig(candidates=["faux"], pinned=True, judge_every=0),  # explicit pin
+                router=router,
+                model=faux,
+            )
+            routing = asyncio.run(agent.prompt("hi"))
+        finally:
+            _MODELS.pop((faux.provider, faux.id), None)
+    assert routing is not None
+    assert routing.decision_basis == "pinned"
+    assert routing.chosen_model_id == "faux"
+    assert routing.recommendation_id is None  # no Minima attribution for a manual pin
+    assert router.recommend_calls == []  # Minima was NOT consulted (no 422 possible)
+    assert agent._offline_reason is None  # it's a pin, not an offline fallback
+
+
+def test_drop_failed_calls_filters_error_assistants():
+    """The loop-level guard never sends a failed call's assistant to a provider."""
+    from minima_harness.agent.loop import _drop_failed_calls
+    from minima_harness.ai import AssistantMessage, Message, TextContent
+
+    msgs = [
+        Message(role="user", content="q1"),
+        AssistantMessage(content=[TextContent(text="")], stop_reason="error"),
+        Message(role="user", content="q2"),
+        AssistantMessage(content=[TextContent(text="real")], stop_reason="stop"),
+    ]
+    kept = _drop_failed_calls(msgs)
+    assert [m.role for m in kept] == ["user", "user", "assistant"]
+    assert all(getattr(m, "stop_reason", None) != "error" for m in kept)
 
 
 def test_reconnect_rebuilds_client_with_current_key(monkeypatch):

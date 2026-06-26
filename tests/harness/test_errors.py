@@ -33,6 +33,15 @@ def test_rate_limit_is_429():
     assert "rate-limited" in msg
 
 
+def test_forbidden_403_is_actionable():
+    # The Gemini case the user hit: 403 can be a key-permission OR a quota problem, so the
+    # message must offer both fixes (check the key, or pin another model).
+    msg = classify_provider_error("Client error '403 Forbidden'", "gemini-2.5-flash")
+    assert "Access denied" in msg and "Gemini" in msg
+    assert "GEMINI_API_KEY" in msg and "/config" in msg
+    assert "/model" in msg  # the universal escape hatch when one provider is unavailable
+
+
 def test_connection_error():
     msg = classify_provider_error("ConnectError: failed to connect", "claude-haiku-4-5")
     assert "Couldn't reach" in msg
