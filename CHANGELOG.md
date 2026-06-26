@@ -4,6 +4,32 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.8] - 2026-06-26
+
+### Fixed
+- **A provider whose API key is invalid no longer wastes every turn routed to it.** When a model
+  call hard-fails on auth (e.g. an invalid `ANTHROPIC_API_KEY` → `401 invalid x-api-key`), that
+  provider is now blacklisted for the session and the *same* message is auto-rerouted onto a
+  provider whose key works — instead of the router re-recommending the dead provider on every
+  turn. The auth failure is also no longer fed back to Minima as a model-quality failure (it's a
+  credential problem, not a quality signal), so it can't poison the model's success estimate in
+  your namespace. Routing now also drops providers with no key configured up front, `/reconnect`
+  (and a key fixed via `/config`) clears the blacklist, and pins are never auto-rerouted.
+- **Scroll-wheel and text selection/copy both work now.** Terminal mouse-tracking is
+  all-or-nothing — capturing the mouse for scroll-wheel suppresses the terminal's native
+  click-drag selection. Mouse capture is back ON by default (wheel scroll + in-app drag-select),
+  the terminal's native selection stays reachable by holding the bypass modifier while dragging
+  (Option on macOS, Shift on Linux), and copy now also pushes to the OS clipboard
+  (`pbcopy`/`xclip`/`wl-copy`) — Textual's built-in copy emits only OSC 52, which macOS
+  Terminal.app silently ignores, so selections *looked* copied but weren't.
+
+### Added
+- **`/resume` picker shows timestamps** — each session row now shows when it was created and last
+  used (e.g. `used 2h ago · created 3d ago`), and the list is sorted most-recently-used first.
+- **`/mouse [on|off]`** command to toggle mouse capture live (scroll-wheel vs. terminal-native
+  selection) without restarting, plus a **`--no-mouse`** launch flag and an OS-aware selection
+  hint on the splash.
+
 ## [0.4.7] - 2026-06-26
 
 ### Fixed
