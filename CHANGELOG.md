@@ -4,6 +4,22 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.9] - 2026-06-26
+
+### Fixed
+- **Multi-turn conversations with thinking enabled no longer 400 on Anthropic.** With extended
+  thinking on, Anthropic signs each thinking block and requires the signature echoed back when the
+  block is replayed — so the second turn of any thinking conversation (and any thinking + tool-use
+  turn) failed with `messages.N.content.0.thinking.signature: Field required`. The provider now
+  captures the `signature_delta` onto the thinking block and sends it back; an unsigned thinking
+  block (from another provider or an older session) is dropped rather than sent unsigned.
+- **Text selection works again in macOS Terminal.app.** Terminal.app doesn't report mouse-motion
+  events (xterm mode 1003), which Textual needs for in-app drag-select — so capturing the mouse
+  there gave neither in-app selection nor Terminal.app's native selection (only wheel-scroll). The
+  mouse default is now resolved per-terminal: ON everywhere (scroll + in-app drag-select, as in
+  iTerm2/Ghostty/WezTerm), but OFF on macOS Terminal.app so native click-drag selection + copy work
+  out of the box (scroll with PageUp/PageDown). `--mouse`/`--no-mouse` overrides; `/mouse` toggles.
+
 ## [0.4.8] - 2026-06-26
 
 ### Fixed
