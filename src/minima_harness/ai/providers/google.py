@@ -169,7 +169,13 @@ def _build_config(model: Model, context: Context, options: dict[str, Any]) -> di
                     {
                         "name": t.name,
                         "description": t.description,
-                        "parameters": to_json_schema(t.parameters),
+                        # Use `parameters_json_schema` (standard JSON Schema), NOT `parameters`
+                        # (the SDK's strict Schema model). The strict model rejects `$ref`/`$defs`
+                        # — which pydantic emits for any tool with a nested model (e.g. the
+                        # `tasks` tool's TaskItem) — with a pydantic ValidationError, breaking the
+                        # whole call. The json_schema path lets google-genai inline/convert refs
+                        # itself, per Gemini's function-declaration rules.
+                        "parameters_json_schema": to_json_schema(t.parameters),
                     }
                     for t in context.tools
                 ]

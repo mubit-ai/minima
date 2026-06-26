@@ -156,3 +156,27 @@ def test_google_function_call_becomes_tooluse():
         asyncio.run(run())
     finally:
         register_provider("google-generative-ai", original)
+
+
+def test_build_config_uses_parameters_json_schema_for_nested_tools():
+    """Tools with a nested-model ($ref) schema (e.g. `tasks`) must go via
+    `parameters_json_schema`, not the SDK's strict `parameters` Schema (which rejects $ref with
+    a pydantic ValidationError and breaks the whole Gemini call)."""
+    from minima_harness.ai import get_model
+    from minima_harness.ai.providers import ensure_providers_registered
+    from minima_harness.ai.providers.google import _build_config
+    from minima_harness.ai.types import Context, Tool
+    from minima_harness.minima.goals import GoalStore
+    from minima_harness.tools.tasks import tasks_tool
+
+    ensure_providers_registered()
+    t = tasks_tool(GoalStore())  # nested TaskItem -> $ref/$defs in the schema
+    ctx = Context(
+        system_prompt="",
+        messages=[],
+        tools=[Tool(name=t.name, description=t.description, parameters=t.parameters)],
+    )
+    cfg = _build_config(get_model("google", "gemini-2.5-flash"), ctx, {})
+    fd = cfg["tools"][0]["function_declarations"][0]
+    assert "parameters_json_schema" in fd  # the JSON-schema path the SDK converts itself
+    assert "parameters" not in fd  # NOT the strict Schema model that rejects $ref
