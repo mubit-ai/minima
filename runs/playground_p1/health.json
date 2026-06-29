@@ -1,0 +1,22 @@
+{
+  "auth": "passthrough",
+  "catalog": {
+    "cost_source": "litellm",
+    "models": 12,
+    "stale": false,
+    "version": "fallback-snapshot-2026-06"
+  },
+  "mubit": {
+    "endpoint": "https://api.mubit.ai",
+    "org_id": "minima-runs-gykrsy",
+    "reachable": true,
+    "status_code": 200,
+    "transport": "http"
+  },
+  "reasoner": {
+    "configured": false,
+    "provider": "none"
+  },
+  "status": "ok",
+  "version": "0.3.0"
+}

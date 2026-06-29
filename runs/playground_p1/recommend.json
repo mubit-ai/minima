@@ -1,0 +1,200 @@
+{
+  "catalog_stale": false,
+  "catalog_version": "<scrubbed>",
+  "classified_difficulty": "medium",
+  "classified_task_type": "summarization",
+  "confidence": 0.0,
+  "decision_basis": "prior",
+  "fallback_model": {
+    "context_window": 1048576,
+    "decision_basis": "prior",
+    "est_cost_breakdown": {
+      "input": 0.0009,
+      "output": 0.00036
+    },
+    "est_cost_usd": 0.00126,
+    "est_latency_ms": "<scrubbed>",
+    "evidence": [],
+    "latency_basis": "",
+    "model_id": "gemini-3-flash-preview",
+    "predicted_success": 0.87,
+    "provider": "google",
+    "rationale": "no memory yet; capability prior 87% for summarization; est $0.00126/call",
+    "score": 0.5288,
+    "supports_prompt_caching": true
+  },
+  "latency_ms": "<scrubbed>",
+  "ranked": [
+    {
+      "context_window": 1048576,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.00054,
+        "output": 0.0003
+      },
+      "est_cost_usd": 0.00084,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gemini-2.5-flash",
+      "predicted_success": 0.88,
+      "provider": "google",
+      "rationale": "no memory yet; capability prior 88% for summarization; est $0.00084/call",
+      "score": 0.5475,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1048576,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.0009,
+        "output": 0.00036
+      },
+      "est_cost_usd": 0.00126,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gemini-3-flash-preview",
+      "predicted_success": 0.87,
+      "provider": "google",
+      "rationale": "no memory yet; capability prior 87% for summarization; est $0.00126/call",
+      "score": 0.5288,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1048576,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.00225,
+        "output": 0.0012
+      },
+      "est_cost_usd": 0.00345,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gemini-2.5-pro",
+      "predicted_success": 0.92,
+      "provider": "google",
+      "rationale": "no memory yet; capability prior 92% for summarization; est $0.00345/call",
+      "score": 0.4974,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1048576,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.0027,
+        "output": 0.00108
+      },
+      "est_cost_usd": 0.00378,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gemini-3.5-flash",
+      "predicted_success": 0.88,
+      "provider": "google",
+      "rationale": "no memory yet; capability prior 88% for summarization; est $0.00378/call",
+      "score": 0.4618,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1048576,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.0036,
+        "output": 0.00144
+      },
+      "est_cost_usd": 0.00504,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gemini-3.1-pro-preview",
+      "predicted_success": 0.93,
+      "provider": "google",
+      "rationale": "no memory yet; capability prior 93% for summarization; est $0.00504/call",
+      "score": 0.4575,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 128000,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.0045,
+        "output": 0.0012
+      },
+      "est_cost_usd": 0.0057,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "gpt-4o",
+      "predicted_success": 0.9,
+      "provider": "openai",
+      "rationale": "no memory yet; capability prior 90% for summarization; est $0.00570/call",
+      "score": 0.4188,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1000000,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.0054,
+        "output": 0.0018
+      },
+      "est_cost_usd": 0.0072,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "claude-sonnet-4-6",
+      "predicted_success": 0.9,
+      "provider": "anthropic",
+      "rationale": "no memory yet; capability prior 90% for summarization; est $0.00720/call",
+      "score": 0.375,
+      "supports_prompt_caching": true
+    },
+    {
+      "context_window": 1000000,
+      "decision_basis": "prior",
+      "est_cost_breakdown": {
+        "input": 0.009,
+        "output": 0.003
+      },
+      "est_cost_usd": 0.012,
+      "est_latency_ms": "<scrubbed>",
+      "evidence": [],
+      "latency_basis": "",
+      "model_id": "claude-opus-4-8",
+      "predicted_success": 0.93,
+      "provider": "anthropic",
+      "rationale": "no memory yet; capability prior 93% for summarization; est $0.01200/call",
+      "score": 0.2545,
+      "supports_prompt_caching": true
+    }
+  ],
+  "recommendation_id": "<scrubbed>",
+  "recommended_actions": [
+    "enable_prompt_cache"
+  ],
+  "recommended_model": {
+    "context_window": 1048576,
+    "decision_basis": "prior",
+    "est_cost_breakdown": {
+      "input": 0.00054,
+      "output": 0.0003
+    },
+    "est_cost_usd": 0.00084,
+    "est_latency_ms": "<scrubbed>",
+    "evidence": [],
+    "latency_basis": "",
+    "model_id": "gemini-2.5-flash",
+    "predicted_success": 0.88,
+    "provider": "google",
+    "rationale": "no memory yet; capability prior 88% for summarization; est $0.00084/call",
+    "score": 0.5475,
+    "supports_prompt_caching": true
+  },
+  "selection_policy": "argmin",
+  "threshold_used": 0.735,
+  "warnings": [
+    "cold_start"
+  ]
+}
