@@ -95,6 +95,12 @@ SECTIONS: tuple[Section, ...] = (
             Field("MUBIT_ENDPOINT", "Mubit endpoint URL", secret=False, optional=True),
         ),
     ),
+    Section(
+        title="Web tools",
+        note="Exa API key for the web_search / web_fetch tools (https://exa.ai). Optional — "
+        "the web tools simply stay unavailable until it is set.",
+        fields=(Field("EXA_API_KEY", "Exa API key (web search)", optional=True),),
+    ),
 )
 
 

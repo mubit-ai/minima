@@ -72,6 +72,11 @@ def _doctor() -> int:
         ok = bool(os.environ.get(key))
         print(f"  [{'ok' if ok else '  '}] {label:<10} {key:<18} {'present' if ok else 'missing'}")
 
+    # Exa powers the web_search / web_fetch tools — optional, so an unset key is not an error.
+    exa_ok = bool(os.environ.get("EXA_API_KEY"))
+    exa_state = "present" if exa_ok else "not set — web_search/web_fetch disabled"
+    print(f"  [{'ok' if exa_ok else '  '}] {'Exa (web)':<10} {'EXA_API_KEY':<18} {exa_state}")
+
     url = os.environ.get("MINIMA_URL", DEFAULT_MINIMA_URL)
     print(f"\n  Minima endpoint: {url}")
     import httpx

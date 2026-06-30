@@ -194,6 +194,38 @@ def test_cli_doctor_auth_probe_rejects_bad_key(file_store, monkeypatch, capsys):
     assert "auth: FAILED" in out and "401" in out
 
 
+# --- Exa web-search key ----------------------------------------------------------------
+
+
+def test_exa_key_is_a_known_config_field(file_store):
+    """EXA_API_KEY is first-class: settable via `minima config set` and keyring-eligible."""
+    assert "EXA_API_KEY" in [f.key for f in config_store.all_fields()]
+    assert file_store.set_value("EXA_API_KEY", "exa-secret-7890") == "file"
+    assert file_store.get("EXA_API_KEY") == "exa-secret-7890"
+
+
+def test_cli_doctor_reports_exa_presence(file_store, monkeypatch, capsys):
+    import httpx
+
+    def _boom(*a, **k):
+        raise httpx.ConnectError("no network in tests")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+
+    # Unset → reported as disabled, but doctor still succeeds (Exa is optional).
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "EXA_API_KEY" in out and "web_search/web_fetch disabled" in out
+
+    # Set → reported present, and the value is never echoed.
+    file_store.set_value("EXA_API_KEY", "exa-doctor-secret")
+    assert config_cli.config_cli(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "EXA_API_KEY" in out and "present" in out
+    assert "exa-doctor-secret" not in out
+
+
 # --- overlay ---------------------------------------------------------------------------
 
 
