@@ -26,11 +26,13 @@ def selection_hint(mouse_on: bool) -> str:
         return "Terminal.app can't drag-select while scrolling — /mouse off to select & copy"
     return "scroll: wheel/PgUp · select+copy: drag then Ctrl+C · /mouse off for native selection"
 
+
 def _needs_setup() -> bool:
     """No configured provider key (across the whole provider catalog) → first-run nudge."""
     from minima_harness.ai.provider_catalog import configured_providers
 
     return not configured_providers()
+
 
 # ANSI-Shadow-style block glyphs (6 rows). Built programmatically and joined row-wise so the
 # columns always line up — never hand-concatenate ASCII art. Each letter's rows are equal width.
@@ -79,5 +81,15 @@ def render_welcome(app: HarnessApp) -> Group:
     parts.append(Text("type a prompt, or / for commands", style=muted, justify="center"))
     parts.append(
         Text(selection_hint(getattr(app, "_mouse_enabled", True)), style=muted, justify="center")
+    )
+    # A single rotating "💡 Tip · …" line so a distinctive command surfaces on every launch.
+    from minima_harness.tui.tips import format_tip, pick
+
+    parts.append(
+        Text(
+            format_tip("Tip · " + pick(getattr(app, "_tip_index", 0))),
+            style=muted,
+            justify="center",
+        )
     )
     return Group(*parts)

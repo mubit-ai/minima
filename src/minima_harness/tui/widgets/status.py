@@ -17,6 +17,7 @@ class StatusBar(Static):
         self._state = "idle"  # idle | routing | thinking | working
         self._frame = 0
         self._idle_text: Text | str = ""
+        self._tip = ""  # a "💡 …" spinner tip shown beside the loader while busy (empty = none)
         self._timer = None
 
     def on_mount(self) -> None:
@@ -49,9 +50,26 @@ class StatusBar(Static):
         if self._state == "idle":
             self._display()
 
-    def _display(self) -> None:
-        t = get_theme(current_theme())
+    def set_tip(self, tip: str) -> None:
+        # The tip is chosen once per turn (not per spinner tick), so the text is constant while the
+        # frame animates. Repaint immediately if we're already busy so it appears mid-turn.
+        self._tip = tip
+        if self._state != "idle":
+            self._display()
+
+    def _status_renderable(self) -> Text | str:
+        """The renderable for the current state — pure, so it's testable without a mounted app.
+
+        NB: must NOT be named ``_render`` — that's a Textual ``Widget`` internal; overriding it
+        corrupts the render pipeline (a raw ``Text`` reaches ``Visual.to_strips``).
+        """
         if self._state == "idle":
-            self.update(self._idle_text or "")
-        else:
-            self.update(Text(f"{_FRAMES[self._frame]} {self._state}…", style=t["accent"]))
+            return self._idle_text or ""
+        t = get_theme(current_theme())
+        line = Text(f"{_FRAMES[self._frame]} {self._state}…", style=t["accent"])
+        if self._tip:
+            line.append(f"  {self._tip}", style=t["muted"])
+        return line
+
+    def _display(self) -> None:
+        self.update(self._status_renderable())

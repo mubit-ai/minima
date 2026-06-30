@@ -249,6 +249,12 @@ class HarnessApp(App):
         # thinking bubble is (re)created per turn; empty ones are dropped after the turn.
         self._show_thinking = False
         self._thinking_bubble: Any = None
+        # Spinner tips: passively surface a distinctive command per turn (Claude Code style).
+        # The launch index drives the welcome splash; each turn advances to the next tip.
+        from minima_harness.tui import tips as _tips
+
+        self._tips_enabled = True
+        self._tip_index = _tips.advance()
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
@@ -464,6 +470,16 @@ class HarnessApp(App):
         try:
             self.query_one(StatusBar).set_state(state)
         except Exception:  # noqa: BLE001 - during teardown the widget may be gone
+            pass
+
+    def _set_spinner_tip(self) -> None:
+        """Advance to the next tip and hand it to the loader (cleared when /tip off)."""
+        from minima_harness.tui import tips
+
+        try:
+            tip = tips.format_tip(tips.pick(tips.advance())) if self._tips_enabled else ""
+            self.query_one(StatusBar).set_tip(tip)
+        except Exception:  # noqa: BLE001 - a tip must never break a turn
             pass
 
     def _append_stream(self, delta: str) -> None:
@@ -748,6 +764,7 @@ class HarnessApp(App):
         # A live "thinking" bubble (above the answer) when /thoughts is on; dropped if empty.
         self._thinking_bubble = await chatlog.add_thinking_stream() if self._show_thinking else None
         self._stream_bubble = await chatlog.add_assistant_stream()
+        self._set_spinner_tip()
         self._set_state("routing")
         routing = None
         resp_text = ""
@@ -1075,9 +1092,7 @@ class HarnessApp(App):
             basis = app._footer_state.get("basis")
             # Pinned iff the config holds exactly one candidate (check the CONFIG, not the
             # union `cands` above which is always >1 — the old check could never detect a pin).
-            pinned = (
-                app.config.candidates[0] if len(app.config.candidates or []) == 1 else None
-            )
+            pinned = app.config.candidates[0] if len(app.config.candidates or []) == 1 else None
 
             def _picked(chosen: str | None) -> None:
                 if not chosen:
@@ -1388,9 +1403,7 @@ class HarnessApp(App):
             def _applied(result: dict | None) -> None:
                 if result and result.get("action") == "apply":
                     app.run_worker(
-                        app._apply_prompt_edit(
-                            {"action": "project", "content": result["content"]}
-                        ),
+                        app._apply_prompt_edit({"action": "project", "content": result["content"]}),
                         exclusive=True,
                     )
 
@@ -1480,6 +1493,23 @@ class HarnessApp(App):
                 else "thoughts: off"
             )
             await app.query_one(ChatLog).add_system(msg)
+
+        async def _tip(app: HarnessApp, args: str) -> None:
+            from minima_harness.tui import tips
+
+            a = args.strip().lower()
+            if a in {"off", "0", "false", "no"}:
+                app._tips_enabled = False
+                await app.query_one(ChatLog).add_system("spinner tips: off")
+                return
+            if a in {"on", "1", "true", "yes"}:
+                app._tips_enabled = True
+                await app.query_one(ChatLog).add_system(
+                    "spinner tips: ON — a command tip shows beside the loader each turn"
+                )
+                return
+            # No arg: print the next tip on demand and advance the cycle.
+            await app.query_one(ChatLog).add_system(tips.format_tip(tips.pick(tips.advance())))
 
         async def _exit(app: HarnessApp, args: str) -> None:
             app.exit()
@@ -1578,6 +1608,7 @@ class HarnessApp(App):
             ("edits", _edits, "force a diff review for every edit/write"),
             ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
             ("thoughts", _thoughts, "toggle streaming the model's thinking"),
+            ("tip", _tip, "show a command tip (/tip off to silence spinner tips)"),
             ("ledger", _goals, "set/track a budgeted goal + tasks (set <title> · clear · budget)"),
             ("cache", _cache, "toggle semantic response cache"),
             ("exit", _exit, "quit Minima"),
@@ -1784,8 +1815,7 @@ def _routing_reason(routing: Any) -> str:
     """Hybrid reasoning: the reasoner's NL text when escalation fired and produced one;
     otherwise a data-grounded line from the chosen candidate's evidence + an ROI comparison."""
     escalated = any(
-        w == "reasoner_consulted" or w.startswith("escalation_suggested")
-        for w in routing.warnings
+        w == "reasoner_consulted" or w.startswith("escalation_suggested") for w in routing.warnings
     )
     if escalated and routing.rationale.strip():
         return routing.rationale.strip()
@@ -1866,9 +1896,7 @@ def _format_tool_call(name: str, args: Any) -> str:
 
         path = a.get("path", "?")
         diff = render_tool_diff("edit", SimpleNamespace(**a))
-        body = "\n".join(
-            ln for ln in diff.splitlines() if not ln.startswith(("--- ", "+++ "))
-        )
+        body = "\n".join(ln for ln in diff.splitlines() if not ln.startswith(("--- ", "+++ ")))
         tag = "  (replace all)" if a.get("replace_all") else ""
         return f"{path}{tag}\n{_preview(body, '', max_lines=24)}"
     if name == "read":

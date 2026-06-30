@@ -15,7 +15,9 @@ TEST_MUBIT_KEY = os.getenv("TEST_MUBIT_KEY", "mbt_test_kid_secret")
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+def _hermetic_offline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
     """Keep offline tests independent of a developer's local ``.env``.
 
     A populated ``.env`` (e.g. ``MINIMA_REASONER_PROVIDER=gemini`` + a key) would
@@ -31,6 +33,16 @@ def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIMA_REASONER_PROVIDER", "none")
     monkeypatch.setenv("MINIMA_REASONER_MODEL", "")
     monkeypatch.setenv("MINIMA_DURABLE_FASTPATH", "off")
+    # The spinner-tip rotation persists a tiny cursor; redirect it off the developer's real
+    # ~/.minima-harness so constructing a HarnessApp in tests never writes to it.
+    try:
+        from minima_harness.tui import tips
+
+        tmp = tmp_path_factory.mktemp("tips_state")
+        monkeypatch.setattr(tips, "GLOBAL_DIR", tmp, raising=False)
+        monkeypatch.setattr(tips, "STATE_FILE", tmp / "tips_state.json", raising=False)
+    except Exception:  # noqa: BLE001 - harness extra not installed → nothing to redirect
+        pass
 
 
 @pytest.fixture

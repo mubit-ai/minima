@@ -40,6 +40,17 @@ def test_render_welcome_is_a_clean_splash(tmp_path):
     assert "theme:" not in out
 
 
+def test_render_welcome_shows_a_command_tip(tmp_path):
+    cfg = HarnessConfig(allow_offline=True)
+    app = HarnessApp(
+        cfg, session=SessionStore.in_memory(), agent=MinimaAgent(cfg, tools=[]), cwd=tmp_path
+    )
+    out = _render_text(app)
+    assert "💡" in out  # the rotating onboarding tip
+    assert "Tip ·" in out
+    assert "/" in out  # the tip names a /command
+
+
 def test_welcome_nudges_when_no_provider_key(tmp_path, monkeypatch):
     from minima_harness.ai.provider_catalog import PROVIDERS
 
