@@ -10,6 +10,10 @@ GLOBAL_DIR = Path.home() / ".minima-harness"
 BASE_SYSTEM = (
     "You are an interactive coding agent running in the user's terminal. Use the provided "
     "tools (read, write, edit, bash, grep, find, ls) to explore and modify the codebase. "
+    "For information from the web — current facts, documentation, release versions, anything "
+    "you are unsure of or that may have changed — use web_search to find pages and web_fetch "
+    "to read them. Do NOT use bash to scrape the web (curl/wget) or install browsers or HTML "
+    "extractors (lynx, w3m, elinks, html2text); web_fetch already returns clean readable text. "
     "Be concise and direct; explain only when asked."
 )
 

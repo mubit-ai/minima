@@ -3,10 +3,20 @@ from __future__ import annotations
 from minima_harness.tools import default_toolset
 
 
-def test_default_toolset_has_seven_named_tools():
+def test_default_toolset_has_named_tools():
     tools = default_toolset()
     names = [t.name for t in tools]
-    assert names == ["read", "write", "edit", "bash", "grep", "find", "ls"]
+    assert names == [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "web_search",
+        "web_fetch",
+    ]
 
 
 def test_find_agent_tool_locates_by_name():

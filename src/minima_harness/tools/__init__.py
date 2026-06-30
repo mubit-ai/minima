@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from minima_harness.tools.builtin import default_toolset
+from minima_harness.tools.builtin import default_toolset, web_toolset
 
-__all__ = ["default_toolset"]
+__all__ = ["default_toolset", "web_toolset"]
