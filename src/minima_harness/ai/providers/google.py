@@ -53,7 +53,12 @@ class GoogleProvider:
     def _build_client(self, options: dict[str, Any]) -> Any:
         if self._client is not None:
             return self._client
+        import logging
+
         import google.genai as genai  # lazy; optional extra
+
+        # Set logging level for google-generative-ai to WARNING
+        logging.getLogger("google").setLevel(logging.WARNING)
 
         api_key = resolve_api_key(
             options, "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"
