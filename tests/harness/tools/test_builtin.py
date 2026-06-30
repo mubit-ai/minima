@@ -10,6 +10,7 @@ def test_default_toolset_has_named_tools():
         "read",
         "write",
         "edit",
+        "apply_patch",
         "bash",
         "grep",
         "find",
