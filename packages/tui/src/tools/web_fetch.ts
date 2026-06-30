@@ -107,9 +107,9 @@ export function webFetchTool(): AgentTool {
   return {
     name: "web_fetch",
     description:
-      "Fetch a URL and return clean text content. Strips HTML to readable text. " +
-      "Works for documentation pages, GitHub, Stack Overflow, npm, PyPI, MDN, etc. " +
-      "Max 5000 chars by default.",
+      "Fetch a URL and return clean text. Strips HTML to readable content. " +
+      "Use for reading docs, API references, GitHub files, MDN, Stack Overflow. " +
+      "Not a search engine — you must provide the URL. Max 5000 chars.",
     parameters,
     execute,
   };

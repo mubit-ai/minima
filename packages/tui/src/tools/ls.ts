@@ -31,7 +31,8 @@ async function execute(_id: string, params: Record<string, unknown>): Promise<To
 export function lsTool(): AgentTool {
   return {
     name: "ls",
-    description: "List entries in a directory. Directories are suffixed with / and sorted first.",
+    description:
+      "List entries in a directory. Includes hidden files. Directories suffixed with /, sorted first. Use glob for pattern matching.",
     parameters,
     execute,
   };

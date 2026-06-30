@@ -160,15 +160,28 @@ export interface CommandPickerProps {
 
 export function CommandPicker({ commands, onPick, onDismiss }: CommandPickerProps) {
   const [cursor, setCursor] = useState(0);
+  const [closed, setClosed] = useState(false);
+
+  const safePick = (name: string) => {
+    if (closed) return;
+    setClosed(true);
+    onPick(name);
+  };
+  const safeDismiss = () => {
+    if (closed) return;
+    setClosed(true);
+    onDismiss();
+  };
 
   useInput((input, key) => {
-    if (key.escape) return onDismiss();
+    if (key.escape) return safeDismiss();
     if (commands.length === 0) return;
     if (key.upArrow) return setCursor((c) => (c - 1 + commands.length) % commands.length);
     if (key.downArrow) return setCursor((c) => (c + 1) % commands.length);
-    if (key.return) return onPick(commands[cursor]!.name);
+    if (key.return) return safePick(commands[cursor]!.name);
     const n = Number(input);
-    if (Number.isInteger(n) && n >= 1 && n <= commands.length) return onPick(commands[n - 1]!.name);
+    if (Number.isInteger(n) && n >= 1 && n <= commands.length)
+      return safePick(commands[n - 1]!.name);
   });
 
   return (
@@ -259,12 +272,28 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
           {" permission "}
         </Text>
       </Box>
-      <Text>
-        <Text color="yellow" bold>
-          {prompt.toolName}
+      <Box flexDirection="column">
+        <Text>
+          <Text color="yellow" bold>
+            {prompt.toolName === "read" ||
+            prompt.toolName === "ls" ||
+            prompt.toolName === "glob" ||
+            prompt.toolName === "grep"
+              ? "READ"
+              : prompt.toolName === "write"
+                ? "WRITE (new file)"
+                : prompt.toolName === "edit"
+                  ? "EDIT (modify file)"
+                  : prompt.toolName === "bash"
+                    ? "RUN COMMAND"
+                    : prompt.toolName.toUpperCase()}
+          </Text>
+          <Text color="white"> {prompt.promptText}</Text>
         </Text>
-        <Text color="gray"> — {prompt.promptText}</Text>
-      </Text>
+        {prompt.argsSummary && !prompt.diffPreview ? (
+          <Text color="gray"> target: {prompt.argsSummary.slice(0, 80)}</Text>
+        ) : null}
+      </Box>
       {prompt.diffPreview ? (
         <Box flexDirection="column" marginTop={0}>
           {prompt.diffPreview
@@ -406,6 +435,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
+  const [streamingThoughts, setStreamingThoughts] = useState("");
+  const streamingBufRef = useRef("");
+  const streamingThoughtsBufRef = useRef("");
+  const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyState, setBusyState] = useState<"ready" | "thinking" | "working">("ready");
   const [actualCost, setActualCost] = useState<number>();
@@ -439,10 +473,6 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     };
     process.stdout.on("resize", handleResize);
 
-    // Enter alternate screen buffer, hide cursor
-    process.stdout.write("\u001b[?1049h");
-    process.stdout.write("\u001b[?25l");
-
     // Register the mouse scroll callback (the stdin.read() filter is already
     // installed in main.ts; here we just wire it to our scroll state).
     setMouseScrollCallback((dir) => {
@@ -458,8 +488,6 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setMouseScrollCallback(null);
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
-      process.stdout.write("\u001b[?1049l");
-      process.stdout.write("\u001b[?25h");
     };
   }, []);
 
@@ -506,7 +534,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on content changes
   useEffect(() => {
     setScrollOffset(0);
-  }, [messages.length, streaming]);
+  }, [messages.length, streaming, streamingThoughts]);
 
   // Status Bar states
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
@@ -552,11 +580,25 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           if (s?.type === "thinking_start") {
             thinkingStartRef.current = Date.now();
             setBusyState("thinking");
+            streamingThoughtsBufRef.current = "";
           } else if (s?.type === "thinking_delta") {
             thoughtsRef.current += s.delta;
+            streamingThoughtsBufRef.current += s.delta;
+            if (!thoughtsFlushRef.current) {
+              thoughtsFlushRef.current = setTimeout(() => {
+                setStreamingThoughts(streamingThoughtsBufRef.current);
+                thoughtsFlushRef.current = null;
+              }, 80);
+            }
           } else if (s?.type === "text_delta") {
             setBusyState("working");
-            setStreaming((prev) => prev + s.delta);
+            streamingBufRef.current += s.delta;
+            if (!streamFlushRef.current) {
+              streamFlushRef.current = setTimeout(() => {
+                setStreaming(streamingBufRef.current);
+                streamFlushRef.current = null;
+              }, 80);
+            }
           }
           break;
         }
@@ -592,6 +634,17 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               setMessages((m) => [...m, { role: "assistant", text }]);
             }
             setStreaming("");
+            setStreamingThoughts("");
+            streamingBufRef.current = "";
+            streamingThoughtsBufRef.current = "";
+            if (streamFlushRef.current) {
+              clearTimeout(streamFlushRef.current);
+              streamFlushRef.current = null;
+            }
+            if (thoughtsFlushRef.current) {
+              clearTimeout(thoughtsFlushRef.current);
+              thoughtsFlushRef.current = null;
+            }
             thoughtsRef.current = "";
             thinkingStartRef.current = null;
           } else if (ev.message?.role === "toolResult") {
@@ -616,7 +669,8 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
-    if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return; // overlay owns inputs
+    if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return;
+    if (busy) return; // don't open overlays mid-run
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
       return;
@@ -1280,17 +1334,26 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     setBusy(true);
     setBusyState("thinking");
     setStreaming("");
+    setStreamingThoughts("");
     try {
       const expanded = expandAtFiles(text, process.cwd());
       const routing = await agent.promptRouted(expanded);
       if (routing) {
         setBasis(routing.decisionBasis || "minima");
-        if (routing.warnings.length > 0) {
+        // Filter out non-actionable cold-start warnings; only surface real issues
+        const actionable = routing.warnings.filter(
+          (w) =>
+            !w.startsWith("escalation_suggested") &&
+            !w.startsWith("cold_start") &&
+            !w.startsWith("reasoner_disabled") &&
+            !w.startsWith("recall_timeout"),
+        );
+        if (actionable.length > 0) {
           setMessages((m) => [
             ...m,
             {
               role: "tool",
-              text: `⚠ ${routing.warnings.join("; ")}`,
+              text: `⚠ ${actionable.join("; ")}`,
               toolName: "routing",
               isError: true,
             },
@@ -1321,6 +1384,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setBusy(false);
       setBusyState("ready");
       setStreaming("");
+      setStreamingThoughts("");
       const totals = agent.meter?.totals();
       if (totals) setActualCost(totals.actualCostUsd);
 
@@ -1352,8 +1416,15 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Calculate dynamic sizing for chat list based on terminal size
   const footerHeight = 6;
   const suggestionsHeight = matchingCommands.length > 0 ? matchingCommands.length + 2 : 0;
-  const streamingHeight = streaming ? 1 + Math.max(1, Math.ceil(streaming.length / cols)) : 0;
-  const maxChatHeight = Math.max(1, rows - footerHeight - suggestionsHeight - streamingHeight);
+  const streamingHeight = streaming ? 2 + Math.max(1, Math.ceil(streaming.length / cols)) : 0;
+  const streamingThoughtsHeight =
+    streamingThoughts && showThinkingRef.current
+      ? 2 + Math.max(1, Math.ceil(streamingThoughts.length / cols))
+      : 0;
+  const maxChatHeight = Math.max(
+    1,
+    rows - footerHeight - suggestionsHeight - streamingHeight - streamingThoughtsHeight,
+  );
 
   const { visible: visibleMsgs, atBottom } = getScrollableMessages(
     messages,
@@ -1392,7 +1463,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         </Box>
       ) : (
         <Box flexDirection="column" flexGrow={1}>
-          <Messages messages={visibleMsgs} streaming={busy && atBottom ? streaming : ""} />
+          <Messages
+            messages={visibleMsgs}
+            streaming={busy && atBottom ? streaming : ""}
+            streamingThoughts={busy && atBottom && showThinkingRef.current ? streamingThoughts : ""}
+          />
           {!atBottom && (
             <Text color="gray">
               {" "}
@@ -1435,7 +1510,17 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           commands={COMMANDS}
           onPick={(name) => {
             setPaletteOpen(false);
-            handleCommand(name, "");
+            handleCommand(name, "").catch((exc) => {
+              setMessages((m) => [
+                ...m,
+                {
+                  role: "tool",
+                  text: `Command /${name} failed: ${String(exc)}`,
+                  toolName: "error",
+                  isError: true,
+                },
+              ]);
+            });
           }}
           onDismiss={() => setPaletteOpen(false)}
         />
@@ -1452,7 +1537,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
       ) : (
-        <Box flexDirection="column" width="100%" marginTop={1}>
+        <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold>
@@ -1499,44 +1584,46 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         />
       )}
 
-      <StatusBar
-        model={agent.agentState.model?.id ?? "(none)"}
-        basis={basis}
-        routeMode={routeMode}
-        thinkingLevel={thinkingLevel}
-        ctxPct={ctxPct}
-        inputTokens={inputTokens}
-        outputTokens={outputTokens}
-        actualCostUsd={actualCost}
-        sessionId={agent.sessionId ?? "ephemeral"}
-        routingOffline={agent.offlineReason !== null}
-        offlineReason={agent.offlineReason}
-        statusText={busyState}
-        planMode={planMode}
-        readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
-        alwaysTools={[...permStateRef.current.allowAlways]}
-      />
+      <Box flexDirection="column" flexShrink={0}>
+        <StatusBar
+          model={agent.agentState.model?.id ?? "(none)"}
+          basis={basis}
+          routeMode={routeMode}
+          thinkingLevel={thinkingLevel}
+          ctxPct={ctxPct}
+          inputTokens={inputTokens}
+          outputTokens={outputTokens}
+          actualCostUsd={actualCost}
+          sessionId={agent.sessionId ?? "ephemeral"}
+          routingOffline={agent.offlineReason !== null}
+          offlineReason={agent.offlineReason}
+          statusText={busyState}
+          planMode={planMode}
+          readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
+          alwaysTools={[...permStateRef.current.allowAlways]}
+        />
 
-      <Box justifyContent="space-between" width="100%">
-        <Box>
-          <Text color="yellow">pgup </Text>
-          <Text color="gray">PgUp </Text>
-          <Text color="yellow">pgdn </Text>
-          <Text color="gray">PgDn </Text>
-          <Text color="yellow">ctrl+l </Text>
-          <Text color="gray">Model </Text>
-          <Text color="yellow">ctrl+r </Text>
-          <Text color="gray">Route </Text>
-          <Text color="yellow">esc </Text>
-          <Text color="gray">Abort</Text>
+        <Box justifyContent="space-between" width="100%">
+          <Box>
+            <Text color="yellow">pgup </Text>
+            <Text color="gray">PgUp </Text>
+            <Text color="yellow">pgdn </Text>
+            <Text color="gray">PgDn </Text>
+            <Text color="yellow">ctrl+l </Text>
+            <Text color="gray">Model </Text>
+            <Text color="yellow">ctrl+r </Text>
+            <Text color="gray">Route </Text>
+            <Text color="yellow">esc </Text>
+            <Text color="gray">Abort</Text>
+          </Box>
+          <Box>
+            <Text color="yellow">ctrl+p </Text>
+            <Text color="gray">palette</Text>
+          </Box>
         </Box>
-        <Box>
-          <Text color="yellow">ctrl+p </Text>
-          <Text color="gray">palette</Text>
-        </Box>
+
+        {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
       </Box>
-
-      {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
     </Box>
   );
 }

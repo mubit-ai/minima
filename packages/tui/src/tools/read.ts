@@ -32,7 +32,7 @@ export function readTool(): AgentTool {
   return {
     name: "read",
     description:
-      "Read a text file from the local filesystem. Returns lines with 1-based line numbers. Use `offset` and `limit` to page through large files.",
+      "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).",
     parameters,
     execute,
   };

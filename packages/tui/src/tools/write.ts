@@ -26,7 +26,8 @@ export function writeTool(): AgentTool {
   return {
     name: "write",
     description:
-      "Create or overwrite a file on the local filesystem. Parent directories are created automatically. Pass the full intended file contents.",
+      "Create or overwrite a file. Overwrites entirely — prefer edit for targeted changes. " +
+      "Parent directories are created automatically. Pass the full intended file contents.",
     parameters,
     execute,
   };

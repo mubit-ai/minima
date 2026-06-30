@@ -113,7 +113,9 @@ export function bashTool(): AgentTool {
   return {
     name: "bash",
     description:
-      "Run a shell command and return its combined stdout/stderr and exit code. Output streams live. Runs with the user's full permissions.",
+      "Run a shell command and return combined stdout/stderr and exit code. " +
+      "Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. " +
+      "Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
     parameters,
     execute,
   };

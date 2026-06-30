@@ -312,10 +312,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // before Ink's parseKeypress ever sees them (prevents garbage in TextInput).
   installMouseScrollFilter();
 
+  // Enter alternate screen + hide cursor BEFORE render() so Ink's first paint
+  // lands in the alternate buffer (otherwise the screen is blank until a key is pressed).
+  process.stdout.write("\u001b[?1049h");
+  process.stdout.write("\u001b[?25l");
+
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
   const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }));
   await instance.waitUntilExit();
+
+  // Exit alternate screen + restore cursor on shutdown.
+  process.stdout.write("\u001b[?1049l");
+  process.stdout.write("\u001b[?25h");
   return 0;
 }
 

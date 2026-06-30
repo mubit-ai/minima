@@ -151,7 +151,15 @@ export function MarkdownRenderer({ text }: { text: string }) {
   );
 }
 
-export function Messages({ messages, streaming }: { messages: ChatMessage[]; streaming: string }) {
+export function Messages({
+  messages,
+  streaming,
+  streamingThoughts,
+}: {
+  messages: ChatMessage[];
+  streaming: string;
+  streamingThoughts?: string;
+}) {
   const turns = groupMessagesIntoTurns(messages);
 
   return (
@@ -190,7 +198,7 @@ export function Messages({ messages, streaming }: { messages: ChatMessage[]; str
                   <Text color={sub.isError ? "red" : "yellow"}>
                     {`  ⚙ ${sub.toolName ?? "tool"}:`}
                   </Text>
-                  <Text color="gray">{sub.text}</Text>
+                  <Text color={sub.isError ? "red" : "white"}>{sub.text}</Text>
                 </Box>
               );
             }
@@ -232,6 +240,18 @@ export function Messages({ messages, streaming }: { messages: ChatMessage[]; str
           })}
         </Box>
       ))}
+
+      {/* Streaming Active Thoughts */}
+      {streamingThoughts ? (
+        <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={0} width="100%">
+          <Box flexDirection="column">
+            <Text color="cyan">{"💭 thinking..."}</Text>
+            <Text color="gray" wrap="truncate">
+              {streamingThoughts.slice(-300)}
+            </Text>
+          </Box>
+        </Box>
+      ) : null}
 
       {/* Streaming Active Turn */}
       {streaming ? (

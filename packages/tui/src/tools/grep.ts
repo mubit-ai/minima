@@ -71,7 +71,8 @@ export function grepTool(): AgentTool {
   return {
     name: "grep",
     description:
-      "Search file contents using ripgrep. Returns file:line:content matches. Respects .gitignore by default. Use 'glob' to filter file types.",
+      "Search file contents (uses ripgrep if available, falls back to grep). " +
+      "Returns file:line:content matches. Respects .gitignore. Use 'glob' to filter file types. Max 200 results.",
     parameters,
     execute,
   };

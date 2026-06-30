@@ -24,16 +24,28 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
       models.findIndex((m) => m.id === currentId),
     ),
   );
+  const [closed, setClosed] = useState(false);
+
+  const safePick = (model: Model, pinned: boolean) => {
+    if (closed) return;
+    setClosed(true);
+    onPick(model, pinned);
+  };
+  const safeDismiss = () => {
+    if (closed) return;
+    setClosed(true);
+    onDismiss();
+  };
 
   useInput((input, key) => {
-    if (key.escape) return onDismiss();
+    if (key.escape) return safeDismiss();
     if (models.length === 0) return;
     if (key.upArrow) return setCursor((c) => (c - 1 + models.length) % models.length);
     if (key.downArrow) return setCursor((c) => (c + 1) % models.length);
-    if (key.return) return onPick(models[cursor]!, false);
-    if (input === "p" || input === "P") return onPick(models[cursor]!, true);
+    if (key.return) return safePick(models[cursor]!, false);
+    if (input === "p" || input === "P") return safePick(models[cursor]!, true);
     const n = Number(input);
-    if (Number.isInteger(n) && n >= 1 && n <= models.length) return onPick(models[n - 1]!, false);
+    if (Number.isInteger(n) && n >= 1 && n <= models.length) return safePick(models[n - 1]!, false);
   });
 
   return (

@@ -29,7 +29,8 @@ export function globTool(): AgentTool {
   return {
     name: "glob",
     description:
-      "Find files matching a glob pattern. Returns paths relative to the base directory. Supports ** for recursive matching.",
+      "Find files matching a glob pattern (e.g. **/*.ts, src/**/test_*.py). " +
+      "Hidden files excluded. Max 200 results. Use grep for content search.",
     parameters,
     execute,
   };

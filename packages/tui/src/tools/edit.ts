@@ -47,7 +47,8 @@ export function editTool(): AgentTool {
   return {
     name: "edit",
     description:
-      "Replace an exact string in a file. Errors if old_string is absent or (without replace_all) appears more than once — add context to disambiguate.",
+      "Replace an exact string in a file. Read the file first to get exact strings. " +
+      "Errors if old_string is absent or (without replace_all) appears more than once — add context to disambiguate.",
     parameters,
     execute,
   };
