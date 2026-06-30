@@ -12,6 +12,7 @@ dist/
 build/
 .minima_state/
 .seed_progress.json
+scratch/
 
 
 # Astro docs site
