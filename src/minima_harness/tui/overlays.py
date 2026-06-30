@@ -491,6 +491,84 @@ class PermissionRequest(ModalScreen[dict | None]):
         self.dismiss({"action": "reject"})
 
 
+class QuestionOverlay(ModalScreen[dict | None]):
+    """Ask the user a structured question on the model's behalf (the ``question`` tool).
+
+    ↑↓ select · Enter confirm · ``t`` type a custom answer · Esc dismiss. Returns
+    ``{"answer": str}`` for a pick or typed answer, or ``None`` if dismissed (the tool then tells
+    the model to proceed on its own).
+    """
+
+    _OTHER = "__other__"  # sentinel id for the "type a custom answer" row
+
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Dismiss", priority=True),
+        # Not priority: when the custom-answer Input is focused it must receive a literal "t"
+        # rather than triggering this binding. While the OptionList is focused, the key still
+        # bubbles up to here.
+        Binding("t", "type_custom", "Type"),
+    ]
+
+    def __init__(
+        self,
+        question: str,
+        header: str = "",
+        options: list[Any] | None = None,
+        allow_freetext: bool = True,
+    ) -> None:
+        super().__init__()
+        self._question = question
+        self._header = header
+        self._options = list(options or [])
+        self._allow_freetext = allow_freetext
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="question-card"):
+            yield Static(Text(self._question, style="bold"), id="question-head")
+            yield Static(
+                Text("↑↓ select · Enter confirm · t type · Esc dismiss", style="dim"),
+                id="question-hint",
+            )
+            opts = []
+            for i, o in enumerate(self._options):
+                label = o.label
+                if getattr(o, "description", ""):
+                    label = f"{o.label}  —  {o.description}"
+                opts.append(Option(label, id=str(i)))
+            if self._allow_freetext:
+                opts.append(Option("✎ Other (type a custom answer)", id=self._OTHER))
+            yield OptionList(*opts)
+            inp = Input(placeholder="type a custom answer, then Enter", id="question-input")
+            inp.display = False
+            yield inp
+
+    def on_mount(self) -> None:
+        self.query_one("#question-card").border_title = self._header or "question"
+        self.query_one(OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id == self._OTHER:
+            self.action_type_custom()
+            return
+        idx = int(event.option.id)
+        self.dismiss({"answer": self._options[idx].label})
+
+    def action_type_custom(self) -> None:
+        if not self._allow_freetext:
+            return
+        inp = self.query_one("#question-input", Input)
+        inp.display = True
+        inp.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        if text:
+            self.dismiss({"answer": text})
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
 class ConfigOverlay(ModalScreen[dict | None]):
     """Edit stored credentials, grouped into sections. Ctrl+S saves, Esc cancels.
 

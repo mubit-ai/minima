@@ -170,6 +170,21 @@ class HarnessApp(App):
         width: 1fr; height: auto; max-height: 24; background: $boost;
         border: round $panel-lighten-2;
     }
+    QuestionOverlay { align: center middle; }
+    QuestionOverlay #question-card {
+        width: 84; height: auto; max-height: 80%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    QuestionOverlay #question-hint { color: $text-muted; padding: 0 1 1 1; }
+    QuestionOverlay OptionList {
+        height: auto; max-height: 16; background: $panel; border: round $panel-lighten-2;
+    }
+    QuestionOverlay OptionList:focus { border: round $accent; }
+    QuestionOverlay Input {
+        width: 1fr; height: 3; margin: 1 0 0 0;
+        background: $boost; border: round $panel-lighten-2;
+    }
+    QuestionOverlay Input:focus { border: round $accent; }
     ConfigOverlay { align: center middle; }
     ConfigOverlay #config-card {
         width: 84; height: auto; max-height: 88%;
@@ -229,11 +244,15 @@ class HarnessApp(App):
         # appended here so it reaches the agent via _apply_extensions; the goal is loaded from
         # the session so it survives resume.
         from minima_harness.minima.goals import GoalStore
+        from minima_harness.tools.question import question_tool
         from minima_harness.tools.tasks import tasks_tool
 
         self._goals = GoalStore()
         self._goals.load(self.session)
         self._tools.append(tasks_tool(self._goals))
+        # question: let the model ask the user a structured clarifying question mid-run. Bound to
+        # a TUI modal so the answer returns as the tool result; TUI-only (headless proceeds).
+        self._tools.append(question_tool(self._ask_question))
         self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
         self._confirm_edits = False  # /edits: force a diff review for every edit/write
         # Ask before sensitive ops (write/edit/bash) by default; /yolo or
@@ -276,6 +295,22 @@ class HarnessApp(App):
         init_mubit(self.cwd)
         self._load_customization()
         self._apply_extensions()
+
+    async def _ask_question(self, params: Any) -> str | None:
+        """Callback for the ``question`` tool: show the modal and return the user's answer (or
+        None if they dismissed it). Mirrors the permission flow's ``push_screen`` await."""
+        from minima_harness.tui.overlays import QuestionOverlay
+
+        result = await self.push_screen(
+            QuestionOverlay(
+                params.question,
+                params.header,
+                list(params.options),
+                params.allow_freetext,
+            ),
+            wait_for_dismiss=True,
+        )
+        return (result or {}).get("answer")
 
     def _load_customization(self) -> None:
         from minima_harness.tui.customize import load_skills, load_templates
