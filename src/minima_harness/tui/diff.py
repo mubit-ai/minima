@@ -15,7 +15,16 @@ def render_tool_diff(tool_name: str, args: Any) -> str:
         return _write_diff(args)
     if tool_name == "edit":
         return _edit_diff(args)
+    if tool_name == "apply_patch":
+        return _apply_patch_diff(args)
     return f"{tool_name}: {args}"
+
+
+def _apply_patch_diff(args: Any) -> str:
+    from minima_harness.tools.apply_patch import patch_preview
+
+    patch = getattr(args, "patch", "") or ""
+    return _truncate(patch_preview(patch, Path.cwd()))
 
 
 def _read_lines(path: str) -> list[str] | None:

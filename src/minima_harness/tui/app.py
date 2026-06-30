@@ -81,9 +81,9 @@ from minima_harness.tui.widgets.status import StatusBar
 _log = logging.getLogger("minima_harness.tui.app")
 
 # Tools whose effects are gated behind diff approval when /edits is on.
-_MUTATING_TOOLS = frozenset({"edit", "write"})
+_MUTATING_TOOLS = frozenset({"edit", "write", "apply_patch"})
 # Tools that touch the user's machine/network and so require approval by default.
-_SENSITIVE_TOOLS = frozenset({"edit", "write", "bash"})
+_SENSITIVE_TOOLS = frozenset({"edit", "write", "bash", "apply_patch"})
 
 
 class HarnessApp(App):
@@ -1899,6 +1899,10 @@ def _format_tool_call(name: str, args: Any) -> str:
         body = "\n".join(ln for ln in diff.splitlines() if not ln.startswith(("--- ", "+++ ")))
         tag = "  (replace all)" if a.get("replace_all") else ""
         return f"{path}{tag}\n{_preview(body, '', max_lines=24)}"
+    if name == "apply_patch":
+        from minima_harness.tools.apply_patch import summarize_patch
+
+        return summarize_patch(a.get("patch") or "")
     if name == "read":
         path = a.get("path", "?")
         off = a.get("offset") or 1

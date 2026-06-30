@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from minima_harness.agent.tools import AgentTool
+from minima_harness.tools.apply_patch import apply_patch_tool
 from minima_harness.tools.bash import bash_tool
 from minima_harness.tools.edit import edit_tool
 from minima_harness.tools.find import find_tool
@@ -13,13 +14,16 @@ from minima_harness.tools.write import write_tool
 
 
 def default_toolset() -> list[AgentTool]:
-    """The default tools, in a stable order: PI's seven coding tools plus the
-    Exa-backed web tools. The web tools need ``EXA_API_KEY`` set to run, but
+    """The default tools, in a stable order: PI's coding tools (read/write/edit/
+    apply_patch/bash/grep/find/ls) plus the Exa-backed web tools. apply_patch is
+    the multi-file/atomic counterpart to the single-shot edit. The web tools need
+    ``EXA_API_KEY`` set to run, but
     constructing them (and the toolset) never touches the network or the key."""
     return [
         read_tool(),
         write_tool(),
         edit_tool(),
+        apply_patch_tool(),
         bash_tool(),
         grep_tool(),
         find_tool(),
