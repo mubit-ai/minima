@@ -83,3 +83,4 @@ class HarnessConfig:
         """
         self.minima_url = os.environ.get("MINIMA_URL", self.minima_url)
         self.minima_api_key = os.environ.get("MINIMA_API_KEY") or os.environ.get("MUBIT_API_KEY")
+        self.baseline_model_id = os.environ.get("MINIMA_BASELINE_MODEL_ID", self.baseline_model_id)
