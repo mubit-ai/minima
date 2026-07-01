@@ -655,14 +655,21 @@ class HarnessApp(App):
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
         self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
-        if text.strip():
-            self._history.add(text)
-            append_history(self.cwd, text)
-        if self.agent.state.is_streaming:
-            # Enter while running = steering (delivered after the current tool batch).
-            self.agent.steer(text)
+        # Ignore empty/whitespace-only submits: an empty turn renders a blank bubble and
+        # sends task="" to /v1/recommend, which fails TaskInput(min_length=1) and knocks
+        # routing offline. Just clear and wait for real input.
+        if not text.strip():
             self.query_one(Editor).text = ""
-            await self.query_one(ChatLog).add_system(f"↳ (steering) {text}")
+            return
+        self._history.add(text)
+        append_history(self.cwd, text)
+        if self.agent.state.is_streaming:
+            # Enter while running = queue a follow-up (runs after the current turn). Enter is
+            # the one key every terminal forwards, so this is the reliable "type while it's
+            # working" path; Alt+Enter steers the in-flight turn for terminals that pass it.
+            self.agent.follow_up(text)
+            self.query_one(Editor).text = ""
+            await self.query_one(ChatLog).add_system(f"↳ (queued — runs after this turn) {text}")
             return
         self.query_one(Editor).text = ""
         parsed = parse_submission(text)
@@ -673,13 +680,17 @@ class HarnessApp(App):
             return
         self.run_worker(self._run_submission(parsed), exclusive=True, name="turn")
 
-    async def on_editor_follow_up(self, event: Editor.FollowUp) -> None:
+    async def on_editor_steer(self, event: Editor.Steer) -> None:
         text = event.text
         if not text.strip():
             return
-        self.agent.follow_up(text)
+        if not self.agent.state.is_streaming:
+            # Nothing to steer when idle — treat Alt+Enter like a normal submit.
+            self.post_message(Editor.Submitted(text))
+            return
+        self.agent.steer(text)
         self.query_one(Editor).text = ""
-        await self.query_one(ChatLog).add_system(f"↳ (follow-up) {text}")
+        await self.query_one(ChatLog).add_system(f"↳ (steering) {text}")
 
     # ------------------------------------------------------------- command popup
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -735,6 +746,11 @@ class HarnessApp(App):
 
     # ------------------------------------------------------------- a turn
     async def run_turn(self, text: str) -> None:
+        # Choke point for every turn (editor submit, bash `!cmd` feed, scripted prompts):
+        # never start a turn on empty text — a blank task fails TaskInput(min_length=1) and
+        # knocks routing offline, leaving a blank bubble + an unrouted, billed turn.
+        if not text.strip():
+            return
         chatlog = self.query_one(ChatLog)
         self._dismiss_welcome()  # first prompt: drop the splash, let the conversation flow top-down
         self._apply_effective_prompt()  # re-anchor the goal/tasks into the system prompt

@@ -1,0 +1,104 @@
+/**
+ * Status bar — the bottom line: current model, turn count, and any offline/reroute note.
+ * Port of minima_harness/tui/widgets/footer.py.
+ */
+
+import { Box, Text } from "ink";
+import React from "react";
+
+export interface StatusBarProps {
+  model: string;
+  basis: string;
+  routeMode: "auto" | "confirm";
+  thinkingLevel: string;
+  ctxPct: number;
+  inputTokens: number;
+  outputTokens: number;
+  actualCostUsd?: number;
+  sessionId: string;
+  routingOffline: boolean;
+  offlineReason?: string | null;
+  statusText: "ready" | "thinking" | "working";
+  planMode?: boolean;
+  readDirs?: string[];
+  alwaysTools?: string[];
+}
+
+export function StatusBar({
+  model,
+  basis,
+  routeMode,
+  thinkingLevel,
+  ctxPct,
+  inputTokens,
+  outputTokens,
+  actualCostUsd = 0,
+  sessionId,
+  routingOffline,
+  offlineReason,
+  statusText,
+  planMode,
+  readDirs,
+  alwaysTools,
+}: StatusBarProps) {
+  const modelStyle = basis === "offline" ? "yellow" : "cyan";
+  const routeStyle = routeMode === "confirm" ? "yellow" : "gray";
+  const thinkStyle =
+    thinkingLevel === "high" ? "yellow" : thinkingLevel === "off" ? "gray" : "cyan";
+  const ctxStyle = ctxPct > 80 ? "red" : "gray";
+  const statusColor = statusText === "ready" ? "green" : "yellow";
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box>
+        {planMode && (
+          <Text color="yellow" bold>
+            {" "}
+            [PLAN]{" "}
+          </Text>
+        )}
+
+        <Text color="gray"> model: </Text>
+        <Text color={modelStyle}>
+          {model} ▸ {basis}
+        </Text>
+
+        <Text color="gray"> · route: </Text>
+        <Text color={routeStyle}>{routeMode}</Text>
+
+        <Text color="gray"> · think: </Text>
+        <Text color={thinkStyle}>{thinkingLevel}</Text>
+
+        <Text color="gray"> │ ctx </Text>
+        <Text color={ctxStyle}>{ctxPct.toFixed(0)}%</Text>
+
+        <Text color="gray">
+          {" "}
+          · ↑{inputTokens} ↓{outputTokens}
+        </Text>
+
+        <Text color="gray"> · </Text>
+        <Text color="yellow">${actualCostUsd.toFixed(4)}</Text>
+
+        <Text color="gray"> · sess {sessionId.slice(0, 12)}</Text>
+
+        <Text color="gray"> · </Text>
+        <Text color={statusColor}>{statusText}</Text>
+
+        {routingOffline && (
+          <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
+        )}
+      </Box>
+      <Box>
+        <Text color="gray">perms: </Text>
+        <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
+        {alwaysTools && alwaysTools.length > 0 ? (
+          <Text color="yellow"> {`· --x ${alwaysTools.join(", ")}`}</Text>
+        ) : (
+          <Text color="gray"> · w/e/b: ask</Text>
+        )}
+        {planMode && <Text color="magenta"> · PLAN (ro)</Text>}
+      </Box>
+    </Box>
+  );
+}
