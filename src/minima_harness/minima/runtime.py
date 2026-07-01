@@ -30,6 +30,7 @@ from minima_harness.minima.judge import (
     clamp01,
 )
 from minima_harness.minima.mapping import ModelMapping
+from minima_harness.minima.memory import HarnessMemory, NoopHarnessMemory, format_recall_block
 from minima_harness.minima.meter import CostMeter
 from minima_harness.minima.router import MinimaRouter, Ranking, RoutingResult
 from minima_harness.minima.signals import ContextExtractor, extract_or_none
@@ -63,6 +64,7 @@ class MinimaAgent(Agent):
         meter: CostMeter | None = None,
         before_route: BeforeRoute | None = None,
         extractor: ContextExtractor | None = None,
+        memory: HarnessMemory | None = None,
     ) -> None:
         self.config = config
         self.mapping = mapping or (router.mapping if router else ModelMapping())
@@ -71,6 +73,10 @@ class MinimaAgent(Agent):
         self.meter = meter
         self.before_route = before_route
         self.extractor = extractor
+        # Mubit memory seam: recall-before-route + write-back after feedback. Defaults to a
+        # no-op so behaviour is unchanged unless a MubitHarnessMemory is wired in (by the TUI /
+        # --print entrypoint once init_mubit succeeds). Settable post-construction.
+        self.memory: HarnessMemory = memory or NoopHarnessMemory()
         self._task_type_hint = task_type
         self._prompts_run = 0
         # Count of tool calls the human rejected this turn (diff-approval). A reject is a
@@ -125,6 +131,32 @@ class MinimaAgent(Agent):
         self._last_error_raw = None
         self._reroute_note = None  # reset per-turn auto-reroute note
 
+        # Recall-before-route: pull task-relevant prior context from Mubit memory and inject it
+        # into THIS turn's system prompt only (restored in `finally`), so the model acts with
+        # prior learnings instead of blind. No-op unless a MubitHarnessMemory is wired in.
+        _orig_system = self.state.system_prompt
+        recalled = await self.memory.recall(task_text)
+        if recalled:
+            block = format_recall_block(recalled)
+            self.state.system_prompt = f"{_orig_system}\n\n{block}" if _orig_system else block
+        try:
+            return await self._run_routed(
+                content, task_text, effective_task_type, slider, files=files, tags=tags
+            )
+        finally:
+            # Never let this turn's recalled context leak into the next turn's base prompt.
+            self.state.system_prompt = _orig_system
+
+    async def _run_routed(
+        self,
+        content: str | list[ContentBlock] | Message | list[Any],
+        task_text: str,
+        effective_task_type: str | None,
+        slider: float | None,
+        *,
+        files: list[str | Path] | None = None,
+        tags: list[str] | None = None,
+    ) -> RoutingResult | None:
         routing: RoutingResult | None = None
         last: AssistantMessage | None = None
         run_error: BaseException | None = None
@@ -396,6 +428,14 @@ class MinimaAgent(Agent):
         self._excluded_providers.clear()
         await old.aclose()
 
+    async def end_session(self) -> None:
+        """Distil this run into durable Mubit memory (reflect + checkpoint).
+
+        Call once at shutdown / when a coding session ends. No-op unless memory is wired;
+        fail-open, so it never blocks teardown.
+        """
+        await self.memory.end_session()
+
     async def _feedback_safely(
         self,
         task_text: str,
@@ -446,6 +486,20 @@ class MinimaAgent(Agent):
                 usage=usage,
                 latency_ms=latency_ms,
                 iterations=turns_taken or None,
+            )
+            # Close the Mubit learning loop: record this turn's realized outcome as a trace +
+            # score, attributed to the recommendation (idempotency/reference = recommendation_id).
+            # Fail-open and never fabricated — a judge abstention (quality None) writes the trace
+            # but no score. No-op unless a MubitHarnessMemory is wired in.
+            await self.memory.record_outcome(
+                task=task_text,
+                recommendation_id=routing.recommendation_id,
+                model_id=routing.chosen_model_id,
+                outcome=outcome,
+                quality=quality,
+                cost_usd=usage.cost.total,
+                latency_ms=latency_ms,
+                turns=turns_taken,
             )
         except Exception:  # noqa: BLE001 - feedback must never break a successful run
             _log.warning("minima_feedback_failed", exc_info=True)

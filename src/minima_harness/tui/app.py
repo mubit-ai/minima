@@ -267,9 +267,25 @@ class HarnessApp(App):
         self._skills: dict[str, str] = {}
         self._history: History = History(load_history(self.cwd))
         self._load_session_on_mount = load_session
-        init_mubit(self.cwd)
+        # Wire Mubit memory into the agent: recall prior project context before routing and
+        # write realized outcomes back, closing the learning loop. No-op when Mubit is
+        # unavailable (init_mubit returns False and the agent keeps its no-op memory).
+        if init_mubit(self.cwd):
+            from uuid import uuid4
+
+            from minima_harness.minima.memory import MubitHarnessMemory
+
+            self.agent.memory = MubitHarnessMemory(
+                session_id=getattr(self.session, "session_id", None) or uuid4().hex
+            )
         self._load_customization()
         self._apply_extensions()
+
+    async def on_unmount(self) -> None:
+        # Distil this run into durable Mubit memory (reflect + checkpoint) on quit. Best-effort
+        # and time-boxed so exiting never hangs on the control plane; end_session is fail-open.
+        with anyio.move_on_after(5.0):
+            await self.agent.end_session()
 
     def _load_customization(self) -> None:
         from minima_harness.tui.customize import load_skills, load_templates

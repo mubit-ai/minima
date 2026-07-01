@@ -188,10 +188,27 @@ def main(argv: list[str] | None = None) -> int:
         agent = MinimaAgent(
             config, tools=tools, meter=CostMeter(), system_prompt=build_system_prompt(cwd)
         )
+        # Wire Mubit memory (recall-before-route + outcome write-back) for the one-shot run.
+        from minima_harness.tui.mubit import init_mubit
+
+        if init_mubit(cwd):
+            from uuid import uuid4
+
+            from minima_harness.minima.memory import MubitHarnessMemory
+
+            agent.memory = MubitHarnessMemory(session_id=uuid4().hex)
         from minima_harness.tui.run_modes import run_json, run_print
 
         runner = run_json if args.mode == "json" else run_print
-        return asyncio.run(runner(agent, prompt))
+
+        async def _run_once() -> int:
+            try:
+                return await runner(agent, prompt)
+            finally:
+                # Distil the one-shot run into durable memory (reflect + checkpoint).
+                await agent.end_session()
+
+        return asyncio.run(_run_once())
 
     mgr = SessionManager()
     load_on_start = False
