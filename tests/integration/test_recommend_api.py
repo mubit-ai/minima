@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 
 def test_recommend_cold_start(client):
     resp = client.post(
@@ -19,6 +21,25 @@ def test_recommend_cold_start(client):
     assert body["recommended_model"]["model_id"]
     assert body["recommendation_id"]
     assert body["ranked"]
+
+
+def test_recommend_uses_configured_single_tenant_key_without_auth_header(app):
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/recommend",
+            json={
+                "task": {
+                    "task": "Summarize this incident report into 3 bullets.",
+                    "task_type": "summarization",
+                },
+                "cost_quality_tradeoff": 3,
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recommendation_id"]
+    assert body["recommended_model"]["model_id"]
+    assert body["classified_task_type"] == "summarization"
 
 
 def test_recommend_no_candidates_returns_422(client):

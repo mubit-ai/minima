@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from minima.memory import keys
-from minima.recommender.classify import classify, infer_difficulty, infer_task_type
+from minima.recommender.classify import (
+    classify,
+    classify_details,
+    extract_feature_vector,
+    infer_difficulty,
+    infer_task_type,
+)
 from minima.schemas.common import Difficulty, TaskInput, TaskType
 
 
@@ -26,6 +32,32 @@ def test_infer_difficulty_code_harder_than_classification():
 def test_caller_hints_win():
     task = TaskInput(task="x", task_type=TaskType.reasoning, difficulty=Difficulty.expert)
     assert classify(task) == (TaskType.reasoning, Difficulty.expert)
+
+
+def test_extract_feature_vector():
+    features = extract_feature_vector(
+        "Translate this to French as JSON in 3 bullets",
+        expected_output_tokens=120,
+    )
+    assert features.reasoning == 0.0
+    assert features.code == 0.0
+    assert features.language == 1.0
+    assert features.structured_output == 1.0
+    assert features.creativity == 0.0
+    assert features.tool_use == 0.0
+    assert features.expected_input_output_length > 0
+
+
+def test_classify_details_exposes_uncertainty():
+    details = classify_details(TaskInput(task="Arrange the blocks by texture and weight"))
+    assert details.features.reasoning == 0.0
+    assert details.features.code == 0.0
+    assert details.features.structured_output == 0.0
+    assert details.features.creativity == 0.0
+    assert details.features.language == 0.0
+    assert details.features.tool_use == 0.0
+    assert details.task_type == TaskType.other
+    assert 0.0 <= details.uncertainty <= 1.0
 
 
 def test_fingerprint_stable_under_whitespace_and_case():

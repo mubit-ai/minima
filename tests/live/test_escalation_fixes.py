@@ -19,6 +19,7 @@ import os
 import uuid
 
 import pytest
+from mubit.client import AuthError
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
@@ -108,15 +109,18 @@ async def _feedback(
     content = build_content("other", rec_resp.classified_difficulty.value, FLASH_FAIL_TASK)
     upsert_key = outcome_upsert_key(cluster, model_id)
     idem = f"{rec_resp.recommendation_id}:{model_id}"
-    record_id = await memory.remember_outcome(
-        content=content,
-        record=record,
-        lane=lane,
-        upsert_key=upsert_key,
-        idempotency_key=idem,
-        importance="medium",
-        source="human",
-    )
+    try:
+        record_id = await memory.remember_outcome(
+            content=content,
+            record=record,
+            lane=lane,
+            upsert_key=upsert_key,
+            idempotency_key=idem,
+            importance="medium",
+            source="human",
+        )
+    except AuthError as exc:
+        pytest.skip(f"Mubit rejected live feedback write: {exc}")
     # Pin the record id so the durable fastpath can dereference it on the next recommend
     if record_id and durable_refs is not None:
         durable_refs.upsert(lane, cluster, model_id, record_id, record_id)
