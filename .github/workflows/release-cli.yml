@@ -1,0 +1,140 @@
+name: Release — CLI binaries + Homebrew
+
+# On a published release, cross-compile the TypeScript/Bun CLI for macOS + Linux,
+# ad-hoc codesign the macOS arches, attach the tarballs to the release, and open
+# a PR to the Homebrew tap (mubit-ai/homebrew-minima) bumping the binary formula.
+# PyPI publishing of the Python `minima-cli` (SDK + server tooling) stays in prod.yml.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build (e.g. v0.5.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  BUN_VERSION: "1.3.14"
+
+permissions:
+  contents: write # upload release assets
+
+jobs:
+  build-macos:
+    name: Build + sign macOS binaries
+    runs-on: macos-14 # Apple Silicon; cross-compiles darwin-x64 too, codesign is arch-agnostic
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install deps
+        working-directory: packages/tui
+        run: bun install --frozen-lockfile
+      - name: Cross-compile darwin arm64 + x64
+        working-directory: packages/tui
+        run: bun run scripts/build-all.ts bun-darwin-arm64 bun-darwin-x64
+      - name: Ad-hoc codesign (required for Apple Silicon to run the binary)
+        working-directory: packages/tui
+        run: |
+          for b in dist/minima-darwin-arm64 dist/minima-darwin-x64; do
+            codesign -s - --force --timestamp=none "$b"
+            codesign --verify --verbose=1 "$b"
+          done
+      - name: Package tarballs
+        working-directory: packages/tui
+        run: |
+          VER="${RELEASE_TAG#v}"
+          for slug in darwin-arm64 darwin-x64; do
+            tmp="$(mktemp -d)"; cp "dist/minima-$slug" "$tmp/minima"
+            tar -czf "dist/minima-$VER-$slug.tar.gz" -C "$tmp" minima
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin
+          path: packages/tui/dist/minima-*.tar.gz
+
+  build-linux:
+    name: Build Linux binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install deps
+        working-directory: packages/tui
+        run: bun install --frozen-lockfile
+      - name: Cross-compile linux x64 + arm64
+        working-directory: packages/tui
+        run: bun run scripts/build-all.ts bun-linux-x64 bun-linux-arm64
+      - name: Package tarballs
+        working-directory: packages/tui
+        run: |
+          VER="${RELEASE_TAG#v}"
+          for slug in linux-x64 linux-arm64; do
+            tmp="$(mktemp -d)"; cp "dist/minima-$slug" "$tmp/minima"
+            tar -czf "dist/minima-$VER-$slug.tar.gz" -C "$tmp" minima
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: packages/tui/dist/minima-*.tar.gz
+
+  publish-and-bump:
+    name: Attach assets + open tap PR
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect tarballs
+        run: |
+          mkdir -p dist
+          find artifacts -name 'minima-*.tar.gz' -exec cp {} dist/ \;
+          ls -la dist
+      - name: Attach binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" dist/minima-*.tar.gz --clobber --repo "${{ github.repository }}"
+      - name: Render binary formula
+        run: |
+          VER="${RELEASE_TAG#v}"
+          python3 packaging/homebrew/render_formula.py --version "$VER" --dist dist --out minima.rb
+          echo "----- rendered formula -----"; cat minima.rb
+      - name: Open Homebrew tap PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          VER="${RELEASE_TAG#v}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/mubit-ai/homebrew-minima.git" tap
+          cp minima.rb tap/Formula/minima.rb
+          cd tap
+          git config user.name "mubit-release-bot"
+          git config user.email "release-bot@mubit.ai"
+          branch="bump-minima-${VER}"
+          git checkout -b "$branch"
+          if git diff --quiet Formula/minima.rb; then
+            echo "formula already up to date for ${VER}; nothing to do"; exit 0
+          fi
+          git add Formula/minima.rb
+          git commit -m "minima ${VER} (prebuilt binary)"
+          git push -u origin "$branch" --force-with-lease
+          gh pr create --repo mubit-ai/homebrew-minima --base main --head "$branch" \
+            --title "minima ${VER}" \
+            --body "Automated bump to the prebuilt TypeScript/Bun binary for \`${RELEASE_TAG}\`. Replaces the Python virtualenv formula. \`brew test-bot\` validates install + \`test do\` on macOS + Linux before merge." \
+            || echo "PR already exists for ${branch}"

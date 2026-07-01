@@ -17,12 +17,31 @@ import { hostname } from "node:os";
 
 export const DEFAULT_CONSOLE_URL = "https://console.mubit.ai";
 
+/**
+ * Thrown when the tenant's Minima workspace is still provisioning (first-time
+ * auth kicks off async instance creation, ~1-2 min). Not a failure — the caller
+ * should tell the user to re-run `minima auth` shortly; the next run reuses the
+ * now-ready instance.
+ */
+export class ProvisioningPending extends Error {
+  constructor() {
+    super("workspace provisioning");
+    this.name = "ProvisioningPending";
+  }
+}
+
 export interface AuthResult {
   mubitApiKey: string;
   minimaUrl: string;
   instanceId: string;
   projectId: string;
   namespace: string;
+}
+
+/** What the loopback callback carries back: a one-time code, or a provisioning signal. */
+interface LoopbackResult {
+  code?: string;
+  provisioning?: boolean;
 }
 
 export interface RunAuthOptions {
@@ -69,17 +88,17 @@ function openBrowserDefault(url: string): void {
 
 interface Loopback {
   port: number;
-  waitForCode: (timeoutMs: number) => Promise<string>;
+  waitForResult: (timeoutMs: number) => Promise<LoopbackResult>;
   close: () => void;
 }
 
-function startLoopback(state: string): Promise<Loopback> {
+function startLoopback(state: string, consoleUrl: string): Promise<Loopback> {
   return new Promise((resolveStart, rejectStart) => {
-    let resolveCode: (code: string) => void;
-    let rejectCode: (err: Error) => void;
-    const done = new Promise<string>((res, rej) => {
-      resolveCode = res;
-      rejectCode = rej;
+    let resolveResult: (result: LoopbackResult) => void;
+    let rejectResult: (err: Error) => void;
+    const done = new Promise<LoopbackResult>((res, rej) => {
+      resolveResult = res;
+      rejectResult = rej;
     });
 
     const server = createServer((req, res) => {
@@ -90,20 +109,21 @@ function startLoopback(state: string): Promise<Loopback> {
         return;
       }
       const code = u.searchParams.get("code");
+      const provisioning = u.searchParams.get("provisioning");
       const gotState = u.searchParams.get("state");
-      if (!code || gotState !== state) {
-        res.writeHead(400, { "content-type": "text/html" });
+      if (gotState !== state || (!code && !provisioning)) {
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
         res.end("<h2>Invalid authorization callback.</h2>");
-        rejectCode(new Error("invalid callback (state mismatch or missing code)"));
+        rejectResult(new Error("invalid callback (state mismatch or missing code)"));
         return;
       }
-      res.writeHead(200, { "content-type": "text/html" });
-      res.end(
-        "<html><body style='font-family:system-ui;text-align:center;padding-top:4rem'>" +
-          "<h2>Minima CLI authorized ✅</h2>" +
-          "<p>You can close this tab and return to your terminal.</p></body></html>",
-      );
-      resolveCode(code);
+      // Hand the browser back to a branded console page (302) so the final tab
+      // lands on console.mubit.ai — not a bare 127.0.0.1 URL with the code in the
+      // address bar. The CLI already has what it needs, so this is cosmetic only.
+      const landing = `${consoleUrl}/app/cli-auth?status=${provisioning ? "provisioning" : "authorized"}`;
+      res.writeHead(302, { location: landing });
+      res.end();
+      resolveResult(provisioning ? { provisioning: true } : { code: code ?? undefined });
     });
 
     server.on("error", rejectStart);
@@ -111,19 +131,19 @@ function startLoopback(state: string): Promise<Loopback> {
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
       let settled = false;
-      const waitForCode = (timeoutMs: number) =>
-        new Promise<string>((resolve, reject) => {
+      const waitForResult = (timeoutMs: number) =>
+        new Promise<LoopbackResult>((resolve, reject) => {
           const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
             reject(new Error("timed out waiting for browser authorization"));
           }, timeoutMs);
           done.then(
-            (code) => {
+            (result) => {
               if (settled) return;
               settled = true;
               clearTimeout(timer);
-              resolve(code);
+              resolve(result);
             },
             (err) => {
               if (settled) return;
@@ -133,7 +153,7 @@ function startLoopback(state: string): Promise<Loopback> {
             },
           );
         });
-      resolveStart({ port, waitForCode, close: () => server.close() });
+      resolveStart({ port, waitForResult, close: () => server.close() });
     });
   });
 }
@@ -167,7 +187,7 @@ export async function runAuth(opts: RunAuthOptions): Promise<AuthResult> {
   const { verifier, challenge } = makePkce();
   const state = base64url(randomBytes(16));
 
-  const loop = await startLoopback(state);
+  const loop = await startLoopback(state, consoleUrl);
   try {
     const url = buildAuthUrl(consoleUrl, {
       port: loop.port,
@@ -180,7 +200,11 @@ export async function runAuth(opts: RunAuthOptions): Promise<AuthResult> {
     opts.onUrl?.(url);
     (opts.openBrowser ?? openBrowserDefault)(url);
 
-    const code = await loop.waitForCode(timeoutMs);
+    const result = await loop.waitForResult(timeoutMs);
+    if (result.provisioning || !result.code) {
+      throw new ProvisioningPending();
+    }
+    const code = result.code;
 
     const res = await fetchImpl(`${consoleUrl}/api/cli/token`, {
       method: "POST",

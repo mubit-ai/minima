@@ -16,7 +16,7 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
-import { DEFAULT_CONSOLE_URL, runAuth } from "./auth.ts";
+import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ChatMessage, Messages } from "./messages.tsx";
@@ -957,15 +957,26 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             },
           ]);
         } catch (exc) {
-          setMessages((m) => [
-            ...m,
-            {
-              role: "tool",
-              text: `auth failed: ${exc instanceof Error ? exc.message : String(exc)}`,
-              toolName: "auth",
-              isError: true,
-            },
-          ]);
+          if (exc instanceof ProvisioningPending) {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: "⏳ Your Minima workspace is provisioning (~1-2 min). Run /auth again shortly — it'll pick up where it left off.",
+                toolName: "auth",
+              },
+            ]);
+          } else {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: `auth failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+                toolName: "auth",
+                isError: true,
+              },
+            ]);
+          }
         }
         break;
       }

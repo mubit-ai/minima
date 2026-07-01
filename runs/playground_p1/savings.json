@@ -1,0 +1,42 @@
+{
+  "days": 7.0,
+  "group_by": null,
+  "groups": [],
+  "health": {
+    "cheapest_model_share": 1.0,
+    "cost_position": 0.0,
+    "epsilon_policy_share": 0.0,
+    "escalation_rate": 0.0,
+    "exploration_share": 0.0,
+    "feedback_coverage": 0.3333,
+    "late_feedback_share": 0.0,
+    "recommendations": 3,
+    "shadow_agreement": 0.0,
+    "success_rate": 1.0,
+    "top_model_share": 0.0
+  },
+  "namespace": "playground-p1",
+  "org_id": "minima-runs-gykrsy",
+  "since": 1781692082.316839,
+  "summary": {
+    "estimated": {
+      "cost_declared_usd": 0.0,
+      "cost_premium_usd": 0.0355,
+      "cost_recommended_usd": 0.00253,
+      "n": 3,
+      "n_declared": 0,
+      "savings_vs_declared_usd": 0.0,
+      "savings_vs_premium_usd": 0.03297
+    },
+    "realized": {
+      "est_cost_declared_usd": 0.0,
+      "est_cost_premium_usd": 0.012,
+      "est_cost_recommended_usd": 0.00084,
+      "n_declared": 0,
+      "n_reconciled": 1,
+      "realized_cost_usd": 0.0021,
+      "savings_vs_declared_est_usd": 0.0,
+      "savings_vs_premium_est_usd": 0.0099
+    }
+  }
+}
