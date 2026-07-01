@@ -88,6 +88,13 @@ export const SECTIONS: Section[] = [
         optional: true,
       },
       { key: "MUBIT_ENDPOINT", label: "Mubit endpoint URL", secret: false, optional: true },
+      {
+        key: "MUBIT_CONSOLE_URL",
+        label: "Mubit console URL (used by /auth)",
+        secret: false,
+        optional: true,
+        default: "https://console.mubit.ai",
+      },
     ],
   },
 ];

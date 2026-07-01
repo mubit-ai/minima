@@ -1,0 +1,231 @@
+/**
+ * `minima auth` — one-click browser login that provisions a managed Mubit
+ * project for this repo and returns a scoped API key to the locally-running CLI.
+ *
+ * Loopback + PKCE (the `gh auth login` pattern): we start an ephemeral HTTP
+ * server on 127.0.0.1, open the browser to the Mubit console's /app/cli-auth
+ * page, and — after Clerk login + server-side provisioning — the browser
+ * redirects a one-time code to our loopback. We then exchange {code, verifier}
+ * at /api/cli/token for the key. The verifier never leaves this process, so the
+ * code (all the browser ever sees) is useless on its own.
+ */
+
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import { hostname } from "node:os";
+
+export const DEFAULT_CONSOLE_URL = "https://console.mubit.ai";
+
+/**
+ * Thrown when the tenant's Minima workspace is still provisioning (first-time
+ * auth kicks off async instance creation, ~1-2 min). Not a failure — the caller
+ * should tell the user to re-run `minima auth` shortly; the next run reuses the
+ * now-ready instance.
+ */
+export class ProvisioningPending extends Error {
+  constructor() {
+    super("workspace provisioning");
+    this.name = "ProvisioningPending";
+  }
+}
+
+export interface AuthResult {
+  mubitApiKey: string;
+  minimaUrl: string;
+  instanceId: string;
+  projectId: string;
+  namespace: string;
+}
+
+/** What the loopback callback carries back: a one-time code, or a provisioning signal. */
+interface LoopbackResult {
+  code?: string;
+  provisioning?: boolean;
+}
+
+export interface RunAuthOptions {
+  /** Stable repo identity → project name (see projects.repoIdentity). */
+  repo: string;
+  /** Mubit console base URL, e.g. https://console.mubit.ai. */
+  consoleUrl?: string;
+  region?: "eu" | "us";
+  /** Overall deadline for the whole flow (default 120s). */
+  timeoutMs?: number;
+  /** Injectable for tests / headless. Default opens the OS browser. */
+  openBrowser?: (url: string) => void;
+  /** Called with the auth URL (so callers can print a manual fallback). */
+  onUrl?: (url: string) => void;
+  /** Injectable for tests. */
+  fetchImpl?: typeof fetch;
+}
+
+function base64url(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function makePkce(): { verifier: string; challenge: string } {
+  const verifier = base64url(randomBytes(32));
+  const challenge = base64url(createHash("sha256").update(verifier).digest());
+  return { verifier, challenge };
+}
+
+function openBrowserDefault(url: string): void {
+  const cmd =
+    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    const child = spawn(cmd, [url], {
+      stdio: "ignore",
+      detached: true,
+      shell: process.platform === "win32",
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // If the browser can't be opened, the caller's onUrl fallback still prints the link.
+  }
+}
+
+interface Loopback {
+  port: number;
+  waitForResult: (timeoutMs: number) => Promise<LoopbackResult>;
+  close: () => void;
+}
+
+function startLoopback(state: string, consoleUrl: string): Promise<Loopback> {
+  return new Promise((resolveStart, rejectStart) => {
+    let resolveResult: (result: LoopbackResult) => void;
+    let rejectResult: (err: Error) => void;
+    const done = new Promise<LoopbackResult>((res, rej) => {
+      resolveResult = res;
+      rejectResult = rej;
+    });
+
+    const server = createServer((req, res) => {
+      const u = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (u.pathname !== "/callback") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      const code = u.searchParams.get("code");
+      const provisioning = u.searchParams.get("provisioning");
+      const gotState = u.searchParams.get("state");
+      if (gotState !== state || (!code && !provisioning)) {
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+        res.end("<h2>Invalid authorization callback.</h2>");
+        rejectResult(new Error("invalid callback (state mismatch or missing code)"));
+        return;
+      }
+      // Hand the browser back to a branded console page (302) so the final tab
+      // lands on console.mubit.ai — not a bare 127.0.0.1 URL with the code in the
+      // address bar. The CLI already has what it needs, so this is cosmetic only.
+      const landing = `${consoleUrl}/app/cli-auth?status=${provisioning ? "provisioning" : "authorized"}`;
+      res.writeHead(302, { location: landing });
+      res.end();
+      resolveResult(provisioning ? { provisioning: true } : { code: code ?? undefined });
+    });
+
+    server.on("error", rejectStart);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      let settled = false;
+      const waitForResult = (timeoutMs: number) =>
+        new Promise<LoopbackResult>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            reject(new Error("timed out waiting for browser authorization"));
+          }, timeoutMs);
+          done.then(
+            (result) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              resolve(result);
+            },
+            (err) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              reject(err);
+            },
+          );
+        });
+      resolveStart({ port, waitForResult, close: () => server.close() });
+    });
+  });
+}
+
+function buildAuthUrl(
+  consoleUrl: string,
+  q: {
+    port: number;
+    state: string;
+    challenge: string;
+    repo: string;
+    host: string;
+    region?: string;
+  },
+): string {
+  const base = consoleUrl.replace(/\/+$/, "");
+  const url = new URL(`${base}/app/cli-auth`);
+  url.searchParams.set("port", String(q.port));
+  url.searchParams.set("state", q.state);
+  url.searchParams.set("challenge", q.challenge);
+  url.searchParams.set("repo", q.repo);
+  url.searchParams.set("host", q.host);
+  if (q.region) url.searchParams.set("region", q.region);
+  return url.toString();
+}
+
+export async function runAuth(opts: RunAuthOptions): Promise<AuthResult> {
+  const consoleUrl = (opts.consoleUrl || DEFAULT_CONSOLE_URL).replace(/\/+$/, "");
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const { verifier, challenge } = makePkce();
+  const state = base64url(randomBytes(16));
+
+  const loop = await startLoopback(state, consoleUrl);
+  try {
+    const url = buildAuthUrl(consoleUrl, {
+      port: loop.port,
+      state,
+      challenge,
+      repo: opts.repo,
+      host: hostname(),
+      region: opts.region,
+    });
+    opts.onUrl?.(url);
+    (opts.openBrowser ?? openBrowserDefault)(url);
+
+    const result = await loop.waitForResult(timeoutMs);
+    if (result.provisioning || !result.code) {
+      throw new ProvisioningPending();
+    }
+    const code = result.code;
+
+    const res = await fetchImpl(`${consoleUrl}/api/cli/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, verifier }),
+    });
+    if (!res.ok) {
+      throw new Error(`token exchange failed (HTTP ${res.status})`);
+    }
+    const data = (await res.json()) as Partial<AuthResult>;
+    if (!data.mubitApiKey) {
+      throw new Error("server did not return an API key");
+    }
+    return {
+      mubitApiKey: data.mubitApiKey,
+      minimaUrl: data.minimaUrl ?? "",
+      instanceId: data.instanceId ?? "",
+      projectId: data.projectId ?? "",
+      namespace: data.namespace ?? "",
+    };
+  } finally {
+    loop.close();
+  }
+}

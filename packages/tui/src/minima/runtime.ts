@@ -18,7 +18,7 @@ import type { ThinkingLevel } from "../agent/tools.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
-import type { HarnessConfig } from "./config.ts";
+import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import type { CostMeter } from "./meter.ts";
@@ -74,8 +74,11 @@ export class MinimaAgent extends Agent {
     this.taskTypeHint = taskType ?? null;
   }
 
-  /** Rebuild the Minima client from the current environment (/reconnect). */
+  /** Rebuild the Minima client from the current environment (/reconnect, /auth, /config set). */
   reconnect(): void {
+    // Re-read MINIMA_URL / MUBIT_API_KEY from the env so a key set mid-session
+    // (via /config set or /auth) actually reaches the rebuilt client.
+    refreshRoutingEnv(this.config);
     this.router = MinimaRouter.forConfig(this.config, this.mapping);
     this.offlineReason = null;
   }

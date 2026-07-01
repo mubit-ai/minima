@@ -19,6 +19,7 @@ import { ConstJudge } from "../minima/index.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
 import { HarnessApp } from "../tui/app.tsx";
+import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
   SECTIONS,
   hydrateEnv,
@@ -28,6 +29,7 @@ import {
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
+import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
 const ENV_FILES = [".env.harness", ".env"];
@@ -223,6 +225,8 @@ function parseArgs(argv: string[]): CliArgs {
 const HELP = `minima — cost-aware model-routing coding agent.
 
 Usage: minima [prompt] [--print|--mode json] [options]
+       minima auth              sign in to Mubit + provision this repo's project
+       minima config [set|get]  manage stored credentials
 
   -p, --print              one-shot: print the reply and exit
       --mode {interactive|print|json}
@@ -265,6 +269,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // `minima config …` — credential setup (no TUI; works before any keys exist).
   if (argv[0] === "config") return configCli(argv.slice(1));
 
+  // `minima auth` — one-click browser login + per-repo project provisioning.
+  if (argv[0] === "auth") return authCli(argv.slice(1));
+
   let args: CliArgs;
   try {
     args = parseArgs(argv);
@@ -287,6 +294,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   const config = buildConfig(args);
+  // Per-repo memory isolation: MINIMA_NAMESPACE env wins, else the project
+  // provisioned for this repo by `minima auth` (~/.minima-harness/projects.json).
+  const nsEnv = process.env.MINIMA_NAMESPACE?.trim();
+  if (nsEnv) {
+    config.namespace = nsEnv;
+  } else {
+    const mapping = await getProject(repoIdentity(process.cwd()));
+    if (mapping?.namespace) config.namespace = mapping.namespace;
+  }
   const tools = toolsFor(args);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -366,6 +382,53 @@ async function configCli(args: string[]): Promise<number> {
   }
   process.stdout.write("\nUse `minima config set <KEY> <value>` to store a credential.\n");
   return 0;
+}
+
+/** `minima auth` — browser login → provision this repo's Mubit project → store the key. */
+async function authCli(args: string[]): Promise<number> {
+  const region = args.includes("--region")
+    ? (args[args.indexOf("--region") + 1] as "eu" | "us" | undefined)
+    : undefined;
+  const cwd = process.cwd();
+  const repo = repoIdentity(cwd);
+  const consoleUrl = process.env.MUBIT_CONSOLE_URL?.trim() || DEFAULT_CONSOLE_URL;
+
+  process.stdout.write(`minima auth — provisioning a Mubit project for ${repo}\n`);
+  try {
+    const result = await runAuth({
+      repo,
+      consoleUrl,
+      region: region === "eu" || region === "us" ? region : undefined,
+      onUrl: (u) =>
+        process.stdout.write(
+          `\nOpening your browser to authorize:\n  ${u}\n\n(If it didn't open, paste that URL into your browser.)\n`,
+        ),
+    });
+    await storeSetValue("MUBIT_API_KEY", result.mubitApiKey);
+    if (result.minimaUrl) await storeSetValue("MINIMA_URL", result.minimaUrl);
+    await setProject(repo, {
+      instanceId: result.instanceId,
+      projectId: result.projectId,
+      namespace: result.namespace,
+      minimaUrl: result.minimaUrl,
+    });
+    process.stdout.write(
+      `\n✅ Authorized. MUBIT_API_KEY stored (${mask(result.mubitApiKey)}).\n   project: ${result.projectId}  ·  instance: ${result.instanceId}\n   Run \`minima\` to start.\n`,
+    );
+    return 0;
+  } catch (exc) {
+    if (exc instanceof ProvisioningPending) {
+      process.stdout.write(
+        "\n⏳ Your Minima workspace is provisioning (~1-2 min). " +
+          "Re-run `minima auth` shortly — it'll pick up where it left off.\n",
+      );
+      return 0;
+    }
+    process.stderr.write(
+      `\nminima auth failed: ${exc instanceof Error ? exc.message : String(exc)}\n`,
+    );
+    return 1;
+  }
 }
 
 if (import.meta.main) {
