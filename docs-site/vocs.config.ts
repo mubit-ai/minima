@@ -55,7 +55,7 @@ export default defineConfig({
     },
   },
   font: {
-    google: 'JetBrains Mono',
+    google: 'Manrope',
   },
   aiCta: false,
   search: {
