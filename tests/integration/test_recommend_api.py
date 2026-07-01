@@ -21,6 +21,7 @@ def test_recommend_cold_start(client):
     assert body["recommended_model"]["model_id"]
     assert body["recommendation_id"]
     assert body["ranked"]
+    assert body["stage_latency_ms"]["total"] >= 0
 
 
 def test_recommend_uses_configured_single_tenant_key_without_auth_header(app):
@@ -40,6 +41,13 @@ def test_recommend_uses_configured_single_tenant_key_without_auth_header(app):
     assert body["recommendation_id"]
     assert body["recommended_model"]["model_id"]
     assert body["classified_task_type"] == "summarization"
+    profile = body["classification_profile"]
+    assert profile["task_type_source"] == "caller"
+    assert profile["selected_rule"] == "summarization"
+    assert any(
+        rule["task_type"] == "summarization" and rule["matched"]
+        for rule in profile["rule_checks"]
+    )
 
 
 def test_recommend_no_candidates_returns_422(client):

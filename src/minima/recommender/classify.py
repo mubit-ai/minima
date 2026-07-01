@@ -1,16 +1,18 @@
 """Heuristic task classification: feature vector, type, and difficulty.
 
 Cheap and deterministic. Caller-supplied ``task_type``/``difficulty`` always win.
-A cheap-LLM classifier is layered in a later phase when confidence is low.
+Neighbor votes can refine an ``other`` result, but no LLM is consulted here.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from minima.schemas.common import Difficulty, TaskInput, TaskType
+from minima.schemas.recommend import ClassificationProfile, ClassificationRuleProfile
 
 
 @dataclass(slots=True, frozen=True)
@@ -30,8 +32,10 @@ class ClassificationEstimate:
     task_type: TaskType
     difficulty: Difficulty
     uncertainty: float
+    confidence: float
     neighbor_support: float = 0.0
     neighbor_count: int = 0
+    profile: ClassificationProfile | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -41,6 +45,31 @@ class _NeighborVoteEstimate:
     uncertainty: float
     neighbor_support: float
     neighbor_count: int
+
+
+@dataclass(slots=True, frozen=True)
+class NeighborClassificationEstimate:
+    task_type: TaskType
+    neighbor_support: float
+    neighbor_count: int
+
+
+@dataclass(slots=True)
+class _ClassificationProfiler:
+    started: float = field(default_factory=time.monotonic)
+    marks: list[tuple[str, float]] = field(default_factory=list)
+
+    def mark(self, name: str) -> None:
+        self.marks.append((name, (time.monotonic() - self.started) * 1000.0))
+
+    def as_dict(self) -> dict[str, float]:
+        result: dict[str, float] = {}
+        prev = 0.0
+        for name, total in self.marks:
+            result[name] = round(total - prev, 3)
+            prev = total
+        result["total"] = round((time.monotonic() - self.started) * 1000.0, 3)
+        return result
 
 
 @dataclass(slots=True, frozen=True)
@@ -196,6 +225,10 @@ def _vector_items(vector: TaskFeatureVector) -> tuple[tuple[str, float], ...]:
     return tuple((name, getattr(vector, name)) for name in _FEATURE_NAMES)
 
 
+def _vector_to_dict(vector: TaskFeatureVector) -> dict[str, float]:
+    return {name: getattr(vector, name) for name in _FEATURE_NAMES}
+
+
 def _vector_from_values(values: dict[str, float]) -> TaskFeatureVector:
     return TaskFeatureVector(**{name: _clamp01(values.get(name, 0.0)) for name in _FEATURE_NAMES})
 
@@ -208,8 +241,63 @@ def _blend_vectors(primary: TaskFeatureVector, secondary: TaskFeatureVector, wei
     return _vector_from_values(blended)
 
 
-def _matching_rules(text: str) -> tuple[_FeatureRule, ...]:
-    return tuple(rule for rule in _FEATURE_RULES if rule.pattern.search(text))
+def _classify_text(
+    text: str,
+    *,
+    expected_input_tokens: int | None = None,
+    expected_output_tokens: int | None = None,
+) -> tuple[TaskFeatureVector, tuple[ClassificationRuleProfile, ...], TaskType, str | None]:
+    values = dict.fromkeys(_FEATURE_NAMES, 0.0)
+    rule_checks: list[ClassificationRuleProfile] = []
+    heuristic_task_type = TaskType.other
+    selected_rule: str | None = None
+    for rule in _FEATURE_RULES:
+        matched = bool(rule.pattern.search(text))
+        if matched:
+            if selected_rule is None:
+                heuristic_task_type = rule.task_type
+                selected_rule = rule.task_type.value
+            for name, value in _vector_items(rule.values):
+                values[name] = max(values[name], value)
+        rule_checks.append(
+            ClassificationRuleProfile(
+                task_type=rule.task_type,
+                pattern=rule.pattern.pattern,
+                matched=matched,
+                feature_boosts=_vector_to_dict(rule.values),
+            )
+        )
+
+    features = _vector_from_values(values)
+    reasoning = features.reasoning
+    code = features.code
+    structured_output = features.structured_output
+    creativity = features.creativity
+    language = features.language
+    tool_use = features.tool_use
+    expected_input_output_length = _normalize_length_score(
+        text, expected_input_tokens, expected_output_tokens
+    )
+    if _STRUCTURED_OUTPUT_MARKERS.search(text):
+        structured_output = max(structured_output, 1.0)
+    if reasoning and re.search(r"\b(why|how|what|which|explain)\b", text, re.I):
+        reasoning = min(1.0, reasoning + 0.15)
+    if structured_output and re.search(r"\b(json|yaml|csv|table|bullet|list)\b", text, re.I):
+        structured_output = min(1.0, structured_output + 0.1)
+    return (
+        TaskFeatureVector(
+            reasoning=reasoning,
+            code=code,
+            structured_output=structured_output,
+            creativity=creativity,
+            expected_input_output_length=expected_input_output_length,
+            language=language,
+            tool_use=tool_use,
+        ),
+        tuple(rule_checks),
+        heuristic_task_type,
+        selected_rule,
+    )
 
 
 def _feature_vector_from_rules(rules: Iterable[_FeatureRule]) -> TaskFeatureVector:
@@ -238,29 +326,12 @@ def _normalize_length_score(text: str, expected_input_tokens: int | None, expect
 def extract_feature_vector(
     text: str, *, expected_input_tokens: int | None = None, expected_output_tokens: int | None = None
 ) -> TaskFeatureVector:
-    features = _feature_vector_from_rules(_matching_rules(text))
-    reasoning = features.reasoning
-    code = features.code
-    structured_output = features.structured_output
-    creativity = features.creativity
-    language = features.language
-    tool_use = features.tool_use
-    expected_input_output_length = _normalize_length_score(text, expected_input_tokens, expected_output_tokens)
-    if _STRUCTURED_OUTPUT_MARKERS.search(text):
-        structured_output = max(structured_output, 1.0)
-    if reasoning and re.search(r"\b(why|how|what|which|explain)\b", text, re.I):
-        reasoning = min(1.0, reasoning + 0.15)
-    if structured_output and re.search(r"\b(json|yaml|csv|table|bullet|list)\b", text, re.I):
-        structured_output = min(1.0, structured_output + 0.1)
-    return TaskFeatureVector(
-        reasoning=reasoning,
-        code=code,
-        structured_output=structured_output,
-        creativity=creativity,
-        expected_input_output_length=expected_input_output_length,
-        language=language,
-        tool_use=tool_use,
+    features, _, _, _ = _classify_text(
+        text,
+        expected_input_tokens=expected_input_tokens,
+        expected_output_tokens=expected_output_tokens,
     )
+    return features
 
 
 def _estimate_uncertainty(
@@ -278,6 +349,38 @@ def _estimate_uncertainty(
     if neighbor_support > 0.0:
         base = min(base, 1.0 - _clamp01(neighbor_support) + 0.1)
     return _clamp01(base)
+
+
+def _classification_confidence(
+    task: TaskInput,
+    task_type: TaskType,
+    heuristic_task_type: TaskType,
+    uncertainty: float,
+    selected_rule: str | None = None,
+) -> float:
+    confidence = 1.0 - _clamp01(uncertainty)
+    if task.task_type is not None:
+        confidence += 0.12
+        if task.task_type == task_type:
+            confidence += 0.08
+    if task_type in _EASY_TYPES:
+        confidence += 0.06
+    if task_type == TaskType.other:
+        confidence -= 0.1
+    elif heuristic_task_type == task_type:
+        confidence += 0.04
+    if task.task_type is None and task_type in _EASY_TYPES:
+        confidence += 0.03
+    if (
+        selected_rule is not None
+        and task_type in _EASY_TYPES
+        and task.task_type is not None
+        and task.task_type == task_type
+    ):
+        confidence = max(confidence, 0.85)
+    elif selected_rule is not None and task_type in _EASY_TYPES:
+        confidence = max(confidence, 0.75)
+    return _clamp01(confidence)
 
 
 def _neighbor_classification_estimate(
@@ -322,11 +425,8 @@ def _neighbor_classification_estimate(
 
 
 def infer_task_type(text: str) -> TaskType:
-    rules = _matching_rules(text)
-    _ = _feature_vector_from_rules(rules)
-    if rules:
-        return rules[0].task_type
-    return TaskType.other
+    _, _, task_type, _ = _classify_text(text)
+    return task_type
 
 
 def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
@@ -355,14 +455,18 @@ def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
 def classify_details(
     task: TaskInput, *, neighbor_votes: Iterable[tuple[str, float]] | None = None
 ) -> ClassificationEstimate:
-    features = extract_feature_vector(
+    profiler = _ClassificationProfiler()
+    profiler.mark("start")
+    features, rule_checks, heuristic_task_type, selected_rule = _classify_text(
         task.task,
         expected_input_tokens=task.expected_input_tokens,
         expected_output_tokens=task.expected_output_tokens,
     )
-    task_type = task.task_type or infer_task_type(task.task)
+    profiler.mark("classify_text")
     neighbor_support = 0.0
     neighbor_count = 0
+    task_type = task.task_type or heuristic_task_type
+    task_type_source = "caller" if task.task_type is not None else "heuristic"
     if neighbor_votes is not None:
         neighbor_estimate = _neighbor_classification_estimate(neighbor_votes)
         if neighbor_estimate is not None:
@@ -371,15 +475,43 @@ def classify_details(
             neighbor_count = neighbor_estimate.neighbor_count
             if task.task_type is None and task_type == TaskType.other and neighbor_estimate.task_type != TaskType.other:
                 task_type = neighbor_estimate.task_type
+                task_type_source = "neighbor_vote"
+        profiler.mark("neighbor_vote")
+    profiler.mark("difficulty")
     difficulty = task.difficulty or infer_difficulty(task.task, task_type)
     uncertainty = _estimate_uncertainty(features, task_type, neighbor_support=neighbor_support)
+    confidence = _classification_confidence(
+        task, task_type, heuristic_task_type, uncertainty, selected_rule=selected_rule
+    )
+    easy_route = task_type in _EASY_TYPES and confidence >= 0.72 and selected_rule is not None
+    profile = ClassificationProfile(
+        task_type_source=task_type_source,
+        difficulty_source="caller" if task.difficulty is not None else "heuristic",
+        caller_task_type=task.task_type,
+        caller_difficulty=task.difficulty,
+        heuristic_task_type=heuristic_task_type,
+        heuristic_difficulty=infer_difficulty(task.task, heuristic_task_type),
+        final_task_type=task_type,
+        final_difficulty=difficulty,
+        selected_rule=selected_rule,
+        rule_checks=list(rule_checks),
+        extracted_features=_vector_to_dict(features),
+        uncertainty=uncertainty,
+        confidence=confidence,
+        easy_route=easy_route,
+        neighbor_support=neighbor_support,
+        neighbor_count=neighbor_count,
+        timings_ms=profiler.as_dict(),
+    )
     return ClassificationEstimate(
         features=features,
         task_type=task_type,
         difficulty=difficulty,
         uncertainty=uncertainty,
+        confidence=confidence,
         neighbor_support=neighbor_support,
         neighbor_count=neighbor_count,
+        profile=profile,
     )
 
 
@@ -397,10 +529,23 @@ def classify_from_neighbors(
 
     ``votes`` is ``(neighbor_task_type, similarity)`` over recalled outcomes. Returns the
     similarity-weighted plurality type when it is non-`other`, has >= ``min_neighbors``
-    supporters, and holds >= ``min_share`` of the weighted vote; else None. This is the free,
-    semantic alternative to a paid LLM-classify call for prompts the regex can't place.
+    supporters, and holds >= ``min_share`` of the weighted vote; else None. This is the
+    free semantic fallback for prompts the regex can't place.
     """
     estimate = _neighbor_classification_estimate(votes, min_neighbors=min_neighbors, min_share=min_share)
     if estimate is None or estimate.task_type == TaskType.other:
         return None
     return estimate.task_type
+
+
+def classify_from_neighbors_details(
+    votes: list[tuple[str, float]], *, min_neighbors: int = 2, min_share: float = 0.5
+) -> NeighborClassificationEstimate | None:
+    estimate = _neighbor_classification_estimate(votes, min_neighbors=min_neighbors, min_share=min_share)
+    if estimate is None or estimate.task_type == TaskType.other:
+        return None
+    return NeighborClassificationEstimate(
+        task_type=estimate.task_type,
+        neighbor_support=estimate.neighbor_support,
+        neighbor_count=estimate.neighbor_count,
+    )
