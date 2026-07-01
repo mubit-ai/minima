@@ -1,6 +1,6 @@
 {
   "name": "minima-tui",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Minima harness + TUI — a TypeScript/Ink port of minima_harness. Talks to the Python FastAPI recommender service over the /v1/* contract.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",
@@ -24,6 +24,7 @@
     "lint": "biome check src",
     "format": "biome format --write src",
     "build": "bun run scripts/build.ts",
+    "build:all": "bun run scripts/build-all.ts",
     "prepublishOnly": "bun run check && bun test"
   },
   "dependencies": {
