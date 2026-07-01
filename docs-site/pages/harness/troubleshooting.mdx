@@ -1,0 +1,56 @@
+---
+title: Troubleshooting
+description: Common issues — auth, routing connectivity, permissions, context, and provider keys.
+---
+
+import { PageHeader, Note, Tip } from '@components'
+
+<PageHeader />
+
+# Troubleshooting
+
+## The recommender is unreachable
+
+If routing calls fail or hang:
+
+- Run `/reconnect` to re-establish the routing client.
+- Check `MINIMA_URL` (`minima config get MINIMA_URL`) — it should be `https://api.minima.sh` unless you're pointing at a local recommender.
+- As a fallback, run pinned + offline: `minima --offline --model <id> --provider <name>`.
+
+## Authentication failures
+
+- Re-run `minima auth` to refresh your `MUBIT_API_KEY` and repo project mapping.
+- Verify the key is stored: `minima config get MUBIT_API_KEY` (it will show the stored value).
+- If your org is in a specific region, pass `minima auth --region eu` or `--region us`.
+- Override the console with `MUBIT_CONSOLE_URL` if you use a non-default Mubit console.
+
+## "No provider key" / a model won't run
+
+The harness runs models itself, so the relevant provider key must be set. Confirm with `minima config`, then set the missing one:
+
+```bash
+minima config set ANTHROPIC_API_KEY sk-ant-…   # or OPENAI_API_KEY / GEMINI_API_KEY / …
+```
+
+<Note>
+See the full provider → environment-variable table in [Configuration](/harness/configuration#llm-provider-keys). Remember the precedence order: shell env > project `.env` > stored config.
+</Note>
+
+## A tool won't run
+
+- Writes and `bash` prompt for approval every time unless you grant "always". Check active grants with `/perms`.
+- If you're in **plan mode**, `write`/`edit`/`bash` are blocked — toggle it off with `/plan`.
+- If you launched with `-t`/`-xt`/`-nt`, the toolset is restricted by those flags. See [Tools & permissions](/harness/tools).
+- Undo an unwanted change with `/undo` (`git checkout` of the last AI edit).
+
+## Running out of context
+
+When the context percentage in the [status bar](/harness/interactive#the-status-bar) climbs, run `/compact` to summarize older turns, or `/new` to start fresh. See [Sessions](/harness/sessions).
+
+## Credentials aren't persisting
+
+On the compiled binary, `keytar` isn't available, so credentials fall back to `~/.minima-harness/config.env` (mode `0600`). That's expected — `minima config set` reports `file` as the backend in that case. See the note in [Configuration](/harness/configuration#managing-credentials).
+
+<Tip>
+Mouse selection not working for copy/paste? Toggle `/mouse off` to release mouse capture back to your terminal (then `/mouse on` to re-enable in-app scrolling).
+</Tip>

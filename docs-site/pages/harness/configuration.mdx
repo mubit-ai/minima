@@ -1,0 +1,100 @@
+---
+title: Configuration
+description: Credentials, environment variables, precedence, providers, and the default model catalog.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# Configuration
+
+The harness is configured through environment variables — supplied via a per-user credential store, project `.env` files, or your shell. `minima config` manages the per-user store.
+
+## Managing credentials
+
+```bash
+minima config                       # list every configurable key (secrets masked)
+minima config set <KEY> <value>     # store a credential
+minima config get <KEY>             # print a stored value
+```
+
+Secrets are stored **keychain-first**: the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `keytar` when available, otherwise a `~/.minima-harness/config.env` file written mode `0600`. Non-secret values (URLs) always live in the file. `minima config set` reports which backend it used.
+
+<Warning>
+The `keytar` native module does not bundle into the compiled binary, so the `dist/minima` binary transparently falls back to the `0600` file store. That file is plaintext — keep it owner-only (it already is) and prefer project `.env` files or your shell for CI.
+</Warning>
+
+## Precedence
+
+When the harness starts it loads configuration in this order — **earlier wins**, and stored values never overwrite something already set:
+
+1. **Real shell environment** — anything already exported in your shell.
+2. **Project `.env` files** in the current directory — `.env.harness`, then `.env`. Only fills keys not already set.
+3. **Per-user store** — OS keychain + `~/.minima-harness/config.env`, materialized into the environment with set-default semantics (lowest precedence).
+
+<Note>
+Put shared, non-secret settings (like `MINIMA_URL` for a local recommender) in a project `.env.harness`, and keep secrets in the keychain via `minima config set`.
+</Note>
+
+## Environment variables
+
+### Mubit / Minima routing
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `MUBIT_API_KEY` | **Yes** | — | Memory backend + routing auth. Passed through to Mubit for recall/learning. |
+| `MINIMA_URL` | No | `https://api.minima.sh` | The Minima recommender endpoint. Set to `http://localhost:8080` for local dev. |
+| `MINIMA_API_KEY` | No | falls back to `MUBIT_API_KEY` | Separate Minima auth, if your deployment uses one. |
+| `MUBIT_ENDPOINT` | No | — | Override the Mubit memory backend URL. |
+| `MUBIT_CONSOLE_URL` | No | `https://console.mubit.ai` | Console URL used by `minima auth`. |
+| `MINIMA_NAMESPACE` | No | per-repo project | Memory isolation lane. Overrides the repo's provisioned project. |
+| `MINIMA_TIMEOUT` | No | `30` | Recommender request timeout, in seconds. |
+
+<Note>
+**Per-repo memory isolation.** If `MINIMA_NAMESPACE` is set it wins; otherwise the harness uses the namespace of the Mubit project that `minima auth` provisioned for this repo (stored in `~/.minima-harness/projects.json`). This keeps each project's `task → model → outcome` history separate.
+</Note>
+
+### LLM provider keys
+
+Set a key for any provider you want the harness to be able to run. The first environment variable listed for a provider wins.
+
+| Provider | Environment variable(s) | Notes |
+|----------|-------------------------|-------|
+| Anthropic (Claude) | `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN` | Claude — Opus / Sonnet / Haiku |
+| OpenAI | `OPENAI_API_KEY` | GPT-5.x / GPT-4o |
+| Google Gemini | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_API_KEY` | Gemini 2.5 / 3.5 |
+| xAI (Grok) | `XAI_API_KEY` | Grok 4.x · base URL `https://api.x.ai/v1` |
+| DeepSeek | `DEEPSEEK_API_KEY` | Open-weight, cheap · `https://api.deepseek.com` |
+| OpenRouter | `OPENROUTER_API_KEY` | Aggregator — any model, one key · `https://openrouter.ai/api/v1` |
+| Groq | `GROQ_API_KEY` | Fast inference for open models · `https://api.groq.com/openai/v1` |
+
+## Default model catalog
+
+Out of the box the harness seeds this catalog; `/model` lets you pin one or add your own.
+
+| Model | Provider | Context |
+|-------|----------|---------|
+| `gpt-4o-mini` | openai | 128K |
+| `gpt-4o` | openai | 128K |
+| `deepseek-chat` | deepseek | 64K |
+| `claude-haiku-4-5` | anthropic | 200K |
+| `claude-sonnet-4-6` | anthropic | 200K |
+| `claude-opus-4-8` | anthropic | 200K |
+| `gemini-2.5-flash` | google | 1M |
+| `gemini-2.5-pro` | google | 2M |
+
+When routing (not pinned), Minima chooses from the candidate set `gemini-2.5-flash`, `claude-haiku-4-5`, `claude-sonnet-4-6`, `gemini-2.5-pro`, `claude-opus-4-8` by default.
+
+<Tip>
+To run a model that isn't seeded, pass `--model <id> --provider <name>` — the harness registers it on the fly against the provider's OpenAI-compatible endpoint. See [CLI usage](/harness/cli).
+</Tip>
+
+## Config files at a glance
+
+| Path | What it holds |
+|------|---------------|
+| `~/.minima-harness/config.env` | Per-user credentials (file backend, mode `0600`). |
+| `~/.minima-harness/projects.json` | Repo → Mubit instance / project / namespace mapping (written by `minima auth`). |
+| `~/.minima-harness/sessions/*.jsonl` | Append-only session history. See [Sessions](/harness/sessions). |
+| `./.env.harness`, `./.env` | Project-scoped environment overrides. |

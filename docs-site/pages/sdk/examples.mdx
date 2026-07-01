@@ -1,17 +1,19 @@
 ---
 title: Examples
 description: Copy-paste recipes — from a single curl to a production routing wrapper.
-sidebar:
-  order: 3
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { PageHeader, Tip } from '@components'
+
+<PageHeader />
+
+# Examples
 
 Copy-paste recipes against the hosted API, from a single `curl` to a production routing wrapper. Every snippet is self-contained.
 
-<Aside type="tip" title="Setup">
-Set your key once: `export MUBIT_API_KEY=mbt_…`. The Python examples use the [`minima_client`](/client-sdk/) package and read the same key. All requests go to `https://api.minima.sh`.
-</Aside>
+<Tip>
+**Setup.** Set your key once: `export MUBIT_API_KEY=mbt_…`. The Python examples use the [`minima_client`](/sdk/client-sdk) package and read the same key. All requests go to `https://api.minima.sh`.
+</Tip>
 
 ## 1. Quickstart with curl
 
@@ -199,6 +201,6 @@ with MinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
 
 ## Where to go next
 
-- The schemas behind every field: [API Reference](/api-reference/).
-- Why the cost numbers move the way they do: [Concepts → Cost-basis tiers](/concepts/#cost-basis-tiers-estimate--observed--rescaled).
-- The full client surface: [Python Client SDK](/client-sdk/).
+- The schemas behind every field: [API Reference](/api-reference/endpoints).
+- Why the cost numbers move the way they do: [Concepts → Cost-basis tiers](/sdk/concepts#cost-basis-tiers-estimate--observed--rescaled).
+- The full client surface: [Python Client SDK](/sdk/client-sdk).

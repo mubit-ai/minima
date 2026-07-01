@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 32" fill="none">
+  <!-- Word-mark "minima" — "m" in brand accent, rest dark for light backgrounds. -->
+  <text x="0" y="24" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-weight="700" font-size="22" letter-spacing="-0.5">
+    <tspan fill="#ff4500">m</tspan><tspan fill="#18181b">inima</tspan>
+  </text>
+</svg>

@@ -1,0 +1,87 @@
+---
+title: Installation
+description: Build the minima harness from source with Bun, then sign in and run it.
+---
+
+import { PageHeader, Steps, Step, Note, Tip } from '@components'
+
+<PageHeader />
+
+# Installation
+
+The harness ships as a self-contained native binary built from the `packages/tui` workspace with [Bun](https://bun.sh). Build it once, then authenticate and start.
+
+## Prerequisites
+
+- **[Bun](https://bun.sh) ≥ 1.2** — the build toolchain and test runner.
+- **A Mubit API key** (`MUBIT_API_KEY`) — routing + memory-backend auth. `minima auth` can obtain one for you (see below).
+- **At least one LLM provider key** — the harness runs the model itself, so you need a key for whichever provider(s) you want to call: OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Groq, or OpenRouter. Local runtimes (Ollama, vLLM, LM Studio) need no key.
+
+## Build from source
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    cd packages/tui
+    bun install
+    ```
+  </Step>
+  <Step title="(Optional) run the checks">
+    ```bash
+    bun test          # hermetic test suite (no network, no keys)
+    bun run check     # tsc --noEmit
+    bun run lint      # biome
+    ```
+  </Step>
+  <Step title="Compile the binary">
+    ```bash
+    bun run build     # -> dist/minima (a self-contained native binary)
+    ./dist/minima --help
+    ```
+
+    Put `dist/minima` on your `PATH` (or symlink it) so you can invoke it as `minima` from any repo.
+  </Step>
+</Steps>
+
+## First-time setup
+
+Pick one of the two paths below.
+
+### Recommended — browser login
+
+`minima auth` opens your browser, signs you in to Mubit, provisions a Mubit **project scoped to the current repo**, stores your `MUBIT_API_KEY`, and records the project mapping for per-repo memory isolation.
+
+```bash
+cd your-repo
+minima auth
+# Opens the browser to authorize; on success stores MUBIT_API_KEY (+ MINIMA_URL)
+# and writes the repo → project mapping to ~/.minima-harness/projects.json
+```
+
+<Note>
+`minima auth` accepts `--region eu|us` to choose a Mubit region. The console URL defaults to `https://console.mubit.ai` and can be overridden with `MUBIT_CONSOLE_URL`.
+</Note>
+
+### Manual — set credentials directly
+
+If you already have keys, store them with `minima config`:
+
+```bash
+minima config set MUBIT_API_KEY   mbt_…
+minima config set OPENAI_API_KEY  sk-…
+# or ANTHROPIC_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY / …
+```
+
+Secrets go to your OS keychain when available, otherwise to `~/.minima-harness/config.env` (mode `0600`). See [Configuration](/harness/configuration) for the full precedence rules and every key.
+
+## Start
+
+```bash
+minima            # interactive TUI (default)
+minima -p "explain this repo"          # one-shot answer, then exit
+minima --mode json "refactor foo" | jq # machine-readable event stream
+```
+
+<Tip>
+`MUBIT_API_KEY` (routing) plus **one** provider key is enough to start. From there, `--offline` bypasses the recommender and `--model` / `--provider` pin a specific model. See [CLI usage](/harness/cli).
+</Tip>

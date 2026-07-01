@@ -1,0 +1,71 @@
+---
+title: Getting Started
+description: From an API key to a working recommendation and a closed feedback loop in a few minutes.
+---
+
+import { PageHeader, Steps, Step, Note, Tip } from '@components'
+
+<PageHeader />
+
+# Getting Started
+
+Minima is a hosted API. There is nothing to install or run — you call the service with an API key, get a model recommendation, run that model in **your own** stack, and report the outcome so the next pick gets sharper. This walks you from a key to a closed feedback loop.
+
+## Prerequisites
+
+- **A Mubit API key** (`mbt_…`) — your Mubit data-plane key. Minima passes it through on each request to read and write your `task → model → outcome` history in Mubit; there is no separate Minima key. [Request access](https://minima.sh) if you don't have one yet.
+- Nothing else. Minima computes its own embeddings server-side — there's no model, database, or runtime for you to operate.
+
+<Note>
+**Base URL.** All requests go to `https://api.minima.sh`. The examples below read your Mubit key from a `MUBIT_API_KEY` environment variable — `export MUBIT_API_KEY=mbt_…` before running them.
+</Note>
+
+<Steps>
+  <Step title="Make your first recommendation">
+    ```bash
+    curl -s https://api.minima.sh/v1/recommend \
+      -H "authorization: Bearer $MUBIT_API_KEY" \
+      -H 'content-type: application/json' \
+      -d '{
+            "task": {"task": "Summarize this 2-page incident report into 3 bullet points.",
+                     "task_type": "summarization"},
+            "cost_quality_tradeoff": 3
+          }' | jq
+    ```
+
+    You get back a `recommendation_id`, a `recommended_model`, a ranked candidate list, a `fallback_model`, and a `decision_basis` (`memory` | `prior` | `llm`).
+  </Step>
+  <Step title="Run the model yourself">
+    Minima hands back the pick — it never proxies, executes, or rewrites. Run the recommended model in your own stack with your own provider credentials. Keep the `recommendation_id`; you'll quote it back in the next step.
+  </Step>
+  <Step title="Close the loop">
+    Tell Minima how it went. This is what makes the next recommendation sharper — and it populates the realized cost/token history that powers accurate cost ranking.
+
+    ```bash
+    curl -s https://api.minima.sh/v1/feedback \
+      -H "authorization: Bearer $MUBIT_API_KEY" \
+      -H 'content-type: application/json' \
+      -d '{
+            "recommendation_id": "<from step 1>",
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.95,
+            "input_tokens": 1180,
+            "output_tokens": 320,
+            "actual_cost_usd": 0.0028,
+            "verified_in_production": true
+          }' | jq
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+**Cold start.** On day one your account has little history, so early picks lean on capability priors (`decision_basis: "prior"`, a `cold_start` warning) and the cheap-LLM reasoner fires more often. As your `/v1/feedback` outcomes accumulate, recommendations shift to `decision_basis: "memory"` and the cost ranking sharpens automatically — see [How it gets better over time](/sdk/concepts#how-it-gets-better-over-time).
+</Tip>
+
+## Next steps
+
+- Use the typed [Python Client SDK](/sdk/client-sdk) instead of raw `curl`.
+- Read [Concepts](/sdk/concepts) to understand the slider, the cost-basis tiers, and the escalation path.
+- Browse the [Examples](/sdk/examples) for constraints, workflows, and a production routing wrapper.
+- Prefer the terminal? The [Harness CLI](/harness/overview) wraps this whole loop in a coding agent.

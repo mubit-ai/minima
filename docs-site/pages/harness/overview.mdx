@@ -1,0 +1,49 @@
+---
+title: Harness CLI — Overview
+description: minima is a cost-aware, memory-isolated terminal coding agent that routes every prompt through Minima.
+---
+
+import { PageHeader, CardGroup, Card, Note } from '@components'
+
+<PageHeader />
+
+# Harness CLI
+
+`minima` is a terminal coding agent. It reads and edits your code, runs commands, and answers questions about a repo — like any agentic CLI — but every prompt is first sent to the [Minima recommender](/sdk/getting-started) to pick the cheapest model that will actually do the job. It then **runs that model itself** (calling the provider API directly), grades the outcome, and reports feedback so the next pick is sharper.
+
+```
+recommend  ──▶  run the model yourself  ──▶  judge quality  ──▶  feedback
+```
+
+<Note>
+The harness talks to the Minima recommender service over the same `/v1/*` HTTP contract as the [SDK](/sdk/getting-started). It **never proxies LLM calls** — it calls OpenAI / Anthropic / Google / etc. directly with your provider keys, so your prompts and code never pass through Minima.
+</Note>
+
+## What you get
+
+<CardGroup cols={2}>
+  <Card title="Cost-aware routing" icon="circle-nodes" href="/harness/routing">
+    Every turn is routed to the cheapest model expected to clear the task, across OpenAI, Anthropic, Google, DeepSeek, xAI, Groq, and OpenRouter. Pin a model with `/model` or `--model` any time.
+  </Card>
+  <Card title="Built-in tools" icon="folder-tree" href="/harness/tools">
+    `read`, `write`, `edit`, `bash`, `ls`, `glob`, `grep`, `web_fetch`, and `todowrite` — gated by a permission system that auto-approves reads and prompts for writes and shell.
+  </Card>
+  <Card title="Per-repo memory" icon="brain" href="/harness/configuration">
+    `minima auth` provisions a Mubit project scoped to the current repo, so each project's `task → model → outcome` history stays isolated.
+  </Card>
+  <Card title="Sessions you can branch" icon="folder-tree" href="/harness/sessions">
+    An append-only session tree — fork, clone, and resume past conversations, and compact old turns to free context.
+  </Card>
+</CardGroup>
+
+## How it fits together
+
+- **Interactive TUI** — the default. A conversation view, status bar (model, cost, context), model picker, and slash commands. See [Interactive TUI](/harness/interactive).
+- **Non-interactive** — `minima -p "…"` prints one answer; `minima --mode json "…"` streams machine-readable events for scripting. See [CLI usage](/harness/cli).
+- **The recommender** — the Python FastAPI service that ranks models. The harness needs only a `MUBIT_API_KEY` (routing + memory auth) plus one provider key to call models. See [Configuration](/harness/configuration).
+
+## Next steps
+
+- [Install the harness](/harness/installation) and run `minima auth`.
+- [Configure credentials](/harness/configuration) and pick your providers.
+- Learn the [interactive TUI](/harness/interactive) — keybindings and slash commands.

@@ -1,11 +1,13 @@
 ---
 title: Python Client SDK
 description: The minima_client package — sync and async clients, autocapture, and error handling.
-sidebar:
-  order: 5
 ---
 
-import { Aside, Code } from '@astrojs/starlight/components';
+import { PageHeader, Warning } from '@components'
+
+<PageHeader />
+
+# Python Client SDK
 
 The `minima_client` package is the official thin, typed Python client for the hosted Minima API, plus an optional zero-code intake helper.
 
@@ -126,7 +128,7 @@ status  = minima.health()                                          # dict
 
 ## `savings(...)` and `calibration(...)`
 
-The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/#get-v1savings) for every field).
+The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/endpoints#get-v1savings) for every field).
 
 ```python
 report = minima.savings(namespace="team-payments", days=30, group_by="task_type")
@@ -180,9 +182,9 @@ autocapture.feedback(good=True)   # or score in [-1, 1]
 autocapture.disable()             # restore original client behavior
 ```
 
-<Aside type="caution" title="What autocapture does and doesn't do">
-Autocapture lands traces + lessons in Minima's lane (enriching the reasoner's memory block and Mubit's reflection), but it does **not** by itself produce the `kind="outcome"` records the deterministic k-NN aggregator scores. To fully close the loop, either call `autocapture.feedback(...)` or send a quality score to `POST /v1/feedback`.
-</Aside>
+<Warning>
+**What autocapture does and doesn't do.** Autocapture lands traces + lessons in Minima's lane (enriching the reasoner's memory block and Mubit's reflection), but it does **not** by itself produce the `kind="outcome"` records the deterministic k-NN aggregator scores. To fully close the loop, either call `autocapture.feedback(...)` or send a quality score to `POST /v1/feedback`.
+</Warning>
 
 Other helpers:
 
@@ -191,4 +193,4 @@ autocapture.wrap(client)                           # enrich one client instead o
 autocapture.capture(messages, response)            # manual ingest for raw HTTP / unsupported libs
 ```
 
-See the [zero-code intake example](/examples/#5-zero-code-intake).
+See the [zero-code intake example](/sdk/examples#5-zero-code-intake).

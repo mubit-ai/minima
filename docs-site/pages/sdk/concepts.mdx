@@ -1,11 +1,13 @@
 ---
 title: Concepts
 description: The loop, the algorithm, cost-basis tiers, escalation, and how Minima improves over time.
-sidebar:
-  order: 2
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { PageHeader, Tip } from '@components'
+
+<PageHeader />
+
+# Concepts
 
 ## The problem Minima solves
 
@@ -79,9 +81,9 @@ One basis is chosen for the **whole candidate set** so all costs are compared li
 
 A small minimum number of observations per candidate (default 3) gates the observed and rescaled tiers. The chosen basis is reflected in each `RankedModel.est_cost_breakdown`, and the rationale tags the number `obs` (grounded) or `est` (cold). The realized `cost_usd` / `input_tokens` / `output_tokens` come from your `POST /v1/feedback` calls — so the more you feed back, the more the ranking climbs from estimate → observed → rescaled.
 
-<Aside type="tip">
+<Tip>
 The **median** (not mean) makes the observed/rescaled tiers robust to outlier calls. The weight is similarity-only (not staleness-decayed) because cost is an objective fact about a model, not a quality signal that should fade.
-</Aside>
+</Tip>
 
 ## Escalation to a cheap-LLM reasoner
 
@@ -109,8 +111,8 @@ New accounts start with a baseline of benchmark-derived history so picks are use
 
 Every recommendation is logged with its counterfactual cost baselines and reconciled with the outcome you report — so the two questions that matter are answerable from your own traffic, not from a benchmark:
 
-- **Did it save money?** [`GET /v1/savings`](/api-reference/#get-v1savings) reports estimated and realized savings against two explicitly-labeled baselines: the most expensive scored candidate (generous) and your own declared default (`baseline_model_id` — honest). It also reports `feedback_coverage`, the share of recommendations that ever received feedback — the number that tells you how much weight the realized figures can bear.
-- **Are the predictions honest?** [`GET /v1/calibration`](/api-reference/#get-v1calibration) compares `predicted_success` at decision time against realized outcomes (expected calibration error per task type) and flags sustained drift per `(cluster, model)` — the early-warning signal for a provider silently changing a model.
+- **Did it save money?** [`GET /v1/savings`](/api-reference/endpoints#get-v1savings) reports estimated and realized savings against two explicitly-labeled baselines: the most expensive scored candidate (generous) and your own declared default (`baseline_model_id` — honest). It also reports `feedback_coverage`, the share of recommendations that ever received feedback — the number that tells you how much weight the realized figures can bear.
+- **Are the predictions honest?** [`GET /v1/calibration`](/api-reference/endpoints#get-v1calibration) compares `predicted_success` at decision time against realized outcomes (expected calibration error per task type) and flags sustained drift per `(cluster, model)` — the early-warning signal for a provider silently changing a model.
 
 Accounts can additionally opt into a small amount of bounded **exploration** (`selection_policy: epsilon_softmax`): a few percent of picks sample from the *eligible* set (never below your quality bar) instead of always taking the cheapest eligible model, which keeps evidence flowing for under-tried cheap models and makes the logged history statistically sound for off-policy analysis. Default is off — deterministic picks everywhere.
 
