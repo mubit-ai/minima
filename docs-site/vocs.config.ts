@@ -64,12 +64,8 @@ export default defineConfig({
   },
   topNav: [
     { text: 'SDK', link: '/sdk/getting-started', match: '/sdk' },
-    { text: 'Harness CLI', link: '/harness/overview', match: '/harness' },
+    { text: 'Minima CLI', link: '/harness/overview', match: '/harness' },
     { text: 'API Reference', link: '/api-reference/endpoints', match: '/api-reference' },
-    {
-      text: 'Get API Key',
-      link: 'https://console.mubit.ai',
-    },
   ],
   sidebar,
   // Global <head> injection. The function form is required (not a bare element):

@@ -19,6 +19,14 @@ minima config set <KEY> <value>     # store a credential
 minima config get <KEY>             # print a stored value
 ```
 
+You don't have to drop to the CLI — the same is available **inside the interactive TUI** via the [`/config`](/harness/interactive) slash command:
+
+```
+/config                     # open the config editor / list keys
+/config set <KEY> <value>   # store a credential
+/config get <KEY>           # print a stored value
+```
+
 Secrets are stored **keychain-first**: the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `keytar` when available, otherwise a `~/.minima-harness/config.env` file written mode `0600`. Non-secret values (URLs) always live in the file. `minima config set` reports which backend it used.
 
 <Warning>

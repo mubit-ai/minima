@@ -14,7 +14,7 @@ The `minima` harness is distributed as a self-contained native binary through th
 ## Prerequisites
 
 - **[Homebrew](https://brew.sh)** (macOS or Linux).
-- **A Mubit API key** (`MUBIT_API_KEY`) — routing + memory-backend auth. `minima auth` can obtain one for you (see below).
+- **A Mubit API key** (`MUBIT_API_KEY`) — routing + memory-backend auth. Get one from the [Mubit console](https://console.mubit.ai), or run `minima auth` (see below) to have it created and stored for you.
 - **At least one LLM provider key** — the harness runs the model itself, so you need a key for whichever provider(s) you want to call: OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Groq, or OpenRouter. Local runtimes (Ollama, vLLM, LM Studio) need no key.
 
 ## Install with Homebrew
@@ -63,7 +63,7 @@ Pick one of the two paths below.
 
 ### Recommended — browser login
 
-`minima auth` opens your browser, signs you in to Mubit, provisions a Mubit **project scoped to the current repo**, stores your `MUBIT_API_KEY`, and records the project mapping for per-repo memory isolation.
+`minima auth` opens your browser, signs you in to Mubit, provisions a Mubit **project scoped to the current repo**, stores your `MUBIT_API_KEY`, and records the project mapping for per-repo memory isolation. Already running the TUI? The [`/auth`](/harness/interactive) slash command runs the same flow.
 
 ```bash
 cd your-repo

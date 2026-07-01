@@ -12,7 +12,7 @@ export type SidebarGroup = {
 }
 
 // Path-keyed sidebars. Vocs picks the sidebar whose key is the longest prefix
-// of the current path, so each top-nav tab (SDK / Harness CLI / API Reference)
+// of the current path, so each top-nav tab (SDK / Minima CLI / API Reference)
 // gets its own rail. `/` is the landing page.
 export const sidebar: Record<string, SidebarGroup[]> = {
   '/': [
@@ -21,7 +21,7 @@ export const sidebar: Record<string, SidebarGroup[]> = {
       items: [
         { text: 'Overview', link: '/' },
         { text: 'SDK — Getting started', link: '/sdk/getting-started' },
-        { text: 'Harness CLI — Overview', link: '/harness/overview' },
+        { text: 'Minima CLI — Overview', link: '/harness/overview' },
       ],
     },
   ],
@@ -44,7 +44,7 @@ export const sidebar: Record<string, SidebarGroup[]> = {
   ],
   '/harness': [
     {
-      text: 'Harness CLI',
+      text: 'Minima CLI',
       items: [
         { text: 'Overview', link: '/harness/overview' },
         { text: 'Installation', link: '/harness/installation' },
