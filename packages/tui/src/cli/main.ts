@@ -19,7 +19,7 @@ import { ConstJudge } from "../minima/index.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
 import { HarnessApp } from "../tui/app.tsx";
-import { DEFAULT_CONSOLE_URL, runAuth } from "../tui/auth.ts";
+import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
   SECTIONS,
   hydrateEnv,
@@ -417,6 +417,13 @@ async function authCli(args: string[]): Promise<number> {
     );
     return 0;
   } catch (exc) {
+    if (exc instanceof ProvisioningPending) {
+      process.stdout.write(
+        "\n⏳ Your Minima workspace is provisioning (~1-2 min). " +
+          "Re-run `minima auth` shortly — it'll pick up where it left off.\n",
+      );
+      return 0;
+    }
     process.stderr.write(
       `\nminima auth failed: ${exc instanceof Error ? exc.message : String(exc)}\n`,
     );
