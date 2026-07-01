@@ -1,0 +1,81 @@
+---
+title: Interactive TUI
+description: The default terminal UI — status bar, keybindings, and slash commands.
+---
+
+import { PageHeader, Note, Tip } from '@components'
+
+<PageHeader />
+
+# Interactive TUI
+
+Running `minima` with no prompt opens the interactive terminal UI: a scrolling conversation view, an input prompt, and a status bar. Type a message and press <kbd>Enter</kbd> to send it; the harness routes it, runs the chosen model, streams the reply, and executes any tool calls (asking permission where required).
+
+## The status bar
+
+The bar along the bottom shows, at a glance:
+
+- **Model** — the pinned model, or `auto` when Minima is routing.
+- **Cost** — running total from the cost meter for this session.
+- **Context** — percentage of the model's context window used, plus token counts.
+- **State** — whether a turn is in flight.
+
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| <kbd>Enter</kbd> | Send the current prompt |
+| <kbd>Ctrl</kbd>+<kbd>L</kbd> | Open the model picker |
+| <kbd>Ctrl</kbd>+<kbd>P</kbd> | Open the command palette (slash commands) |
+| <kbd>Ctrl</kbd>+<kbd>R</kbd> | Toggle route mode (auto ↔ confirm) |
+| <kbd>Esc</kbd> | Abort the in-flight run |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> | Abort a running turn; press again at the prompt to quit |
+| <kbd>PageUp</kbd> / <kbd>PageDown</kbd> | Scroll the conversation |
+| <kbd>Shift</kbd>+<kbd>Space</kbd> | Scroll down |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Jump to the top of the chat |
+| <kbd>Ctrl</kbd>+<kbd>E</kbd> | Jump to the bottom of the chat |
+| <kbd>Tab</kbd> | Auto-complete a slash command |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Cycle input history (at the prompt) · navigate items (in a picker) |
+
+<Note>
+In the model picker, command palette, and session picker, use <kbd>↑</kbd>/<kbd>↓</kbd> to move, <kbd>Enter</kbd> to choose, and <kbd>Esc</kbd> to dismiss.
+</Note>
+
+## Slash commands
+
+Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a command:
+
+| Command | What it does |
+|---------|--------------|
+| `/model` | Select or pin a model (or `auto` to unpin and let Minima route) |
+| `/clear` | Clear chat messages |
+| `/auth` | Sign in to Mubit & provision this repo's project |
+| `/config` | Show/set API keys (`MUBIT`, `GEMINI`, `ANTHROPIC`, …) |
+| `/help` | Show the available commands |
+| `/cost` | Show cost-meter totals |
+| `/reconnect` | Reconnect the routing client |
+| `/new` | Start a fresh session |
+| `/name <label>` | Set the session display name |
+| `/session` | Show session info |
+| `/tree` | View the session tree |
+| `/fork <entry-id>` | Fork a new session from an entry id |
+| `/clone` | Clone the current session |
+| `/resume [id]` | Resume a previous session (optionally by id) |
+| `/judge [on\|off]` | Toggle LLM quality judging |
+| `/thoughts [on\|off]` | Toggle streaming the model's thinking |
+| `/mouse [on\|off]` | Toggle mouse capture (scroll vs. select/copy) |
+| `/perms` | Show current tool permission grants |
+| `/undo` | Undo the last AI change (`git checkout`) |
+| `/compact` | Summarize old turns to free context |
+| `/plan` | Toggle plan mode (read-only) |
+| `/quit`, `/exit` | Exit the application |
+
+<Tip>
+`/model auto` hands routing back to Minima after you've pinned a model. `/plan` is handy when you want the agent to think and read without touching files — it blocks `write`, `edit`, and `bash`. See [Tools & permissions](/harness/tools).
+</Tip>
+
+## Related
+
+- [Model routing](/harness/routing) — auto routing, pinning, and the feedback loop.
+- [Sessions](/harness/sessions) — `/new`, `/resume`, `/fork`, `/clone`, `/compact`.
+- [Tools & permissions](/harness/tools) — what the agent can do and how grants work.

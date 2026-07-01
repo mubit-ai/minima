@@ -1,39 +1,50 @@
 ---
-title: Minima
+title: What is Minima
 description: A recommendation engine for LLM model routing. Cuts token spend without losing quality.
-template: splash
-hero:
-  tagline: A recommendation engine, not a router. Route every LLM call to the cheapest model that will actually succeed — then watch the picks get sharper.
-  image:
-    file: ../../assets/logo.svg
-  actions:
-    - text: Get Started
-      link: /getting-started/
-      icon: right-arrow
-    - text: Concepts
-      link: /concepts/
-      icon: open-book
-      variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { PageHeader, CardGroup, Card, Note, Tip } from '@components'
+
+# What is Minima
+
+A recommendation engine, not a router. Route every LLM call to the cheapest model that will actually succeed — then watch the picks get sharper as you report outcomes.
+
+Minima **only recommends**. It does not proxy your call, execute a model, rewrite prompts, cache, or compress. You ask "which model should run this?", it answers, and you run the model yourself in your own stack — so it adds **zero latency to the actual LLM request**.
+
+## Two ways to use Minima
+
+<CardGroup cols={2}>
+  <Card title="Minima SDK & API" icon="code" href="/sdk/getting-started">
+    A hosted API and a typed Python client. Call `recommend`, run the model in your own stack, then `feedback` the outcome. Embed cost-aware routing directly in your app.
+  </Card>
+  <Card title="Minima CLI" icon="terminal" href="/harness/overview">
+    `minima` — a cost-aware, memory-isolated terminal coding agent that routes every prompt through Minima, runs the chosen model, and closes the feedback loop for you.
+  </Card>
+</CardGroup>
 
 ## How it works
 
-<CardGrid>
-  <Card title="Recommend" icon="magnifier">
+<CardGroup cols={2}>
+  <Card title="Recommend" icon="circle-nodes">
     `POST /v1/recommend` — Minima recalls similar past `task → model → outcome` records, aggregates empirical success rates, and returns the cheapest model expected to clear your quality bar. Zero added latency to your actual LLM call.
   </Card>
   <Card title="Run it yourself" icon="rocket">
     Minima hands back a `recommended_model` and a `recommendation_id`. You run the model in your own stack — Minima never proxies, executes, or rewrites.
   </Card>
-  <Card title="Feed back" icon="pencil">
+  <Card title="Feed back" icon="receipt">
     `POST /v1/feedback` — report the outcome, quality score, and realized tokens. Minima writes the outcome to memory, reinforces the exact neighbors that drove the pick, and promotes durable lessons.
   </Card>
-  <Card title="Improve automatically" icon="star">
+  <Card title="Improve automatically" icon="bolt">
     Every feedback call makes the next recommendation sharper. The cost basis climbs from flat estimates → observed median → rescaled per-request as history accumulates.
   </Card>
-</CardGrid>
+</CardGroup>
+
+```
+  POST /v1/recommend  ──▶  you run the model  ──▶  POST /v1/feedback
+   (recall + rank)          (your stack)            (write outcome, reinforce)
+        ▲                                                    │
+        └────────────── picks get sharper ──────────────────┘
+```
 
 ## Key properties
 
@@ -44,9 +55,6 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 - **Provable.** `GET /v1/savings` reports estimated *and realized* savings against honest baselines, and `GET /v1/calibration` shows whether `predicted_success` matches your real outcomes.
 - **Bring your own memory.** Authenticate with your own Mubit API key — Minima reads and writes your `task → model → outcome` history in your Mubit instance, with `namespace` / `user_id` sub-scoping inside it.
 
-```
-  POST /v1/recommend  ──▶  you run the model  ──▶  POST /v1/feedback
-   (recall + rank)          (your stack)            (write outcome, reinforce)
-        ▲                                                    │
-        └────────────── picks get sharper ──────────────────┘
-```
+<Tip>
+New to Minima? Start with the [SDK Getting Started](/sdk/getting-started) for the hosted API, or jump to the [Minima CLI Overview](/harness/overview) if you want the terminal agent.
+</Tip>

@@ -1,11 +1,13 @@
 ---
 title: API Reference
 description: Every Minima endpoint — full request and response schemas, warnings, and error formats.
-sidebar:
-  order: 3
 ---
 
-import { Aside, Badge } from '@astrojs/starlight/components';
+import { PageHeader, Note, Badge } from '@components'
+
+<PageHeader />
+
+# API Reference
 
 Base URL: `https://api.minima.sh`. Base path: `/v1`. All request and response bodies are JSON. Interactive OpenAPI docs are served at [`https://api.minima.sh/docs`](https://api.minima.sh/docs).
 
@@ -36,13 +38,15 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 | `401` | Unauthorized | Missing or invalid Mubit key. |
 | `422` | No candidate models | Constraints eliminated every catalog model. |
 
-<Aside type="note">
+<Note>
 `POST /v1/feedback` does **not** error on an unknown `recommendation_id`. It returns `200` with `accepted: false` and an `unknown_recommendation` warning, so retried or cross-instance feedback fails safely.
-</Aside>
+</Note>
 
 ---
 
-## `POST /v1/recommend` <Badge text="core" variant="success" />
+## `POST /v1/recommend`
+
+<Badge text="core" variant="success" />
 
 Recommend a model for a single task.
 
@@ -111,7 +115,7 @@ Recommend a model for a single task.
 | `provider` | string | |
 | `predicted_success` | float `0–1` | Probability the model clears the task. |
 | `est_cost_usd` | float ≥ 0 | Estimated cost for this request, per the chosen cost basis. |
-| `est_cost_breakdown` | object | Keys depend on the basis: `{rescaled, obs_output_tokens}`, `{observed_avg}`, or `{input, output}`. See [Cost-basis tiers](/concepts/#cost-basis-tiers-estimate--observed--rescaled). |
+| `est_cost_breakdown` | object | Keys depend on the basis: `{rescaled, obs_output_tokens}`, `{observed_avg}`, or `{input, output}`. See [Cost-basis tiers](/sdk/concepts#cost-basis-tiers-estimate--observed--rescaled). |
 | `score` | float | Final objective score; the sorting key. |
 | `rationale` | string | Human-readable reason (tags cost as `obs` or `est`). |
 | `decision_basis` | enum | Per-model basis: `memory` \| `prior` \| `llm`. |
@@ -169,7 +173,9 @@ curl -s https://api.minima.sh/v1/recommend \
 
 ---
 
-## `POST /v1/recommend/workflow` <Badge text="workflow" variant="note" />
+## `POST /v1/recommend/workflow`
+
+<Badge text="workflow" variant="note" />
 
 Recommend a model for each step of a multi-step workflow. Each step runs the same engine independently and gets its own `recommendation_id` for per-step feedback.
 
@@ -203,11 +209,13 @@ Recommend a model for each step of a multi-step workflow. Each step runs the sam
 | `total_est_cost_if_all_premium` | float | Sum if each step used its most expensive candidate — the savings baseline. |
 | `confidence` | float `0–1` | Mean step confidence. |
 
-See the [multi-step workflow example](/examples/#4-multi-step-workflow).
+See the [multi-step workflow example](/sdk/examples#4-multi-step-workflow).
 
 ---
 
-## `POST /v1/feedback` <Badge text="core" variant="success" />
+## `POST /v1/feedback`
+
+<Badge text="core" variant="success" />
 
 Report an outcome and close the learning loop. This reinforces the memories that drove the recommendation **and** records realized cost/token history that powers the observed and rescaled cost-basis tiers.
 
@@ -239,9 +247,9 @@ Report an outcome and close the learning loop. This reinforces the memories that
 | `lesson_promoted` | bool | Whether a durable lesson was promoted. |
 | `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`. |
 
-<Aside type="note" title="How late can feedback arrive?">
-A `recommendation_id` accepts fully-attributed feedback for **7 days**. After that the outcome is still accepted and still teaches the recommender (the durable outcome record is written), but the specific recalled neighbors can no longer be credited — the response carries a `late_feedback_no_attribution` warning.
-</Aside>
+<Note>
+**How late can feedback arrive?** A `recommendation_id` accepts fully-attributed feedback for **7 days**. After that the outcome is still accepted and still teaches the recommender (the durable outcome record is written), but the specific recalled neighbors can no longer be credited — the response carries a `late_feedback_no_attribution` warning.
+</Note>
 
 ### Example
 
@@ -299,7 +307,9 @@ Surfaces the rules Mubit has promoted for a namespace — the "why" behind routi
 
 ---
 
-## `GET /v1/savings` <Badge text="measurement" variant="tip" />
+## `GET /v1/savings`
+
+<Badge text="measurement" variant="tip" />
 
 What Minima actually saved you. Every recommendation is logged with its counterfactual cost baselines and reconciled with the realized cost you report to `/v1/feedback` — this endpoint aggregates that ledger for your account.
 
@@ -327,13 +337,15 @@ curl -s "https://api.minima.sh/v1/savings?days=30&group_by=task_type" \
   -H "authorization: Bearer $MUBIT_API_KEY" | jq '.summary, .health'
 ```
 
-<Aside type="tip">
+<Note>
 Send `baseline_model_id` on your `/v1/recommend` calls and realized `actual_cost_usd` on your `/v1/feedback` calls — they turn the savings report from an estimate into a measurement.
-</Aside>
+</Note>
 
 ---
 
-## `GET /v1/calibration` <Badge text="measurement" variant="tip" />
+## `GET /v1/calibration`
+
+<Badge text="measurement" variant="tip" />
 
 Is `predicted_success` telling the truth for your traffic? Compares each recommendation's predicted success against the realized outcome you reported, per task type.
 

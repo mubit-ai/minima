@@ -1,0 +1,64 @@
+---
+title: Tools & permissions
+description: The built-in tools the agent can call and the permission model that gates them.
+---
+
+import { PageHeader, Note, Warning, Tip } from '@components'
+
+<PageHeader />
+
+# Tools & permissions
+
+The agent gets things done by calling **tools**. Each tool call passes through a permission gate before it runs, so nothing touches your files or shell without approval (or a standing grant).
+
+## Built-in tools
+
+| Tool | What it does | Class |
+|------|--------------|-------|
+| `read` | Read a file's contents | read |
+| `ls` | List a directory | read |
+| `glob` | Match files by glob pattern | read |
+| `grep` | Search file contents by regex | read |
+| `web_fetch` | Fetch and parse an HTTP URL | read |
+| `write` | Create a new file | write |
+| `edit` | Modify an existing file | write |
+| `bash` | Run a shell command (with timeout + abort) | dangerous |
+| `todowrite` | Maintain a plan/todo file | write |
+
+## The permission model
+
+Approval depends on the tool's class:
+
+- **Read tools** (`read`, `ls`, `glob`, `grep`) are **auto-approved** within the working directory and allowed parent directories. You can grant "always" for a directory so future reads there don't prompt.
+- **Write tools** (`write`, `edit`, `todowrite`) always prompt. You can grant "always" for the tool.
+- **Dangerous tools** (`bash`) always prompt. You can grant "always" for the tool.
+
+When a tool needs approval, the TUI shows an inline prompt: approve once (<kbd>y</kbd>), approve always (<kbd>a</kbd>), or deny (<kbd>n</kbd> / <kbd>Esc</kbd>).
+
+<Note>
+Use `/perms` to see the grants active in the current session.
+</Note>
+
+## Plan mode
+
+`/plan` toggles **read-only** mode: `write`, `edit`, and `bash` are blocked entirely, so the agent can read, search, and reason about the repo without changing anything. Toggle it off to let it act.
+
+<Tip>
+`/undo` reverts the last AI change with `git checkout`, so an unwanted edit is one command away.
+</Tip>
+
+## Restricting tools from the CLI
+
+In non-interactive runs (and to constrain the interactive agent), narrow the toolset with flags:
+
+```bash
+minima -t read,ls,grep     -p "trace how requests are authenticated"   # allowlist
+minima -xt bash,write      -p "summarize the module"                    # denylist
+minima -nt                 -p "just answer, no tools"                   # no tools at all
+```
+
+<Warning>
+`bash` runs arbitrary commands in your shell. Grant "always" only in repos you trust, and prefer an allowlist (`-t`) or [plan mode](/harness/tools) when you only need the agent to look, not act.
+</Warning>
+
+See the flags reference in [CLI usage](/harness/cli).
