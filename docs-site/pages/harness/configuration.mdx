@@ -22,7 +22,7 @@ minima config get <KEY>             # print a stored value
 Secrets are stored **keychain-first**: the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `keytar` when available, otherwise a `~/.minima-harness/config.env` file written mode `0600`. Non-secret values (URLs) always live in the file. `minima config set` reports which backend it used.
 
 <Warning>
-The `keytar` native module does not bundle into the compiled binary, so the `dist/minima` binary transparently falls back to the `0600` file store. That file is plaintext — keep it owner-only (it already is) and prefer project `.env` files or your shell for CI.
+The `keytar` native module does not bundle into the compiled binary, so the Homebrew-installed `minima` binary transparently falls back to the `0600` file store. That file is plaintext — keep it owner-only (it already is) and prefer project `.env` files or your shell for CI.
 </Warning>
 
 ## Precedence

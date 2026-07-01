@@ -1,47 +1,61 @@
 ---
 title: Installation
-description: Build the minima harness from source with Bun, then sign in and run it.
+description: Install the minima harness with Homebrew, then sign in and run it.
 ---
 
-import { PageHeader, Steps, Step, Note, Tip } from '@components'
+import { PageHeader, Steps, Step, Note, Tip, Accordion } from '@components'
 
 <PageHeader />
 
 # Installation
 
-The harness ships as a self-contained native binary built from the `packages/tui` workspace with [Bun](https://bun.sh). Build it once, then authenticate and start.
+The `minima` harness is distributed as a self-contained native binary through the [`mubit-ai/homebrew-minima`](https://github.com/mubit-ai/homebrew-minima) Homebrew tap. Install it, authenticate, and start.
 
 ## Prerequisites
 
-- **[Bun](https://bun.sh) ≥ 1.2** — the build toolchain and test runner.
+- **[Homebrew](https://brew.sh)** (macOS or Linux).
 - **A Mubit API key** (`MUBIT_API_KEY`) — routing + memory-backend auth. `minima auth` can obtain one for you (see below).
 - **At least one LLM provider key** — the harness runs the model itself, so you need a key for whichever provider(s) you want to call: OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Groq, or OpenRouter. Local runtimes (Ollama, vLLM, LM Studio) need no key.
 
-## Build from source
+## Install with Homebrew
 
-<Steps>
-  <Step title="Install dependencies">
-    ```bash
-    cd packages/tui
-    bun install
-    ```
-  </Step>
-  <Step title="(Optional) run the checks">
-    ```bash
-    bun test          # hermetic test suite (no network, no keys)
-    bun run check     # tsc --noEmit
-    bun run lint      # biome
-    ```
-  </Step>
-  <Step title="Compile the binary">
-    ```bash
-    bun run build     # -> dist/minima (a self-contained native binary)
-    ./dist/minima --help
-    ```
+```bash
+brew install mubit-ai/minima/minima
+```
 
-    Put `dist/minima` on your `PATH` (or symlink it) so you can invoke it as `minima` from any repo.
-  </Step>
-</Steps>
+That taps [`mubit-ai/homebrew-minima`](https://github.com/mubit-ai/homebrew-minima) and installs the `minima` formula in one step. Prefer to tap explicitly? It's equivalent to:
+
+```bash
+brew tap mubit-ai/minima
+brew install minima
+```
+
+Verify it's on your `PATH`, and upgrade later with Homebrew:
+
+```bash
+minima --help
+brew upgrade minima      # pull the latest release
+```
+
+<Note>
+The Homebrew formula ships the compiled binary, which bundles no OS keychain module — so credentials fall back to a `~/.minima-harness/config.env` file (mode `0600`). See [Configuration](/harness/configuration#managing-credentials).
+</Note>
+
+<Accordion title="Build from source (for development)">
+Contributing to the harness? Build the binary yourself from the `packages/tui` workspace with [Bun](https://bun.sh) ≥ 1.2:
+
+```bash
+cd packages/tui
+bun install
+bun test          # hermetic test suite (no network, no keys)
+bun run check     # tsc --noEmit
+bun run lint      # biome
+bun run build     # -> dist/minima (a self-contained native binary)
+./dist/minima --help
+```
+
+Put `dist/minima` on your `PATH` (or symlink it) to invoke it as `minima` from any repo.
+</Accordion>
 
 ## First-time setup
 
