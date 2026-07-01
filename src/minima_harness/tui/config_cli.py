@@ -77,6 +77,22 @@ def _doctor() -> int:
     exa_state = "present" if exa_ok else "not set — web_search/web_fetch disabled"
     print(f"  [{'ok' if exa_ok else '  '}] {'Exa (web)':<10} {'EXA_API_KEY':<18} {exa_state}")
 
+    # The experimental `lsp` code-intelligence tool — opt-in, needs the pylsp server.
+    import shutil
+
+    from minima_harness.lsp import lsp_enabled
+
+    lsp_on = lsp_enabled()
+    pylsp_ok = shutil.which("pylsp") is not None
+    if not lsp_on:
+        lsp_state = "off — set MINIMA_EXPERIMENTAL_LSP=1 to enable"
+    elif pylsp_ok:
+        lsp_state = "on — pylsp found"
+    else:
+        lsp_state = "on but pylsp NOT installed (pip install python-lsp-server)"
+    usable = lsp_on and pylsp_ok
+    print(f"  [{'ok' if usable else '  '}] {'LSP (exp)':<10} {'EXPERIMENTAL_LSP':<18} {lsp_state}")
+
     url = os.environ.get("MINIMA_URL", DEFAULT_MINIMA_URL)
     print(f"\n  Minima endpoint: {url}")
     import httpx

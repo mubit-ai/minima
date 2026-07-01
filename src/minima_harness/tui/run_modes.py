@@ -12,6 +12,7 @@ from minima_harness.agent.events import (
     TurnEndEvent,
 )
 from minima_harness.ai.events import ErrorEvent, TextDeltaEvent
+from minima_harness.lsp.manager import shutdown_all as _lsp_shutdown
 from minima_harness.minima.runtime import MinimaAgent
 
 
@@ -48,19 +49,26 @@ async def run_print(agent: MinimaAgent, prompt: str) -> int:
     A provider failure (bad key, 404, network) produces empty output; report the classified
     reason on stderr and exit non-zero instead of silently printing a blank line.
     """
-    await agent.prompt(prompt)
-    err = getattr(agent, "_last_error", None)
-    last = agent._last_assistant()  # noqa: SLF001
-    text = last.text if last is not None else ""
-    if err and not text.strip():
-        print(err, file=sys.stderr)
-        return 1
-    print(text)
-    return 0
+    try:
+        await agent.prompt(prompt)
+        err = getattr(agent, "_last_error", None)
+        last = agent._last_assistant()  # noqa: SLF001
+        text = last.text if last is not None else ""
+        if err and not text.strip():
+            print(err, file=sys.stderr)
+            return 1
+        print(text)
+        return 0
+    finally:
+        # Reap any warm LSP servers spawned this run (no-op unless the lsp tool was used).
+        await _lsp_shutdown()
 
 
 async def run_json(agent: MinimaAgent, prompt: str) -> int:
     """Stream every AgentEvent as a JSON line, then exit."""
     agent.subscribe(lambda event: print(json.dumps(event_to_dict(event)), flush=True))
-    await agent.prompt(prompt)
-    return 0
+    try:
+        await agent.prompt(prompt)
+        return 0
+    finally:
+        await _lsp_shutdown()

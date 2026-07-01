@@ -56,7 +56,11 @@ server = [
 reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
-harness = ["anthropic>=0.40", "google-genai>=0.3"]
+harness = [
+    "anthropic>=0.40",
+    "google-genai>=0.3",
+    "python-lsp-server>=1.14.0",
+]
 # keyring: OS-keychain credential storage for `minima-harness config` (graceful 0600-file
 # fallback when no backend is present, so it stays optional).
 # textual>=3.0 for app-wide text selection + copy_to_clipboard (so in-app drag-select & ⌘/Ctrl+C
@@ -89,6 +93,7 @@ asyncio_mode = "auto"
 markers = [
   "live: requires a running Mubit runtime (make run-mubit)",
   "eval: slow offline evaluation (RouterBench)",
+  "lsp_integration: spawns a real pylsp language server (skipped if pylsp absent); run with -m lsp_integration",
 ]
 
 [tool.ruff]

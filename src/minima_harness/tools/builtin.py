@@ -18,8 +18,11 @@ def default_toolset() -> list[AgentTool]:
     apply_patch/bash/grep/find/ls) plus the Exa-backed web tools. apply_patch is
     the multi-file/atomic counterpart to the single-shot edit. The web tools need
     ``EXA_API_KEY`` set to run, but
-    constructing them (and the toolset) never touches the network or the key."""
-    return [
+    constructing them (and the toolset) never touches the network or the key.
+
+    The experimental ``lsp`` code-intelligence tool is appended only when
+    ``MINIMA_EXPERIMENTAL_LSP`` is set, so it stays out of the schema by default."""
+    tools = [
         read_tool(),
         write_tool(),
         edit_tool(),
@@ -31,6 +34,13 @@ def default_toolset() -> list[AgentTool]:
         web_search_tool(),
         web_fetch_tool(),
     ]
+    from minima_harness.lsp import lsp_enabled
+
+    if lsp_enabled():
+        from minima_harness.tools.lsp import lsp_tool
+
+        tools.append(lsp_tool())
+    return tools
 
 
 def web_toolset() -> list[AgentTool]:
