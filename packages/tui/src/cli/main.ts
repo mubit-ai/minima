@@ -7,7 +7,6 @@
  * this binary only needs a MUBIT_API_KEY (routing) + a provider key (calling).
  */
 
-import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
@@ -318,8 +317,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   });
 
   // Wire Mubit memory (recall-before-route + write-back) into the agent. No-op unless a
-  // MUBIT_API_KEY is present, so the harness is unchanged when Mubit isn't configured.
-  agent.memory = await createMubitMemory(randomUUID());
+  // MUBIT_API_KEY is present. Use a STABLE per-repo memory session id (the provisioned project
+  // namespace, else the repo identity) so recall surfaces prior outcomes across runs and
+  // write-backs accumulate under it — random-per-run ids would make recall see nothing.
+  const memorySession = config.namespace ?? repoIdentity(process.cwd());
+  agent.memory = await createMubitMemory(memorySession);
 
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
   if (nonInteractive) {

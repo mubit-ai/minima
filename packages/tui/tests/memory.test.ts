@@ -95,11 +95,13 @@ describe("MubitHarnessMemory", () => {
     expect(out).toEqual(["lesson A", "lesson B", "lesson D"]);
   });
 
-  test("recall is project-scoped (no session_id) and typed", async () => {
+  test("recall passes the (stable per-repo) session_id — the SDK requires it — and entry types", async () => {
     const c = new FakeClient();
     c.recallReturn = [{ content: "a" }];
     await new MubitHarnessMemory(c, "s1").recall("q");
-    expect(c.recallReqs[0]!.session_id).toBeUndefined();
+    // The SDK rejects recall without a session_id/run_id; a stable per-repo id (set by the
+    // caller) makes recall surface prior outcomes across runs.
+    expect(c.recallReqs[0]!.session_id).toBe("s1");
     expect(c.recallReqs[0]!.entry_types).toEqual(["lesson", "rule", "observation"]);
   });
 

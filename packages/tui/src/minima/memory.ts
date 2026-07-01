@@ -104,12 +104,14 @@ export class MubitHarnessMemory implements HarnessMemory {
     if (!task.trim()) return [];
     const cap = Math.max(1, Math.min(limit, MAX_SNIPPETS));
     try {
-      // No session_id: recall across the project/agent scope so THIS run learns from PAST
-      // sessions on the repo — the point of a coding agent's memory. Writes stay scoped.
+      // The SDK requires a session_id (or run_id) for recall. We use a STABLE per-repo session
+      // id (see createMubitMemory), so recall surfaces prior outcomes accumulated on this repo
+      // across runs — the point of a coding agent's memory — and writes land under the same id.
       const res = await this.client.recall({
         query: task,
         limit: cap,
         entry_types: RECALL_ENTRY_TYPES,
+        session_id: this.sessionId,
       });
       const out: string[] = [];
       for (const entry of entriesOf(res)) {
