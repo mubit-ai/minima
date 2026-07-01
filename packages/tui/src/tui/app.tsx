@@ -16,6 +16,7 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
+import { DEFAULT_CONSOLE_URL, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ChatMessage, Messages } from "./messages.tsx";
@@ -27,6 +28,7 @@ import {
   checkPermission,
   createPermissionState,
 } from "./permissions.ts";
+import { repoIdentity, setProject } from "./projects.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 
@@ -71,6 +73,7 @@ function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
 const COMMANDS = [
   { name: "model", desc: "Select or pin a model (or 'auto')" },
   { name: "clear", desc: "Clear chat messages" },
+  { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
   { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
   { name: "help", desc: "Show available commands list" },
   { name: "quit", desc: "Exit the application" },
@@ -906,6 +909,64 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             toolName: "compact",
           },
         ]);
+        break;
+      }
+      case "auth": {
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: "/auth" },
+          { role: "tool", text: "Opening your browser to sign in to Mubit…", toolName: "auth" },
+        ]);
+        try {
+          const cwd = process.cwd();
+          const repo = repoIdentity(cwd);
+          const consoleUrl = process.env.MUBIT_CONSOLE_URL?.trim() || DEFAULT_CONSOLE_URL;
+          const result = await runAuth({
+            repo,
+            consoleUrl,
+            onUrl: (u) =>
+              setMessages((m) => [
+                ...m,
+                {
+                  role: "tool",
+                  text: `If the browser didn't open, visit:\n${u}`,
+                  toolName: "auth",
+                },
+              ]),
+          });
+          await storeSetValue("MUBIT_API_KEY", result.mubitApiKey);
+          process.env.MUBIT_API_KEY = result.mubitApiKey;
+          if (result.minimaUrl) {
+            await storeSetValue("MINIMA_URL", result.minimaUrl);
+            process.env.MINIMA_URL = result.minimaUrl;
+          }
+          await setProject(repo, {
+            instanceId: result.instanceId,
+            projectId: result.projectId,
+            namespace: result.namespace,
+            minimaUrl: result.minimaUrl,
+          });
+          if (result.namespace) agent.config.namespace = result.namespace;
+          agent.reconnect();
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `✅ Authorized. Key stored (${mask(result.mubitApiKey)}). Project ${result.projectId} on ${result.instanceId}. Router reconnected.`,
+              toolName: "auth",
+            },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `auth failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+              toolName: "auth",
+              isError: true,
+            },
+          ]);
+        }
         break;
       }
       case "config": {
