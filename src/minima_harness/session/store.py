@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from minima_harness.session.format import EntryType, SessionEntry, new_id
 
 _log = logging.getLogger("minima_harness.session")
+
+
+def format_age(ts: float, now: float | None = None) -> str:
+    """Compact relative age for a timestamp: ``just now`` / ``5m ago`` / ``2h ago`` /
+    ``3d ago`` / ``5w ago``. Returns ``?`` when ``ts`` is missing/non-positive."""
+    if not ts or ts <= 0:
+        return "?"
+    now = time.time() if now is None else now
+    delta = max(0.0, now - ts)
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 86400 * 7:
+        return f"{int(delta // 86400)}d ago"
+    return f"{int(delta // (86400 * 7))}w ago"
 
 
 class SessionStore:
@@ -128,8 +148,9 @@ class SessionSummary:
     session_id: str
     path: Path
     display_name: str | None
-    mtime: float
+    mtime: float  # file mtime ≈ last activity ("recently used")
     n_entries: int
+    created: float = 0.0  # ts of the first entry ("created"); falls back to mtime
 
 
 class SessionManager:
@@ -184,17 +205,32 @@ class SessionManager:
         out: list[SessionSummary] = []
         for p in sorted(d.glob("*.jsonl")):
             try:
-                lines = p.read_text(encoding="utf-8").splitlines()
-                count = sum(1 for ln in lines if ln.strip())
+                nonempty = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
             except OSError:  # noqa: BLE001
                 continue
+            mtime = p.stat().st_mtime
             out.append(
                 SessionSummary(
                     session_id=p.stem,
                     path=p,
                     display_name=None,
-                    mtime=p.stat().st_mtime,
-                    n_entries=count,
+                    mtime=mtime,
+                    n_entries=len(nonempty),
+                    created=_first_entry_ts(nonempty) or mtime,
                 )
             )
+        # Most-recently-used first — the natural order for a resume picker.
+        out.sort(key=lambda s: s.mtime, reverse=True)
         return out
+
+
+def _first_entry_ts(nonempty_lines: list[str]) -> float | None:
+    """Parse the ``ts`` of a session's first entry (its logical creation time)."""
+    if not nonempty_lines:
+        return None
+    try:
+        obj = json.loads(nonempty_lines[0])
+        ts = obj.get("ts") if isinstance(obj, dict) else None  # non-object first line → no ts
+        return float(ts) if ts is not None else None
+    except (ValueError, TypeError):
+        return None

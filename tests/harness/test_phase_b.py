@@ -30,6 +30,7 @@ class _RecordingRouter:
         tags=None,
         difficulty=None,
         expected_input_tokens=None,
+        candidates=None,
     ):
         self.calls.append(
             {

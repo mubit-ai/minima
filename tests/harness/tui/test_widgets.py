@@ -74,6 +74,25 @@ def test_render_banner_contains_reason():
     assert "reconnect" in out.lower()
 
 
+def test_render_config_banner_omits_reconnect_framing():
+    from minima_harness.tui.widgets.banner import render_config_banner
+
+    out = str(render_config_banner("no Mubit API key — add MUBIT_API_KEY via /config"))
+    assert "MUBIT_API_KEY" in out and "/config" in out
+    # the actionable banner must NOT tell the user to /reconnect (that wouldn't help)
+    assert "reconnect" not in out.lower()
+
+
+def test_render_model_error_banner_is_not_routing_framed():
+    from minima_harness.tui.widgets.banner import render_model_error_banner
+
+    # a failed model call (routing succeeded) must not be framed as a routing/Minima problem
+    out = str(render_model_error_banner("Access denied by Google Gemini … /model"))
+    assert "Access denied" in out
+    assert "routing offline" not in out.lower()
+    assert "reconnect" not in out.lower()
+
+
 def test_render_notice_is_not_offline_framed():
     from minima_harness.tui.widgets.banner import render_notice
 
@@ -91,3 +110,17 @@ def test_banner_warnings_suppresses_inline_warnings():
     assert _banner_warnings(["reasoner_consulted", "no_model_meets_threshold:x"]) == []
     # an unexpected warning still surfaces
     assert _banner_warnings(["catalog_stale", "escalation_suggested:tie"]) == ["catalog_stale"]
+
+
+def test_banner_warnings_suppresses_benign_routing_diagnostics():
+    from minima_harness.tui.app import _banner_warnings
+
+    # the exact signals from the bug report — benign internal diagnostics, never a red banner
+    assert _banner_warnings(["neighbor_classified"]) == []
+    assert _banner_warnings(["recall_timeout", "cold_start"]) == []
+    assert _banner_warnings(["prices_stale", "thompson_pick", "llm_classified"]) == []
+    # genuinely actionable signals (budget excluded all models) STILL surface
+    assert _banner_warnings(["no_model_within_cost_budget"]) == ["no_model_within_cost_budget"]
+    assert _banner_warnings(["cold_start", "no_model_within_latency_budget"]) == [
+        "no_model_within_latency_budget"
+    ]

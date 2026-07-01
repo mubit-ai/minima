@@ -158,8 +158,21 @@ async def agent_loop_continue(state: AgentState, config: AgentLoopConfig) -> Asy
 # ---------------------------------------------------------------------------
 
 
+def _drop_failed_calls(messages: list[Message]) -> list[Message]:
+    """Never send a failed call's assistant to a provider.
+
+    A provider error is swallowed into an assistant with ``stop_reason == "error"`` and
+    (usually) empty content, which the loop appends to history before breaking. Left in the
+    context it makes the *next* request invalid — e.g. Anthropic rejects an empty text block
+    with ``400 "messages: text content blocks must be non-empty"`` — so a single provider
+    hiccup would wedge the whole session. Filtering here protects every consumer of the loop
+    (not just :class:`MinimaAgent`) and resumed sessions alike.
+    """
+    return [m for m in messages if getattr(m, "stop_reason", None) != "error"]
+
+
 async def _prepare_messages(state: AgentState, config: AgentLoopConfig) -> list[Message]:
-    messages = state.messages
+    messages = _drop_failed_calls(state.messages)
     if config.transform_context is not None:
         messages = await config.transform_context(messages, None)
     return config.convert_to_llm(messages)

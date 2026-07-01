@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from minima_harness.minima.config import DEFAULT_MINIMA_URL
 from minima_harness.tui.customize import GLOBAL_DIR
 
 CONFIG_FILE = GLOBAL_DIR / "config.env"
@@ -54,15 +55,25 @@ class Section:
     fields: tuple[Field, ...] = field(default_factory=tuple)
 
 
+def _provider_fields() -> tuple[Field, ...]:
+    """Build the LLM-provider key fields from the provider catalog (single source of truth)."""
+    from minima_harness.ai.provider_catalog import config_providers
+
+    fields: list[Field] = []
+    for p in config_providers():
+        primary, *alts = p.env_vars
+        label = f"{p.display_name} — {p.blurb}" if p.blurb else f"{p.display_name} API key"
+        fields.append(Field(primary, label, optional=True, aliases=tuple(alts)))
+    return tuple(fields)
+
+
 SECTIONS: tuple[Section, ...] = (
     Section(
         title="LLM provider keys",
-        note="Used by the harness to RUN the chosen model.",
-        fields=(
-            Field("ANTHROPIC_API_KEY", "Anthropic (Claude) API key"),
-            Field("GEMINI_API_KEY", "Google Gemini API key", aliases=("GOOGLE_API_KEY",)),
-            Field("OPENAI_API_KEY", "OpenAI API key", optional=True),
-        ),
+        note="Keys to RUN the chosen model — set any one (or several). More providers "
+        "(Fireworks, DeepInfra, Cerebras, Perplexity, Cohere, …) work by exporting their env "
+        "var; local runtimes (Ollama, vLLM, LM Studio) need no key.",
+        fields=_provider_fields(),
     ),
     Section(
         title="Mubit / Minima routing",
@@ -74,7 +85,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Minima endpoint URL",
                 secret=False,
                 optional=True,
-                default="https://api.minima.sh",
+                default=DEFAULT_MINIMA_URL,
             ),
             Field(
                 "MINIMA_API_KEY",

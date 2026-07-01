@@ -11,12 +11,26 @@ from minima_harness.tui.theme import current_theme, get_theme
 if TYPE_CHECKING:
     from minima_harness.tui.app import HarnessApp
 
-# Without a provider key the harness can't run any model — surface a first-run nudge.
-_PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY")
 
+def selection_hint(mouse_on: bool) -> str:
+    """One-line guidance for selecting/copying text given the current mouse mode.
+
+    With mouse capture ON the wheel scrolls but the terminal's own click-drag selection is
+    suppressed; you select in-app instead (drag + Ctrl+C). macOS Terminal.app can't do in-app
+    drag-select (it doesn't report mouse motion), so capture there only blocks native selection —
+    `/mouse off` is the way to select+copy.
+    """
+    if not mouse_on:
+        return "native mouse select & copy · scroll with PageUp/PageDown · /mouse to toggle"
+    if os.environ.get("TERM_PROGRAM") == "Apple_Terminal":
+        return "Terminal.app can't drag-select while scrolling — /mouse off to select & copy"
+    return "scroll: wheel/PgUp · select+copy: drag then Ctrl+C · /mouse off for native selection"
 
 def _needs_setup() -> bool:
-    return not any(os.environ.get(k) for k in _PROVIDER_KEYS)
+    """No configured provider key (across the whole provider catalog) → first-run nudge."""
+    from minima_harness.ai.provider_catalog import configured_providers
+
+    return not configured_providers()
 
 # ANSI-Shadow-style block glyphs (6 rows). Built programmatically and joined row-wise so the
 # columns always line up — never hand-concatenate ASCII art. Each letter's rows are equal width.
@@ -47,16 +61,23 @@ def render_welcome(app: HarnessApp) -> Group:
     """
     t = get_theme(current_theme())
     accent, muted = t["accent"], t["muted"]
-    banner = Text(BANNER, style=f"bold {accent}")
-    subtitle = Text("CLI · cost-aware model routing", style=muted)
-    strap = Text(DIAGRAM, style=muted)
+    # justify="center" centers each line within the (auto-width = banner-width) splash widget, so
+    # the subtitle/strap/hint sit centered under the banner. The banner's 6 rows are equal width,
+    # so centering them keeps the ASCII art aligned.
+    banner = Text(BANNER, style=f"bold {accent}", justify="center")
+    subtitle = Text("CLI · cost-aware model routing", style=muted, justify="center")
+    strap = Text(DIAGRAM, style=muted, justify="center")
     parts = [banner, Text(""), subtitle, Text(""), strap]
     if _needs_setup():
         parts.append(
             Text(
-                "no API keys found — run  minima-harness config  to add them",
+                "no API keys found — run  minima config  to add them",
                 style=t.get("warning", accent),
+                justify="center",
             )
         )
-    parts.append(Text("type a prompt, or / for commands", style=muted))
+    parts.append(Text("type a prompt, or / for commands", style=muted, justify="center"))
+    parts.append(
+        Text(selection_hint(getattr(app, "_mouse_enabled", True)), style=muted, justify="center")
+    )
     return Group(*parts)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from minima_harness.agent.events import (
     AgentEndEvent,
@@ -10,7 +11,7 @@ from minima_harness.agent.events import (
     ToolExecutionStartEvent,
     TurnEndEvent,
 )
-from minima_harness.ai.events import TextDeltaEvent
+from minima_harness.ai.events import ErrorEvent, TextDeltaEvent
 from minima_harness.minima.runtime import MinimaAgent
 
 
@@ -20,6 +21,13 @@ def event_to_dict(event) -> dict:  # noqa: ANN001
         stream = event.assistant_message_event
         if isinstance(stream, TextDeltaEvent):
             return {"type": "text_delta", "delta": stream.delta}
+        if isinstance(stream, ErrorEvent):
+            err = stream.error
+            return {
+                "type": "error",
+                "message": getattr(err, "error_message", "") or "provider error",
+                "model": getattr(err, "model", ""),
+            }
         return {"type": "message_update"}
     if isinstance(event, ToolExecutionStartEvent):
         return {"type": "tool_start", "name": event.tool_name}
@@ -35,10 +43,19 @@ def event_to_dict(event) -> dict:  # noqa: ANN001
 
 
 async def run_print(agent: MinimaAgent, prompt: str) -> int:
-    """One-shot: run the prompt, print the final assistant text, exit."""
+    """One-shot: run the prompt, print the final assistant text, exit.
+
+    A provider failure (bad key, 404, network) produces empty output; report the classified
+    reason on stderr and exit non-zero instead of silently printing a blank line.
+    """
     await agent.prompt(prompt)
+    err = getattr(agent, "_last_error", None)
     last = agent._last_assistant()  # noqa: SLF001
-    print(last.text if last is not None else "")
+    text = last.text if last is not None else ""
+    if err and not text.strip():
+        print(err, file=sys.stderr)
+        return 1
+    print(text)
     return 0
 
 

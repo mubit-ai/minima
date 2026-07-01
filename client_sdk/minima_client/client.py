@@ -274,6 +274,27 @@ class AsyncMinimaClient:
         raise_for_status(resp)
         return StrategiesResponse.model_validate(resp.json())
 
+    async def models(
+        self,
+        provider: str | None = None,
+        task_type: str | None = None,
+        max_cost: float | None = None,
+        include_stale: bool = True,
+    ) -> ModelsResponse:
+        params = {
+            k: v
+            for k, v in {
+                "provider": provider,
+                "task_type": task_type,
+                "max_cost": max_cost,
+                "include_stale": include_stale,
+            }.items()
+            if v is not None
+        }
+        resp = await self._client.get("/v1/models", params=params)
+        raise_for_status(resp)
+        return ModelsResponse.model_validate(resp.json())
+
     async def health(self) -> dict[str, Any]:
         resp = await self._client.get("/v1/health")
         raise_for_status(resp)

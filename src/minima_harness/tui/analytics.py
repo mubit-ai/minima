@@ -52,7 +52,7 @@ def aggregate_sessions(cwd: Path, n: int = 10) -> dict[str, Any]:
     pred_n = 0  # rows with both an estimate and a realized cost
     band_n = 0  # rows that carried a predicted cost band
     band_hits = 0  # rows where the realized cost landed inside the band
-    for s in summaries[-n:]:
+    for s in summaries[:n]:  # list_sessions is sorted most-recent-first → take the front n
         store = SessionStore.file_backed(s.path)
         stats["sessions"] += 1
         for e in store.entries:

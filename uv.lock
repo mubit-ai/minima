@@ -1244,8 +1244,8 @@ wheels = [
 ]
 
 [[package]]
-name = "minima"
-version = "0.4.0"
+name = "minima-cli"
+version = "0.4.7"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -1310,7 +1310,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
     { name = "keyring", marker = "extra == 'tui'", specifier = ">=24" },
-    { name = "minima", extras = ["server", "harness", "tui"], marker = "extra == 'dev'" },
+    { name = "minima-cli", extras = ["server", "harness", "tui"], marker = "extra == 'dev'" },
     { name = "mubit-sdk", specifier = ">=0.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },
@@ -1323,7 +1323,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "tenacity", specifier = ">=8.4" },
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.79" },
+    { name = "textual", marker = "extra == 'tui'", specifier = ">=3.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.30" },
 ]
 provides-extras = ["server", "reasoner-anthropic", "reasoner-gemini", "seed", "harness", "tui", "dev"]

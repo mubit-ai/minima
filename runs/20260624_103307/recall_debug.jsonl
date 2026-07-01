@@ -1,0 +1,8 @@
+{"run": 1, "task": "email-regex", "model_chosen": "gemini-2.5-pro", "basis": "prior", "evidence": []}
+{"run": 1, "task": "csv-to-json", "model_chosen": "gemini-2.5-flash", "basis": "prior", "evidence": []}
+{"run": 1, "task": "bst-implement", "model_chosen": "claude-sonnet-4-6", "basis": "prior", "evidence": []}
+{"run": 1, "task": "receipt-extract", "model_chosen": "gemini-2.5-flash", "basis": "memory", "evidence": [{"model_id": "gemini-2.5-flash", "similarity": 0.6514, "observed_success": 0.5, "confidence": 0.6681}]}
+{"run": 1, "task": "fr-translate", "model_chosen": "gemini-2.5-flash", "basis": "memory", "evidence": [{"model_id": "gemini-2.5-flash", "similarity": 0.8385, "observed_success": 0.5, "confidence": 0.783}, {"model_id": "gemini-2.5-flash", "similarity": 0.6899, "observed_success": 0.9, "confidence": 0.65}]}
+{"run": 1, "task": "lru-cache", "model_chosen": "claude-sonnet-4-6", "basis": "memory", "evidence": [{"model_id": "claude-sonnet-4-6", "similarity": 0.7981, "observed_success": 0.9, "confidence": 0.7681}]}
+{"run": 1, "task": "keyword-extract", "model_chosen": "gemini-2.5-flash", "basis": "memory", "evidence": [{"model_id": "gemini-2.5-flash", "similarity": 1.0, "observed_success": 0.5, "confidence": 0.8951}, {"model_id": "gemini-2.5-flash", "similarity": 0.7931, "observed_success": 0.9, "confidence": 0.7681}, {"model_id": "gemini-2.5-flash", "similarity": 0.5728, "observed_success": 1.0, "confidence": 0.65}]}
+{"run": 1, "task": "painted-cube", "model_chosen": "claude-sonnet-4-6", "basis": "memory", "evidence": [{"model_id": "claude-sonnet-4-6", "similarity": 0.8167, "observed_success": 0.9, "confidence": 0.883}, {"model_id": "claude-sonnet-4-6", "similarity": 0.6275, "observed_success": 0.9, "confidence": 0.65}]}

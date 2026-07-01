@@ -1,0 +1,42 @@
+{
+  "name": "minima-tui",
+  "version": "0.5.0",
+  "description": "Minima harness + TUI — a TypeScript/Ink port of minima_harness. Talks to the Python FastAPI recommender service over the /v1/* contract.",
+  "type": "module",
+  "license": "FSL-1.1-Apache-2.0",
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "minima": "./src/cli/main.ts"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "check": "tsc --noEmit",
+    "lint": "biome check src",
+    "format": "biome format --write src",
+    "build": "bun run scripts/build.ts",
+    "build:all": "bun run scripts/build-all.ts",
+    "prepublishOnly": "bun run check && bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@google/genai": "^0.3.0",
+    "ink": "^5.0.0",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/bun": "latest",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.6.0"
+  }
+}

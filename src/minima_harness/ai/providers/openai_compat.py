@@ -33,6 +33,7 @@ from minima_harness.ai.events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from minima_harness.ai.provider_quirks import quirks_for
 from minima_harness.ai.providers._common import resolve_api_key, to_json_schema
 from minima_harness.ai.types import (
     AssistantMessage,
@@ -69,9 +70,12 @@ class OpenAICompatProvider:
         signal: object | None = None,
     ) -> AsyncIterator[Event]:
         options = options or {}
-        api_key = resolve_api_key(
-            options, "OPENAI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_COMPAT_API_KEY"
-        )
+        # Resolve the key for THIS model's provider (e.g. a Groq model -> GROQ_API_KEY), so a
+        # key for one provider can't be sent to another provider's endpoint. Unknown/custom
+        # providers fall back to the generic OpenAI-compat vars via env_vars_for_provider.
+        from minima_harness.ai.provider_catalog import env_vars_for_provider
+
+        api_key = resolve_api_key(options, *env_vars_for_provider(model.provider))
         base = (model.base_url or _DEFAULT_BASE).rstrip("/")
         url = f"{base}/chat/completions"
         payload = _build_payload(model, context, options)
@@ -112,7 +116,9 @@ def _build_payload(model: Model, context: Context, options: dict[str, Any]) -> d
         "messages": out,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": options.get("max_tokens", model.max_tokens),
+        # Per-provider request quirks (e.g. OpenAI GPT-5 needs max_completion_tokens) come from
+        # the quirks table, not a growing chain of `if model.provider == ...` branches here.
+        quirks_for(model.provider).token_param: options.get("max_tokens", model.max_tokens),
     }
     if context.tools:
         payload["tools"] = [

@@ -1,4 +1,4 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness
+.PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness tui-install tui-test tui-check tui-build tui tui-dev
 
 install:
 	uv sync --extra dev   # dev pulls server + harness + tui for the full test suite
@@ -39,3 +39,32 @@ harness-test:
 
 harness:
 	uv run --extra harness --extra tui --env-file .env.harness minima-harness $(ARGS)
+
+# --- TS TUI (packages/tui) — run from the repo root so .env.harness auto-loads --------
+
+TUI := packages/tui
+TUI_BIN := $(TUI)/dist/minima
+
+tui-install:
+	cd $(TUI) && bun install
+
+tui-test:
+	cd $(TUI) && bun test
+
+tui-check:
+	cd $(TUI) && bun run check && bun run lint
+
+tui-build:
+	cd $(TUI) && bun run build
+
+# Run the compiled binary (build first with `make tui-build`). Passes ARGS through, so:
+#   make tui ARGS='-p "hello"'          # one-shot
+#   make tui ARGS='--offline --model gpt-4o-mini -p "hi"'
+#   make tui                             # interactive TUI
+tui:
+	@test -x $(TUI_BIN) || { echo "Run 'make tui-build' first"; exit 1; }
+	./$(TUI_BIN) $(ARGS)
+
+# Run from source via Bun (no compile step) — fastest dev loop.
+tui-dev:
+	cd $(TUI) && bun run src/cli/main.ts $(ARGS)

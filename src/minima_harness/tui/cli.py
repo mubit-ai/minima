@@ -42,7 +42,9 @@ def _load_env_files() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="minima-harness", description="PI-style agent on Minima.")
+    p = argparse.ArgumentParser(
+        prog="minima", description="Minima CLI — cost-aware model-routing coding agent."
+    )
     p.add_argument(
         "prompt", nargs="*", help="optional initial prompt (used by --print/--mode json)"
     )
@@ -68,11 +70,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mouse",
+        action=argparse.BooleanOptionalAction,
+        default=None,  # resolved per-terminal below (see _resolve_mouse)
+        help="capture the mouse: scroll-wheel + in-app drag-select & copy. Default ON, except "
+        "macOS Terminal.app — it doesn't report mouse motion (xterm 1003), so in-app drag-select "
+        "can't work and capture would only block its native selection; defaults OFF there (select "
+        "natively, scroll with PageUp/PageDown). Override with --mouse/--no-mouse; /mouse toggles.",
+    )
+    p.add_argument(
+        "--dangerously-skip-permissions",
         action="store_true",
-        help="capture the mouse for scroll-wheel support. OFF by default so terminal text "
-        "selection + copy (drag, then Cmd/Ctrl+C) works; scroll with PageUp/PageDown.",
+        help="don't ask before write/edit/bash (YOLO). Off by default — the TUI asks first.",
     )
     return p
+
+
+def _resolve_mouse(flag: bool | None) -> bool:
+    """Resolve the mouse-capture default. Explicit --mouse/--no-mouse wins. Otherwise ON,
+    except macOS Terminal.app, which doesn't report mouse motion (xterm mode 1003) — so in-app
+    drag-select can't work there and capturing the mouse would only suppress its rock-solid native
+    selection. Default OFF there so users can select+copy out of the box."""
+    if flag is not None:
+        return flag
+    return os.environ.get("TERM_PROGRAM") != "Apple_Terminal"
 
 
 def _tools_for(args: argparse.Namespace):
@@ -89,11 +109,45 @@ def _tools_for(args: argparse.Namespace):
 
 
 def _register_providers(cwd: Path) -> None:
+    from minima_harness.ai.provider_catalog import provider_key_present, register_catalog_models
     from minima_harness.ai.providers import ensure_providers_registered
     from minima_harness.tui.extra_models import register_extra_models
 
     ensure_providers_registered()
+    # Register the curated multi-provider catalog, but only for providers whose key is
+    # configured — so the model picker stays relevant (you see models you can actually run).
+    register_catalog_models()
+    # OpenRouter is an aggregator: one key unlocks its *entire* live model list (cached +
+    # offline-safe), not just a few curated ids. Register it when the key is present.
+    if provider_key_present("openrouter"):
+        try:
+            from minima_harness.ai.openrouter_catalog import register_openrouter_models
+
+            register_openrouter_models()
+        except Exception:  # noqa: BLE001 - never block startup on the OpenRouter catalog
+            pass
     register_extra_models(cwd)
+
+
+def _overlay_minima_prices(config: HarnessConfig) -> None:
+    """Best-effort: overlay Minima's authoritative live pricing onto the registered models.
+
+    So the cost the harness reports for a call matches the cost the server routed against
+    (keeps est-vs-actual honest). Offline-safe and quick: skipped without a Minima URL, short
+    timeout, and any failure is swallowed (the seeded prices stand)."""
+    if not (config.minima_url or "").strip():
+        return
+    try:
+        from minima_client import MinimaClient
+
+        from minima_harness.minima.mapping import sync_catalog
+
+        with MinimaClient(
+            config.minima_url, config.minima_api_key, timeout=min(config.timeout, 8.0)
+        ) as client:
+            sync_catalog(client)
+    except Exception:  # noqa: BLE001 - pricing overlay must never block startup
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,6 +170,13 @@ def main(argv: list[str] | None = None) -> int:
         config.minima_url = ""
     cwd = Path.cwd()
     _register_providers(cwd)
+    # Gate the routing candidate pool to models whose provider key is configured (after
+    # registration so newly-added providers count) — Minima won't be offered a model the
+    # user can't run. No-op when keys for the defaults (Anthropic/Gemini) are present.
+    from minima_harness.ai.provider_catalog import runnable_candidates
+
+    config.candidates = runnable_candidates(config.candidates)
+    _overlay_minima_prices(config)
     tools = _tools_for(args)
 
     noninteractive = args.print or args.mode in ("print", "json")
@@ -155,8 +216,10 @@ def main(argv: list[str] | None = None) -> int:
         cwd=cwd,
         system_prompt=build_system_prompt(cwd),
         load_session=load_on_start,
+        skip_permissions=args.dangerously_skip_permissions,
+        mouse=(mouse := _resolve_mouse(args.mouse)),
     )
-    app.run(mouse=args.mouse)
+    app.run(mouse=mouse)
     return 0
 
 

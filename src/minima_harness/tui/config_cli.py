@@ -1,4 +1,4 @@
-"""``minima-harness config`` — the pre-TUI credential setup command.
+"""``minima config`` — the pre-TUI credential setup command.
 
 Sectioned guided setup plus non-interactive ``list``/``get``/``set``/``unset``/``doctor``/
 ``path``. Secrets are never echoed: interactive entry uses ``getpass``, and ``list``/``get``
@@ -11,12 +11,13 @@ import getpass
 import os
 import sys
 
+from minima_harness.minima.config import DEFAULT_MINIMA_URL
 from minima_harness.tui import config_store as store
 
 _USAGE = (
-    "usage: minima-harness config "
+    "usage: minima config "
     "[list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | doctor | path]\n"
-    "       minima-harness config            # interactive guided setup"
+    "       minima config            # interactive guided setup"
 )
 
 
@@ -37,7 +38,7 @@ def _list() -> int:
 
 
 def _interactive() -> int:
-    print("minima-harness config — press Enter to keep the current value.\n")
+    print("minima config — press Enter to keep the current value.\n")
     for section in store.SECTIONS:
         print(f"# {section.title} — {section.note}")
         for f in section.fields:
@@ -54,7 +55,7 @@ def _interactive() -> int:
                 store.set_value(f.key, f.default)
                 print(f"    saved default → {f.default}")
         print()
-    print("done. Run `minima-harness config doctor` to verify.")
+    print("done. Run `minima config doctor` to verify.")
     return 0
 
 
@@ -71,7 +72,7 @@ def _doctor() -> int:
         ok = bool(os.environ.get(key))
         print(f"  [{'ok' if ok else '  '}] {label:<10} {key:<18} {'present' if ok else 'missing'}")
 
-    url = os.environ.get("MINIMA_URL", "https://api.minima.sh")
+    url = os.environ.get("MINIMA_URL", DEFAULT_MINIMA_URL)
     print(f"\n  Minima endpoint: {url}")
     import httpx
 

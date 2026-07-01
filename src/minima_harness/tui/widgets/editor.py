@@ -12,8 +12,9 @@ _NEWLINE_KEYS = frozenset({"shift+enter", "ctrl+enter"})
 class Editor(TextArea):
     """Multi-line editor with /-command autocomplete.
 
-    Enter submits (or steers while the agent runs — decided by the app); Shift/Ctrl+Enter
-    inserts a newline; Alt+Enter queues a follow-up. Text changes flow out via TextArea's
+    Enter submits (or queues a follow-up while the agent runs — decided by the app);
+    Shift/Ctrl+Enter inserts a newline; Alt+Enter steers the running turn. Text changes flow
+    out via TextArea's
     built-in ``Changed`` message so the app can drive a command popup; Tab on a ``/``-prefixed
     line requests completion.
     """
@@ -23,7 +24,7 @@ class Editor(TextArea):
             super().__init__()
             self.text = text
 
-    class FollowUp(Message):
+    class Steer(Message):
         def __init__(self, text: str) -> None:
             super().__init__()
             self.text = text
@@ -76,7 +77,7 @@ class Editor(TextArea):
         elif event.key == "alt+enter":
             event.prevent_default()
             event.stop()
-            self.post_message(self.FollowUp(self.text))
+            self.post_message(self.Steer(self.text))
         elif event.key in _NEWLINE_KEYS:
             event.prevent_default()
             event.stop()

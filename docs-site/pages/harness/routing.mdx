@@ -1,0 +1,54 @@
+---
+title: Model routing
+description: How the harness routes each turn through Minima — auto vs. pinned, offline, judging, and feedback.
+---
+
+import { PageHeader, Note, Tip } from '@components'
+
+<PageHeader />
+
+# Model routing
+
+Every turn follows the Minima loop:
+
+```
+recommend  ──▶  run the model yourself  ──▶  judge quality  ──▶  feedback
+```
+
+1. **Recommend.** The harness sends the turn to the Minima recommender, which ranks the candidate models and returns the cheapest one expected to clear the task.
+2. **Run.** The harness runs that model directly against the provider API — Minima never sees your prompt or code.
+3. **Judge.** The outcome is optionally graded (see [Quality judging](#quality-judging)).
+4. **Feedback.** The result and realized cost/tokens are reported back so the next recommendation is sharper.
+
+This is the same engine described in the [SDK Concepts](/sdk/concepts) — the harness is a client of it.
+
+## Auto vs. pinned
+
+- **Auto (default).** The status bar shows `auto`; Minima picks a model per turn from the candidate set (`gemini-2.5-flash`, `claude-haiku-4-5`, `claude-sonnet-4-6`, `gemini-2.5-pro`, `claude-opus-4-8` by default).
+- **Pinned.** Choose a model with `/model` in the TUI, or `--model <id>` (optionally `--provider <name>`) on the CLI. Routing is bypassed — the harness always runs that model. `/model auto` returns to routing.
+
+<Note>
+The cost/quality tradeoff defaults to the middle of the slider (`5` of `0–10`). Lower it to favor cheaper models, raise it to demand higher predicted quality. See [the slider](/sdk/concepts#the-costquality-slider).
+</Note>
+
+## Offline mode
+
+`--offline` bypasses the Minima recommender entirely — no recommend/feedback round-trips. Pair it with `--model`/`--provider` to run a specific model with no routing at all:
+
+```bash
+minima --offline --model gpt-4o-mini --provider openai -p "quick summary"
+```
+
+Use `/reconnect` in the TUI to re-establish the routing client if the recommender was briefly unreachable.
+
+## Quality judging
+
+After a turn, the harness can grade the outcome and send that quality score with feedback. In the CLI the judge **abstains by default** (it reports no score unless you enable it). Toggle an LLM judge on or off with `/judge [on|off]` in the TUI.
+
+<Tip>
+Reporting quality and realized cost is what turns Minima's savings report from an estimate into a measurement, and sharpens future picks. Judging is how the harness supplies the quality half automatically.
+</Tip>
+
+## Memory isolation
+
+Routing recall and learning are scoped to a **namespace** — by default the Mubit project `minima auth` provisioned for the current repo, or `MINIMA_NAMESPACE` if set. Different repos therefore learn independently. See [Configuration → per-repo memory isolation](/harness/configuration).

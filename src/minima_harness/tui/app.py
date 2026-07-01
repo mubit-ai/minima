@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from minima_harness.tools import default_toolset
 from minima_harness.tui import config_store
 from minima_harness.tui.analytics import aggregate_sessions, format_stats
 from minima_harness.tui.bridge import EventBridge
-from minima_harness.tui.clipboard import copy_to_clipboard
+from minima_harness.tui.clipboard import copy_to_clipboard as _os_clipboard_copy
 from minima_harness.tui.commands import CommandRegistry
 from minima_harness.tui.compaction import summarize
 from minima_harness.tui.context import get_session_override, set_session_override
@@ -57,15 +58,21 @@ from minima_harness.tui.mubit import (
 from minima_harness.tui.overlays import (
     CommandPicker,
     ConfigOverlay,
-    DiffApproval,
+    GoalsOverlay,
     LayeredPromptInspector,
     ModelPicker,
+    PermissionRequest,
     PromptOptimizationOverlay,
     RoutingConfirm,
     SessionPicker,
     TreePicker,
 )
-from minima_harness.tui.widgets.banner import render_banner, render_notice
+from minima_harness.tui.widgets.banner import (
+    render_banner,
+    render_config_banner,
+    render_model_error_banner,
+    render_notice,
+)
 from minima_harness.tui.widgets.editor import Editor
 from minima_harness.tui.widgets.footer import render_footer
 from minima_harness.tui.widgets.messages import ChatLog, MessageBubble
@@ -75,6 +82,8 @@ _log = logging.getLogger("minima_harness.tui.app")
 
 # Tools whose effects are gated behind diff approval when /edits is on.
 _MUTATING_TOOLS = frozenset({"edit", "write"})
+# Tools that touch the user's machine/network and so require approval by default.
+_SENSITIVE_TOOLS = frozenset({"edit", "write", "bash"})
 
 
 class HarnessApp(App):
@@ -92,6 +101,9 @@ class HarnessApp(App):
     Screen { layout: vertical; }
     #chatlog { height: 1fr; background: $boost; padding: 0 1; }
     #chatlog.empty { align: center middle; }  /* fresh session: center the splash, no void */
+    /* The splash must shrink to its content (the banner) so the parent's center-align actually
+       centers it — a full-width Static would pin the art to the left edge. */
+    #welcome { width: auto; height: auto; }
     #banner { height: auto; padding: 0 1; }
     #editor { height: 6; background: $panel; border: round $accent; padding: 0 1; }
     #status { height: 1; background: $panel; padding: 0 1; color: $text-muted; }
@@ -141,8 +153,23 @@ class HarnessApp(App):
         background: $panel; border: round $accent; padding: 0 1;
     }
     TreePicker Tree:focus { border: round $accent; }
-    DiffApproval { align: center middle; }
-    DiffApproval TextArea { width: 90; height: 24; background: $panel; }
+    GoalsOverlay { align: center middle; }
+    GoalsOverlay #goals-card {
+        width: 84; height: auto; max-height: 80%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    GoalsOverlay #goals-budget { color: $text-muted; padding: 0 1 1 1; }
+    GoalsOverlay #goals-body { height: auto; max-height: 22; padding: 0 1; }
+    PermissionRequest { align: center middle; }
+    PermissionRequest #perm-card {
+        width: 92; height: auto; max-height: 85%;
+        background: $panel; border: round $accent; padding: 0 1;
+    }
+    PermissionRequest #perm-hint { color: $text-muted; padding: 0 1 1 1; }
+    PermissionRequest #perm-view {
+        width: 1fr; height: auto; max-height: 24; background: $boost;
+        border: round $panel-lighten-2;
+    }
     ConfigOverlay { align: center middle; }
     ConfigOverlay #config-card {
         width: 84; height: auto; max-height: 88%;
@@ -150,6 +177,9 @@ class HarnessApp(App):
     }
     ConfigOverlay #config-hint { color: $text-muted; padding: 0 1 1 1; }
     ConfigOverlay #config-body { height: auto; max-height: 26; padding: 0 1; }
+    ConfigOverlay #config-foot {
+        color: $text-muted; padding: 1 1 0 1; border-top: solid $panel-lighten-2;
+    }
     ConfigOverlay .cfg-section { text-style: bold; padding: 1 0 0 0; }
     ConfigOverlay .cfg-note { color: $text-muted; }
     ConfigOverlay .cfg-key { color: $text-muted; padding: 1 0 0 0; }
@@ -158,6 +188,7 @@ class HarnessApp(App):
         background: $boost; border: round $panel-lighten-2;
     }
     ConfigOverlay Input:focus { border: round $accent; }
+    ConfigOverlay #cfg-save { width: auto; margin: 1 0 0 0; }
     PromptOptimizationOverlay { align: center middle; }
     PromptOptimizationOverlay #opt-card {
         width: 92; height: auto; max-height: 85%;
@@ -180,19 +211,44 @@ class HarnessApp(App):
         cwd: Path | None = None,
         system_prompt: str | None = None,
         load_session: bool = False,
+        skip_permissions: bool = False,
+        mouse: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
+        # Whether the app is capturing the mouse (scroll-wheel + in-app drag-select). Mirrors the
+        # value passed to .run(mouse=...); /mouse flips it live. When on, the terminal's own
+        # click-drag selection is suppressed (hold Option/Shift to bypass); when off, native
+        # selection works but the wheel no longer scrolls the app (use PageUp/PageDown).
+        self._mouse_enabled = mouse
         self.config.judge_every = judge_every  # default OFF in interactive mode
         self.session = session
         self.cwd = cwd or Path.cwd()
         self._tools = list(tools or default_toolset())
+        # /goals: the agent's live task checklist + (Phase 2) cost-to-goal. The `tasks` tool is
+        # appended here so it reaches the agent via _apply_extensions; the goal is loaded from
+        # the session so it survives resume.
+        from minima_harness.minima.goals import GoalStore
+        from minima_harness.tools.tasks import tasks_tool
+
+        self._goals = GoalStore()
+        self._goals.load(self.session)
+        self._tools.append(tasks_tool(self._goals))
         self._route_mode = "auto"  # auto | confirm (Ctrl+R cycles; /confirm sets it too)
-        self._confirm_edits = False  # /edits: review edit/write diffs before applying
+        self._confirm_edits = False  # /edits: force a diff review for every edit/write
+        # Ask before sensitive ops (write/edit/bash) by default; /yolo or
+        # --dangerously-skip-permissions turns it off. _allow_always holds tools the user chose
+        # to always-allow this session.
+        self._ask_permission = not skip_permissions
+        self._allow_always: set[str] = set()
         self._cache_enabled = config.cache_enabled  # /cache: serve near-duplicate prompts free
         self._cache = SemanticCache(threshold=config.cache_threshold)
         self._escalate = False
         self._escalate_threshold = 0.7
+        # /thoughts: stream the model's reasoning into the log (off by default). The live
+        # thinking bubble is (re)created per turn; empty ones are dropped after the turn.
+        self._show_thinking = False
+        self._thinking_bubble: Any = None
         self.agent = agent or MinimaAgent(
             self.config, tools=self._tools, meter=CostMeter(), system_prompt=system_prompt
         )
@@ -315,7 +371,7 @@ class HarnessApp(App):
         return "+".join([*modifiers, key])
 
     def on_mount(self) -> None:
-        self.title = "minima-harness"
+        self.title = "Minima CLI"
         self.agent.subscribe(self.bridge)
         self.agent.subscribe(self._extension_fanout)
         self.bridge.bind(on_text=self._append_stream, on_thinking=self._on_thinking)
@@ -326,10 +382,11 @@ class HarnessApp(App):
         self.run_worker(self._show_welcome(), exclusive=True)
 
     def _apply_effective_prompt(self) -> None:
-        """Recompute and apply the Mubit+local+session system prompt to the agent."""
-        self.agent.state.system_prompt = effective_prompt(
-            self.cwd, get_session_override(self.session)
-        )
+        """Recompute and apply the Mubit+local+session system prompt to the agent, with the
+        active goal + open tasks appended so the model is re-anchored to the goal each turn."""
+        base = effective_prompt(self.cwd, get_session_override(self.session))
+        goal_block = self._goals.prompt_block()
+        self.agent.state.system_prompt = f"{base}\n\n{goal_block}" if goal_block else base
 
     async def _apply_prompt_edit(self, result: dict) -> None:
         action, content = result["action"], result["content"]
@@ -365,6 +422,43 @@ class HarnessApp(App):
             w.remove()
         chatlog.remove_class("empty")
 
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy ``text`` to the clipboard. Textual's built-in copy (triggered by the in-app
+        text selection + ⌘/Ctrl+C) emits *only* OSC 52, which macOS Terminal.app silently
+        ignores — so a selection looked copied but wasn't. Also push to the OS clipboard tool
+        (pbcopy/xclip/wl-copy) so selection-copy lands on the real clipboard everywhere, and
+        through tmux/SSH. Run off the UI thread so a slow subprocess never stalls the app."""
+        super().copy_to_clipboard(text)  # Textual: track _clipboard + emit OSC 52
+        if not text:
+            return
+        try:
+            self.run_worker(
+                partial(_os_clipboard_copy, text),
+                thread=True,
+                group="clipboard",
+                exclusive=True,
+            )
+        except Exception:  # noqa: BLE001 - copy must never crash the app
+            _log.debug("clipboard_worker_failed", exc_info=True)
+
+    def _set_mouse_capture(self, enabled: bool) -> bool:
+        """Turn mouse capture on/off live via the driver. Returns True on success. Mouse capture
+        is what trades terminal-native selection for scroll-wheel + in-app selection, so this lets
+        a user flip between the two without restarting."""
+        driver = getattr(self, "_driver", None)
+        if driver is None:
+            return False
+        try:
+            if enabled:
+                driver._enable_mouse_support()
+            else:
+                driver._disable_mouse_support()
+        except Exception:  # noqa: BLE001 - never crash on a terminal that can't toggle
+            _log.debug("mouse_toggle_failed", exc_info=True)
+            return False
+        self._mouse_enabled = enabled
+        return True
+
     # ------------------------------------------------------------- streaming
     def _set_state(self, state: str) -> None:
         try:
@@ -379,6 +473,50 @@ class HarnessApp(App):
 
     def _on_thinking(self, delta: str) -> None:
         self._set_state("thinking")
+        if self._thinking_bubble is not None:
+            self._thinking_bubble.append(delta)
+
+    async def _finalize_thinking(self) -> None:
+        """Drop the per-turn thinking bubble if the model produced no thoughts; else keep it."""
+        if self._thinking_bubble is None:
+            return
+        if not self._thinking_bubble.buffer.strip():
+            await self._thinking_bubble.remove()
+        else:
+            self._thinking_bubble.flush()
+        self._thinking_bubble = None
+
+    async def _emit_goal_cost_line(self, routing: Any) -> None:
+        """Attribute this turn's realized cost to the active goal and show spent/projected/budget.
+
+        The one thing no other agent does: frame the goal as a budget. spent = realized cost since
+        the goal started; projected = linear extrapolation from task progress; budget warns (never
+        blocks) when exceeded."""
+        if routing is None or not self._goals.active or self._goals.goal is None:
+            return
+        meter = self.agent.meter
+        if meter is None or not meter.rows:
+            return
+        row = meter.rows[-1]
+        # Tasks the model flipped to completed THIS turn get the cost split across them (covers
+        # the common case: model plans, works, then marks several done with no in_progress step).
+        before: set[str] = getattr(self, "_goal_completed_before", set())
+        newly_completed = [tid for tid in self._goals.completed_ids() if tid not in before]
+        self._goals.record_turn_cost(row.actual_cost_usd, row.est_cost_usd, newly_completed)
+        g = self._goals.goal
+        spent = g.spent_usd()
+        parts = [f"spent ${spent:.4f}"]
+        proj = g.projected_total_usd()
+        if proj is not None:
+            parts.append(f"~${proj:.4f} projected")
+        over = False
+        if g.budget_usd:
+            pct = (100.0 * spent / g.budget_usd) if g.budget_usd > 0 else 0.0
+            over = spent > g.budget_usd
+            parts.append(f"budget ${g.budget_usd:.4f} ({pct:.0f}%)")
+        await self.query_one(ChatLog).add_system(
+            "   └ ledger · " + " · ".join(parts), color="red" if over else None
+        )
 
     async def _check_escalate(self, routing: Any, task_text: str) -> None:
         """Judge the output and suggest escalating if quality < threshold."""
@@ -457,50 +595,81 @@ class HarnessApp(App):
             if model is not None:
                 routing.model = model
                 routing.chosen_model_id = chosen_id
+            else:
+                # The pick isn't a model the harness can actually call (id unknown to the
+                # registry) — say so instead of silently running the originally-routed model.
+                await chatlog.add_error(
+                    f"can't switch to {chosen_id} — not a registered model; "
+                    f"running {routing.chosen_model_id or routing.model.id}"
+                )
         if action == "pin" and chosen_id:
             self.config.candidates = [chosen_id]
         return routing
 
-    async def _tool_hook(self, ctx: Any) -> Any:
-        """before_tool_call hook: when /edits is on, review edit/write diffs before applying.
+    def _tool_preview(self, name: str, args: Any) -> str:
+        """What a sensitive tool call will do, for the permission modal: a diff for write/edit,
+        the command for bash, else a compact summary."""
+        if name in _MUTATING_TOOLS:
+            from minima_harness.tui.diff import render_tool_diff
 
-        A rejected edit is blocked (the model sees the rejection) AND recorded as a
-        ground-truth negative outcome fed back to Minima.
+            return render_tool_diff(name, args)
+        if name == "bash":
+            return f"$ {getattr(args, 'command', '') or ''}"
+        return _format_tool_call(name, args)
+
+    async def _tool_hook(self, ctx: Any) -> Any:
+        """before_tool_call hook: ask the user to approve sensitive ops (write/edit/bash) before
+        they run — Claude-Code-style. Approval is needed when permission-asking is on and the
+        tool isn't already always-allowed, OR when /edits forces a diff review for edits.
+
+        A rejected call is blocked (the model sees the rejection) AND recorded as a ground-truth
+        negative outcome fed back to Minima.
         """
         from minima_harness.agent.tools import BeforeToolCallResult
-        from minima_harness.tui.diff import render_tool_diff
 
-        if not self._confirm_edits or ctx.tool_call.name not in _MUTATING_TOOLS:
+        name = ctx.tool_call.name
+        forced = self._confirm_edits and name in _MUTATING_TOOLS
+        gated = self._ask_permission and name in _SENSITIVE_TOOLS and name not in self._allow_always
+        if not (forced or gated):
             return None
-        target = getattr(ctx.args, "path", "")
-        diff = render_tool_diff(ctx.tool_call.name, ctx.args)
+        target = getattr(ctx.args, "path", "") or ""
+        preview = self._tool_preview(name, ctx.args)
         result = await self.push_screen(
-            DiffApproval(ctx.tool_call.name, diff, target), wait_for_dismiss=True
+            PermissionRequest(name, preview, target), wait_for_dismiss=True
         )
-        if result and result.get("action") == "approve":
+        action = (result or {}).get("action", "reject")
+        if action == "always":
+            self._allow_always.add(name)  # don't ask again for this tool this session
+            return None
+        if action == "approve":
             return None
         self.agent.record_tool_rejection()
-        await self.query_one(ChatLog).add_system(
-            f"✗ rejected {ctx.tool_call.name} {target}".rstrip(), color="red"
-        )
+        await self.query_one(ChatLog).add_error(f"rejected {name} {target}".rstrip())
         return BeforeToolCallResult(
             block=True,
-            reason="The user rejected this edit. Do not retry it verbatim — propose a "
-            "different approach or ask what they want changed.",
+            reason="The user rejected this tool call. Do not retry it verbatim — propose a "
+            "different approach or ask what they want.",
         )
 
     # ------------------------------------------------------------- input
     async def on_editor_submitted(self, event: Editor.Submitted) -> None:
         text = event.text
         self.query_one("#cmd-popup", OptionList).set_class(False, "visible")
-        if text.strip():
-            self._history.add(text)
-            append_history(self.cwd, text)
-        if self.agent.state.is_streaming:
-            # Enter while running = steering (delivered after the current tool batch).
-            self.agent.steer(text)
+        # Ignore empty/whitespace-only submits: an empty turn renders a blank bubble and
+        # sends task="" to /v1/recommend, which fails TaskInput(min_length=1) and knocks
+        # routing offline. Just clear and wait for real input.
+        if not text.strip():
             self.query_one(Editor).text = ""
-            await self.query_one(ChatLog).add_system(f"↳ (steering) {text}")
+            return
+        self._history.add(text)
+        append_history(self.cwd, text)
+        if self.agent.state.is_streaming:
+            # Enter while running = queue a follow-up (runs after the current turn). Enter is
+            # the one key every terminal forwards, so this is the reliable "type while it's
+            # working" path; Alt+Enter steers the in-flight turn for terminals that pass it.
+            self.agent.follow_up(text)
+            self.query_one(Editor).text = ""
+            await self.query_one(ChatLog).add_system(f"↳ (queued — runs after this turn) {text}")
             return
         self.query_one(Editor).text = ""
         parsed = parse_submission(text)
@@ -511,13 +680,17 @@ class HarnessApp(App):
             return
         self.run_worker(self._run_submission(parsed), exclusive=True, name="turn")
 
-    async def on_editor_follow_up(self, event: Editor.FollowUp) -> None:
+    async def on_editor_steer(self, event: Editor.Steer) -> None:
         text = event.text
         if not text.strip():
             return
-        self.agent.follow_up(text)
+        if not self.agent.state.is_streaming:
+            # Nothing to steer when idle — treat Alt+Enter like a normal submit.
+            self.post_message(Editor.Submitted(text))
+            return
+        self.agent.steer(text)
         self.query_one(Editor).text = ""
-        await self.query_one(ChatLog).add_system(f"↳ (follow-up) {text}")
+        await self.query_one(ChatLog).add_system(f"↳ (steering) {text}")
 
     # ------------------------------------------------------------- command popup
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -573,8 +746,14 @@ class HarnessApp(App):
 
     # ------------------------------------------------------------- a turn
     async def run_turn(self, text: str) -> None:
+        # Choke point for every turn (editor submit, bash `!cmd` feed, scripted prompts):
+        # never start a turn on empty text — a blank task fails TaskInput(min_length=1) and
+        # knocks routing offline, leaving a blank bubble + an unrouted, billed turn.
+        if not text.strip():
+            return
         chatlog = self.query_one(ChatLog)
         self._dismiss_welcome()  # first prompt: drop the splash, let the conversation flow top-down
+        self._apply_effective_prompt()  # re-anchor the goal/tasks into the system prompt
         await chatlog.add_user(text)
         self.session.append(EntryType.USER, {"text": text})
         if self._cache_enabled:
@@ -582,41 +761,82 @@ class HarnessApp(App):
             if hit is not None:
                 await self._serve_cache_hit(text, hit)
                 return
+        # A live "thinking" bubble (above the answer) when /thoughts is on; dropped if empty.
+        self._thinking_bubble = await chatlog.add_thinking_stream() if self._show_thinking else None
         self._stream_bubble = await chatlog.add_assistant_stream()
         self._set_state("routing")
         routing = None
         resp_text = ""
+        # Goal-conditioned routing: an active goal supplies task_type + a goal tag so the whole
+        # goal routes coherently and clusters in Minima's memory.
+        g_type, g_tags = (None, None)
+        self._goal_completed_before = self._goals.completed_ids()  # for per-task cost attribution
+        if self._goals.active and self._goals.goal is not None:
+            g_type, g_tags = self._goals.goal.routing_signals()
         try:
-            routing = await self.agent.prompt(text)
+            routing = await self.agent.prompt(text, task_type=g_type, tags=g_tags)
         except Exception as exc:  # noqa: BLE001
             self._set_state("idle")
+            await self._finalize_thinking()
+            if self._stream_bubble is not None:
+                await self._stream_bubble.remove()  # never leave an empty bubble behind
+                self._stream_bubble = None
             await chatlog.add_error(str(exc))
             self._set_banner(str(exc))
-            self._stream_bubble = None
             return
+        await self._finalize_thinking()
         await self._render_tools_post_turn()
+        # A provider call that failed (bad/missing key, 404, rate limit, network) is swallowed
+        # into an empty assistant (stop_reason="error"); the agent classifies it as _last_error.
+        # Surface that reason instead of leaving a silent blank bubble.
+        turn_error = getattr(self.agent, "_last_error", None)
         if self._stream_bubble is not None:
-            self._stream_bubble.render_markdown()
-            resp_text = self._stream_bubble.buffer
-            _last = self.agent._last_assistant()
-            _usage = _last.usage if _last is not None else None
-            self.session.append(
-                EntryType.ASSISTANT,
-                {
-                    "text": self._stream_bubble.buffer,
-                    "model": routing.chosen_model_id if routing else None,
-                    "in_tokens": _usage.input if _usage else 0,
-                    "out_tokens": _usage.output if _usage else 0,
-                    "cost": _usage.cost.total if _usage else 0.0,
-                    # est cost (+ band) so predictability (est-vs-actual) is computable later.
-                    "est_cost": routing.est_cost_usd if routing else 0.0,
-                    "est_cost_low": routing.est_cost_low if routing else None,
-                    "est_cost_high": routing.est_cost_high if routing else None,
-                },
-            )
+            if turn_error and not self._stream_bubble.buffer.strip():
+                await self._stream_bubble.remove()  # no output at all → drop the blank bubble
+            else:
+                self._stream_bubble.render_markdown()
+                resp_text = self._stream_bubble.buffer
+                _last = self.agent._last_assistant()
+                _usage = _last.usage if _last is not None else None
+                self.session.append(
+                    EntryType.ASSISTANT,
+                    {
+                        "text": self._stream_bubble.buffer,
+                        "model": routing.chosen_model_id if routing else None,
+                        "in_tokens": _usage.input if _usage else 0,
+                        "out_tokens": _usage.output if _usage else 0,
+                        "cost": _usage.cost.total if _usage else 0.0,
+                        # est cost (+ band) so predictability (est-vs-actual) is computable later.
+                        "est_cost": routing.est_cost_usd if routing else 0.0,
+                        "est_cost_low": routing.est_cost_low if routing else None,
+                        "est_cost_high": routing.est_cost_high if routing else None,
+                    },
+                )
             self._stream_bubble = None
+        if turn_error:
+            # The *model call* failed (routing succeeded) — surface it as a model error, NOT
+            # the "routing offline … /reconnect to retry Minima" banner (reconnecting won't fix
+            # a bad provider key / quota / 404). The message already names the next step.
+            await chatlog.add_error(turn_error)
+            # Show the provider's RAW words too (muted) — an ambiguous 403/429 ("permission, or
+            # no quota") is only diagnosable from the provider's exact reason.
+            raw = getattr(self.agent, "_last_error_raw", None)
+            if raw and raw.strip() and raw.strip() not in turn_error:
+                await chatlog.add_system(f"   └ provider said: {_snippet(raw, 300)}")
+            self._set_model_error_banner(turn_error)
+            self._scroll_bottom()
+            self._refresh_footer()
+            self._set_state("idle")
+            return
+        # If a dead-key provider was auto-rerouted around, say so (the turn otherwise looks like a
+        # normal success on the fallback model — the user should know their key was rejected).
+        reroute = getattr(self.agent, "_reroute_note", None)
+        if reroute and resp_text.strip():
+            model = routing.chosen_model_id if routing else "an available model"
+            await chatlog.add_system(f"⚠ {reroute} · re-routed to {model}", color="yellow")
         self._scroll_bottom()
         await self._emit_cost_line()
+        await self._emit_goal_cost_line(routing)
         if self._escalate and routing is not None:
             await self._check_escalate(routing, text)
         # Cache a clean, successful answer so a near-duplicate prompt is free next time.
@@ -666,14 +886,18 @@ class HarnessApp(App):
         for msg in self.agent.state.messages[self._rendered_msgs :]:
             if isinstance(msg, AssistantMessage):
                 for call in msg.tool_calls:
-                    await chatlog.add_tool(call.name, _args_repr(call.arguments))
+                    await chatlog.add_tool(call.name, _format_tool_call(call.name, call.arguments))
             elif msg.role == "toolResult":
-                await chatlog.add_tool_result(_snippet(msg.text), msg.is_error)
+                # Errors (incl. permission/sandbox failures) get more room + a prominent ✗ so a
+                # failed tool is never an easy-to-miss faint line.
+                limit = 400 if msg.is_error else 120
+                await chatlog.add_tool_result(_snippet(msg.text, limit), msg.is_error)
         self._rendered_msgs = len(self.agent.state.messages)
 
     async def _load_session(self, store: SessionStore) -> None:
         """Switch the active session and rebuild the agent context + transcript from it."""
         self.session = store
+        self._goals.load(store)  # restore the session's goal/task list
         chatlog = self.query_one(ChatLog)
         await chatlog.remove_children()
         chatlog.remove_class("empty")
@@ -697,14 +921,19 @@ class HarnessApp(App):
 
     def _after_turn(self, routing: Any) -> None:
         if routing is None:
-            # Genuine offline fallback: Minima was unreachable. render_banner adds the
-            # "routing offline … /reconnect" framing, so pass only the concise reason.
+            # Offline fallback. A retryable cause (unreachable/timeout) gets the
+            # "routing offline … /reconnect" framing; a config/auth cause (no/invalid key)
+            # gets the actionable banner instead — /reconnect alone wouldn't fix it.
             self._routing_offline = True
             reason = getattr(self.agent, "_offline_reason", None) or "Minima unreachable"
+            retryable = getattr(self.agent, "_offline_retryable", True)
             model = self.agent.state.model.id if self.agent.state.model else "default model"
             self._footer_state["model"] = model
             self._footer_state["basis"] = "offline"
-            self._set_banner(f"{reason} — ran {model} unrouted")
+            if retryable:
+                self._set_banner(f"{reason} — ran {model} unrouted")
+            else:
+                self._set_config_banner(f"{reason} (ran {model} unrouted)")
         else:
             # Routing SUCCEEDED. Surface only actionable, not-already-inline conditions —
             # never the "routing offline/reconnect" framing (that's a false alarm here).
@@ -716,6 +945,8 @@ class HarnessApp(App):
                 self._set_notice("context near limit — /compact to free space")
             else:
                 self.query_one("#banner", Static).update(Text(""))
+        # Persist any goal/task changes the model made via the `tasks` tool this turn.
+        self._goals.save(self.session)
         self._refresh_footer()
         self._set_state("idle")
 
@@ -739,16 +970,37 @@ class HarnessApp(App):
     def _set_banner(self, reason: str) -> None:
         self.query_one("#banner", Static).update(render_banner(reason))
 
+    def _set_config_banner(self, reason: str) -> None:
+        """Offline due to a config/auth issue — actionable, without '/reconnect' framing."""
+        self.query_one("#banner", Static).update(render_config_banner(reason))
+
+    def _set_model_error_banner(self, reason: str) -> None:
+        """The model call failed (routing was fine) — actionable, no '/reconnect' framing."""
+        self.query_one("#banner", Static).update(render_model_error_banner(reason))
+
+    def _clear_banner(self) -> None:
+        """Drop any standing banner (e.g. after switching models — a prior model's error or
+        offline state no longer applies)."""
+        self._routing_offline = False
+        self.query_one("#banner", Static).update(Text(""))
+
     def _set_notice(self, reason: str) -> None:
         """A non-offline heads-up (no '/reconnect' framing — routing succeeded)."""
         self.query_one("#banner", Static).update(render_notice(reason))
+
+    def _goal_footer(self) -> str:
+        """`N/M` progress for the active goal (empty when none) — shown in the footer."""
+        if not self._goals.active or self._goals.goal is None:
+            return ""
+        done, total = self._goals.goal.progress()
+        return f"{done}/{total}"
 
     def _refresh_footer(self) -> None:
         meter = self.agent.meter or CostMeter()
         session_label = self.session.display_name or (
             self.session.path.stem if self.session.path else "ephemeral"
         )
-        self.title = "minima-harness"
+        self.title = "Minima CLI"
         self.sub_title = ""
         footer = render_footer(
             cwd=str(self.cwd),
@@ -764,6 +1016,7 @@ class HarnessApp(App):
             routing_offline=self._routing_offline,
             route_mode=self._route_mode,
             thinking_level=str(self.agent.state.thinking_level),
+            goal=self._goal_footer(),
         )
         self.sub_title = ""
         try:
@@ -810,19 +1063,52 @@ class HarnessApp(App):
 
         async def _model(app: HarnessApp, args: str) -> None:
             from minima_harness.ai import all_models
+            from minima_harness.ai.provider_catalog import runnable_candidates
+            from minima_harness.minima.config import DEFAULT_CANDIDATES
 
+            def _unpin() -> None:
+                # Release any pin: restore the full runnable candidate pool so Minima routes.
+                app.config.candidates = runnable_candidates(list(DEFAULT_CANDIDATES))
+                app.config.pinned = False
+                app._footer_state["model"] = "auto"
+                app._footer_state["basis"] = "minima"
+                app._clear_banner()  # a prior model's error/offline banner no longer applies
+                app._refresh_footer()
+
+            # `/model auto` (or unpin/clear) releases the pin without opening the picker.
+            if args.strip().lower() in ("auto", "unpin", "clear"):
+                _unpin()
+                await app.query_one(ChatLog).add_system("model: auto — Minima routes each turn")
+                return
+
+            # Offer the union of routing candidates + every registered model (candidates first,
+            # deduped) so a user can pin ANY provider's model — e.g. a Groq/DeepSeek model that
+            # isn't in the default routing pool. Pinning sets candidates=[chosen].
             cands = list(app.config.candidates or [])
+            cands = list(dict.fromkeys(cands + [m.id for m in all_models()]))
             providers = {m.id: m.provider for m in all_models()}
             active = app._footer_state.get("model")
             basis = app._footer_state.get("basis")
-            pinned = cands[0] if len(cands) == 1 else None
+            # Pinned iff the config holds exactly one candidate (check the CONFIG, not the
+            # union `cands` above which is always >1 — the old check could never detect a pin).
+            pinned = (
+                app.config.candidates[0] if len(app.config.candidates or []) == 1 else None
+            )
 
             def _picked(chosen: str | None) -> None:
-                if chosen:
-                    app.config.candidates = [chosen]  # pin: Minima must route to this model
-                    app._footer_state["model"] = chosen
-                    app._footer_state["basis"] = "pinned"
-                    app._refresh_footer()  # reflect the pin immediately
+                if not chosen:
+                    return
+                if chosen == ModelPicker.AUTO:
+                    _unpin()  # explicit "auto" entry: unpin back to Minima routing
+                    return
+                app.config.candidates = [chosen]  # pin → run this model directly (bypass Minima)
+                app.config.pinned = True
+                app._footer_state["model"] = chosen
+                app._footer_state["basis"] = "pinned"
+                # Clear any banner from the previous model — switching to `chosen` makes a
+                # prior model's "access denied"/offline banner stale and misleading.
+                app._clear_banner()
+                app._refresh_footer()  # reflect the pin immediately
 
             app.push_screen(
                 ModelPicker(
@@ -836,9 +1122,20 @@ class HarnessApp(App):
             )
 
         async def _reconnect(app: HarnessApp, args: str) -> None:
+            # Rebuild the Minima client from the current env so a key/URL set via /config (or
+            # exported since launch) actually takes effect — the old client's auth header was
+            # fixed at build time, which is why a plain banner-clear wasn't enough before.
+            await app.agent.reconnect()
             app._routing_offline = False
             app.query_one("#banner", Static).update(Text(""))
-            await app.query_one(ChatLog).add_system("reconnected (next turn routes via Minima)")
+            if (app.agent.config.minima_api_key or "").strip():
+                msg = "reconnected (next turn routes via Minima)"
+            else:
+                msg = (
+                    "reconnected — but no Mubit API key set, so routing stays offline; "
+                    "add MUBIT_API_KEY via /config"
+                )
+            await app.query_one(ChatLog).add_system(msg)
 
         async def _new(app: HarnessApp, args: str) -> None:
             app.session = SessionManager().new(app.cwd, name=args or None)
@@ -989,7 +1286,7 @@ class HarnessApp(App):
                 await app.query_one(ChatLog).add_system("nothing to copy yet (run a prompt first)")
                 return
             # run the clipboard call off the event loop for a clean subprocess context
-            ok = await anyio.to_thread.run_sync(copy_to_clipboard, text)
+            ok = await anyio.to_thread.run_sync(_os_clipboard_copy, text)
             if ok:
                 await app.query_one(ChatLog).add_system(f"copied {len(text)} char(s) to clipboard")
             else:
@@ -999,6 +1296,25 @@ class HarnessApp(App):
                 await app.query_one(ChatLog).add_error(
                     f"clipboard unavailable — wrote {len(text)} char(s) to {path}"
                 )
+
+        async def _mouse(app: HarnessApp, args: str) -> None:
+            from minima_harness.tui.welcome import selection_hint
+
+            arg = args.strip().lower()
+            if arg in ("on", "1", "true", "yes"):
+                want = True
+            elif arg in ("off", "0", "false", "no"):
+                want = False
+            else:
+                want = not app._mouse_enabled  # bare /mouse toggles
+            if not app._set_mouse_capture(want):
+                await app.query_one(ChatLog).add_error(
+                    "couldn't change mouse capture on this terminal"
+                )
+                return
+            await app.query_one(ChatLog).add_system(
+                f"mouse {'ON' if want else 'OFF'} · {selection_hint(want)}"
+            )
 
         async def _export(app: HarnessApp, args: str) -> None:
             target = (
@@ -1040,24 +1356,39 @@ class HarnessApp(App):
             )
 
         async def _config(app: HarnessApp, args: str) -> None:
+            # Changing any of these requires rebuilding the Minima client (its auth header +
+            # base URL are fixed at build time); provider keys, by contrast, resolve from
+            # os.environ on each call, so they apply immediately.
+            routing_keys = {"MUBIT_API_KEY", "MINIMA_API_KEY", "MINIMA_URL", "MUBIT_ENDPOINT"}
+
             def _saved(changes: dict | None) -> None:
                 if not changes:
                     return
-                # Live-apply to the running session so provider calls pick keys up at once
-                # (provider keys resolve from os.environ per call). Routing auth / MINIMA_URL
-                # are read when the Minima client is built — those take a /reconnect or restart.
+                # Live-apply to the running session so provider calls pick keys up at once.
                 for key, val in changes.items():
                     os.environ[key] = val
                     f = config_store.field_for(key)
                     for alias in f.aliases if f else ():
                         os.environ[alias] = val
-                app.run_worker(
-                    app.query_one(ChatLog).add_system(
-                        f"config: updated {', '.join(sorted(changes))} "
-                        "— provider keys apply now; MINIMA_URL/auth on /reconnect or restart"
-                    ),
-                    exclusive=False,
-                )
+
+                async def _apply() -> None:
+                    note = "provider keys apply now"
+                    if routing_keys & set(changes):
+                        # Rebuild the routing client so a just-entered Mubit key / URL works
+                        # this session — no restart, no separate /reconnect needed.
+                        await app.agent.reconnect()
+                        app._routing_offline = False
+                        app.query_one("#banner", Static).update(Text(""))
+                        note = (
+                            "routing reconnected"
+                            if (app.agent.config.minima_api_key or "").strip()
+                            else "still no Mubit API key — routing stays offline"
+                        )
+                    await app.query_one(ChatLog).add_system(
+                        f"config: updated {', '.join(sorted(changes))} — {note}"
+                    )
+
+                app.run_worker(_apply(), exclusive=False)
 
             app.push_screen(ConfigOverlay(), callback=_saved)
 
@@ -1127,6 +1458,90 @@ class HarnessApp(App):
                 + ("ON (review each edit/write diff before it applies)" if on else "off")
             )
 
+        async def _yolo(app: HarnessApp, args: str) -> None:
+            a = args.strip().lower()
+            if a in {"on", "1", "true", "yes"}:  # YOLO ON = skip permission prompts
+                app._ask_permission = False
+            elif a in {"off", "0", "false", "no"}:
+                app._ask_permission = True
+            else:
+                app._ask_permission = not app._ask_permission
+            if app._ask_permission:
+                await app.query_one(ChatLog).add_system(
+                    "permissions: ON — you'll be asked before write/edit/bash"
+                )
+            else:
+                await app.query_one(ChatLog).add_error(
+                    "YOLO mode: permissions OFF — sensitive tools run without asking"
+                )
+
+        async def _thoughts(app: HarnessApp, args: str) -> None:
+            a = args.strip().lower()
+            if a in {"on", "1", "true", "yes"}:
+                on = True
+            elif a in {"off", "0", "false", "no"}:
+                on = False
+            else:
+                on = not app._show_thinking
+            app._show_thinking = on
+            extra = ""
+            # Showing thoughts is pointless if the model isn't asked to think — bump the level.
+            if on and app.agent.state.thinking_level == "off":
+                app.agent.state.thinking_level = "medium"
+                app._refresh_footer()
+                extra = " (thinking set to medium)"
+            msg = (
+                f"thoughts: ON — the model's reasoning streams above each answer{extra}"
+                if on
+                else "thoughts: off"
+            )
+            await app.query_one(ChatLog).add_system(msg)
+
+        async def _exit(app: HarnessApp, args: str) -> None:
+            app.exit()
+
+        async def _goals(app: HarnessApp, args: str) -> None:
+            import time
+
+            a = args.strip()
+            low = a.lower()
+            if low in ("clear", "done", "stop", "off"):
+                app._goals.clear()
+                app._goals.save(app.session)
+                app._apply_effective_prompt()
+                app._refresh_footer()
+                await app.query_one(ChatLog).add_system("ledger cleared — back to ad-hoc routing")
+                return
+            if low.startswith("budget"):
+                if not app._goals.active:
+                    await app.query_one(ChatLog).add_error("no open ledger — /ledger set <title>")
+                    return
+                raw = a[6:].strip().lstrip("$")
+                try:
+                    amount = float(raw) if raw else None
+                except ValueError:
+                    await app.query_one(ChatLog).add_error("usage: /goals budget <usd> (or blank)")
+                    return
+                app._goals.set_budget(amount)
+                app._goals.save(app.session)
+                msg = f"ledger budget set to ${amount:.4f}" if amount else "ledger budget cleared"
+                await app.query_one(ChatLog).add_system(msg)
+                return
+            if low.startswith("set ") or low.startswith("set\t"):
+                title = a[3:].strip()
+                if not title:
+                    await app.query_one(ChatLog).add_error("usage: /goals set <title>")
+                    return
+                app._goals.start(title, now=time.time())
+                app._goals.save(app.session)
+                app._apply_effective_prompt()
+                app._refresh_footer()
+                await app.query_one(ChatLog).add_system(
+                    f"ledger opened: {title} — describe the work; I'll plan + track it (with cost)"
+                )
+                return
+            app.push_screen(GoalsOverlay(app._goals.goal))  # no/other args -> view the checklist
+
         async def _cache(app: HarnessApp, args: str) -> None:
             on = args.strip().lower() in {"on", "1", "true", "yes"}
             if not args.strip():
@@ -1167,6 +1582,7 @@ class HarnessApp(App):
             ("help", _help, "list commands"),
             ("model", _model, "pick / pin the model"),
             ("copy", _copy, "copy last reply (or /copy <text>) to clipboard"),
+            ("mouse", _mouse, "toggle mouse capture (scroll-wheel vs native text selection)"),
             ("export", _export, "export the conversation to a Markdown file"),
             ("commands", _commands, "open the command palette"),
             ("config", _config, "manage API keys (LLM providers + Mubit)"),
@@ -1175,8 +1591,13 @@ class HarnessApp(App):
             ("skills", _skills, "list loaded skills (local + Mubit)"),
             ("confirm", _confirm, "toggle routing confirm gate"),
             ("escalate", _escalate, "toggle quality escalation"),
-            ("edits", _edits, "toggle edit/write diff confirmation"),
+            ("edits", _edits, "force a diff review for every edit/write"),
+            ("yolo", _yolo, "toggle permission prompts (YOLO = off, runs without asking)"),
+            ("thoughts", _thoughts, "toggle streaming the model's thinking"),
+            ("ledger", _goals, "set/track a budgeted goal + tasks (set <title> · clear · budget)"),
             ("cache", _cache, "toggle semantic response cache"),
+            ("exit", _exit, "quit Minima"),
+            ("quit", _exit, "quit Minima"),
             ("stats", _stats, "show session analytics (last 10)"),
             ("recall", _recall, "Mubit cross-session recall"),
             ("reconnect", _reconnect, "retry Minima after an offline fallback"),
@@ -1193,6 +1614,8 @@ class HarnessApp(App):
             ("reload", _reload, "reload extensions + customization"),
         ]:
             reg.register(name, description=desc)(fn)
+        # /goals stays as a hidden alias for /ledger (the feature was originally named goals).
+        reg.register("goals", description="alias of /ledger", hidden=True)(_goals)
         return reg
 
     async def _dispatch_command(self, name: str, args: str) -> None:
@@ -1306,9 +1729,35 @@ _INLINE_WARNINGS = (
     "no_model_meets_threshold",
 )
 
+# Internal routing/recall diagnostics that mean "routing succeeded, just a side-note" — NOT
+# user-actionable. These must never render as an alarming red banner (they read exactly like an
+# offline/auth error and scared users). Routing still happened; the decision card already shows
+# the relevant context ("evidence thin", the chosen model, confidence). Anything NOT listed here
+# (or in _INLINE_WARNINGS) is still surfaced, so a genuinely actionable signal — e.g.
+# no_model_within_cost_budget / latency_budget, or a future unknown warning — is never hidden.
+_BENIGN_WARNINGS = (
+    "cold_start",
+    "recall_timeout",
+    "memory_unavailable",
+    "neighbor_classified",
+    "llm_classified",
+    "prices_stale",
+    "thompson_pick",
+    "exploration_pick",
+    "collapse_guard_applied",
+    "thin_evidence",
+    "capability_prior",
+    "shadow_disagree",
+    "durable_fastpath_timeout",
+    "reasoner_failed",
+)
+
+_HIDDEN_WARNINGS = _INLINE_WARNINGS + _BENIGN_WARNINGS
+
 
 def _banner_warnings(warnings: list[str]) -> list[str]:
-    return [w for w in warnings if not w.startswith(_INLINE_WARNINGS)]
+    """Warnings worth surfacing: drop inline-handled + benign diagnostics; keep the rest."""
+    return [w for w in warnings if not w.startswith(_HIDDEN_WARNINGS)]
 
 
 # ROI is "not significant" when a pricier model buys less than this much extra predicted
@@ -1381,6 +1830,92 @@ def _args_repr(args: Any) -> str:
         return str(args)
     except Exception:  # noqa: BLE001
         return ""
+
+
+_TOOL_PREVIEW_LINES = 18
+
+
+def _as_dict(args: Any) -> dict:
+    if isinstance(args, dict):
+        return args
+    if hasattr(args, "model_dump"):
+        try:
+            return args.model_dump()
+        except Exception:  # noqa: BLE001
+            return {}
+    return getattr(args, "__dict__", {}) or {}
+
+
+def _clip(text: str, limit: int = 200) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _preview(body: str, prefix: str, *, max_lines: int = _TOOL_PREVIEW_LINES) -> str:
+    lines = body.splitlines()
+    shown = "\n".join(f"{prefix}{ln}" for ln in lines[:max_lines])
+    extra = len(lines) - max_lines
+    if extra > 0:
+        shown += f"\n  … (+{extra} more line{'s' if extra != 1 else ''})"
+    return shown
+
+
+def _format_tool_call(name: str, args: Any) -> str:
+    """Render a tool call as a clean, IDE-like summary instead of a raw JSON args dump.
+
+    write -> "path (new file, N lines)" + a + prefixed preview; edit -> a unified diff of the
+    change; read -> path + range; bash -> the command; others -> compact key=value. Falls back
+    to the raw repr for anything unexpected so nothing is ever hidden."""
+    a = _as_dict(args)
+    if not a:
+        return _clip(_args_repr(args), 300)
+    if name == "write":
+        path = a.get("path", "?")
+        lines = (a.get("content") or "").splitlines()
+        n = len(lines)
+        head = f"{path}  (new file, {n} line{'s' if n != 1 else ''})"
+        return f"{head}\n{_preview(a.get('content') or '', '+')}" if n else head
+    if name == "edit":
+        from types import SimpleNamespace
+
+        from minima_harness.tui.diff import render_tool_diff
+
+        path = a.get("path", "?")
+        diff = render_tool_diff("edit", SimpleNamespace(**a))
+        body = "\n".join(
+            ln for ln in diff.splitlines() if not ln.startswith(("--- ", "+++ "))
+        )
+        tag = "  (replace all)" if a.get("replace_all") else ""
+        return f"{path}{tag}\n{_preview(body, '', max_lines=24)}"
+    if name == "read":
+        path = a.get("path", "?")
+        off = a.get("offset") or 1
+        return f"{path}" + (f"  (from line {off})" if off and off != 1 else "")
+    if name == "bash":
+        return f"$ {_clip(a.get('command') or '', 200)}"
+    if name == "tasks":
+        op = a.get("op", "")
+        if op == "set":
+            items = a.get("tasks") or []
+            marks = {"completed": "[x]", "in_progress": "[~]", "blocked": "[!]"}
+            head = f"plan {len(items)} task{'s' if len(items) != 1 else ''}:"
+            rows = [
+                f"  {marks.get(str(it.get('status', '')), '[ ]')} "
+                f"{_clip(str(it.get('content', '')), 80)}"
+                for it in items[:_TOOL_PREVIEW_LINES]
+            ]
+            return "\n".join([head, *rows])
+        if op == "update":
+            return f"{a.get('task_id', '?')} → {a.get('status', '?')}"
+        return "list tasks"
+    if name in ("ls", "grep", "find"):
+        salient = a.get("pattern") or a.get("path") or a.get("query") or ""
+        return _clip(str(salient), 160) if salient else _kv(a)
+    return _kv(a)
+
+
+def _kv(a: dict) -> str:
+    return " · ".join(f"{k}={_clip(str(v), 80)}" for k, v in a.items())
 
 
 def _snippet(text: str, limit: int = 120) -> str:

@@ -1,0 +1,55 @@
+{
+  "endpoints": [
+    {
+      "endpoint": "health",
+      "file": "health.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "models",
+      "file": "models.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "recommend",
+      "file": "recommend.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "workflow",
+      "file": "workflow.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "feedback",
+      "file": "feedback.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "strategies",
+      "file": "strategies.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "savings",
+      "file": "savings.json",
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "endpoint": "calibration",
+      "file": "calibration.json",
+      "http_status": 200,
+      "ok": true
+    }
+  ],
+  "namespace": "playground-p1",
+  "scrubbed": true,
+  "url": "http://localhost:8088"
+}
