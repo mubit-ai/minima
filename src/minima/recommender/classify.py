@@ -337,9 +337,9 @@ def extract_feature_vector(
 def _estimate_uncertainty(
     features: TaskFeatureVector, task_type: TaskType, *, neighbor_support: float = 0.0
 ) -> float:
-    values = [getattr(features, name) for name in _FEATURE_NAMES]
-    top = max(values, default=0.0)
-    second = max((value for value in values if value != top), default=0.0)
+    values = sorted((getattr(features, name) for name in _FEATURE_NAMES), reverse=True)
+    top = values[0] if values else 0.0
+    second = values[1] if len(values) > 1 else 0.0
     margin = max(0.0, top - second)
     base = 1.0 - _clamp01(margin)
     if task_type == TaskType.other:
