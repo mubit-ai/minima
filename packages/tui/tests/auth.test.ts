@@ -137,7 +137,8 @@ describe("runAuth (loopback + PKCE)", () => {
       const parsed = new URL(authUrl);
       const port = parsed.searchParams.get("port");
       const state = parsed.searchParams.get("state");
-      void fetch(`http://127.0.0.1:${port}/callback?provisioning=1&state=${state}`);
+      // The loopback 302-redirects to the (unreachable) console; swallow that.
+      void fetch(`http://127.0.0.1:${port}/callback?provisioning=1&state=${state}`).catch(() => {});
     };
     await expect(
       runAuth({ repo: "x", consoleUrl: "http://127.0.0.1:1", openBrowser, timeoutMs: 5000 }),

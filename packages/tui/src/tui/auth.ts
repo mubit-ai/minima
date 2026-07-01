@@ -92,7 +92,7 @@ interface Loopback {
   close: () => void;
 }
 
-function startLoopback(state: string): Promise<Loopback> {
+function startLoopback(state: string, consoleUrl: string): Promise<Loopback> {
   return new Promise((resolveStart, rejectStart) => {
     let resolveResult: (result: LoopbackResult) => void;
     let rejectResult: (err: Error) => void;
@@ -112,19 +112,17 @@ function startLoopback(state: string): Promise<Loopback> {
       const provisioning = u.searchParams.get("provisioning");
       const gotState = u.searchParams.get("state");
       if (gotState !== state || (!code && !provisioning)) {
-        res.writeHead(400, { "content-type": "text/html" });
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
         res.end("<h2>Invalid authorization callback.</h2>");
         rejectResult(new Error("invalid callback (state mismatch or missing code)"));
         return;
       }
-      res.writeHead(200, { "content-type": "text/html" });
-      res.end(
-        `<html><body style='font-family:system-ui;text-align:center;padding-top:4rem'>${
-          provisioning
-            ? "<h2>Minima workspace provisioning…</h2><p>Return to your terminal.</p>"
-            : "<h2>Minima CLI authorized ✅</h2><p>You can close this tab and return to your terminal.</p>"
-        }</body></html>`,
-      );
+      // Hand the browser back to a branded console page (302) so the final tab
+      // lands on console.mubit.ai — not a bare 127.0.0.1 URL with the code in the
+      // address bar. The CLI already has what it needs, so this is cosmetic only.
+      const landing = `${consoleUrl}/app/cli-auth?status=${provisioning ? "provisioning" : "authorized"}`;
+      res.writeHead(302, { location: landing });
+      res.end();
       resolveResult(provisioning ? { provisioning: true } : { code: code ?? undefined });
     });
 
@@ -189,7 +187,7 @@ export async function runAuth(opts: RunAuthOptions): Promise<AuthResult> {
   const { verifier, challenge } = makePkce();
   const state = base64url(randomBytes(16));
 
-  const loop = await startLoopback(state);
+  const loop = await startLoopback(state, consoleUrl);
   try {
     const url = buildAuthUrl(consoleUrl, {
       port: loop.port,
