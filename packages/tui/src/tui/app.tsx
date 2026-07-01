@@ -10,9 +10,12 @@
 import { Box, Text, useApp, useInput } from "ink";
 import React, { useEffect, useState, useRef } from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import { errText } from "../errtext.ts";
+import { refreshCatalog } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
@@ -29,12 +32,38 @@ import {
   createPermissionState,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
+import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 
 export interface AppProps {
   agent: MinimaAgent;
   banner?: string;
+}
+
+/** True when at least one key-requiring model provider has its key set. */
+function anyProviderKeyPresent(): boolean {
+  return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
+}
+
+/** Suggested `/config set` hint for a provider (or a generic one). */
+function keyHint(provider?: string): string {
+  const env = provider ? envVarsForProvider(provider)[0] : undefined;
+  return env ? `\`/config set ${env} <key>\`` : "a model-provider key via /config";
+}
+
+/**
+ * Append actionable guidance to an auth-shaped error so a user who ran `/auth` (routing only)
+ * knows to set a MODEL-provider key. Leaves already-actionable messages (our own "config set"
+ * text) untouched.
+ */
+function actionableError(msg: string, provider?: string): string {
+  const authish =
+    /could not resolve authentication|api[\s_-]?key|authtoken|unauthor|x-api-key|http 401|no api key/i.test(
+      msg,
+    );
+  if (!authish || /config set/i.test(msg)) return msg;
+  return `${msg}\n→ Set a model-provider key: ${keyHint(provider)} (\`/auth\` configures routing only), then /reconnect.`;
 }
 
 const GLYPHS: Record<string, string[]> = {
@@ -453,6 +482,29 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionsList, setSessionsList] = useState<SessionSummary[]>([]);
   const [configOverlayOpen, setConfigOverlayOpen] = useState(false);
+  // Re-render trigger after a catalog refresh so the /model picker (which reads allModels()
+  // at render) reflects newly-registered models even if it's already open.
+  const [, setCatalogVersion] = useState(0);
+
+  // On mount: nudge if routing is set but no model-provider key is, and pull the live model
+  // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
+  useEffect(() => {
+    if (!anyProviderKeyPresent()) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          toolName: "setup",
+          text: `No model-provider API key set — set one to run models: ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER). \`/auth\` configures routing only.`,
+        },
+      ]);
+    }
+    void refreshCatalog(agent.config)
+      .then((n) => {
+        if (n > 0) setCatalogVersion((v) => v + 1);
+      })
+      .catch(() => {});
+  }, [agent]);
 
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
@@ -626,11 +678,16 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               ]);
             }
             if (isErr) {
+              // A hard provider failure — render RED (role tool + isError) and, when it's an
+              // auth error, append actionable guidance naming the provider key to set.
+              const provider = agent.agentState.model?.provider;
               setMessages((m) => [
                 ...m,
                 {
-                  role: "assistant",
-                  text: `⚠ Error: ${errMsg || "provider error (no response)"}`,
+                  role: "tool",
+                  toolName: "error",
+                  text: `⚠ ${actionableError(errMsg || "provider error (no response)", provider)}`,
+                  isError: true,
                 },
               ]);
             } else if (text) {
@@ -888,7 +945,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         } catch (exc) {
           setMessages((m) => [
             ...m,
-            { role: "tool", text: `undo failed: ${String(exc)}`, toolName: "undo", isError: true },
+            { role: "tool", text: `undo failed: ${errText(exc)}`, toolName: "undo", isError: true },
           ]);
         }
         break;
@@ -952,7 +1009,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             ...m,
             {
               role: "tool",
-              text: `✅ Authorized. Key stored (${mask(result.mubitApiKey)}). Project ${result.projectId} on ${result.instanceId}. Router reconnected.`,
+              text: `✅ Authorized. Key stored (${mask(result.mubitApiKey)}). Project ${result.projectId} on ${result.instanceId}. Router reconnected.${
+                anyProviderKeyPresent()
+                  ? ""
+                  : `\n→ Next: set a model-provider key to run models — ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER).`
+              }`,
               toolName: "auth",
             },
           ]);
@@ -971,7 +1032,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               ...m,
               {
                 role: "tool",
-                text: `auth failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+                text: `auth failed: ${errText(exc)}`,
                 toolName: "auth",
                 isError: true,
               },
@@ -1085,8 +1146,14 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       }
-      case "reconnect":
+      case "reconnect": {
         agent.reconnect();
+        // Re-pull the model catalog too (a key added since launch may unlock more models).
+        void refreshCatalog(agent.config)
+          .then((n) => {
+            if (n > 0) setCatalogVersion((v) => v + 1);
+          })
+          .catch(() => {});
         setMessages((m) => [
           ...m,
           {
@@ -1100,6 +1167,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
         ]);
         break;
+      }
       case "quit":
       case "exit":
         exit();
@@ -1204,7 +1272,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               ...m,
               {
                 role: "tool",
-                text: `Failed to list sessions: ${String(exc)}`,
+                text: `Failed to list sessions: ${errText(exc)}`,
                 toolName: "resume",
                 isError: true,
               },
@@ -1226,7 +1294,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               },
               {
                 role: "tool",
-                text: `Failed to resume session: ${String(exc)}`,
+                text: `Failed to resume session: ${errText(exc)}`,
                 toolName: "resume",
                 isError: true,
               },
@@ -1412,35 +1480,31 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       const routing = await agent.promptRouted(expanded);
       if (routing) {
         setBasis(routing.decisionBasis || "minima");
-        // Filter out non-actionable cold-start warnings; only surface real issues
-        const actionable = routing.warnings.filter(
-          (w) =>
-            !w.startsWith("escalation_suggested") &&
-            !w.startsWith("cold_start") &&
-            !w.startsWith("reasoner_disabled") &&
-            !w.startsWith("recall_timeout"),
-        );
-        if (actionable.length > 0) {
+        // Recommend-path warnings are all benign/informational (routing succeeded or degraded
+        // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
+        const info = routingInfoWarnings(routing.warnings);
+        if (info.length > 0) {
           setMessages((m) => [
             ...m,
             {
               role: "tool",
-              text: `⚠ ${actionable.join("; ")}`,
+              text: `ℹ ${info.join("; ")}`,
               toolName: "routing",
-              isError: true,
+              isError: false,
             },
           ]);
         }
       } else {
         setBasis("offline");
         const reason = agent.offlineReason ?? "Minima unreachable";
+        // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
         setMessages((m) => [
           ...m,
           {
             role: "tool",
-            text: `⚠ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. Use /reconnect to retry.`,
+            text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
             toolName: "routing",
-            isError: true,
+            isError: false,
           },
         ]);
       }
@@ -1448,8 +1512,10 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setMessages((m) => [
         ...m,
         {
-          role: "assistant",
-          text: `⚠ Error: ${String(exc)}`,
+          role: "tool",
+          toolName: "error",
+          text: `⚠ ${actionableError(errText(exc), agent.agentState.model?.provider)}`,
+          isError: true,
         },
       ]);
     } finally {
@@ -1587,7 +1653,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
                 ...m,
                 {
                   role: "tool",
-                  text: `Command /${name} failed: ${String(exc)}`,
+                  text: `Command /${name} failed: ${errText(exc)}`,
                   toolName: "error",
                   isError: true,
                 },

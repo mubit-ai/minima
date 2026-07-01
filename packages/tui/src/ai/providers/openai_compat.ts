@@ -11,6 +11,7 @@
  * stream_options.include_usage is honoured.
  */
 
+import { errText } from "../../errtext.ts";
 import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
@@ -82,9 +83,18 @@ export class OpenAICompatProvider {
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     Object.assign(headers, model.headers ?? {});
 
-    const fetchImpl = (options.fetch as CompatFetch | undefined) ?? fetch;
+    const injectedFetch = options.fetch as CompatFetch | undefined;
+    const fetchImpl = injectedFetch ?? fetch;
 
     try {
+      // Fail fast with an actionable message when a key-requiring provider has no key —
+      // otherwise the request goes out unauthenticated and returns a cryptic HTTP 401. Only
+      // guards the real network path; an injected fetch (proxy/test) supplies its own auth.
+      if (!apiKey && apiKeys.length > 0 && !injectedFetch) {
+        throw new Error(
+          `no API key for provider "${model.provider}" — set ${apiKeys[0]} (e.g. \`minima config set ${apiKeys[0]} <key>\`). Note: \`minima auth\` configures routing only, not model-provider keys.`,
+        );
+      }
       const resp = await fetchImpl(url, {
         method: "POST",
         headers,
@@ -99,7 +109,7 @@ export class OpenAICompatProvider {
       const err = new AssistantMessage({
         content: [text("")],
         stop_reason: "error",
-        error_message: String(exc),
+        error_message: errText(exc),
       });
       err.model = model.id;
       yield errorEv("error", err);

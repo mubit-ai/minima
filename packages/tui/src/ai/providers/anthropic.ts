@@ -7,6 +7,7 @@
  * injected client for hermetic tests.
  */
 
+import { errText } from "../../errtext.ts";
 import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
@@ -167,7 +168,7 @@ export class AnthropicProvider {
       const err = new AssistantMessage({
         content: [text("")],
         stop_reason: "error",
-        error_message: String(exc),
+        error_message: errText(exc),
       });
       err.model = model.id;
       yield errorEv("error", err);
