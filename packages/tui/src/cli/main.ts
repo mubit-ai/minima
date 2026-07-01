@@ -14,6 +14,7 @@ import React from "react";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
+import { errText } from "../errtext.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge } from "../minima/index.ts";
 import { runJson, runPrint } from "../run_modes.ts";
@@ -276,7 +277,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     args = parseArgs(argv);
   } catch (exc) {
-    process.stderr.write(`minima: ${String(exc)}\n`);
+    process.stderr.write(`minima: ${errText(exc)}\n`);
     return 2;
   }
 
@@ -435,7 +436,7 @@ if (import.meta.main) {
   main()
     .then((code) => process.exit(code))
     .catch((exc) => {
-      process.stderr.write(`minima: ${String(exc)}\n`);
+      process.stderr.write(`minima: ${errText(exc)}\n`);
       process.exit(1);
     });
 }

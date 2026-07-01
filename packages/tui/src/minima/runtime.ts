@@ -15,9 +15,11 @@
 
 import { Agent, type AgentOptions } from "../agent/agent.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
+import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
+import { errText } from "../errtext.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
@@ -58,6 +60,8 @@ export class MinimaAgent extends Agent {
   private promptsRun = 0;
   /** Why the last route fell back to offline (null = routed fine). */
   offlineReason: string | null = null;
+  /** Why the last feedback write failed (null = ok). Non-fatal — kept for diagnostics. */
+  lastFeedbackError: string | null = null;
 
   constructor(opts: MinimaAgentOptions) {
     const { config, router, judge, mapping, model, meter, beforeRoute, taskType, ...agentOpts } =
@@ -156,11 +160,20 @@ export class MinimaAgent extends Agent {
       }
     }
     try {
+      // Only let Minima pick models the user can actually run: restrict candidates to those
+      // whose provider key is present, so a routed turn never dies with a provider auth error.
+      // If NO candidate is runnable (no provider keys at all), fall back to the full set and
+      // let the provider layer surface an actionable "no API key" message.
+      const runnable = this.config.candidates.filter((id) => {
+        const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
+        return m ? providerKeyPresent(m.provider) : false;
+      });
       const routing = await this.router.recommend({
         task: taskText,
         taskType: taskType ?? undefined,
         slider: slider ?? undefined,
         tags,
+        candidates: runnable.length ? runnable : undefined,
       });
       this.offlineReason = null;
       if (this.beforeRouteHook) {
@@ -171,7 +184,7 @@ export class MinimaAgent extends Agent {
       return routing;
     } catch (exc) {
       if (this.config.allowOffline) {
-        this.offlineReason = String(exc);
+        this.offlineReason = errText(exc);
         return null;
       }
       throw exc;
@@ -221,8 +234,11 @@ export class MinimaAgent extends Agent {
         latencyMs,
         iterations: turnsTaken || undefined,
       });
-    } catch {
-      // feedback must never break a successful run
+      this.lastFeedbackError = null;
+    } catch (exc) {
+      // Feedback must never break a successful run, but don't vanish silently — keep the
+      // reason for diagnostics (/reconnect, tests, debugging the learning loop).
+      this.lastFeedbackError = errText(exc);
     }
     return { quality, outcome };
   }
