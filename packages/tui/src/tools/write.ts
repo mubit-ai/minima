@@ -2,10 +2,11 @@
  * write tool — port of minima_harness/tools/write.py.
  */
 
-import type { AgentTool, ToolResult } from "../agent/tools.ts";
+import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
-import { expand, writeText } from "./_io.ts";
+import { resolveWithin, writeText } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
+import type { FsToolOptions } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -15,20 +16,22 @@ const parameters = objectSchema(
   ["path", "content"],
 );
 
-async function execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
-  const p = expand(String(params.path));
-  const content = String(params.content);
-  const n = await writeText(p, content);
-  return { content: [text(`wrote ${n} lines to ${p}`)], details: { bytes: content.length } };
-}
-
-export function writeTool(): AgentTool {
+export function writeTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "write",
     description:
       "Create or overwrite a file. Overwrites entirely — prefer edit for targeted changes. " +
       "Parent directories are created automatically. Pass the full intended file contents.",
     parameters,
-    execute,
+    async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
+      const r = resolveWithin(String(params.path), opts.workdir);
+      if (!r.ok) return errorResult(`write: ${r.error}`);
+      const content = String(params.content);
+      const n = await writeText(r.path, content);
+      return {
+        content: [text(`wrote ${n} lines to ${r.path}`)],
+        details: { bytes: content.length },
+      };
+    },
   };
 }

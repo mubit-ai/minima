@@ -15,7 +15,7 @@ import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { errText } from "../errtext.ts";
-import { refreshCatalog } from "../minima/catalog.ts";
+import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
@@ -441,7 +441,9 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         },
       ]);
     }
-    void refreshCatalog(agent.config)
+    // One-time bootstrap (memoized): the REGISTRY is process-global, so the catalog must
+    // not be re-synced mid-run once (sub-)agents can be in flight.
+    void refreshCatalogOnce(agent.config)
       .then((n) => {
         if (n > 0) setCatalogVersion((v) => v + 1);
       })

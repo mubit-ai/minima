@@ -9,8 +9,9 @@
 import { existsSync, statSync } from "node:fs";
 import { type AgentTool, type ToolResult, type ToolUpdate, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
-import { expand } from "./_io.ts";
+import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
+import type { FsToolOptions } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -36,6 +37,7 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
 }
 
 async function execute(
+  base: string | undefined,
   _id: string,
   params: Record<string, unknown>,
   signal: AbortSignal | null,
@@ -43,7 +45,16 @@ async function execute(
 ): Promise<ToolResult> {
   const command = String(params.command);
   const timeoutMs = (params.timeout as number) ?? 120_000;
-  const wd = params.workdir ? expand(String(params.workdir)) : undefined;
+  // Factory base = the default cwd for this tool instance (per-sub-agent isolation);
+  // a model-supplied workdir must stay within it when a base is set.
+  let wd: string | undefined;
+  if (params.workdir) {
+    const r = resolveWithin(String(params.workdir), base);
+    if (!r.ok) return errorResult(`bash: ${r.error}`);
+    wd = r.path;
+  } else {
+    wd = base;
+  }
   if (wd && !existsSync(wd)) return errorResult(`bash: workdir does not exist: ${wd}`);
   if (wd && !statSync(wd).isDirectory())
     return errorResult(`bash: workdir is not a directory: ${wd}`);
@@ -109,7 +120,7 @@ async function execute(
   return { content: [text(body)], details: { exit_code: code } };
 }
 
-export function bashTool(): AgentTool {
+export function bashTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "bash",
     description:
@@ -117,6 +128,6 @@ export function bashTool(): AgentTool {
       "Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. " +
       "Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
     parameters,
-    execute,
+    execute: (id, params, signal, onUpdate) => execute(opts.workdir, id, params, signal, onUpdate),
   };
 }

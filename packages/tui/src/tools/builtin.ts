@@ -29,18 +29,25 @@ export { webFetchTool } from "./web_fetch.ts";
 
 export interface BuiltinToolsOptions {
   exclude?: string[];
+  /**
+   * Base directory for every filesystem tool in this set (per-sub-agent isolation):
+   * relative paths resolve against it, escapes are rejected. Omit for ambient-cwd
+   * behavior (the historical default for the lead agent).
+   */
+  workdir?: string;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
 export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
+  const fs = { workdir: opts.workdir };
   const all: AgentTool[] = [
-    readTool(),
-    writeTool(),
-    editTool(),
-    bashTool(),
-    lsTool(),
-    globTool(),
-    grepTool(),
+    readTool(fs),
+    writeTool(fs),
+    editTool(fs),
+    bashTool(fs),
+    lsTool(fs),
+    globTool(fs),
+    grepTool(fs),
     todowriteTool(),
     webFetchTool(),
   ];

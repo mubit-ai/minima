@@ -4,12 +4,35 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 const MAX_LINE = 2000;
 
 export function expand(path: string): string {
   return path.startsWith("~") ? path.replace(/^~/, homedir()) : path;
+}
+
+/**
+ * Resolve `path` against an optional `workdir` base and confine it there.
+ *
+ * Without a base this is just expand() (current behavior — relative paths resolve against
+ * the ambient process.cwd()). With a base, relative paths resolve against IT, and any
+ * resolved target escaping the base (`..`, absolute paths outside it) is rejected — the
+ * isolation contract that lets parallel sub-agents share one process without clobbering
+ * each other. This is a convenience boundary, not a sandbox (symlinks/bash can still
+ * escape); the permission layer stays the real gate.
+ */
+export function resolveWithin(
+  path: string,
+  base?: string,
+): { ok: true; path: string } | { ok: false; error: string } {
+  const expanded = expand(path);
+  if (!base) return { ok: true, path: expanded };
+  const absBase = resolve(expand(base));
+  const abs = isAbsolute(expanded) ? expanded : resolve(absBase, expanded);
+  const rel = relative(absBase, abs);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return { ok: true, path: abs };
+  return { ok: false, error: `path escapes workdir (${absBase}): ${path}` };
 }
 
 export function truncateLine(line: string): string {
