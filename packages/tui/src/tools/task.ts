@@ -134,22 +134,112 @@ export interface TaskToolOptions {
   spawnDepth?: number;
   /** Depth cap: a child at the cap gets an explicit refusal, not a missing tool. */
   maxDepth?: number;
+  /** Max children running at once (fan-out semaphore; default 4). */
+  concurrency?: number;
+}
+
+/**
+ * Execute a validated DAG: independent frontier nodes run CONCURRENTLY under the
+ * semaphore, dependents wait for their prerequisites, a failed dependency blocks its
+ * dependents (partial-failure), and abort stops new launches (in-flight children abort
+ * via their parentSignal wiring). Results come back in delegation order.
+ */
+export async function executeDag(
+  ds: Delegation[],
+  spawn: SpawnFn,
+  opts: { depth: number; signal: AbortSignal | null; concurrency: number },
+): Promise<ChildResult[]> {
+  const settled = new Map<string, ChildResult>();
+  const running = new Map<string, Promise<{ id: string; res: ChildResult }>>();
+  const pending = new Map(ds.map((d) => [d.step_id, d]));
+
+  const blockedResult = (d: Delegation, deps: string[]): ChildResult => ({
+    step_id: d.step_id,
+    childId: "",
+    text: `blocked: dependency ${deps.join(", ")} failed`,
+    costUsd: 0,
+    quality: null,
+    outcome: "failure",
+    workdir: null,
+  });
+
+  while (pending.size > 0 || running.size > 0) {
+    // Launch every ready node (deps settled successfully) up to the concurrency cap.
+    if (!opts.signal?.aborted) {
+      for (const [id, d] of [...pending]) {
+        if (running.size >= opts.concurrency) break;
+        const deps = d.depends_on ?? [];
+        if (!deps.every((dep) => settled.has(dep))) continue; // wait for prerequisites
+        pending.delete(id);
+        const failedDeps = deps.filter((dep) => {
+          const o = settled.get(dep)!.outcome;
+          return o === "failure" || o === "aborted";
+        });
+        if (failedDeps.length) {
+          settled.set(id, blockedResult(d, failedDeps));
+          continue;
+        }
+        const priorResults = deps.map((dep) => settled.get(dep)!);
+        running.set(
+          id,
+          spawn(d, { depth: opts.depth, parentSignal: opts.signal, priorResults })
+            .then((res) => ({ id, res }))
+            .catch((exc) => ({
+              id,
+              res: {
+                step_id: id,
+                childId: "",
+                text: `spawn failed: ${String(exc)}`,
+                costUsd: 0,
+                quality: null,
+                outcome: "failure" as const,
+                workdir: null,
+              },
+            })),
+        );
+      }
+    }
+    if (running.size === 0) {
+      if (opts.signal?.aborted) break; // nothing in flight and no new launches
+      // No node is ready AND nothing is running: only possible when pending nodes wait on
+      // deps that will never settle (all remaining are transitively blocked) — mark them.
+      for (const [id, d] of [...pending]) {
+        pending.delete(id);
+        settled.set(
+          id,
+          blockedResult(
+            d,
+            (d.depends_on ?? []).filter((x) => !settled.has(x)),
+          ),
+        );
+      }
+      continue;
+    }
+    const done = await Promise.race(running.values());
+    running.delete(done.id);
+    settled.set(done.id, done.res);
+  }
+
+  // Delegation order (deterministic summaries regardless of completion order).
+  return ds.filter((d) => settled.has(d.step_id)).map((d) => settled.get(d.step_id)!);
 }
 
 export function taskTool(opts: TaskToolOptions): AgentTool {
   const depth = opts.spawnDepth ?? 0;
   const maxDepth = opts.maxDepth ?? 2;
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
   return {
     name: "task",
     description:
-      "Delegate subtasks to child agents, each cost-routed to its own model and run in " +
-      "sequence respecting depends_on. Use for decomposable work (research a module, make " +
-      "an isolated change, verify a result). Each delegation MUST state objective, " +
-      "output_format, and boundaries. Prefer 1 subtask for a focused question; more only " +
-      "when genuinely independent.",
+      "Delegate subtasks to child agents, each cost-routed to its own model. Independent " +
+      "subtasks run in parallel (bounded); depends_on chains run in order. Use for " +
+      "decomposable work (research a module, make an isolated change, verify a result). " +
+      "Each delegation MUST state objective, output_format, and boundaries — boundaries " +
+      "matter for parallel edits (workers must not touch each other's files). Prefer 1 " +
+      "subtask for a focused question; more only when genuinely independent.",
     parameters,
-    // Children run one at a time (M-G adds parallel frontiers); keep the batch sequential
-    // so two task calls in one assistant turn can't interleave children.
+    // One task batch at a time: two task calls in one assistant turn must not interleave
+    // their children (the DAG itself parallelizes within the batch).
     executionMode: "sequential",
     async execute(_id, params, signal): Promise<ToolResult> {
       if (depth >= maxDepth) {
@@ -166,47 +256,11 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
       const v = validateDelegations(parsed);
       if (!v.ok) return errorResult(`task: ${v.error}`);
 
-      const order = topoOrder(v.value)!;
-      const results: ChildResult[] = [];
-      const failed = new Set<string>();
-      for (const d of order) {
-        if (signal?.aborted) break;
-        // Partial-failure semantics: a failed dependency blocks its dependents.
-        const blockedBy = (d.depends_on ?? []).filter((dep) => failed.has(dep));
-        if (blockedBy.length) {
-          failed.add(d.step_id);
-          results.push({
-            step_id: d.step_id,
-            childId: "",
-            text: `blocked: dependency ${blockedBy.join(", ")} failed`,
-            costUsd: 0,
-            quality: null,
-            outcome: "failure",
-            workdir: null,
-          });
-          continue;
-        }
-        try {
-          const res = await opts.spawn(d, {
-            depth: depth + 1,
-            parentSignal: signal ?? null,
-            priorResults: [...results],
-          });
-          results.push(res);
-          if (res.outcome === "failure" || res.outcome === "aborted") failed.add(d.step_id);
-        } catch (exc) {
-          failed.add(d.step_id);
-          results.push({
-            step_id: d.step_id,
-            childId: "",
-            text: `spawn failed: ${String(exc)}`,
-            costUsd: 0,
-            quality: null,
-            outcome: "failure",
-            workdir: null,
-          });
-        }
-      }
+      const results = await executeDag(v.value, opts.spawn, {
+        depth: depth + 1,
+        signal: signal ?? null,
+        concurrency,
+      });
 
       const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
       const summary = results

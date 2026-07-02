@@ -136,12 +136,12 @@ describe("taskTool", () => {
     expect(textOf(res)).toContain("directly");
   });
 
-  test("abort stops spawning further nodes", async () => {
+  test("abort stops launching dependent nodes", async () => {
     const spawned: string[] = [];
     const ctrl = new AbortController();
     const spawn: SpawnFn = async (d, ctx) => {
       spawned.push(d.step_id);
-      ctrl.abort(); // abort after the first child
+      ctrl.abort(); // abort after the first child completes
       return okSpawn(d, ctx);
     };
     const tool = taskTool({ spawn });
@@ -150,13 +150,56 @@ describe("taskTool", () => {
       {
         delegations: JSON.stringify([
           okDelegation({ step_id: "a" }),
-          okDelegation({ step_id: "b" }),
+          okDelegation({ step_id: "b", depends_on: ["a"] }), // not launched until a settles
         ]),
       },
       ctrl.signal,
       null,
     );
-    expect(spawned).toEqual(["a"]);
+    expect(spawned).toEqual(["a"]); // b never launches after the abort
+  });
+
+  test("independent frontier nodes run in parallel under the semaphore cap", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const spawn: SpawnFn = async (d, ctx) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      inFlight -= 1;
+      return okSpawn(d, ctx);
+    };
+    const five = Array.from({ length: 5 }, (_, i) => okDelegation({ step_id: `n${i}` }));
+    const tool = taskTool({ spawn, concurrency: 2 });
+    const res = await tool.execute("1", { delegations: JSON.stringify(five) }, null, null);
+    expect(maxInFlight).toBeGreaterThan(1); // genuinely parallel
+    expect(maxInFlight).toBeLessThanOrEqual(2); // the cap holds
+    expect(textOf(res)).toContain("5 subtask(s), 5 succeeded");
+  });
+
+  test("a dependent still waits for its prerequisite even with free slots", async () => {
+    const order: string[] = [];
+    const spawn: SpawnFn = async (d, ctx) => {
+      order.push(`start:${d.step_id}`);
+      await new Promise((r) => setTimeout(r, d.step_id === "slow" ? 20 : 1));
+      order.push(`end:${d.step_id}`);
+      return okSpawn(d, ctx);
+    };
+    const tool = taskTool({ spawn, concurrency: 4 });
+    await tool.execute(
+      "1",
+      {
+        delegations: JSON.stringify([
+          okDelegation({ step_id: "slow" }),
+          okDelegation({ step_id: "after", depends_on: ["slow"] }),
+          okDelegation({ step_id: "free" }),
+        ]),
+      },
+      null,
+      null,
+    );
+    expect(order.indexOf("start:after")).toBeGreaterThan(order.indexOf("end:slow"));
+    expect(order.indexOf("start:free")).toBeLessThan(order.indexOf("end:slow")); // parallel with slow
   });
 });
 
