@@ -22,6 +22,7 @@ import { expandAtFiles } from "../tools/at_mentions.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
+import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
 import { type ChatMessage, Messages } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
@@ -124,65 +125,6 @@ const COMMANDS = [
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (read-only)" },
 ];
-
-function computeMsgHeight(msg: ChatMessage, cols: number): number {
-  if (msg.role === "tool") return 1;
-  const lines = msg.text.split("\n");
-  let lineCount = 0;
-  for (const line of lines) {
-    lineCount += Math.max(1, Math.ceil(line.length / Math.max(20, cols - 4)));
-  }
-  if (msg.role === "thinking") return 2 + lineCount; // border + header + content
-  return 1 + lineCount; // header + content
-}
-
-function getScrollableMessages(
-  messages: ChatMessage[],
-  maxHeight: number,
-  scrollOffset: number,
-  cols: number,
-): { visible: ChatMessage[]; totalHeight: number; atTop: boolean; atBottom: boolean } {
-  if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
-
-  const heights = messages.map((m) => computeMsgHeight(m, cols));
-  const totalHeight = heights.reduce((a, b) => a + b, 0);
-
-  const effectiveOffset = Math.min(scrollOffset, Math.max(0, totalHeight - maxHeight));
-  const endLine = totalHeight - effectiveOffset;
-  const startLine = Math.max(0, endLine - maxHeight);
-
-  let currentLine = 0;
-  const visible: ChatMessage[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const msgStart = currentLine;
-    const msgEnd = currentLine + heights[i]!;
-
-    if (msgEnd <= startLine) {
-      currentLine = msgEnd;
-      continue;
-    }
-    if (msgStart >= endLine) break;
-
-    if (msgStart < startLine && msgEnd > startLine) {
-      // Partially visible at top — truncate to fit
-      const skipLines = startLine - msgStart;
-      const textLines = messages[i]!.text.split("\n");
-      const truncated = textLines.slice(skipLines).join("\n");
-      visible.push({ ...messages[i]!, text: truncated });
-    } else {
-      visible.push(messages[i]!);
-    }
-    currentLine = msgEnd;
-  }
-
-  return {
-    visible,
-    totalHeight,
-    atTop: effectiveOffset >= totalHeight - maxHeight,
-    atBottom: effectiveOffset === 0,
-  };
-}
 
 export interface CommandPickerProps {
   commands: { name: string; desc: string }[];
@@ -1551,18 +1493,35 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     }
   }
 
-  // Calculate dynamic sizing for chat list based on terminal size
-  const footerHeight = 6;
+  // Calculate dynamic sizing for the chat list based on terminal size. The chat region is the
+  // ONE flex-grow child; every other bottom region is a fixed sibling and must be subtracted so
+  // the windowed history + live streaming fit the frame. (The region ALSO hard-clips via
+  // overflow:"hidden" as a safety net — see the render tree — so an estimate error can never
+  // corrupt the terminal, only shave a line at the fold.)
+  const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
   const suggestionsHeight = matchingCommands.length > 0 ? matchingCommands.length + 2 : 0;
-  const streamingHeight = streaming ? 2 + Math.max(1, Math.ceil(streaming.length / cols)) : 0;
-  const streamingThoughtsHeight =
-    streamingThoughts && showThinkingRef.current
-      ? 2 + Math.max(1, Math.ceil(streamingThoughts.length / cols))
-      : 0;
-  const maxChatHeight = Math.max(
+  const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
+  // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
+  // bottom region (see the render tree). Plan mode adds its banner (+3).
+  const inputBoxHeight = overlayOpen || permPrompt ? 0 : planMode ? 7 : 4;
+  const permPromptHeight = permPrompt
+    ? 3 + // round border (2) + prompt line (1)
+      (permPrompt.argsSummary && !permPrompt.diffPreview ? 1 : 0) +
+      (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
+      1 // hint line
+    : 0;
+  // Live streaming renders INSIDE the chat region, below the history. Reserve its true height:
+  // count newlines + wrapping at the turn-box interior width (cols-4), plus box chrome (border 2 +
+  // outer marginBottom 1 + inner marginY 2 + header 1 = 6). The old `2 + ceil(len/cols)` collapsed
+  // newlines and undercounted, letting a multi-line reply overflow.
+  const streamingHeight = streaming ? 6 + wrappedLineCount(streaming, cols - 4) : 0;
+  // The thoughts peek is wrap="truncate" (fixed ~4 rows), so it never grows with content.
+  const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 4 : 0;
+  const chatRegionHeight = Math.max(
     1,
-    rows - footerHeight - suggestionsHeight - streamingHeight - streamingThoughtsHeight,
+    rows - footerHeight - suggestionsHeight - inputBoxHeight - permPromptHeight,
   );
+  const maxChatHeight = Math.max(1, chatRegionHeight - streamingHeight - streamingThoughtsHeight);
 
   const { visible: visibleMsgs, atBottom } = getScrollableMessages(
     messages,
@@ -1572,7 +1531,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   );
 
   return (
-    <Box flexDirection="column" height={rows} width="100%">
+    // Global overflow guard: bound the whole frame to exactly `rows` and clip anything beyond.
+    // This keeps Ink's output from ever exceeding the terminal height (which is what desyncs its
+    // cursor-relative diff into garbled output), covering not just the chat region but oversized
+    // overlays (command palette, config, permission diffs) on short terminals too.
+    <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
       {messages.length === 0 &&
       !pickerOpen &&
       !paletteOpen &&
@@ -1600,7 +1563,18 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           </Box>
         </Box>
       ) : (
-        <Box flexDirection="column" flexGrow={1}>
+        // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat
+        // to exceed its allotted rows regardless of any height-estimate error — this is what stops
+        // Ink's cursor-relative diff from desyncing into garbled/overlapping output. flex-end
+        // bottom-aligns the conversation so the clip eats the OLDEST content at the top fold,
+        // keeping the newest answer + live streaming visible (correct chat semantics).
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          minHeight={0}
+          overflow="hidden"
+          justifyContent="flex-end"
+        >
           <Messages
             messages={visibleMsgs}
             streaming={busy && atBottom ? streaming : ""}
@@ -1674,7 +1648,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         />
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : (
+      ) : permPrompt ? null : ( // permission prompt owns the bottom region (rendered below)
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>

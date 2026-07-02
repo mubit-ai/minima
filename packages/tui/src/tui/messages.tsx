@@ -5,48 +5,11 @@
 
 import { Box, Text } from "ink";
 import type React from "react";
+import { type ChatMessage, type Turn, groupMessagesIntoTurns } from "./layout.ts";
 
-export interface ChatMessage {
-  role: "user" | "assistant" | "tool" | "thinking";
-  text: string;
-  toolName?: string;
-  isError?: boolean;
-  thoughtDurationSecs?: number;
-}
-
-export interface Turn {
-  user: ChatMessage;
-  subsequent: ChatMessage[];
-}
-
-export function groupMessagesIntoTurns(messages: ChatMessage[]): Turn[] {
-  const turns: Turn[] = [];
-  let currentTurn: Turn | null = null;
-
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      if (currentTurn) {
-        turns.push(currentTurn);
-      }
-      currentTurn = { user: msg, subsequent: [] };
-    } else {
-      if (currentTurn) {
-        currentTurn.subsequent.push(msg);
-      } else {
-        // Fallback for any orphaned early system messages
-        turns.push({
-          user: { role: "user", text: "" },
-          subsequent: [msg],
-        });
-      }
-    }
-  }
-
-  if (currentTurn) {
-    turns.push(currentTurn);
-  }
-  return turns;
-}
+// Re-exported so existing importers (app.tsx) keep a single import site; the definitions and the
+// pure grouping logic now live in the React/Ink-free layout module (also unit-tested there).
+export { type ChatMessage, type Turn, groupMessagesIntoTurns };
 
 function renderInlineMarkdown(text: string): React.ReactNode {
   const tokens: React.ReactNode[] = [];
@@ -163,7 +126,9 @@ export function Messages({
   const turns = groupMessagesIntoTurns(messages);
 
   return (
-    <Box flexDirection="column" flexGrow={1}>
+    // No flexGrow: the parent chat region is bottom-aligned (justifyContent="flex-end") and clips
+    // overflow, so this must be content-sized (not stretched) for the newest turn to sit at the fold.
+    <Box flexDirection="column">
       {turns.map((turn, i) => (
         <Box
           // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
