@@ -15,12 +15,15 @@
 
 import { Agent, type AgentOptions } from "../agent/agent.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
+import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
+import { errText } from "../errtext.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
+import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
 
@@ -39,6 +42,8 @@ export interface MinimaAgentOptions extends Omit<AgentOptions, "model"> {
   taskType?: string;
   thinkingLevel?: ThinkingLevel;
   maxTurns?: number;
+  /** Mubit memory seam: recall-before-route + write-back. Defaults to a no-op. */
+  memory?: HarnessMemory;
 }
 
 export function gradeOutcome(quality: number): "success" | "partial" | "failure" {
@@ -58,10 +63,24 @@ export class MinimaAgent extends Agent {
   private promptsRun = 0;
   /** Why the last route fell back to offline (null = routed fine). */
   offlineReason: string | null = null;
+  /** Why the last feedback write failed (null = ok). Non-fatal — kept for diagnostics. */
+  lastFeedbackError: string | null = null;
+  /** Mubit memory: recall-before-route + write-back. No-op unless wired in. */
+  memory: HarnessMemory;
 
   constructor(opts: MinimaAgentOptions) {
-    const { config, router, judge, mapping, model, meter, beforeRoute, taskType, ...agentOpts } =
-      opts;
+    const {
+      config,
+      router,
+      judge,
+      mapping,
+      model,
+      meter,
+      beforeRoute,
+      taskType,
+      memory,
+      ...agentOpts
+    } = opts;
     const map = mapping ?? router?.mapping ?? new ModelMapping();
     const initial = model ?? map.defaultModel();
     super({ ...agentOpts, model: initial });
@@ -72,6 +91,7 @@ export class MinimaAgent extends Agent {
     this.meter = meter ?? null;
     this.beforeRouteHook = beforeRoute ?? null;
     this.taskTypeHint = taskType ?? null;
+    this.memory = memory ?? new NoopHarnessMemory();
   }
 
   /** Rebuild the Minima client from the current environment (/reconnect, /auth, /config set). */
@@ -94,46 +114,64 @@ export class MinimaAgent extends Agent {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
 
-    const routing = await this.route(
-      content,
-      effectiveTaskType ?? null,
-      opts.slider ?? null,
-      opts.tags,
-    );
-    const start = Date.now();
-    let runError: unknown = null;
+    // Recall-before-route: inject task-relevant prior Mubit context into THIS turn's system
+    // prompt (restored in `finally` — no leak across turns). No-op unless memory is wired.
+    const origSystem = this.agentState.systemPrompt;
+    const recalled = await this.memory.recall(content);
+    if (recalled.length > 0) {
+      const block = formatRecallBlock(recalled);
+      this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
+    }
     try {
-      await super.prompt(content);
-    } catch (exc) {
-      runError = exc;
-    }
-    const latencyMs = Date.now() - start;
-    const turnsTaken = this.agentState.turnsTaken;
-    const last = this.lastAssistant();
-    const failed = runError !== null || (last !== null && last.stop_reason === "error");
+      const routing = await this.route(
+        content,
+        effectiveTaskType ?? null,
+        opts.slider ?? null,
+        opts.tags,
+      );
+      const start = Date.now();
+      let runError: unknown = null;
+      try {
+        await super.prompt(content);
+      } catch (exc) {
+        runError = exc;
+      }
+      const latencyMs = Date.now() - start;
+      const turnsTaken = this.agentState.turnsTaken;
+      const last = this.lastAssistant();
+      const failed = runError !== null || (last !== null && last.stop_reason === "error");
 
-    const { quality, outcome } = await this.feedbackSafely(
-      content,
-      routing,
-      latencyMs,
-      failed,
-      turnsTaken,
-    );
-
-    if (this.meter) {
-      const actual = last?.usage.cost.total ?? 0;
-      this.meter.record({
-        label: shortLabel(content),
+      const { quality, outcome } = await this.feedbackSafely(
+        content,
         routing,
-        actualCostUsd: actual,
-        quality: failed ? 0 : quality,
-        outcome: failed ? "failure" : outcome,
-        turns: turnsTaken,
-      });
-    }
+        latencyMs,
+        failed,
+        turnsTaken,
+      );
 
-    if (runError !== null) throw runError;
-    return routing;
+      if (this.meter) {
+        const actual = last?.usage.cost.total ?? 0;
+        this.meter.record({
+          label: shortLabel(content),
+          routing,
+          actualCostUsd: actual,
+          quality: failed ? 0 : quality,
+          outcome: failed ? "failure" : outcome,
+          turns: turnsTaken,
+        });
+      }
+
+      if (runError !== null) throw runError;
+      return routing;
+    } finally {
+      // Never let this turn's recalled context leak into the next turn's base prompt.
+      this.agentState.systemPrompt = origSystem;
+    }
+  }
+
+  /** Distil this run into durable Mubit memory (reflect + checkpoint). Call at shutdown. */
+  async endSession(): Promise<void> {
+    await this.memory.endSession();
   }
 
   // ------------------------------------------------------------------ routing
@@ -156,11 +194,20 @@ export class MinimaAgent extends Agent {
       }
     }
     try {
+      // Only let Minima pick models the user can actually run: restrict candidates to those
+      // whose provider key is present, so a routed turn never dies with a provider auth error.
+      // If NO candidate is runnable (no provider keys at all), fall back to the full set and
+      // let the provider layer surface an actionable "no API key" message.
+      const runnable = this.config.candidates.filter((id) => {
+        const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
+        return m ? providerKeyPresent(m.provider) : false;
+      });
       const routing = await this.router.recommend({
         task: taskText,
         taskType: taskType ?? undefined,
         slider: slider ?? undefined,
         tags,
+        candidates: runnable.length ? runnable : undefined,
       });
       this.offlineReason = null;
       if (this.beforeRouteHook) {
@@ -171,7 +218,7 @@ export class MinimaAgent extends Agent {
       return routing;
     } catch (exc) {
       if (this.config.allowOffline) {
-        this.offlineReason = String(exc);
+        this.offlineReason = errText(exc);
         return null;
       }
       throw exc;
@@ -221,8 +268,24 @@ export class MinimaAgent extends Agent {
         latencyMs,
         iterations: turnsTaken || undefined,
       });
-    } catch {
-      // feedback must never break a successful run
+      // Close the Mubit learning loop: record this turn's realized outcome as a trace + score,
+      // attributed to the recommendation. Fail-open, never fabricated (quality null -> trace
+      // only, no score). No-op unless a MubitHarnessMemory is wired in.
+      await this.memory.recordOutcome({
+        task: taskText,
+        recommendationId: routing.recommendationId,
+        modelId: routing.chosenModelId,
+        outcome,
+        quality,
+        costUsd: usage.cost.total,
+        latencyMs,
+        turns: turnsTaken,
+      });
+      this.lastFeedbackError = null;
+    } catch (exc) {
+      // Feedback/write-back must never break a successful run, but don't vanish silently — keep
+      // the reason for diagnostics (/reconnect, tests, debugging the learning loop).
+      this.lastFeedbackError = errText(exc);
     }
     return { quality, outcome };
   }

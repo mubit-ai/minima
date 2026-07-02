@@ -37,7 +37,7 @@ export default defineConfig({
   titleTemplate: '%s · Minima',
   description:
     'A recommendation engine for LLM model routing. Cuts token spend without losing quality — plus the minima harness, a cost-aware terminal coding agent.',
-  iconUrl: '/images/favicon.svg',
+  iconUrl: '/images/favicon.png',
   logoUrl: {
     light: '/images/logo-light.svg',
     dark: '/images/logo-dark.svg',
@@ -55,7 +55,7 @@ export default defineConfig({
     },
   },
   font: {
-    google: 'JetBrains Mono',
+    google: 'Manrope',
   },
   aiCta: false,
   search: {

@@ -1,9 +1,10 @@
 /**
- * Model picker overlay — port of the Python tui/overlays.py ModelPicker (focused).
+ * Model picker overlay — scrollable + filterable.
  *
- * Lists the registered harness models; pick with ↑/↓ + Enter (or a number key), pin with
- * P, dismiss with Esc. Pinning sets MinimaAgent.config.pinned so routing is bypassed and
- * the chosen model runs directly.
+ * The registry can hold hundreds of models (OpenRouter + Minima catalog), so this is a
+ * type-to-filter list over a scrolling viewport: type to narrow (matches name/provider/id,
+ * space-separated AND tokens), ↑/↓ to move, ⏎ to run, Tab to pin (bypass routing), Esc to
+ * cancel. Pinning sets MinimaAgent.config.pinned so the chosen model runs directly.
  */
 
 import { Box, Text, useInput } from "ink";
@@ -17,17 +18,26 @@ export interface ModelPickerProps {
   onDismiss: () => void;
 }
 
+const WINDOW = 12; // visible rows
+
+export function matches(model: Model, filter: string): boolean {
+  const tokens = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const hay = `${model.name} ${model.provider} ${model.id}`.toLowerCase();
+  return tokens.every((t) => hay.includes(t));
+}
+
 export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPickerProps) {
-  const [cursor, setCursor] = useState(() =>
-    Math.max(
-      0,
-      models.findIndex((m) => m.id === currentId),
-    ),
-  );
+  const [filter, setFilter] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [closed, setClosed] = useState(false);
 
-  const safePick = (model: Model, pinned: boolean) => {
-    if (closed) return;
+  const filtered = models.filter((m) => matches(m, filter));
+  // Keep the cursor in range as the filter narrows/widens the list.
+  const cur = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1);
+
+  const safePick = (model: Model | undefined, pinned: boolean) => {
+    if (closed || !model) return;
     setClosed(true);
     onPick(model, pinned);
   };
@@ -39,28 +49,58 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
 
   useInput((input, key) => {
     if (key.escape) return safeDismiss();
-    if (models.length === 0) return;
-    if (key.upArrow) return setCursor((c) => (c - 1 + models.length) % models.length);
-    if (key.downArrow) return setCursor((c) => (c + 1) % models.length);
-    if (key.return) return safePick(models[cursor]!, false);
-    if (input === "p" || input === "P") return safePick(models[cursor]!, true);
-    const n = Number(input);
-    if (Number.isInteger(n) && n >= 1 && n <= models.length) return safePick(models[n - 1]!, false);
+    if (key.upArrow) return setCursor(() => Math.max(0, cur - 1));
+    if (key.downArrow) return setCursor(() => Math.min(filtered.length - 1, cur + 1));
+    if (key.return) return safePick(filtered[cur], false);
+    if (key.tab) return safePick(filtered[cur], true);
+    if (key.backspace || key.delete) {
+      setFilter((f) => f.slice(0, -1));
+      setCursor(0);
+      return;
+    }
+    // Printable character → extend the filter (ignore control/meta chords).
+    if (input && input.length === 1 && !key.ctrl && !key.meta && input >= " ") {
+      setFilter((f) => f + input);
+      setCursor(0);
+    }
   });
+
+  // Scroll so the cursor stays visible.
+  const start = Math.max(
+    0,
+    Math.min(cur - Math.floor(WINDOW / 2), Math.max(0, filtered.length - WINDOW)),
+  );
+  const view = filtered.slice(start, start + WINDOW);
 
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
       <Text bold color="magenta">
         {" model "}
       </Text>
-      {models.slice(0, 20).map((m, i) => (
-        <Text key={m.id} color={i === cursor ? "cyan" : undefined}>
-          {i === cursor ? "❯" : " "} {i < 9 ? `${i + 1} ` : "  "}
-          {m.name} <Text color="gray">{`(${m.provider}/${m.id})`}</Text>
-          {m.id === currentId ? <Text color="green"> ✓</Text> : null}
-        </Text>
-      ))}
-      <Text color="gray">{"↑/↓ select · ⏎ run · P pin · Esc cancel"}</Text>
+      <Text color="gray">
+        {"filter: "}
+        <Text color="white">{filter || " "}</Text>
+        <Text color="gray">{`  (${filtered.length}/${models.length})`}</Text>
+      </Text>
+      {start > 0 ? <Text color="gray">{`  ↑ ${start} more`}</Text> : null}
+      {view.length === 0 ? (
+        <Text color="gray">{"  (no models match)"}</Text>
+      ) : (
+        view.map((m, i) => {
+          const idx = start + i;
+          return (
+            <Text key={`${m.provider}:${m.id}`} color={idx === cur ? "cyan" : undefined}>
+              {idx === cur ? "❯ " : "  "}
+              {m.name} <Text color="gray">{`(${m.provider}/${m.id})`}</Text>
+              {m.id === currentId ? <Text color="green"> ✓</Text> : null}
+            </Text>
+          );
+        })
+      )}
+      {start + WINDOW < filtered.length ? (
+        <Text color="gray">{`  ↓ ${filtered.length - start - WINDOW} more`}</Text>
+      ) : null}
+      <Text color="gray">{"↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel"}</Text>
     </Box>
   );
 }

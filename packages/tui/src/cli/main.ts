@@ -14,8 +14,10 @@ import React from "react";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
+import { errText } from "../errtext.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge } from "../minima/index.ts";
+import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
 import { HarnessApp } from "../tui/app.tsx";
@@ -276,7 +278,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   try {
     args = parseArgs(argv);
   } catch (exc) {
-    process.stderr.write(`minima: ${String(exc)}\n`);
+    process.stderr.write(`minima: ${errText(exc)}\n`);
     return 2;
   }
 
@@ -314,6 +316,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     systemPrompt,
   });
 
+  // Wire Mubit memory (recall-before-route + write-back) into the agent. No-op unless a
+  // MUBIT_API_KEY is present. Use a STABLE per-repo memory session id (the provisioned project
+  // namespace, else the repo identity) so recall surfaces prior outcomes across runs and
+  // write-backs accumulate under it — random-per-run ids would make recall see nothing.
+  const memorySession = config.namespace ?? repoIdentity(process.cwd());
+  agent.memory = await createMubitMemory(memorySession);
+
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
@@ -321,7 +330,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       process.stderr.write("minima: --print/--mode json requires a prompt\n");
       return 2;
     }
-    return args.mode === "json" ? runJson(agent, prompt) : runPrint(agent, prompt);
+    const rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
+    await endSessionSafely(agent); // distil the one-shot run into durable memory
+    return rc;
   }
 
   // Install the stdin.read() filter so SGR mouse wheel sequences are stripped
@@ -341,7 +352,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Exit alternate screen + restore cursor on shutdown.
   process.stdout.write("\u001b[?1049l");
   process.stdout.write("\u001b[?25h");
+  await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   return 0;
+}
+
+/** Distil the run into durable Mubit memory on exit, time-boxed so it never hangs shutdown. */
+async function endSessionSafely(agent: MinimaAgent): Promise<void> {
+  await Promise.race([agent.endSession(), new Promise<void>((r) => setTimeout(r, 5000))]);
 }
 
 // local re-export to avoid a cycle through the barrel
@@ -435,7 +452,7 @@ if (import.meta.main) {
   main()
     .then((code) => process.exit(code))
     .catch((exc) => {
-      process.stderr.write(`minima: ${String(exc)}\n`);
+      process.stderr.write(`minima: ${errText(exc)}\n`);
       process.exit(1);
     });
 }
