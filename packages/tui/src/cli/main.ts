@@ -170,6 +170,8 @@ interface CliArgs {
   /** Session budget in USD (creates a BudgetLedger; warn mode unless --budget-enforce). */
   budgetUsd?: number;
   budgetEnforce: boolean;
+  /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
+  slider?: number;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -232,6 +234,13 @@ function parseArgs(argv: string[]): CliArgs {
       case "--budget-enforce":
         opts.budgetEnforce = true;
         break;
+      case "--slider": {
+        const v = Number(take(i++));
+        if (!Number.isFinite(v) || v < 0 || v > 10)
+          throw new Error("--slider requires a number between 0 and 10");
+        opts.slider = v;
+        break;
+      }
       case "-h":
       case "--help":
         process.stdout.write(HELP);
@@ -262,6 +271,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -nt, --no-tools
   -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
+      --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
 `;
 
@@ -285,6 +295,7 @@ function buildConfig(args: CliArgs): HarnessConfig {
     cfg.candidates = [args.model];
     cfg.pinned = true;
   }
+  if (args.slider !== undefined) cfg.costQualityTradeoff = args.slider;
   return cfg;
 }
 
@@ -435,11 +446,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
       process.stderr.write("minima: --print/--mode json requires a prompt\n");
+      closeDb("aborted");
       return 2;
     }
-    const rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
-    await endSessionSafely(agent); // distil the one-shot run into durable memory
-    closeDb(rc === 0 ? "done" : "aborted");
+    // finally-guarded: a thrown run error (e.g. budget-enforce refusal) must still finish
+    // the run row + close the DB, or the run leaks as 'active'.
+    let rc = 1;
+    try {
+      rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
+    } catch (exc) {
+      process.stderr.write(`minima: ${errText(exc)}\n`);
+      rc = 1;
+    } finally {
+      await endSessionSafely(agent); // distil the one-shot run into durable memory
+      closeDb(rc === 0 ? "done" : "aborted");
+    }
     return rc;
   }
 
