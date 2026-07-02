@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
-from minima.recommender.classify import classify_from_neighbors, infer_task_type
+from minima.recommender.classify import classify_details, classify_from_neighbors, infer_task_type
 from minima.recommender.engine import Recommender
 from minima.recommender.recstore import RecommendationStore
 from minima.schemas.common import TaskInput, TaskType
@@ -34,6 +34,19 @@ def test_neighbor_vote_needs_majority_share():
     # split 3 ways with no >=50% winner -> abstain
     votes = [("code", 0.3), ("qa", 0.3), ("reasoning", 0.3)]
     assert classify_from_neighbors(votes, min_neighbors=1) is None
+
+
+def test_classify_details_uses_neighbor_votes():
+    details = classify_details(
+        TaskInput(task=_AMBIGUOUS),
+        neighbor_votes=[("code", 0.9), ("code", 0.8), ("qa", 0.2)],
+    )
+    assert details.task_type == TaskType.code
+    assert details.features.code > 0
+    assert details.features.reasoning > 0
+    assert details.neighbor_support > 0
+    assert details.neighbor_count == 2
+    assert 0.0 <= details.uncertainty <= 1.0
 
 
 async def test_engine_refines_other_from_neighbors():

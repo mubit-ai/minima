@@ -127,7 +127,12 @@ class Settings(BaseSettings):
     # minima_reasoner_blend. Heavy evidence barely moves; cold candidates lean on the LLM.
     minima_reasoner_blend_adaptive: bool = True
     minima_reasoner_blend_max: float = 0.8
-    minima_reasoner_classify: bool = True  # let the reasoner refine ambiguous task classification
+    minima_reasoner_fast_mode: bool = False
+    minima_reasoner_fast_memory_token_budget: int = 500
+    minima_reasoner_fast_candidate_limit: int = 6
+    minima_reasoner_fast_skip_low_value: bool = True
+    minima_reasoner_skip_confident_classifications: bool = True
+    minima_reasoner_confidence_skip_threshold: float = 0.72
     anthropic_api_key: str | None = None
     gemini_api_key: str | None = None
 

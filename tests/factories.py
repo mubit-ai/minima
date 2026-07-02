@@ -31,6 +31,7 @@ class FakeMemory:
         self.lookup_results: list[RecalledEvidence] = []
         self._strategies = list(strategies or [])
         self.next_record_id = "rec-fake-1"
+        self.get_context_calls: list[dict[str, Any]] = []
 
     async def recall(self, **kwargs: Any) -> RecallResult:
         self.recall_calls.append(kwargs)
@@ -65,6 +66,7 @@ class FakeMemory:
         return {"count": len(items), "success": True}
 
     async def get_context(self, **_kwargs: Any) -> str:
+        self.get_context_calls.append(_kwargs)
         return ""
 
     async def reflect(self, **kwargs: Any) -> dict:

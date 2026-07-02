@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import socket
+from functools import lru_cache
+from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,6 +34,31 @@ def _hermetic_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIMA_REASONER_PROVIDER", "none")
     monkeypatch.setenv("MINIMA_REASONER_MODEL", "")
     monkeypatch.setenv("MINIMA_DURABLE_FASTPATH", "off")
+
+
+@lru_cache(maxsize=1)
+def _mubit_endpoint_reachable() -> bool:
+    api_key = os.getenv("MUBIT_API_KEY")
+    if not api_key:
+        return False
+    endpoint = Settings(mubit_api_key=api_key).mubit_endpoint
+    parsed = urlparse(endpoint)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if _mubit_endpoint_reachable():
+        return
+    skip_live = pytest.mark.skip(reason="needs MUBIT_API_KEY and a reachable Mubit endpoint")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
 
 
 @pytest.fixture
