@@ -109,7 +109,15 @@ export class MinimaAgent extends Agent {
    */
   async promptRouted(
     content: string,
-    opts: { taskType?: string; slider?: number; tags?: string[] } = {},
+    opts: {
+      taskType?: string;
+      slider?: number;
+      tags?: string[];
+      difficulty?: string;
+      maxCostPerCall?: number;
+      minQuality?: number;
+      excludedModels?: string[];
+    } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
@@ -123,12 +131,17 @@ export class MinimaAgent extends Agent {
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
     }
     try {
-      const routing = await this.route(
-        content,
-        effectiveTaskType ?? null,
-        opts.slider ?? null,
-        opts.tags,
-      );
+      const routing = await this.route(content, {
+        taskType: effectiveTaskType ?? null,
+        slider: opts.slider ?? null,
+        tags: opts.tags,
+        difficulty: opts.difficulty,
+        maxCostPerCall: opts.maxCostPerCall,
+        minQuality: opts.minQuality,
+        excludedModels: opts.excludedModels,
+      });
+      // Everything appended from here belongs to THIS prompt's run (for run-total usage).
+      const runStartIdx = this.agentState.messages.length;
       const start = Date.now();
       let runError: unknown = null;
       try {
@@ -140,21 +153,25 @@ export class MinimaAgent extends Agent {
       const turnsTaken = this.agentState.turnsTaken;
       const last = this.lastAssistant();
       const failed = runError !== null || (last !== null && last.stop_reason === "error");
+      // Run-TOTAL usage: a multi-turn run has one assistant message per turn — summing is
+      // what makes the reported cost truthful (last-turn-only under-reports and corrupts
+      // the server's observed-cost basis).
+      const runUsage = this.usageSince(runStartIdx);
 
       const { quality, outcome } = await this.feedbackSafely(
         content,
         routing,
+        runUsage,
         latencyMs,
         failed,
         turnsTaken,
       );
 
       if (this.meter) {
-        const actual = last?.usage.cost.total ?? 0;
         this.meter.record({
           label: shortLabel(content),
           routing,
-          actualCostUsd: actual,
+          actualCostUsd: runUsage.cost.total,
           quality: failed ? 0 : quality,
           outcome: failed ? "failure" : outcome,
           turns: turnsTaken,
@@ -169,6 +186,25 @@ export class MinimaAgent extends Agent {
     }
   }
 
+  /** Sum usage over the assistant messages appended since `startIdx` (this run's turns). */
+  private usageSince(startIdx: number): Usage {
+    const total = new UsageClass();
+    for (let i = startIdx; i < this.agentState.messages.length; i++) {
+      const m = this.agentState.messages[i];
+      if (!(m instanceof AssistantMessage)) continue;
+      total.input += m.usage.input;
+      total.output += m.usage.output;
+      total.cache_read += m.usage.cache_read;
+      total.cache_write += m.usage.cache_write;
+      total.cost.input += m.usage.cost.input;
+      total.cost.output += m.usage.cost.output;
+      total.cost.cache_read += m.usage.cost.cache_read;
+      total.cost.cache_write += m.usage.cost.cache_write;
+      total.cost.total += m.usage.cost.total;
+    }
+    return total;
+  }
+
   /** Distil this run into durable Mubit memory (reflect + checkpoint). Call at shutdown. */
   async endSession(): Promise<void> {
     await this.memory.endSession();
@@ -177,9 +213,15 @@ export class MinimaAgent extends Agent {
   // ------------------------------------------------------------------ routing
   private async route(
     taskText: string,
-    taskType: string | null,
-    slider: number | null,
-    tags: string[] | undefined,
+    opts: {
+      taskType: string | null;
+      slider: number | null;
+      tags: string[] | undefined;
+      difficulty?: string;
+      maxCostPerCall?: number;
+      minQuality?: number;
+      excludedModels?: string[];
+    },
   ): Promise<RoutingResult | null> {
     // A hard pin bypasses Minima entirely: run that model directly.
     if (this.config.pinned) {
@@ -202,12 +244,23 @@ export class MinimaAgent extends Agent {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
       });
+      const effective = runnable.length ? runnable : undefined;
       const routing = await this.router.recommend({
         task: taskText,
-        taskType: taskType ?? undefined,
-        slider: slider ?? undefined,
-        tags,
-        candidates: runnable.length ? runnable : undefined,
+        taskType: opts.taskType ?? undefined,
+        slider: opts.slider ?? undefined,
+        tags: opts.tags,
+        difficulty: opts.difficulty,
+        // The live context IS the input the chosen model will read — the server's cost
+        // estimate is only truthful when it knows the real prompt size.
+        expectedInputTokens: this.estimateContextTokens(taskText),
+        candidates: effective,
+        maxCostPerCall: opts.maxCostPerCall,
+        minQuality: opts.minQuality,
+        excludedModels: opts.excludedModels,
+        // The server caps candidate selection at 8 by default; widen when the pool is larger.
+        maxCandidates:
+          effective && effective.length > 8 ? Math.min(effective.length, 16) : undefined,
       });
       this.offlineReason = null;
       if (this.beforeRouteHook) {
@@ -229,6 +282,7 @@ export class MinimaAgent extends Agent {
   private async feedbackSafely(
     taskText: string,
     routing: RoutingResult | null,
+    runUsage: Usage,
     latencyMs: number,
     failed: boolean,
     turnsTaken: number,
@@ -240,7 +294,6 @@ export class MinimaAgent extends Agent {
     let outcome: "success" | "partial" | "failure" = "success";
     try {
       const last = this.lastAssistant();
-      const usage: Usage = last?.usage ?? new UsageClass();
       if (failed) {
         quality = 0.0;
         outcome = "failure";
@@ -259,14 +312,23 @@ export class MinimaAgent extends Agent {
           outcome = gradeOutcome(quality);
         }
       }
+      // Feedback truth (the learning loop is only as good as this call):
+      //  - usage is the RUN TOTAL (all turns), not the last assistant message;
+      //  - verified_in_production is NEVER claimed — nothing here runs the project's tests
+      //    yet, and a fabricated flag makes the server treat unjudged successes as
+      //    high-importance ground truth (it substitutes quality 0.9 for null);
+      //  - unjudged turns are tagged so the server/analytics can discriminate them.
+      const judged = quality !== null;
       await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
         outcome,
         quality,
-        usage,
+        usage: runUsage,
         latencyMs,
         iterations: turnsTaken || undefined,
+        verifiedInProduction: false,
+        notes: judged ? undefined : "judged=false",
       });
       // Close the Mubit learning loop: record this turn's realized outcome as a trace + score,
       // attributed to the recommendation. Fail-open, never fabricated (quality null -> trace
@@ -277,7 +339,7 @@ export class MinimaAgent extends Agent {
         modelId: routing.chosenModelId,
         outcome,
         quality,
-        costUsd: usage.cost.total,
+        costUsd: runUsage.cost.total,
         latencyMs,
         turns: turnsTaken,
       });
@@ -294,6 +356,17 @@ export class MinimaAgent extends Agent {
   private shouldJudge(): boolean {
     const every = this.config.judgeEvery;
     return every > 0 && this.promptsRun % every === 0;
+  }
+
+  /** Rough input-token estimate for THIS turn: live context + system prompt + the new task
+   * (chars/4 — the standard heuristic; the server only needs the right order of magnitude
+   * to price candidates truthfully). */
+  private estimateContextTokens(taskText: string): number {
+    let chars = (this.agentState.systemPrompt ?? "").length + taskText.length;
+    for (const m of this.agentState.messages) {
+      chars += m.textContent.length;
+    }
+    return Math.max(1, Math.ceil(chars / 4));
   }
 
   private lastAssistant(): AssistantMessage | null {
@@ -327,6 +400,10 @@ function pinnedResult(model: Model): RoutingResult {
     estCostLow: null,
     estCostHigh: null,
     costBandBasis: "",
+    recommendedActions: [],
+    selectionPolicy: "pinned",
+    classifiedTaskType: "",
+    classifiedDifficulty: "",
   };
 }
 

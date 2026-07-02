@@ -13,7 +13,7 @@ import { MinimaClient } from "./client.ts";
 import type { HarnessConfig } from "./config.ts";
 import { MinimaError } from "./errors.ts";
 import { ModelMapping } from "./mapping.ts";
-import type { RankedModel, TaskInput, TaskType } from "./schemas.ts";
+import type { Constraints, FeedbackResponse, RankedModel, TaskInput, TaskType } from "./schemas.ts";
 
 /** A harness-native view of one ranked candidate (no minima schema leak). */
 export interface Ranking {
@@ -49,6 +49,14 @@ export interface RoutingResult {
   estCostLow: number | null;
   estCostHigh: number | null;
   costBandBasis: string;
+  /** Server hints (enable_prompt_cache | set_effort:<level> | ...) — consume, don't display raw. */
+  recommendedActions: string[];
+  /** argmin | epsilon_softmax | thompson — needed for honest off-policy analysis. */
+  selectionPolicy: string;
+  /** What the server classified the task as (authoritative unless the caller overrode). */
+  classifiedTaskType: string;
+  /** Server-classified difficulty — the seam for per-prompt effort routing. */
+  classifiedDifficulty: string;
 }
 
 function needsAuth(url: string): boolean {
@@ -121,6 +129,16 @@ export class MinimaRouter {
     difficulty?: string;
     expectedInputTokens?: number;
     candidates?: string[];
+    /** Per-call USD ceiling (server-honored as a SOFT filter + warning; enforce locally). */
+    maxCostPerCall?: number;
+    /** Quality floor that raises the server's τ regardless of the slider. */
+    minQuality?: number;
+    /** Dead-key / failed-rung exclusion (server expands nothing — exact model ids). */
+    excludedModels?: string[];
+    /** Widen the server's default 8-candidate cap when the pool is larger. */
+    maxCandidates?: number;
+    /** Cost-control opt-out of the server's LLM-reasoner consult. */
+    allowLlmEscalation?: boolean;
   }): Promise<RoutingResult> {
     if (!(this.config.minimaUrl || "").trim()) {
       throw new Error("routing disabled (offline mode)");
@@ -130,7 +148,11 @@ export class MinimaRouter {
     }
 
     const effective = opts.candidates ?? [...this.config.candidates];
-    const constraints = effective.length ? { candidate_models: effective } : undefined;
+    const constraints: Constraints = {};
+    if (effective.length) constraints.candidate_models = effective;
+    if (opts.maxCostPerCall !== undefined) constraints.max_cost_per_call = opts.maxCostPerCall;
+    if (opts.minQuality !== undefined) constraints.min_quality = opts.minQuality;
+    if (opts.excludedModels?.length) constraints.excluded_models = opts.excludedModels;
 
     // Build a TaskInput only when enriching signals are present; else pass the bare string.
     let taskInput: string | TaskInput;
@@ -148,9 +170,11 @@ export class MinimaRouter {
 
     const rec = await this.client.recommend(taskInput, {
       cost_quality_tradeoff: opts.slider ?? this.config.costQualityTradeoff,
-      constraints,
+      constraints: Object.keys(constraints).length ? constraints : undefined,
       namespace: this.config.namespace ?? undefined,
       baseline_model_id: this.config.baselineModelId ?? undefined,
+      max_candidates: opts.maxCandidates,
+      allow_llm_escalation: opts.allowLlmEscalation,
     });
 
     const ranked = rec.recommended_model;
@@ -172,6 +196,10 @@ export class MinimaRouter {
       estCostLow: ranked.est_cost_low ?? null,
       estCostHigh: ranked.est_cost_high ?? null,
       costBandBasis: ranked.cost_band_basis ?? "",
+      recommendedActions: [...(rec.recommended_actions ?? [])],
+      selectionPolicy: rec.selection_policy ?? "argmin",
+      classifiedTaskType: String(rec.classified_task_type ?? ""),
+      classifiedDifficulty: String(rec.classified_difficulty ?? ""),
     };
   }
 
@@ -183,8 +211,17 @@ export class MinimaRouter {
     usage: Usage;
     latencyMs: number;
     iterations?: number;
-  }): Promise<void> {
-    await this.client.feedback({
+    /**
+     * True ONLY when the outcome was externally verified (tests passed / checks green).
+     * NEVER default this to true: the server treats verified successes as high-importance
+     * ground truth and promotes lessons from them — a fabricated flag poisons the
+     * learning loop (it substitutes quality 0.9 for null-quality successes).
+     */
+    verifiedInProduction: boolean;
+    /** Provenance tag, e.g. "judged=false" for cadence-skipped/abstained turns. */
+    notes?: string;
+  }): Promise<FeedbackResponse> {
+    return await this.client.feedback({
       recommendation_id: opts.recommendationId,
       chosen_model_id: opts.chosenModelId,
       outcome: opts.outcome as "success" | "partial" | "failure",
@@ -194,7 +231,8 @@ export class MinimaRouter {
       actual_cost_usd: Math.round(opts.usage.cost.total * 1e8) / 1e8,
       latency_ms: opts.latencyMs,
       iterations: opts.iterations,
-      verified_in_production: true,
+      verified_in_production: opts.verifiedInProduction,
+      notes: opts.notes,
     });
   }
 }

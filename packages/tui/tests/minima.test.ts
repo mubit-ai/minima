@@ -17,8 +17,34 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  toolCall,
+  Usage,
   type Model,
 } from "../src/ai/index.ts";
+import type { AgentTool } from "../src/agent/tools.ts";
+
+function echoTool(): AgentTool {
+  return {
+    name: "echo",
+    description: "echo the message back",
+    parameters: {
+      jsonSchema: {
+        type: "object",
+        properties: { msg: { type: "string" } },
+        required: ["msg"],
+      },
+      validate(v) {
+        if (v && typeof v === "object" && "msg" in v) {
+          return { ok: true, value: v as Record<string, unknown> };
+        }
+        return { ok: false, errors: ["msg is required"] };
+      },
+    },
+    async execute(args) {
+      return { content: [text(String((args as { msg: string }).msg))], is_error: false };
+    },
+  };
+}
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -36,13 +62,15 @@ function resetAll() {
   resetModelRegistry();
 }
 
-/** A mock Minima service: returns a recommend response for the faux model, captures feedback. */
+/** A mock Minima service: returns a recommend response for the faux model, captures calls. */
 function mockService() {
   const feedbackCalls: Record<string, unknown>[] = [];
+  const recommendCalls: Record<string, unknown>[] = [];
   const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
     const u = new URL(url);
     const method = init?.method ?? "GET";
     if (method === "POST" && u.pathname === "/v1/recommend") {
+      recommendCalls.push(init?.body ? JSON.parse(init.body) : {});
       return {
         status: 200,
         json: async () => ({
@@ -73,7 +101,7 @@ function mockService() {
     }
     return { status: 404, json: async () => ({ detail: "not found" }) };
   };
-  return { fetchLike, feedbackCalls };
+  return { fetchLike, feedbackCalls, recommendCalls };
 }
 
 describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
@@ -115,7 +143,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     expect(fb.outcome).toBe("success");
     expect(fb.quality_score).toBe(0.9);
     expect(fb.latency_ms).toBeGreaterThanOrEqual(0);
-    expect(fb.verified_in_production).toBe(true);
+    // NEVER claimed unless tests actually verified the outcome — a fabricated true makes
+    // the server treat this as high-importance ground truth (poisons the learning loop).
+    expect(fb.verified_in_production).toBe(false);
+    // Judged turn (quality present) → no unjudged tag.
+    expect(fb.notes).toBeUndefined();
 
     // The meter recorded a successful row.
     const totals = meter.totals();
@@ -145,6 +177,86 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     const fb = feedbackCalls[0] as Record<string, unknown>;
     expect(fb.outcome).toBe("success");
     expect(fb.quality_score).toBeUndefined();
+    // Unjudged turns are tagged, never claimed verified — the server substitutes a
+    // fabricated quality (0.9) for null-quality successes and treats verified ones as
+    // high-importance ground truth, so an untagged/false-verified turn poisons learning.
+    expect(fb.verified_in_production).toBe(false);
+    expect(fb.notes).toBe("judged=false");
+    reg.unregister();
+  });
+
+  test("feedback reports the RUN-TOTAL cost across turns, not the last turn only", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    const turn1 = new AssistantMessage({
+      content: [toolCall("c1", "echo", { msg: "ping" })],
+      stop_reason: "toolUse",
+    });
+    turn1.usage = new Usage({ input: 1000, output: 200 });
+    turn1.usage.cost.total = 0.03;
+    const turn2 = new AssistantMessage({ content: [text("done")] });
+    turn2.usage = new Usage({ input: 1400, output: 100 });
+    turn2.usage.cost.total = 0.02;
+    reg.setResponses([turn1, turn2]);
+
+    const { fetchLike, feedbackCalls } = mockService();
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
+    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+    const meter = new CostMeter();
+
+    const agent = new MinimaAgent({
+      config,
+      router,
+      judge: new ConstJudge(0.9),
+      meter,
+      tools: [echoTool()],
+    });
+    await agent.promptRouted("use echo then answer");
+
+    // Provider prices at FAUX_MODEL cost {input:1, output:2} $/Mtok:
+    //   turn1 = 1000*1e-6 + 200*2e-6 = 0.0014 ; turn2 = 1400*1e-6 + 100*2e-6 = 0.0016
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.actual_cost_usd).toBeCloseTo(0.003, 8); // BOTH turns — not the last one (0.0016)
+    expect(fb.input_tokens).toBe(2400);
+    expect(fb.output_tokens).toBe(300);
+    // The meter records the same run total (est→actual comparisons stay truthful).
+    expect(meter.totals().actualCostUsd).toBeCloseTo(0.003, 8);
+    reg.unregister();
+  });
+
+  test("recommend carries the routing levers (constraints, difficulty, context size)", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("ok")] })]);
+
+    const { fetchLike, recommendCalls } = mockService();
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
+    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+
+    const agent = new MinimaAgent({ config, router, judge: { grade: async () => null } });
+    const routing = await agent.promptRouted("fix the flaky test", {
+      difficulty: "hard",
+      maxCostPerCall: 0.25,
+      minQuality: 0.8,
+      excludedModels: ["dead-model"],
+    });
+
+    const req = recommendCalls[0] as Record<string, any>;
+    expect(req.task.difficulty).toBe("hard");
+    expect(req.task.expected_input_tokens).toBeGreaterThan(0); // live-context estimate
+    expect(req.constraints.max_cost_per_call).toBe(0.25);
+    expect(req.constraints.min_quality).toBe(0.8);
+    expect(req.constraints.excluded_models).toEqual(["dead-model"]);
+    expect(req.constraints.candidate_models).toEqual(["test-faux"]);
+    // The previously-dropped response fields round-trip into RoutingResult.
+    expect(routing?.classifiedTaskType).toBe("code");
+    expect(routing?.classifiedDifficulty).toBe("easy");
+    expect(routing?.selectionPolicy).toBe("argmin");
+    expect(routing?.recommendedActions).toEqual([]);
     reg.unregister();
   });
 

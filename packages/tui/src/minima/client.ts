@@ -6,6 +6,7 @@
  * hermetic tests (no network).
  */
 
+import { VERSION } from "../version.ts";
 import { raiseForStatus } from "./errors.ts";
 import type {
   CalibrationResponse,
@@ -36,7 +37,12 @@ function coerceTask(task: TaskLike): TaskInput {
 }
 
 function headers(apiKey?: string): Record<string, string> {
-  const h: Record<string, string> = { "content-type": "application/json" };
+  const h: Record<string, string> = {
+    "content-type": "application/json",
+    // Server-side compat gating: old servers ignore it; new servers can version-gate
+    // response shapes (e.g. effort-arm model ids) on it.
+    "x-minima-client": VERSION,
+  };
   if (apiKey) h.authorization = `Bearer ${apiKey}`;
   return h;
 }
@@ -110,6 +116,7 @@ export class MinimaClient {
       constraints?: Constraints;
       user_id?: string;
       namespace?: string;
+      max_candidates?: number;
       allow_llm_escalation?: boolean;
       explain?: boolean;
       baseline_model_id?: string;
@@ -122,6 +129,7 @@ export class MinimaClient {
       ...dropUndefined({
         user_id: opts.user_id,
         namespace: opts.namespace,
+        max_candidates: opts.max_candidates,
         allow_llm_escalation: opts.allow_llm_escalation,
         explain: opts.explain,
         baseline_model_id: opts.baseline_model_id,
