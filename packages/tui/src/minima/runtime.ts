@@ -19,6 +19,7 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
+import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
@@ -67,6 +68,12 @@ export class MinimaAgent extends Agent {
   lastFeedbackError: string | null = null;
   /** Mubit memory: recall-before-route + write-back. No-op unless wired in. */
   memory: HarnessMemory;
+  /** Persistence spine (optional): when set with runId, every routed prompt writes a
+   * durable DecisionRecord — the replay buffer + provenance substrate. */
+  db: MinimaDb | null = null;
+  runId: string | null = null;
+  /** Set for sub-agents so their rows demux from the lead's. */
+  agentId: string | null = null;
 
   constructor(opts: MinimaAgentOptions) {
     const {
@@ -178,11 +185,99 @@ export class MinimaAgent extends Agent {
         });
       }
 
+      this.persistDecision(content, routing, {
+        actualCostUsd: runUsage.cost.total,
+        quality: failed ? 0 : quality,
+        judged: (failed ? 0 : quality) !== null,
+        outcome: failed ? "failure" : outcome,
+        turns: turnsTaken,
+        latencyMs,
+        taskType: effectiveTaskType ?? null,
+        difficulty: opts.difficulty ?? null,
+      });
+
       if (runError !== null) throw runError;
       return routing;
     } finally {
       // Never let this turn's recalled context leak into the next turn's base prompt.
       this.agentState.systemPrompt = origSystem;
+    }
+  }
+
+  /**
+   * Persist this prompt's DecisionRecord — the row that closes the local learning loop
+   * (replay buffer for regret-vs-oracle) and grounds later provenance. Idempotent on
+   * rec_id; offline/pinned rows get a synthetic local id (never the hosted join key) and
+   * are labeled so metrics can report them as unrouted spend. Fail-open: a write failure
+   * marks the run degraded, never breaks the turn.
+   */
+  private persistDecision(
+    taskText: string,
+    routing: RoutingResult | null,
+    o: {
+      actualCostUsd: number;
+      quality: number | null;
+      judged: boolean;
+      outcome: "success" | "partial" | "failure";
+      turns: number;
+      latencyMs: number;
+      taskType: string | null;
+      difficulty: string | null;
+    },
+  ): void {
+    if (!this.db || !this.runId) return;
+    try {
+      const routed: "server" | "offline" | "pinned" =
+        routing === null ? "offline" : routing.recommendationId === null ? "pinned" : "server";
+      const recId = routing?.recommendationId ?? `local-${newId()}`;
+      const eventId = this.db.appendEvent({
+        runId: this.runId,
+        agentId: this.agentId,
+        type: "routing",
+        payload: {
+          rec_id: recId,
+          routed,
+          chosen_model: routing?.chosenModelId ?? this.agentState.model?.id ?? null,
+          decision_basis: routing?.decisionBasis ?? "offline",
+          warnings: routing?.warnings ?? [],
+          offline_reason: routed === "offline" ? this.offlineReason : undefined,
+        },
+      });
+      this.db.writeDecision({
+        recId,
+        runId: this.runId,
+        eventId,
+        agentId: this.agentId,
+        taskLabel: shortLabel(taskText),
+        taskType: routing?.classifiedTaskType || o.taskType,
+        difficulty: routing?.classifiedDifficulty || o.difficulty,
+        chosenModel: routing?.chosenModelId ?? this.agentState.model?.id ?? null,
+        decisionBasis: routing?.decisionBasis ?? "offline",
+        selectionPolicy: routing?.selectionPolicy ?? null,
+        confidence: routing?.confidence ?? 0,
+        thresholdUsed: routing?.thresholdUsed ?? 0,
+        ranked: routing?.ranked ?? [],
+        estCostUsd: routing?.estCostUsd ?? 0,
+        estCostLow: routing?.estCostLow ?? null,
+        estCostHigh: routing?.estCostHigh ?? null,
+        allPremiumCostUsd: routing?.ranked.length
+          ? Math.max(...routing.ranked.map((r) => r.estCostUsd))
+          : null,
+        configuredBaselineCostUsd: routing?.baselineCostUsd ?? null,
+        actualCostUsd: o.actualCostUsd,
+        quality: o.quality,
+        judged: o.judged,
+        outcome: o.outcome,
+        routed,
+        turns: o.turns,
+        latencyMs: o.latencyMs,
+      });
+    } catch {
+      try {
+        this.db.markDegraded(this.runId);
+      } catch {
+        // persistence is fail-open — never break the turn
+      }
     }
   }
 
@@ -208,6 +303,11 @@ export class MinimaAgent extends Agent {
   /** Distil this run into durable Mubit memory (reflect + checkpoint). Call at shutdown. */
   async endSession(): Promise<void> {
     await this.memory.endSession();
+  }
+
+  /** Restore the routed-prompt count (judge cadence) when rehydrating a persisted run. */
+  setPromptsRun(n: number): void {
+    this.promptsRun = Math.max(0, Math.floor(n));
   }
 
   // ------------------------------------------------------------------ routing

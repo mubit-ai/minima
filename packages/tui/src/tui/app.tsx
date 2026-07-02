@@ -14,6 +14,7 @@ import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provide
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
@@ -784,6 +785,45 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     return history[nextIdx];
   }
 
+  /** Resume a DB-persisted run: restore context + cost footer + judge cadence, and record
+   * lineage (the CURRENT run continues from the resumed one — new rows keep landing under
+   * the current run_id; rec_ids are never duplicated). */
+  async function loadRun(runId: string) {
+    if (!agent.db) throw new Error("no run store");
+    const r = rehydrateRun(agent.db, runId);
+    applyRehydratedRun(agent, r);
+    if (agent.runId) {
+      try {
+        agent.db.setRunParent(agent.runId, runId);
+      } catch {
+        // lineage is best-effort
+      }
+    }
+    const chat: ChatMessage[] = [];
+    for (const m of r.messages) {
+      if (m.role === "user") chat.push({ role: "user", text: m.textContent });
+      else if (m.role === "assistant") chat.push({ role: "assistant", text: m.textContent });
+      else if (m.role === "toolResult")
+        chat.push({
+          role: "tool",
+          text: m.textContent,
+          toolName: (m as AgentMessage & { tool_name?: string }).tool_name ?? "tool",
+          isError: (m as AgentMessage & { is_error?: boolean }).is_error ?? false,
+        });
+    }
+    const totals = agent.meter?.totals();
+    if (totals) setActualCost(totals.actualCostUsd);
+    const label = r.run.display_name || runId.slice(0, 12);
+    setMessages([
+      ...chat,
+      {
+        role: "tool",
+        text: `Resumed run ${label} (${r.messages.length} msg(s), ${r.meterRows.length} routed prompt(s), $${(totals?.actualCostUsd ?? 0).toFixed(4)} recorded)`,
+        toolName: "resume",
+      },
+    ]);
+  }
+
   async function loadSession(store: SessionStore) {
     const list: ChatMessage[] = [];
     const agentMsgs: AgentMessage[] = [];
@@ -1133,7 +1173,17 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
         ]);
         break;
-      case "name":
+      case "name": {
+        // Persist to the run row so the name survives reload (was cosmetic-only).
+        let persisted = false;
+        if (agent.db && agent.runId && args.trim()) {
+          try {
+            agent.db.setRunName(agent.runId, args.trim());
+            persisted = true;
+          } catch {
+            // fail-open: name-setting must not break the session
+          }
+        }
         setMessages((m) => [
           ...m,
           {
@@ -1142,11 +1192,14 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: `Session display name set to: "${args}"`,
+            text: persisted
+              ? `Session name set to "${args.trim()}" (persisted)`
+              : `Session display name set to: "${args}" (not persisted — no run store)`,
             toolName: "name",
           },
         ]);
         break;
+      }
       case "session":
         setMessages((m) => [
           ...m,
@@ -1207,10 +1260,28 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         const targetId = args.trim();
         if (!targetId) {
           try {
-            const manager = new SessionManager();
-            const list = await manager.listSessions(process.cwd());
-            setSessionsList(list);
-            setSessionPickerOpen(true);
+            // DB-backed runs are the real record (JSONL sessions are legacy/read-only).
+            if (agent.db) {
+              const runs = agent.db
+                .listRuns(repoIdentity(process.cwd()))
+                .filter((r) => r.run_id !== agent.runId);
+              setSessionsList(
+                runs.map((r) => ({
+                  path: `run:${r.run_id}`,
+                  sessionId: r.run_id.slice(0, 12),
+                  displayName: r.display_name,
+                  nEntries: agent.db?.countEvents(r.run_id) ?? 0,
+                  created: r.created * 1000,
+                  mtime: r.updated * 1000,
+                })),
+              );
+              setSessionPickerOpen(true);
+            } else {
+              const manager = new SessionManager();
+              const list = await manager.listSessions(process.cwd());
+              setSessionsList(list);
+              setSessionPickerOpen(true);
+            }
           } catch (exc) {
             setMessages((m) => [
               ...m,
@@ -1224,11 +1295,15 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           }
         } else {
           try {
-            const manager = new SessionManager();
-            const store = await manager.open(process.cwd(), {
-              sessionId: targetId,
-            });
-            await loadSession(store);
+            if (agent.db) {
+              await loadRun(targetId);
+            } else {
+              const manager = new SessionManager();
+              const store = await manager.open(process.cwd(), {
+                sessionId: targetId,
+              });
+              await loadSession(store);
+            }
           } catch (exc) {
             setMessages((m) => [
               ...m,
@@ -1643,8 +1718,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           sessions={sessionsList}
           onPick={async (path) => {
             setSessionPickerOpen(false);
-            const store = await SessionStore.fileBacked(path);
-            await loadSession(store);
+            if (path.startsWith("run:")) {
+              await loadRun(path.slice(4)).catch((exc) => {
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "tool",
+                    text: `Failed to resume run: ${errText(exc)}`,
+                    toolName: "resume",
+                    isError: true,
+                  },
+                ]);
+              });
+            } else {
+              const store = await SessionStore.fileBacked(path);
+              await loadSession(store);
+            }
           }}
           onDismiss={() => setSessionPickerOpen(false)}
         />

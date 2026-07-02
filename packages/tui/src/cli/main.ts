@@ -14,6 +14,8 @@ import React from "react";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
+import { MinimaDb } from "../db/minima_db.ts";
+import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge } from "../minima/index.ts";
@@ -323,6 +325,36 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const memorySession = config.namespace ?? repoIdentity(process.cwd());
   agent.memory = await createMubitMemory(memorySession);
 
+  // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
+  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
+  let db: MinimaDb | null = null;
+  let sink: DbSinkHandle | null = null;
+  try {
+    db = new MinimaDb();
+    const projectKey = repoIdentity(process.cwd());
+    db.ensureProject(projectKey, config.namespace ?? null);
+    const runId = db.startRun({
+      projectKey,
+      providerSessionId: agent.sessionId,
+      gitBaseSha: gitHeadSha(process.cwd()),
+    });
+    agent.db = db;
+    agent.runId = runId;
+    sink = attachDbSink(agent, db, { runId });
+  } catch (exc) {
+    process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
+    db = null;
+  }
+  const closeDb = (status: "done" | "aborted" = "done"): void => {
+    try {
+      sink?.detach();
+      if (db && agent.runId) db.finishRun(agent.runId, status);
+      db?.close();
+    } catch {
+      // shutdown must never fail on bookkeeping
+    }
+  };
+
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
@@ -332,6 +364,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     const rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
     await endSessionSafely(agent); // distil the one-shot run into durable memory
+    closeDb(rc === 0 ? "done" : "aborted");
     return rc;
   }
 
@@ -353,7 +386,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write("\u001b[?1049l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
+  closeDb("done");
   return 0;
+}
+
+/** Best-effort HEAD sha for run provenance (null outside a git repo). */
+function gitHeadSha(cwd: string): string | null {
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd });
+    const out = proc.stdout.toString().trim();
+    return proc.exitCode === 0 && out ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Distil the run into durable Mubit memory on exit, time-boxed so it never hangs shutdown. */
