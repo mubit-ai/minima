@@ -96,6 +96,37 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_tool_calls_run ON tool_calls(run_id, ts)",
   ],
+  // v2 — budget ledger + feedback provenance
+  [
+    // One row per budget scope. Cross-process safety: reserve/reconcile run inside a
+    // BEGIN IMMEDIATE transaction (single writer) with a guarded UPDATE, so two
+    // concurrent sessions sharing a scope can never jointly overshoot.
+    `CREATE TABLE IF NOT EXISTS budgets (
+       scope_key   TEXT PRIMARY KEY,   -- e.g. "session:<run_id>" | "project:<key>"
+       limit_usd   REAL NOT NULL,
+       spent_usd   REAL NOT NULL DEFAULT 0,
+       reserved_usd REAL NOT NULL DEFAULT 0,
+       mode        TEXT NOT NULL DEFAULT 'warn',  -- shadow|warn|enforce
+       created REAL NOT NULL, updated REAL NOT NULL
+     )`,
+    `CREATE TABLE IF NOT EXISTS budget_events (
+       id TEXT PRIMARY KEY,
+       scope_key TEXT NOT NULL,
+       run_id TEXT,
+       rec_id TEXT,
+       kind TEXT NOT NULL,             -- reserve|reconcile|release|threshold|deny
+       amount_usd REAL,
+       spent_usd REAL NOT NULL,
+       reserved_usd REAL NOT NULL,
+       limit_usd REAL NOT NULL,
+       note TEXT,
+       ts REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_budget_events_scope ON budget_events(scope_key, ts)",
+    // Mubit-side provenance ids from FeedbackResponse (previously discarded).
+    "ALTER TABLE routing_decisions ADD COLUMN reinforced_entry_ids TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN lesson_promoted INTEGER",
+  ],
 ];
 
 export interface RunRow {

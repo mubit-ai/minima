@@ -62,7 +62,7 @@ export class Agent {
   private readonly maxTurns: number;
   public sessionId: string | null;
   private readonly streamOptions: Record<string, unknown> | null;
-  private readonly shouldStopAfterTurn: AgentLoopConfig["shouldStopAfterTurn"] | null;
+  private shouldStopAfterTurn: AgentLoopConfig["shouldStopAfterTurn"] | null;
   private readonly streamFn: StreamFnLike | null;
   private readonly listeners: Listener[] = [];
   private controller: AbortController | null = null;
@@ -116,6 +116,10 @@ export class Agent {
   }
   setSessionId(id: string | null): void {
     this.sessionId = id;
+  }
+  /** Install/replace the per-turn stop gate (e.g. a budget's running-sum closure). */
+  setShouldStopAfterTurn(fn: AgentLoopConfig["shouldStopAfterTurn"] | null): void {
+    this.shouldStopAfterTurn = fn;
   }
 
   // --- subscribe ---

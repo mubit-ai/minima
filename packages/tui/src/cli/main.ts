@@ -17,6 +17,7 @@ import type { Model } from "../ai/types.ts";
 import { MinimaDb } from "../db/minima_db.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
@@ -165,6 +166,9 @@ interface CliArgs {
   tools?: string;
   excludeTools?: string;
   noTools: boolean;
+  /** Session budget in USD (creates a BudgetLedger; warn mode unless --budget-enforce). */
+  budgetUsd?: number;
+  budgetEnforce: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -175,6 +179,7 @@ function parseArgs(argv: string[]): CliArgs {
     print: false,
     mode: "interactive",
     noTools: false,
+    budgetEnforce: false,
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -215,6 +220,17 @@ function parseArgs(argv: string[]): CliArgs {
       case "--no-tools":
         opts.noTools = true;
         break;
+      case "-b":
+      case "--budget": {
+        const v = Number(take(i++));
+        if (!Number.isFinite(v) || v <= 0)
+          throw new Error("--budget requires a positive USD amount");
+        opts.budgetUsd = v;
+        break;
+      }
+      case "--budget-enforce":
+        opts.budgetEnforce = true;
+        break;
       case "-h":
       case "--help":
         process.stdout.write(HELP);
@@ -243,6 +259,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
+  -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
+      --budget-enforce     refuse runs once the budget is exhausted (default: warn)
   -h, --help
 `;
 
@@ -368,7 +386,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }),
   );
 
+  // Budget following: --budget creates a session-scoped ledger (warn mode unless
+  // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
+  // TUI renders them as chat notices.
+  if (args.budgetUsd !== undefined && db && agent.runId) {
+    agent.budget = new BudgetLedger({
+      db,
+      scopeKey: `session:${agent.runId}`,
+      limitUsd: args.budgetUsd,
+      mode: args.budgetEnforce ? "enforce" : "warn",
+      runId: agent.runId,
+    });
+  } else if (args.budgetUsd !== undefined) {
+    process.stderr.write("minima: --budget ignored (persistence unavailable)\n");
+  }
+
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
+  // Headless: budget signals go to stderr. (The TUI re-targets them to chat notices.)
+  if (nonInteractive && agent.budget) {
+    agent.budget.setOnEvent((e) => {
+      if (e.kind === "threshold" || e.kind === "deny") {
+        process.stderr.write(`minima: ${e.note ?? e.kind}\n`);
+      }
+    });
+  }
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {

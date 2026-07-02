@@ -17,6 +17,7 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
@@ -111,6 +112,7 @@ const COMMANDS = [
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
+  { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
@@ -429,6 +431,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Re-render trigger after a catalog refresh so the /model picker (which reads allModels()
   // at render) reflects newly-registered models even if it's already open.
   const [, setCatalogVersion] = useState(0);
+  const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
 
   // On mount: nudge if routing is set but no model-provider key is, and pull the live model
   // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
@@ -450,6 +453,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         if (n > 0) setCatalogVersion((v) => v + 1);
       })
       .catch(() => {});
+    // Budget signals render as chat notices (not stderr — that would corrupt Ink).
+    agent.budget?.setOnEvent((e) => {
+      if (e.kind === "threshold" || e.kind === "deny") {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: `${e.kind === "deny" ? "⛔" : "💰"} ${e.note ?? e.kind}`,
+            toolName: "budget",
+            isError: e.kind === "deny",
+          },
+        ]);
+      }
+      setBudgetStatus(agent.budget?.status() ?? null);
+    });
+    setBudgetStatus(agent.budget?.status() ?? null);
   }, [agent]);
 
   // Permission system
@@ -1142,6 +1161,69 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       }
+      case "budget": {
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        let textOut: string;
+        let isErr = false;
+        if (parts[0] === "set" && parts[1]) {
+          const usd = Number(parts[1]);
+          if (!Number.isFinite(usd) || usd <= 0) {
+            textOut = "Usage: /budget set <usd>  (positive USD amount)";
+            isErr = true;
+          } else if (agent.db && agent.runId) {
+            agent.budget = new BudgetLedger({
+              db: agent.db,
+              scopeKey: `session:${agent.runId}`,
+              limitUsd: usd,
+              mode: agent.budget?.mode ?? "warn",
+              runId: agent.runId,
+            });
+            agent.budget.setOnEvent((e) => {
+              if (e.kind === "threshold" || e.kind === "deny") {
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "tool",
+                    text: `${e.kind === "deny" ? "⛔" : "💰"} ${e.note ?? e.kind}`,
+                    toolName: "budget",
+                    isError: e.kind === "deny",
+                  },
+                ]);
+              }
+              setBudgetStatus(agent.budget?.status() ?? null);
+            });
+            setBudgetStatus(agent.budget.status());
+            textOut = `Budget set: $${usd.toFixed(2)} (${agent.budget.mode} mode) — warnings at 50/75/90/100%`;
+          } else {
+            textOut = "Budget unavailable: persistence is disabled this session";
+            isErr = true;
+          }
+        } else if (parts[0] === "mode" && parts[1]) {
+          const mode = parts[1] as "shadow" | "warn" | "enforce";
+          if (!["shadow", "warn", "enforce"].includes(mode)) {
+            textOut = "Usage: /budget mode shadow|warn|enforce";
+            isErr = true;
+          } else if (agent.budget) {
+            agent.budget.setMode(mode);
+            setBudgetStatus(agent.budget.status());
+            textOut = `Budget mode: ${mode}${mode === "enforce" ? " — runs are refused once the limit is hit" : ""}`;
+          } else {
+            textOut = "No budget set — /budget set <usd> first";
+            isErr = true;
+          }
+        } else if (agent.budget) {
+          const s = agent.budget.status();
+          textOut = `Budget: $${s.spentUsd.toFixed(4)} spent + $${s.reservedUsd.toFixed(4)} reserved of $${s.limitUsd.toFixed(2)} (${Math.round(s.fraction * 100)}%) · remaining $${s.remainingUsd.toFixed(4)} · mode ${s.mode}\n/budget set <usd> · /budget mode shadow|warn|enforce`;
+        } else {
+          textOut = "No budget set. /budget set <usd> to add one (warn mode by default).";
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text: textOut, toolName: "budget", isError: isErr },
+        ]);
+        break;
+      }
       case "reconnect": {
         agent.reconnect();
         // Re-pull the model catalog too (a key added since launch may unlock more models).
@@ -1556,6 +1638,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
       if (totals) setActualCost(totals.actualCostUsd);
+      if (agent.budget) setBudgetStatus(agent.budget.status());
 
       const last = getLastAssistant(agent);
       if (last?.usage) {
@@ -1809,6 +1892,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           inputTokens={inputTokens}
           outputTokens={outputTokens}
           actualCostUsd={actualCost}
+          budget={budgetStatus}
           sessionId={agent.sessionId ?? "ephemeral"}
           routingOffline={agent.offlineReason !== null}
           offlineReason={agent.offlineReason}

@@ -21,6 +21,7 @@ import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
+import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
@@ -74,6 +75,9 @@ export class MinimaAgent extends Agent {
   runId: string | null = null;
   /** Set for sub-agents so their rows demux from the lead's. */
   agentId: string | null = null;
+  /** Budget following (optional): reserve-after-route / reconcile-after-run, graduated
+   * warnings, and (enforce mode) refusal once exhausted. */
+  budget: BudgetLedger | null = null;
 
   constructor(opts: MinimaAgentOptions) {
     const {
@@ -138,15 +142,46 @@ export class MinimaAgent extends Agent {
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
     }
     try {
+      // Budget gate (enforce mode only): once the scope is exhausted, refuse BEFORE any
+      // provider spend — the caller gets an actionable error, never a silent overrun.
+      if (this.budget && this.budget.mode === "enforce" && this.budget.exhausted()) {
+        const s = this.budget.status();
+        throw new Error(
+          `budget exhausted: $${s.spentUsd.toFixed(4)} spent of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
+        );
+      }
       const routing = await this.route(content, {
         taskType: effectiveTaskType ?? null,
         slider: opts.slider ?? null,
         tags: opts.tags,
         difficulty: opts.difficulty,
-        maxCostPerCall: opts.maxCostPerCall,
+        // The remaining budget rides into the server as a (soft) per-call cost cap.
+        maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
         minQuality: opts.minQuality,
         excludedModels: opts.excludedModels,
       });
+      // Reserve-after-route: hold a padded estimate so parallel agents sharing this scope
+      // can't jointly overshoot; reconciled with realized cost after the run.
+      let reservationId: string | null = null;
+      if (this.budget && routing) {
+        const r = this.budget.reserve(
+          reserveAmount(routing.estCostUsd, routing.estCostHigh),
+          shortLabel(content),
+        );
+        if (r.ok) reservationId = r.id;
+        else if (this.budget.mode === "enforce") throw new Error(r.reason);
+      }
+      // Mid-run stop: once realized spend crosses the limit, finish the CURRENT turn
+      // (the model gets its wrap-up) and stop gracefully — no partial-tool corruption.
+      if (this.budget) {
+        let runSpend = 0;
+        const limitLeft = this.budget.status().remainingUsd;
+        const enforce = this.budget.mode === "enforce";
+        this.setShouldStopAfterTurn(async (assistant) => {
+          runSpend += assistant.usage.cost.total;
+          return enforce && runSpend >= limitLeft;
+        });
+      }
       // Everything appended from here belongs to THIS prompt's run (for run-total usage).
       const runStartIdx = this.agentState.messages.length;
       const start = Date.now();
@@ -155,6 +190,8 @@ export class MinimaAgent extends Agent {
         await super.prompt(content);
       } catch (exc) {
         runError = exc;
+      } finally {
+        if (this.budget) this.setShouldStopAfterTurn(null);
       }
       const latencyMs = Date.now() - start;
       const turnsTaken = this.agentState.turnsTaken;
@@ -164,6 +201,10 @@ export class MinimaAgent extends Agent {
       // what makes the reported cost truthful (last-turn-only under-reports and corrupts
       // the server's observed-cost basis).
       const runUsage = this.usageSince(runStartIdx);
+      // Swap the reservation for realized spend (even on error — partial spend is real).
+      if (this.budget && reservationId) {
+        this.budget.reconcile(reservationId, runUsage.cost.total, routing?.recommendationId);
+      }
 
       const { quality, outcome } = await this.feedbackSafely(
         content,
