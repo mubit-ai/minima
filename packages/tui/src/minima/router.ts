@@ -203,6 +203,14 @@ export class MinimaRouter {
     };
   }
 
+  /** Fleet-level savings truth from the server (org-scoped; dual-baseline vocabulary). */
+  savings(opts: { days?: number } = {}): Promise<import("./schemas.ts").SavingsResponse> {
+    return this.client.savings({
+      namespace: this.config.namespace ?? undefined,
+      days: opts.days,
+    });
+  }
+
   async feedback(opts: {
     recommendationId: string;
     chosenModelId: string;

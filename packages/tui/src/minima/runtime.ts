@@ -56,6 +56,15 @@ export function gradeOutcome(quality: number): "success" | "partial" | "failure"
   return "failure";
 }
 
+/** Effort Phase A: server-classified difficulty → per-prompt thinking level. */
+export const EFFORT_BY_DIFFICULTY: Record<string, ThinkingLevel> = {
+  trivial: "off",
+  easy: "off",
+  medium: "low",
+  hard: "medium",
+  expert: "high",
+};
+
 export class MinimaAgent extends Agent {
   readonly config: HarnessConfig;
   readonly mapping: ModelMapping;
@@ -84,6 +93,9 @@ export class MinimaAgent extends Agent {
   recoveryRungs = 2;
   /** How many ladder escalations happened this session (diagnostics). */
   ladderEscalations = 0;
+  /** Effort routing Phase A (staged, default OFF): map the server's classified difficulty
+   * to a per-prompt thinking level — route (model, effort), not just model. */
+  autoEffort = false;
 
   constructor(opts: MinimaAgentOptions) {
     const {
@@ -144,6 +156,7 @@ export class MinimaAgent extends Agent {
     // Recall-before-route: inject task-relevant prior Mubit context into THIS turn's system
     // prompt (restored in `finally` — no leak across turns). No-op unless memory is wired.
     const origSystem = this.agentState.systemPrompt;
+    const origThinking = this.agentState.thinkingLevel;
     const recalled = await this.memory.recall(content);
     if (recalled.length > 0) {
       const block = formatRecallBlock(recalled);
@@ -181,6 +194,13 @@ export class MinimaAgent extends Agent {
         });
         lastRouting = routing;
         if (firstRecId === null) firstRecId = routing?.recommendationId ?? null;
+
+        // Effort routing Phase A: the second decision axis. The server's classified
+        // difficulty picks THIS prompt's thinking level (restored after the prompt).
+        if (this.autoEffort && routing?.classifiedDifficulty) {
+          const effort = EFFORT_BY_DIFFICULTY[routing.classifiedDifficulty];
+          if (effort !== undefined) this.agentState.thinkingLevel = effort;
+        }
 
         // Reserve-after-route: hold a padded estimate so parallel agents sharing this
         // scope can't jointly overshoot; reconciled with realized cost after the run.
@@ -233,7 +253,7 @@ export class MinimaAgent extends Agent {
 
         // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
         // the signal that sharpens the next recommendation.
-        const { quality, outcome } = await this.feedbackSafely(
+        const { quality, outcome, reinforcedEntryIds, lessonPromoted } = await this.feedbackSafely(
           content,
           routing,
           runUsage,
@@ -264,6 +284,8 @@ export class MinimaAgent extends Agent {
           taskType: effectiveTaskType ?? null,
           difficulty: opts.difficulty ?? null,
           parentRecId: attempt > 0 ? firstRecId : null,
+          reinforcedEntryIds,
+          lessonPromoted,
         });
 
         // Escalate? Only with a rung left, a routed (non-pinned) decision to learn from,
@@ -288,8 +310,9 @@ export class MinimaAgent extends Agent {
       if (lastError !== null) throw lastError;
       return lastRouting;
     } finally {
-      // Never let this turn's recalled context leak into the next turn's base prompt.
+      // Never let this turn's recalled context or effort override leak into the next turn.
       this.agentState.systemPrompt = origSystem;
+      if (this.autoEffort) this.agentState.thinkingLevel = origThinking;
     }
   }
 
@@ -314,6 +337,9 @@ export class MinimaAgent extends Agent {
       difficulty: string | null;
       /** First rung's rec_id when this row is a ladder retry (links the escalation chain). */
       parentRecId?: string | null;
+      /** Mubit-side provenance from FeedbackResponse (cited by the work record). */
+      reinforcedEntryIds?: string[] | null;
+      lessonPromoted?: boolean | null;
     },
   ): void {
     if (!this.db || !this.runId) return;
@@ -363,6 +389,8 @@ export class MinimaAgent extends Agent {
         routed,
         turns: o.turns,
         latencyMs: o.latencyMs,
+        reinforcedEntryIds: o.reinforcedEntryIds ?? null,
+        lessonPromoted: o.lessonPromoted ?? null,
       });
     } catch {
       try {
@@ -478,12 +506,19 @@ export class MinimaAgent extends Agent {
     latencyMs: number,
     failed: boolean,
     turnsTaken: number,
-  ): Promise<{ quality: number | null; outcome: "success" | "partial" | "failure" }> {
+  ): Promise<{
+    quality: number | null;
+    outcome: "success" | "partial" | "failure";
+    reinforcedEntryIds: string[] | null;
+    lessonPromoted: boolean | null;
+  }> {
     if (!routing || routing.recommendationId === null || routing.chosenModelId === null) {
-      return { quality: null, outcome: "success" };
+      return { quality: null, outcome: "success", reinforcedEntryIds: null, lessonPromoted: null };
     }
     let quality: number | null = null;
     let outcome: "success" | "partial" | "failure" = "success";
+    let reinforcedEntryIds: string[] | null = null;
+    let lessonPromoted: boolean | null = null;
     try {
       const last = this.lastAssistant();
       if (failed) {
@@ -511,7 +546,7 @@ export class MinimaAgent extends Agent {
       //    high-importance ground truth (it substitutes quality 0.9 for null);
       //  - unjudged turns are tagged so the server/analytics can discriminate them.
       const judged = quality !== null;
-      await this.router.feedback({
+      const resp = await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
         outcome,
@@ -522,6 +557,10 @@ export class MinimaAgent extends Agent {
         verifiedInProduction: false,
         notes: judged ? undefined : "judged=false",
       });
+      // Keep the Mubit-side provenance ids (previously discarded) — the work record
+      // cites which memory entries this outcome reinforced.
+      reinforcedEntryIds = resp.reinforced_entry_ids ?? null;
+      lessonPromoted = resp.lesson_promoted ?? null;
       // Close the Mubit learning loop: record this turn's realized outcome as a trace + score,
       // attributed to the recommendation. Fail-open, never fabricated (quality null -> trace
       // only, no score). No-op unless a MubitHarnessMemory is wired in.
@@ -541,7 +580,7 @@ export class MinimaAgent extends Agent {
       // the reason for diagnostics (/reconnect, tests, debugging the learning loop).
       this.lastFeedbackError = errText(exc);
     }
-    return { quality, outcome };
+    return { quality, outcome, reinforcedEntryIds, lessonPromoted };
   }
 
   // ----------------------------------------------------------------- helpers

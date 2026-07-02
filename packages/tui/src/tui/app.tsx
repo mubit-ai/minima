@@ -1135,6 +1135,33 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       case "cost": {
+        // `/cost fleet` — org-level savings truth straight from the server.
+        if (args.trim().toLowerCase().startsWith("fleet")) {
+          setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+          try {
+            const s = await agent.router.savings({ days: 30 });
+            const summary = JSON.stringify(s.summary ?? {}, null, 2);
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: `Fleet savings (org ${s.org_id}, last ${s.days}d${s.namespace ? `, ns ${s.namespace}` : ""}):\n${summary}`,
+                toolName: "cost",
+              },
+            ]);
+          } catch (exc) {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: `fleet savings unavailable: ${errText(exc)}`,
+                toolName: "cost",
+                isError: true,
+              },
+            ]);
+          }
+          break;
+        }
         let report = agent.meter?.report() || "(no cost metrics recorded)";
         // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
         if (agent.db && agent.runId) {

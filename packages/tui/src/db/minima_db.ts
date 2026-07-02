@@ -178,6 +178,9 @@ export interface DecisionWrite {
   routed?: "server" | "offline" | "pinned";
   turns: number;
   latencyMs: number;
+  /** Mubit-side provenance from FeedbackResponse (v2 columns). */
+  reinforcedEntryIds?: string[] | null;
+  lessonPromoted?: boolean | null;
 }
 
 export class MinimaDb {
@@ -381,12 +384,14 @@ export class MinimaDb {
          chosen_model, decision_basis, selection_policy, confidence, threshold_used, ranked,
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
-         turns, latency_ms, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+         turns, latency_ms, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
-         turns = excluded.turns, latency_ms = excluded.latency_ms`,
+         turns = excluded.turns, latency_ms = excluded.latency_ms,
+         reinforced_entry_ids = excluded.reinforced_entry_ids,
+         lesson_promoted = excluded.lesson_promoted`,
       [
         d.recId,
         d.runId,
@@ -414,6 +419,12 @@ export class MinimaDb {
         d.routed ?? "server",
         d.turns,
         d.latencyMs,
+        d.reinforcedEntryIds?.length ? JSON.stringify(d.reinforcedEntryIds) : null,
+        d.lessonPromoted === null || d.lessonPromoted === undefined
+          ? null
+          : d.lessonPromoted
+            ? 1
+            : 0,
         Date.now() / 1000,
       ],
     );

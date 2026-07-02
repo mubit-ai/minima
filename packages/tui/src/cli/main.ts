@@ -11,15 +11,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
-import { registerModel } from "../ai/registry.ts";
+import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { MinimaDb } from "../db/minima_db.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
-import { ConstJudge } from "../minima/index.ts";
+import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
@@ -330,13 +331,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const tools = toolsFor(args);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
+  // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
+  // on real LLM grading (staged default-off: it spends money where ConstJudge spent zero).
+  let judge: ConstJudge | LLMJudge = new ConstJudge(null);
+  if (process.env.MINIMA_LLM_JUDGE === "1") {
+    const jm = findModelById(config.judgeModel);
+    if (jm && providerKeyPresent(jm.provider)) {
+      judge = new LLMJudge(jm);
+      process.stderr.write(
+        `minima: LLM judge on (${jm.id}) — grading adds a small per-prompt cost\n`,
+      );
+    } else {
+      process.stderr.write(
+        `minima: MINIMA_LLM_JUDGE=1 ignored (judge model ${config.judgeModel} unavailable or key missing)\n`,
+      );
+    }
+  }
+
   const agent = new MinimaAgent({
     config,
     tools,
     meter: new CostMeter(),
-    judge: new ConstJudge(null), // abstain by default in the CLI; wire an LLMJudge later
+    judge,
     systemPrompt,
   });
+  // Effort routing Phase A (staged default-off): the server's classified difficulty picks
+  // each prompt's thinking level — routing (model, effort), not just model.
+  agent.autoEffort = process.env.MINIMA_AUTO_EFFORT === "1";
 
   // Wire Mubit memory (recall-before-route + write-back) into the agent. No-op unless a
   // MUBIT_API_KEY is present. Use a STABLE per-repo memory session id (the provisioned project
@@ -460,8 +481,6 @@ async function endSessionSafely(agent: MinimaAgent): Promise<void> {
   await Promise.race([agent.endSession(), new Promise<void>((r) => setTimeout(r, 5000))]);
 }
 
-// local re-export to avoid a cycle through the barrel
-import { findModelById } from "../ai/registry.ts";
 function findModelByIdLocal(id: string) {
   return findModelById(id);
 }
