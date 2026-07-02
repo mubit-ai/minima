@@ -10,12 +10,25 @@ import re
 
 from minima.schemas.common import Difficulty, TaskInput, TaskType
 
-# Ordered most-specific-first; the first matching pattern wins.
+# Ordered most-specific-first; the ORDER is the tie-break — classification itself is by
+# STRONGEST signal (most pattern hits), not first match. First-match-wins misrouted real
+# coding-agent prompts: "find the bug, fix it, run the tests... then summarize the fix"
+# has one incidental "summarize" but four coding cues, and used to classify as
+# summarization/trivial (observed live), pricing the task like a one-liner.
 _TYPE_PATTERNS: list[tuple[TaskType, re.Pattern[str]]] = [
     (
         TaskType.code,
         re.compile(
-            r"```|\bdef \b|\bclass \b|\bfunction\b|\bimport \b|\bSELECT \b|regex|stack ?trace|compile|refactor|implement|unit test|debug",
+            r"```|\bdef \b|\bclass \b|\bfunction\b|\bimport \b|\bSELECT \b|regex|stack ?trace"
+            r"|\btraceback\b|compile|refactor|implement|debug"
+            # coding-agent vocabulary: bugs, tests, builds, repos, tooling
+            r"|\bbugs?\b|\bfix(es|ed|ing)? (the |a |this |it\b)|\bfix it\b"
+            r"|\b(failing|unit|integration|broken) tests?\b|\btests? (pass|fail|suite)\b"
+            r"|\brun the tests\b|\bpytest\b|\bnpm (test|run)\b|\blint(er)?\b|\btype-?check"
+            r"|\bcodebase\b|\brepo(sitory)?\b|\bgit (commit|branch|diff|rebase)\b"
+            r"|\bcompil(er|ation) error\b|\bexit code\b"
+            # file-path/extension mentions are strong code signals
+            r"|\b[\w/.-]+\.(py|ts|tsx|js|jsx|go|rs|java|rb|cpp|cs|sh|sql|yaml|yml|toml|json)\b",
             re.I,
         ),
     ),
@@ -66,7 +79,11 @@ _TYPE_PATTERNS: list[tuple[TaskType, re.Pattern[str]]] = [
     (
         TaskType.reasoning,
         re.compile(
-            r"\bprove\b|\bcalculate\b|\bsolve\b|\bequation\b|\bstep[- ]by[- ]step\b|\breason(ing)?\b|\bderive\b|\bwhy (does|is|are)\b",
+            r"\bprove\b|\bcalculate\b|\bsolve\b|\bequation\b|\bstep[- ]by[- ]step\b|\breason(ing)?\b|\bderive\b|\bwhy (does|is|are)\b"
+            # design/architecture prompts are reasoning-heavy even without math verbs
+            r"|\bdesign an?\b|\barchitect(ure)?\b|\btrade-?offs?\b|\balgorithm\b|\bdata structures?\b"
+            r"|\block-free\b|\bconcurren(t|cy)\b|\bdistributed\b|\bconsensus\b"
+            r"|\brace condition\b|\bdeadlock\b|\bmemory[- ]ordering\b|\binvariants?\b",
             re.I,
         ),
     ),
@@ -77,7 +94,11 @@ _TYPE_PATTERNS: list[tuple[TaskType, re.Pattern[str]]] = [
 ]
 
 _COMPLEXITY_MARKERS = re.compile(
-    r"\b(and then|after that|must|ensure|constraint|optimi[sz]e|edge case|step \d|\d\.\s)\b", re.I
+    r"\b(and then|after that|must|ensure|constraint|optimi[sz]e|edge case|step \d|\d\.\s"
+    # systems-hardness cues: concurrency/distribution/compat push real difficulty up
+    r"|lock-free|concurren(t|cy)|thread-?safe|race condition|deadlock|distributed"
+    r"|memory[- ]ordering|multi-tenant|SLAs?|backwards?[- ]compatib|migration|atomic)\b",
+    re.I,
 )
 
 # Task types that tend to need more capability for the same text length.
@@ -99,10 +120,28 @@ _ORDER = [
 
 
 def infer_task_type(text: str) -> TaskType:
+    """Strongest signal wins; pattern-list order only breaks ties.
+
+    A single incidental verb ("...then summarize the fix") must not outvote several
+    domain cues (bug/tests/pytest) — that misclassification prices a multi-turn coding
+    task like a one-line summary and was observed routing live traffic wrong.
+    """
+    best: TaskType | None = None
+    best_score = 0
     for task_type, pattern in _TYPE_PATTERNS:
-        if pattern.search(text):
-            return task_type
-    return TaskType.other
+        hits = len(pattern.findall(text))
+        # Question FORM is one weak signal, not two: "How do you say X in Spanish?" hits
+        # the qa pattern twice (leading interrogative + trailing "?") and would outvote
+        # the actual domain cue. Cap it so a single domain hit ties, and the tie-break
+        # (specificity order) sends it to the domain type.
+        if task_type is TaskType.qa:
+            hits = min(hits, 1)
+        # Strictly-greater keeps the earlier (more specific) pattern on ties, since we
+        # iterate in specificity order.
+        if hits > best_score:
+            best = task_type
+            best_score = hits
+    return best or TaskType.other
 
 
 def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:

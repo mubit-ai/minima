@@ -52,9 +52,12 @@ export class ConstJudge implements QualityJudge {
 
 /** Grades via a cheap independent model. 0-10 -> /10 -> clamp. */
 export class LLMJudge implements QualityJudge {
+  /** Why the last grade() abstained (null = it scored). Diagnostics only. */
+  lastAbstainReason: string | null = null;
+
   constructor(
     private readonly model: Model,
-    private readonly opts: { apiKey?: string; timeout?: number } = {},
+    private readonly opts: { apiKey?: string; timeout?: number; retries?: number } = {},
   ) {}
 
   async grade(
@@ -70,21 +73,40 @@ export class LLMJudge implements QualityJudge {
       prompt_cache: false,
     };
     if (this.opts.apiKey) options.api_key = this.opts.apiKey;
-    try {
-      const resp = await complete(
-        this.model,
-        {
-          system_prompt: JUDGE_SYSTEM,
-          messages: [new Message({ role: "user", content: user })],
-          tools: [],
-        },
-        { options },
-      );
-      const score = parseScore(resp.textContent);
-      return score === null ? null : clamp01(score / 10);
-    } catch {
-      return null;
+
+    // A judge abstention drops a real learning signal, and single calls to a cheap model
+    // flake (observed live: one transient failure -> judged=0 for the whole turn). Retry
+    // transient failures once; NEVER retry a well-formed non-score reply (the model
+    // declining to grade is a legitimate abstention, not noise).
+    const attempts = 1 + Math.max(0, this.opts.retries ?? 1);
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const resp = await complete(
+          this.model,
+          {
+            system_prompt: JUDGE_SYSTEM,
+            messages: [new Message({ role: "user", content: user })],
+            tools: [],
+          },
+          { options },
+        );
+        if (resp.stop_reason === "error") {
+          this.lastAbstainReason = resp.error_message || "judge provider error";
+          continue; // transient-shaped: retry
+        }
+        const score = parseScore(resp.textContent);
+        if (score === null) {
+          this.lastAbstainReason = `unparseable judge reply: ${resp.textContent.slice(0, 60)}`;
+          return null; // legitimate abstention — no retry
+        }
+        this.lastAbstainReason = null;
+        return clamp01(score / 10);
+      } catch (exc) {
+        this.lastAbstainReason = exc instanceof Error ? exc.message : String(exc);
+        // thrown = transport/timeout — retry
+      }
     }
+    return null;
   }
 }
 

@@ -79,3 +79,37 @@ def test_reflection_triggers_on_cadence(client, fake_memory):
         ).json()
         triggers.append(fb["reflection_triggered"])
     assert triggers == [False, False, True]
+
+
+def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
+    """Regression (observed live): a Mubit 503 made feedback return early BEFORE
+    _reconcile_decision, so /v1/savings showed 0 reconciled rows for a whole day of
+    traffic. Realized cost/outcome are local analytics facts — they must survive a
+    memory outage."""
+    rec = _recommend_haiku(client, fake_memory)
+
+    async def _boom(**kwargs):
+        raise RuntimeError("mubit unavailable (503)")
+
+    fake_memory.remember_outcome = _boom  # type: ignore[method-assign]
+
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "actual_cost_usd": 0.0042,
+            "latency_ms": 900,
+        },
+    ).json()
+    # The memory write failure is still surfaced honestly...
+    assert fb["accepted"] is False
+    assert "memory_write_failed" in fb["warnings"]
+
+    # ...but the decision-log row was reconciled anyway: savings sees realized cost.
+    savings = client.get("/v1/savings", params={"days": 1}).json()
+    realized = savings["summary"]["realized"]
+    assert realized["n_reconciled"] == 1
+    assert abs(realized["realized_cost_usd"] - 0.0042) < 1e-9

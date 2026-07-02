@@ -561,6 +561,12 @@ export class MinimaAgent extends Agent {
       // cites which memory entries this outcome reinforced.
       reinforcedEntryIds = resp.reinforced_entry_ids ?? null;
       lessonPromoted = resp.lesson_promoted ?? null;
+      // An HTTP-200 rejection (accepted=false, e.g. memory_write_failed) is NOT success:
+      // keep it visible in diagnostics or a server-side outage silently starves the
+      // learning loop (observed live for a full day of traffic).
+      const rejection = resp.accepted
+        ? null
+        : `feedback not accepted: ${(resp.warnings ?? []).join(", ") || "unknown"}`;
       // Close the Mubit learning loop: record this turn's realized outcome as a trace + score,
       // attributed to the recommendation. Fail-open, never fabricated (quality null -> trace
       // only, no score). No-op unless a MubitHarnessMemory is wired in.
@@ -574,7 +580,7 @@ export class MinimaAgent extends Agent {
         latencyMs,
         turns: turnsTaken,
       });
-      this.lastFeedbackError = null;
+      this.lastFeedbackError = rejection;
     } catch (exc) {
       // Feedback/write-back must never break a successful run, but don't vanish silently — keep
       // the reason for diagnostics (/reconnect, tests, debugging the learning loop).

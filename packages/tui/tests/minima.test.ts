@@ -307,4 +307,57 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     expect(agent.agentState.messages.some((m) => m.role === "assistant")).toBe(true);
     reg.unregister();
   });
+
+  test("an accepted=false feedback response surfaces in lastFeedbackError (not silent)", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("ok")] })]);
+
+    // Service accepts recommend but rejects feedback with memory_write_failed.
+    const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
+      const u = new URL(url);
+      if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
+        return {
+          status: 200,
+          json: async () => ({
+            recommendation_id: "rec-rej",
+            recommended_model: {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 1,
+            },
+            ranked: [],
+            confidence: 0.8,
+            decision_basis: "memory",
+            threshold_used: 0.5,
+            classified_task_type: "code",
+            classified_difficulty: "easy",
+            catalog_version: "v1",
+          }),
+        };
+      }
+      if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/feedback") {
+        return {
+          status: 200,
+          json: async () => ({ accepted: false, warnings: ["memory_write_failed"] }),
+        };
+      }
+      return { status: 404, json: async () => ({ detail: "nope" }) };
+    };
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+    const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9) });
+
+    await agent.promptRouted("do it");
+    expect(agent.lastFeedbackError).toContain("memory_write_failed");
+    reg.unregister();
+  });
 });

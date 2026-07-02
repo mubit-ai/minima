@@ -104,6 +104,12 @@ async def feedback(
     )
     importance = "high" if (req.verified_in_production and is_success) else "medium"
 
+    # Reconcile the decision-log row BEFORE the Mubit memory write: realized cost/outcome
+    # are local analytics facts and must survive a memory outage. (Observed live: a Mubit
+    # 503 made every feedback return early and /v1/savings showed 0 reconciled rows for a
+    # whole day of traffic.)
+    _reconcile_decision(tenant, req, quality, late=False)
+
     try:
         record_id = await memory.remember_outcome(
             content=stored.content,
@@ -191,8 +197,6 @@ async def feedback(
         _fire_reflect(memory, stored.lane, stored.user_id)
         reflection_triggered = True
 
-    _reconcile_decision(tenant, req, quality, late=False)
-
     return FeedbackResponse(
         accepted=True,
         record_id=record_id,
@@ -259,6 +263,9 @@ async def _late_feedback(
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
+    # Realized analytics first — must survive a memory outage (same ordering as the
+    # main path).
+    _reconcile_decision(tenant, req, quality, late=True)
     try:
         record_id = await tenant.memory.remember_outcome(
             content=decision.content,
@@ -275,5 +282,4 @@ async def _late_feedback(
         log.warning("late_remember_outcome_failed", error=str(exc))
         return FeedbackResponse(accepted=False, warnings=["memory_write_failed", *warnings])
 
-    _reconcile_decision(tenant, req, quality, late=True)
     return FeedbackResponse(accepted=True, record_id=record_id, warnings=warnings)
