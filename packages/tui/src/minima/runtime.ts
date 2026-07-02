@@ -46,6 +46,8 @@ export interface MinimaAgentOptions extends Omit<AgentOptions, "model"> {
   maxTurns?: number;
   /** Mubit memory seam: recall-before-route + write-back. Defaults to a no-op. */
   memory?: HarnessMemory;
+  /** Recovery-ladder retries per prompt (default 2; 0 disables the ladder). */
+  recoveryRungs?: number;
 }
 
 export function gradeOutcome(quality: number): "success" | "partial" | "failure" {
@@ -78,6 +80,10 @@ export class MinimaAgent extends Agent {
   /** Budget following (optional): reserve-after-route / reconcile-after-run, graduated
    * warnings, and (enforce mode) refusal once exhausted. */
   budget: BudgetLedger | null = null;
+  /** Recovery-ladder retries per prompt (total attempts = 1 + rungs; 0 disables). */
+  recoveryRungs = 2;
+  /** How many ladder escalations happened this session (diagnostics). */
+  ladderEscalations = 0;
 
   constructor(opts: MinimaAgentOptions) {
     const {
@@ -90,6 +96,7 @@ export class MinimaAgent extends Agent {
       beforeRoute,
       taskType,
       memory,
+      recoveryRungs,
       ...agentOpts
     } = opts;
     const map = mapping ?? router?.mapping ?? new ModelMapping();
@@ -103,6 +110,7 @@ export class MinimaAgent extends Agent {
     this.beforeRouteHook = beforeRoute ?? null;
     this.taskTypeHint = taskType ?? null;
     this.memory = memory ?? new NoopHarnessMemory();
+    this.recoveryRungs = recoveryRungs ?? 2;
   }
 
   /** Rebuild the Minima client from the current environment (/reconnect, /auth, /config set). */
@@ -142,103 +150,143 @@ export class MinimaAgent extends Agent {
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
     }
     try {
-      // Budget gate (enforce mode only): once the scope is exhausted, refuse BEFORE any
-      // provider spend — the caller gets an actionable error, never a silent overrun.
-      if (this.budget && this.budget.mode === "enforce" && this.budget.exhausted()) {
-        const s = this.budget.status();
-        throw new Error(
-          `budget exhausted: $${s.spentUsd.toFixed(4)} spent of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
-        );
-      }
-      const routing = await this.route(content, {
-        taskType: effectiveTaskType ?? null,
-        slider: opts.slider ?? null,
-        tags: opts.tags,
-        difficulty: opts.difficulty,
-        // The remaining budget rides into the server as a (soft) per-call cost cap.
-        maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
-        minQuality: opts.minQuality,
-        excludedModels: opts.excludedModels,
-      });
-      // Reserve-after-route: hold a padded estimate so parallel agents sharing this scope
-      // can't jointly overshoot; reconciled with realized cost after the run.
-      let reservationId: string | null = null;
-      if (this.budget && routing) {
-        const r = this.budget.reserve(
-          reserveAmount(routing.estCostUsd, routing.estCostHigh),
-          shortLabel(content),
-        );
-        if (r.ok) reservationId = r.id;
-        else if (this.budget.mode === "enforce") throw new Error(r.reason);
-      }
-      // Mid-run stop: once realized spend crosses the limit, finish the CURRENT turn
-      // (the model gets its wrap-up) and stop gracefully — no partial-tool corruption.
-      if (this.budget) {
-        let runSpend = 0;
-        const limitLeft = this.budget.status().remainingUsd;
-        const enforce = this.budget.mode === "enforce";
-        this.setShouldStopAfterTurn(async (assistant) => {
-          runSpend += assistant.usage.cost.total;
-          return enforce && runSpend >= limitLeft;
+      // Recovery ladder: walk SERVER-SUPPLIED rungs (fresh recommend per rung with the
+      // failed model excluded — never a client-side re-rank, which would corrupt the
+      // server's logged propensities). Triggers: a provider hard failure, or a REAL judge
+      // grade below the rung's τ. Never retries on a null judge. Max attempts = 1 + rungs.
+      const excluded = [...(opts.excludedModels ?? [])];
+      const preRunIdx = this.agentState.messages.length;
+      let firstRecId: string | null = null;
+      let lastError: unknown = null;
+      let lastRouting: RoutingResult | null = null;
+
+      for (let attempt = 0; attempt <= this.recoveryRungs; attempt++) {
+        // Budget gate (enforce mode only): refuse BEFORE any provider spend.
+        if (this.budget && this.budget.mode === "enforce" && this.budget.exhausted()) {
+          if (attempt > 0) break; // keep the last rung's (failed) result; never overrun
+          const s = this.budget.status();
+          throw new Error(
+            `budget exhausted: $${s.spentUsd.toFixed(4)} spent of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
+          );
+        }
+        const routing = await this.route(content, {
+          taskType: effectiveTaskType ?? null,
+          slider: opts.slider ?? null,
+          tags: opts.tags,
+          difficulty: opts.difficulty,
+          // The remaining budget rides into the server as a (soft) per-call cost cap.
+          maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
+          minQuality: opts.minQuality,
+          excludedModels: excluded.length ? excluded : undefined,
         });
-      }
-      // Everything appended from here belongs to THIS prompt's run (for run-total usage).
-      const runStartIdx = this.agentState.messages.length;
-      const start = Date.now();
-      let runError: unknown = null;
-      try {
-        await super.prompt(content);
-      } catch (exc) {
-        runError = exc;
-      } finally {
-        if (this.budget) this.setShouldStopAfterTurn(null);
-      }
-      const latencyMs = Date.now() - start;
-      const turnsTaken = this.agentState.turnsTaken;
-      const last = this.lastAssistant();
-      const failed = runError !== null || (last !== null && last.stop_reason === "error");
-      // Run-TOTAL usage: a multi-turn run has one assistant message per turn — summing is
-      // what makes the reported cost truthful (last-turn-only under-reports and corrupts
-      // the server's observed-cost basis).
-      const runUsage = this.usageSince(runStartIdx);
-      // Swap the reservation for realized spend (even on error — partial spend is real).
-      if (this.budget && reservationId) {
-        this.budget.reconcile(reservationId, runUsage.cost.total, routing?.recommendationId);
-      }
+        lastRouting = routing;
+        if (firstRecId === null) firstRecId = routing?.recommendationId ?? null;
 
-      const { quality, outcome } = await this.feedbackSafely(
-        content,
-        routing,
-        runUsage,
-        latencyMs,
-        failed,
-        turnsTaken,
-      );
+        // Reserve-after-route: hold a padded estimate so parallel agents sharing this
+        // scope can't jointly overshoot; reconciled with realized cost after the run.
+        let reservationId: string | null = null;
+        if (this.budget && routing) {
+          const r = this.budget.reserve(
+            reserveAmount(routing.estCostUsd, routing.estCostHigh),
+            shortLabel(content),
+          );
+          if (r.ok) reservationId = r.id;
+          else if (this.budget.mode === "enforce") {
+            if (attempt > 0) break;
+            throw new Error(r.reason);
+          }
+        }
+        // Mid-run stop: once realized spend crosses the limit, finish the CURRENT turn
+        // (the model gets its wrap-up) and stop gracefully — no partial-tool corruption.
+        if (this.budget) {
+          let runSpend = 0;
+          const limitLeft = this.budget.status().remainingUsd;
+          const enforce = this.budget.mode === "enforce";
+          this.setShouldStopAfterTurn(async (assistant) => {
+            runSpend += assistant.usage.cost.total;
+            return enforce && runSpend >= limitLeft;
+          });
+        }
+        // Everything appended from here belongs to THIS rung (for rung-total usage).
+        const runStartIdx = this.agentState.messages.length;
+        const start = Date.now();
+        let runError: unknown = null;
+        try {
+          await super.prompt(content);
+        } catch (exc) {
+          runError = exc;
+        } finally {
+          if (this.budget) this.setShouldStopAfterTurn(null);
+        }
+        const latencyMs = Date.now() - start;
+        const turnsTaken = this.agentState.turnsTaken;
+        const last = this.lastAssistant();
+        const failed = runError !== null || (last !== null && last.stop_reason === "error");
+        // Rung-TOTAL usage: a multi-turn run has one assistant message per turn — summing
+        // is what makes the reported cost truthful (last-turn-only under-reports and
+        // corrupts the server's observed-cost basis).
+        const runUsage = this.usageSince(runStartIdx);
+        // Swap the reservation for realized spend (even on error — partial spend is real).
+        if (this.budget && reservationId) {
+          this.budget.reconcile(reservationId, runUsage.cost.total, routing?.recommendationId);
+        }
 
-      if (this.meter) {
-        this.meter.record({
-          label: shortLabel(content),
+        // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
+        // the signal that sharpens the next recommendation.
+        const { quality, outcome } = await this.feedbackSafely(
+          content,
           routing,
+          runUsage,
+          latencyMs,
+          failed,
+          turnsTaken,
+        );
+
+        if (this.meter) {
+          this.meter.record({
+            label:
+              attempt > 0 ? `${shortLabel(content)} (rung ${attempt + 1})` : shortLabel(content),
+            routing,
+            actualCostUsd: runUsage.cost.total,
+            quality: failed ? 0 : quality,
+            outcome: failed ? "failure" : outcome,
+            turns: turnsTaken,
+          });
+        }
+
+        this.persistDecision(content, routing, {
           actualCostUsd: runUsage.cost.total,
           quality: failed ? 0 : quality,
+          judged: (failed ? 0 : quality) !== null,
           outcome: failed ? "failure" : outcome,
           turns: turnsTaken,
+          latencyMs,
+          taskType: effectiveTaskType ?? null,
+          difficulty: opts.difficulty ?? null,
+          parentRecId: attempt > 0 ? firstRecId : null,
         });
+
+        // Escalate? Only with a rung left, a routed (non-pinned) decision to learn from,
+        // and a REAL trigger: provider failure, or a non-null judge grade below τ.
+        const judgeFailed =
+          !failed && quality !== null && routing !== null && quality < routing.thresholdUsed;
+        const failedModel =
+          routing !== null && routing.recommendationId !== null ? routing.chosenModelId : null;
+        const canEscalate =
+          attempt < this.recoveryRungs && failedModel !== null && (failed || judgeFailed);
+        if (!canEscalate) {
+          if (runError !== null) throw runError;
+          return routing;
+        }
+        // Roll back this rung's messages so the retry starts from the same context the
+        // failed rung saw (no confusing half-answers in the next rung's prompt).
+        this.agentState.messages.length = preRunIdx;
+        excluded.push(failedModel);
+        lastError = runError;
+        this.ladderEscalations += 1;
       }
-
-      this.persistDecision(content, routing, {
-        actualCostUsd: runUsage.cost.total,
-        quality: failed ? 0 : quality,
-        judged: (failed ? 0 : quality) !== null,
-        outcome: failed ? "failure" : outcome,
-        turns: turnsTaken,
-        latencyMs,
-        taskType: effectiveTaskType ?? null,
-        difficulty: opts.difficulty ?? null,
-      });
-
-      if (runError !== null) throw runError;
-      return routing;
+      if (lastError !== null) throw lastError;
+      return lastRouting;
     } finally {
       // Never let this turn's recalled context leak into the next turn's base prompt.
       this.agentState.systemPrompt = origSystem;
@@ -264,6 +312,8 @@ export class MinimaAgent extends Agent {
       latencyMs: number;
       taskType: string | null;
       difficulty: string | null;
+      /** First rung's rec_id when this row is a ladder retry (links the escalation chain). */
+      parentRecId?: string | null;
     },
   ): void {
     if (!this.db || !this.runId) return;
@@ -289,6 +339,7 @@ export class MinimaAgent extends Agent {
         runId: this.runId,
         eventId,
         agentId: this.agentId,
+        parentRecId: o.parentRecId ?? null,
         taskLabel: shortLabel(taskText),
         taskType: routing?.classifiedTaskType || o.taskType,
         difficulty: routing?.classifiedDifficulty || o.difficulty,
