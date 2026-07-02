@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { type Server, createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAuth } from "../src/tui/auth.ts";
+import { ProvisioningPending, runAuth } from "../src/tui/auth.ts";
 import { getProject, repoIdentity, setProject, setProjectsDir } from "../src/tui/projects.ts";
 
 function base64url(buf: Buffer): string {
@@ -128,6 +128,21 @@ describe("runAuth (loopback + PKCE)", () => {
     } finally {
       console_.close();
     }
+  });
+
+  test("throws ProvisioningPending when the workspace is still coming up", async () => {
+    // First-time tenant: the console returns {status:'provisioning'}, so the page
+    // redirects `provisioning=1` (no code) and runAuth surfaces a retry signal.
+    const openBrowser = (authUrl: string) => {
+      const parsed = new URL(authUrl);
+      const port = parsed.searchParams.get("port");
+      const state = parsed.searchParams.get("state");
+      // The loopback 302-redirects to the (unreachable) console; swallow that.
+      void fetch(`http://127.0.0.1:${port}/callback?provisioning=1&state=${state}`).catch(() => {});
+    };
+    await expect(
+      runAuth({ repo: "x", consoleUrl: "http://127.0.0.1:1", openBrowser, timeoutMs: 5000 }),
+    ).rejects.toBeInstanceOf(ProvisioningPending);
   });
 
   test("times out when the browser never returns", async () => {

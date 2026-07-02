@@ -21,3 +21,7 @@ docs-site/dist/
 
 # PLAN
 docs/PLAN/
+
+# Meta files
+.codaph 
+.claude
