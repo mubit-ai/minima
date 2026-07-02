@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "sessions": {
+    "ec9ad6d0-8fe0-40ea-a947-bc9f9a1e9f30": {
+      "to": "2026-06-29T11:39:06.256Z",
+      "eventCount": 20,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "eb36ae20-e4c4-4a6b-9b2d-fd70ad4fad0c": {
+      "to": "2026-06-29T11:38:45.459Z",
+      "eventCount": 145,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "c63f43d4-1299-43f0-b570-2870f622ad0d": {
+      "to": "2026-06-29T11:38:41.630Z",
+      "eventCount": 22,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "8bf9f52a-5675-4465-8adc-f6b3480f9689": {
+      "to": "2026-06-29T11:37:19.320Z",
+      "eventCount": 587,
+      "artifactEventCount": 16,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "89ad2e88-1e89-476a-a337-b23aad84030a": {
+      "to": "2026-06-29T11:37:06.603Z",
+      "eventCount": 83,
+      "artifactEventCount": 2,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "38b745be-26a3-46c6-8668-4b0647408ad1": {
+      "to": "2026-06-29T11:36:44.339Z",
+      "eventCount": 161,
+      "artifactEventCount": 2,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "367900c4-2867-4186-b125-9ba191c0bf33": {
+      "to": "2026-06-29T11:36:38.906Z",
+      "eventCount": 32,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "30261b35-4853-4691-948e-38a7f075b793": {
+      "to": "2026-06-29T11:35:57.777Z",
+      "eventCount": 307,
+      "artifactEventCount": 2,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "2df357de-13f3-4009-884d-fff0fde5def6": {
+      "to": "2026-06-29T11:35:14.643Z",
+      "eventCount": 328,
+      "artifactEventCount": 8,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "2a714a0c-621e-44d7-b43f-6e72a2ed66ae": {
+      "to": "2026-06-29T11:35:11.969Z",
+      "eventCount": 10,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "af0038c7-854b-45c3-954e-c4cefae32cf5": {
+      "to": "2026-06-11T14:32:19.593Z",
+      "eventCount": 2729,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-29T13:55:54.496Z"
+    },
+    "fb407500-b069-4363-bbe6-7fa7ceb5195d": {
+      "to": "2026-06-30T12:06:00.286Z",
+      "eventCount": 432,
+      "artifactEventCount": 7,
+      "publishedAt": "2026-06-30T13:06:53.572Z"
+    },
+    "d31a9277-8d56-479e-9fa9-819181ee7f20": {
+      "to": "2026-06-30T09:59:51.452Z",
+      "eventCount": 487,
+      "artifactEventCount": 2,
+      "publishedAt": "2026-06-30T10:00:00.017Z"
+    },
+    "c745ed17-45c8-49a7-a600-76efbf7f959f": {
+      "to": "2026-06-30T14:17:34.539Z",
+      "eventCount": 91,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-06-30T14:17:44.367Z"
+    },
+    "a05af89a-c6c7-413d-b634-f16ae37cbf3a": {
+      "to": "2026-07-01T09:57:13.490Z",
+      "eventCount": 1137,
+      "artifactEventCount": 4,
+      "publishedAt": "2026-07-01T10:16:21.819Z"
+    },
+    "366b4bda-f926-474d-8863-433b089c6f5e": {
+      "to": "2026-06-30T15:57:44.510Z",
+      "eventCount": 101,
+      "artifactEventCount": 2,
+      "publishedAt": "2026-06-30T15:57:49.731Z"
+    },
+    "15c8293a-7055-498c-a2d8-088aac9f0a57": {
+      "to": "2026-07-01T09:40:21.728Z",
+      "eventCount": 10,
+      "artifactEventCount": 1,
+      "publishedAt": "2026-07-01T09:43:49.657Z"
+    },
+    "5d538cc5-3fbc-4912-941d-402c393f5192": {
+      "to": "2026-07-01T15:09:09.258Z",
+      "eventCount": 825,
+      "artifactEventCount": 9,
+      "publishedAt": "2026-07-01T15:09:14.818Z"
+    }
+  }
+}

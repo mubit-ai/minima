@@ -1,0 +1,2711 @@
+{
+  "repoId": "mubit-ai/minima",
+  "events": {
+    "codaph-session-summary-v2-fb407500-b069-4363-bbe6-7fa7ceb5195d-ac7c81d3c026fe5b": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T10:12:19.862Z",
+      "sessionId": "fb407500-b069-4363-bbe6-7fa7ceb5195d",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-c745ed17-45c8-49a7-a600-76efbf7f959f-def067db9133b8e2": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T11:03:04.749Z",
+      "sessionId": "c745ed17-45c8-49a7-a600-76efbf7f959f",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-fb407500-b069-4363-bbe6-7fa7ceb5195d-09690b3518df4d4d": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T13:32:33.042Z",
+      "sessionId": "fb407500-b069-4363-bbe6-7fa7ceb5195d",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-fb407500-b069-4363-bbe6-7fa7ceb5195d-c901138c1526e874": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T13:55:31.263Z",
+      "sessionId": "fb407500-b069-4363-bbe6-7fa7ceb5195d",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-d31a9277-8d56-479e-9fa9-819181ee7f20-29a418962b86b672": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T09:40:42.294Z",
+      "sessionId": "d31a9277-8d56-479e-9fa9-819181ee7f20",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-d31a9277-8d56-479e-9fa9-819181ee7f20-21032b5ed30e0a14": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T09:56:41.243Z",
+      "sessionId": "d31a9277-8d56-479e-9fa9-819181ee7f20",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-ec9ad6d0-8fe0-40ea-a947-bc9f9a1e9f30-377ff5039b0e013f": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:39:06.256Z",
+      "sessionId": "ec9ad6d0-8fe0-40ea-a947-bc9f9a1e9f30",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-eb36ae20-e4c4-4a6b-9b2d-fd70ad4fad0c-1b43b8d64715a049": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:38:45.459Z",
+      "sessionId": "eb36ae20-e4c4-4a6b-9b2d-fd70ad4fad0c",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-c63f43d4-1299-43f0-b570-2870f622ad0d-8d5c910845441c91": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:38:41.630Z",
+      "sessionId": "c63f43d4-1299-43f0-b570-2870f622ad0d",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-351d09ad3f6d3fe6": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:37:19.320Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-89ad2e88-1e89-476a-a337-b23aad84030a-9f2d0f16b9cb73fd": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:37:06.603Z",
+      "sessionId": "89ad2e88-1e89-476a-a337-b23aad84030a",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-38b745be-26a3-46c6-8668-4b0647408ad1-48461c6efa406696": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:36:44.339Z",
+      "sessionId": "38b745be-26a3-46c6-8668-4b0647408ad1",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-367900c4-2867-4186-b125-9ba191c0bf33-4c7e5b59ab9f3b2b": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:36:38.906Z",
+      "sessionId": "367900c4-2867-4186-b125-9ba191c0bf33",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-30261b35-4853-4691-948e-38a7f075b793-3af40527cc98846e": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:35:57.777Z",
+      "sessionId": "30261b35-4853-4691-948e-38a7f075b793",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-2df357de-13f3-4009-884d-fff0fde5def6-45e676b4a3438772": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:35:14.643Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-2a714a0c-621e-44d7-b43f-6e72a2ed66ae-45addea6f038f9cc": {
+      "segment": "events/mubit-ai/minima/2026/06/29/segment-20260629.jsonl",
+      "ts": "2026-06-29T11:35:11.969Z",
+      "sessionId": "2a714a0c-621e-44d7-b43f-6e72a2ed66ae",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-8372e0d500b73e9d": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:28:52.377Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-af0038c7-854b-45c3-954e-c4cefae32cf5-8e8017aa5ef25f7c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:32:19.593Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-366b4bda-f926-474d-8863-433b089c6f5e-70931eb46b70f09b": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:59.389Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-3b3a9b74ca262e4d": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:11:31.191Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-0b6886ed54a1de58": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:17:06.177Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-366b4bda-f926-474d-8863-433b089c6f5e-eb327ae5d3f4578b": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:56:08.306Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-15c8293a-7055-498c-a2d8-088aac9f0a57-67d9434f7784ef72": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:40:21.728Z",
+      "sessionId": "15c8293a-7055-498c-a2d8-088aac9f0a57",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-5d538cc5-3fbc-4912-941d-402c393f5192-a4421b5da12cb4c9": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:16:07.370Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-ed6ea6e6f5e990f741e9f99c-76c61732ff21802e-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T11:41:28.624Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-f681ac338a87bcd5182fa898-97130a2fe759d4bd-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T12:43:06.308Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-fee91bcbfffacce42bb4fb83-1d846a75fb98ac59-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T13:27:50.912Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-a0583e3c98e0c62603c1f64c-db7ff0fbd18497bd-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T16:17:52.415Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-34ff4ea669204cffaf715d8e-f922786fbbd9375c-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T18:22:29.018Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-32b8b668735180f45ed8ea73-b736faca21a6afbd-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T18:26:29.976Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-71a6af23cc9b4ff47e01251d-d66d2dd2e95aaa74-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T18:31:19.687Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-1a69b841dbcd9930ebd88473-cf2740ffdd709711-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T18:53:22.747Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-a09d3a3bd8e8b4a13636feee-a0d071b0f2ea4dab-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T19:57:07.480Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-8bf9f52a-5675-4465-8adc-f6b3480f9689-6325024f3fe5a6c208791daf-a45a11a6fe7aa68e-0": {
+      "segment": "events/mubit-ai/minima/2026/06/12/segment-20260612.jsonl",
+      "ts": "2026-06-12T20:36:35.828Z",
+      "sessionId": "8bf9f52a-5675-4465-8adc-f6b3480f9689",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-89ad2e88-1e89-476a-a337-b23aad84030a-2e6618ae7e73c1080f40604f-c4cb45397b7c9211-0": {
+      "segment": "events/mubit-ai/minima/2026/06/10/segment-20260610.jsonl",
+      "ts": "2026-06-10T21:14:27.011Z",
+      "sessionId": "89ad2e88-1e89-476a-a337-b23aad84030a",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-38b745be-26a3-46c6-8668-4b0647408ad1-f96ee11d9e25d5394b86a9e0-7bfc5e1ffc10f217-0": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T11:23:44.025Z",
+      "sessionId": "38b745be-26a3-46c6-8668-4b0647408ad1",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-30261b35-4853-4691-948e-38a7f075b793-1b18dedc5878f9ae4709c4a1-20dad021016e2ced-0": {
+      "segment": "events/mubit-ai/minima/2026/06/25/segment-20260625.jsonl",
+      "ts": "2026-06-25T10:47:18.395Z",
+      "sessionId": "30261b35-4853-4691-948e-38a7f075b793",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-57d1daf87f6bd2449fed47a0-15d1f2a344740d2d-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T09:23:21.226Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-6770400c67d9d8230cef1142-ead72696eb076635-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T10:41:06.191Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-22749ca9736e2f21d2592121-471ab12417fa9e1a-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T12:33:02.414Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-869aa2f65f538f0db24ca08d-858ea2259fee038d-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T12:45:10.510Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-5ecc16a6d4509d14cf40bc34-fde2e8f2c09434be-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T13:27:09.883Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-0f6281960350c8b589b21456-7f290c2c3a3cb3e9-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T13:37:01.067Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-2df357de-13f3-4009-884d-fff0fde5def6-4ed4a897ab0ead2bd5bf5f88-836f3e5bdaf12290-0": {
+      "segment": "events/mubit-ai/minima/2026/06/15/segment-20260615.jsonl",
+      "ts": "2026-06-15T13:45:32.438Z",
+      "sessionId": "2df357de-13f3-4009-884d-fff0fde5def6",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-e2970ee156e4f9b20f2bd6fc-f2bf27b4c12f0633-0": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:02:05.945Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-e2970ee156e4f9b20f2bd6fc-05f5555f051a2179-0": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:02:05.945Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-a216df734b648a055e5a6d02-6e876c5ba90c0d69-0": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:22:56.114Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-366b4bda-f926-474d-8863-433b089c6f5e-5f8ce01d2cd0981ac241e2b3-9baa322b7898d29d-0": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:55:26.022Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-a05af89a-c6c7-413d-b634-f16ae37cbf3a-83b0b389d356c9ec21ecb2e6-adb023f118a53456-0": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:23:22.574Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "7c20843aff72a6722be59a09": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:10:36.147Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "f58cf9c4b40b94b82e0a8760": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:11:34.902Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "913012d11f54996d4b1579f2": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:11:34.901Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "9f19670dfca16a7edd40e2ab": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:12:55.998Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "a94b33eb92a06d2edde43cf5": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:12:55.999Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "b22b957da1a84a0d0c9923b4": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:13:32.749Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "d6b5dca33cb773041e70675a": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:13:41.189Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "c54b08765b8ce276856b2d42": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:13:42.713Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "3e4a24f2d92cde2828e6c006": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:13:46.940Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "323d15208a9ec393cfec952e": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:02.353Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "939c06e3607384d32b15bd97": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:07.539Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "52aed77414d4b066e5b58e76": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:09.682Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "10419e2d1a8feeb60a7c965a": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:20.662Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "c6ed747604d37fe605ba48b8": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:27.737Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "7a57a7ea3b0bbd8e5cde0933": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:31.275Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "7020e3f4d7e8da5eb521149b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:35.001Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "b7d8687bd6e4902d775c658b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:55.705Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "9abdbe67d012ac9e511d584b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:14:58.650Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "8ddf324cee9fd78624254c54": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:15:09.828Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "12131505dc786a471311b89c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:15:14.540Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "4483d05f48d2169e045a8260": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:15:17.768Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "acec0577b5692a4d35c41333": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:16:50.110Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "bf88c322a063b4aa1af9345f": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:16:50.116Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "96f6eb22827f3a78cc94d55c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:16:50.111Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "99771e8ed0e7a6c9d3b877fd": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:16:50.117Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "6abbdb9213dc70e789911a08": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:16:50.119Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "f7af2dc062451bfd9f90be40": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:17:43.170Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "7213d5fcc976dcefd679b864": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:17:53.676Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "6c839d58eb48070995042427": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:17:59.171Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "cd2484ceb5f195b71a40c4f0": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:18:05.639Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "90dae5be5bebecd0d52dd10d": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:18:15.652Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "61cd2856e1034ede521fee15": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:18:27.044Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "6e921d93a8965d7a20399bfd": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:18:44.862Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "389848fd68f1d1cbca4e32c5": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:08.460Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "71a702df0fd4f69a4499b6b9": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:15.481Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "238d533e8c81e3c15e73fbd0": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:15.581Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "1ba2c86aceccc70c5d396bf9": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:31.759Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "039abdf44df11169477e1050": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:35.911Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "f6c419f6633f2244627b7e07": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:19:56.082Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "646d15f6749345977f71bc86": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:10.126Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "3d05499acf3d303563479a4c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:22.380Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "1f0a6d2899fdcfb1562e5c8e": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:29.888Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "ed0d6d25aeba98287f8eb0b3": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:37.029Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "9c8fb06c2e11c47501e7a10a": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:39.143Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "2bc3981eacbb88d07275eab1": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:42.776Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "4637cf2df571445fa842669d": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:20:48.556Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e358e684bd8552910a8c6a93": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:03.870Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "5b835e66fe607bdc0147deaa": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:25.080Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "25b2242eafdaa582aa6a6307": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:33.554Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "267d7606f2891a9df910d1c4": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:34.807Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "133f9d05fd93705fb5ba086b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:37.656Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "c68674d1f99027d4a6cdb6d0": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:50.076Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "16ef0f82074857e6ae1b1f0c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:52.548Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "52293556b65e0f45e9c91aaf": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:21:54.383Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "347d4b45621ac6778f024a8d": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:09.547Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "96bb6df5565889adb87fbf9f": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:30.207Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "6ed5e36e152f0743aec90640": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:27:59.998Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "4db99067eddda2c180f2635d": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:24:05.794Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "26b49763e6259826898e8410": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:24:05.773Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "3377e9e6546b723644f2dd77": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:27:59.998Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "23a19215a3cb5435b5b5a4f1": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:33.174Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "8d2702cf60f7e14652e8b400": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:35.029Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e88ba58f9b1a9b427b1bf4ba": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:28:18.118Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "aa6afd2f268d9d8c9569e228": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:44.135Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "ef0a84eb013d87cafad1a7cf": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:28:22.781Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "be6a4148a137f9d91f4074cb": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:22:53.218Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "631643a31dc7e1469ab5a14f": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:02.421Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "8d1d6ae488228280f8422be9": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:16.353Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "2ee5856028129f34fb8094de": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:18.234Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "2f1b2b2ff7bb581d4b41b639": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:26.888Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "a784acf599328eb0d60b601b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:35.274Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "766fc1a6e969ae9642bf41f7": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:50.996Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "807c2ff5226ae591ad7d7e38": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:23:58.482Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "5d8d58155b209193a45ba242": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:00.465Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e5210097513453dbf05ca59e": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:29:39.842Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "e515dbbc0b321373dc4da46d": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:17.380Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "55b62bff096ba62752d4e823": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:18.183Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "6f96524ac15040ac29ddaa2c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:22.208Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "3244b1714719f99456502390": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:41.208Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "b57d80973636b3f17b2ee760": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:24:46.496Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "a88b19c61fb86ab21483d7d5": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:25:02.054Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "c99644141c92f59f87697a8e": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:25:07.090Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "ad454070cf588f93decb53fa": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:25:32.998Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "0cbf43e5e25c757e967ac8ec": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:25:36.370Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "8308a93e02a53bb289a68c90": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:25:37.207Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "f02a58ebf07eb48cadd98741": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:26:27.060Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "aa7db02aa6e8340cb821a812": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:26:35.495Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e39b8806909f15808ff959fb": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:26:43.759Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "ee07236fca440a104b351db5": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:30:30.974Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "a992ecbd601bf00df2856037": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:12.089Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "47a59c8506818cd611cb4d81": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:15.299Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "de147f009eab712ea103693c": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:17.308Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "a25a5f96b62f2316d07a1414": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:20.897Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "3ba193c8e07f5e0b9f41edea": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:36.736Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "524a6f902803b8de8f158534": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:27:53.233Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "bee1195c354d4e49ef1e7671": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:28:02.786Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "adb4813a772eb3a5a1566810": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:28:24.430Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "0612e3cb896118fc358ab75a": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:28:44.829Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "4b1a41c83c2b88dd3faad62b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:28:55.204Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "bad97e7d30d2cc1a8d2c096b": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:29:04.738Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e3eeebde83acdffbcb5e0402": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:29:17.551Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "34b80c1f1eeefb72a2d9bd2f": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:30:15.015Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "8a431214-92df-4667-b695-2592e87a5bfe": {
+      "segment": "events/mubit-ai/minima/2026/06/11/segment-20260611.jsonl",
+      "ts": "2026-06-11T14:30:15.015Z",
+      "sessionId": "af0038c7-854b-45c3-954e-c4cefae32cf5",
+      "actorId": "e1daru"
+    },
+    "e3de99a6722f49c30b26799a": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:49:00.101Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "09fb9d3c037cdda47d937beb": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:30.018Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "b0f7c8db310da83cb4758e67": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:30.032Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "663d59ae7f96d84e10e7de01": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:57:52.221Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "389e2c8b16193018c71a6303": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:57:52.221Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "60611d9aa35c607a4d66d69a": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:57:52.221Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "9c7efd8af898e46207938341": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:56:15.260Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "55fc1731da0411c2506dcd39": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:39.738Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "42fe78bc6e36296849d7b9c2": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:03.307Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "18aaf37a8ec819fd6faa2008": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:37.865Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "ae0140513e8baac6d60bcf84": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:46.361Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "975ea2fa2b9fa6dee5fadd6a": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T13:59:55.766Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "150e4403159ca09b3a2c2570": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:00:44.736Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "727af522eef7c379f199d083": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:00:39.722Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "361b042470d1745ba33763ca": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:01:02.860Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "0bf56df34ad31d7960648365": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:11:34.952Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "e2970ee156e4f9b20f2bd6fc": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:02:05.945Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "f67143b5c7873eb34f3744cd": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:15:44.674Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "626793c32bb8482d00757f08": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:16:09.928Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "02ec96b14bfd4e432eefe37d": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:17:10.532Z",
+      "sessionId": "c745ed17-45c8-49a7-a600-76efbf7f959f",
+      "actorId": "e1daru"
+    },
+    "6f72782870a0579b8ecfe426": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:17:10.532Z",
+      "sessionId": "c745ed17-45c8-49a7-a600-76efbf7f959f",
+      "actorId": "e1daru"
+    },
+    "a216df734b648a055e5a6d02": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:22:56.114Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "a5426d06967f03b8873ad752": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:55:00.165Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "99a37ee17da4e0ce7316006d": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:56:00.943Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "5f8ce01d2cd0981ac241e2b3": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T14:55:26.022Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "7f1fed0200cd8cea4ab6b851": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T15:24:25.191Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "5b11b51fbf28e0498a94fefb": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T15:23:39.065Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "bc10e349e8fdec641b7dc8d4": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T15:26:00.896Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "603f086500f45b7eeedf2e97": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T15:57:36.841Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "88ce0a7abce951b7ef896623": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T15:57:02.835Z",
+      "sessionId": "366b4bda-f926-474d-8863-433b089c6f5e",
+      "actorId": "e1daru"
+    },
+    "8dc5a214e40c0e9503fe7a39": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T16:01:01.524Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "10bb06f3189e842bf7af1fee": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T16:02:01.342Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "1c7f54d1c483d714d37021f6": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T16:12:31.651Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "30f4f1112cff0f7dc0c3459b": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:01:02.022Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "ac6a38845fa6ec825e669ae4": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:02:52.247Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "a66fbaf1b4a3028d23bada3e": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:02:51.910Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "c4cfef694b6130b31d4f2a41": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:01:02.022Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "5206622acd62bc1fbad69027": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:10:51.766Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "e30fa8544919bbca9457d206": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:11:29.117Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "c5f97797262e39bf1e4ef6d9": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:11:38.804Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "60a459439856614b865fea59": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:11:19.258Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "7d5a28b14af79648c1669e46": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:12:38.599Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "60badf4edc79de7ab731b1c6": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:12:38.599Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "7d93c00864daf35a8c1008ff": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:19:22.014Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "83b0b389d356c9ec21ecb2e6": {
+      "segment": "events/mubit-ai/minima/2026/06/30/segment-20260630.jsonl",
+      "ts": "2026-06-30T18:23:22.574Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "a8cb91257c2b3da3c1157c6d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:29:03.380Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "673d35b060f9ad6122e54ef6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:40:05.099Z",
+      "sessionId": "15c8293a-7055-498c-a2d8-088aac9f0a57",
+      "actorId": "e1daru"
+    },
+    "3a086f639343019540f65d60": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:42:00.118Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "5893defe714602009cd974b0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:47:38.745Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "2c4683e9252ea9dc33fefcad": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:15:19.407Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8eb763cb3981300b5fab2b04": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:15:53.550Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bce99630bf41f17785168dd3": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:15:45.785Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "549536e8d735347de13a8b43": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:57:13.490Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "cb12f1e57a18502ad869f44b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:57:13.489Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "bb3d8bf872b56bdbfe91af3d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T09:57:13.489Z",
+      "sessionId": "a05af89a-c6c7-413d-b634-f16ae37cbf3a",
+      "actorId": "e1daru"
+    },
+    "bf7e369c500189e1d2d24d92": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:16:36.267Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7bf35d9e37f41feb6dfe65cd": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:17:18.708Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bdffc77208f32c371bd8e927": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:17:32.823Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9fb65a49cee8d79140855c77": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:18:21.092Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f414aa4b3946865ca838d4bb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:11.951Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d080a4b8d5206b142a6e624f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:18:33.423Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "2d60cd768e5acab1286b1679": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:18.602Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8f859459143df47abb995f4d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:11.932Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9762fba2eb58c1c498dcbb02": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:17.748Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fb38695a1650a62637c767ea": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:26:27.885Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4bf6b7ba6778c79807489410": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:27:16.106Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "35589d632481e2cb2b930b6d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:09.941Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7e5aabf71afbe4a551194bbf": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:22.552Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "00cc272b71a5e2ca9bb919b7": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:18.621Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6eee1f31f23cadc1f3c7719a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:29.317Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1b9f21edafc1a1c7da3c511e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:20.229Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8ce4ae539683bbcfbd265666": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:13.165Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5db48218e7f16f4e6334ec66": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:30.320Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1f6f986e5d7827618d40832b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:29.789Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "62546ab06708544ea84ac53d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:29.807Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "98444335cea101f323101387": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:09.998Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "70a89ff465e43f18509b966c": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:29.334Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d371f0eb903491088d89328e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:09.998Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c6d722d0948ea5d637ac788b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:13.578Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0f25c6684f5ed97cd2df46e6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:30.334Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f78ba82d35a662eca7f54574": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:33:23.352Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "71a64ea75f45ed90399b75b5": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:33:56.606Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e2e0f0aacfaa5332ab36567b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:28:16.915Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d9edcf1532247cb87185b556": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:30.861Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bb2794047d9458fd936c282b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:31.673Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4fa0a99eed2cc22a7d807bfb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:30.852Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fca4fdb4e0ba82a1fb16f2a0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:33:57.168Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "efcc6e84f2f4a87b2d2a32ef": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.593Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "960541db303d616f45704613": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:31.692Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ba839349d175f633e488a78f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.177Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1c7f86f6840881c488983a3b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:04.742Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f90c4b2c25402ced1a5658d6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:06.191Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6bb6bbd73140a169e2ecfd92": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.191Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ea4e8a6878089aa0d3503129": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:04.769Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "06ec5e60e4f39067ebdaad60": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:08.133Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a3888a09eb21f23591529dcc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:06.203Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "97e474a233f4953d98877bc7": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.905Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e17c40060f51e7e898fea2f0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:49.900Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fe678594190943a7256d1192": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.889Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9275ba1a28533bbb0ba3f588": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:32.607Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4e13efa31a152b0260e362af": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:08.146Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c990f0f2cfc4313aadb14bdc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:09.655Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0edd9912b8759ca2995742fb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:09.665Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "674a84f89b72931b91fea1d6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:10.964Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e966eb506a71f533bbfce8e4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:34:10.982Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-5d538cc5-3fbc-4912-941d-402c393f5192-9239f95dccc14f43": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:10:18.464Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-bdffc77208f32c371bd8e927-66df2ba3e1379186-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T10:17:32.823Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-07479a5e4a888fdd68701bd5-d5b9f4feca28baa4-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:09.603Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "07479a5e4a888fdd68701bd5": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:09.603Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0f124a4962f8eb1fa65ed0ea": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:10:10.670Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "de51af562ee4e85b3a84c605": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:10:18.464Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "458159926b471b4b937f2b04": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:07.530Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "eeab6ee05fd1d842ada304f1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:29.817Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ce99c6f1fe3eb70de1ee4220": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:02.141Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4fdc648d1dff856ce31d2d83": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:31.136Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "308426bfe35aab347ecebb6d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:31.162Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6a03b94bfa7f7d34c0852445": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:37.034Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1f0a33f06676f13a8f5abf69": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:37.251Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a406be16368635085a356611": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:37.243Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7fdbac0b2cd8f7f3ccce06f6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:39.575Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5db17341f496eb9dd76379e1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:52.867Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5c3e7f18406e90920bfad9aa": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:52.867Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9385bf39770c3093ca84cf50": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:52.836Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "58708e10018c533b4712467f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:00.118Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1d8eb1e7e8af9fb2c7b362f7": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:06:58.526Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a86bcf16ab1e763affe87c00": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:00.143Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7466864c47ee8b517755e279": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:04.408Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a707a0d8dbdc6fe884103407": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:00.143Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0f1a7ceb2193eee66e0ddb6e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:03.543Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ff3628e2e46764887e81b478": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:12.858Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6f1e6bf7b81eeb370466bb2a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:07:26.064Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a5c8662416b87a29c82e0f52": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:10:13.870Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "47cfd9c53a9b21bb02a396ee": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:10:14.960Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-5d538cc5-3fbc-4912-941d-402c393f5192-98b3968739821fea": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:16.480Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-5d538cc5-3fbc-4912-941d-402c393f5192-508f268521a7bd3a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:12.410Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-eab2c6d3829f037c3189d099-0cd78227d2752836-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:35:09.744Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-168a106b73873863d22d90bc-70013bcc3988de9c-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:58:44.810Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "eab2c6d3829f037c3189d099": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:35:09.744Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6d9dc3b03ae0092714f405dc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:00.553Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "168a106b73873863d22d90bc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:58:44.810Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6bdaad885f6fbe0810c907b4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:58:44.810Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ddce362c557abc3045cb1215": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:45.917Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ba50949500ff9253e9c562a6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:45.929Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "3ceb6e56a73589391c1b7547": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:36:53.426Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0850ebdcc601da6a1cb814d8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:00.181Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9ae9e341d8e128374289f656": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:48.381Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5a77e9ab75d9535d3eb9af0c": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:14.569Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "95d61486a9bd9a105e66fcb1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:14.609Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9661011d6e175a14d382e2c4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:48.409Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "3c68a4b94d958c795df1ab24": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:14.609Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1ebca6b7e7b214cb202c7874": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:48.409Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4aec73c25c50c635b2d212bb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:02.428Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "cb4db022a4ad25aa5d5954a8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:00.404Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "06e45dc0bbbe57780b9c14f7": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:17.646Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "12e0614c2d66a591a5eba1d8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:11.009Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5acae34489cfead212caec77": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:02.442Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5c86d2dbd3d54aa7bbf6908d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:20.652Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "452885af1bf94c373d9b53f3": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:02.442Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1aeb02afc0de317462b47c97": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:37:17.912Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "eaff0ea586f2ce3e1cb533eb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:21.305Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5988fd0fb793687190b601f1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:24.106Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8d2937c2191df6d887ac5b59": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:11.870Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "490f5ccaf51eb77a21da24ba": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:21.971Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "dab92b7349dabe725cd9040c": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:24.125Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9d67f461c896d023a83fe7e6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:24.125Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fdc1383d1605de6d9dad6c5d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:25.774Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0809b2796916824d5c7e7a52": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:39:25.757Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "685d9638fb1639c7dd82cc1f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:40.588Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "11982a804c9c3346c33cab37": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:30.232Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "08928223f3a35949bb9fcb85": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:28.455Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "cd825da000cb8b36d232c13e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:44.857Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f6e9fe6da3f70a8a41aba2ee": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:59.506Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7a3e0045456fbfb1575e6ad6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:40:48.824Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f3a417d17256ddcae009fc94": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:09.308Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f56b711745b9298dd7ba9ade": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:03.919Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "daf4aa71033e10f06dc5efad": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:06.006Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b90509ef1d3db5be838ad950": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:16.480Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fb000ef7c8c76a525a32ea18": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:12.968Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d06bae127da08f333d5ffe86": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:23.507Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "16e566489c6bd315a5d6a957": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:15.813Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "002285d354df8341d490f2e4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T11:46:20.011Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "dbfae54766c3be6118376120": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:17.186Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "52248e3b7b840fafbff17217": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:20.780Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "3001fb6adc9479238f79c071": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:32.154Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bfcb9e24a3ae0146a95abbda": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:29.954Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "377002383a492925b10d6c00": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:34.316Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9fbacea41582a2ca1ece356a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:38.173Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7eeea115981663319b6fd125": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:36.907Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6cf9d40d1001d8e32ded1e7d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:38.115Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "072d80728bd9fdbfdf1933c2": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:38.173Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d7526a4ffc469831775771b8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:42.826Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5d95cf8c707a1dffadcb02fc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:44.602Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0c9d3c73fde27788cf2cf744": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T12:59:52.397Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ca2c78d812e138bde92f0e05": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:02.488Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c12577b706add10362a4be33": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:03.468Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5f1b56e9f1ff820c4710efa9": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:12.410Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d47c317f5a541357a0370489": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:05.367Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a0f4311b0b48ee14bced5954": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:00:10.515Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-session-summary-v2-5d538cc5-3fbc-4912-941d-402c393f5192-b8f9a2e68b53646a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:48:24.019Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-8984b5d1aaa62700bc79ebc1-204f4b129dc945a2-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:29.157Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-c23b49e1e3fa30f96eba962b-ecf847fedd3b522a-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:48:44.746Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-0467099e27d9980486490da0-f508cfeaa29bb3f5-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:53:54.222Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "codaph-prompt-diff-v2-5d538cc5-3fbc-4912-941d-402c393f5192-b4d68ac65b30d99ff7a5c761-7fbec1f0cca212c6-0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:56.670Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c23b49e1e3fa30f96eba962b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:48:44.746Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8984b5d1aaa62700bc79ebc1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:29.157Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0467099e27d9980486490da0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:53:54.222Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b4d68ac65b30d99ff7a5c761": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:56.670Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bafe21978eef74caeea08d73": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:33:23.421Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f8197bf22eb108326d10c115": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:19:01.273Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0c3bd726b7532c7626475829": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:19:01.273Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f74d1e5bec5466553dfe4ef7": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:41:13.672Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "2debce87a8a905c7b13aaea4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:41:13.672Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b4485d7e8c86ca1111608461": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:46:31.492Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "22dfd63828a49972e913dfc4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:48:17.606Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d8b42deadb46d401da9d658b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:05:55.264Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "696b1b0fa4070751376eedea": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:44.605Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fe3c3de266d487aa10f9a5f8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:05:55.237Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b2c3a5a04ffdf42ab820c813": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:48.429Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "eadf39e748f3829b672b77a9": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:06:29.870Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e33007712d9b0797a736211f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:48.397Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ab29efeb6c195d535d67e740": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:48.429Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ebf7521f5d09c9bdc8ee91b4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:06:01.715Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e3ae15bea2541779b58e7cb1": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:06:10.520Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "906f92411729068bd1660132": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:53.069Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bc9b323dd9bc0b1e22ac46b8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:53.100Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8c598861f7e588a1445cac7b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:58.624Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6a092fb8a8347a4fc51d7e89": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:57.158Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d2b355c83e5b6a8ef2d8ec96": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:53.100Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6ee319b40fdf7eb5444ed602": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:58.596Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c2185a76829c24230b56541f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:49:58.328Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "bc185aecf13f1f08881b567b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:58.624Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fc7bfcb24fcb62811cd2c8d0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:00.889Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "81c760dfb53042b3dc1b0467": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:04.906Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "2908f0a619bf87ac54c8b31d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:09.590Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "79089d60f5a6ead3aaf19587": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:59.312Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "52dffccbc68a807b923bbfe8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:59.345Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ef24d765dd5f8deb085772bb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:12:59.345Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "149b712c64b20e7092f60e0f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:12.791Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0b407bd573715b5a31c4ca7e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:03.192Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "2894846fff70532272e6a86f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:24.908Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b0ed7a8aeda86d706c1f55f8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:38.163Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d56da8fac69d70e4677746f3": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:04.534Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b0fd28eb9430dedd6ea5e971": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:50:21.076Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6c5df0c7f627cec4e59c9035": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:13:12.903Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "006efeb20caacaf1c937b3d3": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:54:59.470Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a09cfb711e0d0b78a664af3a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T13:55:08.870Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "451638eb9f007a10cdc2b6dc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:04:18.125Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "dd7564b831c15f7424b88929": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:30.227Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "8fdfa7aa9908d1ca9affc8cc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:31.677Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "1823406249369d0a90109ac2": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:31.705Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6c7a114832d79d7dce1987af": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:31.705Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a3a936d0037e291d4bedd695": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:33.488Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "a037110f9273290bded2ea7e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:28:47.542Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "f73a9b570dbf85543607cb5a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:33.522Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b8bb557c0f36f070232b9310": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:33.522Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "94f738c382be3629a52a8e9f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:28:38.017Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d0e345abaf5362a27ef19a20": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:34.954Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "53bc1d11b48cdbb54f3bc3e9": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:28:51.348Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "aa2ce5cf5288a84fbbb5ee95": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:28:59.111Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ffe40c8d3aaa12885c9d8155": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:34.984Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "fc8b0ef0fd9a0c23a5054672": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:34.984Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "31d54862124fd9198a2ca71d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:29:26.454Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "dc765ce85ff045d1213e8352": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:36.379Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "5a5c08c858c2f9c3ad5a34c5": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:29:02.762Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0941a0d4b98726002c5fd533": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:36.347Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "559e73d6f061288223f82357": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:29:12.207Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "18910cc1bf2aa8f6d7919696": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:52.891Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "78f3ad7828073ea9f2175f5d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:34:04.267Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "3e0931afa0f55e110f1e461b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:47.868Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "e296b6e1ad0f972821e81b3d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:36.379Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7600ecf475cb4d65ba648f26": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:34:05.190Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0e993d5f1ee601d381470472": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:14:40.582Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "315ac787d24d38915e88c614": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:20:05.399Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6f16daeacea93fbeb37bd7c6": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:34:05.223Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d189ee08c2666c4e0463a7dc": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:34:05.230Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "dd79d4120aa943af57306f71": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:34:05.222Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "655b3026c875314f70c6d33e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:20:06.829Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "ea011eea164825c90c36fefb": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:35:58.244Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7bbadaca6b0985139433679d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:36:01.155Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "96f2634ac81f84c476d07b9b": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:35:49.535Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "af3dddbb0d1028e1ca39a326": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:36:08.787Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "9605a898feee78b010bdd718": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:20:09.906Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b6d9d290545871b19d6c8d9a": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:36:11.346Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "2d4d561c3926a72f5c002908": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:36:32.653Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7838ad08b9c1431a4b10192e": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:21:10.731Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "075d957fe1dc9f49cbbc4607": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:26:20.117Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "040de4464a602cbcb48bae7d": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:21:04.587Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "38167663beee42470093b772": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:36:20.571Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "59c0a751d7e1045e731bf6f4": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:42:22.361Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "0e078ec6ca7386ae18d2fdf8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:42:31.665Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "eb8d7ef3e66c9677809cb31f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:42:44.454Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "4b97bc4bb6e7df930b07e516": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:42:53.770Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "b82fde29f25d482986485e12": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:46:56.459Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7be4a52c16fc6de4530463c8": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:47:04.861Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "d75e5f89468cb9c7a2212c35": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:47:22.611Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "6a30b500ac0c577cb011b3b0": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:47:14.294Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "7083dced589bb976d8a68538": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:48:20.825Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "c79872eaa6aedf9478eb3e27": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:48:22.170Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    },
+    "77e5370aeaaa549a1e6ac74f": {
+      "segment": "events/mubit-ai/minima/2026/07/01/segment-20260701.jsonl",
+      "ts": "2026-07-01T14:48:24.019Z",
+      "sessionId": "5d538cc5-3fbc-4912-941d-402c393f5192",
+      "actorId": "e1daru"
+    }
+  }
+}

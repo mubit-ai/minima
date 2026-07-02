@@ -1,0 +1,83 @@
+2026-06-29T11:46:45.685Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-29T13:32:47.012Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-29T13:55:54.528Z sync workflow error {"triggerSource":"hook-agent-complete","mode":"all","error":"upstream connect error or disconnect/reset before headers. reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused"}
+2026-06-29T13:55:54.531Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:35:00.426Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:41:08.021Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:41:32.966Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:41:38.103Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:42:11.066Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T09:57:25.210Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:00:04.897Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:12:31.016Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:30:51.861Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:43:26.305Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:45:11.799Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T10:45:23.163Z lock busy; marked pending trigger {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T10:45:25.794Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T10:45:50.921Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T10:47:59.507Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:03:18.181Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:03:40.598Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:05:56.571Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:08:37.555Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:23:03.752Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T11:23:19.500Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:30:33.846Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T11:35:45.709Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T12:05:56.890Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T12:06:09.200Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:00:16.803Z sync workflow error {"triggerSource":"hook-agent-complete","mode":"all","error":"upstream connect error or disconnect/reset before headers. reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused"}
+2026-06-30T13:00:16.805Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:06:59.220Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:20:02.009Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:23:57.617Z sync workflow error {"triggerSource":"hook-agent-complete","mode":"all","error":"{\"error\":\"status: Unavailable, message: \\\"internal error\\\", details: [], metadata: MetadataMap { headers: {} }\"}"}
+2026-06-30T13:23:57.621Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:29:13.443Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:30:24.493Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:31:37.962Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T13:49:23.322Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:00:37.697Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:01:02.835Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:02:05.921Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:12:04.375Z sync workflow error {"triggerSource":"hook-agent-complete","mode":"all","error":"upstream connect error or disconnect/reset before headers. reset reason: connection termination"}
+2026-06-30T14:12:04.377Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:16:08.410Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T14:17:49.675Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:18:48.595Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:22:56.078Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:24:46.214Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:55:25.194Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T14:56:19.077Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T15:24:46.934Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T15:26:24.175Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T15:57:55.095Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T16:01:43.257Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T16:02:56.045Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T16:03:06.083Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-06-30T16:03:27.512Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T16:13:05.622Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T18:12:19.842Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T18:12:38.581Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T18:19:38.214Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-06-30T19:05:10.034Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T09:30:37.391Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T09:32:09.855Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T09:40:29.828Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T09:43:55.006Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T09:49:25.094Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T10:16:27.200Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T10:17:12.750Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T10:17:25.004Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T11:06:07.711Z lock busy; marked pending trigger {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T11:06:20.302Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T11:10:36.603Z lock busy; marked pending trigger {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T11:10:38.938Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T11:46:23.638Z lock busy; marked pending trigger {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T11:46:31.608Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T13:00:21.686Z lock busy; marked pending trigger {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T13:00:22.360Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T14:48:38.369Z lock busy; marked pending trigger {"triggerSource":"hook-agent-complete","mode":"all"}
+2026-07-01T14:48:57.004Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T15:09:07.364Z sync workflow finished {"triggerSource":"hook-post-commit","mode":"push"}
+2026-07-01T15:09:19.816Z sync workflow finished {"triggerSource":"hook-agent-complete","mode":"all"}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "codaph": {
+      "type": "stdio",
+      "command": "codaph",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

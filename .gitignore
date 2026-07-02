@@ -21,3 +21,8 @@ docs-site/dist/
 
 # PLAN
 docs/PLAN/
+
+#Playground
+.playground
+.codaph/
+.claude/

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codaph hooks run agent-complete --provider 'claude-code' --quiet"
+          }
+        ]
+      }
+    ]
+  }
+}

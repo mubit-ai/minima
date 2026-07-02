@@ -1,0 +1,26 @@
+{
+  "schema": "codaph.project.v2",
+  "projectPath": "/Users/eldaru/Mubit/Minima/minima",
+  "repoId": "mubit-ai/minima",
+  "projectLabel": "minima",
+  "mubitProjectId": "mubit-ai/minima",
+  "mubitRunScope": "project",
+  "mubitLinkedRuns": false,
+  "agentProviders": [
+    "claude-code"
+  ],
+  "syncAutomation": {
+    "enabled": true,
+    "gitPostCommit": true,
+    "agentComplete": true,
+    "agentCompleteProviders": [
+      "claude-code"
+    ],
+    "registerAgent": false,
+    "autoCheckpoint": false,
+    "mirrorRunState": false,
+    "autoReflect": false
+  },
+  "createdAt": "2026-06-26T15:56:31.866Z",
+  "updatedAt": "2026-06-26T15:56:31.867Z"
+}

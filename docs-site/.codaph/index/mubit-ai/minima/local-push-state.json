@@ -1,0 +1,23 @@
+{
+  "lastRunAt": "2026-07-01T15:08:25.748Z",
+  "lastSuccessAt": "2026-07-01T15:08:25.748Z",
+  "lastTriggerSource": "hook-agent-complete",
+  "lastScannedFiles": 561,
+  "lastMatchedFiles": 0,
+  "lastImportedEvents": 0,
+  "lastImportedSessions": 0,
+  "mubitRequested": true,
+  "mubitEnabled": true,
+  "lastError": null,
+  "providers": {
+    "claude-code": {
+      "scannedFiles": 561,
+      "matchedFiles": 0,
+      "importedEvents": 0,
+      "importedSessions": 0,
+      "lastError": null,
+      "lastRunAt": "2026-07-01T15:08:25.748Z",
+      "lastSuccessAt": "2026-07-01T15:08:25.748Z"
+    }
+  }
+}

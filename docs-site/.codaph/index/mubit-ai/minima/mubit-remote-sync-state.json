@@ -1,0 +1,25 @@
+{
+  "lastRunAt": "2026-07-01T15:08:26.922Z",
+  "lastSuccessAt": "2026-07-01T15:08:33.176Z",
+  "lastTriggerSource": "hook-agent-complete",
+  "requestedTimelineLimit": 1200,
+  "receivedTimelineCount": 800,
+  "observedUniqueEvents": 451,
+  "observedUniqueTimelineEvents": 212,
+  "observedUniquePromptTimelineEvents": 178,
+  "observedUniqueSessionSummaryTimelineEvents": 28,
+  "observedUniqueDiffTimelineEvents": 33,
+  "lastImported": 0,
+  "lastDeduplicated": 400,
+  "lastSkipped": 400,
+  "lastMaxTs": "2026-07-01T14:49:17.140Z",
+  "lastSnapshotFingerprint": "192e0b4ad65e1a313ae0b276",
+  "consecutiveSameSnapshotCount": 2,
+  "suspectedServerCap": false,
+  "lastError": null,
+  "pendingTrigger": {
+    "pending": false,
+    "source": null,
+    "ts": null
+  }
+}
