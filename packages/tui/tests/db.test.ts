@@ -1,4 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import {
+  AssistantMessage,
+  type Model,
+  registerFauxProvider,
+  registerModel,
+  resetModelRegistry,
+  resetProviderRegistration,
+  resetRegistry,
+  text,
+} from "../src/ai/index.ts";
 import { MinimaDb, newId } from "../src/db/minima_db.ts";
 import { applyRehydratedRun, rehydrateRun } from "../src/db/rehydrate.ts";
 import { attachDbSink } from "../src/db/sink.ts";
@@ -11,16 +21,6 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
-import {
-  AssistantMessage,
-  registerFauxProvider,
-  registerModel,
-  resetModelRegistry,
-  resetProviderRegistration,
-  resetRegistry,
-  text,
-  type Model,
-} from "../src/ai/index.ts";
 
 const FAUX_MODEL: Model = {
   id: "test-faux",

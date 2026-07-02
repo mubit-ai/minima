@@ -1,16 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  ConstJudge,
-  CostMeter,
-  MinimaAgent,
-  MinimaClient,
-  MinimaRouter,
-  ModelMapping,
-  harnessConfig,
-  type RoutingResult,
-} from "../src/minima/index.ts";
+import type { AgentTool } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
+  type Model,
+  Usage,
   registerFauxProvider,
   registerModel,
   resetModelRegistry,
@@ -18,10 +11,17 @@ import {
   resetRegistry,
   text,
   toolCall,
-  Usage,
-  type Model,
 } from "../src/ai/index.ts";
-import type { AgentTool } from "../src/agent/tools.ts";
+import {
+  ConstJudge,
+  CostMeter,
+  MinimaAgent,
+  MinimaClient,
+  MinimaRouter,
+  ModelMapping,
+  type RoutingResult,
+  harnessConfig,
+} from "../src/minima/index.ts";
 
 function echoTool(): AgentTool {
   return {
@@ -84,7 +84,13 @@ function mockService() {
             rationale: "cheapest viable",
           },
           ranked: [
-            { model_id: "test-faux", provider: "faux", predicted_success: 0.9, est_cost_usd: 0.001, score: 0.001 },
+            {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
           ],
           confidence: 0.8,
           decision_basis: "memory",
@@ -113,7 +119,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
     const meter = new CostMeter();
 
@@ -164,7 +174,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
 
     const agent = new MinimaAgent({
@@ -202,7 +216,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
     const meter = new CostMeter();
 
@@ -234,7 +252,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, recommendCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
 
     const agent = new MinimaAgent({ config, router, judge: { grade: async () => null } });
@@ -269,7 +291,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     // A client whose recommend always fails.
     const failingFetch = async () => ({ status: 500, json: async () => ({ detail: "down" }) });
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: failingFetch });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: true, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: true,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
 
     const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9) });

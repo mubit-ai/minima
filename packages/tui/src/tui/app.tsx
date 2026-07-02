@@ -14,6 +14,7 @@ import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provide
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import { metricsReport } from "../db/metrics.ts";
 import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
@@ -1115,7 +1116,18 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       case "cost": {
-        const report = agent.meter?.report() || "(no cost metrics recorded)";
+        let report = agent.meter?.report() || "(no cost metrics recorded)";
+        // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
+        if (agent.db && agent.runId) {
+          try {
+            const rows = agent.db.getRunDecisions(agent.runId) as unknown as Parameters<
+              typeof metricsReport
+            >[0];
+            report += `\n\n— run metrics —\n${metricsReport(rows)}`;
+          } catch {
+            // metrics are best-effort
+          }
+        }
         setMessages((m) => [
           ...m,
           {

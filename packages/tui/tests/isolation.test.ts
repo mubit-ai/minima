@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { refreshCatalogOnce, resetCatalogBootstrap } from "../src/minima/catalog.ts";
+import { harnessConfig } from "../src/minima/index.ts";
 import { resolveWithin } from "../src/tools/_io.ts";
 import { builtinTools } from "../src/tools/builtin.ts";
 import { editTool } from "../src/tools/edit.ts";
 import { readTool } from "../src/tools/read.ts";
 import { type TodoTask, todowriteTool } from "../src/tools/todowrite.ts";
 import { writeTool } from "../src/tools/write.ts";
-import { refreshCatalogOnce, resetCatalogBootstrap } from "../src/minima/catalog.ts";
-import { harnessConfig } from "../src/minima/index.ts";
 
 const dirs: string[] = [];
 function tmp(): string {

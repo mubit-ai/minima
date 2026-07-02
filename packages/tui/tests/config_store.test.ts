@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { rmSync, mkdtempSync, statSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  setConfigDir,
-  setValue,
+  backendName,
   get,
-  unset,
+  hydrateEnv,
   location,
   mask,
-  hydrateEnv,
-  backendName,
+  setConfigDir,
+  setValue,
+  unset,
 } from "../src/tui/config_store.ts";
 
 let dir = "";

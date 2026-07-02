@@ -20,8 +20,10 @@ import { errText } from "../errtext.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
+import { createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
+import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -354,6 +356,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // shutdown must never fail on bookkeeping
     }
   };
+
+  // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
+  // Children get their own routed model, meter, confined tools, and budget slice; their
+  // rows land in the same run under agentId=childId.
+  agent.agentState.tools.push(
+    taskTool({
+      spawn: createSpawn({ parent: agent, workdir: process.cwd() }),
+      spawnDepth: 0,
+      maxDepth: 2,
+    }),
+  );
 
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
   if (nonInteractive) {

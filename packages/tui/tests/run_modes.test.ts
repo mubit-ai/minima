@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { runJson, runPrint, eventToDict } from "../src/run_modes.ts";
 import {
   AssistantMessage,
+  type Model,
   registerFauxProvider,
   registerModel,
   resetModelRegistry,
   resetProviderRegistration,
   resetRegistry,
   text,
-  type Model,
 } from "../src/ai/index.ts";
 import {
   ConstJudge,
@@ -18,6 +17,7 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
+import { eventToDict, runJson, runPrint } from "../src/run_modes.ts";
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -70,7 +70,11 @@ function mockService() {
 
 function buildAgent() {
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: mockService() });
-  const config = harnessConfig({ candidates: ["test-faux"], minimaApiKey: "k", allowOffline: false });
+  const config = harnessConfig({
+    candidates: ["test-faux"],
+    minimaApiKey: "k",
+    allowOffline: false,
+  });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   return new MinimaAgent({ config, router, judge: new ConstJudge(null), tools: [] });
 }
@@ -96,7 +100,9 @@ afterEach(resetAll);
 describe("eventToDict", () => {
   test("maps text deltas, tool events, and lifecycle markers", () => {
     expect(eventToDict({ type: "agent_start" })).toEqual({ type: "start" });
-    expect(eventToDict({ type: "turn_end", message: null, toolResults: [] })).toEqual({ type: "turn_end" });
+    expect(eventToDict({ type: "turn_end", message: null, toolResults: [] })).toEqual({
+      type: "turn_end",
+    });
     expect(
       eventToDict({
         type: "message_update",
@@ -132,7 +138,10 @@ describe("runJson", () => {
     const agent = buildAgent();
     const { out, code } = await captureStdout(() => runJson(agent, "say hello"));
     expect(code).toBe(0);
-    const lines = out.trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
     const types = lines.map((l) => l.type);
     expect(types[0]).toBe("start");
     expect(types).toContain("text_delta");

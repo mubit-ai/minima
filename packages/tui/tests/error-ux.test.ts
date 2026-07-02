@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import type { Model } from "../src/ai/types.ts";
 import { errText } from "../src/errtext.ts";
 import { matches } from "../src/tui/model-picker.tsx";
 import { routingInfoWarnings } from "../src/tui/routing-warnings.ts";
-import type { Model } from "../src/ai/types.ts";
 
 describe("errText", () => {
   test("returns an Error's message without the class-name prefix (no 'Error: Error:')", () => {

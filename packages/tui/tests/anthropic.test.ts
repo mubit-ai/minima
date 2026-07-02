@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
+  stream,
+  Message,
+  type Model,
   complete,
   context,
-  Message,
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
-  stream,
-  type Model,
 } from "../src/ai/index.ts";
-import { AnthropicProvider, type AnthropicClientLike, type AnthropicStreamEvent } from "../src/ai/providers/anthropic.ts";
+import {
+  type AnthropicClientLike,
+  AnthropicProvider,
+  type AnthropicStreamEvent,
+} from "../src/ai/providers/anthropic.ts";
 
 const MODEL: Model = {
   id: "claude-haiku-4-5",
@@ -43,15 +47,27 @@ function resetAll() {
 describe("AnthropicProvider", () => {
   test("assembles a text reply from message_start/delta/stop events", async () => {
     resetAll();
-    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient([
-      { type: "message_start", message: { usage: { input_tokens: 12, cache_read_input_tokens: 3 } } },
-      { type: "content_block_start", index: 0, content_block: { type: "text" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: ", world" } },
-      { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
-      { type: "message_stop" },
-    ])));
+    registerProvider(
+      "anthropic-messages",
+      new AnthropicProvider(
+        fakeClient([
+          {
+            type: "message_start",
+            message: { usage: { input_tokens: 12, cache_read_input_tokens: 3 } },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: ", world" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 5 },
+          },
+          { type: "message_stop" },
+        ]),
+      ),
+    );
 
     const types: string[] = [];
     const s = stream(MODEL, context({ messages: [new Message({ role: "user", content: "hi" })] }));
@@ -70,17 +86,41 @@ describe("AnthropicProvider", () => {
 
   test("assembles a tool call and maps stop to toolUse", async () => {
     resetAll();
-    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient([
-      { type: "message_start", message: { usage: { input_tokens: 10 } } },
-      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "c1", name: "bash" } },
-      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"comm' } },
-      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: 'and":"ls"}' } },
-      { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 8 } },
-      { type: "message_stop" },
-    ])));
+    registerProvider(
+      "anthropic-messages",
+      new AnthropicProvider(
+        fakeClient([
+          { type: "message_start", message: { usage: { input_tokens: 10 } } },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "c1", name: "bash" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"comm' },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: 'and":"ls"}' },
+          },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "tool_use" },
+            usage: { output_tokens: 8 },
+          },
+          { type: "message_stop" },
+        ]),
+      ),
+    );
 
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "run ls" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "run ls" })] }),
+    );
     expect(result.stop_reason).toBe("toolUse");
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("bash");
@@ -89,20 +129,40 @@ describe("AnthropicProvider", () => {
 
   test("captures thinking + signature and replays it", async () => {
     resetAll();
-    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient([
-      { type: "message_start", message: { usage: { input_tokens: 1 } } },
-      { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
-      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Hmm" } },
-      { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig123" } },
-      { type: "content_block_stop", index: 0 },
-      { type: "content_block_start", index: 1, content_block: { type: "text" } },
-      { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "ok" } },
-      { type: "content_block_stop", index: 1 },
-      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
-      { type: "message_stop" },
-    ])));
+    registerProvider(
+      "anthropic-messages",
+      new AnthropicProvider(
+        fakeClient([
+          { type: "message_start", message: { usage: { input_tokens: 1 } } },
+          { type: "content_block_start", index: 0, content_block: { type: "thinking" } },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Hmm" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature: "sig123" },
+          },
+          { type: "content_block_stop", index: 0 },
+          { type: "content_block_start", index: 1, content_block: { type: "text" } },
+          { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "ok" } },
+          { type: "content_block_stop", index: 1 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 2 },
+          },
+          { type: "message_stop" },
+        ]),
+      ),
+    );
 
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+    );
     expect(result.content.map((b) => b.type)).toEqual(["thinking", "text"]);
     expect((result.content[0] as { signature?: string }).signature).toBe("sig123");
     expect(result.textContent).toBe("ok");
@@ -111,10 +171,17 @@ describe("AnthropicProvider", () => {
   test("surfaces a thrown stream error as an error event", async () => {
     resetAll();
     const throwingClient: AnthropicClientLike = {
-      messages: { stream: () => { throw new Error("401 invalid key"); } },
+      messages: {
+        stream: () => {
+          throw new Error("401 invalid key");
+        },
+      },
     };
     registerProvider("anthropic-messages", new AnthropicProvider(throwingClient));
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+    );
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/401 invalid key/);
   });

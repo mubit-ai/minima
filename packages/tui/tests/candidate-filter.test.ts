@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  AssistantMessage,
+  type Model,
+  registerFauxProvider,
+  registerModel,
+  resetModelRegistry,
+  resetProviderRegistration,
+  resetRegistry,
+  text,
+} from "../src/ai/index.ts";
+import {
   ConstJudge,
   MinimaAgent,
   MinimaClient,
@@ -7,16 +17,6 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
-import {
-  AssistantMessage,
-  registerFauxProvider,
-  registerModel,
-  resetModelRegistry,
-  resetProviderRegistration,
-  resetRegistry,
-  text,
-  type Model,
-} from "../src/ai/index.ts";
 
 const FAUX: Model = {
   id: "test-faux",
@@ -58,8 +58,22 @@ function service() {
         status: 200,
         json: async () => ({
           recommendation_id: "rec-1",
-          recommended_model: { model_id: "test-faux", provider: "faux", predicted_success: 0.9, est_cost_usd: 0.001, score: 0.001 },
-          ranked: [{ model_id: "test-faux", provider: "faux", predicted_success: 0.9, est_cost_usd: 0.001, score: 0.001 }],
+          recommended_model: {
+            model_id: "test-faux",
+            provider: "faux",
+            predicted_success: 0.9,
+            est_cost_usd: 0.001,
+            score: 0.001,
+          },
+          ranked: [
+            {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
+          ],
           confidence: 0.8,
           decision_basis: "prior",
           threshold_used: 0.5,
@@ -67,19 +81,26 @@ function service() {
         }),
       };
     }
-    if (u.pathname === "/v1/feedback") return { status: 200, json: async () => ({ accepted: true }) };
+    if (u.pathname === "/v1/feedback")
+      return { status: 200, json: async () => ({ accepted: true }) };
     return { status: 404, json: async () => ({}) };
   };
   return { fetchLike, candidateLists };
 }
 
-function buildAgent(fetchLike: (url: string, init?: { method?: string; body?: string }) => Promise<unknown>) {
+function buildAgent(
+  fetchLike: (url: string, init?: { method?: string; body?: string }) => Promise<unknown>,
+) {
   registerModel(CLAUDE);
   registerModel(GPT);
   registerModel(FAUX);
   const reg = registerFauxProvider([FAUX]);
   reg.setResponses([new AssistantMessage({ content: [text("ok")], stop_reason: "stop" })]);
-  const config = harnessConfig({ candidates: ["claude-x", "gpt-x"], allowOffline: false, minimaApiKey: "k" });
+  const config = harnessConfig({
+    candidates: ["claude-x", "gpt-x"],
+    allowOffline: false,
+    minimaApiKey: "k",
+  });
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike as never });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9), tools: [] });

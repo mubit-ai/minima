@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
 import {
+  type Model,
+  findModelById,
   registerModel,
   resetModelRegistry,
   tryGetModel,
-  findModelById,
-  type Model,
 } from "../src/ai/index.ts";
+import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
 import type { ModelCard } from "../src/minima/schemas.ts";
 
 const ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] as const;
@@ -55,7 +55,9 @@ describe("populateFromMinima", () => {
     process.env.ANTHROPIC_API_KEY = "k";
     const client = {
       models: async () => ({
-        models: [card("claude-x", "anthropic", { context_window: 200_000, max_output_tokens: 16384 })],
+        models: [
+          card("claude-x", "anthropic", { context_window: 200_000, max_output_tokens: 16384 }),
+        ],
       }),
     };
     await populateFromMinima(client);
@@ -124,7 +126,10 @@ describe("populateFromOpenRouter", () => {
 
   test("HTTP failure is a no-op", async () => {
     process.env.OPENROUTER_API_KEY = "or-key";
-    const added = await populateFromOpenRouter((async () => ({ ok: false, json: async () => ({}) })) as unknown as typeof fetch);
+    const added = await populateFromOpenRouter((async () => ({
+      ok: false,
+      json: async () => ({}),
+    })) as unknown as typeof fetch);
     expect(added).toBe(0);
   });
 });

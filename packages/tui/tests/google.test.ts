@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
+  stream,
+  Message,
+  type Model,
   complete,
   context,
-  Message,
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
-  stream,
-  type Model,
 } from "../src/ai/index.ts";
-import { GoogleProvider, type GoogleChunk, type GoogleClientLike } from "../src/ai/providers/google.ts";
+import {
+  type GoogleChunk,
+  type GoogleClientLike,
+  GoogleProvider,
+} from "../src/ai/providers/google.ts";
 
 const MODEL: Model = {
   id: "gemini-2.5-flash",
@@ -25,7 +29,9 @@ const MODEL: Model = {
 function fakeClient(chunks: GoogleChunk[]): GoogleClientLike {
   return {
     models: {
-      async generateContentStream(_opts: Record<string, unknown>): Promise<AsyncIterable<GoogleChunk>> {
+      async generateContentStream(
+        _opts: Record<string, unknown>,
+      ): Promise<AsyncIterable<GoogleChunk>> {
         async function* gen(): AsyncIterable<GoogleChunk> {
           for (const c of chunks) yield c;
         }
@@ -43,19 +49,28 @@ function resetAll() {
 describe("GoogleProvider", () => {
   test("assembles text deltas and folds usage into cost", async () => {
     resetAll();
-    registerProvider("google-generative-ai", new GoogleProvider(fakeClient([
-      {
-        usage_metadata: { prompt_token_count: 8, candidates_token_count: 3, cached_content_token_count: 2 },
-        candidates: [
+    registerProvider(
+      "google-generative-ai",
+      new GoogleProvider(
+        fakeClient([
           {
-            content: {
-              parts: [{ text: "Hello" }, { text: ", world" }],
+            usage_metadata: {
+              prompt_token_count: 8,
+              candidates_token_count: 3,
+              cached_content_token_count: 2,
             },
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: "Hello" }, { text: ", world" }],
+                },
+              },
+            ],
           },
-        ],
-      },
-      { candidates: [{ finish_reason: "STOP" }] },
-    ])));
+          { candidates: [{ finish_reason: "STOP" }] },
+        ]),
+      ),
+    );
 
     const types: string[] = [];
     const s = stream(MODEL, context({ messages: [new Message({ role: "user", content: "hi" })] }));
@@ -73,21 +88,29 @@ describe("GoogleProvider", () => {
 
   test("emits a full toolcall_end for a function_call part and sets toolUse", async () => {
     resetAll();
-    registerProvider("google-generative-ai", new GoogleProvider(fakeClient([
-      {
-        usage_metadata: { prompt_token_count: 5, candidates_token_count: 1 },
-        candidates: [
+    registerProvider(
+      "google-generative-ai",
+      new GoogleProvider(
+        fakeClient([
           {
-            content: {
-              parts: [{ function_call: { name: "bash", args: { command: "ls" } } }],
-            },
+            usage_metadata: { prompt_token_count: 5, candidates_token_count: 1 },
+            candidates: [
+              {
+                content: {
+                  parts: [{ function_call: { name: "bash", args: { command: "ls" } } }],
+                },
+              },
+            ],
           },
-        ],
-      },
-      { candidates: [{ finish_reason: "STOP" }] },
-    ])));
+          { candidates: [{ finish_reason: "STOP" }] },
+        ]),
+      ),
+    );
 
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "run ls" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "run ls" })] }),
+    );
     expect(result.stop_reason).toBe("toolUse");
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("bash");
@@ -96,21 +119,33 @@ describe("GoogleProvider", () => {
 
   test("captures thoughts as thinking when include_thoughts is on", async () => {
     resetAll();
-    registerProvider("google-generative-ai", new GoogleProvider(fakeClient([
-      {
-        usage_metadata: { prompt_token_count: 1, candidates_token_count: 1, thoughts_token_count: 4 },
-        candidates: [
+    registerProvider(
+      "google-generative-ai",
+      new GoogleProvider(
+        fakeClient([
           {
-            content: {
-              parts: [{ thought: true, text: "reasoning" }, { text: "answer" }],
+            usage_metadata: {
+              prompt_token_count: 1,
+              candidates_token_count: 1,
+              thoughts_token_count: 4,
             },
+            candidates: [
+              {
+                content: {
+                  parts: [{ thought: true, text: "reasoning" }, { text: "answer" }],
+                },
+              },
+            ],
           },
-        ],
-      },
-      { candidates: [{ finish_reason: "STOP" }] },
-    ])));
+          { candidates: [{ finish_reason: "STOP" }] },
+        ]),
+      ),
+    );
 
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+    );
     expect(result.content.map((b) => b.type)).toEqual(["thinking", "text"]);
     // thought tokens are folded into output.
     expect(result.usage.output).toBe(5);
@@ -126,7 +161,10 @@ describe("GoogleProvider", () => {
       },
     };
     registerProvider("google-generative-ai", new GoogleProvider(throwingClient));
-    const result = await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }));
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+    );
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/quota exceeded/);
   });

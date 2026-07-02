@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  stream,
   AssistantMessage,
+  type Model,
   Stream,
   attachCost,
   complete,
@@ -8,12 +10,10 @@ import {
   done as doneEv,
   getProvider,
   registerFauxProvider,
-  resetRegistry,
   resetProviderRegistration,
-  stream,
+  resetRegistry,
   text,
   toolCall,
-  type Model,
 } from "../src/ai/index.ts";
 
 const FAUX_MODEL: Model = {
@@ -79,13 +79,7 @@ describe("faux provider", () => {
     const types: string[] = [];
     for await (const ev of s) types.push(ev.type);
 
-    expect(types).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
+    expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
     reg.unregister();
   });
 
