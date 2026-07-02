@@ -1,7 +1,8 @@
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
-import { expand } from "./_io.ts";
+import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
+import type { FsToolOptions } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -20,9 +21,14 @@ const parameters = objectSchema(
   ["pattern"],
 );
 
-async function execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
+async function executeWithin(
+  workdir: string | undefined,
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
   const pattern = String(params.pattern ?? "");
-  const path = expand(String(params.path ?? "."));
+  const r = resolveWithin(String(params.path ?? "."), workdir);
+  if (!r.ok) return errorResult(`grep: ${r.error}`);
+  const path = r.path;
   const fileGlob = params.glob ? String(params.glob) : undefined;
   const ci = Boolean(params.case_insensitive);
 
@@ -67,13 +73,13 @@ async function execute(_id: string, params: Record<string, unknown>): Promise<To
   return { content: [text(lines.join("\n"))], details: { count: lines.length } };
 }
 
-export function grepTool(): AgentTool {
+export function grepTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "grep",
     description:
       "Search file contents (uses ripgrep if available, falls back to grep). " +
       "Returns file:line:content matches. Respects .gitignore. Use 'glob' to filter file types. Max 200 results.",
     parameters,
-    execute,
+    execute: (_id, params) => executeWithin(opts.workdir, params),
   };
 }

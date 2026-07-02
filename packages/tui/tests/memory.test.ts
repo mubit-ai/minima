@@ -81,7 +81,11 @@ describe("MubitHarnessMemory", () => {
 
   test("no-op without a recommendationId (nothing to attribute)", async () => {
     const c = new FakeClient();
-    await new MubitHarnessMemory(c, "s1").recordOutcome({ ...base, recommendationId: "", quality: 0.9 });
+    await new MubitHarnessMemory(c, "s1").recordOutcome({
+      ...base,
+      recommendationId: "",
+      quality: 0.9,
+    });
     expect(c.remembers).toHaveLength(0);
     expect(c.outcomes).toHaveLength(0);
   });
@@ -120,7 +124,11 @@ describe("MubitHarnessMemory", () => {
   test("fail-open: recordOutcome swallows client errors", async () => {
     const c = new FakeClient();
     c.throwOn.add("remember");
-    await new MubitHarnessMemory(c, "s1").recordOutcome({ ...base, recommendationId: "r", quality: 0.9 });
+    await new MubitHarnessMemory(c, "s1").recordOutcome({
+      ...base,
+      recommendationId: "r",
+      quality: 0.9,
+    });
     expect(c.outcomes).toHaveLength(0);
   });
 

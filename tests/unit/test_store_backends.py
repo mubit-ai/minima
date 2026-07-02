@@ -13,6 +13,7 @@ Or via the Makefile target:
 
 from __future__ import annotations
 
+import socket
 import time
 import uuid
 
@@ -23,6 +24,24 @@ PG_URL = "postgresql://minima_app:minima_local@localhost:55432/minima_test"
 REDIS_URL = "redis://localhost:6379/1"  # DB 1 to avoid clobbering other local data
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def _port_open(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def _require_postgres() -> None:
+    if not _port_open("localhost", 55432):
+        pytest.skip("local Postgres test backend is not running on localhost:55432")
+
+
+def _require_redis() -> None:
+    if not _port_open("localhost", 6379):
+        pytest.skip("local Redis test backend is not running on localhost:6379")
 
 
 def _uid() -> str:
@@ -81,6 +100,7 @@ class TestPostgresRecStore:
     def store(self):
         from minima.recommender.recstore import PostgresRecommendationStore
 
+        _require_postgres()
         s = PostgresRecommendationStore(PG_URL, ttl_seconds=3600)
         yield s
 
@@ -129,6 +149,7 @@ class TestPostgresDecisionLog:
     def log(self):
         from minima.recommender.decisionlog import PostgresDecisionLog
 
+        _require_postgres()
         yield PostgresDecisionLog(PG_URL, retention_days=90)
 
     def test_put_get_roundtrip(self, log):
@@ -219,6 +240,7 @@ class TestPostgresPropensityTracker:
     def tracker(self):
         from minima.recommender.propensity import PostgresPropensityTracker
 
+        _require_postgres()
         yield PostgresPropensityTracker(PG_URL)
 
     @pytest.fixture
@@ -276,6 +298,7 @@ class TestPostgresDurableRefs:
     def refs(self):
         from minima.recommender.durablerefs import PostgresDurableRefs
 
+        _require_postgres()
         yield PostgresDurableRefs(PG_URL)
 
     def test_upsert_and_refs(self, refs):
@@ -332,6 +355,7 @@ class TestRedisRecStore:
     def store(self):
         from minima.recommender.recstore import RedisRecommendationStore
 
+        _require_redis()
         yield RedisRecommendationStore(REDIS_URL, ttl_seconds=3600)
 
     def test_put_get_roundtrip(self, store):
@@ -369,6 +393,7 @@ class TestRedisDurableRefs:
     def refs(self):
         from minima.recommender.durablerefs import RedisDurableRefs
 
+        _require_redis()
         yield RedisDurableRefs(REDIS_URL)
 
     def test_upsert_and_refs(self, refs):
@@ -442,6 +467,9 @@ def test_build_factories_select_correct_backend():
     assert isinstance(build_decision_log(mem), MemoryDecisionLog)
     assert isinstance(build_propensity(mem), PropensityTracker)
     assert isinstance(build_durable_refs(mem), MemoryDurableRefs)
+
+    if not _port_open("localhost", 55432) or not _port_open("localhost", 6379):
+        pytest.skip("local Postgres and Redis test backends are not running")
 
     pg = Settings(
         mubit_api_key="t",

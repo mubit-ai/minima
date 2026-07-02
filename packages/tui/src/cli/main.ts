@@ -11,15 +11,21 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
-import { registerModel } from "../ai/registry.ts";
+import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
+import { MinimaDb } from "../db/minima_db.ts";
+import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
-import { ConstJudge } from "../minima/index.ts";
+import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
+import { createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
+import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -161,6 +167,11 @@ interface CliArgs {
   tools?: string;
   excludeTools?: string;
   noTools: boolean;
+  /** Session budget in USD (creates a BudgetLedger; warn mode unless --budget-enforce). */
+  budgetUsd?: number;
+  budgetEnforce: boolean;
+  /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
+  slider?: number;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -171,6 +182,7 @@ function parseArgs(argv: string[]): CliArgs {
     print: false,
     mode: "interactive",
     noTools: false,
+    budgetEnforce: false,
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -211,6 +223,24 @@ function parseArgs(argv: string[]): CliArgs {
       case "--no-tools":
         opts.noTools = true;
         break;
+      case "-b":
+      case "--budget": {
+        const v = Number(take(i++));
+        if (!Number.isFinite(v) || v <= 0)
+          throw new Error("--budget requires a positive USD amount");
+        opts.budgetUsd = v;
+        break;
+      }
+      case "--budget-enforce":
+        opts.budgetEnforce = true;
+        break;
+      case "--slider": {
+        const v = Number(take(i++));
+        if (!Number.isFinite(v) || v < 0 || v > 10)
+          throw new Error("--slider requires a number between 0 and 10");
+        opts.slider = v;
+        break;
+      }
       case "-h":
       case "--help":
         process.stdout.write(HELP);
@@ -239,6 +269,9 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
+  -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
+      --budget-enforce     refuse runs once the budget is exhausted (default: warn)
+      --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
 `;
 
@@ -262,6 +295,7 @@ function buildConfig(args: CliArgs): HarnessConfig {
     cfg.candidates = [args.model];
     cfg.pinned = true;
   }
+  if (args.slider !== undefined) cfg.costQualityTradeoff = args.slider;
   return cfg;
 }
 
@@ -308,13 +342,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const tools = toolsFor(args);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
+  // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
+  // on real LLM grading (staged default-off: it spends money where ConstJudge spent zero).
+  let judge: ConstJudge | LLMJudge = new ConstJudge(null);
+  if (process.env.MINIMA_LLM_JUDGE === "1") {
+    const jm = findModelById(config.judgeModel);
+    if (jm && providerKeyPresent(jm.provider)) {
+      judge = new LLMJudge(jm);
+      process.stderr.write(
+        `minima: LLM judge on (${jm.id}) — grading adds a small per-prompt cost\n`,
+      );
+    } else {
+      process.stderr.write(
+        `minima: MINIMA_LLM_JUDGE=1 ignored (judge model ${config.judgeModel} unavailable or key missing)\n`,
+      );
+    }
+  }
+
   const agent = new MinimaAgent({
     config,
     tools,
     meter: new CostMeter(),
-    judge: new ConstJudge(null), // abstain by default in the CLI; wire an LLMJudge later
+    judge,
     systemPrompt,
   });
+  // Effort routing Phase A (staged default-off): the server's classified difficulty picks
+  // each prompt's thinking level — routing (model, effort), not just model.
+  agent.autoEffort = process.env.MINIMA_AUTO_EFFORT === "1";
 
   // Wire Mubit memory (recall-before-route + write-back) into the agent. No-op unless a
   // MUBIT_API_KEY is present. Use a STABLE per-repo memory session id (the provisioned project
@@ -323,15 +377,90 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const memorySession = config.namespace ?? repoIdentity(process.cwd());
   agent.memory = await createMubitMemory(memorySession);
 
+  // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
+  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
+  let db: MinimaDb | null = null;
+  let sink: DbSinkHandle | null = null;
+  try {
+    db = new MinimaDb();
+    const projectKey = repoIdentity(process.cwd());
+    db.ensureProject(projectKey, config.namespace ?? null);
+    const runId = db.startRun({
+      projectKey,
+      providerSessionId: agent.sessionId,
+      gitBaseSha: gitHeadSha(process.cwd()),
+    });
+    agent.db = db;
+    agent.runId = runId;
+    sink = attachDbSink(agent, db, { runId });
+  } catch (exc) {
+    process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
+    db = null;
+  }
+  const closeDb = (status: "done" | "aborted" = "done"): void => {
+    try {
+      sink?.detach();
+      if (db && agent.runId) db.finishRun(agent.runId, status);
+      db?.close();
+    } catch {
+      // shutdown must never fail on bookkeeping
+    }
+  };
+
+  // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
+  // Children get their own routed model, meter, confined tools, and budget slice; their
+  // rows land in the same run under agentId=childId.
+  agent.agentState.tools.push(
+    taskTool({
+      spawn: createSpawn({ parent: agent, workdir: process.cwd() }),
+      spawnDepth: 0,
+      maxDepth: 2,
+    }),
+  );
+
+  // Budget following: --budget creates a session-scoped ledger (warn mode unless
+  // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
+  // TUI renders them as chat notices.
+  if (args.budgetUsd !== undefined && db && agent.runId) {
+    agent.budget = new BudgetLedger({
+      db,
+      scopeKey: `session:${agent.runId}`,
+      limitUsd: args.budgetUsd,
+      mode: args.budgetEnforce ? "enforce" : "warn",
+      runId: agent.runId,
+    });
+  } else if (args.budgetUsd !== undefined) {
+    process.stderr.write("minima: --budget ignored (persistence unavailable)\n");
+  }
+
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
+  // Headless: budget signals go to stderr. (The TUI re-targets them to chat notices.)
+  if (nonInteractive && agent.budget) {
+    agent.budget.setOnEvent((e) => {
+      if (e.kind === "threshold" || e.kind === "deny") {
+        process.stderr.write(`minima: ${e.note ?? e.kind}\n`);
+      }
+    });
+  }
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
       process.stderr.write("minima: --print/--mode json requires a prompt\n");
+      closeDb("aborted");
       return 2;
     }
-    const rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
-    await endSessionSafely(agent); // distil the one-shot run into durable memory
+    // finally-guarded: a thrown run error (e.g. budget-enforce refusal) must still finish
+    // the run row + close the DB, or the run leaks as 'active'.
+    let rc = 1;
+    try {
+      rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
+    } catch (exc) {
+      process.stderr.write(`minima: ${errText(exc)}\n`);
+      rc = 1;
+    } finally {
+      await endSessionSafely(agent); // distil the one-shot run into durable memory
+      closeDb(rc === 0 ? "done" : "aborted");
+    }
     return rc;
   }
 
@@ -353,7 +482,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write("\u001b[?1049l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
+  closeDb("done");
   return 0;
+}
+
+/** Best-effort HEAD sha for run provenance (null outside a git repo). */
+function gitHeadSha(cwd: string): string | null {
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd });
+    const out = proc.stdout.toString().trim();
+    return proc.exitCode === 0 && out ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Distil the run into durable Mubit memory on exit, time-boxed so it never hangs shutdown. */
@@ -361,8 +502,6 @@ async function endSessionSafely(agent: MinimaAgent): Promise<void> {
   await Promise.race([agent.endSession(), new Promise<void>((r) => setTimeout(r, 5000))]);
 }
 
-// local re-export to avoid a cycle through the barrel
-import { findModelById } from "../ai/registry.ts";
 function findModelByIdLocal(id: string) {
   return findModelById(id);
 }

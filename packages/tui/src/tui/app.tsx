@@ -14,8 +14,11 @@ import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provide
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import { metricsReport } from "../db/metrics.ts";
+import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
-import { refreshCatalog } from "../minima/catalog.ts";
+import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
+import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
@@ -109,6 +112,7 @@ const COMMANDS = [
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
+  { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
@@ -427,6 +431,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Re-render trigger after a catalog refresh so the /model picker (which reads allModels()
   // at render) reflects newly-registered models even if it's already open.
   const [, setCatalogVersion] = useState(0);
+  const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
 
   // On mount: nudge if routing is set but no model-provider key is, and pull the live model
   // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
@@ -441,11 +446,29 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         },
       ]);
     }
-    void refreshCatalog(agent.config)
+    // One-time bootstrap (memoized): the REGISTRY is process-global, so the catalog must
+    // not be re-synced mid-run once (sub-)agents can be in flight.
+    void refreshCatalogOnce(agent.config)
       .then((n) => {
         if (n > 0) setCatalogVersion((v) => v + 1);
       })
       .catch(() => {});
+    // Budget signals render as chat notices (not stderr — that would corrupt Ink).
+    agent.budget?.setOnEvent((e) => {
+      if (e.kind === "threshold" || e.kind === "deny") {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: `${e.kind === "deny" ? "⛔" : "💰"} ${e.note ?? e.kind}`,
+            toolName: "budget",
+            isError: e.kind === "deny",
+          },
+        ]);
+      }
+      setBudgetStatus(agent.budget?.status() ?? null);
+    });
+    setBudgetStatus(agent.budget?.status() ?? null);
   }, [agent]);
 
   // Permission system
@@ -782,6 +805,45 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     return history[nextIdx];
   }
 
+  /** Resume a DB-persisted run: restore context + cost footer + judge cadence, and record
+   * lineage (the CURRENT run continues from the resumed one — new rows keep landing under
+   * the current run_id; rec_ids are never duplicated). */
+  async function loadRun(runId: string) {
+    if (!agent.db) throw new Error("no run store");
+    const r = rehydrateRun(agent.db, runId);
+    applyRehydratedRun(agent, r);
+    if (agent.runId) {
+      try {
+        agent.db.setRunParent(agent.runId, runId);
+      } catch {
+        // lineage is best-effort
+      }
+    }
+    const chat: ChatMessage[] = [];
+    for (const m of r.messages) {
+      if (m.role === "user") chat.push({ role: "user", text: m.textContent });
+      else if (m.role === "assistant") chat.push({ role: "assistant", text: m.textContent });
+      else if (m.role === "toolResult")
+        chat.push({
+          role: "tool",
+          text: m.textContent,
+          toolName: (m as AgentMessage & { tool_name?: string }).tool_name ?? "tool",
+          isError: (m as AgentMessage & { is_error?: boolean }).is_error ?? false,
+        });
+    }
+    const totals = agent.meter?.totals();
+    if (totals) setActualCost(totals.actualCostUsd);
+    const label = r.run.display_name || runId.slice(0, 12);
+    setMessages([
+      ...chat,
+      {
+        role: "tool",
+        text: `Resumed run ${label} (${r.messages.length} msg(s), ${r.meterRows.length} routed prompt(s), $${(totals?.actualCostUsd ?? 0).toFixed(4)} recorded)`,
+        toolName: "resume",
+      },
+    ]);
+  }
+
   async function loadSession(store: SessionStore) {
     const list: ChatMessage[] = [];
     const agentMsgs: AgentMessage[] = [];
@@ -1073,7 +1135,45 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       case "cost": {
-        const report = agent.meter?.report() || "(no cost metrics recorded)";
+        // `/cost fleet` — org-level savings truth straight from the server.
+        if (args.trim().toLowerCase().startsWith("fleet")) {
+          setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+          try {
+            const s = await agent.router.savings({ days: 30 });
+            const summary = JSON.stringify(s.summary ?? {}, null, 2);
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: `Fleet savings (org ${s.org_id}, last ${s.days}d${s.namespace ? `, ns ${s.namespace}` : ""}):\n${summary}`,
+                toolName: "cost",
+              },
+            ]);
+          } catch (exc) {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "tool",
+                text: `fleet savings unavailable: ${errText(exc)}`,
+                toolName: "cost",
+                isError: true,
+              },
+            ]);
+          }
+          break;
+        }
+        let report = agent.meter?.report() || "(no cost metrics recorded)";
+        // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
+        if (agent.db && agent.runId) {
+          try {
+            const rows = agent.db.getRunDecisions(agent.runId) as unknown as Parameters<
+              typeof metricsReport
+            >[0];
+            report += `\n\n— run metrics —\n${metricsReport(rows)}`;
+          } catch {
+            // metrics are best-effort
+          }
+        }
         setMessages((m) => [
           ...m,
           {
@@ -1085,6 +1185,69 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             text: report,
             toolName: "cost",
           },
+        ]);
+        break;
+      }
+      case "budget": {
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        let textOut: string;
+        let isErr = false;
+        if (parts[0] === "set" && parts[1]) {
+          const usd = Number(parts[1]);
+          if (!Number.isFinite(usd) || usd <= 0) {
+            textOut = "Usage: /budget set <usd>  (positive USD amount)";
+            isErr = true;
+          } else if (agent.db && agent.runId) {
+            agent.budget = new BudgetLedger({
+              db: agent.db,
+              scopeKey: `session:${agent.runId}`,
+              limitUsd: usd,
+              mode: agent.budget?.mode ?? "warn",
+              runId: agent.runId,
+            });
+            agent.budget.setOnEvent((e) => {
+              if (e.kind === "threshold" || e.kind === "deny") {
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "tool",
+                    text: `${e.kind === "deny" ? "⛔" : "💰"} ${e.note ?? e.kind}`,
+                    toolName: "budget",
+                    isError: e.kind === "deny",
+                  },
+                ]);
+              }
+              setBudgetStatus(agent.budget?.status() ?? null);
+            });
+            setBudgetStatus(agent.budget.status());
+            textOut = `Budget set: $${usd.toFixed(2)} (${agent.budget.mode} mode) — warnings at 50/75/90/100%`;
+          } else {
+            textOut = "Budget unavailable: persistence is disabled this session";
+            isErr = true;
+          }
+        } else if (parts[0] === "mode" && parts[1]) {
+          const mode = parts[1] as "shadow" | "warn" | "enforce";
+          if (!["shadow", "warn", "enforce"].includes(mode)) {
+            textOut = "Usage: /budget mode shadow|warn|enforce";
+            isErr = true;
+          } else if (agent.budget) {
+            agent.budget.setMode(mode);
+            setBudgetStatus(agent.budget.status());
+            textOut = `Budget mode: ${mode}${mode === "enforce" ? " — runs are refused once the limit is hit" : ""}`;
+          } else {
+            textOut = "No budget set — /budget set <usd> first";
+            isErr = true;
+          }
+        } else if (agent.budget) {
+          const s = agent.budget.status();
+          textOut = `Budget: $${s.spentUsd.toFixed(4)} spent + $${s.reservedUsd.toFixed(4)} reserved of $${s.limitUsd.toFixed(2)} (${Math.round(s.fraction * 100)}%) · remaining $${s.remainingUsd.toFixed(4)} · mode ${s.mode}\n/budget set <usd> · /budget mode shadow|warn|enforce`;
+        } else {
+          textOut = "No budget set. /budget set <usd> to add one (warn mode by default).";
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text: textOut, toolName: "budget", isError: isErr },
         ]);
         break;
       }
@@ -1131,7 +1294,17 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
         ]);
         break;
-      case "name":
+      case "name": {
+        // Persist to the run row so the name survives reload (was cosmetic-only).
+        let persisted = false;
+        if (agent.db && agent.runId && args.trim()) {
+          try {
+            agent.db.setRunName(agent.runId, args.trim());
+            persisted = true;
+          } catch {
+            // fail-open: name-setting must not break the session
+          }
+        }
         setMessages((m) => [
           ...m,
           {
@@ -1140,11 +1313,14 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: `Session display name set to: "${args}"`,
+            text: persisted
+              ? `Session name set to "${args.trim()}" (persisted)`
+              : `Session display name set to: "${args}" (not persisted — no run store)`,
             toolName: "name",
           },
         ]);
         break;
+      }
       case "session":
         setMessages((m) => [
           ...m,
@@ -1205,10 +1381,28 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         const targetId = args.trim();
         if (!targetId) {
           try {
-            const manager = new SessionManager();
-            const list = await manager.listSessions(process.cwd());
-            setSessionsList(list);
-            setSessionPickerOpen(true);
+            // DB-backed runs are the real record (JSONL sessions are legacy/read-only).
+            if (agent.db) {
+              const runs = agent.db
+                .listRuns(repoIdentity(process.cwd()))
+                .filter((r) => r.run_id !== agent.runId);
+              setSessionsList(
+                runs.map((r) => ({
+                  path: `run:${r.run_id}`,
+                  sessionId: r.run_id.slice(0, 12),
+                  displayName: r.display_name,
+                  nEntries: agent.db?.countEvents(r.run_id) ?? 0,
+                  created: r.created * 1000,
+                  mtime: r.updated * 1000,
+                })),
+              );
+              setSessionPickerOpen(true);
+            } else {
+              const manager = new SessionManager();
+              const list = await manager.listSessions(process.cwd());
+              setSessionsList(list);
+              setSessionPickerOpen(true);
+            }
           } catch (exc) {
             setMessages((m) => [
               ...m,
@@ -1222,11 +1416,15 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           }
         } else {
           try {
-            const manager = new SessionManager();
-            const store = await manager.open(process.cwd(), {
-              sessionId: targetId,
-            });
-            await loadSession(store);
+            if (agent.db) {
+              await loadRun(targetId);
+            } else {
+              const manager = new SessionManager();
+              const store = await manager.open(process.cwd(), {
+                sessionId: targetId,
+              });
+              await loadSession(store);
+            }
           } catch (exc) {
             setMessages((m) => [
               ...m,
@@ -1467,6 +1665,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
       if (totals) setActualCost(totals.actualCostUsd);
+      if (agent.budget) setBudgetStatus(agent.budget.status());
 
       const last = getLastAssistant(agent);
       if (last?.usage) {
@@ -1641,8 +1840,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           sessions={sessionsList}
           onPick={async (path) => {
             setSessionPickerOpen(false);
-            const store = await SessionStore.fileBacked(path);
-            await loadSession(store);
+            if (path.startsWith("run:")) {
+              await loadRun(path.slice(4)).catch((exc) => {
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "tool",
+                    text: `Failed to resume run: ${errText(exc)}`,
+                    toolName: "resume",
+                    isError: true,
+                  },
+                ]);
+              });
+            } else {
+              const store = await SessionStore.fileBacked(path);
+              await loadSession(store);
+            }
           }}
           onDismiss={() => setSessionPickerOpen(false)}
         />
@@ -1706,6 +1919,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           inputTokens={inputTokens}
           outputTokens={outputTokens}
           actualCostUsd={actualCost}
+          budget={budgetStatus}
           sessionId={agent.sessionId ?? "ephemeral"}
           routingOffline={agent.offlineReason !== null}
           offlineReason={agent.offlineReason}

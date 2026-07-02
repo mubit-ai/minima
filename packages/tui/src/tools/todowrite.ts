@@ -8,8 +8,6 @@ export interface TodoTask {
   priority: "high" | "medium" | "low";
 }
 
-const todoState: TodoTask[] = [];
-
 const parameters = objectSchema(
   {
     tasks: {
@@ -21,36 +19,13 @@ const parameters = objectSchema(
   ["tasks"],
 );
 
-async function execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
-  try {
-    const parsed = JSON.parse(String(params.tasks));
-    if (!Array.isArray(parsed)) return { content: [text("tasks must be a JSON array")] };
-
-    todoState.length = 0;
-    for (const t of parsed) {
-      todoState.push({
-        content: String(t.content ?? ""),
-        status: t.status ?? "pending",
-        priority: t.priority ?? "medium",
-      });
-    }
-
-    const lines = todoState.map((t, i) => {
-      const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
-      const pri = t.priority === "high" ? "!" : t.priority === "low" ? "-" : " ";
-      return `${i + 1}. [${mark}] ${pri} ${t.content}`;
-    });
-    const summary = `${todoState.filter((t) => t.status === "completed").length}/${todoState.length} done`;
-    return {
-      content: [text(`Todo list updated (${summary}):\n${lines.join("\n")}`)],
-      details: { count: todoState.length },
-    };
-  } catch (exc) {
-    return { content: [text(`Invalid JSON: ${String(exc)}`)] };
-  }
-}
-
-export function todowriteTool(): AgentTool {
+/**
+ * Per-INSTANCE todo state: each todowriteTool() owns its own list (closure), so parallel
+ * agents in one process never trample each other's todos. (This was a module-level
+ * singleton — an isolation hazard for sub-agents.) Pass `state` to observe the list from
+ * outside (e.g. a TUI panel).
+ */
+export function todowriteTool(state: TodoTask[] = []): AgentTool {
   return {
     name: "todowrite",
     description:
@@ -58,10 +33,33 @@ export function todowriteTool(): AgentTool {
       '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
       "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
     parameters,
-    execute,
-  };
-}
+    async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
+      try {
+        const parsed = JSON.parse(String(params.tasks));
+        if (!Array.isArray(parsed)) return { content: [text("tasks must be a JSON array")] };
 
-export function getTodoState(): TodoTask[] {
-  return [...todoState];
+        state.length = 0;
+        for (const t of parsed) {
+          state.push({
+            content: String(t.content ?? ""),
+            status: t.status ?? "pending",
+            priority: t.priority ?? "medium",
+          });
+        }
+
+        const lines = state.map((t, i) => {
+          const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
+          const pri = t.priority === "high" ? "!" : t.priority === "low" ? "-" : " ";
+          return `${i + 1}. [${mark}] ${pri} ${t.content}`;
+        });
+        const summary = `${state.filter((t) => t.status === "completed").length}/${state.length} done`;
+        return {
+          content: [text(`Todo list updated (${summary}):\n${lines.join("\n")}`)],
+          details: { count: state.length },
+        };
+      } catch (exc) {
+        return { content: [text(`Invalid JSON: ${String(exc)}`)] };
+      }
+    },
+  };
 }

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  stream,
   AssistantMessage,
   Message,
+  type Model,
   OpenAICompatProvider,
   complete,
   context,
@@ -9,9 +11,7 @@ import {
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
-  stream,
   text,
-  type Model,
 } from "../src/ai/index.ts";
 
 const OPENAI_MODEL: Model = {
@@ -69,22 +69,19 @@ describe("openai-compat SSE streaming", () => {
       "data: [DONE]\n\n",
     ];
 
-    const s = stream(OPENAI_MODEL, context({ messages: [new Message({ role: "user", content: "hi" })] }), {
-      options: { fetch: sseFetch(chunks) },
-    });
+    const s = stream(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      {
+        options: { fetch: sseFetch(chunks) },
+      },
+    );
 
     const types: string[] = [];
     for await (const ev of s) types.push(ev.type);
     const result = await s.result();
 
-    expect(types).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
+    expect(types).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
     expect(result.textContent).toBe("Hello, world");
     expect(result.stop_reason).toBe("stop");
     expect(result.usage.input).toBe(10);

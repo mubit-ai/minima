@@ -7,6 +7,7 @@ import math
 import random
 import time
 import uuid
+from dataclasses import dataclass, field
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
@@ -18,7 +19,7 @@ from minima.memory.records import clamp01
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model, apply_ipw
-from minima.recommender.classify import classify, classify_from_neighbors
+from minima.recommender.classify import classify_details, classify_from_neighbors_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.propensity import Propensity, PropensityTracker
@@ -44,6 +45,24 @@ MAX_EVIDENCE_PER_CANDIDATE = 5
 
 class NoCandidatesError(ValueError):
     """Raised when constraints eliminate every catalog model."""
+
+
+@dataclass(slots=True)
+class _StageProfiler:
+    started: float = field(default_factory=time.monotonic)
+    marks: list[tuple[str, float]] = field(default_factory=list)
+
+    def mark(self, name: str) -> None:
+        self.marks.append((name, (time.monotonic() - self.started) * 1000.0))
+
+    def as_dict(self) -> dict[str, float]:
+        result: dict[str, float] = {}
+        prev = 0.0
+        for name, total in self.marks:
+            result[name] = round(total - prev, 3)
+            prev = total
+        result["total"] = round((time.monotonic() - self.started) * 1000.0, 3)
+        return result
 
 
 class Recommender:
@@ -84,11 +103,16 @@ class Recommender:
 
     async def recommend(self, req: RecommendRequest) -> RecommendResponse:
         started = time.monotonic()
+        profile = _StageProfiler(started=started)
         settings = self._settings
         warnings: list[str] = []
 
-        task_type, difficulty = classify(req.task)
-        task_type, difficulty = await self._maybe_llm_classify(req, task_type, difficulty, warnings)
+        classification = classify_details(req.task)
+        task_type = classification.task_type
+        difficulty = classification.difficulty
+        profile.mark("classify")
+        classification.profile.final_task_type = task_type
+        classification.profile.final_difficulty = difficulty
         signature = (
             salient_signature(req.task.task, settings.minima_cluster_signature_tokens)
             if settings.minima_cluster_granularity.lower() == "fine"
@@ -100,6 +124,7 @@ class Recommender:
 
         catalog = self._catalog_store.get()
         candidates = _select_candidates(catalog.cards, req, task_type, req.max_candidates)
+        profile.mark("select_candidates")
         if not candidates:
             raise NoCandidatesError("no models match the supplied constraints")
         candidate_ids = {c.model_id for c in candidates}
@@ -107,6 +132,7 @@ class Recommender:
         recall, fastpath_evidence = await self._recall_with_fastpath(
             req=req, lane=lane, cluster=cluster, candidate_ids=candidate_ids
         )
+        profile.mark("recall")
         if recall.timed_out:
             warnings.append("recall_timeout")
         elif recall.error:
@@ -122,13 +148,23 @@ class Recommender:
             and settings.minima_neighbor_classify
             and evidence
         ):
-            voted = classify_from_neighbors(
+            neighbor_estimate = classify_from_neighbors_details(
                 [(ev.record.task_type, ev.score) for ev in evidence if ev.record is not None]
             )
-            if voted is not None and voted != task_type:
-                task_type = voted
+            if neighbor_estimate is not None:
+                classification.profile.neighbor_support = neighbor_estimate.neighbor_support
+                classification.profile.neighbor_count = neighbor_estimate.neighbor_count
+                if (
+                    neighbor_estimate.task_type != task_type
+                    and classification.profile.caller_task_type is None
+                    and task_type == TaskType.other
+                ):
+                    task_type = neighbor_estimate.task_type
+                    classification.profile.task_type_source = "neighbor_vote"
+                    classification.profile.final_task_type = task_type
                 cluster = task_cluster(task_type, difficulty, signature)
                 warnings.append("neighbor_classified")
+        profile.mark("neighbor_classify")
 
         # Remember durable-record ids surfaced by recall so the fast path can
         # Dereference them next time (live records only — seeds are per-row inserts,
@@ -149,6 +185,7 @@ class Recommender:
                         )
             except Exception as exc:  # noqa: BLE001
                 log.warning("durable_ref_upsert_failed", error=str(exc))
+        profile.mark("durable_refs")
 
         aggregates = aggregate_by_model(
             evidence,
@@ -158,6 +195,7 @@ class Recommender:
             seed_weight=settings.minima_seed_weight,
             seed_crowdout_n=settings.minima_seed_crowdout_n,
         )
+        profile.mark("aggregate")
         if settings.minima_ipw_enabled and aggregates:
             apply_ipw(
                 aggregates,
@@ -165,6 +203,7 @@ class Recommender:
                 settings.minima_ipw_clip_low,
                 settings.minima_ipw_clip_high,
             )
+        profile.mark("ipw")
 
         input_tokens = req.task.expected_input_tokens or settings.minima_default_input_tokens
         output_tokens = req.task.expected_output_tokens or int(
@@ -174,6 +213,7 @@ class Recommender:
         scored = self._score_candidates(
             candidates, aggregates, task_type, input_tokens, output_tokens, req
         )
+        profile.mark("score")
         # Premium counterfactual baseline, captured BEFORE the cost/latency filters
         # shrink the set — otherwise the baseline itself would shift with the caller's
         # constraints and savings would not be comparable across requests.
@@ -198,6 +238,7 @@ class Recommender:
                 scored = within
             else:
                 warnings.append("no_model_within_latency_budget")
+        profile.mark("filters")
 
         tau = score.threshold_from_slider(
             req.cost_quality_tradeoff,
@@ -209,6 +250,7 @@ class Recommender:
         recommended, fallback, ranked, opt_warnings = self._finalize(
             scored, tau, req.cost_quality_tradeoff
         )
+        profile.mark("finalize")
         overall_basis = recommended.decision_basis
 
         esc = escalation.evaluate(
@@ -226,13 +268,30 @@ class Recommender:
             ),
             recommended_predicted_success=recommended.predicted_success,
             tau=tau,
+            classification_task_type=task_type,
+            classification_confidence=classification.confidence,
+            classification_easy_route=task_type
+            in {
+                TaskType.summarization,
+                TaskType.extraction,
+                TaskType.classification,
+                TaskType.translation,
+            },
         )
+        profile.mark("escalation_eval")
         if esc.should_escalate:
             warnings.extend(f"escalation_suggested:{reason}" for reason in esc.reasons)
-            if self._reasoner is not None and settings.reasoner_enabled:
+            if (
+                settings.minima_reasoner_fast_mode
+                and settings.minima_reasoner_fast_skip_low_value
+                and _is_low_value_escalation(esc.reasons)
+            ):
+                warnings.append("reasoner_skipped_low_value")
+            elif self._reasoner is not None and settings.reasoner_enabled:
                 consulted = await self._consult_reasoner(
                     scored=scored, task_type=task_type, difficulty=difficulty, lane=lane, req=req
                 )
+                profile.mark("reasoner")
                 if consulted:
                     recommended, fallback, ranked, opt_warnings = self._finalize(
                         scored, tau, req.cost_quality_tradeoff
@@ -256,9 +315,7 @@ class Recommender:
         # a degenerate (deterministic) log from a stochastic one.
         selection_policy = "argmin"
         explored_pick = False
-        sel_propensities: dict[str, float] = dict.fromkeys(
-            (c.card.model_id for c in ranked), 0.0
-        )
+        sel_propensities: dict[str, float] = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
         sel_propensities[recommended.card.model_id] = 1.0
         if self._thompson_enabled and len(scored) >= 2:
             # Posterior-sampling selection: sample each candidate's success, pick cheapest
@@ -308,6 +365,7 @@ class Recommender:
             )
             if shadow_pick is not None and shadow_pick != recommended.card.model_id:
                 warnings.append("shadow_disagree")
+        profile.mark("selection")
 
         recommendation_id = uuid.uuid4().hex
         self._recstore.put(
@@ -328,6 +386,7 @@ class Recommender:
                 },
             )
         )
+        profile.mark("recstore")
         self._log_decision(
             recommendation_id=recommendation_id,
             req=req,
@@ -348,8 +407,10 @@ class Recommender:
             est_cost_premium=est_cost_premium,
             shadow_chosen_model_id=shadow_pick,
         )
+        profile.mark("decision_log")
 
         confidence = _overall_confidence(overall_basis, recommended.confidence)
+        profile.mark("response")
         return RecommendResponse(
             recommendation_id=recommendation_id,
             recommended_model=_to_ranked_model(recommended, req.explain),
@@ -363,9 +424,11 @@ class Recommender:
             catalog_version=catalog.version,
             catalog_stale=catalog.stale,
             latency_ms=int((time.monotonic() - started) * 1000),
+            classification_profile=classification.profile,
             warnings=warnings,
             selection_policy=selection_policy,
             recommended_actions=_actions_for(recommended.card),
+            stage_latency_ms=profile.as_dict(),
         )
 
     def _maybe_explore(
@@ -463,9 +526,7 @@ class Recommender:
         if pending:
             log.warning("durable_fastpath_timeout", cluster=cluster, dropped=len(pending))
         derefs = [
-            task.result()
-            for task in done
-            if not task.cancelled() and task.exception() is None
+            task.result() for task in done if not task.cancelled() and task.exception() is None
         ]
         fetched = [d for d in derefs if d is not None and d.record is not None]
         ann_ids = {ev.entry_id for ev in recall.evidence}
@@ -523,9 +584,7 @@ class Recommender:
         # stated default model.
         baseline_cost: float | None = None
         if req.baseline_model_id:
-            in_ranked = next(
-                (c for c in ranked if c.card.model_id == req.baseline_model_id), None
-            )
+            in_ranked = next((c for c in ranked if c.card.model_id == req.baseline_model_id), None)
             if in_ranked is not None:
                 baseline_cost = in_ranked.est_cost_usd
             else:
@@ -587,34 +646,6 @@ class Recommender:
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path
             log.warning("decision_log_write_failed", error=str(exc))
 
-    async def _maybe_llm_classify(
-        self,
-        req: RecommendRequest,
-        task_type: TaskType,
-        difficulty: Difficulty,
-        warnings: list[str],
-    ) -> tuple[TaskType, Difficulty]:
-        """Refine an ambiguous heuristic classification via the reasoner (best-effort)."""
-        if not (
-            self._settings.minima_reasoner_classify
-            and req.allow_llm_escalation
-            and req.task.task_type is None
-            and task_type == TaskType.other
-            and self._reasoner is not None
-            and self._settings.reasoner_enabled
-            and hasattr(self._reasoner, "classify")
-        ):
-            return task_type, difficulty
-        try:
-            result = await self._reasoner.classify(task=req.task.task)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("llm_classify_failed", error=str(exc))
-            return task_type, difficulty
-        if result is None:
-            return task_type, difficulty
-        warnings.append("llm_classified")
-        return result
-
     async def _consult_reasoner(
         self,
         *,
@@ -624,8 +655,22 @@ class Recommender:
         lane: str,
         req: RecommendRequest,
     ) -> bool:
+        settings = self._settings
+        reasoner_candidates = _reasoner_candidate_subset(
+            scored,
+            settings.minima_reasoner_fast_candidate_limit
+            if settings.minima_reasoner_fast_mode
+            else len(scored),
+        )
         memory_block = await self._memory.get_context(
-            query=req.task.task, lane=lane, user_id=req.user_id, max_token_budget=1500
+            query=req.task.task,
+            lane=lane,
+            user_id=req.user_id,
+            max_token_budget=(
+                settings.minima_reasoner_fast_memory_token_budget
+                if settings.minima_reasoner_fast_mode
+                else 1500
+            ),
         )
         views = [
             CandidateView(
@@ -639,7 +684,7 @@ class Recommender:
                 predicted_success=c.predicted_success,
                 est_latency_ms=c.est_latency_ms,
             )
-            for c in scored
+            for c in reasoner_candidates
         ]
         result = await self._reasoner.rank(  # type: ignore[union-attr]
             task=req.task.task,
@@ -685,6 +730,7 @@ class Recommender:
                 c.predicted_success, c.est_cost_usd / max_cost, cost_quality_tradeoff
             )
         return _optimize(scored, tau, self._settings.minima_collapse_margin)
+
 
     # --------------------------------------------------------------- calibration
     def _calibrate(self, task_type_value: str, predicted: float) -> float:
@@ -772,7 +818,13 @@ class Recommender:
                 else 0.0
             )
             est_cost, breakdown = score.effective_cost(
-                card, agg, input_tokens, output_tokens, use_cache, cost_basis, min_cost_n,
+                card,
+                agg,
+                input_tokens,
+                output_tokens,
+                use_cache,
+                cost_basis,
+                min_cost_n,
                 cache_fraction,
             )
             cost_band = score.effective_cost_band(
@@ -845,8 +897,11 @@ def _shadow_pick(
     best = max(
         scored,
         key=lambda c: score.ucb_score(
-            c.predicted_success, c.interval_width, c.est_cost_usd / max_cost,
-            cost_quality_tradeoff, alpha,
+            c.predicted_success,
+            c.interval_width,
+            c.est_cost_usd / max_cost,
+            cost_quality_tradeoff,
+            alpha,
         ),
     )
     return best.card.model_id
@@ -871,6 +926,21 @@ def _overall_confidence(basis: DecisionBasis, recommended_confidence: float) -> 
     if basis == DecisionBasis.llm:
         return max(recommended_confidence, 0.5)
     return min(recommended_confidence, 0.5)
+
+
+def _reasoner_candidate_subset(scored: list[CandidateScore], limit: int) -> list[CandidateScore]:
+    if limit <= 0 or limit >= len(scored):
+        return list(scored)
+    return sorted(
+        scored, key=lambda c: (-c.predicted_success, c.est_cost_usd, -c.confidence)
+    )[:limit]
+
+
+def _is_low_value_escalation(reasons: list[str]) -> bool:
+    if not reasons:
+        return False
+    low_value = {"near_threshold", "tie"}
+    return all(reason in low_value for reason in reasons)
 
 
 def _select_candidates(

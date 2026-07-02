@@ -169,6 +169,11 @@ def cusum_flags(
     flags: list[CusumFlag] = []
     for (cluster, model_id), points in series.items():
         points.sort(key=lambda tr: tr[0])
+        if not points:
+            continue
+        mean_resid = sum(resid for _, resid in points) / len(points)
+        if abs(mean_resid) <= k:
+            continue
         s_hi = s_lo = 0.0
         peak_hi = peak_lo = 0.0
         for _, resid in points:

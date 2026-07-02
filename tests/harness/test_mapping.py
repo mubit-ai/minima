@@ -6,6 +6,7 @@ import pytest
 
 from minima.schemas.recommend import RankedModel
 from minima_harness.ai import get_model
+from minima_harness.ai.provider_catalog import PROVIDERS
 from minima_harness.minima import ModelMapping
 
 
@@ -47,7 +48,12 @@ def test_no_match_no_default_raises():
         ModelMapping().to_model(_ranked("totally-unknown", "weird"))
 
 
-def test_default_model_is_cheapest():
+def test_default_model_is_cheapest(monkeypatch):
+    for provider in PROVIDERS:
+        for env_var in provider.env_vars:
+            monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+
     m = ModelMapping().default_model()
     # gpt-4o-mini: 0.15 + 0.60 = 0.75, the cheapest in the seed catalog
     assert m.id == "gpt-4o-mini"

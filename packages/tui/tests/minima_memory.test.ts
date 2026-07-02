@@ -1,15 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ConstJudge,
-  MinimaAgent,
-  MinimaClient,
-  MinimaRouter,
-  ModelMapping,
-  harnessConfig,
-} from "../src/minima/index.ts";
-import type { HarnessMemory, OutcomeRecord } from "../src/minima/memory.ts";
-import { NoopHarnessMemory } from "../src/minima/memory.ts";
-import {
   AssistantMessage,
   type Model,
   registerFauxProvider,
@@ -19,6 +9,16 @@ import {
   resetRegistry,
   text,
 } from "../src/ai/index.ts";
+import {
+  ConstJudge,
+  MinimaAgent,
+  MinimaClient,
+  MinimaRouter,
+  ModelMapping,
+  harnessConfig,
+} from "../src/minima/index.ts";
+import type { HarnessMemory, OutcomeRecord } from "../src/minima/memory.ts";
+import { NoopHarnessMemory } from "../src/minima/memory.ts";
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -54,7 +54,13 @@ function mockService() {
             rationale: "cheapest viable",
           },
           ranked: [
-            { model_id: "test-faux", provider: "faux", predicted_success: 0.9, est_cost_usd: 0.001, score: 0.001 },
+            {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
           ],
           confidence: 0.8,
           decision_basis: "memory",

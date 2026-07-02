@@ -5,16 +5,22 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
-import { expand } from "./_io.ts";
+import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
+import type { FsToolOptions } from "./types.ts";
 
 const parameters = objectSchema(
   { path: { type: "string", description: "Directory to list.", default: "." } },
   [],
 );
 
-async function execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
-  const root = expand((params.path as string) ?? ".");
+async function executeWithin(
+  workdir: string | undefined,
+  params: Record<string, unknown>,
+): Promise<ToolResult> {
+  const r = resolveWithin((params.path as string) ?? ".", workdir);
+  if (!r.ok) return errorResult(`ls: ${r.error}`);
+  const root = r.path;
   if (!existsSync(root)) return errorResult(`ls: no such path: ${root}`);
   const entries = readdirSync(root)
     .map((name) => ({ name, isDir: statSync(`${root}/${name}`).isDirectory() }))
@@ -28,12 +34,12 @@ async function execute(_id: string, params: Record<string, unknown>): Promise<To
   return { content: [text(lines.join("\n"))], details: { count: lines.length } };
 }
 
-export function lsTool(): AgentTool {
+export function lsTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "ls",
     description:
       "List entries in a directory. Includes hidden files. Directories suffixed with /, sorted first. Use glob for pattern matching.",
     parameters,
-    execute,
+    execute: (_id, params) => executeWithin(opts.workdir, params),
   };
 }

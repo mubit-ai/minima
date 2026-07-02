@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from minima.config import Settings
 from minima.recommender.aggregate import is_conflicted
 from minima.recommender.types import CandidateScore, ModelAggregate
+from minima.schemas.common import TaskType
 
 
 @dataclass(slots=True)
@@ -32,6 +33,9 @@ def evaluate(
     recommended_interval_width: float | None = None,
     recommended_predicted_success: float = 0.0,
     tau: float = 0.0,
+    classification_task_type: TaskType | None = None,
+    classification_confidence: float = 0.0,
+    classification_easy_route: bool = False,
 ) -> EscalationDecision:
     """Decide whether the cheap-LLM reasoner should be consulted.
 
@@ -45,6 +49,19 @@ def evaluate(
     """
     decision = EscalationDecision()
     if not allow:
+        return decision
+
+    if (
+        settings.minima_reasoner_skip_confident_classifications
+        and classification_easy_route
+        and classification_confidence >= settings.minima_reasoner_confidence_skip_threshold
+        and classification_task_type in {
+            TaskType.summarization,
+            TaskType.extraction,
+            TaskType.classification,
+            TaskType.translation,
+        }
+    ):
         return decision
 
     uncertainty_mode = settings.minima_escalation_mode.lower() == "uncertainty"

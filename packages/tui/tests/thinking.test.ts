@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { Agent } from "../src/agent/agent.ts";
+import type { AgentEvent } from "../src/agent/events.ts";
 import {
   AssistantMessage,
+  type Model,
   registerFauxProvider,
   registerModel,
   resetModelRegistry,
@@ -8,10 +11,7 @@ import {
   resetRegistry,
   text,
   thinking,
-  type Model,
 } from "../src/ai/index.ts";
-import { Agent } from "../src/agent/agent.ts";
-import type { AgentEvent } from "../src/agent/events.ts";
 
 const FAUX_MODEL_REASONING: Model = {
   id: "test-reasoning",
@@ -127,7 +127,9 @@ describe("Thinking mode event flow", () => {
     const agent = new Agent({ model: FAUX_MODEL_REASONING, thinkingLevel: "medium", tools: [] });
 
     await agent.prompt("turn 1");
-    const last1 = agent.agentState.messages[agent.agentState.messages.length - 1] as AssistantMessage;
+    const last1 = agent.agentState.messages[
+      agent.agentState.messages.length - 1
+    ] as AssistantMessage;
     expect(last1.content.some((b) => b.type === "thinking")).toBe(true);
 
     // Toggle off
@@ -143,7 +145,9 @@ describe("Thinking mode event flow", () => {
     ]);
 
     await agent.prompt("turn 2");
-    const last2 = agent.agentState.messages[agent.agentState.messages.length - 1] as AssistantMessage;
+    const last2 = agent.agentState.messages[
+      agent.agentState.messages.length - 1
+    ] as AssistantMessage;
     expect(last2.content.some((b) => b.type === "thinking")).toBe(false);
     expect(last2.textContent).toBe("response 2");
 
@@ -163,7 +167,9 @@ describe("Error surfacing", () => {
 
     await agent.prompt("this will error");
 
-    const lastMsg = agent.agentState.messages[agent.agentState.messages.length - 1] as AssistantMessage;
+    const lastMsg = agent.agentState.messages[
+      agent.agentState.messages.length - 1
+    ] as AssistantMessage;
     expect(lastMsg.stop_reason).toBe("error");
     expect(lastMsg.error_message).toBeTruthy();
     expect(lastMsg.textContent.trim()).toBe("");
@@ -190,7 +196,9 @@ describe("Error surfacing", () => {
 
     await agent.prompt("trigger error");
 
-    const lastMsg = agent.agentState.messages[agent.agentState.messages.length - 1] as AssistantMessage;
+    const lastMsg = agent.agentState.messages[
+      agent.agentState.messages.length - 1
+    ] as AssistantMessage;
     expect(lastMsg.stop_reason).toBe("error");
     expect(lastMsg.error_message).toBe("API rate limit exceeded");
 

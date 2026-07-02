@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import {
-  Agent,
-  type AgentEvent,
-  type AgentTool,
-} from "../src/agent/index.ts";
+import { Agent, type AgentEvent, type AgentTool } from "../src/agent/index.ts";
 import {
   AssistantMessage,
+  type Model,
+  registerFauxProvider,
+  resetProviderRegistration,
+  resetRegistry,
   text,
   toolCall,
-  registerFauxProvider,
-  resetRegistry,
-  resetProviderRegistration,
-  type Model,
 } from "../src/ai/index.ts";
 
 const FAUX_MODEL: Model = {
@@ -114,7 +110,8 @@ describe("Agent + agentLoop", () => {
     expect(types).toContain("tool_execution_start");
     expect(types).toContain("tool_execution_end");
     const toolEnd = events.find(
-      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        e.type === "tool_execution_end",
     )!;
     expect(toolEnd.isError).toBe(false);
     expect(toolEnd.result?.content[0]).toMatchObject({ type: "text", text: "echo: ping" });
@@ -145,7 +142,8 @@ describe("Agent + agentLoop", () => {
     await agent.prompt("call missing tool");
 
     const toolEnd = events.find(
-      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        e.type === "tool_execution_end",
     )!;
     expect(toolEnd.isError).toBe(true);
     expect((toolEnd.result?.content[0] as { text: string }).text).toMatch(/Unknown tool/);
@@ -172,7 +170,8 @@ describe("Agent + agentLoop", () => {
     await agent.prompt("try echo");
 
     const toolEnd = events.find(
-      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+      (e): e is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        e.type === "tool_execution_end",
     )!;
     expect(toolEnd.isError).toBe(true);
     expect(toolEnd.result?.content[0]).toMatchObject({ type: "text", text: "not allowed" });

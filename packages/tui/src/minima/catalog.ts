@@ -126,3 +126,25 @@ export async function refreshCatalog(
   added += await populateFromOpenRouter(fetchImpl).catch(() => 0);
   return added;
 }
+
+let bootstrapPromise: Promise<number> | null = null;
+
+/**
+ * One-time catalog bootstrap: the first call runs refreshCatalog; every later (or
+ * concurrent) call returns the same promise. The model REGISTRY is process-global and the
+ * mapping layer mutates model cost in place, so an uncoordinated mid-run re-sync races any
+ * concurrently-running (sub-)agents — bootstrap once, then only refresh on an explicit
+ * user action (/reconnect) when no run is in flight.
+ */
+export function refreshCatalogOnce(
+  config: HarnessConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number> {
+  if (!bootstrapPromise) bootstrapPromise = refreshCatalog(config, fetchImpl);
+  return bootstrapPromise;
+}
+
+/** Test seam: forget the bootstrap memo. */
+export function resetCatalogBootstrap(): void {
+  bootstrapPromise = null;
+}

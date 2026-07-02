@@ -1,18 +1,20 @@
 import { describe, expect, mock, test } from "bun:test";
-import { MinimaClient, asOutcome, MinimaError } from "../src/minima/index.ts";
+import { MinimaClient, MinimaError, asOutcome } from "../src/minima/index.ts";
 
 /** Build a client backed by an in-memory mock transport. No network. */
 function mockClient(
-  handler: (method: string, path: string, body: unknown, params: URLSearchParams) => {
+  handler: (
+    method: string,
+    path: string,
+    body: unknown,
+    params: URLSearchParams,
+  ) => {
     status: number;
     json: unknown;
   },
 ) {
   const calls: { method: string; path: string; body: unknown; params: string }[] = [];
-  const fetchLike = async (
-    url: string,
-    init?: { method?: string; body?: string },
-  ) => {
+  const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
     const u = new URL(url);
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(init.body) : undefined;
@@ -62,7 +64,13 @@ describe("MinimaClient.recommend", () => {
       status: 200,
       json: {
         recommendation_id: "r",
-        recommended_model: { model_id: "m", provider: "p", predicted_success: 0.5, est_cost_usd: 1, score: 1 },
+        recommended_model: {
+          model_id: "m",
+          provider: "p",
+          predicted_success: 0.5,
+          est_cost_usd: 1,
+          score: 1,
+        },
         confidence: 0.5,
         decision_basis: "prior",
         threshold_used: 0.5,
@@ -72,12 +80,15 @@ describe("MinimaClient.recommend", () => {
       },
     }));
 
-    await client.recommend({ task: "x", tags: ["a"] }, {
-      cost_quality_tradeoff: 8,
-      constraints: { max_cost_per_call: 0.5 },
-      namespace: "team-x",
-      allow_llm_escalation: false,
-    });
+    await client.recommend(
+      { task: "x", tags: ["a"] },
+      {
+        cost_quality_tradeoff: 8,
+        constraints: { max_cost_per_call: 0.5 },
+        namespace: "team-x",
+        allow_llm_escalation: false,
+      },
+    );
 
     const sent = calls[0].body as Record<string, unknown>;
     expect(sent.cost_quality_tradeoff).toBe(8);
@@ -116,7 +127,10 @@ describe("MinimaClient.feedback", () => {
 
 describe("MinimaClient GET endpoints", () => {
   test("models drops undefined params", async () => {
-    const { client, calls } = mockClient(() => ({ status: 200, json: { models: [], catalog_version: "v1" } }));
+    const { client, calls } = mockClient(() => ({
+      status: 200,
+      json: { models: [], catalog_version: "v1" },
+    }));
     await client.models({ provider: "anthropic" });
     expect(calls[0].params).toBe("provider=anthropic");
   });

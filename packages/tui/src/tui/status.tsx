@@ -22,6 +22,8 @@ export interface StatusBarProps {
   planMode?: boolean;
   readDirs?: string[];
   alwaysTools?: string[];
+  /** "spent/limit (mode)" budget note; null hides the segment. */
+  budget?: { spentUsd: number; limitUsd: number; fraction: number; mode: string } | null;
 }
 
 export function StatusBar({
@@ -40,7 +42,15 @@ export function StatusBar({
   planMode,
   readDirs,
   alwaysTools,
+  budget,
 }: StatusBarProps) {
+  const budgetColor = budget
+    ? budget.fraction >= 0.9
+      ? "red"
+      : budget.fraction >= 0.75
+        ? "yellow"
+        : "green"
+    : "gray";
   const modelStyle = basis === "offline" ? "yellow" : "cyan";
   const routeStyle = routeMode === "confirm" ? "yellow" : "gray";
   const thinkStyle =
@@ -79,6 +89,16 @@ export function StatusBar({
 
         <Text color="gray"> · </Text>
         <Text color="yellow">${actualCostUsd.toFixed(4)}</Text>
+
+        {budget && (
+          <>
+            <Text color="gray"> / </Text>
+            <Text color={budgetColor}>
+              ${budget.limitUsd.toFixed(2)} ({Math.round(budget.fraction * 100)}%
+              {budget.mode === "enforce" ? "⛔" : ""})
+            </Text>
+          </>
+        )}
 
         <Text color="gray"> · sess {sessionId.slice(0, 12)}</Text>
 
