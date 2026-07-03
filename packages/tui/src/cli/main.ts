@@ -22,7 +22,7 @@ import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
-import { createSpawn } from "../minima/spawn.ts";
+import { createSpawn, type ChildEvent } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { builtinTools } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
@@ -410,9 +410,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
   // Children get their own routed model, meter, confined tools, and budget slice; their
   // rows land in the same run under agentId=childId.
+  //
+  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
+  // React state without the TUI needing to exist at createSpawn time.
+  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
   agent.agentState.tools.push(
     taskTool({
-      spawn: createSpawn({ parent: agent, workdir: process.cwd() }),
+      spawn: createSpawn({
+        parent: agent,
+        workdir: process.cwd(),
+        onChildEvent: (e) => childEventRef.handler?.(e),
+      }),
       spawnDepth: 0,
       maxDepth: 2,
     }),
@@ -475,7 +483,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
-  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }));
+  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima", childEventRef }));
   await instance.waitUntilExit();
 
   // Exit alternate screen + restore cursor on shutdown.
