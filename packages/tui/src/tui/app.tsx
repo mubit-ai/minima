@@ -1644,7 +1644,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           },
           {
             role: "tool",
-            text: `thoughts: ${on ? "ON" : "off"}${on ? " — model's reasoning streams above each answer" : ""}`,
+            text: `reasoning: ${on ? "ON" : "off"}${on ? " — model's reasoning streams above each answer" : ""}`,
             toolName: "thoughts",
           },
         ]);

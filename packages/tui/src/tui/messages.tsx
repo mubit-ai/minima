@@ -181,7 +181,7 @@ export function Messages({
                   borderColor="gray"
                 >
                   <Text color="gray" italic>
-                    {`💭 thought for ${sub.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s`}
+                    {`🧠 reasoning (${sub.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s)`}
                   </Text>
                   <Text color="gray" italic>
                     {sub.text}
@@ -210,7 +210,7 @@ export function Messages({
       {streamingThoughts ? (
         <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={0} width="100%">
           <Box flexDirection="column">
-            <Text color="cyan">{"💭 thinking..."}</Text>
+            <Text color="cyan">{"🧠 reasoning..."}</Text>
             <Text color="gray" wrap="truncate">
               {streamingThoughts.slice(-300)}
             </Text>
