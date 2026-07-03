@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type AskUserRef,
   bashTool,
   builtinTools,
   editTool,
   lsTool,
+  questionTool,
   readTool,
   webFetchTool,
   webSearchTool,
@@ -250,5 +252,50 @@ describe("web_fetch tool (Exa)", () => {
     mockFetch(401, { error: "nope" });
     const res = await run(webFetchTool(), { url: "https://a.example" });
     expect((res.content[0] as { text: string }).text).toMatch(/web_fetch failed:.*authentication/);
+  });
+});
+
+describe("question tool", () => {
+  test("headless (no ask callback) tells the model to proceed", async () => {
+    const ref: AskUserRef = { current: null };
+    const res = await run(questionTool(ref), { question: "Which one?" });
+    expect((res.content[0] as { text: string }).text).toMatch(/headless|best assumption/i);
+    expect(res.details?.answered).toBe(false);
+    expect(res.details?.reason).toBe("headless");
+  });
+
+  test("returns the user's answer when ask resolves", async () => {
+    const ref: AskUserRef = { current: async () => "Option B" };
+    const res = await run(questionTool(ref), {
+      question: "Pick",
+      options: [{ label: "Option A" }, { label: "Option B", description: "the good one" }],
+    });
+    expect((res.content[0] as { text: string }).text).toBe("The user answered: Option B");
+    expect(res.details?.answered).toBe(true);
+    expect(res.details?.answer).toBe("Option B");
+  });
+
+  test("dismissed (ask resolves null) tells the model to proceed", async () => {
+    const ref: AskUserRef = { current: async () => null };
+    const res = await run(questionTool(ref), { question: "Pick" });
+    expect((res.content[0] as { text: string }).text).toMatch(/dismissed|best judgment/i);
+    expect(res.details?.answered).toBe(false);
+    expect(res.details?.reason).toBe("dismissed");
+  });
+
+  test("validates required question and option labels", () => {
+    const ref: AskUserRef = { current: null };
+    const tool = questionTool(ref);
+    expect(tool.parameters.validate({}).ok).toBe(false);
+    expect(
+      tool.parameters.validate({ question: "q", options: [{ description: "no label" }] }).ok,
+    ).toBe(false);
+    const ok = tool.parameters.validate({ question: "q" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.value.allow_freetext).toBe(true);
+  });
+
+  test("is sequential (never runs concurrently with other tools)", () => {
+    expect(questionTool({ current: null }).executionMode).toBe("sequential");
   });
 });

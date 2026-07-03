@@ -22,6 +22,7 @@ import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
+import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
@@ -43,6 +44,8 @@ import { TextInput } from "./text-input.tsx";
 export interface AppProps {
   agent: MinimaAgent;
   banner?: string;
+  /** Late-bound slot the `question` tool reads; populated here once the overlay is wired. */
+  askUserRef?: AskUserRef;
 }
 
 /** True when at least one key-requiring model provider has its key set. */
@@ -296,6 +299,109 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
   );
 }
 
+export interface QuestionPromptData {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  allow_freetext: boolean;
+  resolve: (answer: string | null) => void;
+}
+
+/** Overlay for the `question` tool: pick an option, type a custom answer, or dismiss (Esc). */
+export function QuestionOverlay({ prompt }: { prompt: QuestionPromptData }) {
+  const optionCount = prompt.options.length;
+  const rowCount = optionCount + (prompt.allow_freetext ? 1 : 0);
+  const [cursor, setCursor] = useState(0);
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  useInput((input, key) => {
+    if (typing) {
+      if (key.return) {
+        const v = draft.trim();
+        if (v) prompt.resolve(v);
+        return;
+      }
+      if (key.escape) {
+        setTyping(false);
+        setDraft("");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setDraft((v) => v.slice(0, -1));
+        return;
+      }
+      if (key.ctrl || key.meta) return;
+      if (input) setDraft((v) => v + input);
+      return;
+    }
+    if (key.escape) {
+      prompt.resolve(null);
+      return;
+    }
+    if (input === "t" && prompt.allow_freetext) {
+      setTyping(true);
+      return;
+    }
+    if (key.upArrow) {
+      setCursor((c) => (c - 1 + rowCount) % rowCount);
+      return;
+    }
+    if (key.downArrow) {
+      setCursor((c) => (c + 1) % rowCount);
+      return;
+    }
+    if (key.return) {
+      if (prompt.allow_freetext && cursor === optionCount) {
+        setTyping(true);
+        return;
+      }
+      const opt = prompt.options[cursor];
+      if (opt) prompt.resolve(opt.label);
+    }
+  });
+
+  return (
+    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" width="100%">
+      <Box position="absolute" marginTop={-1} marginLeft={2}>
+        <Text color="cyan" bold>
+          {prompt.header ? ` ${prompt.header} ` : " question "}
+        </Text>
+      </Box>
+      <Text color="white" bold>
+        {prompt.question}
+      </Text>
+      {typing ? (
+        <Box marginTop={0}>
+          <Text color="gray">{"› "}</Text>
+          <Text color="white">{draft}</Text>
+          <Text color="gray">{"▋"}</Text>
+        </Box>
+      ) : (
+        <Box flexDirection="column" marginTop={0}>
+          {prompt.options.map((opt, i) => (
+            <Text key={opt.label} color={i === cursor ? "cyan" : "white"}>
+              {i === cursor ? "› " : "  "}
+              {opt.label}
+              {opt.description ? <Text color="gray"> — {opt.description}</Text> : null}
+            </Text>
+          ))}
+          {prompt.allow_freetext ? (
+            <Text color={cursor === optionCount ? "cyan" : "gray"}>
+              {cursor === optionCount ? "› " : "  "}✎ Other (type a custom answer)
+            </Text>
+          ) : null}
+        </Box>
+      )}
+      <Text color="gray">
+        {typing
+          ? "⏎ submit · Esc cancel"
+          : `↑↓ select · ⏎ confirm${prompt.allow_freetext ? " · t type" : ""} · Esc dismiss`}
+      </Text>
+    </Box>
+  );
+}
+
 export interface ConfigOverlayProps {
   onDismiss: () => void;
 }
@@ -409,7 +515,7 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   );
 }
 
-export function HarnessApp({ agent, banner: _banner }: AppProps) {
+export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
@@ -474,6 +580,19 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
   const permStateRef = useRef<PermissionState>(createPermissionState(process.cwd()));
+
+  // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
+  const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
+  useEffect(() => {
+    if (!askUserRef) return;
+    askUserRef.current = (params) =>
+      new Promise<string | null>((resolve) => {
+        setQuestionPrompt({ ...params, resolve });
+      });
+    return () => {
+      askUserRef.current = null;
+    };
+  }, [askUserRef]);
 
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
@@ -694,7 +813,15 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
-    if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return;
+    if (
+      pickerOpen ||
+      paletteOpen ||
+      sessionPickerOpen ||
+      permPrompt ||
+      questionPrompt ||
+      configOverlayOpen
+    )
+      return;
     if (busy) return; // don't open overlays mid-run
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
@@ -1702,7 +1829,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
   // bottom region (see the render tree). Plan mode adds its banner (+3).
-  const inputBoxHeight = overlayOpen || permPrompt ? 0 : planMode ? 7 : 4;
+  const inputBoxHeight = overlayOpen || permPrompt || questionPrompt ? 0 : planMode ? 7 : 4;
   const permPromptHeight = permPrompt
     ? 3 + // round border (2) + prompt line (1)
       (permPrompt.argsSummary && !permPrompt.diffPreview ? 1 : 0) +
@@ -1861,7 +1988,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         />
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : permPrompt ? null : ( // permission prompt owns the bottom region (rendered below)
+      ) : permPrompt || questionPrompt ? null : ( // permission/question prompt owns the bottom region (rendered below)
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
@@ -1904,6 +2031,18 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             resolve: (decision) => {
               setPermPrompt(null);
               permPrompt.resolve(decision);
+            },
+          }}
+        />
+      )}
+
+      {questionPrompt && (
+        <QuestionOverlay
+          prompt={{
+            ...questionPrompt,
+            resolve: (answer) => {
+              setQuestionPrompt(null);
+              questionPrompt.resolve(answer);
             },
           }}
         />

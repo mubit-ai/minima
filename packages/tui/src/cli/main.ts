@@ -24,7 +24,7 @@ import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
-import { builtinTools } from "../tools/index.ts";
+import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
@@ -418,6 +418,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }),
   );
 
+  // The `question` tool lets the model ask the user a structured clarifying question mid-run.
+  // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
+  // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
+  const askUserRef: AskUserRef = { current: null };
+  agent.agentState.tools.push(questionTool(askUserRef));
+
   // Budget following: --budget creates a session-scoped ledger (warn mode unless
   // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
   // TUI renders them as chat notices.
@@ -475,7 +481,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
-  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }));
+  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima", askUserRef }));
   await instance.waitUntilExit();
 
   // Exit alternate screen + restore cursor on shutdown.
