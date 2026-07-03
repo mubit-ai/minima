@@ -290,5 +290,10 @@ function convertSchema(node: Record<string, unknown>): Record<string, unknown> {
     }
     out.properties = props;
   }
+  // Array element schema. Gemini REQUIRES `items` for an ARRAY type — omitting it makes the
+  // API reject the whole request with a 400 "exception parsing response", so recurse into it.
+  if (node.items && typeof node.items === "object") {
+    out.items = convertSchema(node.items as Record<string, unknown>);
+  }
   return out;
 }
