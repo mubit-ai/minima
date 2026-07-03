@@ -2,7 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TIPS, advance, formatTip, nextIndex, pick, setTipsStateDir } from "../src/tui/tips.ts";
+import {
+  TIPS,
+  advance,
+  formatTip,
+  isTipsEnabled,
+  nextIndex,
+  pick,
+  setTipsEnabled,
+  setTipsStateDir,
+} from "../src/tui/tips.ts";
 
 let dir = "";
 afterEach(() => {
@@ -55,5 +64,30 @@ describe("tips", () => {
     setTipsStateDir(dir);
     // No state file yet → readIndex() = 0 → advance() = 1.
     expect(advance()).toBe(pick(1));
+  });
+
+  test("tips are ON by default (no state file)", () => {
+    dir = mkdtempSync(join(tmpdir(), "minima-tips-"));
+    setTipsStateDir(dir);
+    expect(isTipsEnabled()).toBe(true);
+  });
+
+  test("setTipsEnabled persists the preference and round-trips", () => {
+    dir = mkdtempSync(join(tmpdir(), "minima-tips-"));
+    setTipsStateDir(dir);
+    setTipsEnabled(false);
+    expect(isTipsEnabled()).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "tips_state.json"), "utf8")).enabled).toBe(false);
+    setTipsEnabled(true);
+    expect(isTipsEnabled()).toBe(true);
+  });
+
+  test("toggling enabled preserves the rotation cursor", () => {
+    dir = mkdtempSync(join(tmpdir(), "minima-tips-"));
+    setTipsStateDir(dir);
+    advance(); // index → 1
+    setTipsEnabled(false); // must not reset index
+    expect(JSON.parse(readFileSync(join(dir, "tips_state.json"), "utf8")).index).toBe(1);
+    expect(advance()).toBe(pick(2));
   });
 });

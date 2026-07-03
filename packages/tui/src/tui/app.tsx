@@ -40,7 +40,7 @@ import { repoIdentity, setProject } from "./projects.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
-import { advance as advanceTip, formatTip } from "./tips.ts";
+import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -132,7 +132,7 @@ const COMMANDS = [
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (read-only)" },
-  { name: "tip", desc: "Show a tip spotlighting a Minima command" },
+  { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
 export interface CommandPickerProps {
@@ -540,10 +540,16 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   // at render) reflects newly-registered models even if it's already open.
   const [, setCatalogVersion] = useState(0);
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
+  // Startup tips (ON by default): a rotating tip shown on the empty welcome splash. `/tip on|off`
+  // toggles the persisted preference; `startupTip` holds the tip rendered this launch.
+  const [tipsEnabled, setTipsEnabledState] = useState(isTipsEnabled());
+  const [startupTip, setStartupTip] = useState<string | null>(null);
 
   // On mount: nudge if routing is set but no model-provider key is, and pull the live model
   // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
   useEffect(() => {
+    // Rotate a fresh startup tip for the welcome splash (ON by default; persisted preference).
+    if (isTipsEnabled()) setStartupTip(formatTip(advanceTip()));
     if (!anyProviderKeyPresent()) {
       setMessages((m) => [
         ...m,
@@ -1573,6 +1579,22 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
         break;
       }
       case "tip": {
+        const arg = args.trim().toLowerCase();
+        if (arg === "on" || arg === "off") {
+          const on = arg === "on";
+          setTipsEnabled(on);
+          setTipsEnabledState(on);
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/tip ${arg}` },
+            {
+              role: "tool",
+              text: `startup tips ${on ? "on" : "off"}`,
+              toolName: "tip",
+            },
+          ]);
+          break;
+        }
         setMessages((m) => [
           ...m,
           { role: "tool", text: formatTip(advanceTip()), toolName: "tip" },
@@ -1896,6 +1918,11 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
                 : "select & copy ON · /mouse on for wheel scroll · PgUp/PgDn always works"}
             </Text>
           </Box>
+          {tipsEnabled && startupTip ? (
+            <Box marginTop={1}>
+              <Text color="yellow">{startupTip}</Text>
+            </Box>
+          ) : null}
         </Box>
       ) : (
         // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat

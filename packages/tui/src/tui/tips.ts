@@ -53,29 +53,53 @@ export function nextIndex(index: number): number {
   return (index + 1) % TIPS.length;
 }
 
-function readIndex(): number {
+interface TipsState {
+  index?: number;
+  enabled?: boolean;
+}
+
+function readState(): TipsState {
   try {
-    const raw = JSON.parse(readFileSync(stateFile(), "utf8")) as { index?: unknown };
-    const i = Number(raw.index);
-    return Number.isFinite(i) ? i : 0;
+    const raw = JSON.parse(readFileSync(stateFile(), "utf8")) as TipsState;
+    return raw && typeof raw === "object" ? raw : {};
   } catch {
-    // missing / corrupt / unreadable state → start from 0
-    return 0;
+    // missing / corrupt / unreadable state → defaults
+    return {};
   }
 }
 
-/**
- * Advance the rotation cursor, persist it (best-effort), and return the tip at the
- * new index. An unwritable HOME never crashes the app — it just means the next
- * launch re-reads the old value.
- */
-export function advance(): string {
-  const nxt = nextIndex(readIndex());
+/** Best-effort persist. An unwritable HOME never crashes the app. */
+function writeState(state: TipsState): void {
   try {
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(stateFile(), JSON.stringify({ index: nxt }));
+    writeFileSync(stateFile(), JSON.stringify(state));
   } catch {
-    // read-only HOME / no perms: fall back to the in-memory rotation
+    // read-only HOME / no perms: fall back to the in-memory value
   }
+}
+
+function readIndex(): number {
+  const i = Number(readState().index);
+  return Number.isFinite(i) ? i : 0;
+}
+
+/**
+ * Advance the rotation cursor, persist it (best-effort, preserving `enabled`), and
+ * return the tip at the new index.
+ */
+export function advance(): string {
+  const state = readState();
+  const nxt = nextIndex(readIndex());
+  writeState({ ...state, index: nxt });
   return pick(nxt);
+}
+
+/** Whether startup tips are enabled. Defaults to true when unset — tips are ON by default. */
+export function isTipsEnabled(): boolean {
+  return readState().enabled !== false;
+}
+
+/** Persist the startup-tips on/off preference (best-effort), preserving the rotation cursor. */
+export function setTipsEnabled(enabled: boolean): void {
+  writeState({ ...readState(), enabled });
 }
