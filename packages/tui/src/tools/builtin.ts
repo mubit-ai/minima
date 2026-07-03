@@ -7,6 +7,7 @@
  */
 
 import type { AgentTool } from "../agent/tools.ts";
+import { applyPatchTool } from "./apply_patch.ts";
 import { bashTool } from "./bash.ts";
 import { editTool } from "./edit.ts";
 import { globTool } from "./glob.ts";
@@ -21,6 +22,7 @@ import { writeTool } from "./write.ts";
 export { readTool } from "./read.ts";
 export { writeTool } from "./write.ts";
 export { editTool } from "./edit.ts";
+export { applyPatchTool } from "./apply_patch.ts";
 export { bashTool } from "./bash.ts";
 export { lsTool } from "./ls.ts";
 export { globTool } from "./glob.ts";
@@ -46,6 +48,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     readTool(fs),
     writeTool(fs),
     editTool(fs),
+    applyPatchTool(fs),
     bashTool(fs),
     lsTool(fs),
     globTool(fs),

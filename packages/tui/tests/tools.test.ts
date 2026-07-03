@@ -142,6 +142,7 @@ describe("builtinTools", () => {
   test("returns the default set, minus excluded", () => {
     const all = builtinTools();
     expect(all.map((t) => t.name).sort()).toEqual([
+      "apply_patch",
       "bash",
       "edit",
       "glob",
@@ -155,6 +156,7 @@ describe("builtinTools", () => {
     ]);
     const filtered = builtinTools({ exclude: ["bash", "edit"] });
     expect(filtered.map((t) => t.name).sort()).toEqual([
+      "apply_patch",
       "glob",
       "grep",
       "ls",
