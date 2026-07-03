@@ -8,6 +8,8 @@ import {
   editTool,
   lsTool,
   readTool,
+  webFetchTool,
+  webSearchTool,
   writeTool,
 } from "../src/tools/index.ts";
 
@@ -148,6 +150,7 @@ describe("builtinTools", () => {
       "read",
       "todowrite",
       "web_fetch",
+      "web_search",
       "write",
     ]);
     const filtered = builtinTools({ exclude: ["bash", "edit"] });
@@ -158,7 +161,92 @@ describe("builtinTools", () => {
       "read",
       "todowrite",
       "web_fetch",
+      "web_search",
       "write",
     ]);
+  });
+});
+
+// --- Exa-backed web tools ---------------------------------------------------
+
+const realFetch = globalThis.fetch;
+const savedExaKey = process.env.EXA_API_KEY;
+
+function mockFetch(status: number, body: unknown): void {
+  globalThis.fetch = (async () =>
+    new Response(typeof body === "string" ? body : JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+}
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  if (savedExaKey === undefined) {
+    delete process.env.EXA_API_KEY;
+  } else {
+    process.env.EXA_API_KEY = savedExaKey;
+  }
+});
+
+describe("web_search tool", () => {
+  test("errors clearly when EXA_API_KEY is unset", async () => {
+    delete process.env.EXA_API_KEY;
+    const res = await run(webSearchTool(), { query: "typescript" });
+    expect((res.content[0] as { text: string }).text).toMatch(/EXA_API_KEY is not set/);
+  });
+
+  test("formats a numbered list of results", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, {
+      results: [
+        { url: "https://a.example", title: "Alpha", publishedDate: "2025-01-01" },
+        { url: "https://b.example", title: "Beta" },
+      ],
+    });
+    const res = await run(webSearchTool(), { query: "x", num_results: 20 });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("[1] Alpha (2025-01-01)");
+    expect(out).toContain("https://a.example");
+    expect(out).toContain("[2] Beta");
+    expect(res.details?.count).toBe(2);
+  });
+
+  test("reports no results", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [] });
+    const res = await run(webSearchTool(), { query: "nothing" });
+    expect((res.content[0] as { text: string }).text).toBe("No results found.");
+    expect(res.details?.count).toBe(0);
+  });
+});
+
+describe("web_fetch tool (Exa)", () => {
+  test("returns page text with a title header", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, {
+      results: [{ url: "https://a.example", title: "Doc", text: "hello world" }],
+    });
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("# Doc");
+    expect(out).toContain("hello world");
+    expect(res.details?.truncated).toBe(false);
+  });
+
+  test("truncates past max_chars", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [{ url: "https://a.example", text: "x".repeat(2000) }] });
+    const res = await run(webFetchTool(), { url: "https://a.example", max_chars: 500 });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("[truncated — 1500 more chars]");
+    expect(res.details?.truncated).toBe(true);
+  });
+
+  test("surfaces auth failure", async () => {
+    process.env.EXA_API_KEY = "bad";
+    mockFetch(401, { error: "nope" });
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    expect((res.content[0] as { text: string }).text).toMatch(/web_fetch failed:.*authentication/);
   });
 });

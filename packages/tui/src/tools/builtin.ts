@@ -15,6 +15,7 @@ import { lsTool } from "./ls.ts";
 import { readTool } from "./read.ts";
 import { todowriteTool } from "./todowrite.ts";
 import { webFetchTool } from "./web_fetch.ts";
+import { webSearchTool } from "./web_search.ts";
 import { writeTool } from "./write.ts";
 
 export { readTool } from "./read.ts";
@@ -26,6 +27,7 @@ export { globTool } from "./glob.ts";
 export { grepTool } from "./grep.ts";
 export { todowriteTool } from "./todowrite.ts";
 export { webFetchTool } from "./web_fetch.ts";
+export { webSearchTool } from "./web_search.ts";
 
 export interface BuiltinToolsOptions {
   exclude?: string[];
@@ -49,6 +51,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     globTool(fs),
     grepTool(fs),
     todowriteTool(),
+    webSearchTool(),
     webFetchTool(),
   ];
   const exclude = new Set(opts.exclude ?? []);
