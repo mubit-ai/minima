@@ -40,6 +40,7 @@ import { repoIdentity, setProject } from "./projects.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
+import { advance as advanceTip, formatTip } from "./tips.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -131,6 +132,7 @@ const COMMANDS = [
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (read-only)" },
+  { name: "tip", desc: "Show a tip spotlighting a Minima command" },
 ];
 
 export interface CommandPickerProps {
@@ -1568,6 +1570,13 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
             ]);
           }
         }
+        break;
+      }
+      case "tip": {
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: formatTip(advanceTip()), toolName: "tip" },
+        ]);
         break;
       }
       case "judge": {
