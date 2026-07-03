@@ -143,6 +143,8 @@ export interface FeedbackRequest {
   latency_ms?: number;
   iterations?: number;
   verified_in_production?: boolean;
+  /** False = cadence-skip/abstain — server stores NULL quality instead of fabricating 0.9. */
+  judged?: boolean;
   notes?: string;
   idempotency_key?: string;
 }
@@ -257,4 +259,19 @@ export interface Strategy {
   dominant_lesson_type?: string;
   dominant_scope?: string;
   lesson_ids?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities — capabilities.py
+// ---------------------------------------------------------------------------
+
+export interface CapabilitiesResponse {
+  /** POST /v1/plan (goal → Delegation DAG) is available. */
+  plan: boolean;
+  /** POST /v1/recommend/workflow is available. */
+  workflow: boolean;
+  /** Running server version string. */
+  api_version: string;
+  /** Constraint fields the engine actively filters on. */
+  honored_constraints: string[];
 }
