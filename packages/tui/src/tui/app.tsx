@@ -127,7 +127,7 @@ const COMMANDS = [
   { name: "clone", desc: "Clone the current session" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
-  { name: "thoughts", desc: "Toggle streaming model's thinking" },
+  { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "mouse", desc: "Toggle mouse capture (scroll vs select/copy)" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
@@ -528,7 +528,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [busyState, setBusyState] = useState<"ready" | "thinking" | "working">("ready");
+  const [busyState, setBusyState] = useState<"ready" | "reasoning" | "running">("ready");
   const [actualCost, setActualCost] = useState<number>();
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -727,7 +727,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           const s = ev.assistantMessageEvent;
           if (s?.type === "thinking_start") {
             thinkingStartRef.current = Date.now();
-            setBusyState("thinking");
+            setBusyState("reasoning");
             streamingThoughtsBufRef.current = "";
           } else if (s?.type === "thinking_delta") {
             thoughtsRef.current += s.delta;
@@ -739,7 +739,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
               }, 80);
             }
           } else if (s?.type === "text_delta") {
-            setBusyState("working");
+            setBusyState("running");
             streamingBufRef.current += s.delta;
             if (!streamFlushRef.current) {
               streamFlushRef.current = setTimeout(() => {
@@ -813,7 +813,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           }
           break;
         case "tool_execution_start":
-          setBusyState("working");
+          setBusyState("running");
           break;
       }
     });
@@ -1771,7 +1771,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
     }
 
     setBusy(true);
-    setBusyState("thinking");
+    setBusyState("reasoning");
     setStreaming("");
     setStreamingThoughts("");
     try {
@@ -1982,13 +1982,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
         </Box>
       )}
 
-      {busyIndicatorVisible && (
-        <BusyIndicator
-          active
-          state={busyState === "working" ? "working" : "thinking"}
-          showTip={tipsEnabled}
-        />
-      )}
+      {busyIndicatorVisible && <BusyIndicator active showTip={tipsEnabled} />}
 
       {pickerOpen ? (
         <ModelPicker

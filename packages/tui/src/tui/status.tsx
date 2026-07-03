@@ -18,7 +18,7 @@ export interface StatusBarProps {
   sessionId: string;
   routingOffline: boolean;
   offlineReason?: string | null;
-  statusText: "ready" | "thinking" | "working";
+  statusText: "ready" | "reasoning" | "running";
   planMode?: boolean;
   readDirs?: string[];
   alwaysTools?: string[];
@@ -76,7 +76,7 @@ export function StatusBar({
         <Text color="gray"> · route: </Text>
         <Text color={routeStyle}>{routeMode}</Text>
 
-        <Text color="gray"> · think: </Text>
+        <Text color="gray"> · reason: </Text>
         <Text color={thinkStyle}>{thinkingLevel}</Text>
 
         <Text color="gray"> │ ctx </Text>
