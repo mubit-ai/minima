@@ -13,6 +13,7 @@ import {
   type AnthropicClientLike,
   AnthropicProvider,
   type AnthropicStreamEvent,
+  buildClient,
 } from "../src/ai/providers/anthropic.ts";
 
 const MODEL: Model = {
@@ -43,6 +44,17 @@ function resetAll() {
   resetRegistry();
   resetProviderRegistration();
 }
+
+describe("buildClient timeout", () => {
+  test("converts the SECONDS convention to the SDK's milliseconds (regression: 60ms bug)", async () => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    // Default 60s → 60_000ms. Passing 60 raw gave a 60ms timeout: every Claude call aborted.
+    const def = (await buildClient({})) as unknown as { timeout: number };
+    expect(def.timeout).toBe(60_000);
+    const custom = (await buildClient({ timeout: 30 })) as unknown as { timeout: number };
+    expect(custom.timeout).toBe(30_000);
+  });
+});
 
 describe("AnthropicProvider", () => {
   test("assembles a text reply from message_start/delta/stop events", async () => {
