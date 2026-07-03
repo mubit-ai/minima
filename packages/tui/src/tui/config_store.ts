@@ -97,6 +97,18 @@ export const SECTIONS: Section[] = [
       },
     ],
   },
+  {
+    title: "Web tools",
+    note: "Exa API key for the web_search / web_fetch tools (https://exa.ai). Optional — the web tools stay unavailable until it is set.",
+    fields: [
+      {
+        key: "EXA_API_KEY",
+        label: "Exa API key (web search)",
+        secret: true,
+        optional: true,
+      },
+    ],
+  },
 ];
 
 export function allFields(): Field[] {
