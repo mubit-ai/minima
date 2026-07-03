@@ -24,6 +24,7 @@ import { SessionManager, SessionStore, type SessionSummary, formatAge } from "..
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
+import { BusyIndicator } from "./busy.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
@@ -1874,9 +1875,18 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   const streamingHeight = streaming ? 6 + wrappedLineCount(streaming, cols - 4) : 0;
   // The thoughts peek is wrap="truncate" (fixed ~4 rows), so it never grows with content.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 4 : 0;
+  // The busy indicator (spinner + tip) renders as one line above the input box while a turn
+  // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
+  const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
+  const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
   const chatRegionHeight = Math.max(
     1,
-    rows - footerHeight - suggestionsHeight - inputBoxHeight - permPromptHeight,
+    rows -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      permPromptHeight -
+      busyIndicatorHeight,
   );
   const maxChatHeight = Math.max(1, chatRegionHeight - streamingHeight - streamingThoughtsHeight);
 
@@ -1970,6 +1980,14 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
             </Box>
           ))}
         </Box>
+      )}
+
+      {busyIndicatorVisible && (
+        <BusyIndicator
+          active
+          state={busyState === "working" ? "working" : "thinking"}
+          showTip={tipsEnabled}
+        />
       )}
 
       {pickerOpen ? (
