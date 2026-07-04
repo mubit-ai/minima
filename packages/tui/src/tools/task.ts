@@ -236,7 +236,10 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
       "decomposable work (research a module, make an isolated change, verify a result). " +
       "Each delegation MUST state objective, output_format, and boundaries — boundaries " +
       "matter for parallel edits (workers must not touch each other's files). Prefer 1 " +
-      "subtask for a focused question; more only when genuinely independent.",
+      "subtask for a focused question; more only when genuinely independent. Every call " +
+      "spawns fresh agents and spends real money: if a child's result is insufficient, do " +
+      "NOT re-run the same delegations — finish the remaining work yourself with your own " +
+      "tools, or delegate ONE new, narrower subtask.",
     parameters,
     // One task batch at a time: two task calls in one assistant turn must not interleave
     // their children (the DAG itself parallelizes within the batch).
