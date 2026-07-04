@@ -185,10 +185,18 @@ export class AnthropicProvider {
   }
 }
 
+/** SDK timeout (ms) from the harness's seconds-based option. options.timeout is in
+ * SECONDS (the harness-wide contract — google.ts converts the same way); the Anthropic
+ * SDK expects milliseconds. Passing seconds through gave every request a 30-60ms
+ * deadline: all Claude calls died with "Request timed out". */
+export function sdkTimeoutMs(options: Record<string, unknown>): number {
+  return Math.round(((options.timeout as number) ?? 60) * 1000);
+}
+
 async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
   const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey, timeout: (options.timeout as number) ?? 60 });
+  const client = new Anthropic({ apiKey, timeout: sdkTimeoutMs(options) });
   // The SDK's messages.stream() returns a MessageStream (async iterable); cast to our shape.
   return client as unknown as AnthropicClientLike;
 }
