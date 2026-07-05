@@ -55,3 +55,4 @@ class StrategiesResponse(BaseModel):
     lane: str
     strategies: list[Strategy] = Field(default_factory=list)
     count: int = 0
+    warnings: list[str] = Field(default_factory=list)
