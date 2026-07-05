@@ -108,11 +108,17 @@ class Recommender:
         warnings: list[str] = []
 
         classification = classify_details(req.task)
+        # classify_details always populates `profile`; bind it locally so the type
+        # checker sees a non-None ClassificationProfile (narrowing on the attribute
+        # is otherwise dropped across the awaits below). Mutations still apply to the
+        # same object, so behavior is unchanged.
+        class_profile = classification.profile
+        assert class_profile is not None
         task_type = classification.task_type
         difficulty = classification.difficulty
         profile.mark("classify")
-        classification.profile.final_task_type = task_type
-        classification.profile.final_difficulty = difficulty
+        class_profile.final_task_type = task_type
+        class_profile.final_difficulty = difficulty
         signature = (
             salient_signature(req.task.task, settings.minima_cluster_signature_tokens)
             if settings.minima_cluster_granularity.lower() == "fine"
@@ -152,16 +158,16 @@ class Recommender:
                 [(ev.record.task_type, ev.score) for ev in evidence if ev.record is not None]
             )
             if neighbor_estimate is not None:
-                classification.profile.neighbor_support = neighbor_estimate.neighbor_support
-                classification.profile.neighbor_count = neighbor_estimate.neighbor_count
+                class_profile.neighbor_support = neighbor_estimate.neighbor_support
+                class_profile.neighbor_count = neighbor_estimate.neighbor_count
                 if (
                     neighbor_estimate.task_type != task_type
-                    and classification.profile.caller_task_type is None
+                    and class_profile.caller_task_type is None
                     and task_type == TaskType.other
                 ):
                     task_type = neighbor_estimate.task_type
-                    classification.profile.task_type_source = "neighbor_vote"
-                    classification.profile.final_task_type = task_type
+                    class_profile.task_type_source = "neighbor_vote"
+                    class_profile.final_task_type = task_type
                 cluster = task_cluster(task_type, difficulty, signature)
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
