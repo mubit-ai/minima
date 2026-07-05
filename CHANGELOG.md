@@ -4,6 +4,37 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-07-05
+
+### Changed (API behavior — note for integrators)
+- **`max_cost_per_call` is now a true hard filter.** When no model fits the budget,
+  `POST /v1/recommend` returns **422** (`"no model within max_cost_per_call budget"`)
+  instead of 200 with the cheapest over-budget model plus a `no_model_within_cost_budget`
+  warning. This matches the documented "hard filter" contract and the existing
+  no-candidates behavior. Callers who want "cheapest possible regardless of ceiling"
+  should use the cost-quality slider, not `max_cost_per_call`.
+- **Auth rejects malformed bearer tokens.** A bearer token that is not in the Mubit key
+  format (`mbt_…`) now returns **401** before any work, instead of being accepted and
+  served from priors. A missing bearer with a server-configured `MUBIT_API_KEY` fallback
+  is unaffected.
+
+### Fixed
+- **Cold-start catalog prices were stale.** The vendored fallback snapshot
+  (`capability_priors.json`) is refreshed from the live catalog (e.g. `claude-opus-4-8`
+  `15/75` → `5/25`), and a scheduled workflow now keeps it current so it stops drifting
+  by hand. (The auto-refresh updates prices for the curated model list; it does not add
+  new models — expanded provider coverage such as the gpt-5 family remains a separate
+  curation.)
+- **Server version string can no longer drift.** `minima.__version__` (reported by
+  `/v1/health` and `/v1/capabilities`) now derives from installed package metadata instead
+  of a hardcoded constant that had silently lagged across releases.
+- **Feedback reconciliation types the quality value honestly** as `float | None` — unjudged
+  rows keep `NULL`, no fabricated default (preserves the M-J2 fix).
+
+### Internal
+- **PR CI added** — every PR now runs server (`ruff` + `pytest` + `mypy`) and TUI
+  (`bun test` + `tsc`) checks; the recommender is mypy-clean.
+
 ## [0.7.0] - 2026-07-05
 
 ### Added
