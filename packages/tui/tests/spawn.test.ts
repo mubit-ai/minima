@@ -300,4 +300,52 @@ describe("createSpawn (default child factory)", () => {
     expect(p).toContain("do NOT touch");
     expect(p).toContain("A RESULT");
   });
+
+  test("delegationPrompt restates ops rules and the BLOCKED refusal convention", () => {
+    // Children don't inherit the lead's system prompt — a live bench showed a child
+    // editing a file without any verification step. The contract must carry the rules.
+    const p = delegationPrompt(
+      { step_id: "x", objective: "o", output_format: "f", boundaries: "b" },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+    expect(p).toContain("## Rules");
+    expect(p).toContain("Read a file before editing");
+    expect(p).toContain("verify");
+    expect(p).toContain('"BLOCKED: "');
+    expect(p).toContain("Boundaries override the objective");
+  });
+
+  test("a BLOCKED: reply maps to outcome=partial, not success", async () => {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("BLOCKED: objective requires editing config.py, which boundaries forbid")],
+      }),
+    ]);
+
+    const wd = mkdtempSync(join(tmpdir(), "minima-blocked-"));
+    const lead = leadAgent(null, null);
+    const spawn = createSpawn({ parent: lead, workdir: wd });
+    const result = await spawn(
+      {
+        step_id: "blocked-step",
+        objective: "edit config.py",
+        output_format: "one line",
+        boundaries: "do not touch config.py",
+      },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+
+    // A correct refusal is not an accomplishment: the parent must be able to tell
+    // "did it" from "couldn't do it" without a judge.
+    expect(result.outcome).toBe("partial");
+    expect(result.text).toContain("BLOCKED:");
+
+    reg.unregister();
+    rmSync(wd, { recursive: true, force: true });
+  });
 });

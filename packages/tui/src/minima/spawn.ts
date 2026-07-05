@@ -58,6 +58,18 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
         .join("\n")}`,
     );
   }
+  // Children don't inherit the lead's system prompt, so the operational discipline the
+  // lead runs under (read-before-edit, verify-after-change) must be restated here — a
+  // live bench showed children editing files without running any verification.
+  lines.push(
+    [
+      "## Rules",
+      "- Read a file before editing it; never guess contents.",
+      "- After changing files, verify (run the relevant test or command) when possible and include the result.",
+      "- Boundaries override the objective. If the objective cannot be completed without crossing them, " +
+        'change nothing and reply with ONE line starting with "BLOCKED: " followed by the reason.',
+    ].join("\n"),
+  );
   lines.push("Do the work with your tools, then reply with ONLY the requested output.");
   return lines.join("\n\n");
 }
@@ -171,11 +183,19 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     const row = child.meter?.rows.at(-1) ?? null;
     const aborted = timedOut || Boolean(ctx.parentSignal?.aborted);
     const failedRun = runError !== null || last?.stop_reason === "error";
+    // The delegation prompt tells a child whose objective conflicts with its boundaries
+    // to reply "BLOCKED: <reason>". That is a correct refusal, not an accomplishment —
+    // without this cap the parent saw outcome=success and could not tell "did it" from
+    // "couldn't do it" (the judge is off by default).
+    const blocked =
+      !aborted && !failedRun && (last?.textContent ?? "").trimStart().startsWith("BLOCKED:");
     const outcome: ChildResult["outcome"] = aborted
       ? "aborted"
       : failedRun
         ? "failure"
-        : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
+        : blocked
+          ? "partial"
+          : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
 
     const resultText = aborted
       ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
