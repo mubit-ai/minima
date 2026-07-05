@@ -125,6 +125,36 @@ describe("MinimaClient.feedback", () => {
   });
 });
 
+describe("MinimaClient.capabilities", () => {
+  test("parses capabilities response and returns typed object", async () => {
+    const { client } = mockClient(() => ({
+      status: 200,
+      json: {
+        plan: false,
+        workflow: true,
+        api_version: "0.6.0",
+        honored_constraints: ["candidate_models", "excluded_models"],
+      },
+    }));
+    const res = await client.capabilities();
+    expect(res.plan).toBe(false);
+    expect(res.workflow).toBe(true);
+    expect(res.api_version).toBe("0.6.0");
+    expect(res.honored_constraints).toContain("candidate_models");
+  });
+
+  test("hits GET /v1/capabilities with no body", async () => {
+    const { client, calls } = mockClient(() => ({
+      status: 200,
+      json: { plan: false, workflow: true, api_version: "x", honored_constraints: [] },
+    }));
+    await client.capabilities();
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].path).toBe("/v1/capabilities");
+    expect(calls[0].body).toBeUndefined();
+  });
+});
+
 describe("MinimaClient GET endpoints", () => {
   test("models drops undefined params", async () => {
     const { client, calls } = mockClient(() => ({

@@ -555,6 +555,7 @@ export class MinimaAgent extends Agent {
         latencyMs,
         iterations: turnsTaken || undefined,
         verifiedInProduction: false,
+        judged,
         notes: judged ? undefined : "judged=false",
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
