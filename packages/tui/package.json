@@ -1,6 +1,6 @@
 {
   "name": "minima-tui",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Minima harness + TUI — a TypeScript/Ink port of minima_harness. Talks to the Python FastAPI recommender service over the /v1/* contract.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",

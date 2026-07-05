@@ -4,6 +4,66 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-05
+
+### Added
+- **`GET /v1/capabilities`** — server feature handshake (api version, honored constraint
+  fields, feature flags) so clients can gate enforce-mode features on what the server
+  actually supports instead of guessing. (#54)
+- **Sub-agent tree visualization** — a live `▸ step [status] $cost` panel (`/tree`) fed by
+  tagged child events during multi-agent runs. (#55)
+- **Git worktree isolation for parallel sub-agents** — `isolation: "workdir"` delegations run
+  in a temporary `git worktree` (with a dirty-tree warning and automatic cleanup), so parallel
+  children editing the same files can't clobber each other. (#55)
+- **Delegation ops-rules + BLOCKED convention** — sub-agents get explicit operational rules,
+  boundary refusals surface as `BLOCKED` → `partial` outcome so the parent can tell, and the
+  task tool carries anti-retry guidance (no more re-running an identical failed DAG). (#59)
+
+### Fixed
+- **Every Claude call timed out in the harness** — the Anthropic SDK was handed a timeout in
+  seconds where it expects milliseconds (a 30–60 ms budget), so every Claude stream/complete
+  call died with "Request timed out" and fed quality-0 failures into routing. (#56)
+- **Quality-score fabrication in the feedback loop (M-J2)** — unjudged successes no longer
+  default to quality 0.9 in the server decision log; the harness now sends a `judged` flag and
+  unjudged rows reconcile with `quality = NULL`, so calibration and savings metrics stop
+  trusting values that were never measured. (#54)
+- **Judge hardening** — empty-output guard (scores 0 without an API call), head+tail
+  truncation so tail requirements survive long outputs, `<response>` delimiters + scoped-trust
+  system prompt against response-embedded injection, and a `parseScore` fix for
+  "X out of 10" phrasing. (#57)
+- **Gemini reasoner starvation** — advisory JSON calls (classify/rank) no longer burn their
+  entire token budget on thinking before emitting JSON; RANK_SYSTEM invariants hardened. (#58)
+
+### Notes
+- `minima-cli` on PyPI resumes at 0.7.0: the project version had lagged at 0.5.0, so the
+  0.6.0 release build was silently skipped by `--skip-existing` and 0.6.0 was never published.
+
+## [0.6.0] - 2026-07-02
+
+Agent-core release (milestones M-A…M-I): cost-aware sub-agent orchestration — `task` tool
+with sequential and parallel DAG fan-out under a semaphore, per-child routing, budgets and
+timeouts; DB-backed `BudgetLedger` with graduated enforcement; SQLite persistence spine
+(runs/events/decisions + rehydration); recovery ladder walking server-supplied rungs on
+failure; effort routing Phase A + fleet metrics; feedback-loop poisoning fixes; feature-vector
+classifier with strongest-signal scoring. *(Never published to PyPI — see the 0.7.0 note.)*
+
+## [0.5.2] - 2026-07-02
+
+Fixed TUI viewport-overflow rendering corruption; docs rebrand (Manrope, "minima by Mubit"
+nav logo, new favicon).
+
+## [0.5.1] - 2026-07-01
+
+Mubit memory in the TS harness (recall-before-route + outcome write-back with stable session
+ids); benign routing diagnostics no longer render as errors; live model catalog; docs migrated
+to Vocs with a Homebrew install guide.
+
+## [0.5.0] - 2026-07-01
+
+The TypeScript/Bun TUI becomes the shipped CLI: one-click `minima auth` (browser login,
+per-repo project mapping, workspace provisioning), the Homebrew tap ships the compiled binary
+instead of a Python venv formula, and a comprehensive routing/tool test suite lands.
+
 ## [0.4.10] - 2026-06-26
 
 ### Changed
