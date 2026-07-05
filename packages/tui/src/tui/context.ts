@@ -1,5 +1,5 @@
 /**
- * System prompt assembly — port of minima_harness/tui/context.py.
+ * System prompt assembly — port of the Python harness's tui/context.py.
  *
  * Builds the system prompt from: BASE_SYSTEM + AGENTS.md/CLAUDE.md project context
  * + SYSTEM.md (replace) / APPEND_SYSTEM.md (append) overrides.

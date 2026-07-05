@@ -1,5 +1,5 @@
 /**
- * bash tool — port of minima_harness/tools/bash.py.
+ * bash tool — port of the Python harness's tools/bash.py.
  *
  * Runs a shell command via Bun.spawn, streaming combined stdout+stderr. Honours a
  * millisecond timeout and an abort signal (both kill the process). Output is reported

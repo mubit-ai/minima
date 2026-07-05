@@ -1,7 +1,7 @@
 /**
  * Quality judging for the Minima feedback loop.
  *
- * Port of minima_harness/minima/judge.py. A judge turns a model's output into a [0,1]
+ * Port of the Python harness's minima/judge.py. A judge turns a model's output into a [0,1]
  * quality score. `grade` returns `number | null`: null means the judge ABSTAINS — it
  * could not produce a trustworthy score. Abstention is NOT a failure: feeding a
  * fabricated 0.0 or a neutral 0.5 into /v1/feedback poisons the learning loop, so the

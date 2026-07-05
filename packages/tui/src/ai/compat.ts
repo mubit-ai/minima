@@ -1,7 +1,7 @@
 /**
  * Cross-provider message compatibility.
  *
- * Port of minima_harness/ai/compat.py. Some providers can't represent every
+ * Port of the Python harness's ai/compat.py. Some providers can't represent every
  * content block the harness carries (e.g. a provider that has no thinking
  * channel). normalizeForTarget is the pre-pass that rewrites a message list for
  * a target api id before the provider serializes it.

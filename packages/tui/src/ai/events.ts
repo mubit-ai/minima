@@ -1,7 +1,7 @@
 /**
  * Streaming events emitted during assistant message generation.
  *
- * Faithful port of minima_harness/ai/events.py (itself a port of PI's taxonomy).
+ * Faithful port of the Python harness's ai/events.py (itself a port of PI's taxonomy).
  * `contentIndex` associates each delta/end event with its block — providers
  * interleave deltas across text/thinking/tools.
  */

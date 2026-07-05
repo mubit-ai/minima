@@ -1,5 +1,5 @@
 /**
- * `minima` CLI entry point — port of minima_harness/tui/cli.py.
+ * `minima` CLI entry point — port of the Python harness's tui/cli.py.
  *
  * Parses args, loads .env, builds the HarnessConfig + toolset + MinimaAgent, and
  * dispatches to one of: --print (one-shot), --mode json (event stream), or the

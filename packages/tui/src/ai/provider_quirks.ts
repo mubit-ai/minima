@@ -1,7 +1,7 @@
 /**
  * Per-provider request quirks for the OpenAI-compatible provider, as DATA not control flow.
  *
- * Port of minima_harness/ai/provider_quirks.py. Most OpenAI-compatible hosts speak the
+ * Port of the Python harness's ai/provider_quirks.py. Most OpenAI-compatible hosts speak the
  * identical wire protocol; a few diverge on small details (e.g. OpenAI GPT-5/o-series
  * reject `max_tokens` and require `max_completion_tokens`). Encoded as a lookup table so
  * the next quirk is a one-line data entry, not a new branch in the provider.

@@ -1,5 +1,5 @@
 /**
- * edit tool — port of minima_harness/tools/edit.py.
+ * edit tool — port of the Python harness's tools/edit.py.
  */
 
 import { existsSync } from "node:fs";

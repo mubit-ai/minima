@@ -2,7 +2,7 @@
  * MinimaAgent — an Agent that routes each prompt through Minima and feeds the realized
  * outcome back.
  *
- * Port of minima_harness/minima/runtime.py (focused core). Per promptRouted(): (1) ask
+ * Port of the Python harness's minima/runtime.py (focused core). Per promptRouted(): (1) ask
  * Minima which model and set state.model, (2) run the agent loop, (3) judge the final
  * answer and send POST /v1/feedback with realized tokens/cost/latency. Routing is
  * bypassable: if Minima is unreachable and allowOffline is set, the run proceeds on the

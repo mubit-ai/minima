@@ -1,5 +1,5 @@
 /**
- * Agent tools — port of minima_harness/tools/.
+ * Agent tools — port of the Python harness's tools/.
  */
 
 export { objectSchema } from "./schema.ts";

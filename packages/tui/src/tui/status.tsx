@@ -1,6 +1,6 @@
 /**
  * Status bar — the bottom line: current model, turn count, and any offline/reroute note.
- * Port of minima_harness/tui/widgets/footer.py.
+ * Port of the Python harness's tui/widgets/footer.py.
  */
 
 import { Box, Text } from "ink";

@@ -48,13 +48,13 @@ run_test "2. Basic text" "Write a one-line greeting."
 run_test "3. Formatting" "Convert to uppercase: hello world"
 
 # ── Tier 2: Code tasks (should route to mid-tier) ──────────────────
-run_test "4. Code explanation" "Read the file src/minima_harness/tui/context.py and explain what BASE_SYSTEM is in one sentence."
+run_test "4. Code explanation" "Read the file packages/tui/src/tui/context.ts and explain what BASE_SYSTEM is in one sentence."
 run_test "5. Directory listing" "Use ls to list files in the current directory and tell me how many there are."
-run_test "6. Grep search" "Use grep to search for 'class' in src/minima_harness/ai/types.py"
+run_test "6. Grep search" "Use grep to search for 'interface' in packages/tui/src/ai/types.ts"
 
 # ── Tier 3: Complex reasoning (should route to stronger models) ────
 run_test "7. Multi-file analysis" "Read AGENTS.md and give me a 3-bullet summary of the project."
-run_test "8. Code understanding" "Read the file src/minima_harness/minima/runtime.py and tell me what the promptRouted method does in 2 sentences."
+run_test "8. Code understanding" "Read the file packages/tui/src/minima/runtime.ts and tell me what the promptRouted method does in 2 sentences."
 
 # ── Tier 4: Edge cases ─────────────────────────────────────────────
 run_test "9. Empty-ish" "hi"

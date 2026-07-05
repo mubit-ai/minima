@@ -1,6 +1,6 @@
 /**
  * HarnessMemory — lets a MinimaAgent *use* Mubit memory, not just Minima's model
- * recommender. Port of minima_harness/minima/memory.py to the TS harness (the binary
+ * recommender. Port of the Python harness's minima/memory.py to the TS harness (the binary
  * shipped users actually run).
  *
  * The harness read Mubit lessons but never wrote outcomes back, so the loop was open.

@@ -11,7 +11,7 @@ recommend  ->  run the model yourself  ->  judge quality  ->  feedback
 
 ## What's here
 
-A faithful port of `src/minima_harness/` (Python) → TypeScript:
+A faithful TypeScript port of the original Python harness (removed from the repo in v0.7.0):
 
 - **`src/minima/`** — typed async client for the recommender service (every `/v1/*`
   endpoint) + the integration layer (`config`, `mapping`, `meter`, `judge`, `router`,

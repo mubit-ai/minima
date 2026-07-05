@@ -1,5 +1,5 @@
 /**
- * Agent core — port of minima_harness/agent/ (events, state, tools, loop, Agent).
+ * Agent core — port of the Python harness's agent/ (events, state, tools, loop, Agent).
  */
 
 export * from "./events.ts";

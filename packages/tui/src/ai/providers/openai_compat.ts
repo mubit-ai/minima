@@ -1,7 +1,7 @@
 /**
  * OpenAI-compatible Chat Completions provider (raw fetch, no `openai` SDK).
  *
- * Port of minima_harness/ai/providers/openai_compat.py. One implementation covers
+ * Port of the Python harness's ai/providers/openai_compat.py. One implementation covers
  * openai, openrouter, groq, xai, deepseek, together, and any server speaking the
  * `POST {base_url}/chat/completions` SSE protocol — selected by Model.base_url.
  *

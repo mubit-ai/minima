@@ -4,7 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 # Distribution name on PyPI (the `minima` name is taken by an unrelated project). The import
-# package stays `minima`; the CLI is `minima` / `minima-harness`.
+# package stays `minima`. This package ships the server + client SDK only; the `minima` CLI
+# is the TypeScript binary installed via Homebrew (brew tap mubit-ai/minima).
 name = "minima-cli"
 version = "0.7.0"
 description = "Minima CLI: cost-aware LLM model routing — recommend cheaper models, backed by Mubit memory."
@@ -56,15 +57,9 @@ server = [
 reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
-harness = ["anthropic>=0.40", "google-genai>=0.3"]
-# keyring: OS-keychain credential storage for `minima-harness config` (graceful 0600-file
-# fallback when no backend is present, so it stays optional).
-# textual>=3.0 for app-wide text selection + copy_to_clipboard (so in-app drag-select & ⌘/Ctrl+C
-# copy work while the mouse is captured for scroll).
-tui = ["textual>=3.0", "keyring>=24"]
-# dev pulls every runtime extra so the full test suite (server API tests, TUI, providers) runs.
+# dev pulls every runtime extra so the full test suite (server API tests, reasoners) runs.
 dev = [
-  "minima-cli[server,harness,tui]",
+  "minima-cli[server,reasoner-anthropic,reasoner-gemini]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
@@ -73,14 +68,13 @@ dev = [
 ]
 
 [project.scripts]
-# `minima` is the primary command (the "Minima CLI" agent); `minima-harness` is a kept alias.
-minima = "minima_harness.tui.cli:main"
-minima-harness = "minima_harness.tui.cli:main"
+# The `minima` CLI/TUI is NOT here — it is the TypeScript binary (packages/tui) shipped via
+# Homebrew. This package only exposes the server-side operator tools.
 minima-seed = "minima.seeding.run_seed:main"
 minima-calibration-report = "minima.metrics.report:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/minima", "src/minima_harness", "client_sdk/minima_client"]
+packages = ["src/minima", "client_sdk/minima_client"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

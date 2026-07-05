@@ -1,5 +1,5 @@
 /**
- * write tool — port of minima_harness/tools/write.py.
+ * write tool — port of the Python harness's tools/write.py.
  */
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";

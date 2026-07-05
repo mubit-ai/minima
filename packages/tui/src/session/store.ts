@@ -1,7 +1,7 @@
 /**
  * Append-only JSONL session tree + SessionManager.
  *
- * Port of minima_harness/session/store.py + format.py. One node per turn, linked by
+ * Port of the Python harness's session/store.py + format.py. One node per turn, linked by
  * parentId, persisted as one JSON line per entry. File-backed or in-memory (--no-session).
  * A disk failure on append is logged-and-swallowed so it never kills a turn.
  */
