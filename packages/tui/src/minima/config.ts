@@ -1,7 +1,7 @@
 /**
  * Harness configuration: where Minima lives, the candidate pool, and judge policy.
  *
- * Port of minima_harness/minima/config.py. Defaults target the hosted Minima so a
+ * Port of the Python harness's minima/config.py. Defaults target the hosted Minima so a
  * fresh install works once MUBIT_API_KEY + a provider key are set; for local dev set
  * MINIMA_URL=http://localhost:8080.
  */

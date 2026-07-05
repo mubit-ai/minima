@@ -1,5 +1,5 @@
 /**
- * Minima integration layer — port of minima_harness/minima/.
+ * Minima integration layer — port of the Python harness's minima/.
  *
  * The seam between the TS harness/agent and the Python FastAPI recommender service.
  */

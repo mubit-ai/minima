@@ -1,7 +1,7 @@
 /**
  * Unified generation entry points: stream() and complete().
  *
- * Port of minima_harness/ai/stream.py. Dispatches to the provider registered
+ * Port of the Python harness's ai/stream.py. Dispatches to the provider registered
  * for `model.api`. `stream()` returns a Stream (async iterable) that also
  * exposes `.result()` for the final assistant message — mirrors PI's TS stream
  * object, which is not a promise.

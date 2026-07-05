@@ -1,7 +1,7 @@
 /**
  * MinimaRouter — the thin seam between the harness and a running Minima service.
  *
- * Port of minima_harness/minima/router.py. Owns the two halves of the Minima loop on
+ * Port of the Python harness's minima/router.py. Owns the two halves of the Minima loop on
  * the harness side: recommend (ask Minima which model, map it to a callable harness
  * model) and feedback (report realized tokens / cost / latency / quality so Minima's
  * memory sharpens). Realized cost comes from the provider's actual usage, NOT Minima's

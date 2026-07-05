@@ -1,7 +1,7 @@
 /**
  * Anthropic Messages API provider — wraps the @anthropic-ai/sdk async stream.
  *
- * Port of minima_harness/ai/providers/anthropic.py. Maps the SDK's raw stream events
+ * Port of the Python harness's ai/providers/anthropic.py. Maps the SDK's raw stream events
  * onto PI's event taxonomy and assembles the final AssistantMessage with realized
  * token usage (input from message_start, output from message_delta). Accepts an
  * injected client for hermetic tests.

@@ -1,5 +1,5 @@
 /**
- * Shared filesystem IO helpers — port of minima_harness/tools/_io.py.
+ * Shared filesystem IO helpers — port of the Python harness's tools/_io.py.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";

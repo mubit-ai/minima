@@ -1,7 +1,7 @@
 /**
  * In-memory provider for hermetic tests and demos.
  *
- * Port of minima_harness/ai/providers/faux.py. Opt-in; not registered by default.
+ * Port of the Python harness's ai/providers/faux.py. Opt-in; not registered by default.
  * One deterministic scripted flow per registration. Usage is estimated at roughly
  * 1 token per 4 characters when not provided on the message.
  */

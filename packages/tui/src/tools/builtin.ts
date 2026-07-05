@@ -1,7 +1,7 @@
 /**
  * Built-in tools and the registry that assembles the default toolset.
  *
- * Port of minima_harness/tools/builtin.py. Each tool is an AgentTool factory; the
+ * Port of the Python harness's tools/builtin.py. Each tool is an AgentTool factory; the
  * default set (read/write/edit/bash/ls) is what the agent runs with unless the caller
  * opts into more or excludes some.
  */

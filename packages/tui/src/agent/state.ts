@@ -1,7 +1,7 @@
 /**
  * Agent run state and loop config.
  *
- * Port of minima_harness/agent/state.py. AgentState is both observable state
+ * Port of the Python harness's agent/state.py. AgentState is both observable state
  * (read via agent.state) and the mutable context threaded through agentLoop —
  * it carries messages, tools, and the steering/follow-up queues the Agent pushes
  * into. Loop config is split out so it can be rebuilt per run.

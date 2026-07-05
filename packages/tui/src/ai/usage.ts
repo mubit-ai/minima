@@ -1,7 +1,7 @@
 /**
  * Cost computation: realized tokens x per-model prices -> USD.
  *
- * Port of minima_harness/ai/usage.py. Keeping the realized-cost basis in the
+ * Port of the Python harness's ai/usage.py. Keeping the realized-cost basis in the
  * harness (rather than echoing Minima's prior est_cost_usd) lets Minima climb
  * estimate -> observed -> rescaled, its single biggest accuracy lever.
  */

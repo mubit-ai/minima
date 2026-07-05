@@ -1,7 +1,7 @@
 /**
  * Provider catalog: env-var mapping for each provider's API key.
  *
- * Lean port of minima_harness/ai/provider_catalog.py — only the parts the
+ * Lean port of the Python harness's ai/provider_catalog.py — only the parts the
  * openai_compat provider + offline gating need (envVarsForProvider). The full
  * curated model catalog (register_catalog_models) lands when the harness runtime
  * does. env_var order = resolution order (first set wins).

@@ -1,7 +1,7 @@
 /**
  * HarnessApp — the interactive Ink shell.
  *
- * A focused port of minima_harness/tui/app.py: renders the conversation (user prompts,
+ * A focused port of the Python harness's tui/app.py: renders the conversation (user prompts,
  * streamed assistant replies, terse tool lines) plus a status bar, and drives the
  * MinimaAgent. Ctrl+C quits; Esc aborts the in-flight run. (The Python app's overlays,
  * diff approval, mouse capture, sessions, and themes land in later passes.)

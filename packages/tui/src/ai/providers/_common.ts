@@ -1,7 +1,7 @@
 /**
  * Shared helpers for provider implementations.
  *
- * Port of minima_harness/ai/providers/_common.py.
+ * Port of the Python harness's ai/providers/_common.py.
  */
 
 import type { ToolSchema } from "../types.ts";
