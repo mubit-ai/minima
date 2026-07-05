@@ -4,8 +4,7 @@ name: CI — PR checks
 # conventions: server (ruff + offline pytest) and TUI (bun test + tsc). Two
 # independent jobs so a red on one surfaces without masking the other. No
 # deploy, no secrets — the suites are offline (`-m "not live and not eval"`).
-# mypy is intentionally NOT run here: engine.py has known pre-existing errors
-# that a separate PR addresses; adding it now would red every PR.
+# mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
 on:
   pull_request:
     branches: [main]
@@ -24,7 +23,7 @@ env:
 
 jobs:
   server:
-    name: Server — ruff + pytest
+    name: Server — ruff + pytest + mypy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,6 +40,9 @@ jobs:
 
       - name: Pytest (offline)
         run: uv run pytest -m "not live and not eval" -q
+
+      - name: Mypy
+        run: uv run mypy src/minima
 
   tui:
     name: TUI — bun test + tsc
