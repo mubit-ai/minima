@@ -61,7 +61,7 @@ jobs:
           version="fallback-snapshot-$(date -u +%Y-%m)"
           note="Cold-start fallback only. Auto-refreshed by .github/workflows/catalog-snapshot.yml from the live /v1/models catalog — do not hand-edit. Live cost is overlaid from LiteLLM/OpenRouter at runtime; capability_by_task_type are normalized [0,1] heuristic priors, corrected by accumulated memory. Prices are approximate USD per million tokens."
 
-          jq --sort-keys=false \
+          jq \
              --arg version "$version" \
              --arg note "$note" '{
                version: $version,
