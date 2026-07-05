@@ -64,13 +64,41 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
 
 export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
   const parent = opts.parent;
-  const base = opts.workdir ?? process.cwd();
 
   return async (d: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
     const childId = `${d.step_id}-${newId().slice(0, 8)}`;
     const effort = d.effort ?? "standard";
 
-    let tools = builtinTools({ workdir: base, exclude: ["task"] });
+    // Resolve per-child workdir: "workdir" isolation gets a fresh git worktree so
+    // parallel children editing the same files can't clobber each other's writes.
+    const origWorkdir = opts.workdir ?? process.cwd();
+    let childWorkdir = origWorkdir;
+    let worktreePath: string | null = null;
+    let dirtyWarning: string | null = null;
+
+    if (d.isolation === "workdir") {
+      worktreePath = `/tmp/minima-wt-${childId}`;
+      try {
+        const statusProc = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: origWorkdir });
+        if (statusProc.stdout.toString().trim()) {
+          dirtyWarning =
+            "note: worktree created from dirty working tree — uncommitted changes are not visible to this child";
+        }
+        const addProc = Bun.spawnSync(
+          ["git", "worktree", "add", worktreePath, "HEAD"],
+          { cwd: origWorkdir },
+        );
+        if (addProc.exitCode === 0) {
+          childWorkdir = worktreePath;
+        } else {
+          worktreePath = null; // fallback: run in parent workdir
+        }
+      } catch {
+        worktreePath = null;
+      }
+    }
+
+    let tools = builtinTools({ workdir: childWorkdir, exclude: ["task"] });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
       tools = tools.filter((t) => allowed.has(t.name));
@@ -134,6 +162,9 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       ctx.parentSignal?.removeEventListener("abort", onAbort);
       sink?.detach();
       unsubscribe?.();
+      if (worktreePath) {
+        Bun.spawnSync(["git", "worktree", "remove", "--force", worktreePath], { cwd: origWorkdir });
+      }
     }
 
     const last = lastAssistantOf(child);
@@ -146,18 +177,20 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
         ? "failure"
         : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
 
+    const resultText = aborted
+      ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
+      : failedRun
+        ? `error: ${last?.error_message ?? String(runError ?? "unknown")}`
+        : (last?.textContent ?? "");
+
     return {
       step_id: d.step_id,
       childId,
-      text: aborted
-        ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
-        : failedRun
-          ? `error: ${last?.error_message ?? String(runError ?? "unknown")}`
-          : (last?.textContent ?? ""),
+      text: dirtyWarning ? `${dirtyWarning}\n\n${resultText}` : resultText,
       costUsd: child.meter?.totals().actualCostUsd ?? 0,
       quality: row?.quality ?? null,
       outcome,
-      workdir: base,
+      workdir: childWorkdir,
     };
   };
 }
