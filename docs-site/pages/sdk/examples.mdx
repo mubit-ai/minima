@@ -20,8 +20,9 @@ Copy-paste recipes against the hosted API, from a single `curl` to a production 
 Exercise the core endpoints with nothing but `curl` and `jq` — the fastest way to confirm your key works.
 
 ```bash
-# Service health (the only keyless endpoint)
+# Service health and the capabilities handshake (the two keyless endpoints)
 curl -s https://api.minima.sh/v1/health | jq
+curl -s https://api.minima.sh/v1/capabilities | jq
 
 # A recommendation
 REC=$(curl -s https://api.minima.sh/v1/recommend \

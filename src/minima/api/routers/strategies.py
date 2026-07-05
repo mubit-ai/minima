@@ -23,9 +23,17 @@ async def strategies(
     tenant: TenantContext = Depends(get_tenant),
 ) -> StrategiesResponse:
     lane = tenant.lane(namespace)
-    raw = await tenant.memory.surface_strategies(
-        lane=lane, lesson_types=lesson_types, max_strategies=max_strategies
-    )
+    # Degrade like the recommend hot path: a Mubit outage must not 500 this read.
+    try:
+        raw = await tenant.memory.surface_strategies(
+            lane=lane, lesson_types=lesson_types, max_strategies=max_strategies
+        )
+    except Exception as exc:  # noqa: BLE001 — memory unavailability must never break the read
+        log.warning("surface_strategies failed for lane=%s: %s", lane, exc)
+        return StrategiesResponse(
+            namespace=namespace, lane=lane, strategies=[], count=0,
+            warnings=["memory_unavailable"],
+        )
     items = raw.get("strategies") if isinstance(raw, Mapping) else None
     parsed = [Strategy.from_emergent(s) for s in (items or []) if isinstance(s, Mapping)]
     return StrategiesResponse(
