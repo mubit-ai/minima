@@ -230,7 +230,11 @@ class Recommender:
             if affordable:
                 scored = affordable
             else:
-                warnings.append("no_model_within_cost_budget")
+                # max_cost_per_call is a hard filter: if no model fits the budget the
+                # eligible set is empty, which is the same "nothing fits" condition as an
+                # impossible candidate/exclusion set — surface it as the same 422 instead
+                # of serving an over-budget model.
+                raise NoCandidatesError("no model within max_cost_per_call budget")
 
         if req.constraints.max_latency_ms is not None:
             # Only exclude candidates with OBSERVED latency evidence above the budget —
