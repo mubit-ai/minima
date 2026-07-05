@@ -19,7 +19,7 @@ Minima uses **pass-through auth**: present your own **Mubit API key** as a beare
 Authorization: Bearer mbt_<instance>_<keyid>_<secret>
 ```
 
-A missing or invalid key returns `401`. Your Mubit key determines which Mubit instance Minima reads and writes — it's your data boundary. `GET /v1/health` is the only endpoint that works without a key (it returns service liveness only).
+A missing or invalid key returns `401`. Your Mubit key determines which Mubit instance Minima reads and writes — it's your data boundary. Only two endpoints work without a key: `GET /v1/health` (service liveness) and `GET /v1/capabilities` (structural metadata).
 
 `user_id` and `namespace` are scoping fields **within your Mubit instance**, not auth boundaries — use them to partition recall and learning across teams, projects, or environments.
 
@@ -231,7 +231,9 @@ Report an outcome and close the learning loop. This reinforces the memories that
 | `output_tokens` | int ≥ 0 \| null | `null` | Realized output tokens (captures reasoning/thinking) — **populate this** for the rescaled tier. |
 | `actual_cost_usd` | float ≥ 0 \| null | `null` | Realized $/call — enables the observed cost tier. |
 | `latency_ms` | int ≥ 0 \| null | `null` | |
+| `iterations` | int ≥ 0 \| null | `null` | Agent-loop turns to resolution — a token-yield signal recorded on the outcome. |
 | `verified_in_production` | bool | `false` | Marks a real production outcome; gates lesson promotion. |
+| `judged` | bool \| null | `null` | Whether a quality judge actually ran on this outcome. `false` = quality was **not measured** (cadence-skip or judge abstain) — the decision log reconciles quality as `NULL` instead of a label-based default, so calibration and savings metrics never trust a fabricated score. Omitted (`null`) preserves the old-client behavior (per-outcome defaults). |
 | `notes` | string \| null | `null` | |
 | `idempotency_key` | string \| null | `null` | Dedupe key; derived from `recommendation_id + model` if omitted. |
 
@@ -371,9 +373,39 @@ curl -s "https://api.minima.sh/v1/calibration?days=30" \
 
 ---
 
+## `GET /v1/capabilities`
+
+Server feature handshake: which optional endpoints and constraint fields the running server honors. Read it once at startup and cache it per session — gate optional features (like workflow routing) on what the server actually supports instead of guessing. No auth required — this is structural metadata, not account-scoped data.
+
+### Response — `CapabilitiesResponse`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `plan` | bool | `POST /v1/plan` (goal → Delegation DAG) is available. Currently `false`. |
+| `workflow` | bool | `POST /v1/recommend/workflow` is available. |
+| `api_version` | string | Running server version. |
+| `honored_constraints` | string[] | Constraint fields the engine **actively filters on** (not merely accepts). |
+
+```bash
+curl -s https://api.minima.sh/v1/capabilities | jq
+```
+
+```json
+{
+  "plan": false,
+  "workflow": true,
+  "api_version": "0.7.0",
+  "honored_constraints": ["candidate_models", "excluded_models", "max_cost_per_call",
+    "min_quality", "require_prompt_caching", "max_latency_ms",
+    "require_context_window", "allowed_providers"]
+}
+```
+
+---
+
 ## `GET /v1/health`
 
-Always returns `200`; reports degraded state in the body. The only endpoint that doesn't require a key (an unauthenticated probe gets service liveness; a key-bearing probe additionally confirms your account's memory reachability).
+Always returns `200`; reports degraded state in the body. Doesn't require a key (an unauthenticated probe gets service liveness; a key-bearing probe additionally confirms your account's memory reachability).
 
 ```json
 {
@@ -382,7 +414,7 @@ Always returns `200`; reports degraded state in the body. The only endpoint that
   "auth": "passthrough",
   "catalog": {"version": "…", "cost_source": "litellm", "stale": false, "models": 42},
   "reasoner": {"provider": "gemini", "configured": true},
-  "version": "0.4.9"
+  "version": "0.7.0"
 }
 ```
 

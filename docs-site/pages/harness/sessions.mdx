@@ -18,7 +18,6 @@ Every conversation is persisted as an **append-only session** — a JSONL log of
 | `/new` | Start a fresh session |
 | `/name <label>` | Set the current session's display name |
 | `/session` | Show info about the current session |
-| `/tree` | View the session tree |
 | `/resume [id]` | Resume a previous session — opens a picker, or jumps straight to `id` |
 | `/fork <entry-id>` | Start a new session branched from a specific entry |
 | `/clone` | Clone the current session into a new one |
@@ -29,7 +28,7 @@ Every conversation is persisted as an **append-only session** — a JSONL log of
 Because the log is append-only, `/fork <entry-id>` lets you rewind to an earlier point and take the conversation in a different direction without discarding what came after — the original branch is still there. `/clone` duplicates the whole current session so you can experiment safely.
 
 <Tip>
-Use `/tree` to see the branch structure and copy an entry id, then `/fork <entry-id>` to explore an alternative from that point.
+Entry ids are recorded in the session's JSONL log under `~/.minima-harness/sessions/` — grab one there, then `/fork <entry-id>` to explore an alternative from that point. (`/tree` shows the live [sub-agent panel](/harness/tools#sub-agents-the-task-tool), not the session tree.)
 </Tip>
 
 ## Managing context
