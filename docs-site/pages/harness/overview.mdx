@@ -26,7 +26,7 @@ The harness talks to the Minima recommender service over the same `/v1/*` HTTP c
     Every turn is routed to the cheapest model expected to clear the task, across OpenAI, Anthropic, Google, DeepSeek, xAI, Groq, and OpenRouter. Pin a model with `/model` or `--model` any time.
   </Card>
   <Card title="Built-in tools" icon="folder-tree" href="/harness/tools">
-    `read`, `write`, `edit`, `bash`, `ls`, `glob`, `grep`, `web_fetch`, and `todowrite` — gated by a permission system that auto-approves reads and prompts for writes and shell.
+    `read`, `write`, `edit`, `bash`, `ls`, `glob`, `grep`, `web_fetch`, and `todowrite` — gated by a permission system — plus `task`, which delegates subtasks to parallel, cost-routed sub-agents (watch them live with `/tree`).
   </Card>
   <Card title="Per-repo memory" icon="brain" href="/harness/configuration">
     `minima auth` provisions a Mubit project scoped to the current repo, so each project's `task → model → outcome` history stays isolated.
