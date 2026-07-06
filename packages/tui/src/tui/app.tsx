@@ -1921,6 +1921,21 @@ export function HarnessApp({
             },
           ]);
         }
+        // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
+        // land in lastFeedbackError but previously nothing read it — a server-side write
+        // outage starved the learning loop invisibly (observed live). Muted note, not red:
+        // the turn itself succeeded, only the learning write-back failed.
+        if (agent.lastFeedbackError) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `ℹ learning loop: ${agent.lastFeedbackError}`,
+              toolName: "routing",
+              isError: false,
+            },
+          ]);
+        }
       } else {
         setBasis("offline");
         const reason = agent.offlineReason ?? "Minima unreachable";
