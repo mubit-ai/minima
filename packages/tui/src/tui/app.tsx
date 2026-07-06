@@ -1,15 +1,16 @@
 /**
  * HarnessApp — the interactive Ink shell.
  *
- * A focused port of minima_harness/tui/app.py: renders the conversation (user prompts,
+ * A focused port of the Python harness's tui/app.py: renders the conversation (user prompts,
  * streamed assistant replies, terse tool lines) plus a status bar, and drives the
  * MinimaAgent. Ctrl+C quits; Esc aborts the in-flight run. (The Python app's overlays,
  * diff approval, mouse capture, sessions, and themes land in later passes.)
  */
 
 import { Box, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import type { ChildEvent } from "../minima/spawn.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -42,12 +43,15 @@ import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
+import { ChildTree, type ChildRow } from "./child_tree.tsx";
 
 export interface AppProps {
   agent: MinimaAgent;
   banner?: string;
   /** Late-bound slot the `question` tool reads; populated here once the overlay is wired. */
   askUserRef?: AskUserRef;
+  /** Mutable ref written by main.ts so HarnessApp can receive sub-agent events. */
+  childEventRef?: { handler: ((e: ChildEvent) => void) | null };
 }
 
 /** True when at least one key-requiring model provider has its key set. */
@@ -518,7 +522,7 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   );
 }
 
-export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
+export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
@@ -545,6 +549,10 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   // toggles the persisted preference; `startupTip` holds the tip rendered this launch.
   const [tipsEnabled, setTipsEnabledState] = useState(isTipsEnabled());
   const [startupTip, setStartupTip] = useState<string | null>(null);
+
+  // Sub-agent tree: childrenState tracks each in-flight child; treeOpen toggles the panel.
+  const [childrenState, setChildrenState] = useState<Map<string, ChildRow>>(new Map());
+  const [treeOpen, setTreeOpen] = useState(false);
 
   // On mount: nudge if routing is set but no model-provider key is, and pull the live model
   // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
@@ -585,6 +593,35 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
     });
     setBudgetStatus(agent.budget?.status() ?? null);
   }, [agent]);
+
+  // Wire the sub-agent event feed so ChildTree stays live during multi-step runs.
+  useEffect(() => {
+    if (!childEventRef) return;
+    childEventRef.handler = (e: ChildEvent) => {
+      setChildrenState((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(e.childId);
+        // Determine status from the incoming AgentEvent kind.
+        const kind = (e.event as { kind?: string }).kind ?? "";
+        const isDone = kind === "run_complete" || kind === "error";
+        const isAborted = kind === "aborted";
+        const status: ChildRow["status"] = isAborted
+          ? "aborted"
+          : isDone
+            ? "success" === (e.event as { outcome?: string }).outcome
+              ? "done"
+              : "failure"
+            : "running";
+        const costUsd =
+          (e.event as { cost?: { total?: number } }).cost?.total ?? existing?.costUsd ?? 0;
+        next.set(e.childId, { stepId: e.stepId, depth: e.depth, status, costUsd });
+        return next;
+      });
+    };
+    return () => {
+      childEventRef.handler = null;
+    };
+  }, [childEventRef]);
 
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
@@ -1487,6 +1524,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
         ]);
         break;
       case "tree":
+        setTreeOpen((o) => !o);
         setMessages((m) => [
           ...m,
           {
@@ -1495,7 +1533,9 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           },
           {
             role: "tool",
-            text: `Session Tree:\n  └─ ${agent.sessionId ?? "ephemeral"} (active tip)\n     entries: ${messages.length}`,
+            text: childrenState.size > 0
+              ? `Sub-agent tree toggled (${childrenState.size} tracked). Use /tree again to collapse.`
+              : "No sub-agents active. The tree panel will appear during multi-step task runs.",
             toolName: "tree",
           },
         ]);
@@ -2128,6 +2168,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
       )}
 
       <Box flexDirection="column" flexShrink={0}>
+        {treeOpen && <ChildTree children={childrenState} />}
         <StatusBar
           model={agent.agentState.model?.id ?? "(none)"}
           basis={basis}
@@ -2145,6 +2186,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           planMode={planMode}
           readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
           alwaysTools={[...permStateRef.current.allowAlways]}
+          activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
         />
 
         <Box justifyContent="space-between" width="100%">

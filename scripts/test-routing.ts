@@ -68,7 +68,7 @@ const TESTS: { label: string; prompt: string; category: string }[] = [
   },
   {
     label: "Code analysis",
-    prompt: "read src/minima_harness/tui/context.py and explain what buildSystemPrompt does in 2 sentences",
+    prompt: "read packages/tui/src/tui/context.ts and explain what buildSystemPrompt does in 2 sentences",
     category: "complex",
   },
 ];

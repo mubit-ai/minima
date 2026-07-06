@@ -61,6 +61,33 @@ def test_snapshot_loads_and_is_stale():
     assert store.get().stale is True  # fallback snapshot is always stale until refreshed
 
 
+def test_snapshot_json_shape_is_loader_contract():
+    # Pins the exact contract the CI catalog-snapshot refresh (jq normalization in
+    # .github/workflows/catalog-snapshot.yml) must keep producing so an automated
+    # rewrite of the vendored snapshot can never break load_snapshot_cards().
+    from importlib.resources import files
+
+    raw = json.loads(
+        files("minima.catalog").joinpath("data", "capability_priors.json").read_text("utf-8")
+    )
+    assert isinstance(raw.get("version"), str) and raw["version"]
+    models = raw.get("models")
+    assert isinstance(models, list) and len(models) >= 5
+    for m in models:
+        # Required (non-defaulted) keys the loader indexes directly.
+        for key in ("model_id", "provider", "input_cost_per_mtok", "output_cost_per_mtok"):
+            assert key in m, f"snapshot model missing required key {key!r}: {m}"
+        assert isinstance(m["input_cost_per_mtok"], int | float)
+        assert isinstance(m["output_cost_per_mtok"], int | float)
+    # No stray runtime-metadata leaked into the vendored snapshot: those fields are
+    # re-stamped by the loader and the refresh must strip them.
+    assert not any(
+        k in m
+        for m in models
+        for k in ("cost_source", "cost_fetched_at", "cost_stale", "capability_source")
+    )
+
+
 def test_overlay_litellm_converts_per_token_to_per_mtok():
     cards, _ = load_snapshot_cards()
     aliases = load_aliases()

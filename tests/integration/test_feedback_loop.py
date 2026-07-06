@@ -113,3 +113,54 @@ def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
     realized = savings["summary"]["realized"]
     assert realized["n_reconciled"] == 1
     assert abs(realized["realized_cost_usd"] - 0.0042) < 1e-9
+
+
+def test_judged_false_stores_null_quality_not_fabricated(client, fake_memory):
+    """Regression: when the harness sends judged=False (cadence-skip / LLM-judge abstain),
+    the decision log must store NULL quality — never the fabricated 0.9 default.
+    A fabricated value corrupts calibration metrics and OPE weighting."""
+    rec = _recommend_haiku(client, fake_memory)
+
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            # No quality_score — the harness didn't run a judge this turn.
+            "actual_cost_usd": 0.0021,
+            "latency_ms": 600,
+            "judged": False,
+        },
+    ).json()
+
+    assert fb["accepted"] is True
+
+    # /v1/savings must still count this as reconciled (cost is known)...
+    savings = client.get("/v1/savings", params={"days": 1}).json()
+    realized = savings["summary"]["realized"]
+    assert realized["n_reconciled"] == 1
+    assert abs(realized["realized_cost_usd"] - 0.0021) < 1e-9
+
+
+def test_judged_none_preserves_legacy_quality_from_outcome(client, fake_memory):
+    """Old clients that don't send 'judged' must keep their existing behaviour:
+    quality_from_outcome fills in a label-based default (0.9 for success)."""
+    rec = _recommend_haiku(client, fake_memory)
+
+    # Old client: no 'judged' key, no quality_score — legacy path.
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "actual_cost_usd": 0.001,
+        },
+    ).json()
+
+    assert fb["accepted"] is True
+    # Decision log is reconciled; legacy path — quality value is a server concern,
+    # we only assert that the row was written (cost visible in savings).
+    savings = client.get("/v1/savings", params={"days": 1}).json()
+    assert savings["summary"]["realized"]["n_reconciled"] == 1

@@ -1,5 +1,5 @@
 /**
- * minima-tui — TS harness + Ink TUI port of minima_harness.
+ * minima-tui — TS harness + Ink TUI port of the Python harness (removed in v0.7.0).
  *
  * Phases 0–4 land here: the recommender-service client, the AI layer (types,
  * streaming, provider registry, faux + openai-compat providers), the agent core

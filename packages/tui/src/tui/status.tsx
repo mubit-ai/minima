@@ -1,6 +1,6 @@
 /**
  * Status bar — the bottom line: current model, turn count, and any offline/reroute note.
- * Port of minima_harness/tui/widgets/footer.py.
+ * Port of the Python harness's tui/widgets/footer.py.
  */
 
 import { Box, Text } from "ink";
@@ -24,6 +24,8 @@ export interface StatusBarProps {
   alwaysTools?: string[];
   /** "spent/limit (mode)" budget note; null hides the segment. */
   budget?: { spentUsd: number; limitUsd: number; fraction: number; mode: string } | null;
+  /** Number of sub-agents currently in flight; 0 or undefined hides the badge. */
+  activeChildren?: number;
 }
 
 export function StatusBar({
@@ -43,6 +45,7 @@ export function StatusBar({
   readDirs,
   alwaysTools,
   budget,
+  activeChildren,
 }: StatusBarProps) {
   const budgetColor = budget
     ? budget.fraction >= 0.9
@@ -104,6 +107,13 @@ export function StatusBar({
 
         <Text color="gray"> · </Text>
         <Text color={statusColor}>{statusText}</Text>
+
+        {activeChildren ? (
+          <>
+            <Text color="gray"> · </Text>
+            <Text color="cyan">▸ {activeChildren} active</Text>
+          </>
+        ) : null}
 
         {routingOffline && (
           <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>

@@ -1,5 +1,5 @@
 /**
- * Non-interactive run modes — port of minima_harness/tui/run_modes.py.
+ * Non-interactive run modes — port of the Python harness's tui/run_modes.py.
  *
  *   --print       one-shot: run the prompt, print the final assistant text, exit.
  *   --mode json   stream every AgentEvent as a JSON line, then exit.

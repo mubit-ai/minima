@@ -1,0 +1,69 @@
+name: CI — PR checks
+
+# Gate on every PR to main (and on push to main) with the exact local test
+# conventions: server (ruff + offline pytest) and TUI (bun test + tsc). Two
+# independent jobs so a red on one surfaces without masking the other. No
+# deploy, no secrets — the suites are offline (`-m "not live and not eval"`).
+# mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  server:
+    name: Server — ruff + pytest + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync deps (dev extra)
+        run: uv sync --extra dev
+
+      - name: Ruff
+        run: uv run ruff check src client_sdk tests
+
+      - name: Pytest (offline)
+        run: uv run pytest -m "not live and not eval" -q
+
+      - name: Mypy
+        run: uv run mypy src/minima
+
+  tui:
+    name: TUI — bun test + tsc
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/tui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      - name: Typecheck
+        run: bun run check

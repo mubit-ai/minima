@@ -24,20 +24,36 @@ The agent gets things done by calling **tools**. Each tool call passes through a
 | `edit` | Modify an existing file | write |
 | `bash` | Run a shell command (with timeout + abort) | dangerous |
 | `todowrite` | Maintain a plan/todo file | write |
+| `task` | Delegate subtasks to cost-routed sub-agents (see [Sub-agents](#sub-agents-the-task-tool)) | orchestration |
 
 ## The permission model
 
 Approval depends on the tool's class:
 
-- **Read tools** (`read`, `ls`, `glob`, `grep`) are **auto-approved** within the working directory and allowed parent directories. You can grant "always" for a directory so future reads there don't prompt.
+- **`read` / `ls`** prompt the **first time** a new directory is accessed — the working directory is not pre-approved. Granting "always" approves that directory tree, so future reads there are silent.
 - **Write tools** (`write`, `edit`, `todowrite`) always prompt. You can grant "always" for the tool.
 - **Dangerous tools** (`bash`) always prompt. You can grant "always" for the tool.
+- **Everything else** (`glob`, `grep`, `web_fetch`, `task`) prompts per call, with the same per-tool "always" grant.
 
 When a tool needs approval, the TUI shows an inline prompt: approve once (<kbd>y</kbd>), approve always (<kbd>a</kbd>), or deny (<kbd>n</kbd> / <kbd>Esc</kbd>).
 
 <Note>
 Use `/perms` to see the grants active in the current session.
 </Note>
+
+## Sub-agents (the `task` tool)
+
+The lead agent carries one orchestration tool: `task`. The model calls it with a JSON array of **delegations** — subtasks with a required contract (`objective`, `output_format`, `boundaries`) plus optional `depends_on`, `effort` (`light` \| `standard` \| `deep`), `difficulty`, `tool_allowlist`, `budget_usd`, and `isolation`. The harness validates the graph (unique step ids, no dangling `depends_on`, no cycles) and executes it as a DAG: independent steps run **concurrently** (up to 4 at a time), dependents wait for their prerequisites, and a failed dependency blocks its dependents.
+
+Each child is its own cost-routed agent: it gets a per-step model recommendation (the delegation's `difficulty` reaches the recommender), its own cost meter and budget slice, a tool set scoped by the delegation's allowlist and confined to its working directory, and effort-scaled turn and wall-clock caps. Children cannot delegate further — the `task` tool is excluded from their toolset. Sub-agent spend and decisions are recorded under their own agent id, so they demux cleanly from the lead's.
+
+### Git worktree isolation
+
+A delegation with `isolation: "workdir"` runs in a **temporary git worktree** created from `HEAD`, so parallel children editing the same files can't clobber each other's writes. The worktree is removed automatically when the child finishes. If the working tree is dirty when the child spawns, its result carries a note that uncommitted changes weren't visible to it; if the worktree can't be created (e.g. not a git repo), the child falls back to the parent's directory.
+
+### Watching it live
+
+`/tree` in the TUI toggles a live sub-agent panel — one row per child showing its step id, status (running / done / aborted / failure), and accumulated spend. See [Interactive TUI](/harness/interactive).
 
 ## Plan mode
 

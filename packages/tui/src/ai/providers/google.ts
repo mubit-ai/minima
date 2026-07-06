@@ -1,7 +1,7 @@
 /**
  * Google Generative AI (Gemini) provider via @google/genai.
  *
- * Port of minima_harness/ai/providers/google.py. Iterates generateContentStream chunks,
+ * Port of the Python harness's ai/providers/google.py. Iterates generateContentStream chunks,
  * mapping incremental text/thought/function-call parts onto PI's event taxonomy. Gemini
  * does not stream function-call arguments incrementally, so a full toolcall_end is emitted
  * when a function_call part arrives (matches PI's documented behaviour). Accepts an

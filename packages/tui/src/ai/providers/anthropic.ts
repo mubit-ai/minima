@@ -1,7 +1,7 @@
 /**
  * Anthropic Messages API provider — wraps the @anthropic-ai/sdk async stream.
  *
- * Port of minima_harness/ai/providers/anthropic.py. Maps the SDK's raw stream events
+ * Port of the Python harness's ai/providers/anthropic.py. Maps the SDK's raw stream events
  * onto PI's event taxonomy and assembles the final AssistantMessage with realized
  * token usage (input from message_start, output from message_delta). Accepts an
  * injected client for hermetic tests.
@@ -190,16 +190,18 @@ export class AnthropicProvider {
   }
 }
 
-export async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
+/** SDK timeout (ms) from the harness's seconds-based option. options.timeout is in
+ * SECONDS (the harness-wide contract — google.ts converts the same way); the Anthropic
+ * SDK expects milliseconds. Passing seconds through gave every request a 30-60ms
+ * deadline: all Claude calls died with "Request timed out". */
+export function sdkTimeoutMs(options: Record<string, unknown>): number {
+  return Math.round(Number(options.timeout ?? 60) * 1000);
+}
+
+async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
   const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  // options.timeout is in SECONDS (harness convention, matching the Google provider); the
-  // Anthropic SDK wants milliseconds. Passing it raw meant a 60ms timeout — every real Claude
-  // call aborted with "Request timed out". Convert to ms.
-  const client = new Anthropic({
-    apiKey,
-    timeout: Math.round(Number(options.timeout ?? 60) * 1000),
-  });
+  const client = new Anthropic({ apiKey, timeout: sdkTimeoutMs(options) });
   // The SDK's messages.stream() returns a MessageStream (async iterable); cast to our shape.
   return client as unknown as AnthropicClientLike;
 }

@@ -1,7 +1,7 @@
 /**
  * Provider interface and the provider registry.
  *
- * Port of minima_harness/ai/providers/base.py. A provider owns the stream()
+ * Port of the Python harness's ai/providers/base.py. A provider owns the stream()
  * implementation for one `api` id (e.g. "anthropic-messages"). Real providers
  * register themselves; the faux provider registers on demand for hermetic tests.
  */

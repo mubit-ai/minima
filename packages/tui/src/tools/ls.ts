@@ -1,5 +1,5 @@
 /**
- * ls tool — port of minima_harness/tools/ls.py.
+ * ls tool — port of the Python harness's tools/ls.py.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";

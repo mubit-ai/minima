@@ -1,7 +1,7 @@
 /**
  * Provider registry entry point.
  *
- * Port of minima_harness/ai/providers/__init__.py. `ensureProvidersRegistered`
+ * Port of the Python harness's ai/providers/__init__.py. `ensureProvidersRegistered`
  * idempotently registers the always-available openai-compat provider; the
  * anthropic/google providers register when their modules are imported (their
  * SDKs are bundled). The faux provider is opt-in via registerFauxProvider.

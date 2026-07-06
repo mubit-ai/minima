@@ -82,6 +82,12 @@ class GeminiReasoner:
                     "response_mime_type": "application/json",
                     "response_schema": schema,
                     "max_output_tokens": self._max_tokens,
+                    # Gemini 2.5 models think by default and thinking tokens count against
+                    # max_output_tokens — on hard prompts the budget was consumed before any
+                    # JSON was emitted (observed live: classify failed on exactly the
+                    # hard/expert prompts, rank flaked near the cap). These are small
+                    # advisory JSON calls on a 15s deadline; disable thinking outright.
+                    "thinking_config": {"thinking_budget": 0},
                 },
             )
             text = getattr(resp, "text", None)

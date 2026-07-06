@@ -1,5 +1,5 @@
 /**
- * Agent tools and execution hooks — port of minima_harness/agent/tools.py
+ * Agent tools and execution hooks — port of the Python harness's agent/tools.py
  * (itself a port of PI's AgentTool + before/afterToolCall).
  *
  * Tools declare parameters as a ToolSchema; execute() is an async callable

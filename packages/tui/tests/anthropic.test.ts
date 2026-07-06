@@ -13,7 +13,7 @@ import {
   type AnthropicClientLike,
   AnthropicProvider,
   type AnthropicStreamEvent,
-  buildClient,
+  sdkTimeoutMs,
 } from "../src/ai/providers/anthropic.ts";
 
 const MODEL: Model = {
@@ -44,17 +44,6 @@ function resetAll() {
   resetRegistry();
   resetProviderRegistration();
 }
-
-describe("buildClient timeout", () => {
-  test("converts the SECONDS convention to the SDK's milliseconds (regression: 60ms bug)", async () => {
-    process.env.ANTHROPIC_API_KEY = "test-key";
-    // Default 60s → 60_000ms. Passing 60 raw gave a 60ms timeout: every Claude call aborted.
-    const def = (await buildClient({})) as unknown as { timeout: number };
-    expect(def.timeout).toBe(60_000);
-    const custom = (await buildClient({ timeout: 30 })) as unknown as { timeout: number };
-    expect(custom.timeout).toBe(30_000);
-  });
-});
 
 describe("AnthropicProvider", () => {
   test("assembles a text reply from message_start/delta/stop events", async () => {
@@ -178,6 +167,14 @@ describe("AnthropicProvider", () => {
     expect(result.content.map((b) => b.type)).toEqual(["thinking", "text"]);
     expect((result.content[0] as { signature?: string }).signature).toBe("sig123");
     expect(result.textContent).toBe("ok");
+  });
+
+  test("converts the seconds-based timeout option to SDK milliseconds", () => {
+    // Regression: seconds passed straight to the SDK (ms) gave every request a
+    // 30-60ms deadline — all live Claude calls failed with "Request timed out".
+    expect(sdkTimeoutMs({})).toBe(60_000);
+    expect(sdkTimeoutMs({ timeout: 30 })).toBe(30_000);
+    expect(sdkTimeoutMs({ timeout: 0.5 })).toBe(500);
   });
 
   test("surfaces a thrown stream error as an error event", async () => {

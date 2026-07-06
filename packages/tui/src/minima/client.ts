@@ -10,6 +10,7 @@ import { VERSION } from "../version.ts";
 import { raiseForStatus } from "./errors.ts";
 import type {
   CalibrationResponse,
+  CapabilitiesResponse,
   Constraints,
   FeedbackRequest,
   FeedbackResponse,
@@ -179,6 +180,10 @@ export class MinimaClient {
 
   health(): Promise<Record<string, unknown>> {
     return this.get<Record<string, unknown>>("/v1/health");
+  }
+
+  capabilities(): Promise<CapabilitiesResponse> {
+    return this.get<CapabilitiesResponse>("/v1/capabilities");
   }
 }
 

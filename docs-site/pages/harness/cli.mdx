@@ -52,6 +52,9 @@ minima --mode json "refactor the config loader" | jq .
 | `-t`, `--tools` | `LIST` | Comma-separated tool allowlist (only these run). |
 | `-xt`, `--exclude-tools` | `LIST` | Comma-separated tool denylist. |
 | `-nt`, `--no-tools` | — | Disable all tools. |
+| `-b`, `--budget` | `USD` | Session budget with graduated warnings at 50/75/90/100%. |
+| `--budget-enforce` | — | Refuse new runs once the budget is exhausted (default: warn only). |
+| `--slider` | `0–10` | Cost/quality tradeoff — 0 = cheapest acceptable, 10 = highest quality (default 5). |
 | `-h`, `--help` | — | Print usage and exit. |
 
 ```bash

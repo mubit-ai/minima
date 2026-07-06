@@ -1,7 +1,7 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog harness-demo harness-live harness-test harness tui-install tui-test tui-check tui-build tui tui-dev
+.PHONY: install run test lint fmt live eval seed refresh-catalog tui-install tui-test tui-check tui-build tui tui-dev
 
 install:
-	uv sync --extra dev   # dev pulls server + harness + tui for the full test suite
+	uv sync --extra dev   # dev pulls server + reasoner extras for the full test suite
 
 run:
 	uv run --extra server uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
@@ -25,20 +25,6 @@ eval:
 
 seed:
 	uv run minima-seed --limit $${LIMIT:-2000} --lane $${LANE:-minima:default}
-
-# --- minima_harness convenience targets (creds live in gitignored .env.harness) ---
-
-harness-demo:
-	uv run python examples/harness_warmup.py
-
-harness-live:
-	uv run --env-file .env.harness python examples/harness_warmup.py --live --rounds $${ROUNDS:-1}
-
-harness-test:
-	uv run --env-file .env.harness pytest tests/harness -m live -v
-
-harness:
-	uv run --extra harness --extra tui --env-file .env.harness minima-harness $(ARGS)
 
 # --- TS TUI (packages/tui) — run from the repo root so .env.harness auto-loads --------
 

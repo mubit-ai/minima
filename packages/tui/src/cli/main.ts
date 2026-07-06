@@ -1,5 +1,5 @@
 /**
- * `minima` CLI entry point — port of minima_harness/tui/cli.py.
+ * `minima` CLI entry point — port of the Python harness's tui/cli.py.
  *
  * Parses args, loads .env, builds the HarnessConfig + toolset + MinimaAgent, and
  * dispatches to one of: --print (one-shot), --mode json (event stream), or the
@@ -22,7 +22,7 @@ import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
-import { createSpawn } from "../minima/spawn.ts";
+import { createSpawn, type ChildEvent } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
@@ -410,9 +410,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
   // Children get their own routed model, meter, confined tools, and budget slice; their
   // rows land in the same run under agentId=childId.
+  //
+  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
+  // React state without the TUI needing to exist at createSpawn time.
+  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
   agent.agentState.tools.push(
     taskTool({
-      spawn: createSpawn({ parent: agent, workdir: process.cwd() }),
+      spawn: createSpawn({
+        parent: agent,
+        workdir: process.cwd(),
+        onChildEvent: (e) => childEventRef.handler?.(e),
+      }),
       spawnDepth: 0,
       maxDepth: 2,
     }),
@@ -484,7 +492,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // exitOnCtrlC:false hands Ctrl+C to our own useInput handler — during a run it aborts the
   // turn, when idle it arms the double-press quit — instead of Ink killing the app outright.
   const instance = render(
-    React.createElement(HarnessApp, { agent, banner: "minima", askUserRef }),
+    React.createElement(HarnessApp, { agent, banner: "minima", askUserRef, childEventRef }),
     {
       exitOnCtrlC: false,
     },

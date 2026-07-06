@@ -1,5 +1,5 @@
 /**
- * read tool — port of minima_harness/tools/read.py.
+ * read tool — port of the Python harness's tools/read.py.
  */
 
 import { existsSync, statSync } from "node:fs";

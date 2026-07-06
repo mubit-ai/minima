@@ -58,19 +58,59 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
         .join("\n")}`,
     );
   }
+  // Children don't inherit the lead's system prompt, so the operational discipline the
+  // lead runs under (read-before-edit, verify-after-change) must be restated here — a
+  // live bench showed children editing files without running any verification.
+  lines.push(
+    [
+      "## Rules",
+      "- Read a file before editing it; never guess contents.",
+      "- After changing files, verify (run the relevant test or command) when possible and include the result.",
+      "- Boundaries override the objective. If the objective cannot be completed without crossing them, " +
+        'change nothing and reply with ONE line starting with "BLOCKED: " followed by the reason.',
+    ].join("\n"),
+  );
   lines.push("Do the work with your tools, then reply with ONLY the requested output.");
   return lines.join("\n\n");
 }
 
 export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
   const parent = opts.parent;
-  const base = opts.workdir ?? process.cwd();
 
   return async (d: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
     const childId = `${d.step_id}-${newId().slice(0, 8)}`;
     const effort = d.effort ?? "standard";
 
-    let tools = builtinTools({ workdir: base, exclude: ["task"] });
+    // Resolve per-child workdir: "workdir" isolation gets a fresh git worktree so
+    // parallel children editing the same files can't clobber each other's writes.
+    const origWorkdir = opts.workdir ?? process.cwd();
+    let childWorkdir = origWorkdir;
+    let worktreePath: string | null = null;
+    let dirtyWarning: string | null = null;
+
+    if (d.isolation === "workdir") {
+      worktreePath = `/tmp/minima-wt-${childId}`;
+      try {
+        const statusProc = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: origWorkdir });
+        if (statusProc.stdout.toString().trim()) {
+          dirtyWarning =
+            "note: worktree created from dirty working tree — uncommitted changes are not visible to this child";
+        }
+        const addProc = Bun.spawnSync(
+          ["git", "worktree", "add", worktreePath, "HEAD"],
+          { cwd: origWorkdir },
+        );
+        if (addProc.exitCode === 0) {
+          childWorkdir = worktreePath;
+        } else {
+          worktreePath = null; // fallback: run in parent workdir
+        }
+      } catch {
+        worktreePath = null;
+      }
+    }
+
+    let tools = builtinTools({ workdir: childWorkdir, exclude: ["task"] });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
       tools = tools.filter((t) => allowed.has(t.name));
@@ -134,30 +174,43 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       ctx.parentSignal?.removeEventListener("abort", onAbort);
       sink?.detach();
       unsubscribe?.();
+      if (worktreePath) {
+        Bun.spawnSync(["git", "worktree", "remove", "--force", worktreePath], { cwd: origWorkdir });
+      }
     }
 
     const last = lastAssistantOf(child);
     const row = child.meter?.rows.at(-1) ?? null;
     const aborted = timedOut || Boolean(ctx.parentSignal?.aborted);
     const failedRun = runError !== null || last?.stop_reason === "error";
+    // The delegation prompt tells a child whose objective conflicts with its boundaries
+    // to reply "BLOCKED: <reason>". That is a correct refusal, not an accomplishment —
+    // without this cap the parent saw outcome=success and could not tell "did it" from
+    // "couldn't do it" (the judge is off by default).
+    const blocked =
+      !aborted && !failedRun && (last?.textContent ?? "").trimStart().startsWith("BLOCKED:");
     const outcome: ChildResult["outcome"] = aborted
       ? "aborted"
       : failedRun
         ? "failure"
-        : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
+        : blocked
+          ? "partial"
+          : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
+
+    const resultText = aborted
+      ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
+      : failedRun
+        ? `error: ${last?.error_message ?? String(runError ?? "unknown")}`
+        : (last?.textContent ?? "");
 
     return {
       step_id: d.step_id,
       childId,
-      text: aborted
-        ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
-        : failedRun
-          ? `error: ${last?.error_message ?? String(runError ?? "unknown")}`
-          : (last?.textContent ?? ""),
+      text: dirtyWarning ? `${dirtyWarning}\n\n${resultText}` : resultText,
       costUsd: child.meter?.totals().actualCostUsd ?? 0,
       quality: row?.quality ?? null,
       outcome,
-      workdir: base,
+      workdir: childWorkdir,
     };
   };
 }
