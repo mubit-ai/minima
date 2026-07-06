@@ -8,9 +8,13 @@
 import type { Checks } from "./assert/check.ts";
 import { f1 } from "./flows/f1_headless.ts";
 import { f4 } from "./flows/f4_cost_budget.ts";
+import { f5 } from "./flows/f5_task_dag_worktree.ts";
+import { f6 } from "./flows/f6_resume_lineage.ts";
+import { f7 } from "./flows/f7_permissions_plan.ts";
 import { f9 } from "./flows/f9_offline_reconnect.ts";
+import { f10 } from "./flows/f10_recovery_ladder.ts";
 
-const REGISTRY: Record<string, () => Promise<Checks>> = { f1, f9, f4 };
+const REGISTRY: Record<string, () => Promise<Checks>> = { f1, f9, f4, f5, f6, f7, f10 };
 
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(REGISTRY);
 const summaries: string[] = [];

@@ -85,15 +85,25 @@ restart (exact match — the picker's 12-char ids are display-only).
 | `js-lib` ("datakit") | ~0.8k LOC zero-dep utils, 50 tests, fastest suite | 6 | 2 easy + 2 medium + 1 feature + 1 hard (CSV round-trip state machine) |
 | `katas` | 12 single-file stubs (4 py / 4 ts / 4 js) | 12 | all trivial → the unambiguous cheap tier |
 
-Difficulty spread: 12 trivial / 7 easy / 12 medium / 2 hard. Two deliberate traps test
-that routing keys on real difficulty rather than statement length/tone. Difficulty
-labels are structural (diff footprint); `gen/calibrate.ts` measures empirical solve
-rates per arm and `build_index.ts` folds them into `tasks.jsonl` — measured rates
-override structural bins when they disagree. Precedent: ta-007 was authored hard
-(cross-module diagnosis) but the cheap arm solved it first-try in 46s → demoted to
-medium. Mini-calibration (k=1 smoke) so far: ka-001/pc-002/pc-004/ta-007 all solved by
-haiku; the full k=5 cheap+frontier calibration over all 33 tasks is still pending and
-is the authoritative labeling pass (~$10-20, ~330 attempts).
+**Difficulty labels are EMPIRICAL** (k=5 × cheap(haiku)/frontier(sonnet) arms, 330
+attempts, $17.90, 0 errors, 0 cheats — `calibration.jsonl`, report via
+`gen/calibration_report.ts`). The 2026-07-06 full pass rewrote the structural bins:
+
+- **haiku solves 30/33 tasks at ~100%** — well-specified, symptoms-only bugfixes in
+  1-2k-LOC repos are simply within a 2026 cheap model's reach, including the authored-
+  hard 72-line cross-module migration (pc-007: 5/5 cheap). 12 authored-medium/hard
+  tasks were NO-SIGNAL (both arms 5/5) → re-labeled easy/cheap with
+  `authored_difficulty` preserved.
+- **jl-006 is the perfect hard task**: cheap 0/5, frontier 5/5 (CSV state-machine
+  round-trip) — the escalation-value demo in one row.
+- **ta-004 is a cheap-beats-frontier anomaly**: cheap 4/5, frontier 0/5 — sonnet
+  consistently fails a task haiku solves (kept medium, route=cheap, flagged for
+  failure-mode investigation; excellent routing-demo material).
+- Final spread: 12 trivial / 19 easy / 1 medium / 1 hard; expected_route: 32 cheap,
+  1 frontier. **Consequence for the demo:** this dataset proves the savings story
+  (quality parity at cheap prices) overwhelmingly, but differentiated escalation
+  routing rests on jl-006/ta-004 alone — a "genuinely hard" authoring round (vaguer
+  statements, composite multi-bug patches, larger repos) is queued for the demo phase.
 
 Anti-leakage: agents under test see ONLY the materialized template (+ seeded bug) and
 the `problem_statement` — never `task.json` (whose `notes` describe the defect), never
@@ -115,12 +125,40 @@ Live-lane cost: the full Phase A suite spends well under $0.10/run (trivial prom
 mock server wherever determinism matters). Exit code is non-zero if any hard check fails;
 per-flow transcripts land in `bench/artifacts/scratch/<flow>-<ts>/transcript.txt`.
 
-Status (2026-07-06): **f1 30/30 · f9 11/11 · f4 16/16 — all PASS** against installed
-0.7.1 + hosted api.minima.sh.
+Status (2026-07-06): **full suite 7/7 flows PASS — f1 30/30 · f9 11/11 · f4 16/16 ·
+f5 5/5 · f6 6/6 · f7 13/13 · f10 5/5 (86 hard checks)** against installed 0.7.1 +
+hosted api.minima.sh; ~3.3 min, ~$0.15/run.
 
 ## Findings log
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
+
+### 2026-07-06 — Phase C (flow suite) findings
+- **Child routing decisions DO persist correctly** — each sub-agent writes its own
+  routing_decisions row with `agent_id = <childId>` demuxing it from the lead (verified
+  live: 3 children with per-child tool_calls read/glob/bash + worktree isolation). Two
+  false alarms on the way were both harness-side: the assert library's SELECT omitted
+  agent_id, and rows become visible to external readers slightly after the lead's
+  (write-queue flush lag) — poll with a grace window, never point-read.
+- **The packages/tui test suite leaks git worktrees**: stale `/tmp/minima-wt-dirty-step-*`
+  and `/tmp/minima-wt-wt-step-*` dirs from spawn tests predate bench runs. Flows must
+  baseline `/tmp/minima-wt-*` pre-run and assert on the set DIFFERENCE; worth a small
+  cleanup fix in the tui test suite.
+- **In-cwd reads DO prompt** despite the `app.tsx:565` comment claiming "read/ls
+  auto-allow within cwd" — `permissions.ts:41` starts `allowedDirs` empty and nothing
+  pre-approves the cwd. Locked in by F7; either the comment or the behavior should change.
+- **Overlay answering must be effect-keyed**: a single keypress can race the overlay
+  lifecycle (deny → model instantly retries → new overlay paints inside the same poll
+  window). F7's driver retries each answer key until its observable effect (deny text,
+  disk change, transcript content) lands.
+- **Idle detection that survives repaints**: compare `lastIndexOf("· ready")` vs
+  `lastIndexOf("· working")` over the accumulated output — the last footer paint always
+  reflects current state. Needed before typing after DB-predicate turn ends (the visible
+  turn end precedes busy-clear by seconds; typed chars during the tail may not echo).
+- **Prompt-dictated task-tool JSON is genuinely nondeterministic**: the model sometimes
+  omits `isolation:"workdir"` even when asked; quoting the exact field name + a one-shot
+  in-session retry makes F5 reliable. The ladder (F10), by contrast, is fully
+  deterministic via the mock's recommendQueue + a present-but-invalid provider key.
 
 ### 2026-07-06 — Phase B (dataset) findings
 - **Never `await` child stdout/stderr streams to completion after killing a process**:

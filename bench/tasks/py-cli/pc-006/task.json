@@ -2,12 +2,13 @@
   "id": "pc-006",
   "repo": "py-cli",
   "category": "bugfix",
-  "problem_statement": "The percentages in the report's priority breakdown no longer add up. On any board that contains completed items the percent column sums to well over 100 — for example, with four tasks of which two are finished we see shares like 50% + 50% + 100%. The raw counts printed right next to them are correct; only the share figures are inflated, and the more work we complete the worse the inflation gets. On a board where everything is completed, every share collapses to 0.0% instead. Each band's percentage should simply be its share of all tasks included in the report, so the column always totals roughly one hundred.",
+  "problem_statement": "The percentages in the report's priority breakdown no longer add up. On any board that contains completed items the percent column sums to well over 100 \u2014 for example, with four tasks of which two are finished we see shares like 50% + 50% + 100%. The raw counts printed right next to them are correct; only the share figures are inflated, and the more work we complete the worse the inflation gets. On a board where everything is completed, every share collapses to 0.0% instead. Each band's percentage should simply be its share of all tasks included in the report, so the column always totals roughly one hundred.",
   "test_cmd": "python3 -m pytest -q",
-  "difficulty": "medium",
-  "expected_route": "mid",
+  "difficulty": "easy",
+  "expected_route": "cheap",
   "est_files": 1,
   "est_loc": 8,
   "timeout_sec": 120,
-  "notes": "group_by_priority percent denominator became open-tasks-only while counts still cover all tasks."
+  "notes": "group_by_priority percent denominator became open-tasks-only while counts still cover all tasks. | RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved.",
+  "authored_difficulty": "medium"
 }

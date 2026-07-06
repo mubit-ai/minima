@@ -12,6 +12,7 @@ export interface RunRow {
 export interface DecisionRow {
   rec_id: string;
   run_id: string;
+  agent_id: string; // "" = lead agent; sub-agents carry their child id
   chosen_model: string;
   decision_basis: string;
   routed: string; // server | pinned | offline
@@ -46,7 +47,7 @@ export class HarnessDb {
   }
   decisions(runId?: string): DecisionRow[] {
     const sql =
-      "SELECT rec_id, run_id, chosen_model, decision_basis, routed, task_type, difficulty, est_cost_usd, all_premium_cost_usd, actual_cost_usd, outcome, judged, ranked FROM routing_decisions" +
+      "SELECT rec_id, run_id, agent_id, chosen_model, decision_basis, routed, task_type, difficulty, est_cost_usd, all_premium_cost_usd, actual_cost_usd, outcome, judged, ranked FROM routing_decisions" +
       (runId ? " WHERE run_id = ?" : "") +
       " ORDER BY ts";
     return (runId ? this.db.query(sql).all(runId) : this.db.query(sql).all()) as DecisionRow[];

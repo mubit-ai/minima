@@ -14,11 +14,22 @@ export interface CapturedRequest {
   body: unknown;
 }
 
+const PROVIDER_OF: Record<string, string> = {
+  "claude-haiku-4-5": "anthropic",
+  "claude-sonnet-4-6": "anthropic",
+  "gemini-2.5-flash": "google",
+  "gemini-2.5-pro": "google",
+  "gpt-4o-mini": "openai",
+};
+
 export class MockMinimaServer {
   requests: CapturedRequest[] = [];
   private server: ReturnType<typeof Bun.serve> | null = null;
   recommendModel = "claude-haiku-4-5";
   recommendProvider = "anthropic";
+  /** When set, each /v1/recommend shifts the next model off this queue (last one sticks) —
+   * lets a flow script rung-by-rung ladder behavior deterministically. */
+  recommendQueue: string[] | null = null;
 
   constructor(readonly port: number) {}
 
@@ -72,25 +83,28 @@ export class MockMinimaServer {
       });
     }
     if (method === "GET" && path === "/v1/models") {
+      const ids = new Set([this.recommendModel, ...(this.recommendQueue ?? [])]);
       return json({
-        models: [
-          {
-            model_id: this.recommendModel,
-            provider: this.recommendProvider,
-            display_name: "Mock Haiku",
-            input_cost_per_mtok: 1.0,
-            output_cost_per_mtok: 5.0,
-            supports_prompt_caching: true,
-            context_window: 200_000,
-          },
-        ],
+        models: [...ids].map((id) => ({
+          model_id: id,
+          provider: PROVIDER_OF[id] ?? this.recommendProvider,
+          display_name: `Mock ${id}`,
+          input_cost_per_mtok: 1.0,
+          output_cost_per_mtok: 5.0,
+          supports_prompt_caching: true,
+          context_window: 200_000,
+        })),
         catalog_version: "bench-mock-1",
       });
     }
     if (method === "POST" && path === "/v1/recommend") {
+      let modelId = this.recommendModel;
+      if (this.recommendQueue?.length) {
+        modelId = this.recommendQueue.length > 1 ? this.recommendQueue.shift()! : this.recommendQueue[0]!;
+      }
       const rec = {
-        model_id: this.recommendModel,
-        provider: this.recommendProvider,
+        model_id: modelId,
+        provider: PROVIDER_OF[modelId] ?? this.recommendProvider,
         predicted_success: 0.9,
         est_cost_usd: 0.001,
         score: 1.0,

@@ -4,11 +4,12 @@
   "category": "bugfix",
   "problem_statement": "hey, weird one from ops. we renamed a couple of short links last week and the old names sometimes still redirect, and one of them we could not register again even though nothing lists it. after restoring last night's snapshot on the staging box the ghosts were gone, but the renamed link had lost all its click history there. no clean repro yet, sorry \u2014 can someone dig into what is going on?",
   "test_cmd": "bun test tests/",
-  "difficulty": "medium",
-  "expected_route": "mid",
+  "difficulty": "easy",
+  "expected_route": "cheap",
   "est_files": 1,
   "est_loc": 12,
   "timeout_sec": 120,
   "trap": "Statement is short and casual while the defect is a cross-module invariant: a slug rename leaves a stale slug-index entry and strands the click ledger under the old key, so live state drifts from what snapshot persistence (which rebuilds the derived index on restore) reproduces \u2014 symptoms only align after reasoning across store, persist and stats.",
-  "notes": "Fix is small (restore index delete + click-ledger migration in the rename path) but diagnosis requires connecting redirect ghosts, list duplicates, slug reuse conflicts and snapshot behaviour divergence. | RE-BINNED 2026-07-06: authored as hard (diagnostic cross-module spread) but mini-calibration k=1 had the cheap arm (haiku) solve it in 46s, and the fix footprint is 8 lines \u2014 demoted to medium/mid per the evidence-over-structure rule. Trap flag retained: casual statement, multi-module symptoms."
+  "notes": "Fix is small (restore index delete + click-ledger migration in the rename path) but diagnosis requires connecting redirect ghosts, list duplicates, slug reuse conflicts and snapshot behaviour divergence. | RE-BINNED 2026-07-06: authored as hard (diagnostic cross-module spread) but mini-calibration k=1 had the cheap arm (haiku) solve it in 46s, and the fix footprint is 8 lines \u2014 demoted to medium/mid per the evidence-over-structure rule. Trap flag retained: casual statement, multi-module symptoms. | RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved.",
+  "authored_difficulty": "medium"
 }

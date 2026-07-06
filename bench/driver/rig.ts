@@ -78,6 +78,25 @@ export class PtyRig {
     return this.proc.exitCode;
   }
 
+  /**
+   * CURRENT-state idle detector: the footer paints "· ready" when idle and
+   * "· working" while busy — the LAST occurrence in the accumulated output reflects
+   * the present state (repaints always append). Safe against stale-repaint matching.
+   */
+  isIdle(): boolean {
+    const t = this.text();
+    return t.lastIndexOf("· ready") > t.lastIndexOf("· working");
+  }
+
+  async waitIdle(timeoutMs = 60_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.isIdle()) return;
+      await Bun.sleep(200);
+    }
+    throw new AbortError(`waitIdle timeout ${timeoutMs}ms; tail:\n${this.text().slice(-800)}`);
+  }
+
   /** Raw output (with escape sequences) — for debugging and future screen emulation. */
   rawText(): string {
     return this.raw;

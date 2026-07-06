@@ -4,10 +4,11 @@
   "category": "feature",
   "problem_statement": "Add support for explicit bin edges to the histogram function in the stats module. Extend HistogramOptions with an optional `edges?: number[]` property and honour it in `histogram(values, options)`: when `edges` is provided it takes precedence over `bins`. The edges must contain at least two values and be strictly increasing; otherwise throw a RangeError. Given k edges, return k-1 bins shaped `{ x0, x1, count }` where bin i counts values v with `edges[i] <= v < edges[i+1]`, except the final bin, which also counts values equal to the last edge. Values below the first edge or above the last edge are ignored. The existing equal-width behaviour must remain unchanged whenever `edges` is absent.",
   "test_cmd": "bun test tests/",
-  "difficulty": "medium",
-  "expected_route": "mid",
+  "difficulty": "easy",
+  "expected_route": "cheap",
   "est_files": 1,
   "est_loc": 35,
   "timeout_sec": 60,
-  "notes": "Feature task: oracle.patch implements HistogramOptions.edges via a histogramWithEdges helper."
+  "notes": "Feature task: oracle.patch implements HistogramOptions.edges via a histogramWithEdges helper. | RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved.",
+  "authored_difficulty": "medium"
 }
