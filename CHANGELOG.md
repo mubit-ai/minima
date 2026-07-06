@@ -4,7 +4,7 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.8.0] - 2026-07-06
+## [0.7.2] - 2026-07-06
 
 ### Added (TUI)
 - **Fullscreen renderer (new default)** — alternate screen buffer with the prompt glued
