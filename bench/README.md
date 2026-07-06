@@ -142,20 +142,32 @@ a credible counterfactual for agentic workloads — measured paired baselines ar
 
 ## Learning loop (F12) — currently blocked SERVER-side
 
-`flows/f12_learning_loop.ts` (live-lane, ~$0.60/run): warms a fresh namespace with 8
-judged kata runs (separate sessions), then re-runs 4 of the SAME tasks as probes in
-warm-vs-cold namespaces. Mechanical checks pass (all server-routed, cold=prior); the
-prior→memory flip check FAILS — and that is a correct detection, not a flow bug:
+`flows/f12_learning_loop.ts` (live-lane, ~$0.60/run when writes are healthy): first a
+free WRITE-HEALTH probe (direct recommend→feedback, hard check on the feedback BODY's
+`accepted` field, early-exit on failure), then warms a fresh namespace with 8 judged
+kata runs (separate sessions) and re-runs 4 of the SAME tasks as probes in warm-vs-cold
+namespaces.
 
-- Diagnosis (2026-07-06): every recommend from prod api.minima.sh carries the
-  `memory_unavailable` warning (visible in F4/F5 transcripts); `reinforced_entry_ids`
-  never echo; same-task re-runs in a warmed namespace still route on `prior`.
-  A key-swap probe (the .env.harness key that proved the prior→memory transition in
-  the 2026-06-23 live test) reproduces identically — so it is not the key/org: the
-  prod server's Mubit memory backend is unavailable or unconfigured.
-- Consequence: the demo's "learning over time" beat is blocked until prod memory is
-  restored (check the deployment's MUBIT_ENDPOINT/backend health). F12 flips green by
-  itself when it is.
+- **ROOT CAUSE FOUND (2026-07-06, direct API probe): the server rejects every memory
+  write.** `POST /v1/feedback` returns HTTP 200 with `accepted=false, record_id=null,
+  warnings=["memory_write_failed"]`; recommends carry `memory_unavailable`
+  intermittently (it was absent during the post-0.7.2 F12 run — a red herring that
+  briefly pointed suspicion at thresholds). With zero writes landing, the prior→memory
+  flip can never happen; every earlier F12 failure traces to this.
+- The harness swallowed the rejection: `MinimaAgent.lastFeedbackError` captured it but
+  nothing read the field (fixed in PR #84 — TUI info line + `--mode json`
+  `feedback_error` event). F12's write-health check asserts on the response body
+  directly, so it needs no new binary and fails in <1s at the true cause.
+- Next hop: the Minima↔Mubit boundary — the write fails inside the server's
+  `remember_outcome` → Mubit ingest path (the repo `.env` key is `mbt_local_admin`,
+  the dev key with known api.mubit.ai instance-routing problems). Definitive local
+  experiment: run the server against a local ricedb (where that key is valid) and
+  repeat the probe; if it closes locally, it's Mubit-side instance routing for the
+  key, not this repo. Server hardening sketch (separate PR): validate ingest-job
+  `writes[].success` in `memory/adapter.py` instead of treating a done-job-with-failed-
+  writes as success; surface the parsed-but-unread `recall.degraded`.
+- Consequence: the demo's "learning over time" beat stays blocked until writes land
+  for the demo key. F12 flips green by itself when they do.
 - Also noteworthy: routing drifted flash→pro for identical kata prompts within hours
   (catalog/prior drift) — validates the suite-wide rule of never asserting model ids.
 
@@ -181,6 +193,26 @@ hosted api.minima.sh; ~3.3 min, ~$0.15/run.
 ## Findings log
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
+
+### 2026-07-06 (later) — memory-loop root cause + write-health detector
+- **Every memory write is rejected by the server**: direct `POST /v1/feedback` returns
+  HTTP 200 `accepted=false, record_id=null, warnings=["memory_write_failed"]`. The
+  HTTP status is useless as a health signal — assert on the BODY.
+- The binary knew and stayed silent: the rejection landed in `lastFeedbackError`,
+  which no code read (write-only diagnostics). PR #84 surfaces it (TUI info line +
+  `--mode json` `feedback_error` event).
+- F12 now opens with a direct-API write-health probe and exits early on failure:
+  fails in <1s at the true cause instead of ~5min/$0.60 at the basis=prior symptom.
+- `memory_unavailable` on recommends is INTERMITTENT — its absence during one run must
+  not be read as "recall healthy" (it briefly sent this investigation toward evidence
+  thresholds).
+- 5-agent code-trace of the server path (journal in the session workflow dir):
+  `reinforced_entry_ids` echoes recommend-time recall neighbors, so `[]` during
+  warm-up is expected and diagnostic of nothing; `MEMORY_WEIGHT_MIN=0.0` means ONE
+  retrieved outcome flips basis to memory — no threshold story; lane/namespace
+  computed once and reused on both paths — no scoping mismatch. The break is at the
+  Minima↔Mubit ingest boundary (and the SDK treats a done-ingest-job with
+  `writes[].success=false` as success — silent-failure hole worth a server PR).
 
 ### 2026-07-06 — v0.7.2 release compat + memory-loop status
 - **Suite green on both binaries**: installed 0.7.1 and the v0.7.2 release asset
