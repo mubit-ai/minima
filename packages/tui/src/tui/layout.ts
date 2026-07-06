@@ -142,7 +142,19 @@ export function tailToFit(text: string, interior: number, budgetRows: number): s
     rows += h;
     start = i;
   }
-  return lines.slice(start).join("\n");
+  let out = lines.slice(start).join("\n");
+  // A streamed paragraph is ONE source line until the model emits "\n" — when even the
+  // final line alone exceeds the budget, hard-slice its tail. Otherwise the live region
+  // outgrows the viewport: fullscreen re-enters the overflow garble class, and inline can
+  // reach terminal height and trip Ink's scrollback-wiping clearTerminal.
+  if (start === lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
+    const iw = Math.max(1, interior);
+    out = out.slice(-(budgetRows * iw));
+    while (out.length > iw && markdownBodyHeight(out, interior) > budgetRows) {
+      out = out.slice(iw);
+    }
+  }
+  return out;
 }
 
 /**

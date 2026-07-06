@@ -8,6 +8,7 @@ import {
   getScrollableMessages,
   markdownBodyHeight,
   streamTailBudget,
+  tailToFit,
   wrappedLineCount,
 } from "../src/tui/layout.ts";
 
@@ -220,5 +221,28 @@ describe("clampToolText — bounds huge tool output", () => {
     const { text, hiddenLines } = clampToolText(`${huge}\ntail`, 40);
     expect(text.split("\n")[0]).toBe(huge);
     expect(hiddenLines).toBe(1); // the "tail" line
+  });
+});
+
+describe("tailToFit budget enforcement", () => {
+  test("multi-line text keeps only the newest lines that fit", () => {
+    const text = Array(20).fill("line of text").join("\n");
+    const out = tailToFit(text, 80, 5);
+    expect(out.split("\n").length).toBe(5);
+    expect(markdownBodyHeight(out, 80)).toBeLessThanOrEqual(5);
+  });
+  test("a single huge streamed paragraph is hard-sliced to the row budget", () => {
+    // One source line until the model emits "\n": 3000 chars at interior 100 would render
+    // ~30 rows. The live region must NEVER exceed its budget (fullscreen garble / inline
+    // scrollback-wipe class), so the tail is sliced even though it is the final line.
+    const para = "word ".repeat(600).trim();
+    const out = tailToFit(para, 100, 10);
+    expect(markdownBodyHeight(out, 100)).toBeLessThanOrEqual(10);
+    expect(out.length).toBeGreaterThan(0);
+    expect(para.endsWith(out)).toBe(true); // it is the TAIL of the stream
+  });
+  test("budget 1 with a long line still fits one row", () => {
+    const out = tailToFit("x".repeat(500), 50, 1);
+    expect(markdownBodyHeight(out, 50)).toBeLessThanOrEqual(1);
   });
 });

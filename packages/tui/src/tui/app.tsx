@@ -677,6 +677,8 @@ export function HarnessApp({
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
   const planModeRef = useRef(false);
+  /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
+  const quitArmedAtRef = useRef(0);
   useEffect(() => {
     planModeRef.current = planMode;
   }, [planMode]);
@@ -746,11 +748,11 @@ export function HarnessApp({
   useEffect(() => {
     agent.setBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash"];
+        const blocked = ["write", "edit", "bash", "apply_patch"];
         if (blocked.includes(ctx.toolCall.name)) {
           return {
             block: true,
-            reason: "Plan mode is ON — write/edit/bash are blocked. Use /plan to exit.",
+            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
           };
         }
       }
@@ -924,8 +926,25 @@ export function HarnessApp({
 
     // Abort a running turn. MUST be handled before the busy-guard below — otherwise these are
     // dead code and the advertised "esc to abort" does nothing. (Ctrl+C is also intercepted by
-    // Ink unless exitOnCtrlC:false is passed to render — see main.ts.)
+    // Ink unless exitOnCtrlC:false is passed to render — see main.ts.) Abort is best-effort:
+    // some provider streams cannot be cancelled mid-flight (see google.ts), so a SECOND Ctrl+C
+    // within 2.5s force-quits — without it a wedged stream leaves the TUI unkillable.
     if (busy && (key.escape || (key.ctrl && input === "c"))) {
+      if (key.ctrl && input === "c") {
+        if (Date.now() - quitArmedAtRef.current < 2_500) {
+          exit();
+          return;
+        }
+        quitArmedAtRef.current = Date.now();
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: "Aborting… press Ctrl+C again within 2.5s to force-quit.",
+            toolName: "abort",
+          },
+        ]);
+      }
       agent.abort();
       return;
     }
