@@ -99,7 +99,7 @@ export const SECTIONS: Section[] = [
   },
   {
     title: "Web tools",
-    note: "Exa API key for the web_search / web_fetch tools (https://exa.ai). Optional — the web tools stay unavailable until it is set.",
+    note: "Exa API key for the web_search / web_fetch tools (https://exa.ai). Optional — without it the web tools aren't offered to the agent (a key set here is picked up on the next start).",
     fields: [
       {
         key: "EXA_API_KEY",

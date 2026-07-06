@@ -3,10 +3,12 @@ import {
   type ChatMessage,
   MAX_TOOL_LINES,
   SCROLLBACK_SAFETY_ROWS,
+  childTreeHeight,
   clampToolText,
   computeMsgHeight,
   getScrollableMessages,
   markdownBodyHeight,
+  questionOverlayHeight,
   streamTailBudget,
   tailToFit,
   wrappedLineCount,
@@ -244,5 +246,51 @@ describe("tailToFit budget enforcement", () => {
   test("budget 1 with a long line still fits one row", () => {
     const out = tailToFit("x".repeat(500), 50, 1);
     expect(markdownBodyHeight(out, 50)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("questionOverlayHeight", () => {
+  const q = (over: Partial<Parameters<typeof questionOverlayHeight>[0]> = {}) => ({
+    question: "Which approach?",
+    options: [
+      { label: "A", description: "first" },
+      { label: "B", description: null },
+    ],
+    allow_freetext: true,
+    ...over,
+  });
+  test("border + question + option rows + Other row + hint", () => {
+    // cols 80 → interior 76: 2 (border) + 1 (question) + 2 (options) + 1 (Other) + 1 (hint)
+    expect(questionOverlayHeight(q(), 80)).toBe(7);
+  });
+  test("no free-text drops the Other row", () => {
+    expect(questionOverlayHeight(q({ allow_freetext: false }), 80)).toBe(6);
+  });
+  test("long question and descriptions wrap and grow the reservation", () => {
+    const tall = q({
+      question: "x".repeat(200), // interior 76 → 3 rows
+      options: [{ label: "opt", description: "y".repeat(150) }], // 1 option, ~3 rows
+    });
+    // Never under-count: 2 border + 3 question + >=2 option + 1 Other + 1 hint
+    expect(questionOverlayHeight(tall, 80)).toBeGreaterThanOrEqual(9);
+  });
+  test("narrow terminal wraps the hint line too", () => {
+    // cols 40 → interior 36; the free-text hint (44 cols) wraps to 2 rows
+    expect(questionOverlayHeight(q({ options: [] }), 40)).toBe(2 + 1 + 1 + 2);
+  });
+});
+
+describe("childTreeHeight", () => {
+  test("zero children renders nothing", () => {
+    expect(childTreeHeight(0, 8)).toBe(0);
+  });
+  test("border(2) + header(1) + rows + marginBottom(1)", () => {
+    expect(childTreeHeight(3, 8)).toBe(7);
+  });
+  test("caps at maxRows and adds one '+k more' row", () => {
+    expect(childTreeHeight(20, 8)).toBe(4 + 8 + 1);
+  });
+  test("cap floors at one visible row", () => {
+    expect(childTreeHeight(5, 0)).toBe(4 + 1 + 1);
   });
 });

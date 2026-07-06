@@ -54,9 +54,14 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     globTool(fs),
     grepTool(fs),
     todowriteTool(),
-    webSearchTool(),
-    webFetchTool(),
   ];
+  // The Exa-backed web tools fail on every call without EXA_API_KEY, so a keyless
+  // session doesn't offer them at all. Checked at call time (not module load) so
+  // keys hydrated from the config store count; a key set mid-session via /config
+  // takes effect on the next start.
+  if (process.env.EXA_API_KEY) {
+    all.push(webSearchTool(), webFetchTool());
+  }
   const exclude = new Set(opts.exclude ?? []);
   return all.filter((t) => !exclude.has(t.name));
 }

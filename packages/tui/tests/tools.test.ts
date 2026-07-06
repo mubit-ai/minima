@@ -142,6 +142,7 @@ describe("ls tool", () => {
 
 describe("builtinTools", () => {
   test("returns the default set, minus excluded", () => {
+    process.env.EXA_API_KEY = "test-key";
     const all = builtinTools();
     expect(all.map((t) => t.name).sort()).toEqual([
       "apply_patch",
@@ -168,6 +169,14 @@ describe("builtinTools", () => {
       "web_search",
       "write",
     ]);
+  });
+
+  test("omits the Exa web tools when EXA_API_KEY is unset", () => {
+    delete process.env.EXA_API_KEY;
+    const names = builtinTools().map((t) => t.name);
+    expect(names).not.toContain("web_search");
+    expect(names).not.toContain("web_fetch");
+    expect(names).toContain("read"); // the rest of the set is unaffected
   });
 });
 

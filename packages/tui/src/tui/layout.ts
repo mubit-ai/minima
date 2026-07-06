@@ -178,6 +178,49 @@ export function streamTailBudget(rows: number, reserved: number): number {
 }
 
 /**
+ * Rows the `question` tool overlay occupies, mirroring QuestionOverlay in app.tsx:
+ * round border (2) + wrapped question + one row per option (label + description wrap
+ * together) + "Other" row when free-text is allowed + wrapped hint line. Reserves the
+ * option-list view; the typing view is never taller (its draft row is truncated to one
+ * row), so this estimate stays >= the real render. `cols` is the terminal width; the
+ * overlay interior is cols-4 (border + paddingX).
+ */
+export function questionOverlayHeight(
+  q: {
+    question: string;
+    options: { label: string; description?: string | null }[];
+    allow_freetext: boolean;
+  },
+  cols: number,
+): number {
+  const interior = Math.max(1, cols - 4);
+  let h = 2 + wrappedLineCount(q.question, interior);
+  for (const opt of q.options) {
+    h += wrappedLineCount(
+      `› ${opt.label}${opt.description ? ` — ${opt.description}` : ""}`,
+      interior,
+    );
+  }
+  if (q.allow_freetext) h += 1; // "✎ Other (type a custom answer)" row
+  const hint = q.allow_freetext
+    ? "↑↓ select · ⏎ confirm · t type · Esc dismiss"
+    : "↑↓ select · ⏎ confirm · Esc dismiss";
+  return h + wrappedLineCount(hint, interior);
+}
+
+/**
+ * Rows the ChildTree panel occupies, mirroring child_tree.tsx: round border (2) +
+ * header (1) + one row per visible child (capped at `maxRows`, with a "+k more" row
+ * when the cap trims) + marginBottom (1). Zero when there are no children — the
+ * component renders null.
+ */
+export function childTreeHeight(childCount: number, maxRows: number): number {
+  if (childCount <= 0) return 0;
+  const visible = Math.min(childCount, Math.max(1, maxRows));
+  return 4 + visible + (childCount > visible ? 1 : 0);
+}
+
+/**
  * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly, so the
  * fullscreen viewport (getScrollableMessages) can window history without overflowing the frame.
  * CONSERVATIVE bias (>= actual): each role uses the accurate word-wrap helpers at the *narrowest*

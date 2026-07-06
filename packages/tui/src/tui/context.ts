@@ -12,9 +12,14 @@ import { isAbsolute, resolve } from "node:path";
 const GLOBAL_DIR = resolve(homedir(), ".minima-harness");
 const CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"];
 
-const BASE_SYSTEM = [
+// The tools sentence is resolved at call time (not module load): EXA_API_KEY may be
+// hydrated from the config store after import, and the web tools only register when
+// it is set — the prompt must not advertise tools the agent doesn't have.
+const baseSystem = () => [
   "You are an expert coding agent in the user's terminal. You have tools to read, write,",
-  "edit, search (grep/glob), run commands (bash), and fetch web pages (web_fetch).",
+  `edit, search (grep/glob), and run commands (bash)${
+    process.env.EXA_API_KEY ? ", plus web_search/web_fetch for live web access" : ""
+  }.`,
   "",
   "Rules:",
   "- ALWAYS read a file before editing it. Never guess file contents.",
@@ -32,7 +37,7 @@ const BASE_SYSTEM = [
   "- Don't leave TODO comments or placeholder code. Fully implement what's asked.",
   "- Don't modify unrelated code. Change only what's needed.",
   "- Be concise. No preamble, no apology, no unnecessary explanation.",
-].join("\n");
+];
 
 const SUMMARY_SYSTEM =
   "You compact a coding-agent conversation. Summarize the work done so far: key decisions, " +
@@ -77,7 +82,7 @@ export function buildSystemPrompt(cwd: string): string {
   const append =
     tryRead(resolve(cwd, "APPEND_SYSTEM.md")) ?? tryRead(resolve(GLOBAL_DIR, "APPEND_SYSTEM.md"));
 
-  let base = replace ?? BASE_SYSTEM;
+  let base = replace ?? baseSystem().join("\n");
   if (append) base = `${base}\n\n${append}`;
 
   const agents = loadAgentsMd(cwd);
@@ -85,4 +90,4 @@ export function buildSystemPrompt(cwd: string): string {
   return base;
 }
 
-export { SUMMARY_SYSTEM, BASE_SYSTEM };
+export { SUMMARY_SYSTEM, baseSystem };

@@ -31,8 +31,10 @@ import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import {
+  childTreeHeight,
   getScrollableMessages,
   markdownBodyHeight,
+  questionOverlayHeight,
   streamTailBudget,
   tailToFit,
   wrappedLineCount,
@@ -405,7 +407,11 @@ export function QuestionOverlay({ prompt }: { prompt: QuestionPromptData }) {
       {typing ? (
         <Box marginTop={0}>
           <Text color="gray">{"› "}</Text>
-          <Text color="white">{draft}</Text>
+          {/* truncate-start keeps the draft to ONE row (showing its tail) so the overlay never
+              outgrows the rows questionOverlayHeight() reserved for it in the layout budget. */}
+          <Text color="white" wrap="truncate-start">
+            {draft}
+          </Text>
           <Text color="gray">{"▋"}</Text>
         </Box>
       ) : (
@@ -2005,6 +2011,14 @@ export function HarnessApp({
       (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
       1 // hint line
     : 0;
+  // The question overlay owns the bottom region when no permission prompt does (matching the
+  // render gate below); its rows must be reserved like permPrompt's or the live frame overflows.
+  const questionPromptHeight =
+    questionPrompt && !permPrompt ? questionOverlayHeight(questionPrompt, cols) : 0;
+  // /tree panel renders above the status bar; cap its rows (a third of the screen) so a wide
+  // DAG can't starve the chat region, and reserve exactly what child_tree.tsx will render.
+  const treeMaxRows = Math.max(3, Math.floor(rows / 3));
+  const treeHeight = treeOpen ? childTreeHeight(childrenState.size, treeMaxRows) : 0;
   // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
   // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -2019,6 +2033,8 @@ export function HarnessApp({
     suggestionsHeight +
     inputBoxHeight +
     permPromptHeight +
+    questionPromptHeight +
+    treeHeight +
     busyIndicatorHeight +
     streamingThoughtsHeight +
     2; // "◆ assistant" header + marginTop
@@ -2041,6 +2057,8 @@ export function HarnessApp({
       suggestionsHeight -
       inputBoxHeight -
       permPromptHeight -
+      questionPromptHeight -
+      treeHeight -
       busyIndicatorHeight,
   );
   const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
@@ -2300,7 +2318,7 @@ export function HarnessApp({
       )}
 
       <Box flexDirection="column" flexShrink={0}>
-        {treeOpen && <ChildTree nodes={childrenState} />}
+        {treeOpen && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
         {currentAction ? (
           <Text color="yellow" wrap="truncate">
             {currentAction}
