@@ -83,10 +83,14 @@ export function BusyIndicator({ active, showTip = true }: BusyIndicatorProps) {
 
   return (
     <Box marginTop={1}>
-      <Text color="yellow">{spinnerFrame(tick)} </Text>
-      <Text color="gray">{verb}… </Text>
-      {showTip ? <Text color="yellow">{formatTip(pick(tipIdx))} </Text> : null}
-      <Text color="gray">{`· ${elapsed}s · esc to abort`}</Text>
+      {/* One truncating row: a long tip on a narrow terminal must not wrap to a 2nd line
+          (busyIndicatorHeight reserves exactly 1 line + the marginTop). */}
+      <Text wrap="truncate">
+        <Text color="yellow">{spinnerFrame(tick)} </Text>
+        <Text color="gray">{verb}… </Text>
+        {showTip ? <Text color="yellow">{formatTip(pick(tipIdx))} </Text> : null}
+        <Text color="gray">{`· ${elapsed}s · esc to abort`}</Text>
+      </Text>
     </Box>
   );
 }

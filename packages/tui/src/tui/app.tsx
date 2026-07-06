@@ -1917,8 +1917,11 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
-  // bottom region (see the render tree). Plan mode adds its banner (+3).
-  const inputBoxHeight = overlayOpen || permPrompt || questionPrompt ? 0 : planMode ? 7 : 4;
+  // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
+  // inside the box, so grow the reserve by the extra wrapped lines (else it clips the chat).
+  const inputHidden = overlayOpen || permPrompt || questionPrompt;
+  const inputExtraLines = inputHidden ? 0 : Math.max(1, wrappedLineCount(typedText, cols - 4)) - 1;
+  const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   const permPromptHeight = permPrompt
     ? 3 + // round border (2) + prompt line (1)
       (permPrompt.argsSummary && !permPrompt.diffPreview ? 1 : 0) +
@@ -1956,6 +1959,26 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
   // Publish the latest layout facts for the input/scroll handlers, which close over render values.
   maxChatHeightRef.current = maxChatHeight;
   atBottomRef.current = atBottom;
+
+  // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
+  // show a single resize notice instead of a clipped, garbled UI.
+  if (rows < 10 || cols < 40) {
+    return (
+      <Box
+        height={rows}
+        width="100%"
+        flexDirection="column"
+        justifyContent="center"
+        alignItems="center"
+        overflow="hidden"
+      >
+        <Text color="yellow" bold>
+          Terminal too small
+        </Text>
+        <Text color="gray">{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
+      </Box>
+    );
+  }
 
   return (
     // Global overflow guard: bound the whole frame to exactly `rows` and clip anything beyond.

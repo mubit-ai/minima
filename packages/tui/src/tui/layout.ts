@@ -13,6 +13,8 @@
  * garbled-overlap bug this module exists to prevent.
  */
 
+import stringWidth from "string-width";
+
 export interface ChatMessage {
   role: "user" | "assistant" | "tool" | "thinking";
   text: string;
@@ -53,11 +55,15 @@ export function groupMessagesIntoTurns(messages: ChatMessage[]): Turn[] {
   return turns;
 }
 
-/** Wrapped row count of `text` at content `width` (>=1 per source line; floors width at 20). */
+/**
+ * Wrapped row count of `text` at content `width` (>=1 per source line; floors width at 20).
+ * Uses display columns (stringWidth) — the same measure Ink wraps by — so emoji/CJK (💡🧠⚙◆▸)
+ * count as 2 cols and the estimate stays >= the real rendered rows.
+ */
 export function wrappedLineCount(text: string, width: number): number {
   const w = Math.max(20, width);
   let n = 0;
-  for (const line of text.split("\n")) n += Math.max(1, Math.ceil(line.length / w));
+  for (const line of text.split("\n")) n += Math.max(1, Math.ceil(stringWidth(line) / w));
   return n;
 }
 
@@ -82,7 +88,8 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     // marginBottom (1) + "▸ you" header (1) + body. The body renders as ` ${text} ` (+2 chars).
     const w = Math.max(20, interior);
     let body = 0;
-    for (const line of msg.text.split("\n")) body += Math.max(1, Math.ceil((line.length + 2) / w));
+    for (const line of msg.text.split("\n"))
+      body += Math.max(1, Math.ceil((stringWidth(line) + 2) / w));
     return 2 + body;
   }
   // assistant: marginTop (1) + marginBottom (1) + "◆ assistant" header (1) + markdown body,
