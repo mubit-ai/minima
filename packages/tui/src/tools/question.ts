@@ -91,13 +91,20 @@ const parameters: ToolSchema = {
         errors.push("options: must be an array");
       } else {
         obj.options.forEach((raw, i) => {
+          // Be lenient about the shapes weaker models emit: a bare string is shorthand for
+          // { label }, and title/name/text/value are common aliases for `label`.
+          if (typeof raw === "string") {
+            if (raw.trim()) options.push({ label: raw });
+            return;
+          }
           const o = (raw ?? {}) as Record<string, unknown>;
-          if (typeof o.label !== "string" || !o.label) {
+          const labelRaw = o.label ?? o.title ?? o.name ?? o.text ?? o.value;
+          if (typeof labelRaw !== "string" || !labelRaw) {
             errors.push(`options[${i}].label: required`);
             return;
           }
           options.push({
-            label: o.label,
+            label: labelRaw,
             description: typeof o.description === "string" ? o.description : undefined,
           });
         });
@@ -119,10 +126,11 @@ export function questionTool(ref: AskUserRef): AgentTool {
       "Ask the user a single clarifying question and wait for their answer. Use this ONLY " +
       "when you are genuinely blocked by ambiguity or need a decision/confirmation you " +
       "cannot resolve yourself — never for something you could determine by reading or " +
-      "searching the code. Offer 2-4 concrete `options` (each a short `label` with an " +
-      "optional `description`); the user picks one or types a custom answer. Keep `header` " +
-      "to a few words. Their answer is returned as the tool result; if no user is available " +
-      "or they dismiss it, proceed with your best judgment.",
+      "searching the code. Put all the choices in this tool's single `options` array argument " +
+      "(do NOT call a separate tool per choice); each entry may be a short string, or an " +
+      "object {label, description}. Offer 2-4 options; the user picks one or types a custom " +
+      "answer. Keep `header` to a few words. Their answer is returned as the tool result; if no " +
+      "user is available or they dismiss it, proceed with your best judgment.",
     parameters,
     executionMode: "sequential",
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {

@@ -295,6 +295,28 @@ describe("question tool", () => {
     if (ok.ok) expect(ok.value.allow_freetext).toBe(true);
   });
 
+  test("accepts the lenient option shapes weak models emit (string shorthand + label aliases)", () => {
+    const tool = questionTool({ current: null });
+    // bare strings become { label }
+    const strs = tool.parameters.validate({ question: "q", options: ["Yes", "No"] });
+    expect(strs.ok).toBe(true);
+    if (strs.ok) expect(strs.value.options).toEqual([{ label: "Yes" }, { label: "No" }]);
+    // title/name are accepted as aliases for label
+    const aliased = tool.parameters.validate({
+      question: "q",
+      options: [{ title: "A" }, { name: "B", description: "d" }],
+    });
+    expect(aliased.ok).toBe(true);
+    if (aliased.ok)
+      expect(aliased.value.options).toEqual([{ label: "A" }, { label: "B", description: "d" }]);
+    // a truly labelless object is still rejected
+    expect(tool.parameters.validate({ question: "q", options: [{ foo: "bar" }] }).ok).toBe(false);
+    // a non-array options is still rejected with the same message
+    const bad = tool.parameters.validate({ question: "q", options: "Yes" });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors.join()).toContain("options: must be an array");
+  });
+
   test("is sequential (never runs concurrently with other tools)", () => {
     expect(questionTool({ current: null }).executionMode).toBe("sequential");
   });
