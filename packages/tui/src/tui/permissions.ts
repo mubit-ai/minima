@@ -85,6 +85,19 @@ export function denialReason(subject: string): string {
   return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Do not retry the call and do not attempt the same action through other tools; continue without it or ask the user how to proceed.`;
 }
 
+/**
+ * One-line label for the live "current action" indicator: tool name + a compact arg
+ * summary (`bash: git diff --stat`). `args` is null when the model named an unknown tool
+ * or its params failed validation — fall back to the bare tool name.
+ */
+export function formatActionLabel(toolName: string, args: unknown): string {
+  if (args && typeof args === "object") {
+    const summary = formatToolArgs(toolName, args as Record<string, unknown>);
+    return summary ? `${toolName}: ${summary}` : toolName;
+  }
+  return toolName;
+}
+
 export type PromptFn = (prompt: PermissionPrompt) => void;
 
 export function checkPermission(

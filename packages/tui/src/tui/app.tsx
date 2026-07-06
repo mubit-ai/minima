@@ -29,6 +29,7 @@ import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
+import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import {
   getScrollableMessages,
   markdownBodyHeight,
@@ -568,6 +569,9 @@ export function HarnessApp({
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyState, setBusyState] = useState<"ready" | "reasoning" | "running">("ready");
+  // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
+  // "current action" line in the footer; cleared per-tool on tool_execution_end.
+  const [activeActions, setActiveActions] = useState<ActiveAction[]>([]);
   const [actualCost, setActualCost] = useState<number>();
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -906,6 +910,10 @@ export function HarnessApp({
           break;
         case "tool_execution_start":
           setBusyState("running");
+          setActiveActions((a) => reduceActiveActions(a, ev));
+          break;
+        case "tool_execution_end":
+          setActiveActions((a) => reduceActiveActions(a, ev));
           break;
       }
     });
@@ -1940,6 +1948,7 @@ export function HarnessApp({
     } finally {
       setBusy(false);
       setBusyState("ready");
+      setActiveActions([]);
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
@@ -1977,7 +1986,10 @@ export function HarnessApp({
   // clearTerminal (CSI 3J) and WIPE the scrollback (all <Static> history) — so we reserve rows for
   // each live element and bound the streaming preview to keep the total strictly below `rows` (see
   // streamTailBudget). The full reply is committed to <Static> when the turn ends, so nothing is lost.
-  const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
+  // +1 row for the live current-action line while a tool is running, so the chat window
+  // shrinks instead of clipping.
+  const currentAction = currentActionLine(activeActions);
+  const footerHeight = 6 + (currentAction ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -2289,6 +2301,11 @@ export function HarnessApp({
 
       <Box flexDirection="column" flexShrink={0}>
         {treeOpen && <ChildTree nodes={childrenState} />}
+        {currentAction ? (
+          <Text color="yellow" wrap="truncate">
+            {currentAction}
+          </Text>
+        ) : null}
         <StatusBar
           model={agent.agentState.model?.id ?? "(none)"}
           basis={basis}
