@@ -81,6 +81,27 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     const childId = `${d.step_id}-${newId().slice(0, 8)}`;
     const effort = d.effort ?? "standard";
 
+    // A tool_allowlist matching nothing (misspelled names, or web tools without
+    // EXA_API_KEY) would spawn a zero-tool child that burns a routed turn and returns a
+    // spurious text-only "success" — fail the delegation fast with the reason instead.
+    if (d.tool_allowlist?.length) {
+      const available = new Set(builtinTools({ exclude: ["task"] }).map((t) => t.name));
+      if (!d.tool_allowlist.some((n) => available.has(n))) {
+        const webHint = d.tool_allowlist.some((n) => n === "web_search" || n === "web_fetch")
+          ? " (web tools require EXA_API_KEY)"
+          : "";
+        return {
+          step_id: d.step_id,
+          childId,
+          text: `BLOCKED: tool_allowlist [${d.tool_allowlist.join(", ")}] matches no available tool${webHint}`,
+          costUsd: 0,
+          quality: null,
+          outcome: "failure",
+          workdir: opts.workdir ?? process.cwd(),
+        };
+      }
+    }
+
     // Resolve per-child workdir: "workdir" isolation gets a fresh git worktree so
     // parallel children editing the same files can't clobber each other's writes.
     const origWorkdir = opts.workdir ?? process.cwd();

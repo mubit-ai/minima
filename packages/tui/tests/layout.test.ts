@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   type ChatMessage,
   MAX_TOOL_LINES,
+  QUESTION_TEXT_MAX_ROWS,
   SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
   clampToolText,
   computeMsgHeight,
   getScrollableMessages,
   markdownBodyHeight,
+  questionDisplayText,
   questionOverlayHeight,
   streamTailBudget,
   tailToFit,
@@ -249,6 +251,22 @@ describe("tailToFit budget enforcement", () => {
   });
 });
 
+describe("questionDisplayText", () => {
+  test("short questions pass through untouched", () => {
+    expect(questionDisplayText("Which approach?", 80)).toBe("Which approach?");
+  });
+  test("an over-long single line is sliced to the row budget and ellipsized", () => {
+    const out = questionDisplayText("x".repeat(1000), 80); // interior 76, budget 4 rows
+    expect(out.endsWith("…")).toBe(true);
+    expect(wrappedLineCount(out, 76)).toBeLessThanOrEqual(QUESTION_TEXT_MAX_ROWS + 1);
+  });
+  test("newline-heavy questions are clamped by rendered rows, not characters", () => {
+    const out = questionDisplayText(Array(50).fill("line").join("\n"), 80);
+    expect(wrappedLineCount(out, 76)).toBeLessThanOrEqual(QUESTION_TEXT_MAX_ROWS + 1);
+    expect(out.endsWith("…")).toBe(true);
+  });
+});
+
 describe("questionOverlayHeight", () => {
   const q = (over: Partial<Parameters<typeof questionOverlayHeight>[0]> = {}) => ({
     question: "Which approach?",
@@ -260,23 +278,29 @@ describe("questionOverlayHeight", () => {
     ...over,
   });
   test("border + question + option rows + Other row + hint", () => {
-    // cols 80 → interior 76: 2 (border) + 1 (question) + 2 (options) + 1 (Other) + 1 (hint)
-    expect(questionOverlayHeight(q(), 80)).toBe(7);
+    // cols 80: 2 (border) + 1 (question) + 2 (options) + 1 (Other) + 1 (hint), window not trimmed
+    expect(questionOverlayHeight(q(), 80, 10)).toBe(7);
   });
   test("no free-text drops the Other row", () => {
-    expect(questionOverlayHeight(q({ allow_freetext: false }), 80)).toBe(6);
+    expect(questionOverlayHeight(q({ allow_freetext: false }), 80, 10)).toBe(6);
   });
-  test("long question and descriptions wrap and grow the reservation", () => {
-    const tall = q({
-      question: "x".repeat(200), // interior 76 → 3 rows
-      options: [{ label: "opt", description: "y".repeat(150) }], // 1 option, ~3 rows
+  test("a huge option list is windowed: cap + 2 marker rows, not one row per option", () => {
+    const many = q({
+      options: Array.from({ length: 30 }, (_, i) => ({ label: `opt-${i}`, description: null })),
     });
-    // Never under-count: 2 border + 3 question + >=2 option + 1 Other + 1 hint
-    expect(questionOverlayHeight(tall, 80)).toBeGreaterThanOrEqual(9);
+    // 2 border + 1 question + 5 visible + 2 markers + 1 hint — NOT 31 option rows
+    expect(questionOverlayHeight(many, 80, 5)).toBe(11);
   });
-  test("narrow terminal wraps the hint line too", () => {
-    // cols 40 → interior 36; the free-text hint (44 cols) wraps to 2 rows
-    expect(questionOverlayHeight(q({ options: [] }), 40)).toBe(2 + 1 + 1 + 2);
+  test("a huge question is clamped near QUESTION_TEXT_MAX_ROWS", () => {
+    const tall = q({ question: "word ".repeat(500) });
+    // 2 border + <=5 question rows + 2 options + 1 Other + 1 hint
+    expect(questionOverlayHeight(tall, 80, 10)).toBeLessThanOrEqual(
+      2 + QUESTION_TEXT_MAX_ROWS + 1 + 2 + 1 + 1,
+    );
+  });
+  test("option rows are truncated, never wrapped — long descriptions don't grow the estimate", () => {
+    const wide = q({ options: [{ label: "opt", description: "y".repeat(300) }] });
+    expect(questionOverlayHeight(wide, 40, 10)).toBe(2 + 1 + 1 + 1 + 1);
   });
 });
 

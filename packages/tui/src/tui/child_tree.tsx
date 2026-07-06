@@ -63,13 +63,16 @@ export function ChildTree({ nodes, maxRows }: ChildTreeProps) {
         const indent = "  ".repeat(row.depth);
         const color = STATUS_COLOR[row.status];
         const glyph = STATUS_GLYPH[row.status];
+        // One <Text wrap="truncate"> per row: a fixed-width row (indent + 36 cols)
+        // would word-wrap to 2 rows on narrow terminals, breaking childTreeHeight()'s
+        // one-row-per-child reservation — truncation makes the math width-independent.
         return (
-          <Box key={row.stepId}>
+          <Text key={row.stepId} wrap="truncate">
             <Text color="gray">{indent}▸ </Text>
             <Text color={color}>{glyph} </Text>
             <Text>{row.stepId.slice(0, 24).padEnd(24)}</Text>
             <Text color="gray"> ${row.costUsd.toFixed(4)}</Text>
-          </Box>
+          </Text>
         );
       })}
       {hidden > 0 && <Text color="gray"> …+{hidden} more</Text>}

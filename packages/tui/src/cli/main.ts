@@ -293,6 +293,17 @@ function toolsFor(args: CliArgs) {
   let tools = args.noTools ? [] : builtinTools();
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
+    // An allowlisted name that matches nothing would be dropped silently — warn, and say
+    // why for the web tools (they only register when EXA_API_KEY is set). task/question
+    // are added after this filter regardless, so they're not "missing".
+    const known = new Set([...tools.map((t) => t.name), "task", "question"]);
+    const missing = [...allow].filter((n) => !known.has(n));
+    if (missing.length > 0) {
+      const hint = missing.some((n) => n === "web_search" || n === "web_fetch")
+        ? " (web tools require EXA_API_KEY)"
+        : "";
+      process.stderr.write(`minima: requested tools not available: ${missing.join(", ")}${hint}\n`);
+    }
     tools = tools.filter((t) => allow.has(t.name));
   }
   if (args.excludeTools) {

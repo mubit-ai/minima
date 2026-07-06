@@ -31,9 +31,11 @@ import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import {
+  SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
   getScrollableMessages,
   markdownBodyHeight,
+  questionDisplayText,
   questionOverlayHeight,
   streamTailBudget,
   tailToFit,
@@ -340,13 +342,33 @@ export interface QuestionPromptData {
   resolve: (answer: string | null) => void;
 }
 
-/** Overlay for the `question` tool: pick an option, type a custom answer, or dismiss (Esc). */
-export function QuestionOverlay({ prompt }: { prompt: QuestionPromptData }) {
+/**
+ * Overlay for the `question` tool: pick an option, type a custom answer, or dismiss (Esc).
+ * The question text and option list are model-supplied and unbounded, so both are clamped
+ * to fit the screen: the question via questionDisplayText, the options via a cursor-
+ * following window of `maxOptionRows` single (truncated) rows with ↑/↓ overflow markers.
+ * Must stay in lockstep with questionOverlayHeight() in layout.ts.
+ */
+export function QuestionOverlay({
+  prompt,
+  cols,
+  maxOptionRows,
+}: {
+  prompt: QuestionPromptData;
+  cols: number;
+  maxOptionRows: number;
+}) {
   const optionCount = prompt.options.length;
   const rowCount = optionCount + (prompt.allow_freetext ? 1 : 0);
   const [cursor, setCursor] = useState(0);
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState("");
+  const maxVisible = Math.max(1, maxOptionRows);
+  const winStart = Math.min(
+    Math.max(0, cursor - maxVisible + 1),
+    Math.max(0, rowCount - maxVisible),
+  );
+  const winEnd = Math.min(rowCount, winStart + maxVisible);
 
   useInput((input, key) => {
     if (typing) {
@@ -402,7 +424,7 @@ export function QuestionOverlay({ prompt }: { prompt: QuestionPromptData }) {
         </Text>
       </Box>
       <Text color="white" bold>
-        {prompt.question}
+        {questionDisplayText(prompt.question, cols)}
       </Text>
       {typing ? (
         <Box marginTop={0}>
@@ -416,21 +438,26 @@ export function QuestionOverlay({ prompt }: { prompt: QuestionPromptData }) {
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={0}>
-          {prompt.options.map((opt, i) => (
-            <Text key={opt.label} color={i === cursor ? "cyan" : "white"}>
-              {i === cursor ? "› " : "  "}
-              {opt.label}
-              {opt.description ? <Text color="gray"> — {opt.description}</Text> : null}
-            </Text>
-          ))}
-          {prompt.allow_freetext ? (
-            <Text color={cursor === optionCount ? "cyan" : "gray"}>
+          {winStart > 0 ? <Text color="gray"> ↑ +{winStart} more</Text> : null}
+          {prompt.options.slice(winStart, Math.min(winEnd, optionCount)).map((opt, idx) => {
+            const i = winStart + idx;
+            return (
+              <Text key={opt.label} color={i === cursor ? "cyan" : "white"} wrap="truncate">
+                {i === cursor ? "› " : "  "}
+                {opt.label}
+                {opt.description ? <Text color="gray"> — {opt.description}</Text> : null}
+              </Text>
+            );
+          })}
+          {prompt.allow_freetext && winEnd === rowCount ? (
+            <Text color={cursor === optionCount ? "cyan" : "gray"} wrap="truncate">
               {cursor === optionCount ? "› " : "  "}✎ Other (type a custom answer)
             </Text>
           ) : null}
+          {winEnd < rowCount ? <Text color="gray"> ↓ +{rowCount - winEnd} more</Text> : null}
         </Box>
       )}
-      <Text color="gray">
+      <Text color="gray" wrap="truncate">
         {typing
           ? "⏎ submit · Esc cancel"
           : `↑↓ select · ⏎ confirm${prompt.allow_freetext ? " · t type" : ""} · Esc dismiss`}
@@ -1366,7 +1393,13 @@ export function HarnessApp({
             },
             {
               role: "tool",
-              text: `${key} stored (${backend}). ${key === "MUBIT_API_KEY" || key === "MINIMA_API_KEY" ? "Router reconnected." : "Set in env."}`,
+              text: `${key} stored (${backend}). ${
+                key === "MUBIT_API_KEY" || key === "MINIMA_API_KEY"
+                  ? "Router reconnected."
+                  : key === "EXA_API_KEY"
+                    ? "Sub-agents pick it up now; restart to enable web tools for this session."
+                    : "Set in env."
+              }`,
               toolName: "config",
             },
           ]);
@@ -2011,14 +2044,6 @@ export function HarnessApp({
       (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
       1 // hint line
     : 0;
-  // The question overlay owns the bottom region when no permission prompt does (matching the
-  // render gate below); its rows must be reserved like permPrompt's or the live frame overflows.
-  const questionPromptHeight =
-    questionPrompt && !permPrompt ? questionOverlayHeight(questionPrompt, cols) : 0;
-  // /tree panel renders above the status bar; cap its rows (a third of the screen) so a wide
-  // DAG can't starve the chat region, and reserve exactly what child_tree.tsx will render.
-  const treeMaxRows = Math.max(3, Math.floor(rows / 3));
-  const treeHeight = treeOpen ? childTreeHeight(childrenState.size, treeMaxRows) : 0;
   // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
   // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -2026,6 +2051,43 @@ export function HarnessApp({
   // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
   const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
+  // The question overlay owns the bottom region when no permission prompt does (matching the
+  // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
+  // content must be made to fit: the question text is clamped (questionDisplayText) and the
+  // option list is windowed to the rows actually left after the safety margin, footer,
+  // suggestions, and the overlay's own chrome (border 2 + question + 2 window markers + hint).
+  // Component and reservation use the same numbers, so estimate == render.
+  const questionChrome = questionPrompt
+    ? 5 +
+      wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
+    : 0;
+  const questionMaxOptionRows = Math.max(
+    1,
+    rows - SCROLLBACK_SAFETY_ROWS - footerHeight - suggestionsHeight - questionChrome,
+  );
+  const questionPromptHeight =
+    questionPrompt && !permPrompt
+      ? questionOverlayHeight(questionPrompt, cols, questionMaxOptionRows)
+      : 0;
+  // /tree panel renders above the status bar. Its row cap is derived from the rows the other
+  // fixed live elements leave free (a naive rows/3 could push the fixed stack past terminal
+  // height — inline scrollback wipe / fullscreen clip); capped additionally at a third of the
+  // screen so the chat region survives, and hidden entirely when not even one row fits.
+  const TREE_CHROME = 5; // border(2) + header(1) + possible "+k more"(1) + marginBottom(1)
+  const treeMaxRows = Math.min(
+    Math.floor(rows / 3),
+    rows -
+      SCROLLBACK_SAFETY_ROWS -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      permPromptHeight -
+      questionPromptHeight -
+      busyIndicatorHeight -
+      TREE_CHROME,
+  );
+  const treeVisible = treeOpen && treeMaxRows > 0;
+  const treeHeight = treeVisible ? childTreeHeight(childrenState.size, treeMaxRows) : 0;
   // Rows left for the live streaming reply after the other live elements; bound its preview to that
   // (keeping the newest lines) so the re-diffed region never exceeds the terminal.
   const streamReserved =
@@ -2314,11 +2376,13 @@ export function HarnessApp({
               questionPrompt.resolve(answer);
             },
           }}
+          cols={cols}
+          maxOptionRows={questionMaxOptionRows}
         />
       )}
 
       <Box flexDirection="column" flexShrink={0}>
-        {treeOpen && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
+        {treeVisible && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
         {currentAction ? (
           <Text color="yellow" wrap="truncate">
             {currentAction}

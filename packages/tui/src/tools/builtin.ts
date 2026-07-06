@@ -57,8 +57,10 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
   ];
   // The Exa-backed web tools fail on every call without EXA_API_KEY, so a keyless
   // session doesn't offer them at all. Checked at call time (not module load) so
-  // keys hydrated from the config store count; a key set mid-session via /config
-  // takes effect on the next start.
+  // keys hydrated from the config store count. A key set mid-session via /config
+  // reaches newly spawned sub-agents immediately (spawn.ts rebuilds this set per
+  // child); the lead's toolset and system prompt are fixed at startup — restart to
+  // enable the web tools there.
   if (process.env.EXA_API_KEY) {
     all.push(webSearchTool(), webFetchTool());
   }

@@ -177,13 +177,44 @@ export function streamTailBudget(rows: number, reserved: number): number {
   return Math.max(0, rows - reserved - SCROLLBACK_SAFETY_ROWS);
 }
 
+/** Max wrapped rows the question text may occupy in the overlay (see questionDisplayText). */
+export const QUESTION_TEXT_MAX_ROWS = 4;
+
+/**
+ * The question text as QuestionOverlay actually renders it: clamped to roughly
+ * QUESTION_TEXT_MAX_ROWS rendered rows so a huge model-supplied question can't outgrow
+ * the screen. Keeps whole source lines while they fit, then char-slices the first line
+ * that doesn't (word wrap packs looser than a char slice, so the result may run one row
+ * over — the height helper measures this same string, keeping estimate == render).
+ * Shared by component and height math.
+ */
+export function questionDisplayText(question: string, cols: number): string {
+  const interior = Math.max(20, cols - 4);
+  const out: string[] = [];
+  let rows = 0;
+  for (const line of question.split("\n")) {
+    const h = wrappedLineCount(line, interior);
+    if (rows + h <= QUESTION_TEXT_MAX_ROWS) {
+      out.push(line);
+      rows += h;
+      continue;
+    }
+    const remaining = QUESTION_TEXT_MAX_ROWS - rows;
+    if (remaining > 0) out.push(`${line.slice(0, remaining * interior - 1)}…`);
+    else if (out.length > 0) out[out.length - 1] = `${out[out.length - 1]}…`;
+    break;
+  }
+  return out.join("\n");
+}
+
 /**
  * Rows the `question` tool overlay occupies, mirroring QuestionOverlay in app.tsx:
- * round border (2) + wrapped question + one row per option (label + description wrap
- * together) + "Other" row when free-text is allowed + wrapped hint line. Reserves the
- * option-list view; the typing view is never taller (its draft row is truncated to one
- * row), so this estimate stays >= the real render. `cols` is the terminal width; the
- * overlay interior is cols-4 (border + paddingX).
+ * round border (2) + clamped question text + one row per VISIBLE option (each option
+ * renders wrap="truncate", so exactly one row; at most `maxOptionRows` are shown in a
+ * cursor-following window) + up to 2 "↑/↓ +k more" marker rows when the window trims +
+ * one truncated hint row. The typing view is never taller (draft row is truncated),
+ * so this estimate stays >= the real render. `cols` is the terminal width; the overlay
+ * interior is cols-4 (border + paddingX).
  */
 export function questionOverlayHeight(
   q: {
@@ -192,20 +223,15 @@ export function questionOverlayHeight(
     allow_freetext: boolean;
   },
   cols: number,
+  maxOptionRows: number,
 ): number {
   const interior = Math.max(1, cols - 4);
-  let h = 2 + wrappedLineCount(q.question, interior);
-  for (const opt of q.options) {
-    h += wrappedLineCount(
-      `› ${opt.label}${opt.description ? ` — ${opt.description}` : ""}`,
-      interior,
-    );
-  }
-  if (q.allow_freetext) h += 1; // "✎ Other (type a custom answer)" row
-  const hint = q.allow_freetext
-    ? "↑↓ select · ⏎ confirm · t type · Esc dismiss"
-    : "↑↓ select · ⏎ confirm · Esc dismiss";
-  return h + wrappedLineCount(hint, interior);
+  const totalRows = q.options.length + (q.allow_freetext ? 1 : 0);
+  const visible = Math.min(totalRows, Math.max(1, maxOptionRows));
+  const markers = totalRows > visible ? 2 : 0; // worst case: trimmed above AND below
+  return (
+    2 + wrappedLineCount(questionDisplayText(q.question, cols), interior) + visible + markers + 1
+  );
 }
 
 /**
