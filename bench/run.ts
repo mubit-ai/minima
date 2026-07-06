@@ -13,10 +13,13 @@ import { f6 } from "./flows/f6_resume_lineage.ts";
 import { f7 } from "./flows/f7_permissions_plan.ts";
 import { f9 } from "./flows/f9_offline_reconnect.ts";
 import { f10 } from "./flows/f10_recovery_ladder.ts";
+import { f12 } from "./flows/f12_learning_loop.ts";
 
-const REGISTRY: Record<string, () => Promise<Checks>> = { f1, f9, f4, f5, f6, f7, f10 };
+// f12 is live-lane only (16 routed runs + judge): not part of the default sweep.
+const REGISTRY: Record<string, () => Promise<Checks>> = { f1, f9, f4, f5, f6, f7, f10, f12 };
+const DEFAULT_FLOWS = ["f1", "f9", "f4", "f5", "f6", "f7", "f10"];
 
-const wanted = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(REGISTRY);
+const wanted = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_FLOWS;
 const summaries: string[] = [];
 let failed = false;
 

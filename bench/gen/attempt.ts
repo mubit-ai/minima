@@ -16,12 +16,20 @@ import { applyHiddenTests, loadTask, materialize, runSuite } from "./materialize
 export interface AttemptResult {
   task: string;
   arm: string;
-  model: string;
+  model: string; // pinned model, or "routed" for router-chosen
   attempt: number;
   solved: boolean;
   cheated: boolean;
   agent_exit: number | null;
   cost_usd: number | null;
+  /** Router telemetry from the attempt DB (lead row): what actually ran. */
+  chosen_model?: string | null;
+  routed_kind?: string | null; // server | pinned | offline
+  decision_basis?: string | null; // memory | prior | llm | offline
+  est_cost_usd?: number | null;
+  est_premium_usd?: number | null; // server's all-premium counterfactual estimate
+  /** Rows whose feedback response carried reinforced_entry_ids (memory write landed). */
+  reinforced_n?: number;
   duration_ms: number;
   ts: string;
 }
@@ -52,16 +60,52 @@ async function sh(cwd: string, cmd: string[], env: Record<string, string>, timeo
   return { code: killed ? null : code, out, err };
 }
 
-function attemptCost(dbPath: string): number | null {
+function attemptTelemetry(dbPath: string): {
+  cost: number | null;
+  chosen: string | null;
+  routedKind: string | null;
+  basis: string | null;
+  estCost: number | null;
+  estPremium: number | null;
+  reinforcedN: number;
+} {
   try {
     const db = new Database(dbPath, { readonly: true });
-    const row = db
-      .query("SELECT SUM(actual_cost_usd) AS c FROM routing_decisions")
-      .get() as { c: number | null };
+    const sums = db
+      .query(
+        "SELECT SUM(actual_cost_usd) AS c, SUM(est_cost_usd) AS e, SUM(all_premium_cost_usd) AS p FROM routing_decisions",
+      )
+      .get() as { c: number | null; e: number | null; p: number | null };
+    const lead = db
+      .query(
+        "SELECT chosen_model, routed, decision_basis FROM routing_decisions WHERE agent_id = '' OR agent_id IS NULL ORDER BY ts DESC LIMIT 1",
+      )
+      .get() as { chosen_model: string; routed: string; decision_basis: string } | null;
+    const reinforced = db
+      .query(
+        "SELECT COUNT(*) AS n FROM routing_decisions WHERE reinforced_entry_ids IS NOT NULL AND reinforced_entry_ids != '' AND reinforced_entry_ids != '[]'",
+      )
+      .get() as { n: number };
     db.close();
-    return row.c;
+    return {
+      cost: sums.c,
+      chosen: lead?.chosen_model ?? null,
+      routedKind: lead?.routed ?? null,
+      basis: lead?.decision_basis ?? null,
+      estCost: sums.e,
+      estPremium: sums.p,
+      reinforcedN: reinforced.n,
+    };
   } catch {
-    return null;
+    return {
+      cost: null,
+      chosen: null,
+      routedKind: null,
+      basis: null,
+      estCost: null,
+      estPremium: null,
+      reinforcedN: 0,
+    };
   }
 }
 
@@ -70,7 +114,13 @@ export async function runAttempt(
   arm: string,
   model: string,
   attempt: number,
-  opts: { budgetUsd?: string; timeoutMs?: number } = {},
+  opts: {
+    budgetUsd?: string;
+    timeoutMs?: number;
+    routed?: boolean;
+    namespace?: string;
+    extraEnv?: Record<string, string>;
+  } = {},
 ): Promise<AttemptResult> {
   const meta = loadTask(taskDir);
   const scratch = mkdtempSync(join(tmpdir(), `bench-cal-${meta.id}-`));
@@ -80,7 +130,15 @@ export async function runAttempt(
   let solved = false;
   let cheated = false;
   let agentExit: number | null = null;
-  let cost: number | null = null;
+  let telem: ReturnType<typeof attemptTelemetry> = {
+    cost: null,
+    chosen: null,
+    routedKind: null,
+    basis: null,
+    estCost: null,
+    estPremium: null,
+    reinforcedN: 0,
+  };
   try {
     await materialize(taskDir, work, { applyBug: true });
     const action =
@@ -90,14 +148,20 @@ export async function runAttempt(
     const prompt =
       `${meta.problem_statement}\n\n${action} Make the smallest correct change. ` +
       `Do NOT create, modify, or delete any test files. When done, state briefly what you changed.`;
+    // routed = the actual product (server picks the model); otherwise pin `model`.
+    const modelArgs = opts.routed ? [] : ["--model", model];
     const r = await sh(
       work,
-      ["minima", "--model", model, "-xt", "web_fetch", "-b", opts.budgetUsd ?? "0.25", "--budget-enforce", "-p", prompt],
-      { MINIMA_DB_PATH: dbPath, MINIMA_NAMESPACE: "bench-calibration" },
+      ["minima", ...modelArgs, "-xt", "web_fetch", "-b", opts.budgetUsd ?? "0.25", "--budget-enforce", "-p", prompt],
+      {
+        MINIMA_DB_PATH: dbPath,
+        MINIMA_NAMESPACE: opts.namespace ?? "bench-calibration",
+        ...opts.extraEnv,
+      },
       opts.timeoutMs ?? 300_000,
     );
     agentExit = r.code;
-    cost = attemptCost(dbPath);
+    telem = attemptTelemetry(dbPath);
     // Cheating guard: any touched path under tests/ fails the attempt (build artifacts excluded).
     const diff = await sh(work, ["git", "diff", "--name-only", "HEAD"], {}, 30_000);
     const untracked = await sh(work, ["git", "ls-files", "--others", "--exclude-standard"], {}, 30_000);
@@ -121,7 +185,13 @@ export async function runAttempt(
     solved,
     cheated,
     agent_exit: agentExit,
-    cost_usd: cost,
+    cost_usd: telem.cost,
+    chosen_model: telem.chosen,
+    routed_kind: telem.routedKind,
+    decision_basis: telem.basis,
+    est_cost_usd: telem.estCost,
+    est_premium_usd: telem.estPremium,
+    reinforced_n: telem.reinforcedN,
     duration_ms: Date.now() - started,
     ts: new Date().toISOString(),
   };

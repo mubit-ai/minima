@@ -110,6 +110,55 @@ the `problem_statement` — never `task.json` (whose `notes` describe the defect
 `hidden_tests.patch`. Statements are symptoms-only for bugfixes (audited: no defect
 file/function names, no fix quotes); feature statements specify routes/signatures.
 
+## Savings A/B (Phase D, 2026-07-06) — the honest headline
+
+Paired protocol per router-eval best practice: all 33 tasks fresh-executed twice
+(identical prompts, fresh checkouts, hidden-test graded) — arm A pinned
+`claude-opus-4-8` (all-premium baseline), arm B **routed** via api.minima.sh
+(namespace `bench-ab-v1`, feedback live). Runner: `gen/savings_ab.ts` · report:
+`gen/savings_report.ts` · raw log: `tasks/savings_ab.jsonl`. Total run cost $8.71.
+
+```
+1. COST   premium: $7.89 total, $0.2546/completed
+          routed:  $0.82 total, $0.0302/completed   → 89.7% saved
+2. PARITY premium 31/33 (93.9%) vs routed 27/33 (81.8%)
+          both=26 · premium-only=5 · routed-only=1 · neither=1
+          McNemar exact p=0.219 — no significant difference at n=33
+3. ROUTED DISTRIBUTION: gemini-2.5-flash × 33 (cold-prior argmin; no escalation)
+```
+
+Present all three together, never % saved alone; state the n=33 parity bound (±10-15pp).
+Noteworthy pairs: jl-003 is a cheap-beats-premium case (flash PASS $0.008, opus FAIL
+$0.40); the 5 routed-only failures are all tasks haiku solved 5/5 in calibration —
+i.e. flash-specific misses on a cold prior, exactly the signal the learning loop
+should absorb (F12 tests that transition).
+
+**Finding — the server's premium counterfactual understates reality ~10×**: summed
+`all_premium_cost_usd` estimates for the routed arm came to $0.77 vs the MEASURED
+premium arm's $7.89. Single-call token estimates don't capture multi-turn agentic
+tool loops. Real savings are LARGER than /v1/savings claims, but the estimate is not
+a credible counterfactual for agentic workloads — measured paired baselines are.
+(Feeds the GT-8 observed-best/IPS work.)
+
+## Learning loop (F12) — currently blocked SERVER-side
+
+`flows/f12_learning_loop.ts` (live-lane, ~$0.60/run): warms a fresh namespace with 8
+judged kata runs (separate sessions), then re-runs 4 of the SAME tasks as probes in
+warm-vs-cold namespaces. Mechanical checks pass (all server-routed, cold=prior); the
+prior→memory flip check FAILS — and that is a correct detection, not a flow bug:
+
+- Diagnosis (2026-07-06): every recommend from prod api.minima.sh carries the
+  `memory_unavailable` warning (visible in F4/F5 transcripts); `reinforced_entry_ids`
+  never echo; same-task re-runs in a warmed namespace still route on `prior`.
+  A key-swap probe (the .env.harness key that proved the prior→memory transition in
+  the 2026-06-23 live test) reproduces identically — so it is not the key/org: the
+  prod server's Mubit memory backend is unavailable or unconfigured.
+- Consequence: the demo's "learning over time" beat is blocked until prod memory is
+  restored (check the deployment's MUBIT_ENDPOINT/backend health). F12 flips green by
+  itself when it is.
+- Also noteworthy: routing drifted flash→pro for identical kata prompts within hours
+  (catalog/prior drift) — validates the suite-wide rule of never asserting model ids.
+
 ## Running
 
 ```sh
