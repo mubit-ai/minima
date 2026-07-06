@@ -5,7 +5,7 @@
 
 import { Box, Text } from "ink";
 import type React from "react";
-import { type ChatMessage, type Turn, groupMessagesIntoTurns } from "./layout.ts";
+import { type ChatMessage, type Turn, clampToolText, groupMessagesIntoTurns } from "./layout.ts";
 
 // Re-exported so existing importers (app.tsx) keep a single import site; the definitions and the
 // pure grouping logic now live in the React/Ink-free layout module (also unit-tested there).
@@ -153,6 +153,7 @@ export function Messages({
           {/* Subsequent tool calls and assistant answers */}
           {turn.subsequent.map((sub, sIdx) => {
             if (sub.role === "tool") {
+              const { text: body, hiddenLines } = clampToolText(sub.text);
               return (
                 <Box
                   // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
@@ -163,7 +164,9 @@ export function Messages({
                   <Text color={sub.isError ? "red" : "yellow"}>
                     {`  ⚙ ${sub.toolName ?? "tool"}:`}
                   </Text>
-                  <Text color={sub.isError ? "red" : "white"}>{sub.text}</Text>
+                  {/* default fg (no hardcoded white — invisible on light themes); body is clipped */}
+                  <Text color={sub.isError ? "red" : undefined}>{body}</Text>
+                  {hiddenLines > 0 && <Text color="gray">{`  … +${hiddenLines} more lines`}</Text>}
                 </Box>
               );
             }

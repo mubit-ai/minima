@@ -199,15 +199,26 @@ export interface SessionPickerProps {
 
 export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProps) {
   const [cursor, setCursor] = useState(0);
+  // Latch so a fast double-Enter can't resolve twice (duplicate loadRun / "Resumed" messages).
+  const [closed, setClosed] = useState(false);
+  const pick = (path: string) => {
+    if (closed) return;
+    setClosed(true);
+    onPick(path);
+  };
 
   useInput((input, key) => {
-    if (key.escape) return onDismiss();
+    if (closed) return;
+    if (key.escape) {
+      setClosed(true);
+      return onDismiss();
+    }
     if (sessions.length === 0) return;
     if (key.upArrow) return setCursor((c) => (c - 1 + sessions.length) % sessions.length);
     if (key.downArrow) return setCursor((c) => (c + 1) % sessions.length);
-    if (key.return) return onPick(sessions[cursor]!.path);
+    if (key.return) return pick(sessions[cursor]!.path);
     const n = Number(input);
-    if (Number.isInteger(n) && n >= 1 && n <= sessions.length) return onPick(sessions[n - 1]!.path);
+    if (Number.isInteger(n) && n >= 1 && n <= sessions.length) return pick(sessions[n - 1]!.path);
   });
 
   return (
@@ -496,7 +507,9 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
             const idx = allFields.indexOf(f);
             const isActive = idx === cursor;
             const val = values[f.key] ?? "";
-            const shown = f.secret && !isActive ? mask(val) : f.secret && isActive ? val : val;
+            // Always mask secrets in the list — never reveal a full key just because the cursor
+            // landed on its row. (Editing uses a separate, also-masked buffer.)
+            const shown = f.secret ? mask(val) : val;
             return (
               <Text key={f.key} color={isActive ? "cyan" : undefined}>
                 {isActive ? "❯" : " "} {f.key.padEnd(20)}
@@ -738,6 +751,8 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
   // Input history states
   const [history, setHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  // The in-progress line stashed when the user first presses Up into history, restored on the way back.
+  const draftRef = useRef("");
 
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
@@ -968,10 +983,11 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     setThinkingLevel(nxt);
   }
 
-  function handleHistoryUp(): string | undefined {
+  function handleHistoryUp(current: string): string | undefined {
     let nextIdx = historyIdx;
     if (nextIdx === null) {
       if (history.length === 0) return undefined;
+      draftRef.current = current; // stash the in-progress draft before entering history
       nextIdx = history.length - 1;
     } else if (nextIdx > 0) {
       nextIdx = nextIdx - 1;
@@ -987,7 +1003,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     const nextIdx = historyIdx + 1;
     if (nextIdx >= history.length) {
       setHistoryIdx(null);
-      return "";
+      return draftRef.current; // restore the stashed draft, not an empty line
     }
     setHistoryIdx(nextIdx);
     return history[nextIdx];
@@ -2179,7 +2195,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
         />
       )}
 
-      {questionPrompt && (
+      {questionPrompt && !permPrompt && (
         <QuestionOverlay
           prompt={{
             ...questionPrompt,

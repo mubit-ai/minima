@@ -31,6 +31,19 @@ export interface Turn {
 /** Per-turn box chrome in messages.tsx: round border (top+bottom = 2) + marginBottom (1). */
 export const TURN_CHROME = 3;
 
+/** Max rendered lines of a tool message before it's clipped (keeps /model, big bash, etc. bounded). */
+export const MAX_TOOL_LINES = 30;
+
+/** Clip a tool message body to MAX_TOOL_LINES; returns the shown text + how many lines were hidden. */
+export function clampToolText(text: string): { text: string; hiddenLines: number } {
+  const lines = text.split("\n");
+  if (lines.length <= MAX_TOOL_LINES) return { text, hiddenLines: 0 };
+  return {
+    text: lines.slice(0, MAX_TOOL_LINES).join("\n"),
+    hiddenLines: lines.length - MAX_TOOL_LINES,
+  };
+}
+
 /**
  * Group a flat message list into turns the way messages.tsx renders them: a `user` message
  * opens a turn and following non-user messages attach to it; any non-user message BEFORE the
@@ -76,9 +89,10 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
   // Turn box interior width: round border (1 col/side) + paddingX(1) (1 col/side) = cols - 4.
   const interior = cols - 4;
   if (msg.role === "tool") {
-    // ⚙ header line (1) + wrapped body. (Was hard-coded to 1 — the worst-offender undercount:
-    // /help, /perms, /model lists, etc. are all multi-line tool messages.)
-    return 1 + wrappedLineCount(msg.text, interior);
+    // ⚙ header line (1) + wrapped (clipped) body + optional "+N more lines" hint. Mirrors the
+    // clamp in messages.tsx so the estimate matches what actually renders.
+    const { text: body, hiddenLines } = clampToolText(msg.text);
+    return 1 + wrappedLineCount(body, interior) + (hiddenLines > 0 ? 1 : 0);
   }
   if (msg.role === "thinking") {
     // single border (2) + marginY (2) + header line (1) = 5 chrome; body is paddingLeft={2} => cols-8.
