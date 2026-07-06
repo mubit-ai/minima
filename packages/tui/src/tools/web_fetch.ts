@@ -1,11 +1,15 @@
 /**
- * web_fetch — fetch a single URL's main readable text via Exa's /contents API.
- * Port of minima_harness/tools/web_fetch.py (replaces the earlier raw-fetch scraper).
+ * web_fetch — fetch a single URL's main readable text.
+ * Port of minima_harness/tools/web_fetch.py.
+ *
+ * Uses Exa's /contents extraction when `EXA_API_KEY` is set, falling back to a keyless
+ * raw fetch + HTML→text strip when the key is absent or the Exa call fails (see
+ * _search.ts). The fallback's extraction is coarser than Exa's readability.
  */
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
-import { ExaError, exaContents } from "./_exa.ts";
+import { WebSearchError, fetchWeb } from "./_search.ts";
 import { objectSchema } from "./schema.ts";
 
 const DEFAULT_MAX_CHARS = 8000;
@@ -32,11 +36,11 @@ async function execute(_id: string, params: Record<string, unknown>): Promise<To
     Math.min(MAX_MAX_CHARS, (params.max_chars as number) ?? DEFAULT_MAX_CHARS),
   );
 
-  let data: Awaited<ReturnType<typeof exaContents>>;
+  let data: Awaited<ReturnType<typeof fetchWeb>>;
   try {
-    data = await exaContents([url], maxChars);
+    data = await fetchWeb(url, maxChars);
   } catch (exc) {
-    if (exc instanceof ExaError) return errorResult(`web_fetch failed: ${exc.message}`);
+    if (exc instanceof WebSearchError) return errorResult(`web_fetch failed: ${exc.message}`);
     throw exc;
   }
 
