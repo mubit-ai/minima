@@ -484,9 +484,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return rc;
   }
 
-  // Enter alternate screen + hide cursor BEFORE render() so Ink's first paint
-  // lands in the alternate buffer (otherwise the screen is blank until a key is pressed).
-  process.stdout.write("\u001b[?1049h");
+  // Render INLINE in the main screen buffer (NEVER the alternate buffer). Ink commits the
+  // finalized transcript to the terminal's real scrollback via <Static>, so wheel/trackpad scroll
+  // and select/copy work natively — the alt buffer has no scrollback and would defeat that.
+  // Seat the first paint at the bottom of the viewport by scrolling existing shell output up into
+  // scrollback (a one-time reserve, like Codex's inline viewport) so the prompt starts pinned at
+  // the bottom instead of mid-screen. This is plain stdout BEFORE render(), not part of Ink's live
+  // frame, so it cannot trip Ink's overflow-clear. Then hide the cursor (TextInput draws its own).
+  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
   process.stdout.write("\u001b[?25l");
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
@@ -501,8 +506,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   );
   await instance.waitUntilExit();
 
-  // Exit alternate screen + restore cursor on shutdown.
-  process.stdout.write("\u001b[?1049l");
+  // Restore the cursor on shutdown. We stayed in the main buffer (no alternate-screen to leave),
+  // so the finished session remains in the terminal's scrollback — like Claude Code / Codex.
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");

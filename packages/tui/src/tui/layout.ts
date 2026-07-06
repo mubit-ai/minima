@@ -139,3 +139,23 @@ export function tailToFit(text: string, interior: number, budgetRows: number): s
   }
   return lines.slice(start).join("\n");
 }
+
+/**
+ * Safety margin (rows) kept between the live region and the terminal height. Ink renders inline in
+ * the MAIN screen buffer, and if the live frame height reaches `rows` its reconciler switches to a
+ * full clearTerminal (CSI 3J) that WIPES the terminal scrollback — destroying the <Static> transcript
+ * the user scrolls through. So the live region must stay strictly below `rows`; 2 rows also covers
+ * log-update's trailing newline and small estimation slack.
+ */
+export const SCROLLBACK_SAFETY_ROWS = 2;
+
+/**
+ * Rows to allot the live streaming-reply preview, given the terminal height `rows` and the rows
+ * already reserved for the other live elements (input box, status/footer, busy, thoughts, header).
+ * Keeps the total live frame `<= rows - SCROLLBACK_SAFETY_ROWS` so it never trips Ink's
+ * scrollback-wiping clearTerminal. May be 0 on a cramped terminal — the full reply still commits to
+ * <Static> when the turn ends, so nothing is lost, only the live peek is dropped.
+ */
+export function streamTailBudget(rows: number, reserved: number): number {
+  return Math.max(0, rows - reserved - SCROLLBACK_SAFETY_ROWS);
+}

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_TOOL_LINES,
+  SCROLLBACK_SAFETY_ROWS,
   clampToolText,
   markdownBodyHeight,
+  streamTailBudget,
   wrappedLineCount,
 } from "../src/tui/layout.ts";
 
@@ -48,6 +50,28 @@ describe("markdownBodyHeight — mirrors MarkdownRenderer expansion", () => {
     // headings, fusing "◆ assistant" with stale streamed text. Both paths now use this helper.
     const md = "## Places\n1. Chin Chin\n2. Amorino\n- a bullet line here";
     expect(markdownBodyHeight(md, 80)).toBeGreaterThanOrEqual(wrappedLineCount(md, 76));
+  });
+});
+
+describe("streamTailBudget — keeps the live region below the terminal height", () => {
+  test("reserved + streaming preview never exceeds rows - safety (Ink's scrollback-wipe guard)", () => {
+    // If the live frame height reaches `rows`, Ink emits clearTerminal (CSI 3J) and wipes the
+    // terminal scrollback — destroying the <Static> transcript. The budget must keep the whole
+    // live frame strictly below `rows`; a breach here would re-introduce that data loss.
+    for (let rows = 24; rows <= 60; rows += 4) {
+      for (let reserved = 8; reserved <= 22; reserved += 2) {
+        expect(reserved + streamTailBudget(rows, reserved)).toBeLessThanOrEqual(
+          rows - SCROLLBACK_SAFETY_ROWS,
+        );
+      }
+    }
+  });
+  test("never negative; a cramped terminal drops the preview rather than overflow", () => {
+    expect(streamTailBudget(20, 25)).toBe(0);
+    expect(streamTailBudget(10, 10)).toBe(0);
+  });
+  test("allots the remaining rows on a roomy terminal", () => {
+    expect(streamTailBudget(40, 16)).toBe(40 - 16 - SCROLLBACK_SAFETY_ROWS); // 22
   });
 });
 

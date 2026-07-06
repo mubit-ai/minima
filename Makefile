@@ -1,4 +1,4 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog tui-install tui-test tui-check tui-build tui tui-dev
+.PHONY: install run test lint fmt live eval seed refresh-catalog tui-install tui-test tui-check tui-build tui tui-dev tui-shot
 
 install:
 	uv sync --extra dev   # dev pulls server + reasoner extras for the full test suite
@@ -30,6 +30,8 @@ seed:
 
 TUI := packages/tui
 TUI_BIN := $(TUI)/dist/minima
+# Default PTY-capture spec: idle interactive UI at 100x30, run from the repo root so .env loads.
+SPEC ?= {"cmd":["bun","run","$(TUI)/src/cli/main.ts","--offline"],"cwd":"$(CURDIR)","cols":100,"rows":30,"duration":6}
 
 tui-install:
 	cd $(TUI) && bun install
@@ -54,3 +56,10 @@ tui:
 # Run from source via Bun (no compile step) — fastest dev loop.
 tui-dev:
 	cd $(TUI) && bun run src/cli/main.ts $(ARGS)
+
+# Capture a text "screenshot" of the TUI in a real PTY (pyte emulator). No committed venv — uv pulls
+# pyte on demand. Override SPEC to size the terminal / send keystrokes; see the script's docstring:
+#   make tui-shot
+#   make tui-shot SPEC='{"cmd":["bun","run","packages/tui/src/cli/main.ts","--offline","--model","claude-haiku-4-5","--provider","anthropic"],"cwd":"'"$$PWD"'","cols":80,"rows":24,"duration":8,"steps":[{"after":2,"send":"hi<CR>"}]}'
+tui-shot:
+	uv run --with pyte python $(TUI)/scripts/pty_capture.py '$(SPEC)'

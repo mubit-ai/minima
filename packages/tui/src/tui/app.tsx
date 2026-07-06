@@ -29,7 +29,7 @@ import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
-import { tailToFit, wrappedLineCount } from "./layout.ts";
+import { streamTailBudget, tailToFit, wrappedLineCount } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import {
@@ -661,7 +661,8 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     planModeRef.current = planMode;
   }, [planMode]);
 
-  // Sizing & alternate screen setup
+  // Terminal sizing (rows/cols). We render inline in the main buffer — no alternate screen — so
+  // the transcript lives in native scrollback; `rows` bounds the live region (see reservation below).
   const [rows, setRows] = useState(process.stdout.rows || 24);
   const [cols, setCols] = useState(process.stdout.columns || 80);
 
@@ -1858,8 +1859,10 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
 
   // The finalized transcript is printed to native scrollback via <Static>; only the LIVE region
   // (streaming reply + thoughts + busy + input + status) is re-diffed by Ink, so it must fit the
-  // screen. We reserve rows for each live element and bound the streaming preview to what's left —
-  // the full reply is committed to <Static> when the turn ends, so nothing here can overflow.
+  // screen. Because we render inline in the MAIN buffer, a live frame that reaches `rows` makes Ink
+  // clearTerminal (CSI 3J) and WIPE the scrollback (all <Static> history) — so we reserve rows for
+  // each live element and bound the streaming preview to keep the total strictly below `rows` (see
+  // streamTailBudget). The full reply is committed to <Static> when the turn ends, so nothing is lost.
   const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
@@ -1893,7 +1896,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     streamingThoughtsHeight +
     2; // "◆ assistant" header + marginTop
   const streamTail = streaming
-    ? tailToFit(streaming, cols, Math.max(3, rows - streamReserved))
+    ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
