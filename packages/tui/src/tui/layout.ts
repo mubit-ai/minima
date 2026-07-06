@@ -1,16 +1,19 @@
 /**
- * Pure layout math for the TUI — no React/Ink, so it is unit-testable in isolation.
+ * Pure layout math for the small LIVE region of the TUI — no React/Ink, so it is unit-testable in
+ * isolation.
  *
- * The Ink app renders a fixed-height frame and keeps the scrollable conversation from
- * overflowing the terminal by (1) estimating each message's rendered height, (2) windowing
- * the history to a row budget, and (3) hard-clipping the chat region with overflow:"hidden"
- * as a safety net. These helpers implement (1) and (2).
+ * The finalized transcript is NOT managed here: it renders via Ink's <Static> (see app.tsx /
+ * messages.tsx), printed once into the terminal's native scrollback and never re-diffed — so there
+ * is no history-windowing or region-clipping math anymore. What remains are the helpers for the
+ * parts Ink still re-diffs every frame:
+ *   - wrappedLineCount   — input-box height as the typed text wraps
+ *   - tailToFit          — the last lines of a streaming reply that fit the live area
+ *   - clampToolText      — bound a huge tool result so the (still-diffed) preview can't dwarf the screen
+ *   - markdownBodyHeight — rendered rows of a markdown body, mirroring MarkdownRenderer
  *
- * The cardinal rule for the height estimates: they MUST be >= the real rendered rows in
- * messages.tsx (a CONSERVATIVE bias). The window is selected against these estimates and then
- * clipped by the region; an over-estimate merely shows one fewer old line, whereas an
- * under-estimate would let content overflow and (before the clamp) desync Ink's diff — the
- * garbled-overlap bug this module exists to prevent.
+ * The cardinal rule for these estimates: they MUST be >= the real rendered rows in messages.tsx (a
+ * CONSERVATIVE bias). An under-count would let the live region grow past the space reserved for it
+ * and desync Ink's cursor-relative frame diff — the garbled-overlap class of bug this module guards.
  */
 
 import stringWidth from "string-width";
@@ -23,163 +26,116 @@ export interface ChatMessage {
   thoughtDurationSecs?: number;
 }
 
-export interface Turn {
-  user: ChatMessage;
-  subsequent: ChatMessage[];
-}
-
-/** Per-turn box chrome in messages.tsx: round border (top+bottom = 2) + marginBottom (1). */
-export const TURN_CHROME = 3;
-
 /** Max rendered lines of a tool message before it's clipped (keeps /model, big bash, etc. bounded). */
 export const MAX_TOOL_LINES = 30;
 
-/** Clip a tool message body to MAX_TOOL_LINES; returns the shown text + how many lines were hidden. */
-export function clampToolText(text: string): { text: string; hiddenLines: number } {
+/**
+ * Clip a tool message body to MAX_TOOL_LINES *rendered* rows (word-wrapped at the box interior),
+ * not source lines: one long web_fetch/web_search line can wrap to dozens of rows, so a source-line
+ * clamp still lets the box dwarf the chat region. Returns the shown text + how many source lines
+ * were hidden. `cols` is the terminal width (interior = cols-4, floored at 20 to match
+ * wrappedLineCount). The first source line is always kept even if it alone exceeds the budget.
+ */
+export function clampToolText(text: string, cols: number): { text: string; hiddenLines: number } {
+  const w = Math.max(20, cols - 4);
   const lines = text.split("\n");
-  if (lines.length <= MAX_TOOL_LINES) return { text, hiddenLines: 0 };
-  return {
-    text: lines.slice(0, MAX_TOOL_LINES).join("\n"),
-    hiddenLines: lines.length - MAX_TOOL_LINES,
-  };
+  let rendered = 0;
+  let kept = 0;
+  for (const line of lines) {
+    const r = wrapRows(line, w);
+    if (kept > 0 && rendered + r > MAX_TOOL_LINES) break;
+    rendered += r;
+    kept++;
+  }
+  if (kept >= lines.length) return { text, hiddenLines: 0 };
+  return { text: lines.slice(0, kept).join("\n"), hiddenLines: lines.length - kept };
 }
 
 /**
- * Group a flat message list into turns the way messages.tsx renders them: a `user` message
- * opens a turn and following non-user messages attach to it; any non-user message BEFORE the
- * first user message becomes its own (synthetic-user) turn.
+ * Rows a single logical line occupies when word-wrapped to `width` display columns — matching Ink's
+ * wrap-ansi ({ wordWrap: true, hard: true }): greedily pack space-separated words, wrap to a new row
+ * when the next word (plus a joining space) won't fit, and hard-break any single word wider than a
+ * full row. A char-based ceil(width) UNDER-counts this (words don't pack tightly), which is exactly
+ * what desynced Ink's diff into garbled overlap — so we replicate the real algorithm to keep the
+ * estimate >= actual. Uses display columns (stringWidth) so emoji/CJK (💡🧠⚙◆▸) count as 2.
  */
-export function groupMessagesIntoTurns(messages: ChatMessage[]): Turn[] {
-  const turns: Turn[] = [];
-  let currentTurn: Turn | null = null;
-
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      if (currentTurn) turns.push(currentTurn);
-      currentTurn = { user: msg, subsequent: [] };
-    } else if (currentTurn) {
-      currentTurn.subsequent.push(msg);
+function wrapRows(line: string, width: number): number {
+  const w = Math.max(1, width);
+  if (line === "") return 1;
+  let rows = 1;
+  let col = 0;
+  for (const word of line.split(" ")) {
+    const wlen = stringWidth(word);
+    const needed = col === 0 ? wlen : col + 1 + wlen;
+    if (needed <= w) {
+      col = needed;
+      continue;
+    }
+    if (col !== 0) rows += 1; // this word starts a fresh row
+    if (wlen <= w) {
+      col = wlen;
     } else {
-      // Orphaned early (pre-user) message — messages.tsx wraps each in its own turn box.
-      turns.push({ user: { role: "user", text: "" }, subsequent: [msg] });
+      // hard-break an over-long word across full rows; the remainder sits on the last row
+      rows += Math.ceil(wlen / w) - 1;
+      col = wlen % w || w;
     }
   }
-  if (currentTurn) turns.push(currentTurn);
-  return turns;
+  return rows;
 }
 
 /**
  * Wrapped row count of `text` at content `width` (>=1 per source line; floors width at 20).
- * Uses display columns (stringWidth) — the same measure Ink wraps by — so emoji/CJK (💡🧠⚙◆▸)
- * count as 2 cols and the estimate stays >= the real rendered rows.
+ * Word-wraps each line the way Ink does (see wrapRows) so the estimate stays >= the real render.
  */
 export function wrappedLineCount(text: string, width: number): number {
   const w = Math.max(20, width);
   let n = 0;
-  for (const line of text.split("\n")) n += Math.max(1, Math.ceil(stringWidth(line) / w));
+  for (const line of text.split("\n")) n += wrapRows(line, w);
   return n;
 }
 
 /**
- * Estimated rendered height (rows) of a single message, mirroring messages.tsx's box model.
- * Deliberately conservative (>= actual). The turn-box border/margin is added separately, once
- * per turn, by getScrollableMessages — NOT here.
+ * Rendered rows of an assistant markdown body, mirroring MarkdownRenderer in messages.tsx so the
+ * live-streaming reservation in app.tsx agrees with what actually renders:
+ *   - `#` heading   -> a marginTop={1} row + the wrapped heading text
+ *   - `-`/`* ` list  -> body wrapped at interior-4 (marginLeft 2 + "- " bullet 2)
+ *   - any other line -> wrapped at the full interior width
+ * `interior` is the content width (stream box interior = cols-4).
  */
-export function computeMsgHeight(msg: ChatMessage, cols: number): number {
-  // Turn box interior width: round border (1 col/side) + paddingX(1) (1 col/side) = cols - 4.
-  const interior = cols - 4;
-  if (msg.role === "tool") {
-    // ⚙ header line (1) + wrapped (clipped) body + optional "+N more lines" hint. Mirrors the
-    // clamp in messages.tsx so the estimate matches what actually renders.
-    const { text: body, hiddenLines } = clampToolText(msg.text);
-    return 1 + wrappedLineCount(body, interior) + (hiddenLines > 0 ? 1 : 0);
+export function markdownBodyHeight(text: string, interior: number): number {
+  const iw = Math.max(1, interior);
+  const listw = Math.max(1, interior - 4);
+  let rows = 0;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#")) {
+      const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
+      rows += 1 + wrapRows(trimmed.slice(depth).trim(), iw);
+    } else if (trimmed.startsWith("-") || trimmed.startsWith("* ")) {
+      rows += wrapRows(trimmed.slice(1).trim(), listw);
+    } else {
+      rows += wrapRows(line, iw);
+    }
   }
-  if (msg.role === "thinking") {
-    // single border (2) + marginY (2) + header line (1) = 5 chrome; body is paddingLeft={2} => cols-8.
-    return 5 + wrappedLineCount(msg.text, cols - 8);
-  }
-  if (msg.role === "user") {
-    // marginBottom (1) + "▸ you" header (1) + body. The body renders as ` ${text} ` (+2 chars).
-    const w = Math.max(20, interior);
-    let body = 0;
-    for (const line of msg.text.split("\n"))
-      body += Math.max(1, Math.ceil((stringWidth(line) + 2) / w));
-    return 2 + body;
-  }
-  // assistant: marginTop (1) + marginBottom (1) + "◆ assistant" header (1) + markdown body,
-  // with +1 per markdown '#' heading (each renders in a marginTop={1} box).
-  const headings = msg.text.split("\n").filter((l) => l.trim().startsWith("#")).length;
-  return 3 + headings + wrappedLineCount(msg.text, interior);
+  return rows;
 }
 
 /**
- * Mark which message indices open a turn (see groupMessagesIntoTurns): every `user` message,
- * plus each orphaned non-user message that precedes the first user message.
+ * The last whole source lines of `text` whose markdown render fits in `budgetRows` rows at content
+ * width `interior`. Bounds the LIVE streaming preview so the dynamic (re-diffed) region never
+ * exceeds the screen; the finalized reply is printed in full to scrollback via <Static>. Always
+ * keeps at least the final line.
  */
-export function markTurnStarts(messages: ChatMessage[]): boolean[] {
-  const starts = new Array<boolean>(messages.length).fill(false);
-  let sawUser = false;
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i]!.role === "user") {
-      starts[i] = true;
-      sawUser = true;
-    } else if (!sawUser) {
-      starts[i] = true; // each leading orphan is its own turn
-    }
+export function tailToFit(text: string, interior: number, budgetRows: number): string {
+  const lines = text.split("\n");
+  if (budgetRows <= 0 || lines.length === 0) return "";
+  let rows = 0;
+  let start = lines.length - 1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const h = markdownBodyHeight(lines[i]!, interior);
+    if (i < lines.length - 1 && rows + h > budgetRows) break;
+    rows += h;
+    start = i;
   }
-  return starts;
-}
-
-export interface ScrollWindow {
-  visible: ChatMessage[];
-  totalHeight: number;
-  atTop: boolean;
-  atBottom: boolean;
-}
-
-/**
- * Select the window of messages to render given a row budget and a scroll offset (0 = pinned to
- * the newest). Heights include per-turn chrome (TURN_CHROME on each turn's first message) so the
- * sum tracks the real rendered height. Whole messages are returned; the chat region is rendered
- * bottom-aligned with overflow:"hidden", so any message straddling the top fold is clipped there
- * (oldest content lost first) — no fragile text-slicing here.
- */
-export function getScrollableMessages(
-  messages: ChatMessage[],
-  maxHeight: number,
-  scrollOffset: number,
-  cols: number,
-): ScrollWindow {
-  if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
-
-  const turnStart = markTurnStarts(messages);
-  const heights = messages.map(
-    (m, i) => computeMsgHeight(m, cols) + (turnStart[i] ? TURN_CHROME : 0),
-  );
-  const totalHeight = heights.reduce((a, b) => a + b, 0);
-
-  const maxOffset = Math.max(0, totalHeight - maxHeight);
-  const effectiveOffset = Math.min(Math.max(0, scrollOffset), maxOffset);
-  const endLine = totalHeight - effectiveOffset;
-  const startLine = Math.max(0, endLine - maxHeight);
-
-  let currentLine = 0;
-  const visible: ChatMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const msgEnd = currentLine + heights[i]!;
-    if (msgEnd <= startLine) {
-      currentLine = msgEnd;
-      continue; // entirely above the window
-    }
-    if (currentLine >= endLine) break; // entirely below the window
-    visible.push(messages[i]!); // include whole; region clips the top fold
-    currentLine = msgEnd;
-  }
-
-  return {
-    visible,
-    totalHeight,
-    atTop: effectiveOffset >= maxOffset,
-    atBottom: effectiveOffset === 0,
-  };
+  return lines.slice(start).join("\n");
 }

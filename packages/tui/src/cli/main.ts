@@ -36,7 +36,6 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
-import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -484,10 +483,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
     return rc;
   }
-
-  // Install the stdin.read() filter so SGR mouse wheel sequences are stripped
-  // before Ink's parseKeypress ever sees them (prevents garbage in TextInput).
-  installMouseScrollFilter();
 
   // Enter alternate screen + hide cursor BEFORE render() so Ink's first paint
   // lands in the alternate buffer (otherwise the screen is blank until a key is pressed).

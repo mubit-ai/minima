@@ -7,7 +7,7 @@
  * diff approval, mouse capture, sessions, and themes land in later passes.)
  */
 
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput } from "ink";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -29,10 +29,9 @@ import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
-import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
-import { type ChatMessage, Messages } from "./messages.tsx";
+import { tailToFit, wrappedLineCount } from "./layout.ts";
+import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
-import { setMouseScrollCallback } from "./mouse-scroll.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -132,7 +131,6 @@ const COMMANDS = [
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
-  { name: "mouse", desc: "Toggle mouse capture (scroll vs select/copy)" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
@@ -538,6 +536,10 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
 export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Bumped whenever `messages` is REPLACED wholesale (clear / new / resume / load-session) rather
+  // than appended to. It keys the <Static> transcript so it remounts and reprints from scratch
+  // instead of trying to append onto a now-different list (Static is otherwise append-only).
+  const [transcriptGen, setTranscriptGen] = useState(0);
   const [streaming, setStreaming] = useState("");
   const [streamingThoughts, setStreamingThoughts] = useState("");
   const streamingBufRef = useRef("");
@@ -550,7 +552,6 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [mouseEnabled, setMouseEnabled] = useState(true);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionsList, setSessionsList] = useState<SessionSummary[]>([]);
   const [configOverlayOpen, setConfigOverlayOpen] = useState(false);
@@ -671,36 +672,18 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     };
     process.stdout.on("resize", handleResize);
 
-    // Register the mouse scroll callback (the stdin.read() filter is already
-    // installed in main.ts; here we just wire it to our scroll state).
-    setMouseScrollCallback((dir) => {
-      if (dir === "up") {
-        setScrollOffset((p) => p + 3);
-      } else {
-        setScrollOffset((p) => Math.max(0, p - 3));
-      }
-    });
+    // Mouse tracking stays OFF (never enabled) so the terminal's native scroll/select/copy works
+    // with the <Static> transcript. Proactively disable any mouse reporting a parent process may
+    // have left on, so stray SGR sequences never reach Ink; disabled again on exit (cleanup below).
+    process.stdout.write("\u001b[?1000l");
+    process.stdout.write("\u001b[?1006l");
 
     return () => {
       process.stdout.off("resize", handleResize);
-      setMouseScrollCallback(null);
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
     };
   }, []);
-
-  // Toggle SGR mouse reporting on/off based on mouseEnabled state.
-  // ON: mouse wheel scroll works, but terminal native select/copy is suppressed.
-  // OFF: native select/copy works (drag to select, Cmd/Ctrl+C to copy), but no wheel scroll.
-  useEffect(() => {
-    if (mouseEnabled) {
-      process.stdout.write("\u001b[?1000h");
-      process.stdout.write("\u001b[?1006h");
-    } else {
-      process.stdout.write("\u001b[?1006l");
-      process.stdout.write("\u001b[?1000l");
-    }
-  }, [mouseEnabled]);
 
   // Wire the beforeToolCall permission hook.
   // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
@@ -725,20 +708,8 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     });
   }, [agent]);
 
-  // Scroll state: 0 = at bottom (latest); positive = scrolled up N lines
-  const [scrollOffset, setScrollOffset] = useState(0);
-  // Latest render's atBottom + visible-chat-height, read by the input/scroll handlers (which
-  // close over stale render values otherwise). Written once per render, below the height math.
-  const atBottomRef = useRef(true);
-  const maxChatHeightRef = useRef(1);
-
-  // Follow the newest content ONLY when the user is already at the bottom. If they've scrolled
-  // up (offset > 0) we leave their position alone — otherwise every ~80ms streaming delta would
-  // yank the view back down and make scrolling-while-generating impossible.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on content changes
-  useEffect(() => {
-    if (atBottomRef.current) setScrollOffset(0);
-  }, [messages.length, streaming, streamingThoughts]);
+  // Scrolling is handled by the terminal itself (the finalized transcript renders into native
+  // scrollback via <Static>), so there is no in-app scroll offset to track.
 
   // Status Bar states
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
@@ -903,25 +874,8 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
       return;
     }
 
-    // Scrolling works whether or not a turn is running — page by the REAL visible chat height,
-    // not a hardcoded rows-6 (which ignored the input box, suggestions, busy line and streaming).
-    const page = Math.max(1, maxChatHeightRef.current - 2);
-    if (key.pageUp) {
-      setScrollOffset((prev) => prev + page);
-      return;
-    }
-    if (key.pageDown || (key.shift && input === " ")) {
-      setScrollOffset((prev) => Math.max(0, prev - page));
-      return;
-    }
-    if (key.ctrl && input === "g") {
-      setScrollOffset(99999); // Home — jump to top
-      return;
-    }
-    if (key.ctrl && input === "e") {
-      setScrollOffset(0); // End — jump to bottom
-      return;
-    }
+    // Scrolling is the terminal's job now (native scrollback), so there are no PgUp/PgDn/Home/End
+    // handlers here — the transcript lives in scrollback and the wheel/trackpad scroll it directly.
 
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
@@ -1038,6 +992,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd);
     const label = r.run.display_name || runId.slice(0, 12);
+    setTranscriptGen((g) => g + 1);
     setMessages([
       ...chat,
       {
@@ -1078,6 +1033,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
       }
     }
 
+    setTranscriptGen((g) => g + 1);
     setMessages(list);
     agent.agentState.messages = agentMsgs;
 
@@ -1096,6 +1052,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
       case "clear":
+        setTranscriptGen((g) => g + 1);
         setMessages([]);
         break;
       case "perms": {
@@ -1484,6 +1441,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
       case "new":
         agent.setSessionId(Math.random().toString(16).slice(2, 14));
         agent.reset();
+        setTranscriptGen((g) => g + 1);
         setMessages([]);
         setActualCost(0);
         setInputTokens(0);
@@ -1722,31 +1680,6 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
         ]);
         break;
       }
-      case "mouse": {
-        const target = args.trim().toLowerCase();
-        let on = !mouseEnabled;
-        if (target === "on" || target === "1" || target === "true" || target === "yes") {
-          on = true;
-        } else if (target === "off" || target === "0" || target === "false" || target === "no") {
-          on = false;
-        }
-        setMouseEnabled(on);
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: on
-              ? "mouse: ON — wheel scroll enabled · native select/copy disabled · /mouse off to toggle"
-              : "mouse: OFF — native select/copy enabled (drag to select) · wheel scroll disabled · /mouse on to toggle",
-            toolName: "mouse",
-          },
-        ]);
-        break;
-      }
       case "model": {
         const target = args.trim().toLowerCase();
         if (!target) {
@@ -1923,18 +1856,17 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
     }
   }
 
-  // Calculate dynamic sizing for the chat list based on terminal size. The chat region is the
-  // ONE flex-grow child; every other bottom region is a fixed sibling and must be subtracted so
-  // the windowed history + live streaming fit the frame. (The region ALSO hard-clips via
-  // overflow:"hidden" as a safety net — see the render tree — so an estimate error can never
-  // corrupt the terminal, only shave a line at the fold.)
+  // The finalized transcript is printed to native scrollback via <Static>; only the LIVE region
+  // (streaming reply + thoughts + busy + input + status) is re-diffed by Ink, so it must fit the
+  // screen. We reserve rows for each live element and bound the streaming preview to what's left —
+  // the full reply is committed to <Static> when the turn ends, so nothing here can overflow.
   const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
   // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
-  // inside the box, so grow the reserve by the extra wrapped lines (else it clips the chat).
+  // inside the box, so grow the reserve by the extra wrapped lines.
   const inputHidden = overlayOpen || permPrompt || questionPrompt;
   const inputExtraLines = inputHidden ? 0 : Math.max(1, wrappedLineCount(typedText, cols - 4)) - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
@@ -1944,37 +1876,25 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
       (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
       1 // hint line
     : 0;
-  // Live streaming renders INSIDE the chat region, below the history. Reserve its true height:
-  // count newlines + wrapping at the turn-box interior width (cols-4), plus box chrome (border 2 +
-  // outer marginBottom 1 + inner marginY 2 + header 1 = 6). The old `2 + ceil(len/cols)` collapsed
-  // newlines and undercounted, letting a multi-line reply overflow.
-  const streamingHeight = streaming ? 6 + wrappedLineCount(streaming, cols - 4) : 0;
   // The thoughts peek is wrap="truncate" (fixed ~4 rows), so it never grows with content.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 4 : 0;
   // The busy indicator (spinner + tip) renders as one line above the input box while a turn
   // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
   const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
-  const chatRegionHeight = Math.max(
-    1,
-    rows -
-      footerHeight -
-      suggestionsHeight -
-      inputBoxHeight -
-      permPromptHeight -
-      busyIndicatorHeight,
-  );
-  const maxChatHeight = Math.max(1, chatRegionHeight - streamingHeight - streamingThoughtsHeight);
-
-  const { visible: visibleMsgs, atBottom } = getScrollableMessages(
-    messages,
-    maxChatHeight,
-    scrollOffset,
-    cols,
-  );
-  // Publish the latest layout facts for the input/scroll handlers, which close over render values.
-  maxChatHeightRef.current = maxChatHeight;
-  atBottomRef.current = atBottom;
+  // Rows left for the live streaming reply after the other live elements; bound its preview to that
+  // (keeping the newest lines) so the re-diffed region never exceeds the terminal.
+  const streamReserved =
+    footerHeight +
+    suggestionsHeight +
+    inputBoxHeight +
+    permPromptHeight +
+    busyIndicatorHeight +
+    streamingThoughtsHeight +
+    2; // "◆ assistant" header + marginTop
+  const streamTail = streaming
+    ? tailToFit(streaming, cols, Math.max(3, rows - streamReserved))
+    : "";
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -1997,25 +1917,18 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
   }
 
   return (
-    // Global overflow guard: bound the whole frame to exactly `rows` and clip anything beyond.
-    // This keeps Ink's output from ever exceeding the terminal height (which is what desyncs its
-    // cursor-relative diff into garbled output), covering not just the chat region but oversized
-    // overlays (command palette, config, permission diffs) on short terminals too.
-    <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
-      {messages.length === 0 &&
-      matchingCommands.length === 0 &&
-      !pickerOpen &&
-      !paletteOpen &&
-      !sessionPickerOpen &&
-      !configOverlayOpen ? (
-        <Box
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="flex-start"
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-        >
+    // No fixed-height frame: the finalized transcript prints to the terminal's native scrollback via
+    // <Static> (each message once, never re-diffed), and only the small live region below is redrawn
+    // by Ink. This is what keeps long transcripts from garbling — Ink never manages content taller
+    // than the screen. Scrolling/selection/copy are the terminal's own.
+    <Box flexDirection="column" width="100%">
+      {/* Finalized transcript → scrollback. Keyed by transcriptGen so clear/new/resume reprint. */}
+      <Static key={transcriptGen} items={messages}>
+        {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
+      </Static>
+
+      {messages.length === 0 && matchingCommands.length === 0 && !overlayOpen ? (
+        <Box flexDirection="column" alignItems="center" marginTop={1}>
           <Text color="green" bold>
             {getAsciiBanner("MINIMA")}
           </Text>
@@ -2030,9 +1943,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
           </Box>
           <Box marginTop={1}>
             <Text color="gray">
-              {mouseEnabled
-                ? "wheel scroll ON · /mouse off to select & copy · PgUp/PgDn always works"
-                : "select & copy ON · /mouse on for wheel scroll · PgUp/PgDn always works"}
+              scroll with your terminal (wheel / trackpad) · select & copy freely
             </Text>
           </Box>
           {tipsEnabled && startupTip ? (
@@ -2041,32 +1952,14 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
             </Box>
           ) : null}
         </Box>
-      ) : (
-        // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat
-        // to exceed its allotted rows regardless of any height-estimate error — this is what stops
-        // Ink's cursor-relative diff from desyncing into garbled/overlapping output. flex-end
-        // bottom-aligns the conversation so the clip eats the OLDEST content at the top fold,
-        // keeping the newest answer + live streaming visible (correct chat semantics).
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-          justifyContent="flex-end"
-        >
-          <Messages
-            messages={visibleMsgs}
-            streaming={busy && atBottom ? streaming : ""}
-            streamingThoughts={busy && atBottom && showThinkingRef.current ? streamingThoughts : ""}
-          />
-          {!atBottom && (
-            <Text color="gray">
-              {" "}
-              ↑ scrolled up {scrollOffset} lines · PgDn or End to jump to bottom
-            </Text>
-          )}
-        </Box>
-      )}
+      ) : null}
+
+      {/* Live region: reasoning peek + streaming reply (both finalize into <Static> when done). The
+          reply is tail-bounded to the free rows so this re-diffed region never exceeds the screen. */}
+      {busy && streamingThoughts && showThinkingRef.current ? (
+        <StreamingThoughts text={streamingThoughts} />
+      ) : null}
+      {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
 
       {matchingCommands.length > 0 && (
         <Box
@@ -2231,10 +2124,6 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
 
         <Box justifyContent="space-between" width="100%">
           <Box>
-            <Text color="yellow">pgup </Text>
-            <Text color="gray">PgUp </Text>
-            <Text color="yellow">pgdn </Text>
-            <Text color="gray">PgDn </Text>
             <Text color="yellow">ctrl+l </Text>
             <Text color="gray">Model </Text>
             <Text color="yellow">ctrl+r </Text>
