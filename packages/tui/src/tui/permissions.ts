@@ -74,6 +74,17 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
   return JSON.stringify(args).slice(0, 120);
 }
 
+/**
+ * Message handed back to the model when the USER declines a tool call. Framed to stop the
+ * "sandbox spiral" (notably Gemini): a decline is a user choice, not an environment or
+ * sandbox restriction, so the model should try a different action — not retry the identical
+ * call, escalate, or abandon the task believing its tools are broken. `subject` names what
+ * was declined, e.g. "the bash call" or "read access to /repo/src".
+ */
+export function denialReason(subject: string): string {
+  return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Other tools remain available; do not retry the identical call.`;
+}
+
 export type PromptFn = (prompt: PermissionPrompt) => void;
 
 export function checkPermission(
@@ -115,7 +126,7 @@ export function checkPermission(
           if (decision === "allow" || decision === "always") {
             resolve(null);
           } else {
-            resolve({ block: true, reason: `Permission denied: ${targetDir} not approved` });
+            resolve({ block: true, reason: denialReason(`read access to ${targetDir}`) });
           }
         },
       });
@@ -135,7 +146,7 @@ export function checkPermission(
         if (decision === "allow" || decision === "always") {
           resolve(null);
         } else {
-          resolve({ block: true, reason: `Permission denied for ${toolName}` });
+          resolve({ block: true, reason: denialReason(`the ${toolName} call`) });
         }
       },
     });
