@@ -13,7 +13,7 @@ import { Checks } from "../assert/check.ts";
 import { HarnessDb } from "../assert/db.ts";
 import { materialize } from "../gen/materialize.ts";
 import { PtyRig } from "../driver/rig.ts";
-import { makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
+import { MINIMA_BIN, makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
 
 function leadDecisions(dbPath: string): number {
   try {
@@ -46,7 +46,7 @@ export async function f5(): Promise<Checks> {
     } catch {}
   }, 250);
 
-  const rig = PtyRig.spawn({ cmd: ["minima"], cwd: work, env: s.env, wallClockMs: 420_000 });
+  const rig = PtyRig.spawn({ cmd: [MINIMA_BIN], cwd: work, env: s.env, wallClockMs: 420_000 });
 
   try {
     await rig.expectText(/· ready/, { timeoutMs: 20_000 });

@@ -20,7 +20,7 @@ import { Checks } from "../assert/check.ts";
 import { HarnessDb } from "../assert/db.ts";
 import { materialize } from "../gen/materialize.ts";
 import { PtyRig } from "../driver/rig.ts";
-import { makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
+import { MINIMA_BIN, makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
 
 function leadDecisions(dbPath: string): number {
   try {
@@ -106,7 +106,7 @@ export async function f7(): Promise<Checks> {
   writeFileSync(join(s.root, "secret.txt"), "the secret word is MANGO55\n", "utf8");
   const modelsPy = join(work, "taskman", "models.py");
 
-  const rig = PtyRig.spawn({ cmd: ["minima"], cwd: work, env: s.env, wallClockMs: 600_000 });
+  const rig = PtyRig.spawn({ cmd: [MINIMA_BIN], cwd: work, env: s.env, wallClockMs: 600_000 });
   let turns = 0;
 
   try {
@@ -130,9 +130,12 @@ export async function f7(): Promise<Checks> {
     const before = readFileSync(modelsPy, "utf8");
     const o3 = await overlaySession(rig, s.dbPath,
       "Using your edit tool, add the comment line '# bench-f7' at the very top of taskman/models.py.",
-      [{ key: "n", effect: /Permission denied for/, repeat: true }], ++turns);
+      [{ key: "n", effect: /Permission denied for|The user declined the \w+ call/, repeat: true }], ++turns);
     c.check("edit deny: overlay prompted", o3 >= 1, `overlays=${o3}`);
-    c.check("edit deny: 'Permission denied' rendered", /Permission denied for edit/.test(rig.text()));
+    // 0.7.2+ ships apply_patch — models may satisfy an "edit" ask with it; any write-tool
+    // denial counts (the file-untouched check is the real oracle).
+    c.check("edit deny: denial message rendered",
+      /Permission denied for (edit|apply_patch|write)|The user declined the (edit|apply_patch|write) call/.test(rig.text()));
     c.check("edit deny: file untouched", readFileSync(modelsPy, "utf8") === before);
 
     // 4. Same ask, 'a' = always-allow the edit tool: change lands on disk.
@@ -177,15 +180,15 @@ export async function f7(): Promise<Checks> {
       db.close();
       return n;
     })();
-    await rig.submitUntil("/fork", /Forked session successfully/, { timeoutMs: 20_000 });
-    await rig.submitUntil("/clone", /Cloned session successfully/, { timeoutMs: 20_000 });
+    await rig.submitUntil("/fork", /Forked session successfully|\/fork isn't implemented yet/, { timeoutMs: 20_000 });
+    await rig.submitUntil("/clone", /Cloned session successfully|\/clone isn't implemented yet/, { timeoutMs: 20_000 });
     const runsAfter = (() => {
       const db = new HarnessDb(s.dbPath);
       const n = db.runs().length;
       db.close();
       return n;
     })();
-    c.check("LOCK-IN /fork //clone: fake success, no new runs",
+    c.check("/fork //clone: no session branching occurs (fake-success on 0.7.1, honest copy on 0.7.2+)",
       runsAfter === runsBefore, `runs ${runsBefore} -> ${runsAfter}`);
 
     await rig.submitUntil("/exit", () => rig.exitCode !== null, { timeoutMs: 20_000 });

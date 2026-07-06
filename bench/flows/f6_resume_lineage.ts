@@ -11,7 +11,7 @@
 import { Checks } from "../assert/check.ts";
 import { HarnessDb } from "../assert/db.ts";
 import { PtyRig } from "../driver/rig.ts";
-import { makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
+import { MINIMA_BIN, makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
 
 function db(dbPath: string): HarnessDb {
   return new HarnessDb(dbPath);
@@ -21,7 +21,7 @@ export async function f6(): Promise<Checks> {
   const c = new Checks("f6_resume_lineage");
   const s = makeScratch("f6");
   const spawn = () =>
-    PtyRig.spawn({ cmd: ["minima"], cwd: s.repoDir, env: s.env, wallClockMs: 300_000 });
+    PtyRig.spawn({ cmd: [MINIMA_BIN], cwd: s.repoDir, env: s.env, wallClockMs: 300_000 });
 
   // ---- S1: plant state, close cleanly -------------------------------------------------
   let run1 = "";

@@ -15,7 +15,7 @@
 import { Checks } from "../assert/check.ts";
 import { HarnessDb } from "../assert/db.ts";
 import { PtyRig } from "../driver/rig.ts";
-import { makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
+import { MINIMA_BIN, makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
 
 function snapshot(dbPath: string): { decisions: number; spent: number; mode: string | null } {
   try {
@@ -37,7 +37,7 @@ export async function f4(): Promise<Checks> {
   const s = makeScratch("f4");
 
   const rig = PtyRig.spawn({
-    cmd: ["minima"],
+    cmd: [MINIMA_BIN],
     cwd: s.repoDir,
     env: s.env, // real MINIMA_URL from the user's config — this is the live-lane flow
     wallClockMs: 420_000,

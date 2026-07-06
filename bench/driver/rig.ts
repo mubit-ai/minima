@@ -85,7 +85,9 @@ export class PtyRig {
    */
   isIdle(): boolean {
     const t = this.text();
-    return t.lastIndexOf("· ready") > t.lastIndexOf("· working");
+    // 0.7.1 footer says "· working"; 0.7.2+ renamed it "· running" — accept both.
+    const busy = Math.max(t.lastIndexOf("· working"), t.lastIndexOf("· running"));
+    return t.lastIndexOf("· ready") > busy;
   }
 
   async waitIdle(timeoutMs = 60_000): Promise<void> {

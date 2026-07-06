@@ -1,5 +1,7 @@
 /** One-shot runner for headless minima invocations (--print / --mode json / usage errors). */
 
+import { MINIMA_BIN } from "./scratch.ts";
+
 export interface HeadlessResult {
   exitCode: number | null; // null = wall-clock SIGKILL (ABORT)
   stdout: string;
@@ -15,7 +17,7 @@ export async function runHeadless(opts: {
   bin?: string;
 }): Promise<HeadlessResult> {
   const started = Date.now();
-  const proc = Bun.spawn([opts.bin ?? "minima", ...opts.args], {
+  const proc = Bun.spawn([opts.bin ?? MINIMA_BIN, ...opts.args], {
     cwd: opts.cwd,
     env: { ...process.env, ...opts.env } as Record<string, string>,
     stdout: "pipe",

@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MINIMA_BIN } from "../driver/scratch.ts";
 import { applyHiddenTests, loadTask, materialize, runSuite } from "./materialize.ts";
 
 export interface AttemptResult {
@@ -152,7 +153,7 @@ export async function runAttempt(
     const modelArgs = opts.routed ? [] : ["--model", model];
     const r = await sh(
       work,
-      ["minima", ...modelArgs, "-xt", "web_fetch", "-b", opts.budgetUsd ?? "0.25", "--budget-enforce", "-p", prompt],
+      [MINIMA_BIN, ...modelArgs, "-xt", "web_fetch", "-b", opts.budgetUsd ?? "0.25", "--budget-enforce", "-p", prompt],
       {
         MINIMA_DB_PATH: dbPath,
         MINIMA_NAMESPACE: opts.namespace ?? "bench-calibration",

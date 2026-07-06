@@ -13,6 +13,10 @@ export interface FlowScratch {
 
 const ARTIFACTS = join(import.meta.dir, "..", "artifacts");
 
+/** Binary under test — defaults to the installed Homebrew binary; override with
+ * BENCH_MINIMA_BIN (e.g. a downloaded release asset) to test other versions. */
+export const MINIMA_BIN = process.env.BENCH_MINIMA_BIN ?? "minima";
+
 export function makeScratch(flowId: string, sub?: string): FlowScratch {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const root = join(ARTIFACTS, "scratch", `${flowId}-${stamp}${sub ? `-${sub}` : ""}`);

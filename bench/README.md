@@ -182,6 +182,21 @@ hosted api.minima.sh; ~3.3 min, ~$0.15/run.
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
 
+### 2026-07-06 — v0.7.2 release compat + memory-loop status
+- **Suite green on both binaries**: installed 0.7.1 and the v0.7.2 release asset
+  (`BENCH_MINIMA_BIN=<path> bun bench/run.ts`). Version-tolerant assertions cover the
+  0.7.2 renames: `· working`→`· running` (isIdle accepts both), denial copy
+  ("Permission denied for X" → "The user declined the X call"), `/fork`+`/clone`
+  honest copy, and models satisfying an "edit" ask with the new `apply_patch` tool.
+- v0.7.2 plan-mode correctly blocks `apply_patch` (the #77 review fix) — verified live
+  by F7 against the release binary.
+- **Memory loop: partially restored, still not closing.** The v0.7.2 prod redeploy
+  cleared the `memory_unavailable` recommend warning, but F12 still shows
+  reinforced_entry_ids never echoing and same-task warm-namespace probes routing on
+  `prior`. Needs server-side investigation of the feedback→Mubit write path; F12 is
+  the standing detector. (Possible contributor: one outcome per task may be below the
+  evidence threshold — a heavier warm phase, k=3 per task, is worth trying.)
+
 ### 2026-07-06 — Phase C (flow suite) findings
 - **Child routing decisions DO persist correctly** — each sub-agent writes its own
   routing_decisions row with `agent_id = <childId>` demuxing it from the lead (verified

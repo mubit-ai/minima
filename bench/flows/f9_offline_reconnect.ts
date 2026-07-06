@@ -14,7 +14,7 @@ import { Checks } from "../assert/check.ts";
 import { HarnessDb } from "../assert/db.ts";
 import { MockMinimaServer } from "../driver/mock_server.ts";
 import { PtyRig } from "../driver/rig.ts";
-import { makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
+import { MINIMA_BIN, makeScratch, saveArtifact, waitFor } from "../driver/scratch.ts";
 
 function decisionCount(dbPath: string): number {
   try {
@@ -34,7 +34,7 @@ export async function f9(): Promise<Checks> {
   const mock = new MockMinimaServer(port);
 
   const rig = PtyRig.spawn({
-    cmd: ["minima"],
+    cmd: [MINIMA_BIN],
     cwd: s.repoDir,
     env: { ...s.env, MINIMA_URL: mock.url },
     wallClockMs: 240_000,
