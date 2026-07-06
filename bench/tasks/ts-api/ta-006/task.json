@@ -1,0 +1,12 @@
+{
+  "id": "ta-006",
+  "repo": "ts-api",
+  "category": "bugfix",
+  "problem_statement": "A user created a short link with a custom name yesterday and it silently took over a name a different team had registered months ago: the old destination just vanished and that name now redirects to the new URL. The API even answered 201 as if everything were fine, where we expected the second creation to fail loudly telling the caller the name was taken. After the incident we also noticed the reported total link count no longer agrees with what the list endpoint returns. Generated names still come out unique, and updates or deletes behave normally. Please make creating a link under an already-registered custom name fail with a conflict and leave the existing link fully intact.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "medium",
+  "expected_route": "mid",
+  "est_files": 1,
+  "est_loc": 14,
+  "timeout_sec": 120
+}

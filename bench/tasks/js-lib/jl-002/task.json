@@ -1,0 +1,12 @@
+{
+  "id": "jl-002",
+  "repo": "js-lib",
+  "category": "bugfix",
+  "problem_statement": "Percentile summaries computed with this library disagree with numpy and spreadsheet software on the same inputs. For example, the median of the four values 1, 2, 3, 4 comes back as 3 instead of 2.5, and the lower quartile of a five-value series is noticeably too high. The minimum and maximum endpoints are returned correctly, as are single-value series, so only interior percentiles drift. Please correct the calculation so interior percentiles interpolate between order statistics the way the documentation describes.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 60
+}

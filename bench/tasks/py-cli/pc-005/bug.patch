@@ -1,0 +1,37 @@
+diff --git a/taskman/query.py b/taskman/query.py
+index f739ef8..3f0af8d 100644
+--- a/taskman/query.py
++++ b/taskman/query.py
+@@ -11,7 +11,7 @@ from __future__ import annotations
+ from datetime import date
+ from typing import Iterable
+ 
+-from .dates import add_days
++from .dates import add_days, days_between
+ from .models import Task, normalize_tags
+ 
+ #: Days ahead (inclusive) that count as "upcoming" in the due buckets.
+@@ -129,18 +129,19 @@ def bucket_by_due(tasks: Iterable[Task], today: date) -> dict[str, list[Task]]:
+ 
+     Done tasks are not part of the agenda and are skipped entirely.
+     """
+-    horizon = add_days(today, UPCOMING_WINDOW_DAYS)
+     buckets: dict[str, list[Task]] = {name: [] for name in DUE_BUCKETS}
+     for task in tasks:
+         if task.is_done:
+             continue
+         if task.due is None:
+             buckets["unscheduled"].append(task)
+-        elif task.due < today:
++            continue
++        delta = days_between(today, task.due)
++        if delta < 0:
+             buckets["overdue"].append(task)
+-        elif task.due == today:
++        elif delta == 0:
+             buckets["today"].append(task)
+-        elif task.due <= horizon:
++        elif delta < UPCOMING_WINDOW_DAYS:
+             buckets["upcoming"].append(task)
+         else:
+             buckets["later"].append(task)

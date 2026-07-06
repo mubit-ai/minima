@@ -1,0 +1,22 @@
+diff --git a/js/chunk.js b/js/chunk.js
+index 5a3db1a..1bb13f8 100644
+--- a/js/chunk.js
++++ b/js/chunk.js
+@@ -21,5 +21,16 @@
+  * Example: chunk([1, 2, 3], 2, 0) -> [[1, 2], [3, 0]].
+  */
+ export function chunk(items, size, pad) {
+-  throw new Error("kata: implement chunk");
++  if (!Number.isInteger(size) || size < 1) {
++    throw new RangeError("size must be an integer >= 1");
++  }
++  const out = [];
++  for (let i = 0; i < items.length; i += size) {
++    const piece = items.slice(i, i + size);
++    if (pad !== undefined) {
++      while (piece.length < size) piece.push(pad);
++    }
++    out.push(piece);
++  }
++  return out;
+ }

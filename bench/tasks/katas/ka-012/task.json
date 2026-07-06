@@ -1,0 +1,12 @@
+{
+  "id": "ka-012",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement digitalRoot(value, base) in js/droot.js. Write the non-negative integer value in the given base, sum its digits, and repeat on the sum until a single base-digit remains; return that digit's numeric value as a plain number between 0 and base-1. Zero has digital root zero in every base, and any value already below the base is its own root; for example digitalRoot(255, 16) is 15. Throw a RangeError when value is negative or fractional, or when base is not an integer between 2 and 36 inclusive. Verify with bun test tests/js/droot.",
+  "test_cmd": "bun test tests/js/droot",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 14,
+  "timeout_sec": 60
+}

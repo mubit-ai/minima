@@ -1,0 +1,51 @@
+diff --git a/tests/hidden/window-reset.test.ts b/tests/hidden/window-reset.test.ts
+new file mode 100644
+index 0000000..0fc2fde
+--- /dev/null
++++ b/tests/hidden/window-reset.test.ts
+@@ -0,0 +1,45 @@
++import { describe, expect, test } from "bun:test";
++import { FixedWindowLimiter } from "../../src/ratelimit.ts";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++describe("rate-limit windows recover after they elapse", () => {
++  test("a throttled key gets a fresh budget once the window has passed", () => {
++    let t = 100_000;
++    const limiter = new FixedWindowLimiter({ limit: 3, windowMs: 1_000, now: () => t });
++    for (let i = 0; i < 3; i++) expect(limiter.hit("k").allowed).toBe(true);
++    expect(limiter.hit("k").allowed).toBe(false);
++    t += 1_500;
++    const fresh = limiter.hit("k");
++    expect(fresh.allowed).toBe(true);
++    expect(fresh.remaining).toBe(2);
++  });
++
++  test("steady traffic below the per-window budget is never throttled", () => {
++    let t = 0;
++    const limiter = new FixedWindowLimiter({ limit: 5, windowMs: 60_000, now: () => t });
++    for (let window = 0; window < 4; window++) {
++      for (let i = 0; i < 3; i++) {
++        expect(limiter.hit("client").allowed).toBe(true);
++        t += 10_000;
++      }
++      t += 30_000; // finish out the window
++    }
++  });
++
++  test("redirects work again one window after a burst", () => {
++    const { app, clock } = makeApp({ rateLimit: { limit: 2, windowMs: 60_000 } });
++    app.handle(
++      req("POST", "/api/links", {
++        token: TOKENS.alice,
++        body: { url: "https://example.com", slug: "burst" },
++      }),
++    );
++    const hit = () => app.handle(req("GET", "/r/burst", { headers: { "x-forwarded-for": "9.9.9.9" } }));
++    expect(hit().status).toBe(302);
++    expect(hit().status).toBe(302);
++    expect(hit().status).toBe(429);
++    clock.advance(60_001);
++    expect(hit().status).toBe(302);
++    expect(hit().status).toBe(302);
++  });
++});

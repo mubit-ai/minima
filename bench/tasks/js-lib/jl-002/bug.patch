@@ -1,0 +1,13 @@
+diff --git a/src/stats.ts b/src/stats.ts
+index 8d60523..1dd9547 100644
+--- a/src/stats.ts
++++ b/src/stats.ts
+@@ -65,7 +65,7 @@ export function quantile(values: ReadonlyArray<number>, q: number): number {
+   if (values.length === 0) throw new RangeError("quantile of empty array");
+   if (!(q >= 0 && q <= 1)) throw new RangeError("q must be within [0, 1]");
+   const sorted = [...values].sort((a, b) => a - b);
+-  const pos = q * (sorted.length - 1);
++  const pos = q * sorted.length;
+   const lo = Math.min(Math.floor(pos), sorted.length - 1);
+   const hi = Math.min(lo + 1, sorted.length - 1);
+   const frac = pos - lo;

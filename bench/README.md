@@ -37,6 +37,19 @@ bench/
     f4_cost_budget.ts       F4: PTY session — /budget set/mode ladder (warn → enforce
                             refusal → warn → shadow), /clear display-only lock-in,
                             /cost, context retention
+  gen/
+    materialize.ts    template + patches → agent-visible working copy (git HEAD = seeded
+                      state; hidden tests applied only at grade time)
+    validate_task.ts  the 5 execution gates every task must pass (SWE-bench-Verified
+                      style): template green → bug invisible to public suite → hidden
+                      tests fail pre-fix → oracle restores green → statement >= 40 words
+    calibrate.ts      k-run empirical difficulty calibration: pinned cheap/frontier arms
+                      through the installed binary, cheat-guarded hidden-test grading,
+                      appends bench/tasks/calibration.jsonl
+    build_index.ts    task dirs (+ calibration rates when present) → bench/tasks/tasks.jsonl
+  fixtures/templates/ clean fixture repos (py-cli, ts-api, js-lib, katas; _example is the
+                      canonical reference the validator smoke uses)
+  tasks/<repo>/<id>/  task instances: task.json, bug.patch?, hidden_tests.patch, oracle.patch?
   run.ts            entry point: `bun bench/run.ts f1 f9 f4`
   artifacts/        (gitignored) per-run scratch dirs, DBs, transcripts on failure
 ```
@@ -59,11 +72,43 @@ One DB path per flow (one per case for headless batteries) removes all "newest r
 ambiguity. Multi-turn = PTY-drive the interactive TUI; `/resume <FULL run_id>` after
 restart (exact match — the picker's 12-char ids are display-only).
 
+## Task dataset (Phase B, 2026-07-06)
+
+**33 execution-validated tasks** across 4 purpose-built fixture repos (34 counting the
+`_example` reference), authored by a 4-agent fan-out and independently re-validated
+(`bun bench/gen/validate_task.ts --all` → 34/34):
+
+| repo | template | tasks | mix |
+|---|---|---|---|
+| `py-cli` ("taskman") | ~1.2k LOC argparse CLI, 60 pytest tests | 8 | 3 easy + 3 medium + 1 hard (cross-module schema-migration data loss) + 1 **trap** (168-word panic statement, 1-line fix) |
+| `ts-api` ("linkbox") | ~1.6k LOC bun HTTP handlers, 60 tests | 7 | 3 feature-adds (hidden-test spec) + 3 medium bugfixes + 1 **trap** (casual statement, diagnosis spans store/persist/stats) |
+| `js-lib` ("datakit") | ~0.8k LOC zero-dep utils, 50 tests, fastest suite | 6 | 2 easy + 2 medium + 1 feature + 1 hard (CSV round-trip state machine) |
+| `katas` | 12 single-file stubs (4 py / 4 ts / 4 js) | 12 | all trivial → the unambiguous cheap tier |
+
+Difficulty spread: 12 trivial / 7 easy / 12 medium / 2 hard. Two deliberate traps test
+that routing keys on real difficulty rather than statement length/tone. Difficulty
+labels are structural (diff footprint); `gen/calibrate.ts` measures empirical solve
+rates per arm and `build_index.ts` folds them into `tasks.jsonl` — measured rates
+override structural bins when they disagree. Precedent: ta-007 was authored hard
+(cross-module diagnosis) but the cheap arm solved it first-try in 46s → demoted to
+medium. Mini-calibration (k=1 smoke) so far: ka-001/pc-002/pc-004/ta-007 all solved by
+haiku; the full k=5 cheap+frontier calibration over all 33 tasks is still pending and
+is the authoritative labeling pass (~$10-20, ~330 attempts).
+
+Anti-leakage: agents under test see ONLY the materialized template (+ seeded bug) and
+the `problem_statement` — never `task.json` (whose `notes` describe the defect), never
+`hidden_tests.patch`. Statements are symptoms-only for bugfixes (audited: no defect
+file/function names, no fix quotes); feature statements specify routes/signatures.
+
 ## Running
 
 ```sh
 bun bench/run.ts            # all flows
 bun bench/run.ts f1 f9      # a subset
+
+bun bench/gen/validate_task.ts --all        # re-validate every task (local, free)
+bun bench/gen/calibrate.ts --tasks all --arms cheap,frontier --k 5   # full calibration (costed)
+bun bench/gen/build_index.ts                # rebuild tasks.jsonl (+ measured rates)
 ```
 
 Live-lane cost: the full Phase A suite spends well under $0.10/run (trivial prompts,
@@ -76,6 +121,29 @@ Status (2026-07-06): **f1 30/30 · f9 11/11 · f4 16/16 — all PASS** against i
 ## Findings log
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
+
+### 2026-07-06 — Phase B (dataset) findings
+- **Never `await` child stdout/stderr streams to completion after killing a process**:
+  the agent's grandchildren (pytest, bun test) inherit the pipe and hold it open past
+  the parent's death, hanging the collector indefinitely — this stalled the first
+  calibration batch. `sh()` now awaits `proc.exited` and gives the streams a 2s grace
+  race instead.
+- **k=1 calibration is a smoke, not a label**: single-attempt solves by the cheap arm
+  demoted ta-007 (with the audit's structural evidence agreeing) but cannot
+  distinguish "cheap solves 100%" from "cheap solves 40% and got lucky" — medium bins
+  especially need the full k=5 pass before routing accuracy is judged against them.
+- **Pinned calibration runs never touch the Minima server** — `--model X` bypasses
+  routing entirely, so difficulty calibration is pure provider spend with zero effect
+  on the routing namespace. Exactly what we want: calibration cannot pollute the
+  learning loop.
+- **Cheat-guard needs an artifact filter**: running pytest inside the attempt drops
+  `tests/__pycache__/*.pyc` as untracked files under `tests/`, which false-flagged the
+  very first calibration attempt as test-tampering. The guard now ignores
+  `__pycache__/.pyc/.pytest_cache/node_modules` before applying the tests/ rule.
+- Headless agent runs on seeded tasks work exactly as designed: haiku found and fixed
+  the `_example` seeded bug in ~23s for ~$0.01, graded by hidden tests post-hoc.
+- Go is not installed on this machine → the plan's `go-tool` fixture became `js-lib`
+  (zero-dep bun:test library, same fastest-suite role for future worktree/DAG flows).
 
 ### 2026-07-06 — findings from making the flows green
 

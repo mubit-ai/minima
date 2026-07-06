@@ -1,0 +1,42 @@
+diff --git a/src/transform.ts b/src/transform.ts
+index c584c82..8c7396f 100644
+--- a/src/transform.ts
++++ b/src/transform.ts
+@@ -35,17 +35,15 @@ export interface PivotRow {
+  * string is a valid key, including the empty string.
+  */
+ export function groupBy<T>(records: ReadonlyArray<T>, key: KeyFn<T>): Map<string, T[]> {
+-  const groups = new Map<string, T[]>();
++  const groups: Record<string, T[]> = {};
+   for (const record of records) {
+     const k = key(record);
+-    let bucket = groups.get(k);
+-    if (bucket === undefined) {
+-      bucket = [];
+-      groups.set(k, bucket);
++    if (!groups[k]) {
++      groups[k] = [];
+     }
+-    bucket.push(record);
++    groups[k]!.push(record);
+   }
+-  return groups;
++  return new Map(Object.entries(groups));
+ }
+ 
+ /**
+@@ -114,11 +112,11 @@ export function pivot<T>(
+   fill: unknown = null,
+ ): PivotTable {
+   const columns: string[] = [];
+-  const seen = new Set<string>();
++  const seen: Record<string, boolean> = {};
+   for (const record of records) {
+     const c = colKey(record);
+-    if (!seen.has(c)) {
+-      seen.add(c);
++    if (!seen[c]) {
++      seen[c] = true;
+       columns.push(c);
+     }
+   }

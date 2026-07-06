@@ -1,0 +1,12 @@
+{
+  "id": "ta-004",
+  "repo": "ts-api",
+  "category": "bugfix",
+  "problem_statement": "While hardening our client we noticed the service is accepting requests it should refuse. A request that sent the raw token value in the Authorization header with no scheme prefix at all came back 200 with real data, and a colleague who accidentally configured Basic auth with the token as the credential also got through. We even reproduced acceptance with a made-up scheme name in front of a valid token. Properly formed Bearer requests behave exactly as documented, and completely bogus token values are still rejected with 401, so token lookup itself seems fine — it is malformed credential framing that slips past. Please make credential parsing strict again without breaking well-formed requests (including the documented case-insensitive scheme).",
+  "test_cmd": "bun test tests/",
+  "difficulty": "medium",
+  "expected_route": "mid",
+  "est_files": 1,
+  "est_loc": 12,
+  "timeout_sec": 120
+}

@@ -1,0 +1,12 @@
+{
+  "id": "ta-003",
+  "repo": "ts-api",
+  "category": "feature",
+  "problem_statement": "Today every API token can read and delete every note, which is unacceptable for shared deployments. Make notes private to the token that created them. POST /api/notes must record the authenticated token's id on the note and include it in the response JSON as an owner field. GET /api/notes must return only notes owned by the calling token, with the existing ?tag= filter applying within that subset. GET /api/notes/:id and DELETE /api/notes/:id must answer 404 when the note exists but belongs to a different token — exactly as if it did not exist, so existence is not revealed — while the owner keeps full access. This applies uniformly to every token, including admin-scoped ones: admin grants no extra note visibility.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "medium",
+  "expected_route": "mid",
+  "est_files": 3,
+  "est_loc": 22,
+  "timeout_sec": 120
+}

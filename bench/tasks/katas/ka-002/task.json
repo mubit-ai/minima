@@ -1,0 +1,12 @@
+{
+  "id": "ka-002",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement rle_encode(text) in py/rle.py. Scan the string into maximal runs of one character: a run of length one emits just the character, while longer runs emit the decimal count followed by the character (twelve a's give \"12a\"). Escape rule: when the run's character is itself a digit 0-9 or a backslash, prefix it with a single backslash so decoding stays unambiguous — \"1222\" encodes to backslash-1, 3, backslash-2. Empty input returns the empty string; non-str input raises TypeError. Verify with python3 -m pytest -q tests/py/test_rle*.py.",
+  "test_cmd": "python3 -m pytest -q tests/py/test_rle*.py",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 15,
+  "timeout_sec": 60
+}

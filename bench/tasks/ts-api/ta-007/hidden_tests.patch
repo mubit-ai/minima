@@ -1,0 +1,79 @@
+diff --git a/tests/hidden/rename-consistency.test.ts b/tests/hidden/rename-consistency.test.ts
+new file mode 100644
+index 0000000..9d5b230
+--- /dev/null
++++ b/tests/hidden/rename-consistency.test.ts
+@@ -0,0 +1,73 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++const token = TOKENS.alice;
++const admin = TOKENS.root;
++
++function create(app: ReturnType<typeof makeApp>["app"], slug: string, url: string) {
++  return app.handle(req("POST", "/api/links", { token, body: { url, slug } }));
++}
++
++function rename(app: ReturnType<typeof makeApp>["app"], from: string, to: string) {
++  return app.handle(req("PATCH", `/api/links/${from}`, { token, body: { slug: to } }));
++}
++
++describe("slug renames keep every view of the data consistent", () => {
++  test("the old slug stops resolving once renamed", () => {
++    const { app } = makeApp();
++    create(app, "old-name", "https://example.com/page");
++    expect(rename(app, "old-name", "new-name").status).toBe(200);
++    expect(app.handle(req("GET", "/r/new-name")).status).toBe(302);
++    expect(app.handle(req("GET", "/r/old-name")).status).toBe(404);
++    expect(app.handle(req("GET", "/api/links/old-name", { token })).status).toBe(404);
++  });
++
++  test("click history follows the link through a rename", () => {
++    const { app } = makeApp();
++    create(app, "campaign", "https://example.com/lp");
++    app.handle(req("GET", "/r/campaign"));
++    app.handle(req("GET", "/r/campaign"));
++    app.handle(req("GET", "/r/campaign"));
++    rename(app, "campaign", "campaign-v2");
++    const fetched = app.handle(req("GET", "/api/links/campaign-v2", { token }));
++    expect((fetched.body as { clicks: number }).clicks).toBe(3);
++  });
++
++  test("a renamed-away slug becomes available again", () => {
++    const { app } = makeApp();
++    create(app, "launch", "https://example.com/2025");
++    rename(app, "launch", "launch-2025");
++    const reuse = create(app, "launch", "https://example.com/2026");
++    expect(reuse.status).toBe(201);
++    expect(app.handle(req("GET", "/r/launch")).headers?.location).toBe("https://example.com/2026");
++  });
++
++  test("listing shows a renamed link exactly once", () => {
++    const { app } = makeApp();
++    create(app, "alpha", "https://example.com/a");
++    rename(app, "alpha", "beta");
++    const list = app.handle(req("GET", "/api/links", { token }));
++    const body = list.body as { items: { slug: string }[]; total: number };
++    expect(body.total).toBe(1);
++    expect(body.items.map((item) => item.slug)).toEqual(["beta"]);
++  });
++
++  test("a snapshot restore reproduces exactly the pre-restore behaviour", () => {
++    const { app: source } = makeApp();
++    create(source, "docs", "https://example.com/docs");
++    source.handle(req("GET", "/r/docs"));
++    source.handle(req("GET", "/r/docs"));
++    rename(source, "docs", "handbook");
++
++    const snapshot = source.handle(req("POST", "/api/admin/snapshot", { token: admin })).body;
++    const { app: restored } = makeApp();
++    restored.handle(req("POST", "/api/admin/restore", { token: admin, body: snapshot }));
++
++    for (const app of [source, restored]) {
++      expect(app.handle(req("GET", "/r/docs")).status).toBe(404);
++      const fetched = app.handle(req("GET", "/api/links/handbook", { token }));
++      expect(fetched.status).toBe(200);
++      expect((fetched.body as { clicks: number }).clicks).toBe(2);
++    }
++  });
++});

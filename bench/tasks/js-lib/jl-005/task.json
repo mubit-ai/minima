@@ -1,0 +1,13 @@
+{
+  "id": "jl-005",
+  "repo": "js-lib",
+  "category": "feature",
+  "problem_statement": "Add support for explicit bin edges to the histogram function in the stats module. Extend HistogramOptions with an optional `edges?: number[]` property and honour it in `histogram(values, options)`: when `edges` is provided it takes precedence over `bins`. The edges must contain at least two values and be strictly increasing; otherwise throw a RangeError. Given k edges, return k-1 bins shaped `{ x0, x1, count }` where bin i counts values v with `edges[i] <= v < edges[i+1]`, except the final bin, which also counts values equal to the last edge. Values below the first edge or above the last edge are ignored. The existing equal-width behaviour must remain unchanged whenever `edges` is absent.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "medium",
+  "expected_route": "mid",
+  "est_files": 1,
+  "est_loc": 35,
+  "timeout_sec": 60,
+  "notes": "Feature task: oracle.patch implements HistogramOptions.edges via a histogramWithEdges helper."
+}

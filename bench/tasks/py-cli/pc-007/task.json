@@ -1,0 +1,13 @@
+{
+  "id": "pc-007",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "After upgrading taskman, long-time users report that due dates vanished from their oldest task files. Files created by the very first releases still load without any error, and titles, priorities, tags and completion state all come through intact — but every due date comes back empty. The symptoms show up everywhere at once: the list table prints '-' in the DUE column for those tasks, `list --overdue` and `list --due-within` match nothing, the agenda dumps everything into UNSCHEDULED, and the report counts zero overdue items on files that definitely contain late work. Task files written by recent versions are completely unaffected. Worse, once one of these old files has been loaded and saved back, the dates are permanently gone, so this looks like silent data loss on the old-format upgrade path rather than a display problem. Please find where the dates are being dropped and preserve them.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "hard",
+  "expected_route": "frontier",
+  "est_files": 1,
+  "est_loc": 40,
+  "timeout_sec": 120,
+  "notes": "Single root cause in the v1->v2 schema upgrade: record rebuild renames 'due' to 'due_date', and the v2->v3 field whitelist then drops it. Symptoms span list/agenda/report; fix is in migrations only."
+}

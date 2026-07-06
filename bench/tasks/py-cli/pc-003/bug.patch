@@ -1,0 +1,13 @@
+diff --git a/taskman/query.py b/taskman/query.py
+index f739ef8..a899e92 100644
+--- a/taskman/query.py
++++ b/taskman/query.py
+@@ -98,7 +98,7 @@ def due_within(tasks: Iterable[Task], days: int, today: date) -> list[Task]:
+ 
+ def matches_text(task: Task, needle: str) -> bool:
+     """Case-insensitive substring match against title and tags."""
+-    lowered = needle.strip().lower()
++    lowered = needle.strip()
+     if not lowered:
+         return True
+     if lowered in task.title.lower():

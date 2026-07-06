@@ -1,0 +1,27 @@
+diff --git a/src/store.ts b/src/store.ts
+index 619d162..e35866f 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -129,8 +129,6 @@ export class Store {
+   /**
+    * Apply a partial update to the link currently known by `slug`.
+    *
+-   * Renames keep the slug index and the click ledger keyed consistently
+-   * with the record: all three move to the new slug in the same mutation.
+    * Throws {@link ConflictError} when the requested new slug is taken.
+    * Returns the updated record, or `undefined` when `slug` is unknown.
+    */
+@@ -142,13 +140,7 @@ export class Store {
+       if (this.slugIndex.has(changes.slug)) {
+         throw new ConflictError(`slug already in use: ${changes.slug}`);
+       }
+-      this.slugIndex.delete(record.slug);
+       this.slugIndex.set(changes.slug, id);
+-      const clicks = this.clicksBySlug.get(record.slug);
+-      if (clicks !== undefined) {
+-        this.clicksBySlug.delete(record.slug);
+-        this.clicksBySlug.set(changes.slug, clicks);
+-      }
+       record.slug = changes.slug;
+     }
+     if (changes.url !== undefined) {

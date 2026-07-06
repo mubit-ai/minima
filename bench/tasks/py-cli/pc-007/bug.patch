@@ -1,0 +1,89 @@
+diff --git a/taskman/migrations.py b/taskman/migrations.py
+index 7f5f29c..46d7008 100644
+--- a/taskman/migrations.py
++++ b/taskman/migrations.py
+@@ -44,43 +44,53 @@ def _coerce_priority_label(raw: Any) -> int:
+     return DEFAULT_PRIORITY
+ 
+ 
+-def _upgrade_v1(doc: dict[str, Any]) -> dict[str, Any]:
+-    """Upgrade a schema-1 document to schema 2.
++def _upgrade_v1_record(rec: dict[str, Any]) -> dict[str, Any]:
++    """Upgrade one schema-1 record to its schema-2 shape.
+ 
+-    Converts each record's ``priority`` label to an int and splits the
+-    comma-separated ``tags`` string into a normalised list.  All other
+-    fields (``id``, ``title``, ``due``, ``done``, ``created``) carry
+-    over unchanged.
++    Converts the ``priority`` label to an int and splits the
++    comma-separated ``tags`` string into a normalised list; the
++    remaining fields carry over.
+     """
+-    records = []
+-    for rec in doc.get("tasks", []):
+-        records.append(
+-            {
+-                "id": int(rec["id"]),
+-                "title": rec["title"],
+-                "priority": _coerce_priority_label(rec.get("priority")),
+-                "tags": split_tag_string(str(rec.get("tags") or "")),
+-                "due": rec.get("due"),
+-                "done": bool(rec.get("done", False)),
+-                "created": rec.get("created"),
+-            }
+-        )
+-    return {"schema": 2, "tasks": records}
++    return {
++        "id": int(rec["id"]),
++        "title": rec["title"],
++        "priority": _coerce_priority_label(rec.get("priority")),
++        "tags": split_tag_string(str(rec.get("tags") or "")),
++        "due_date": rec.get("due"),
++        "done": bool(rec.get("done", False)),
++        "created": rec.get("created"),
++    }
+ 
+ 
+-def _upgrade_v2(doc: dict[str, Any]) -> dict[str, Any]:
+-    """Upgrade a schema-2 document to schema 3.
++def _upgrade_v1(doc: dict[str, Any]) -> dict[str, Any]:
++    """Upgrade a schema-1 document to schema 2, record by record."""
++    return {
++        "schema": 2,
++        "tasks": [_upgrade_v1_record(rec) for rec in doc.get("tasks", [])],
++    }
++
++
++#: Record fields a schema-2 document carries forward into schema 3.
++_V2_RECORD_FIELDS = ("id", "title", "priority", "tags", "due", "created")
+ 
+-    Replaces the boolean ``done`` flag with the ``status`` string and
+-    drops the old key.  Everything else carries over unchanged.
++
++def _upgrade_v2_record(rec: dict[str, Any]) -> dict[str, Any]:
++    """Upgrade one schema-2 record to its schema-3 shape.
++
++    Rebuilds the record from the known schema-2 fields and replaces
++    the boolean ``done`` flag with the ``status`` string.
+     """
+-    records = []
+-    for rec in doc.get("tasks", []):
+-        upgraded = dict(rec)
+-        done = bool(upgraded.pop("done", False))
+-        upgraded["status"] = STATUS_DONE if done else STATUS_OPEN
+-        records.append(upgraded)
+-    return {"schema": 3, "tasks": records}
++    upgraded = {field: rec.get(field) for field in _V2_RECORD_FIELDS}
++    upgraded["status"] = STATUS_DONE if rec.get("done") else STATUS_OPEN
++    return upgraded
++
++
++def _upgrade_v2(doc: dict[str, Any]) -> dict[str, Any]:
++    """Upgrade a schema-2 document to schema 3, record by record."""
++    return {
++        "schema": 3,
++        "tasks": [_upgrade_v2_record(rec) for rec in doc.get("tasks", [])],
++    }
+ 
+ 
+ #: Upgrade steps keyed by the schema version they consume.

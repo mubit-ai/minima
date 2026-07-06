@@ -1,0 +1,12 @@
+{
+  "id": "ta-002",
+  "repo": "ts-api",
+  "category": "feature",
+  "problem_statement": "Short links currently live forever; we need opt-in expiry. POST /api/links should accept an optional ttlSeconds field: when present it must be a positive integer, otherwise the request fails with 400 and body {\"error\": \"invalid_ttl\"}. Every link JSON view returned by create, get-by-slug and list must include an expiresAt field, an ISO-8601 timestamp equal to the creation time plus ttlSeconds, or null for links created without a ttl. Redirecting through GET /r/:slug for a link whose expiry has been reached (current time >= expiresAt, boundary inclusive) must answer 410 with {\"error\": \"link_expired\"} and must NOT record a click. Metadata reads via GET /api/links/:slug keep returning 200 for expired links so owners can inspect them. All time handling must flow from the app's injected clock.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "medium",
+  "expected_route": "mid",
+  "est_files": 3,
+  "est_loc": 25,
+  "timeout_sec": 120
+}
