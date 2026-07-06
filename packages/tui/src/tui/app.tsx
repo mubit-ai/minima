@@ -677,11 +677,17 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
 
   // Scroll state: 0 = at bottom (latest); positive = scrolled up N lines
   const [scrollOffset, setScrollOffset] = useState(0);
+  // Latest render's atBottom + visible-chat-height, read by the input/scroll handlers (which
+  // close over stale render values otherwise). Written once per render, below the height math.
+  const atBottomRef = useRef(true);
+  const maxChatHeightRef = useRef(1);
 
-  // Auto-scroll to bottom when new messages arrive or streaming updates
+  // Follow the newest content ONLY when the user is already at the bottom. If they've scrolled
+  // up (offset > 0) we leave their position alone — otherwise every ~80ms streaming delta would
+  // yank the view back down and make scrolling-while-generating impossible.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on content changes
   useEffect(() => {
-    setScrollOffset(0);
+    if (atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts]);
 
   // Status Bar states
@@ -700,10 +706,15 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   const [typedText, setTypedText] = useState("");
 
   const hasSpace = typedText.includes(" ");
-  const matchingCommands =
+  const MAX_SUGGESTIONS = 8;
+  const allMatchingCommands =
     typedText.startsWith("/") && !hasSpace
       ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
       : [];
+  // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
+  // reserved height past a short terminal and shove the input/status off-screen.
+  const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
+  const hiddenSuggestions = allMatchingCommands.length - matchingCommands.length;
 
   const [showThinking, setShowThinking] = useState(false);
   const showThinkingRef = useRef(showThinking);
@@ -831,7 +842,38 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
       configOverlayOpen
     )
       return;
-    if (busy) return; // don't open overlays mid-run
+
+    // Abort a running turn. MUST be handled before the busy-guard below — otherwise these are
+    // dead code and the advertised "esc to abort" does nothing. (Ctrl+C is also intercepted by
+    // Ink unless exitOnCtrlC:false is passed to render — see main.ts.)
+    if (busy && (key.escape || (key.ctrl && input === "c"))) {
+      agent.abort();
+      return;
+    }
+
+    // Scrolling works whether or not a turn is running — page by the REAL visible chat height,
+    // not a hardcoded rows-6 (which ignored the input box, suggestions, busy line and streaming).
+    const page = Math.max(1, maxChatHeightRef.current - 2);
+    if (key.pageUp) {
+      setScrollOffset((prev) => prev + page);
+      return;
+    }
+    if (key.pageDown || (key.shift && input === " ")) {
+      setScrollOffset((prev) => Math.max(0, prev - page));
+      return;
+    }
+    if (key.ctrl && input === "g") {
+      setScrollOffset(99999); // Home — jump to top
+      return;
+    }
+    if (key.ctrl && input === "e") {
+      setScrollOffset(0); // End — jump to bottom
+      return;
+    }
+
+    // Everything below opens an overlay / changes mode — not allowed mid-run.
+    if (busy) return;
+
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
       return;
@@ -845,38 +887,11 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
       return;
     }
     if (key.ctrl && input === "c") {
-      if (busy) {
-        agent.abort();
-        return;
-      }
       if (quitArmed) exit();
       else {
         setQuitArmed(true);
         setTimeout(() => setQuitArmed(false), 1500);
       }
-      return;
-    }
-    if (key.escape && busy) {
-      agent.abort();
-    }
-    // Scrolling: PageUp/PageDown, Home/End
-    const chatHeight = rows - 6;
-    if (key.pageUp) {
-      setScrollOffset((prev) => prev + Math.max(1, chatHeight - 2));
-      return;
-    }
-    if (key.pageDown || (key.shift && input === " ")) {
-      setScrollOffset((prev) => Math.max(0, prev - Math.max(1, chatHeight - 2)));
-      return;
-    }
-    if (key.ctrl && input === "g") {
-      // Ctrl+G = Home (jump to top)
-      setScrollOffset(99999);
-      return;
-    }
-    if (key.ctrl && input === "e") {
-      // Ctrl+E = End (jump to bottom)
-      setScrollOffset(0);
       return;
     }
   });
@@ -1857,7 +1872,8 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
   // overflow:"hidden" as a safety net — see the render tree — so an estimate error can never
   // corrupt the terminal, only shave a line at the fold.)
   const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
-  const suggestionsHeight = matchingCommands.length > 0 ? matchingCommands.length + 2 : 0;
+  const suggestionsHeight =
+    matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
   // bottom region (see the render tree). Plan mode adds its banner (+3).
@@ -1896,6 +1912,9 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
     scrollOffset,
     cols,
   );
+  // Publish the latest layout facts for the input/scroll handlers, which close over render values.
+  maxChatHeightRef.current = maxChatHeight;
+  atBottomRef.current = atBottom;
 
   return (
     // Global overflow guard: bound the whole frame to exactly `rows` and clip anything beyond.
@@ -1904,11 +1923,19 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
     // overlays (command palette, config, permission diffs) on short terminals too.
     <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
       {messages.length === 0 &&
+      matchingCommands.length === 0 &&
       !pickerOpen &&
       !paletteOpen &&
       !sessionPickerOpen &&
       !configOverlayOpen ? (
-        <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
+        <Box
+          flexDirection="column"
+          alignItems="center"
+          justifyContent="flex-start"
+          flexGrow={1}
+          minHeight={0}
+          overflow="hidden"
+        >
           <Text color="green" bold>
             {getAsciiBanner("MINIMA")}
           </Text>
@@ -1969,6 +1996,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
           flexDirection="column"
           width="100%"
           marginBottom={0}
+          flexShrink={0}
         >
           <Box position="absolute" marginTop={-1} marginLeft={2}>
             <Text color="gray"> commands </Text>
@@ -1979,6 +2007,9 @@ export function HarnessApp({ agent, banner: _banner, askUserRef }: AppProps) {
               <Text color="gray">{cmd.desc}</Text>
             </Box>
           ))}
+          {hiddenSuggestions > 0 && (
+            <Text color="gray">…+{hiddenSuggestions} more · keep typing or Tab to complete</Text>
+          )}
         </Box>
       )}
 

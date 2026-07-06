@@ -33,9 +33,9 @@ export function installMouseScrollFilter(): void {
       const str: string = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       buffer += str;
 
-      // Extract + dispatch SGR mouse sequences: \u001b[<button;col;row M or m
+      // Extract + dispatch SGR mouse sequences: ESC [ < button ; col ; row M|m
       // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
-      const re = /\u001b\[<(\d+);(-?\d+);(-?\d+)([Mm])/g;
+      const re = /\[<(\d+);(-?\d+);(-?\d+)([Mm])/g;
       let match: RegExpExecArray | null;
       while ((match = re.exec(buffer)) !== null) {
         const button = Number.parseInt(match[1]!, 10);
@@ -45,19 +45,22 @@ export function installMouseScrollFilter(): void {
 
       // Strip all complete mouse sequences
       // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
-      let cleaned = buffer.replace(/\u001b\[<(\d+);(-?\d+);(-?\d+)([Mm])/g, "");
+      let cleaned = buffer.replace(/\[<(\d+);(-?\d+);(-?\d+)([Mm])/g, "");
 
-      // Hold back a trailing incomplete escape sequence for the next read
-      const escIdx = cleaned.lastIndexOf("\u001b");
-      if (escIdx !== -1 && cleaned.length - escIdx < 20) {
-        const tail = cleaned.slice(escIdx);
-        // If the tail doesn't look like a complete CSI sequence yet, hold it
-        if (!/[A-Za-z]/.test(tail)) {
-          buffer = tail;
-          cleaned = cleaned.slice(0, escIdx);
-        } else {
-          buffer = "";
-        }
+      // Hold back a trailing INCOMPLETE CSI sequence (e.g. a mouse seq split across reads) so the
+      // next read can complete it. Crucially, only hold tails that have actually started a CSI —
+      // ESC + "[" plus optional "<", digits and ";". A LONE ESC is the Escape KEY and must pass
+      // through, otherwise it is buffered forever and Esc (abort / close overlay / dismiss) dies.
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for CSI matching
+      const incompleteCsi = /^\[[<\d;]*$/;
+      const escIdx = cleaned.lastIndexOf("");
+      if (
+        escIdx !== -1 &&
+        cleaned.length - escIdx < 20 &&
+        incompleteCsi.test(cleaned.slice(escIdx))
+      ) {
+        buffer = cleaned.slice(escIdx);
+        cleaned = cleaned.slice(0, escIdx);
       } else {
         buffer = "";
       }

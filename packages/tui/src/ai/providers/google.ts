@@ -100,6 +100,9 @@ export class GoogleProvider {
 
     try {
       const contents = toContents(context);
+      // NOTE: @google/genai 0.3.x exposes no abortSignal on generateContentStream, so opts.signal
+      // cannot cancel an in-flight Gemini stream here (unlike the Anthropic/OpenAI providers).
+      // Abort still stops the multi-turn loop between turns; mid-stream cancellation needs an SDK bump.
       const stream = await client.models.generateContentStream({
         model: model.id,
         contents,
