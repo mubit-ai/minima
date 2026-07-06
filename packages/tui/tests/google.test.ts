@@ -168,4 +168,54 @@ describe("GoogleProvider", () => {
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/quota exceeded/);
   });
+
+  test("converts array tool params WITH items (Gemini 400s on an item-less ARRAY)", async () => {
+    resetAll();
+    let capturedTools: unknown;
+    const capturingClient: GoogleClientLike = {
+      models: {
+        async generateContentStream(opts: Record<string, unknown>) {
+          capturedTools = (opts.config as Record<string, unknown>)?.tools;
+          async function* gen(): AsyncIterable<GoogleChunk> {
+            yield { candidates: [{ content: { parts: [{ text: "ok" }] }, finish_reason: "STOP" }] };
+          }
+          return gen();
+        },
+      },
+    };
+    registerProvider("google-generative-ai", new GoogleProvider(capturingClient));
+
+    // A tool with an array-of-objects param — the shape the `question` tool uses.
+    const arrayTool = {
+      name: "ask",
+      description: "ask",
+      parameters: {
+        jsonSchema: {
+          type: "object",
+          properties: {
+            options: {
+              type: "array",
+              items: { type: "object", properties: { label: { type: "string" } } },
+            },
+          },
+          required: [],
+        },
+        validate: () => ({ ok: true as const, value: {} }),
+      },
+    };
+
+    await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })], tools: [arrayTool] }),
+    );
+
+    const decls = (capturedTools as { functionDeclarations: Record<string, unknown>[] }[])[0]!
+      .functionDeclarations[0]!;
+    const optsSchema = (decls.parameters as { properties: Record<string, Record<string, unknown>> })
+      .properties.options!;
+    expect(optsSchema.type).toBe("ARRAY");
+    // The critical assertion: items must survive conversion (its absence is the 400 bug).
+    expect(optsSchema.items).toBeDefined();
+    expect((optsSchema.items as { type: string }).type).toBe("OBJECT");
+  });
 });

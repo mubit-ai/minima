@@ -96,10 +96,9 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
           dirtyWarning =
             "note: worktree created from dirty working tree — uncommitted changes are not visible to this child";
         }
-        const addProc = Bun.spawnSync(
-          ["git", "worktree", "add", worktreePath, "HEAD"],
-          { cwd: origWorkdir },
-        );
+        const addProc = Bun.spawnSync(["git", "worktree", "add", worktreePath, "HEAD"], {
+          cwd: origWorkdir,
+        });
         if (addProc.exitCode === 0) {
           childWorkdir = worktreePath;
         } else {

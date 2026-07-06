@@ -18,7 +18,7 @@ export interface StatusBarProps {
   sessionId: string;
   routingOffline: boolean;
   offlineReason?: string | null;
-  statusText: "ready" | "thinking" | "working";
+  statusText: "ready" | "reasoning" | "running";
   planMode?: boolean;
   readDirs?: string[];
   alwaysTools?: string[];
@@ -63,7 +63,10 @@ export function StatusBar({
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box>
+      {/* Each row is a single truncating line so a long status never wraps to extra rows and
+          pushes itself (or the perms line) off the bottom past the frame clip — footerHeight
+          in app.tsx assumes exactly two status rows. */}
+      <Text wrap="truncate">
         {planMode && (
           <Text color="yellow" bold>
             {" "}
@@ -79,7 +82,7 @@ export function StatusBar({
         <Text color="gray"> · route: </Text>
         <Text color={routeStyle}>{routeMode}</Text>
 
-        <Text color="gray"> · think: </Text>
+        <Text color="gray"> · reason: </Text>
         <Text color={thinkStyle}>{thinkingLevel}</Text>
 
         <Text color="gray"> │ ctx </Text>
@@ -118,8 +121,8 @@ export function StatusBar({
         {routingOffline && (
           <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
         )}
-      </Box>
-      <Box>
+      </Text>
+      <Text wrap="truncate">
         <Text color="gray">perms: </Text>
         <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
         {alwaysTools && alwaysTools.length > 0 ? (
@@ -128,7 +131,7 @@ export function StatusBar({
           <Text color="gray"> · w/e/b: ask</Text>
         )}
         {planMode && <Text color="magenta"> · PLAN (ro)</Text>}
-      </Box>
+      </Text>
     </Box>
   );
 }

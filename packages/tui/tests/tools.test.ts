@@ -3,11 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type AskUserRef,
   bashTool,
   builtinTools,
   editTool,
   lsTool,
+  questionTool,
   readTool,
+  webFetchTool,
+  webSearchTool,
   writeTool,
 } from "../src/tools/index.ts";
 
@@ -140,6 +144,7 @@ describe("builtinTools", () => {
   test("returns the default set, minus excluded", () => {
     const all = builtinTools();
     expect(all.map((t) => t.name).sort()).toEqual([
+      "apply_patch",
       "bash",
       "edit",
       "glob",
@@ -148,17 +153,171 @@ describe("builtinTools", () => {
       "read",
       "todowrite",
       "web_fetch",
+      "web_search",
       "write",
     ]);
     const filtered = builtinTools({ exclude: ["bash", "edit"] });
     expect(filtered.map((t) => t.name).sort()).toEqual([
+      "apply_patch",
       "glob",
       "grep",
       "ls",
       "read",
       "todowrite",
       "web_fetch",
+      "web_search",
       "write",
     ]);
+  });
+});
+
+// --- Exa-backed web tools ---------------------------------------------------
+
+const realFetch = globalThis.fetch;
+const savedExaKey = process.env.EXA_API_KEY;
+
+function mockFetch(status: number, body: unknown): void {
+  globalThis.fetch = (async () =>
+    new Response(typeof body === "string" ? body : JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+}
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  if (savedExaKey === undefined) {
+    delete process.env.EXA_API_KEY;
+  } else {
+    process.env.EXA_API_KEY = savedExaKey;
+  }
+});
+
+describe("web_search tool", () => {
+  test("errors clearly when EXA_API_KEY is unset", async () => {
+    delete process.env.EXA_API_KEY;
+    const res = await run(webSearchTool(), { query: "typescript" });
+    expect((res.content[0] as { text: string }).text).toMatch(/EXA_API_KEY is not set/);
+  });
+
+  test("formats a numbered list of results", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, {
+      results: [
+        { url: "https://a.example", title: "Alpha", publishedDate: "2025-01-01" },
+        { url: "https://b.example", title: "Beta" },
+      ],
+    });
+    const res = await run(webSearchTool(), { query: "x", num_results: 20 });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("[1] Alpha (2025-01-01)");
+    expect(out).toContain("https://a.example");
+    expect(out).toContain("[2] Beta");
+    expect(res.details?.count).toBe(2);
+  });
+
+  test("reports no results", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [] });
+    const res = await run(webSearchTool(), { query: "nothing" });
+    expect((res.content[0] as { text: string }).text).toBe("No results found.");
+    expect(res.details?.count).toBe(0);
+  });
+});
+
+describe("web_fetch tool (Exa)", () => {
+  test("returns page text with a title header", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, {
+      results: [{ url: "https://a.example", title: "Doc", text: "hello world" }],
+    });
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("# Doc");
+    expect(out).toContain("hello world");
+    expect(res.details?.truncated).toBe(false);
+  });
+
+  test("truncates past max_chars", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [{ url: "https://a.example", text: "x".repeat(2000) }] });
+    const res = await run(webFetchTool(), { url: "https://a.example", max_chars: 500 });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("[truncated — 1500 more chars]");
+    expect(res.details?.truncated).toBe(true);
+  });
+
+  test("surfaces auth failure", async () => {
+    process.env.EXA_API_KEY = "bad";
+    mockFetch(401, { error: "nope" });
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    expect((res.content[0] as { text: string }).text).toMatch(/web_fetch failed:.*authentication/);
+  });
+});
+
+describe("question tool", () => {
+  test("headless (no ask callback) tells the model to proceed", async () => {
+    const ref: AskUserRef = { current: null };
+    const res = await run(questionTool(ref), { question: "Which one?" });
+    expect((res.content[0] as { text: string }).text).toMatch(/headless|best assumption/i);
+    expect(res.details?.answered).toBe(false);
+    expect(res.details?.reason).toBe("headless");
+  });
+
+  test("returns the user's answer when ask resolves", async () => {
+    const ref: AskUserRef = { current: async () => "Option B" };
+    const res = await run(questionTool(ref), {
+      question: "Pick",
+      options: [{ label: "Option A" }, { label: "Option B", description: "the good one" }],
+    });
+    expect((res.content[0] as { text: string }).text).toBe("The user answered: Option B");
+    expect(res.details?.answered).toBe(true);
+    expect(res.details?.answer).toBe("Option B");
+  });
+
+  test("dismissed (ask resolves null) tells the model to proceed", async () => {
+    const ref: AskUserRef = { current: async () => null };
+    const res = await run(questionTool(ref), { question: "Pick" });
+    expect((res.content[0] as { text: string }).text).toMatch(/dismissed|best judgment/i);
+    expect(res.details?.answered).toBe(false);
+    expect(res.details?.reason).toBe("dismissed");
+  });
+
+  test("validates required question and option labels", () => {
+    const ref: AskUserRef = { current: null };
+    const tool = questionTool(ref);
+    expect(tool.parameters.validate({}).ok).toBe(false);
+    expect(
+      tool.parameters.validate({ question: "q", options: [{ description: "no label" }] }).ok,
+    ).toBe(false);
+    const ok = tool.parameters.validate({ question: "q" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.value.allow_freetext).toBe(true);
+  });
+
+  test("accepts the lenient option shapes weak models emit (string shorthand + label aliases)", () => {
+    const tool = questionTool({ current: null });
+    // bare strings become { label }
+    const strs = tool.parameters.validate({ question: "q", options: ["Yes", "No"] });
+    expect(strs.ok).toBe(true);
+    if (strs.ok) expect(strs.value.options).toEqual([{ label: "Yes" }, { label: "No" }]);
+    // title/name are accepted as aliases for label
+    const aliased = tool.parameters.validate({
+      question: "q",
+      options: [{ title: "A" }, { name: "B", description: "d" }],
+    });
+    expect(aliased.ok).toBe(true);
+    if (aliased.ok)
+      expect(aliased.value.options).toEqual([{ label: "A" }, { label: "B", description: "d" }]);
+    // a truly labelless object is still rejected
+    expect(tool.parameters.validate({ question: "q", options: [{ foo: "bar" }] }).ok).toBe(false);
+    // a non-array options is still rejected with the same message
+    const bad = tool.parameters.validate({ question: "q", options: "Yes" });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.errors.join()).toContain("options: must be an array");
+  });
+
+  test("is sequential (never runs concurrently with other tools)", () => {
+    expect(questionTool({ current: null }).executionMode).toBe("sequential");
   });
 });

@@ -1,15 +1,20 @@
 /**
- * Conversation rendering for the TUI — user prompts, assistant replies (incl. live
- * streaming text), and terse tool-call lines.
+ * Conversation rendering for the TUI.
+ *
+ * The finalized transcript is rendered via Ink's <Static> (see app.tsx): each message is an
+ * independent, append-only item printed ONCE into the terminal's scrollback and never re-diffed.
+ * That is what makes long transcripts render cleanly — Ink's cursor-relative diff only ever manages
+ * the small live region (streaming reply + input + status), never content taller than the screen.
+ * So this module exposes a per-MESSAGE row (not a per-turn box, which would have to grow and thus
+ * couldn't be a stable Static item) plus the live streaming blocks.
  */
 
 import { Box, Text } from "ink";
 import type React from "react";
-import { type ChatMessage, type Turn, groupMessagesIntoTurns } from "./layout.ts";
+import { type ChatMessage, clampToolText } from "./layout.ts";
 
-// Re-exported so existing importers (app.tsx) keep a single import site; the definitions and the
-// pure grouping logic now live in the React/Ink-free layout module (also unit-tested there).
-export { type ChatMessage, type Turn, groupMessagesIntoTurns };
+// Re-exported so app.tsx keeps a single import site.
+export type { ChatMessage };
 
 function renderInlineMarkdown(text: string): React.ReactNode {
   const tokens: React.ReactNode[] = [];
@@ -114,119 +119,81 @@ export function MarkdownRenderer({ text }: { text: string }) {
   );
 }
 
-export function Messages({
-  messages,
-  streaming,
-  streamingThoughts,
-}: {
-  messages: ChatMessage[];
-  streaming: string;
-  streamingThoughts?: string;
-}) {
-  const turns = groupMessagesIntoTurns(messages);
+/**
+ * One finalized message, rendered inline (no per-turn box). Used as a <Static> item — printed once
+ * into scrollback. A `marginTop` gives visual separation between messages.
+ */
+export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
+  if (msg.role === "user") {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color="green">{"▸ you"}</Text>
+        <Text backgroundColor="#2a2a35" color="white">
+          {` ${msg.text} `}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (msg.role === "tool") {
+    const { text: body, hiddenLines } = clampToolText(msg.text, cols);
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color={msg.isError ? "red" : "yellow"}>{`  ⚙ ${msg.toolName ?? "tool"}:`}</Text>
+        {/* default fg (no hardcoded white — invisible on light themes); body is clipped */}
+        <Text color={msg.isError ? "red" : undefined}>{body}</Text>
+        {hiddenLines > 0 && <Text color="gray">{`  … +${hiddenLines} more lines`}</Text>}
+      </Box>
+    );
+  }
+
+  if (msg.role === "thinking") {
+    return (
+      <Box
+        flexDirection="column"
+        marginTop={1}
+        paddingLeft={2}
+        borderStyle="single"
+        borderColor="gray"
+      >
+        <Text color="gray" italic>
+          {`🧠 reasoning (${msg.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s)`}
+        </Text>
+        <Text color="gray" italic>
+          {msg.text}
+        </Text>
+      </Box>
+    );
+  }
 
   return (
-    // No flexGrow: the parent chat region is bottom-aligned (justifyContent="flex-end") and clips
-    // overflow, so this must be content-sized (not stretched) for the newest turn to sit at the fold.
-    <Box flexDirection="column">
-      {turns.map((turn, i) => (
-        <Box
-          // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
-          key={i}
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="gray"
-          paddingX={1}
-          marginBottom={1}
-          width="100%"
-        >
-          {/* User Section */}
-          {turn.user.text ? (
-            <Box flexDirection="column" marginBottom={1}>
-              <Text color="green">{"▸ you"}</Text>
-              <Text backgroundColor="#2a2a35" color="white">
-                {` ${turn.user.text} `}
-              </Text>
-            </Box>
-          ) : null}
+    <Box flexDirection="column" marginTop={1}>
+      <Text color="magenta">{"◆ assistant"}</Text>
+      <MarkdownRenderer text={msg.text} />
+    </Box>
+  );
+}
 
-          {/* Subsequent tool calls and assistant answers */}
-          {turn.subsequent.map((sub, sIdx) => {
-            if (sub.role === "tool") {
-              return (
-                <Box
-                  // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
-                  key={sIdx}
-                  flexDirection="column"
-                  marginY={0}
-                >
-                  <Text color={sub.isError ? "red" : "yellow"}>
-                    {`  ⚙ ${sub.toolName ?? "tool"}:`}
-                  </Text>
-                  <Text color={sub.isError ? "red" : "white"}>{sub.text}</Text>
-                </Box>
-              );
-            }
+/** The live streaming assistant reply (dynamic region; finalizes into a MessageRow when done). */
+export function StreamingReply({ text }: { text: string }) {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color="magenta">{"◆ assistant"}</Text>
+      <MarkdownRenderer text={text} />
+    </Box>
+  );
+}
 
-            if (sub.role === "thinking") {
-              return (
-                <Box
-                  // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
-                  key={sIdx}
-                  flexDirection="column"
-                  marginTop={1}
-                  marginBottom={1}
-                  paddingLeft={2}
-                  borderStyle="single"
-                  borderColor="gray"
-                >
-                  <Text color="gray" italic>
-                    {`💭 thought for ${sub.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s`}
-                  </Text>
-                  <Text color="gray" italic>
-                    {sub.text}
-                  </Text>
-                </Box>
-              );
-            }
-
-            return (
-              <Box
-                // biome-ignore lint/suspicious/noArrayIndexKey: grouping stable lists
-                key={sIdx}
-                flexDirection="column"
-                marginTop={1}
-                marginBottom={1}
-              >
-                <Text color="magenta">{"◆ assistant"}</Text>
-                <MarkdownRenderer text={sub.text} />
-              </Box>
-            );
-          })}
-        </Box>
-      ))}
-
-      {/* Streaming Active Thoughts */}
-      {streamingThoughts ? (
-        <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={0} width="100%">
-          <Box flexDirection="column">
-            <Text color="cyan">{"💭 thinking..."}</Text>
-            <Text color="gray" wrap="truncate">
-              {streamingThoughts.slice(-300)}
-            </Text>
-          </Box>
-        </Box>
-      ) : null}
-
-      {/* Streaming Active Turn */}
-      {streaming ? (
-        <Box borderStyle="round" borderColor="gray" paddingX={1} marginBottom={1} width="100%">
-          <Box flexDirection="column" marginTop={1} marginBottom={1}>
-            <Text color="magenta">{"◆ assistant"}</Text>
-            <MarkdownRenderer text={streaming} />
-          </Box>
-        </Box>
-      ) : null}
+/** The live reasoning peek (dynamic region); truncated so it never grows past a couple of rows. */
+export function StreamingThoughts({ text }: { text: string }) {
+  return (
+    <Box borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1} width="100%">
+      <Box flexDirection="column">
+        <Text color="cyan">{"🧠 reasoning..."}</Text>
+        <Text color="gray" wrap="truncate">
+          {text.slice(-300)}
+        </Text>
+      </Box>
     </Box>
   );
 }

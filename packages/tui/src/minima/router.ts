@@ -222,7 +222,12 @@ export class MinimaRouter {
     try {
       this._capabilities = await this.client.capabilities();
     } catch {
-      this._capabilities = { plan: false, workflow: false, api_version: "unknown", honored_constraints: [] };
+      this._capabilities = {
+        plan: false,
+        workflow: false,
+        api_version: "unknown",
+        honored_constraints: [],
+      };
     }
     return this._capabilities;
   }

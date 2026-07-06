@@ -13,6 +13,10 @@ build/
 .minima_state/
 .seed_progress.json
 
+# Local experimental / throwaway files
+scratch/
+playground/
+
 
 # Astro docs site
 docs-site/node_modules/
