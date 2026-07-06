@@ -31,7 +31,8 @@ seed:
 TUI := packages/tui
 TUI_BIN := $(TUI)/dist/minima
 # Default PTY-capture spec: idle interactive UI at 100x30, run from the repo root so .env loads.
-SPEC ?= {"cmd":["bun","run","$(TUI)/src/cli/main.ts","--offline"],"cwd":"$(CURDIR)","cols":100,"rows":30,"duration":6}
+# Emits a PNG to the gitignored playground/ so the rendered UI can be inspected as an image.
+SPEC ?= {"cmd":["bun","run","$(TUI)/src/cli/main.ts","--offline"],"cwd":"$(CURDIR)","cols":100,"rows":30,"duration":6,"png":"$(CURDIR)/playground/tui-shot.png"}
 
 tui-install:
 	cd $(TUI) && bun install
@@ -62,4 +63,5 @@ tui-dev:
 #   make tui-shot
 #   make tui-shot SPEC='{"cmd":["bun","run","packages/tui/src/cli/main.ts","--offline","--model","claude-haiku-4-5","--provider","anthropic"],"cwd":"'"$$PWD"'","cols":80,"rows":24,"duration":8,"steps":[{"after":2,"send":"hi<CR>"}]}'
 tui-shot:
-	uv run --with pyte python $(TUI)/scripts/pty_capture.py '$(SPEC)'
+	@mkdir -p $(CURDIR)/playground
+	uv run --with pyte --with pillow python $(TUI)/scripts/pty_capture.py '$(SPEC)'

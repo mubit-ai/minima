@@ -46,20 +46,21 @@ service — no network, no keys.
 
 ### Screenshot the TUI
 
-The TUI renders inline in the terminal's main buffer and commits its transcript to native
-scrollback via Ink `<Static>`. To inspect the layout as a text "screenshot", drive it in a real
-PTY with `scripts/pty_capture.py` (pyte emulator; no committed venv — `uv` pulls pyte on demand):
+To inspect the layout as a "screenshot", drive the TUI in a real PTY with `scripts/pty_capture.py`
+(pyte emulator; no committed venv — `uv` pulls pyte/pillow on demand):
 
 ```bash
 # from the repo root (so .env / .env.harness load):
-make tui-shot                                  # idle UI at 100x30
-make tui-shot SPEC='{"cmd":["bun","run","packages/tui/src/cli/main.ts","--offline","--model","claude-haiku-4-5","--provider","anthropic"],"cwd":"'"$PWD"'","cols":80,"rows":24,"duration":8,"steps":[{"after":2,"send":"hi<CR>"}]}'
+make tui-shot                                  # idle UI at 100x30 -> playground/tui-shot.png
+make tui-shot SPEC='{"cmd":["bun","run","packages/tui/src/cli/main.ts","--offline","--model","claude-haiku-4-5","--provider","anthropic"],"cwd":"'"$PWD"'","cols":80,"rows":24,"duration":8,"png":"'"$PWD"'/playground/shot.png","steps":[{"after":4,"send":"hi"},{"after":6,"send":"<CR>"}]}'
 ```
 
-It prints the visible grid plus the **scrollback** (lines that scrolled off the top) — proving the
-transcript is scrollable. It verifies "prompt at the bottom / no void / clean render / lines in
-scrollback"; true wheel/trackpad scrolling is a real-terminal, human check. See the script's
-docstring for the full JSON spec and send-tokens (`<CR> <UP> <PGUP> <CTRLC> …`).
+It prints the visible grid plus the **scrollback** (lines that scrolled off the top), and — when the
+spec has a `"png"` key — rasterizes the visible grid (colors/bold, Menlo font) to a **PNG image** you
+can open. Verifies "prompt at the bottom / clean render / scroll"; true wheel/trackpad scrolling is a
+real-terminal, human check. Tips: give Ink ~4s to warm up and send the prompt text and `<CR>` as
+separate `steps`. See the script's docstring for the full JSON spec and send-tokens
+(`<CR> <UP> <PGUP> <CTRLC> …`).
 
 ## Use
 

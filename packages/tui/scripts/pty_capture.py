@@ -65,6 +65,68 @@ def render_row(row, cols: int) -> str:
     return "".join(row[x].data for x in range(cols)).rstrip()
 
 
+# pyte's 16 ANSI color names -> RGB. Note pyte uses "brown" for SGR 33 (not "yellow"),
+# and 256/truecolor come through as "RRGGBB" hex strings handled in _resolve().
+_PALETTE = {
+    "black": (0, 0, 0), "red": (194, 54, 33), "green": (37, 188, 36),
+    "brown": (173, 173, 39), "blue": (73, 46, 225), "magenta": (211, 56, 211),
+    "cyan": (51, 187, 200), "white": (203, 204, 205),
+    "brightblack": (129, 131, 131), "brightred": (252, 57, 31),
+    "brightgreen": (49, 231, 34), "brightbrown": (234, 236, 35),
+    "brightblue": (88, 51, 255), "brightmagenta": (249, 53, 248),
+    "brightcyan": (20, 240, 240), "brightwhite": (233, 235, 235),
+}
+_DEFAULT_FG = (205, 205, 205)
+_DEFAULT_BG = (13, 13, 13)
+
+
+def _resolve(color: str, default):
+    if color == "default":
+        return default
+    if color in _PALETTE:
+        return _PALETTE[color]
+    try:  # 256/truecolor arrive as "RRGGBB" hex
+        return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
+    except (ValueError, IndexError):
+        return default
+
+
+def render_png(screen, path: str, font_size: int = 18) -> None:
+    """Rasterize the visible pyte grid (with colors/bold/reverse) to a PNG via Pillow + Menlo, so a
+    reader can visually inspect the TUI. Requires pillow (`uv run --with pillow`)."""
+    import unicodedata
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    font_path = "/System/Library/Fonts/Menlo.ttc"
+    regular = ImageFont.truetype(font_path, font_size, index=0)
+    bold = ImageFont.truetype(font_path, font_size, index=1)
+    ascent, descent = regular.getmetrics()
+    cw = int(round(regular.getlength("M")))  # monospace advance width
+    ch = ascent + descent  # cell height
+    cols, rows = screen.columns, screen.lines
+
+    img = Image.new("RGB", (cols * cw, rows * ch), _DEFAULT_BG)
+    d = ImageDraw.Draw(img)
+    for y in range(rows):
+        line = screen.buffer[y]  # defaultdict; indexing empty cells returns default_char
+        x = 0
+        while x < cols:
+            c = line[x]
+            fg = _resolve(c.fg, _DEFAULT_FG)
+            bg = _resolve(c.bg, _DEFAULT_BG)
+            if c.reverse:
+                fg, bg = bg, fg
+            wide = 2 if (c.data and unicodedata.east_asian_width(c.data[0]) in "WF") else 1
+            px, py = x * cw, y * ch
+            if bg != _DEFAULT_BG:
+                d.rectangle([px, py, px + cw * wide - 1, py + ch - 1], fill=bg)
+            if c.data and c.data != " ":
+                d.text((px, py), c.data, font=(bold if c.bold else regular), fill=fg)
+            x += wide
+    img.save(path, "PNG")
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: pty_capture.py '<json-spec>'", file=sys.stderr)
@@ -129,6 +191,11 @@ def main() -> int:
     for idx, line in enumerate(screen.display):
         print(f"{idx:2} |{line.rstrip()}")
     print(f"=== {len(screen.display)} visible rows; {len(screen.history.top)} in scrollback ===")
+
+    png = spec.get("png")
+    if png:
+        render_png(screen, png)
+        print(f"=== wrote PNG: {png} ===")
     return 0
 
 

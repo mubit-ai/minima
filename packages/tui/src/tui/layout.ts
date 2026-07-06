@@ -159,3 +159,98 @@ export const SCROLLBACK_SAFETY_ROWS = 2;
 export function streamTailBudget(rows: number, reserved: number): number {
   return Math.max(0, rows - reserved - SCROLLBACK_SAFETY_ROWS);
 }
+
+/**
+ * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly, so the
+ * fullscreen viewport (getScrollableMessages) can window history without overflowing the frame.
+ * CONSERVATIVE bias (>= actual): each role uses the accurate word-wrap helpers at the *narrowest*
+ * width the real render could use, so we never under-count (an under-count would let the viewport
+ * render past its budget and desync Ink — the garble class). `cols` is the terminal width.
+ */
+export function computeMsgHeight(msg: ChatMessage, cols: number): number {
+  if (msg.role === "user") {
+    // marginTop(1) + "▸ you" header(1) + body (` ${text} ` — pad 2 cols; wrap at &lt;= cols-2).
+    return 2 + wrappedLineCount(msg.text, cols - 2);
+  }
+  if (msg.role === "tool") {
+    // marginTop(1) + "⚙ tool:" header(1) + clamped body (rows at interior cols-4) + optional hint.
+    const { text: body, hiddenLines } = clampToolText(msg.text, cols);
+    return 2 + wrappedLineCount(body, cols - 4) + (hiddenLines > 0 ? 1 : 0);
+  }
+  if (msg.role === "thinking") {
+    // marginTop(1) + single border(2) + header(1) + body wrapped at interior cols-4 (border 2 + padL 2).
+    return 4 + wrappedLineCount(msg.text, cols - 4);
+  }
+  // assistant: marginTop(1) + "◆ assistant" header(1) + markdown body (headings/lists add rows).
+  return 2 + markdownBodyHeight(msg.text, cols);
+}
+
+/** A windowed view of the transcript for the fullscreen renderer. */
+export interface ScrollWindow {
+  /** Whole messages overlapping the visible window (the region clips the top fold). */
+  visible: ChatMessage[];
+  /** Total estimated rows of the whole transcript. */
+  totalHeight: number;
+  /** True when scrolled as far up as content allows. */
+  atTop: boolean;
+  /** True when pinned to the newest content (offset 0). */
+  atBottom: boolean;
+}
+
+/**
+ * Select the messages visible in a `maxHeight`-row viewport at `scrollOffset` (0 = newest pinned to
+ * the bottom; positive = scrolled up N rows). Sums per-message heights, clamps the offset to
+ * `[0, total-maxHeight]`, and returns the whole messages overlapping the window `[end-maxHeight,
+ * end]` where `end = total - offset`. Renders per-message (no turn boxes); the viewport bottom-aligns
+ * with overflow:"hidden", so the message straddling the top fold is clipped (oldest content first).
+ */
+export function getScrollableMessages(
+  messages: ChatMessage[],
+  maxHeight: number,
+  scrollOffset: number,
+  cols: number,
+): ScrollWindow {
+  if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
+
+  const heights = messages.map((m) => computeMsgHeight(m, cols));
+  const totalHeight = heights.reduce((a, b) => a + b, 0);
+
+  const maxOffset = Math.max(0, totalHeight - maxHeight);
+  const effectiveOffset = Math.min(Math.max(0, scrollOffset), maxOffset);
+  const endLine = totalHeight - effectiveOffset;
+  const startLine = Math.max(0, endLine - maxHeight);
+
+  let currentLine = 0;
+  const visible: ChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const start = currentLine;
+    const end = currentLine + heights[i]!;
+    currentLine = end;
+    if (end <= startLine || start >= endLine) continue; // entirely outside the window
+    // Trim the parts of a boundary message that fall outside the window so NO rendered message is
+    // taller than the viewport. Stock Ink garbles a single child taller than an overflow:"hidden"
+    // flex-end box (negative offset), but renders cleanly once content fits — so we clip the fold.
+    // Dropping whole TEXT lines (each >= 1 rendered row) is a conservative over-trim that can never
+    // leave the content overflowing.
+    const dropTop = Math.max(0, startLine - start);
+    const dropBottom = Math.max(0, end - endLine);
+    visible.push(
+      dropTop || dropBottom ? clipMessageRows(messages[i]!, dropTop, dropBottom) : messages[i]!,
+    );
+  }
+
+  return {
+    visible,
+    totalHeight,
+    atTop: effectiveOffset >= maxOffset,
+    atBottom: effectiveOffset === 0,
+  };
+}
+
+/** Drop `dropTop` leading and `dropBottom` trailing TEXT lines from a message (fold-clipping). */
+function clipMessageRows(msg: ChatMessage, dropTop: number, dropBottom: number): ChatMessage {
+  let lines = msg.text.split("\n");
+  if (dropTop > 0) lines = lines.slice(dropTop);
+  if (dropBottom > 0) lines = lines.slice(0, Math.max(0, lines.length - dropBottom));
+  return { ...msg, text: lines.join("\n") };
+}

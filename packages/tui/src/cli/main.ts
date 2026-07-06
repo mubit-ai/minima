@@ -36,6 +36,7 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
+import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -171,6 +172,12 @@ interface CliArgs {
   budgetEnforce: boolean;
   /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
   slider?: number;
+  /**
+   * Fullscreen renderer: alternate screen buffer, prompt glued to the bottom row, in-app scroll
+   * (PgUp/PgDn + optional mouse wheel) — like Claude Code's fullscreen mode. Default true; disable
+   * with `--no-fullscreen` or `MINIMA_TUI_INLINE=1` to fall back to the inline/native-scroll mode.
+   */
+  fullscreen: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -182,6 +189,7 @@ function parseArgs(argv: string[]): CliArgs {
     mode: "interactive",
     noTools: false,
     budgetEnforce: false,
+    fullscreen: !process.env.MINIMA_TUI_INLINE,
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -209,6 +217,12 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--offline":
         opts.offline = true;
+        break;
+      case "--no-fullscreen":
+        opts.fullscreen = false;
+        break;
+      case "--fullscreen":
+        opts.fullscreen = true;
         break;
       case "-t":
       case "--tools":
@@ -265,6 +279,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider NAME      provider for a pinned --model
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
+      --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -484,30 +499,40 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return rc;
   }
 
-  // Render INLINE in the main screen buffer (NEVER the alternate buffer). Ink commits the
-  // finalized transcript to the terminal's real scrollback via <Static>, so wheel/trackpad scroll
-  // and select/copy work natively — the alt buffer has no scrollback and would defeat that.
-  // Seat the first paint at the bottom of the viewport by scrolling existing shell output up into
-  // scrollback (a one-time reserve, like Codex's inline viewport) so the prompt starts pinned at
-  // the bottom instead of mid-screen. This is plain stdout BEFORE render(), not part of Ink's live
-  // frame, so it cannot trip Ink's overflow-clear. Then hide the cursor (TextInput draws its own).
-  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
-  process.stdout.write("\u001b[?25l");
+  // Two renderers (like Claude Code):
+  //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
+  //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
+  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
+  //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
+  //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
+  //    reserve seats the prompt at the bottom on first paint.
+  if (args.fullscreen) {
+    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
+    process.stdout.write("\u001b[?1049h"); // enter alternate screen
+    process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
+  } else {
+    process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
+    process.stdout.write("\u001b[?25l");
+  }
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
   // exitOnCtrlC:false hands Ctrl+C to our own useInput handler — during a run it aborts the
   // turn, when idle it arms the double-press quit — instead of Ink killing the app outright.
   const instance = render(
-    React.createElement(HarnessApp, { agent, banner: "minima", askUserRef, childEventRef }),
-    {
-      exitOnCtrlC: false,
-    },
+    React.createElement(HarnessApp, {
+      agent,
+      banner: "minima",
+      askUserRef,
+      childEventRef,
+      fullscreen: args.fullscreen,
+    }),
+    { exitOnCtrlC: false },
   );
   await instance.waitUntilExit();
 
-  // Restore the cursor on shutdown. We stayed in the main buffer (no alternate-screen to leave),
-  // so the finished session remains in the terminal's scrollback — like Claude Code / Codex.
+  // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
+  if (args.fullscreen) process.stdout.write("\u001b[?1049l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");
