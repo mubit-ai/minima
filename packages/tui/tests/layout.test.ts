@@ -13,6 +13,8 @@ import {
 
 const asst = (text: string): ChatMessage => ({ role: "assistant", text });
 const user = (text: string): ChatMessage => ({ role: "user", text });
+const tool = (text: string, toolName = "bash"): ChatMessage => ({ role: "tool", text, toolName });
+const thinking = (text: string): ChatMessage => ({ role: "thinking", text });
 
 describe("wrappedLineCount", () => {
   test(">=1 per source line, wraps at width", () => {
@@ -99,6 +101,14 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
       2 + MAX_TOOL_LINES + 1,
     );
   });
+  test("the irreducible chrome floor per role (empty body still renders header + margin)", () => {
+    // A clipped boundary message can never shrink below this — the fullscreen clip must account for
+    // it or a sub-floor slot overflows the viewport (the scroll garble). thinking is 5 (border adds 2).
+    expect(computeMsgHeight(user(""), 80)).toBe(3); // marginTop + "▸ you" + 1 body
+    expect(computeMsgHeight(tool(""), 80)).toBe(3); // marginTop + "⚙ …:" + 1 body
+    expect(computeMsgHeight(asst(""), 80)).toBe(3); // marginTop + "◆ assistant" + 1 body
+    expect(computeMsgHeight(thinking(""), 80)).toBe(5); // marginTop + border(2) + header + 1 body
+  });
 });
 
 describe("getScrollableMessages — windows the transcript for the fullscreen viewport", () => {
@@ -131,6 +141,51 @@ describe("getScrollableMessages — windows the transcript for the fullscreen vi
     const rendered = w.visible.reduce((n, m) => n + computeMsgHeight(m, 80), 0);
     expect(rendered).toBeLessThanOrEqual(12);
     expect(w.atBottom).toBe(true);
+  });
+
+  // A mixed transcript hitting every clip trap: a 1-line bash tool (the chrome-floor / "helloash"
+  // collision), a tool with one very long WRAPPED url line (source-line vs rendered-row over-trim),
+  // markdown headings + lists, a thinking block (floor 5), short user lines, and one assistant taller
+  // than the whole viewport (clipped on both folds).
+  const mixed: ChatMessage[] = [
+    user("hi"),
+    tool("hello"),
+    tool(`[1] Result title\nhttps://example.com/${"segment/".repeat(30)}end`, "web_search"),
+    asst("# Heading\nsome body text here\n- a bullet item\n- another bullet\nmore trailing text"),
+    thinking("reasoning about the problem\na second line of thoughts"),
+    user("do it again"),
+    asst(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")),
+  ];
+
+  test("scroll-sweep: the visible stack never exceeds the viewport at ANY offset (the scroll garble)", () => {
+    // This is the core regression. Ink decimates/fuses lines the instant the flex-end viewport's
+    // content exceeds its height; before the height-targeted clip, boundary messages re-added chrome
+    // that pushed the stack over `maxHeight` at many offsets. Sweep every offset (past the clamp) and
+    // assert the rendered stack fits AND no single child alone exceeds the box.
+    for (const cols of [40, 80]) {
+      const maxHeight = 12;
+      const total = getScrollableMessages(mixed, maxHeight, 0, cols).totalHeight;
+      const maxOffset = Math.max(0, total - maxHeight);
+      for (let off = 0; off <= maxOffset + 5; off++) {
+        const w = getScrollableMessages(mixed, maxHeight, off, cols);
+        const sum = w.visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
+        expect(sum).toBeLessThanOrEqual(maxHeight);
+        for (const m of w.visible) {
+          expect(computeMsgHeight(m, cols)).toBeLessThanOrEqual(maxHeight);
+        }
+      }
+    }
+  });
+
+  test("scrolling is monotonic — offset 0 pins the newest, max offset pins the oldest", () => {
+    const maxHeight = 12;
+    const total = getScrollableMessages(mixed, maxHeight, 0, 80).totalHeight;
+    const maxOffset = Math.max(0, total - maxHeight);
+    expect(getScrollableMessages(mixed, maxHeight, 0, 80).atBottom).toBe(true);
+    expect(getScrollableMessages(mixed, maxHeight, maxOffset, 80).atTop).toBe(true);
+    // The oldest message ("hi") is only reachable when scrolled to the top.
+    const top = getScrollableMessages(mixed, maxHeight, maxOffset, 80);
+    expect(top.visible[0]?.role).toBe("user");
   });
 });
 

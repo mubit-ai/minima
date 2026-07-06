@@ -29,7 +29,13 @@ import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
-import { getScrollableMessages, streamTailBudget, tailToFit, wrappedLineCount } from "./layout.ts";
+import {
+  getScrollableMessages,
+  markdownBodyHeight,
+  streamTailBudget,
+  tailToFit,
+  wrappedLineCount,
+} from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
@@ -1967,8 +1973,9 @@ export function HarnessApp({
       (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
       1 // hint line
     : 0;
-  // The thoughts peek is wrap="truncate" (fixed ~4 rows), so it never grows with content.
-  const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 4 : 0;
+  // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
+  // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
+  const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
   // The busy indicator (spinner + tip) renders as one line above the input box while a turn
   // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
   const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
@@ -1987,10 +1994,14 @@ export function HarnessApp({
     ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
 
-  // Fullscreen: window the transcript into the chat region above the fixed footer, and bound the
-  // in-viewport streaming reply. The viewport is overflow:"hidden" + justifyContent:"flex-end", so
-  // any height under-count merely clips an extra top row instead of overflowing — and running in the
-  // alternate screen makes Ink's clearTerminal fallback harmless (no native scrollback to wipe).
+  // Fullscreen: window the transcript into the chat region above the fixed footer, RESERVING rows for
+  // the in-viewport live extras (streaming reply, reasoning peek, scroll hint) so that messages + live
+  // content together never exceed chatRegionHeight. If they did, the flex-end + overflow:"hidden"
+  // viewport would receive a taller-than-itself stack and stock Ink decimates/fuses lines (the scroll
+  // garble). The extras are mutually exclusive by scroll state: PINNED (offset 0) shows the stream /
+  // thoughts at the bottom; scrolled up shows the "↑ scrolled up" hint instead. Gating the reservation
+  // and the render on the same `pinned` (not on scrollWin.atBottom, which depends on the very budget we
+  // compute here) keeps them consistent and avoids a circular dependency.
   const chatRegionHeight = Math.max(
     1,
     rows -
@@ -2000,17 +2011,24 @@ export function HarnessApp({
       permPromptHeight -
       busyIndicatorHeight,
   );
+  const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
+  const fsThoughtsRows =
+    fullscreen && pinned && busy && streamingThoughts && showThinkingRef.current ? 5 : 0;
+  const fsHintRows = fullscreen && !pinned ? 1 : 0;
+  const fsStreamTail =
+    fullscreen && pinned && busy && streaming
+      ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
+        tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
+      : "";
+  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
+  const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
   const scrollWin = fullscreen
-    ? getScrollableMessages(messages, chatRegionHeight, scrollOffset, cols)
+    ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols)
     : null;
   if (scrollWin) {
-    maxChatHeightRef.current = chatRegionHeight; // page size for PgUp/PgDn
-    atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content + in-viewport streaming
+    maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
+    atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
   }
-  const fsStreamTail =
-    fullscreen && busy && scrollWin?.atBottom && streaming
-      ? tailToFit(streaming, cols, chatRegionHeight)
-      : "";
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -2086,13 +2104,11 @@ export function HarnessApp({
             // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
             <MessageRow key={i} msg={msg} cols={cols} />
           ))}
-          {busy && scrollWin?.atBottom && streamingThoughts && showThinkingRef.current ? (
+          {pinned && busy && streamingThoughts && showThinkingRef.current ? (
             <StreamingThoughts text={streamingThoughts} />
           ) : null}
-          {busy && scrollWin?.atBottom && fsStreamTail ? (
-            <StreamingReply text={fsStreamTail} />
-          ) : null}
-          {scrollWin && !scrollWin.atBottom ? (
+          {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
+          {scrollWin && !pinned ? (
             <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
           ) : null}
         </Box>

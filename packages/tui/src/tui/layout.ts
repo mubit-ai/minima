@@ -1,19 +1,24 @@
 /**
- * Pure layout math for the small LIVE region of the TUI — no React/Ink, so it is unit-testable in
- * isolation.
+ * Pure layout math for the TUI — no React/Ink, so it is unit-testable in isolation.
  *
- * The finalized transcript is NOT managed here: it renders via Ink's <Static> (see app.tsx /
- * messages.tsx), printed once into the terminal's native scrollback and never re-diffed — so there
- * is no history-windowing or region-clipping math anymore. What remains are the helpers for the
- * parts Ink still re-diffs every frame:
- *   - wrappedLineCount   — input-box height as the typed text wraps
- *   - tailToFit          — the last lines of a streaming reply that fit the live area
- *   - clampToolText      — bound a huge tool result so the (still-diffed) preview can't dwarf the screen
- *   - markdownBodyHeight — rendered rows of a markdown body, mirroring MarkdownRenderer
+ * Two consumers:
+ *   - The INLINE renderer prints the finalized transcript via Ink's <Static> (native scrollback) and
+ *     only re-diffs a small live region; the helpers below size that region.
+ *   - The FULLSCREEN renderer owns an alternate-screen viewport and windows the whole transcript
+ *     itself (getScrollableMessages + computeMsgHeight), because <Static>/native scroll is gone.
+ *
+ * Helpers:
+ *   - wrappedLineCount     — input-box height as the typed text wraps
+ *   - tailToFit            — the last lines of a streaming reply that fit the live area
+ *   - clampToolText        — bound a huge tool result so the preview can't dwarf the screen
+ *   - markdownBodyHeight   — rendered rows of a markdown body, mirroring MarkdownRenderer
+ *   - computeMsgHeight     — rendered rows of one MessageRow (per role), the fullscreen window's ruler
+ *   - getScrollableMessages — bottom-anchored window of the transcript for the fullscreen viewport
  *
  * The cardinal rule for these estimates: they MUST be >= the real rendered rows in messages.tsx (a
- * CONSERVATIVE bias). An under-count would let the live region grow past the space reserved for it
- * and desync Ink's cursor-relative frame diff — the garbled-overlap class of bug this module guards.
+ * CONSERVATIVE bias). An under-count would let content grow past the space reserved for it and desync
+ * Ink's frame diff (inline) or overflow the flex-end viewport (fullscreen) — the garbled-overlap /
+ * decimation class of bug this module guards against.
  */
 
 import stringWidth from "string-width";
@@ -227,16 +232,36 @@ export function getScrollableMessages(
     const end = currentLine + heights[i]!;
     currentLine = end;
     if (end <= startLine || start >= endLine) continue; // entirely outside the window
-    // Trim the parts of a boundary message that fall outside the window so NO rendered message is
-    // taller than the viewport. Stock Ink garbles a single child taller than an overflow:"hidden"
-    // flex-end box (negative offset), but renders cleanly once content fits — so we clip the fold.
-    // Dropping whole TEXT lines (each >= 1 rendered row) is a conservative over-trim that can never
-    // leave the content overflowing.
     const dropTop = Math.max(0, startLine - start);
     const dropBottom = Math.max(0, end - endLine);
-    visible.push(
-      dropTop || dropBottom ? clipMessageRows(messages[i]!, dropTop, dropBottom) : messages[i]!,
-    );
+    if (dropTop === 0 && dropBottom === 0) {
+      visible.push(messages[i]!);
+      continue;
+    }
+    // This message straddles a fold. Clip it to the rows the window actually allots it. Clipping to a
+    // rendered HEIGHT (not a raw source-line count) is essential: MessageRow always re-adds chrome
+    // (marginTop + header + >=1 body row, and a border for thinking), so a naive text-line trim can
+    // still render TALLER than its slot and overflow the viewport — the exact cause of the scroll
+    // garble. clipMessageToHeight returns null when even the chrome floor can't fit; we then drop the
+    // message (a blank sliver at the fold, which justifyContent:"flex-end" handles cleanly).
+    const slot = Math.min(end, endLine) - Math.max(start, startLine);
+    const clipped = clipMessageToHeight(messages[i]!, slot, cols, dropTop, dropBottom);
+    if (clipped) visible.push(clipped);
+  }
+
+  // Belt-and-suspenders: guarantee the rendered stack never exceeds the viewport. The per-message
+  // clip already bounds each child to its disjoint slot (so the sum fits), but any height-parity
+  // drift between computeMsgHeight and MessageRow would otherwise re-introduce the overflow → Ink
+  // decimation. Trim/drop from the top (oldest) until the sum fits. Because computeMsgHeight >= the
+  // real render, `sum <= maxHeight` here implies the actual rendered stack is <= maxHeight too.
+  let sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
+  while (sum > maxHeight && visible.length > 0) {
+    const first = visible[0]!;
+    const firstH = computeMsgHeight(first, cols);
+    const shrunk = clipMessageToHeight(first, firstH - (sum - maxHeight), cols, 1, 0);
+    if (shrunk && computeMsgHeight(shrunk, cols) < firstH) visible[0] = shrunk;
+    else visible.shift();
+    sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
   }
 
   return {
@@ -247,10 +272,43 @@ export function getScrollableMessages(
   };
 }
 
-/** Drop `dropTop` leading and `dropBottom` trailing TEXT lines from a message (fold-clipping). */
-function clipMessageRows(msg: ChatMessage, dropTop: number, dropBottom: number): ChatMessage {
-  let lines = msg.text.split("\n");
-  if (dropTop > 0) lines = lines.slice(dropTop);
-  if (dropBottom > 0) lines = lines.slice(0, Math.max(0, lines.length - dropBottom));
-  return { ...msg, text: lines.join("\n") };
+/**
+ * Clip `msg` so its rendered height (computeMsgHeight — which INCLUDES the chrome MessageRow always
+ * re-adds: marginTop + header + border/padding) is `<= budget` rows, by dropping whole source lines
+ * from the fold end(s): `dropTop > 0` keeps a suffix (top scrolled off), `dropBottom > 0` keeps a
+ * prefix (bottom scrolled off), both keep a middle slice (a single message taller than the whole
+ * viewport). Returns null when even an empty body exceeds `budget` (the role's irreducible chrome
+ * floor won't fit) — the caller then leaves the slot blank, which is correct under
+ * justifyContent:"flex-end" (a small gap at the fold, never an overflow).
+ *
+ * Height is strictly monotone as lines are trimmed (each source line renders >= 1 row and per-line
+ * rows are position-independent), so every loop terminates at or before the empty body.
+ */
+function clipMessageToHeight(
+  msg: ChatMessage,
+  budget: number,
+  cols: number,
+  dropTop: number,
+  dropBottom: number,
+): ChatMessage | null {
+  if (computeMsgHeight({ ...msg, text: "" }, cols) > budget) return null; // chrome floor won't fit
+  const full = computeMsgHeight(msg, cols);
+  const lines = msg.text.split("\n");
+  let lo = 0;
+  let hi = lines.length;
+  const heightOf = () => computeMsgHeight({ ...msg, text: lines.slice(lo, hi).join("\n") }, cols);
+  // Honor the top fold: drop leading lines until the remaining height reflects `dropTop` rows gone.
+  // For a top-fold-only message this trims straight to the budget; for a both-folds message it seats
+  // the top of the middle slice before the bottom trim below.
+  if (dropTop > 0) {
+    const target = full - dropTop;
+    while (lo < hi && heightOf() > target) lo++;
+  }
+  // Honor the bottom fold: drop trailing lines until it fits the budget.
+  if (dropBottom > 0) {
+    while (lo < hi && heightOf() > budget) hi--;
+  }
+  // Final safety against any residual over-count: trim from the top until it fits.
+  while (lo < hi && heightOf() > budget) lo++;
+  return { ...msg, text: lines.slice(lo, hi).join("\n") };
 }
