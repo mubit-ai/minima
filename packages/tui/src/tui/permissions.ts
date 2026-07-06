@@ -82,7 +82,7 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
  * was declined, e.g. "the bash call" or "read access to /repo/src".
  */
 export function denialReason(subject: string): string {
-  return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Other tools remain available; do not retry the identical call.`;
+  return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Do not retry the call and do not attempt the same action through other tools; continue without it or ask the user how to proceed.`;
 }
 
 export type PromptFn = (prompt: PermissionPrompt) => void;

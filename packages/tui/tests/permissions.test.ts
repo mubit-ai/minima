@@ -53,7 +53,7 @@ describe("denialReason (anti-sandbox-spiral copy)", () => {
   test("frames a decline as a user choice, not an environment restriction", () => {
     expect(denialReason("the bash call")).toBe(
       "The user declined the bash call — this is a user choice, not an environment " +
-        "restriction or sandbox limit. Other tools remain available; do not retry the identical call.",
+        "restriction or sandbox limit. Do not retry the call and do not attempt the same action through other tools; continue without it or ask the user how to proceed.",
     );
   });
 
@@ -61,7 +61,7 @@ describe("denialReason (anti-sandbox-spiral copy)", () => {
     const reason = denialReason("read access to /repo/src");
     expect(reason).toContain("The user declined read access to /repo/src");
     expect(reason).toContain("not an environment restriction or sandbox limit");
-    expect(reason).toContain("do not retry the identical call");
+    expect(reason).toContain("do not attempt the same action through other tools");
   });
 });
 
@@ -84,6 +84,6 @@ describe("checkPermission denial reason reaches the block result", () => {
       block: true,
       reason: denialReason("read access to /repo/secrets"),
     });
-    expect(result?.reason).toContain("do not retry the identical call");
+    expect(result?.reason).toContain("do not attempt the same action through other tools");
   });
 });
