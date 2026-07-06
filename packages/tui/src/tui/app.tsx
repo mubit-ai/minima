@@ -25,6 +25,7 @@ import { expandAtFiles } from "../tools/at_mentions.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
+import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
 import { type ChatMessage, Messages } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
@@ -420,6 +421,9 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyState, setBusyState] = useState<"ready" | "thinking" | "working">("ready");
+  // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
+  // "current action" line in the footer; cleared per-tool on tool_execution_end.
+  const [activeActions, setActiveActions] = useState<ActiveAction[]>([]);
   const [actualCost, setActualCost] = useState<number>();
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -686,6 +690,10 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           break;
         case "tool_execution_start":
           setBusyState("working");
+          setActiveActions((a) => reduceActiveActions(a, ev));
+          break;
+        case "tool_execution_end":
+          setActiveActions((a) => reduceActiveActions(a, ev));
           break;
       }
     });
@@ -1661,6 +1669,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     } finally {
       setBusy(false);
       setBusyState("ready");
+      setActiveActions([]);
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
@@ -1697,7 +1706,10 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // the windowed history + live streaming fit the frame. (The region ALSO hard-clips via
   // overflow:"hidden" as a safety net — see the render tree — so an estimate error can never
   // corrupt the terminal, only shave a line at the fold.)
-  const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
+  // StatusBar (2 rows + margin) + keybinding row + quit line (generous); +1 for the live
+  // current-action line while a tool is running, so the chat window shrinks instead of clipping.
+  const currentAction = currentActionLine(activeActions);
+  const footerHeight = 6 + (currentAction ? 1 : 0);
   const suggestionsHeight = matchingCommands.length > 0 ? matchingCommands.length + 2 : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
@@ -1910,6 +1922,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       )}
 
       <Box flexDirection="column" flexShrink={0}>
+        {currentAction ? (
+          <Text color="yellow" wrap="truncate">
+            {currentAction}
+          </Text>
+        ) : null}
         <StatusBar
           model={agent.agentState.model?.id ?? "(none)"}
           basis={basis}

@@ -23,5 +23,9 @@ docs-site/dist/
 docs/PLAN/
 
 # Meta files
-.codaph 
+.codaph
 .claude
+
+# Local-only agent docs (not for the repo)
+/CLAUDE.md
+/src/minima_harness/goals_and_scope.md

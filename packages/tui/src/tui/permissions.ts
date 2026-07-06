@@ -61,7 +61,21 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
   if (toolName === "read" || toolName === "ls") return String(args.path ?? args.file_path ?? ".");
   if (toolName === "write") return String(args.path ?? args.file_path ?? "?");
   if (toolName === "edit") return String(args.filePath ?? args.path ?? "?");
+  if (toolName === "grep" || toolName === "glob") return String(args.pattern ?? "");
   return JSON.stringify(args).slice(0, 120);
+}
+
+/**
+ * One-line label for the live "current action" indicator: tool name + a compact arg
+ * summary (`bash: git diff --stat`). `args` is null when the model named an unknown tool
+ * or its params failed validation — fall back to the bare tool name.
+ */
+export function formatActionLabel(toolName: string, args: unknown): string {
+  if (args && typeof args === "object") {
+    const summary = formatToolArgs(toolName, args as Record<string, unknown>);
+    return summary ? `${toolName}: ${summary}` : toolName;
+  }
+  return toolName;
 }
 
 export type PromptFn = (prompt: PermissionPrompt) => void;
