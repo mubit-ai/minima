@@ -62,7 +62,12 @@ export class NoopHarnessMemory implements HarnessMemory {
 /** Render recalled snippets as a compact, clearly-delimited system-prompt section. */
 export function formatRecallBlock(snippets: string[]): string {
   const lines = snippets.map((s) => `- ${s}`).join("\n");
-  const header = "Lessons and outcomes from earlier work on this project; apply when relevant.";
+  // Framed as passive background, NOT an instruction: recall is keyed by repo (not session), so a
+  // fresh chat inherits these; an imperative "apply when relevant" made the model act on habits
+  // (e.g. run ls) before the user asked for anything. Keep it reference-only.
+  const header =
+    "Background context from earlier work on this project, for reference only. Do NOT run tools or " +
+    "take any action based on this memory unless the user's current request actually calls for it.";
   return `<prior_learnings source="mubit">\n${header}\n${lines}\n</prior_learnings>`;
 }
 

@@ -149,10 +149,14 @@ describe("NoopHarnessMemory + formatRecallBlock", () => {
     await m.endSession();
   });
 
-  test("formatRecallBlock renders a delimited section", () => {
+  test("formatRecallBlock renders a delimited, reference-only section", () => {
     const b = formatRecallBlock(["alpha", "beta"]);
     expect(b).toContain("prior_learnings");
     expect(b).toContain("- alpha");
     expect(b).toContain("- beta");
+    // Framed as passive context, not an instruction — so a fresh chat doesn't act on recalled
+    // habits (e.g. run ls) before the user asks. Regression guard for the "unsolicited ls" bug.
+    expect(b.toLowerCase()).toContain("reference only");
+    expect(b.toLowerCase()).toContain("do not");
   });
 });
