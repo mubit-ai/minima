@@ -690,9 +690,10 @@ export function HarnessApp({
   const [scrollOffset, setScrollOffset] = useState(0);
   const atBottomRef = useRef(true);
   const maxChatHeightRef = useRef(1);
-  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. OFF by default so native click-drag
-  // text selection works; ON captures the wheel for in-app scroll (disabling native selection).
-  const [mouseEnabled, setMouseEnabled] = useState(false);
+  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. ON by default so the wheel/trackpad
+  // scrolls the in-app history like Claude Code; run /mouse to turn it OFF and restore native
+  // click-drag text selection (which mouse capture disables).
+  const [mouseEnabled, setMouseEnabled] = useState(true);
 
   useEffect(() => {
     const handleResize = () => {
@@ -2068,7 +2069,7 @@ export function HarnessApp({
         <Box marginTop={1}>
           <Text color="gray">
             {fullscreen
-              ? "scroll history with PgUp / PgDn · /mouse toggles wheel scroll"
+              ? "scroll history with the wheel / trackpad or PgUp / PgDn · /mouse for text-select"
               : "scroll with your terminal (wheel / trackpad) · select & copy freely"}
           </Text>
         </Box>
