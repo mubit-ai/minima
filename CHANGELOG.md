@@ -4,6 +4,38 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-06
+
+### Added (TUI)
+- **Fullscreen renderer (new default)** — alternate screen buffer with the prompt glued
+  to the bottom row, height-accurate transcript windowing, and in-app history scrolling
+  (mouse wheel / trackpad on by default; PgUp/PgDn always work). Opt out with
+  `--no-fullscreen` or `MINIMA_TUI_INLINE=1` for the classic inline renderer with native
+  terminal scrollback.
+- **Live current-action line** — while a tool runs, the footer shows what the agent is
+  doing right now (e.g. `⚙ bash: git diff --stat`), with `(+N more)` for parallel tools.
+- **New tools**: `question` (ask the user mid-run, never permission-gated),
+  `apply_patch` (multi-file add/update/delete/move), and Exa-backed `web_search` +
+  `web_fetch` (require `EXA_API_KEY`).
+- `--thinking LEVEL` is now actually applied (was parsed but ignored).
+- Busy indicator with rotating tips; thinking states renamed to `reasoning`/`running`.
+
+### Fixed (TUI)
+- **Esc / Ctrl+C abort a running turn** (was dead code behind the busy guard); a second
+  Ctrl+C within 2.5s force-quits even if a provider stream cannot be cancelled.
+- Plan mode (read-only) blocks `apply_patch` alongside write/edit/bash.
+- Live streaming region can never outgrow the viewport: over-budget final lines are
+  hard-sliced (fixes the fullscreen garble class and inline scrollback wipes).
+- `/fork` and `/clone` no longer claim fake success — they say they're not implemented.
+- glob/grep are permission-scoped as directory READS (`read from <dir>`) instead of
+  generic `run glob` prompts.
+
+### Changed (TUI)
+- **Permission denials are reframed for the model** ("the user declined … do not retry
+  the call and do not attempt the same action through other tools") — stops the
+  sandbox-spiral where models retry or work around a deliberate user decline.
+- Memory-recall block is annotated reference-only (do NOT run tools from recall).
+
 ## [0.7.1] - 2026-07-05
 
 ### Changed (API behavior — note for integrators)
