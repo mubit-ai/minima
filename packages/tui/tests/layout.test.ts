@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   type ChatMessage,
+  MAX_TOOL_LINES,
   TURN_CHROME,
+  clampToolText,
   computeMsgHeight,
   getScrollableMessages,
   groupMessagesIntoTurns,
@@ -22,6 +24,35 @@ describe("wrappedLineCount", () => {
   });
   test("floors width at 20 (no divide-by-tiny)", () => {
     expect(wrappedLineCount("x".repeat(40), 5)).toBe(2); // ceil(40/20)
+  });
+  test("counts wide chars (CJK) as 2 display columns, not UTF-16 length", () => {
+    // "你" has String.length 1 but display width 2. 15 chars = 30 cols → 2 rows at width 20
+    // (a naive length-based count would say 1 row and under-reserve → overflow).
+    expect(wrappedLineCount("你".repeat(15), 20)).toBe(2);
+    expect(wrappedLineCount("你".repeat(25), 20)).toBe(3); // 50 cols / 20
+  });
+});
+
+describe("clampToolText — bounds huge tool output", () => {
+  test("short text is unchanged, nothing hidden", () => {
+    const { text, hiddenLines } = clampToolText("a\nb\nc");
+    expect(text).toBe("a\nb\nc");
+    expect(hiddenLines).toBe(0);
+  });
+  test("clips beyond MAX_TOOL_LINES and reports the remainder", () => {
+    const body = Array(MAX_TOOL_LINES + 12)
+      .fill("x")
+      .join("\n");
+    const { text, hiddenLines } = clampToolText(body);
+    expect(text.split("\n").length).toBe(MAX_TOOL_LINES);
+    expect(hiddenLines).toBe(12);
+  });
+  test("computeMsgHeight clamps a huge tool message (header + clip + hint)", () => {
+    const body = Array(MAX_TOOL_LINES + 50)
+      .fill("x")
+      .join("\n");
+    // 1 header + MAX_TOOL_LINES body + 1 "+N more" hint.
+    expect(computeMsgHeight(tool(body), 80)).toBe(1 + MAX_TOOL_LINES + 1);
   });
 });
 
