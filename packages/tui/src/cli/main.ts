@@ -366,6 +366,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  // Apply the --thinking CLI flag to the initial reasoning level. It was parsed but never used;
+  // the agent kept its default, so the flag was a silent no-op.
+  const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  if (THINKING_LEVELS.includes(args.thinking)) {
+    agent.agentState.thinkingLevel = args.thinking as typeof agent.agentState.thinkingLevel;
+  }
+
   // Effort routing Phase A (staged default-off): the server's classified difficulty picks
   // each prompt's thinking level — routing (model, effort), not just model.
   agent.autoEffort = process.env.MINIMA_AUTO_EFFORT === "1";

@@ -126,9 +126,9 @@ const COMMANDS = [
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
   { name: "session", desc: "Show session info" },
-  { name: "tree", desc: "View the session tree" },
-  { name: "fork", desc: "Fork from an entry ID" },
-  { name: "clone", desc: "Clone the current session" },
+  { name: "tree", desc: "Toggle the sub-agent tree panel" },
+  { name: "fork", desc: "Fork a session (not implemented yet)" },
+  { name: "clone", desc: "Clone a session (not implemented yet)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
@@ -1566,7 +1566,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
           },
           {
             role: "tool",
-            text: `Forked session successfully from: ${args || "tip"}`,
+            text: "/fork isn't implemented yet — session branching is planned. For now use /resume to reopen a past session or /new to start fresh.",
             toolName: "fork",
           },
         ]);
@@ -1580,7 +1580,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
           },
           {
             role: "tool",
-            text: "Cloned session successfully.",
+            text: "/clone isn't implemented yet — session copy is planned. For now use /resume to reopen a past session or /new to start fresh.",
             toolName: "clone",
           },
         ]);
