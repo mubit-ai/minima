@@ -17,7 +17,7 @@ export interface ChildRow {
 }
 
 export interface ChildTreeProps {
-  children: Map<string, ChildRow>;
+  nodes: Map<string, ChildRow>;
 }
 
 const STATUS_COLOR: Record<ChildRow["status"], string> = {
@@ -34,15 +34,21 @@ const STATUS_GLYPH: Record<ChildRow["status"], string> = {
   failure: "✗",
 };
 
-export function ChildTree({ children }: ChildTreeProps) {
-  if (children.size === 0) return null;
+export function ChildTree({ nodes }: ChildTreeProps) {
+  if (nodes.size === 0) return null;
 
-  const rows = [...children.values()].sort((a, b) => a.stepId.localeCompare(b.stepId));
+  const rows = [...nodes.values()].sort((a, b) => a.stepId.localeCompare(b.stepId));
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginBottom={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="gray"
+      paddingX={1}
+      marginBottom={1}
+    >
       <Text color="gray" bold>
-        sub-agents ({children.size})
+        sub-agents ({nodes.size})
       </Text>
       {rows.map((row) => {
         const indent = "  ".repeat(row.depth);

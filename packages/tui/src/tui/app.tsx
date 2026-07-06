@@ -10,7 +10,6 @@
 import { Box, Text, useApp, useInput } from "ink";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
-import type { ChildEvent } from "../minima/spawn.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -21,11 +20,13 @@ import { errText } from "../errtext.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import type { ChildEvent } from "../minima/spawn.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { BusyIndicator } from "./busy.tsx";
+import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
@@ -43,7 +44,6 @@ import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
-import { ChildTree, type ChildRow } from "./child_tree.tsx";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -1533,9 +1533,10 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
           },
           {
             role: "tool",
-            text: childrenState.size > 0
-              ? `Sub-agent tree toggled (${childrenState.size} tracked). Use /tree again to collapse.`
-              : "No sub-agents active. The tree panel will appear during multi-step task runs.",
+            text:
+              childrenState.size > 0
+                ? `Sub-agent tree toggled (${childrenState.size} tracked). Use /tree again to collapse.`
+                : "No sub-agents active. The tree panel will appear during multi-step task runs.",
             toolName: "tree",
           },
         ]);
@@ -2168,7 +2169,7 @@ export function HarnessApp({ agent, banner: _banner, askUserRef, childEventRef }
       )}
 
       <Box flexDirection="column" flexShrink={0}>
-        {treeOpen && <ChildTree children={childrenState} />}
+        {treeOpen && <ChildTree nodes={childrenState} />}
         <StatusBar
           model={agent.agentState.model?.id ?? "(none)"}
           basis={basis}
