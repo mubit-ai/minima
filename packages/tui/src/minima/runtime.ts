@@ -152,6 +152,11 @@ export class MinimaAgent extends Agent {
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
+    // The surfaced learning-loop note must reflect THIS turn only. Reset here because
+    // feedbackSafely early-returns without touching the field on turns that send no feedback
+    // (pinned / offline / no-recommendation) — otherwise an earlier rejection would re-display
+    // indefinitely on later pinned turns.
+    this.lastFeedbackError = null;
 
     // Recall-before-route: inject task-relevant prior Mubit context into THIS turn's system
     // prompt (restored in `finally` — no leak across turns). No-op unless memory is wired.
