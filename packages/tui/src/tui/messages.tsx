@@ -60,7 +60,7 @@ export function MarkdownRenderer({ text }: { text: string }) {
   const lines = text.split("\n");
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width="100%">
       {lines.map((line, idx) => {
         const trimmed = line.trim();
 
@@ -139,10 +139,16 @@ export function Messages({
           paddingX={1}
           marginBottom={1}
           width="100%"
+          // Hard guard against horizontal spill: Ink wraps text to the node's width, but only
+          // when string-width judges the line too wide — and it under-counts glyphs like ℹ/⚙/◆
+          // and some emoji, so those lines skip wrapping and render PAST the right border. Clip
+          // horizontally at the border so nothing is ever drawn outside the box; vertical growth
+          // (wrap onto more lines) is unaffected.
+          overflowX="hidden"
         >
           {/* User Section */}
           {turn.user.text ? (
-            <Box flexDirection="column" marginBottom={1}>
+            <Box flexDirection="column" marginBottom={1} width="100%">
               <Text color="green">{"▸ you"}</Text>
               <Text backgroundColor="#2a2a35" color="white">
                 {` ${turn.user.text} `}
@@ -159,6 +165,7 @@ export function Messages({
                   key={sIdx}
                   flexDirection="column"
                   marginY={0}
+                  width="100%"
                 >
                   <Text color={sub.isError ? "red" : "yellow"}>
                     {`  ⚙ ${sub.toolName ?? "tool"}:`}
@@ -179,6 +186,8 @@ export function Messages({
                   paddingLeft={2}
                   borderStyle="single"
                   borderColor="gray"
+                  width="100%"
+                  overflowX="hidden"
                 >
                   <Text color="gray" italic>
                     {`💭 thought for ${sub.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s`}
@@ -197,6 +206,7 @@ export function Messages({
                 flexDirection="column"
                 marginTop={1}
                 marginBottom={1}
+                width="100%"
               >
                 <Text color="magenta">{"◆ assistant"}</Text>
                 <MarkdownRenderer text={sub.text} />
@@ -208,8 +218,15 @@ export function Messages({
 
       {/* Streaming Active Thoughts */}
       {streamingThoughts ? (
-        <Box borderStyle="round" borderColor="cyan" paddingX={1} marginBottom={0} width="100%">
-          <Box flexDirection="column">
+        <Box
+          borderStyle="round"
+          borderColor="cyan"
+          paddingX={1}
+          marginBottom={0}
+          width="100%"
+          overflowX="hidden"
+        >
+          <Box flexDirection="column" width="100%">
             <Text color="cyan">{"💭 thinking..."}</Text>
             <Text color="gray" wrap="truncate">
               {streamingThoughts.slice(-300)}
@@ -220,8 +237,15 @@ export function Messages({
 
       {/* Streaming Active Turn */}
       {streaming ? (
-        <Box borderStyle="round" borderColor="gray" paddingX={1} marginBottom={1} width="100%">
-          <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        <Box
+          borderStyle="round"
+          borderColor="gray"
+          paddingX={1}
+          marginBottom={1}
+          width="100%"
+          overflowX="hidden"
+        >
+          <Box flexDirection="column" marginTop={1} marginBottom={1} width="100%">
             <Text color="magenta">{"◆ assistant"}</Text>
             <MarkdownRenderer text={streaming} />
           </Box>

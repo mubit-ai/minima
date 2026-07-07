@@ -163,7 +163,14 @@ export function CommandPicker({ commands, onPick, onDismiss }: CommandPickerProp
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} borderColor="magenta" width="100%">
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      paddingX={1}
+      borderColor="magenta"
+      width="100%"
+      overflowX="hidden"
+    >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
         <Text color="magenta"> palette </Text>
       </Box>
@@ -201,7 +208,14 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} borderColor="magenta" width="100%">
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      paddingX={1}
+      borderColor="magenta"
+      width="100%"
+      overflowX="hidden"
+    >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
         <Text color="magenta"> sessions </Text>
       </Box>
@@ -244,7 +258,14 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
   });
 
   return (
-    <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column" width="100%">
+    <Box
+      borderStyle="round"
+      borderColor="yellow"
+      paddingX={1}
+      flexDirection="column"
+      width="100%"
+      overflowX="hidden"
+    >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
         <Text color="yellow" bold>
           {" permission "}
@@ -368,7 +389,14 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   const field = allFields[cursor];
 
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} borderColor="cyan" width="100%">
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      paddingX={1}
+      borderColor="cyan"
+      width="100%"
+      overflowX="hidden"
+    >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
         <Text color="cyan" bold>
           {" config "}
