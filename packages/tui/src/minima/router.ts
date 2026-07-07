@@ -181,6 +181,10 @@ export class MinimaRouter {
       cost_quality_tradeoff: opts.slider ?? this.config.costQualityTradeoff,
       constraints: Object.keys(constraints).length ? constraints : undefined,
       namespace: this.config.namespace ?? undefined,
+      // Server memory recall is scoped by user_id — without a stable one the server
+      // surfaces nothing and decision_basis never leaves `prior` (so the run can't recall
+      // its own prior outcomes). Send the stable memory-session id; fall back to namespace.
+      user_id: this.config.memorySession ?? this.config.namespace ?? undefined,
       baseline_model_id: this.config.baselineModelId ?? undefined,
       max_candidates: opts.maxCandidates,
       allow_llm_escalation: opts.allowLlmEscalation,
