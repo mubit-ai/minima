@@ -7,6 +7,7 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  textDelta,
   toolCall,
 } from "../src/ai/index.ts";
 
@@ -200,6 +201,158 @@ describe("Agent + agentLoop", () => {
     const agent = new Agent({ model: reg.getModel(), tools: [echoTool()], maxTurns: 2 });
     await agent.prompt("loop");
     expect(agent.agentState.turnsTaken).toBe(2);
+    reg.unregister();
+  });
+
+  test("abort() during a turn stops the loop before the next turn", async () => {
+    resetAll();
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [toolCall("c1", "abort", {})],
+        stop_reason: "toolUse",
+      }),
+      // This second response must NEVER be consumed once we abort in turn 1.
+      new AssistantMessage({ content: [text("should not run")] }),
+    ]);
+
+    let agent: Agent;
+    const abortTool: AgentTool = {
+      name: "abort",
+      description: "aborts the run",
+      parameters: {
+        jsonSchema: { type: "object", properties: {} },
+        validate: (v) => ({ ok: true, value: (v as Record<string, unknown>) ?? {} }),
+      },
+      async execute() {
+        agent.abort();
+        return { content: [text("aborting")] };
+      },
+    };
+
+    agent = new Agent({ model: reg.getModel(), tools: [abortTool] });
+    await agent.prompt("go");
+
+    // Only the first turn ran; the second queued response was never streamed.
+    expect(agent.agentState.turnsTaken).toBe(1);
+    expect(
+      agent.agentState.messages.some((m) => m.textContent === "should not run"),
+    ).toBe(false);
+    reg.unregister();
+  });
+
+  test("abort() mid-stream stops instantly, without waiting for the next chunk", async () => {
+    resetAll();
+    const reg = registerFauxProvider([FAUX_MODEL]);
+
+    // A stream that yields one delta then hangs forever on the next chunk —
+    // simulates a slow/mid-token generation. If abort weren't raced against the
+    // pending chunk, the loop would block here indefinitely.
+    let returned = false;
+    const hangingStreamFn = () => {
+      let calls = 0;
+      const iter = {
+        async next(): Promise<IteratorResult<unknown>> {
+          calls += 1;
+          if (calls === 1) return { done: false, value: textDelta("hi", 0) };
+          await new Promise<never>(() => {}); // hang until the iterator is torn down
+          return { done: true, value: undefined };
+        },
+        async return(): Promise<IteratorResult<unknown>> {
+          returned = true;
+          return { done: true, value: undefined };
+        },
+      };
+      return {
+        result: async () => new AssistantMessage({ content: [text("unused")] }),
+        [Symbol.asyncIterator]: () => iter,
+      };
+    };
+
+    let agent: Agent;
+    agent = new Agent({ model: reg.getModel(), streamFn: hangingStreamFn });
+    // Abort the moment the first streamed delta lands.
+    agent.subscribe((e) => {
+      if (e.type === "message_update") agent.abort();
+      return undefined;
+    });
+
+    // Resolves promptly (not hanging on the stalled chunk) → proof of instant abort.
+    await agent.prompt("go");
+
+    expect(agent.agentState.errorMessage).toBe("aborted");
+    expect(returned).toBe(true); // provider iterator was torn down (HTTP request killed)
+    expect(agent.agentState.turnsTaken).toBe(1);
+    reg.unregister();
+  });
+
+  test("a prompt after an abort is a fresh turn — the model doesn't answer both", async () => {
+    resetAll();
+    const reg = registerFauxProvider([FAUX_MODEL]);
+
+    let mode: "hang" | "reply" = "hang";
+    const streamFn = () => {
+      if (mode === "reply") {
+        const events = [textDelta("answer-2", 0)];
+        let i = 0;
+        const msg = new AssistantMessage({
+          content: [text("answer-2")],
+          stop_reason: "stop",
+          model: FAUX_MODEL.id,
+        });
+        return {
+          result: async () => msg,
+          [Symbol.asyncIterator]: () => ({
+            async next(): Promise<IteratorResult<unknown>> {
+              if (i < events.length) return { done: false, value: events[i++] };
+              return { done: true, value: undefined };
+            },
+          }),
+        };
+      }
+      // hang mode: yield one delta, then stall until aborted
+      let calls = 0;
+      return {
+        result: async () => new AssistantMessage({ content: [text("unused")] }),
+        [Symbol.asyncIterator]: () => ({
+          async next(): Promise<IteratorResult<unknown>> {
+            calls += 1;
+            if (calls === 1) return { done: false, value: textDelta("partial-1", 0) };
+            await new Promise<never>(() => {});
+            return { done: true, value: undefined };
+          },
+          async return(): Promise<IteratorResult<unknown>> {
+            return { done: true, value: undefined };
+          },
+        }),
+      };
+    };
+
+    let agent: Agent;
+    agent = new Agent({ model: reg.getModel(), streamFn });
+    agent.subscribe((e) => {
+      if (mode === "hang" && e.type === "message_update") agent.abort();
+      return undefined;
+    });
+
+    await agent.prompt("first question"); // aborted mid-stream
+    mode = "reply";
+    await agent.prompt("second question"); // must be answered on its own
+
+    // History is strictly alternating — no two user messages in a row for the
+    // provider to merge into one "answer both" prompt.
+    const roles = agent.agentState.messages.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant", "user", "assistant"]);
+
+    // The aborted turn was committed as its own assistant message, preserving the
+    // partial text plus a marker.
+    const abortedTurn = agent.agentState.messages[1] as AssistantMessage;
+    expect(abortedTurn.stop_reason).toBe("aborted");
+    expect(abortedTurn.textContent).toContain("partial-1");
+    expect(abortedTurn.textContent).toContain("[aborted by user]");
+
+    // The second prompt was answered on its own.
+    expect((agent.agentState.messages[3] as AssistantMessage).textContent).toBe("answer-2");
     reg.unregister();
   });
 

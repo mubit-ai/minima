@@ -48,7 +48,10 @@ const EPHEMERAL = { type: "ephemeral" };
 /** Minimal client shape this provider consumes; the real SDK client satisfies it. */
 export interface AnthropicClientLike {
   messages: {
-    stream(opts: Record<string, unknown>): AsyncIterable<AnthropicStreamEvent>;
+    stream(
+      opts: Record<string, unknown>,
+      requestOptions?: { signal?: AbortSignal },
+    ): AsyncIterable<AnthropicStreamEvent>;
   };
 }
 export interface AnthropicStreamEvent {
@@ -85,7 +88,10 @@ export class AnthropicProvider {
 
     yield startEv(assistant);
     try {
-      const s = client.messages.stream(kwargs);
+      // Forward the abort signal into the SDK so Esc cancels the HTTP request,
+      // not just the local stream consumption.
+      if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const s = client.messages.stream(kwargs, { signal: opts.signal });
       for await (const ev of s) {
         const etype = ev.type;
         if (etype === "message_start") {

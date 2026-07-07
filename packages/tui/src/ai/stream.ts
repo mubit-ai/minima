@@ -42,6 +42,23 @@ export class Stream {
     return { done: false, value: ev };
   }
 
+  /**
+   * Close the stream early (abort). Forwards to the provider iterator's own
+   * `return()` so its generator finally-block runs — tearing down the open HTTP
+   * request even for providers whose SDK doesn't honor the AbortSignal directly.
+   */
+  async return(): Promise<IteratorResult<StreamEvent>> {
+    this.consumed = true;
+    if (typeof this.iter.return === "function") {
+      try {
+        await this.iter.return();
+      } catch {
+        // ignore teardown errors
+      }
+    }
+    return { done: true, value: undefined };
+  }
+
   /** Drain the stream and return the final assistant message (done or error). */
   async result(): Promise<AssistantMessage> {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

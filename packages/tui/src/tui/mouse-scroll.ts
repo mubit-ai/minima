@@ -18,6 +18,48 @@ export function setMouseScrollCallback(fn: ((direction: "up" | "down") => void) 
   scrollCallback = fn;
 }
 
+// Complete SGR mouse sequence: ESC [ < button ; col ; row (M|m).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
+const MOUSE_SEQ = /\[<(\d+);(-?\d+);(-?\d+)([Mm])/g;
+// A trailing fragment worth holding for the next read: ONLY a plausible INCOMPLETE
+// SGR mouse prefix — ESC, ESC[, ESC[<, ESC[<digits;… — still awaiting its M/m
+// terminator. Anything else (a lone control byte like Ctrl+C 0x03 that landed
+// right after a stray ESC, a focus/cursor report, an SS3 arrow) MUST flush
+// through. The old "any ESC tail without a letter" rule trapped 0x03 behind a
+// held-back ESC[ forever, silently swallowing every Ctrl+C after the terminal
+// emitted an escape fragment (e.g. on focus change / suspend-resume).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
+const MOUSE_PREFIX = /^(\[(<[\d;]*)?)?$/;
+
+/**
+ * Pure core of the stdin filter: given the carried-over `buffer` and an `incoming`
+ * chunk, dispatch any complete mouse sequences and return the bytes to emit plus
+ * the fragment to carry forward. Exported for tests — the installer wraps it.
+ */
+export function filterMouseChunk(
+  buffer: string,
+  incoming: string,
+): { emit: string; buffer: string; scrolls: ("up" | "down")[] } {
+  const combined = buffer + incoming;
+  const scrolls: ("up" | "down")[] = [];
+  MOUSE_SEQ.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = MOUSE_SEQ.exec(combined)) !== null) {
+    const button = Number.parseInt(match[1]!, 10);
+    if (button === 64) scrolls.push("up");
+    else if (button === 65) scrolls.push("down");
+  }
+
+  let cleaned = combined.replace(MOUSE_SEQ, "");
+  let carry = "";
+  const escIdx = cleaned.lastIndexOf("");
+  if (escIdx !== -1 && cleaned.length - escIdx < 20 && MOUSE_PREFIX.test(cleaned.slice(escIdx))) {
+    carry = cleaned.slice(escIdx);
+    cleaned = cleaned.slice(0, escIdx);
+  }
+  return { emit: cleaned, buffer: carry, scrolls };
+}
+
 export function installMouseScrollFilter(): void {
   const stdin = process.stdin;
   const realRead = stdin.read.bind(stdin);
@@ -31,42 +73,16 @@ export function installMouseScrollFilter(): void {
       if (chunk === null || chunk === undefined) return null;
 
       const str: string = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      buffer += str;
+      const { emit, buffer: carry, scrolls } = filterMouseChunk(buffer, str);
+      buffer = carry;
+      for (const dir of scrolls) scrollCallback?.(dir);
 
-      // Extract + dispatch SGR mouse sequences: \u001b[<button;col;row M or m
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
-      const re = /\u001b\[<(\d+);(-?\d+);(-?\d+)([Mm])/g;
-      let match: RegExpExecArray | null;
-      while ((match = re.exec(buffer)) !== null) {
-        const button = Number.parseInt(match[1]!, 10);
-        if (button === 64 && scrollCallback) scrollCallback("up");
-        else if (button === 65 && scrollCallback) scrollCallback("down");
+      if (emit.length > 0) {
+        return typeof chunk === "string" ? emit : Buffer.from(emit, "utf8");
       }
 
-      // Strip all complete mouse sequences
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is intentional for SGR mouse
-      let cleaned = buffer.replace(/\u001b\[<(\d+);(-?\d+);(-?\d+)([Mm])/g, "");
-
-      // Hold back a trailing incomplete escape sequence for the next read
-      const escIdx = cleaned.lastIndexOf("\u001b");
-      if (escIdx !== -1 && cleaned.length - escIdx < 20) {
-        const tail = cleaned.slice(escIdx);
-        // If the tail doesn't look like a complete CSI sequence yet, hold it
-        if (!/[A-Za-z]/.test(tail)) {
-          buffer = tail;
-          cleaned = cleaned.slice(0, escIdx);
-        } else {
-          buffer = "";
-        }
-      } else {
-        buffer = "";
-      }
-
-      if (cleaned.length > 0) {
-        return typeof chunk === "string" ? cleaned : Buffer.from(cleaned, "utf8");
-      }
-
-      // All data was mouse — loop and try read() again until real stdin is drained
+      // All data was mouse (or a held-back fragment) — loop and read() again
+      // until real stdin is drained.
     }
   };
 }

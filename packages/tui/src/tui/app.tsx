@@ -422,6 +422,10 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const [busyState, setBusyState] = useState<"ready" | "thinking" | "working">("ready");
   const [actualCost, setActualCost] = useState<number>();
   const [quitArmed, setQuitArmed] = useState(false);
+  // Source of truth for the double-tap check — a ref can't go stale between two
+  // fast Ctrl+C presses the way the `quitArmed` state closure can. The state is
+  // kept only to drive the footer hint.
+  const quitArmedRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mouseEnabled, setMouseEnabled] = useState(true);
@@ -694,7 +698,36 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
+    // Ctrl+C is handled FIRST — before the overlay/busy guards below — so it can
+    // always quit. A second press within 1.5s force-quits even while a run is
+    // in flight or an overlay is open; the first press also aborts any run.
+    if (key.ctrl && input === "c") {
+      if (quitArmedRef.current) {
+        exit();
+        // Hard fallback: if Ink's teardown stalls (raw mode / open handles),
+        // kill the process anyway so Ctrl+C twice ALWAYS exits.
+        setTimeout(() => process.exit(0), 100);
+        return;
+      }
+      if (busy) agent.abort();
+      quitArmedRef.current = true;
+      setQuitArmed(true);
+      setTimeout(() => {
+        quitArmedRef.current = false;
+        setQuitArmed(false);
+      }, 1500);
+      return;
+    }
+
     if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return;
+
+    // Esc aborts the in-flight run — must run BEFORE the busy guard below,
+    // otherwise the guard swallows it exactly when there's a run to abort.
+    if (key.escape && busy) {
+      agent.abort();
+      return;
+    }
+
     if (busy) return; // don't open overlays mid-run
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
@@ -707,21 +740,6 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     if (key.ctrl && input === "r") {
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
-    }
-    if (key.ctrl && input === "c") {
-      if (busy) {
-        agent.abort();
-        return;
-      }
-      if (quitArmed) exit();
-      else {
-        setQuitArmed(true);
-        setTimeout(() => setQuitArmed(false), 1500);
-      }
-      return;
-    }
-    if (key.escape && busy) {
-      agent.abort();
     }
     // Scrolling: PageUp/PageDown, Home/End
     const chatHeight = rows - 6;
@@ -1618,7 +1636,13 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     try {
       const expanded = expandAtFiles(text, process.cwd());
       const routing = await agent.promptRouted(expanded);
-      if (routing) {
+      if (agent.lastAborted) {
+        // Esc during routing — nothing ran. Say so plainly instead of a routed/offline note.
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: "⏹ aborted during routing", toolName: "routing", isError: false },
+        ]);
+      } else if (routing) {
         setBasis(routing.decisionBasis || "minima");
         // Recommend-path warnings are all benign/informational (routing succeeded or degraded
         // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.

@@ -475,7 +475,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
-  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }));
+  // exitOnCtrlC:false — the app owns Ctrl+C (double-tap to quit); Ink's built-in
+  // single-press exit would otherwise race and pre-empt the double-tap contract.
+  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }), {
+    exitOnCtrlC: false,
+  });
   await instance.waitUntilExit();
 
   // Exit alternate screen + restore cursor on shutdown.

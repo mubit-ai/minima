@@ -116,8 +116,11 @@ class FauxProvider implements Provider {
   async *stream(
     model: Model,
     _context: Context,
-    _opts?: { options?: Record<string, unknown>; signal?: AbortSignal },
+    opts?: { options?: Record<string, unknown>; signal?: AbortSignal },
   ): AsyncIterable<StreamEvent> {
+    // Honor a pre-aborted signal like the real providers, so abort behaviour is
+    // exercisable in hermetic tests.
+    if (opts?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     this.state.callCount += 1;
     const queued = this.state.responses.shift();
     if (!queued) {
