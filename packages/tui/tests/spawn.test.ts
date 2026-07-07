@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -156,6 +156,120 @@ describe("createSpawn (default child factory)", () => {
     rmSync(wd, { recursive: true, force: true });
   });
 
+  test("isolation=workdir creates a git worktree and cleans it up on exit", async () => {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("worktree child done")] })]);
+
+    // Set up a minimal git repo so git worktree add has somewhere to attach.
+    const repoDir = mkdtempSync(join(tmpdir(), "minima-wt-repo-"));
+    Bun.spawnSync(["git", "init", repoDir]);
+    Bun.spawnSync(["git", "-C", repoDir, "config", "user.email", "test@test.local"]);
+    Bun.spawnSync(["git", "-C", repoDir, "config", "user.name", "Test"]);
+    Bun.spawnSync(["git", "-C", repoDir, "commit", "--allow-empty", "-m", "init"]);
+
+    const worktreesBefore = Bun.spawnSync(["git", "worktree", "list"], { cwd: repoDir })
+      .stdout.toString()
+      .trim()
+      .split("\n").length;
+
+    const lead = leadAgent(null, null);
+    const spawn = createSpawn({ parent: lead, workdir: repoDir });
+    const result = await spawn(
+      {
+        step_id: "wt-step",
+        objective: "do something",
+        output_format: "one line",
+        boundaries: "read-only",
+        isolation: "workdir",
+      },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+
+    // result.workdir should have been the worktree path (cleanup happened in finally).
+    expect(result.workdir).toMatch(/minima-wt-wt-step/);
+    expect(result.outcome).toBe("success");
+    expect(result.text).toContain("worktree child done");
+
+    // Verify worktree was removed — git worktree list should be back to baseline.
+    const worktreesAfter = Bun.spawnSync(["git", "worktree", "list"], { cwd: repoDir })
+      .stdout.toString()
+      .trim()
+      .split("\n").length;
+    expect(worktreesAfter).toBe(worktreesBefore);
+
+    reg.unregister();
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  test("isolation=workdir emits dirty-tree warning when repo has uncommitted changes", async () => {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("ok")] })]);
+
+    const repoDir = mkdtempSync(join(tmpdir(), "minima-wt-dirty-"));
+    Bun.spawnSync(["git", "init", repoDir]);
+    Bun.spawnSync(["git", "-C", repoDir, "config", "user.email", "test@test.local"]);
+    Bun.spawnSync(["git", "-C", repoDir, "config", "user.name", "Test"]);
+    Bun.spawnSync(["git", "-C", repoDir, "commit", "--allow-empty", "-m", "init"]);
+
+    // Leave an uncommitted file to trigger the dirty-tree warning.
+    writeFileSync(join(repoDir, "dirty.txt"), "unstaged");
+
+    const lead = leadAgent(null, null);
+    const spawn = createSpawn({ parent: lead, workdir: repoDir });
+    const result = await spawn(
+      {
+        step_id: "dirty-step",
+        objective: "check warning",
+        output_format: "one line",
+        boundaries: "read-only",
+        isolation: "workdir",
+      },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+
+    expect(result.text).toContain("uncommitted changes");
+
+    reg.unregister();
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  test("isolation=inherit skips worktree creation and uses parent workdir", async () => {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("inherit child")] })]);
+
+    const wd = mkdtempSync(join(tmpdir(), "minima-inherit-"));
+    const lead = leadAgent(null, null);
+    const spawn = createSpawn({ parent: lead, workdir: wd });
+    const result = await spawn(
+      {
+        step_id: "inh-step",
+        objective: "do work",
+        output_format: "one line",
+        boundaries: "read-only",
+        isolation: "inherit",
+      },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+
+    expect(result.workdir).toBe(wd);
+    expect(result.text).toContain("inherit child");
+
+    reg.unregister();
+    rmSync(wd, { recursive: true, force: true });
+  });
+
   test("delegationPrompt carries the contract + dependency results", () => {
     const p = delegationPrompt(
       {
@@ -185,5 +299,53 @@ describe("createSpawn (default child factory)", () => {
     expect(p).toContain("Return exactly");
     expect(p).toContain("do NOT touch");
     expect(p).toContain("A RESULT");
+  });
+
+  test("delegationPrompt restates ops rules and the BLOCKED refusal convention", () => {
+    // Children don't inherit the lead's system prompt — a live bench showed a child
+    // editing a file without any verification step. The contract must carry the rules.
+    const p = delegationPrompt(
+      { step_id: "x", objective: "o", output_format: "f", boundaries: "b" },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+    expect(p).toContain("## Rules");
+    expect(p).toContain("Read a file before editing");
+    expect(p).toContain("verify");
+    expect(p).toContain('"BLOCKED: "');
+    expect(p).toContain("Boundaries override the objective");
+  });
+
+  test("a BLOCKED: reply maps to outcome=partial, not success", async () => {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("BLOCKED: objective requires editing config.py, which boundaries forbid")],
+      }),
+    ]);
+
+    const wd = mkdtempSync(join(tmpdir(), "minima-blocked-"));
+    const lead = leadAgent(null, null);
+    const spawn = createSpawn({ parent: lead, workdir: wd });
+    const result = await spawn(
+      {
+        step_id: "blocked-step",
+        objective: "edit config.py",
+        output_format: "one line",
+        boundaries: "do not touch config.py",
+      },
+      { depth: 1, parentSignal: null, priorResults: [] },
+    );
+
+    // A correct refusal is not an accomplishment: the parent must be able to tell
+    // "did it" from "couldn't do it" without a judge.
+    expect(result.outcome).toBe("partial");
+    expect(result.text).toContain("BLOCKED:");
+
+    reg.unregister();
+    rmSync(wd, { recursive: true, force: true });
   });
 });

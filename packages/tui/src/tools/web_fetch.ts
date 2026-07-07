@@ -1,115 +1,80 @@
+/**
+ * web_fetch — fetch a single URL's main readable text.
+ * Port of minima_harness/tools/web_fetch.py.
+ *
+ * Uses Exa's /contents extraction when `EXA_API_KEY` is set, falling back to a keyless
+ * raw fetch + HTML→text strip when the key is absent or the Exa call fails (see
+ * _search.ts). The fallback's extraction is coarser than Exa's readability.
+ */
+
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
+import { WebSearchError, fetchWeb } from "./_search.ts";
 import { objectSchema } from "./schema.ts";
 
-const MAX_CHARS = 5000;
-const TIMEOUT_MS = 15_000;
+const DEFAULT_MAX_CHARS = 8000;
+const MIN_MAX_CHARS = 500;
+const MAX_MAX_CHARS = 50_000;
 
 const parameters = objectSchema(
   {
-    url: { type: "string", description: "URL to fetch." },
+    url: { type: "string", description: "The URL to fetch and read." },
     max_chars: {
       type: "integer",
-      description: "Maximum characters to return.",
-      default: MAX_CHARS,
+      description:
+        "Maximum characters of page text to return (output is truncated past this). 500–50000.",
+      default: DEFAULT_MAX_CHARS,
     },
   },
   ["url"],
 );
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<svg[\s\S]*?<\/svg>/gi, "")
-    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
-    .replace(/<header[\s\S]*?<\/header>/gi, "")
-    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<\/h[1-6]>/gi, "\n\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-}
-
 async function execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
   const url = String(params.url ?? "");
-  const maxChars = (params.max_chars as number) ?? MAX_CHARS;
+  const maxChars = Math.max(
+    MIN_MAX_CHARS,
+    Math.min(MAX_MAX_CHARS, (params.max_chars as number) ?? DEFAULT_MAX_CHARS),
+  );
 
-  if (!url || !url.startsWith("http")) {
-    return errorResult(`web_fetch: invalid URL: ${url}`);
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
+  let data: Awaited<ReturnType<typeof fetchWeb>>;
   try {
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "user-agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        accept: "text/html,application/xhtml+xml,application/json,text/plain,*/*",
-      },
-      redirect: "follow",
-    });
-
-    if (!resp.ok) {
-      return errorResult(`web_fetch: HTTP ${resp.status} ${resp.statusText}`);
-    }
-
-    const contentType = resp.headers.get("content-type") ?? "";
-    const raw = await resp.text();
-
-    let clean: string;
-    if (contentType.includes("application/json")) {
-      clean = raw;
-    } else if (contentType.includes("text/plain")) {
-      clean = raw;
-    } else {
-      clean = stripHtml(raw);
-    }
-
-    if (clean.length > maxChars) {
-      clean = `${clean.slice(0, maxChars)}\n\n…(truncated, ${clean.length - maxChars} more chars)`;
-    }
-
-    if (!clean.trim()) {
-      return errorResult("web_fetch: empty response after processing");
-    }
-
-    return {
-      content: [text(`URL: ${url}\nStatus: ${resp.status}\n\n${clean}`)],
-      details: { url, status: resp.status, chars: clean.length },
-    };
+    data = await fetchWeb(url, maxChars);
   } catch (exc) {
-    if (controller.signal.aborted) {
-      return errorResult(`web_fetch: timed out after ${TIMEOUT_MS}ms`);
-    }
-    return errorResult(`web_fetch: ${String(exc)}`);
-  } finally {
-    clearTimeout(timer);
+    if (exc instanceof WebSearchError) return errorResult(`web_fetch failed: ${exc.message}`);
+    throw exc;
   }
+
+  if (!data.results.length) {
+    return errorResult(`web_fetch: no content returned for ${url}`);
+  }
+
+  const r = data.results[0]!;
+  let body = (r.text ?? "").trim();
+  if (!body) {
+    return errorResult(`web_fetch: page had no extractable text (${url})`);
+  }
+
+  let suffix = "";
+  if (body.length > maxChars) {
+    const extra = body.length - maxChars;
+    body = body.slice(0, maxChars);
+    suffix = `\n\n[truncated — ${extra} more chars]`;
+  }
+
+  const header = r.title ? `# ${r.title}\n${url}\n\n` : `${url}\n\n`;
+  return {
+    content: [text(header + body + suffix)],
+    details: { url, chars: body.length, truncated: Boolean(suffix) },
+  };
 }
 
 export function webFetchTool(): AgentTool {
   return {
     name: "web_fetch",
     description:
-      "Fetch a URL and return clean text. Strips HTML to readable content. " +
-      "Use for reading docs, API references, GitHub files, MDN, Stack Overflow. " +
-      "Not a search engine — you must provide the URL. Max 5000 chars.",
+      "Fetch a single URL and return its main readable text (not raw HTML). " +
+      "Use after web_search to read a result, or on any URL you already have. " +
+      "Long pages are truncated; raise max_chars if you need more.",
     parameters,
     execute,
   };

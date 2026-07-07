@@ -1,0 +1,40 @@
+diff --git a/tests/js/chunk/hidden.test.js b/tests/js/chunk/hidden.test.js
+new file mode 100644
+index 0000000..d960e8e
+--- /dev/null
++++ b/tests/js/chunk/hidden.test.js
+@@ -0,0 +1,34 @@
++import { expect, test } from "bun:test";
++import { chunk } from "../../../js/chunk.js";
++
++test("short final chunk without pad", () => {
++  expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
++});
++
++test("final chunk padded when pad provided", () => {
++  expect(chunk([1, 2, 3, 4, 5], 2, 0)).toEqual([[1, 2], [3, 4], [5, 0]]);
++});
++
++test("null counts as a pad value", () => {
++  expect(chunk([1, 2, 3], 5, null)).toEqual([[1, 2, 3, null, null]]);
++});
++
++test("exact multiple never padded", () => {
++  expect(chunk([1, 2, 3, 4], 2, 9)).toEqual([[1, 2], [3, 4]]);
++});
++
++test("empty input yields empty output", () => {
++  expect(chunk([], 3)).toEqual([]);
++  expect(chunk([], 3, 0)).toEqual([]);
++});
++
++test("input is not modified", () => {
++  const data = [1, 2, 3];
++  chunk(data, 2, 0);
++  expect(data).toEqual([1, 2, 3]);
++});
++
++test("bad size throws RangeError", () => {
++  expect(() => chunk([1], 0)).toThrow(RangeError);
++  expect(() => chunk([1], 2.5)).toThrow(RangeError);
++});

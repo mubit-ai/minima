@@ -1,0 +1,12 @@
+{
+  "id": "ka-005",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement isBalanced(source) in ts/brackets.ts. Return true when every bracket among (), [], {} and <> is matched and closed in proper LIFO order; all other characters are ignored. Quote-awareness twist: a double quote opens a string literal running to the next unescaped double quote, and everything inside it — brackets included — must be skipped; inside a literal a backslash escapes the following character. If a literal is still open when the input ends, return false. The empty string is balanced. Verify with bun test tests/ts/brackets.",
+  "test_cmd": "bun test tests/ts/brackets",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 19,
+  "timeout_sec": 60
+}

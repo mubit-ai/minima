@@ -1,0 +1,36 @@
+diff --git a/tests/hidden_jl005.test.ts b/tests/hidden_jl005.test.ts
+new file mode 100644
+index 0000000..131d215
+--- /dev/null
++++ b/tests/hidden_jl005.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, test } from "bun:test";
++import { histogram, type HistogramOptions } from "../src/stats.ts";
++
++describe("histogram with explicit edges", () => {
++  test("bins values into [edges[i], edges[i+1]) with an inclusive final edge", () => {
++    const options: HistogramOptions = { edges: [0, 5, 10] };
++    expect(histogram([1, 2, 3, 10], options)).toEqual([
++      { x0: 0, x1: 5, count: 3 },
++      { x0: 5, x1: 10, count: 1 },
++    ]);
++  });
++
++  test("drops values outside the edge range", () => {
++    const options: HistogramOptions = { edges: [0, 5, 10] };
++    expect(histogram([-1, 0, 4.9, 5, 11], options)).toEqual([
++      { x0: 0, x1: 5, count: 2 },
++      { x0: 5, x1: 10, count: 1 },
++    ]);
++  });
++
++  test("edges take precedence over bins", () => {
++    const options: HistogramOptions = { bins: 3, edges: [0, 10] };
++    expect(histogram([1, 9], options)).toEqual([{ x0: 0, x1: 10, count: 2 }]);
++  });
++
++  test("rejects fewer than two edges or non-increasing edges", () => {
++    expect(() => histogram([1], { edges: [0] } as HistogramOptions)).toThrow(RangeError);
++    expect(() => histogram([1], { edges: [0, 5, 5] } as HistogramOptions)).toThrow(RangeError);
++  });
++});

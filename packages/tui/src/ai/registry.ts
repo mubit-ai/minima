@@ -1,6 +1,6 @@
 /**
  * Harness model registry — the calling-side catalogue (distinct from Minima's routing
- * catalogue). A lean port of minima_harness/ai/registry.py: providers/the runtime seed
+ * catalogue). A lean port of the Python harness's ai/registry.py: providers/the runtime seed
  * callable models here; the Minima integration layer (mapping.ts) resolves Minima's
  * ranked pick to a registered model.
  */

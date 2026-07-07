@@ -1,7 +1,7 @@
 /**
  * Google Generative AI (Gemini) provider via @google/genai.
  *
- * Port of minima_harness/ai/providers/google.py. Iterates generateContentStream chunks,
+ * Port of the Python harness's ai/providers/google.py. Iterates generateContentStream chunks,
  * mapping incremental text/thought/function-call parts onto PI's event taxonomy. Gemini
  * does not stream function-call arguments incrementally, so a full toolcall_end is emitted
  * when a function_call part arrives (matches PI's documented behaviour). Accepts an
@@ -103,6 +103,9 @@ export class GoogleProvider {
       // in-flight generation (the @google/genai SDK reads it as `abortSignal`).
       if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const contents = toContents(context);
+      // NOTE: @google/genai 0.3.x exposes no abortSignal on generateContentStream, so opts.signal
+      // cannot cancel an in-flight Gemini stream here (unlike the Anthropic/OpenAI providers).
+      // Abort still stops the multi-turn loop between turns; mid-stream cancellation needs an SDK bump.
       const stream = await client.models.generateContentStream({
         model: model.id,
         contents,
@@ -292,6 +295,11 @@ function convertSchema(node: Record<string, unknown>): Record<string, unknown> {
       }
     }
     out.properties = props;
+  }
+  // Array element schema. Gemini REQUIRES `items` for an ARRAY type — omitting it makes the
+  // API reject the whole request with a 400 "exception parsing response", so recurse into it.
+  if (node.items && typeof node.items === "object") {
+    out.items = convertSchema(node.items as Record<string, unknown>);
   }
   return out;
 }

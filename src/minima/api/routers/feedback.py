@@ -214,13 +214,19 @@ def _reconcile_decision(
     """Fill the decision-log row's realized columns (best-effort analytics)."""
     if tenant.decision_log is None:
         return
+    # When the harness explicitly says this turn was not judged (cadence-skip or
+    # LLM-judge abstain), record NULL quality in the analytics store — never
+    # substitute a label-based default (e.g. 0.9 for success), as that fabricated
+    # value corrupts calibration metrics and OPE weighting.
+    # Backwards-compat: judged=None (old clients) keeps the quality_from_outcome path.
+    reconciled_quality: float | None = None if req.judged is False else quality
     try:
         tenant.decision_log.reconcile(
             req.recommendation_id,
             Reconciliation(
                 model_id=req.chosen_model_id,
                 outcome=req.outcome.value,
-                quality=quality,
+                quality=reconciled_quality,
                 cost_usd=req.actual_cost_usd,
                 latency_ms=req.latency_ms,
                 ts=time.time(),

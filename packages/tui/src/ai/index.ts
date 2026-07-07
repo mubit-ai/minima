@@ -1,5 +1,5 @@
 /**
- * AI layer — port of minima_harness/ai/ (types, streaming, provider registry).
+ * AI layer — port of the Python harness's ai/ (types, streaming, provider registry).
  */
 
 export * from "./types.ts";

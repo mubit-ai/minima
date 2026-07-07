@@ -1,63 +1,52 @@
 import { describe, expect, test } from "bun:test";
-import { filterMouseChunk } from "../src/tui/mouse-scroll.ts";
+import { processMouseChunk } from "../src/tui/mouse-scroll.ts";
 
-const ESC = "\x1b";
-const ETX = "\x03"; // Ctrl+C
+const ESC = String.fromCharCode(27);
 
-describe("filterMouseChunk", () => {
-  test("passes a bare Ctrl+C straight through", () => {
-    const r = filterMouseChunk("", ETX);
-    expect(r.emit).toBe(ETX);
+describe("processMouseChunk", () => {
+  test("a lone ESC passes through (regression: Esc key was buffered forever, breaking abort)", () => {
+    const r = processMouseChunk("", ESC);
+    expect(r.output).toBe(ESC); // emitted to Ink, NOT held
     expect(r.buffer).toBe("");
     expect(r.scrolls).toEqual([]);
   });
 
-  test("REGRESSION: Ctrl+C after a held-back ESC[ fragment is never swallowed", () => {
-    // Terminal emits a stray CSI intro (e.g. a focus/cursor fragment on resume)...
-    const first = filterMouseChunk("", `${ESC}[`);
-    expect(first.emit).toBe(""); // held back as a possible mouse prefix
-    expect(first.buffer).toBe(`${ESC}[`);
-
-    // ...then the user hits Ctrl+C. It MUST flush, not get trapped behind the ESC[.
-    const second = filterMouseChunk(first.buffer, ETX);
-    expect(second.emit).toContain(ETX);
-    expect(second.buffer).toBe(""); // nothing left stuck in the buffer
-  });
-
-  test("dispatches a complete scroll-up sequence and emits nothing", () => {
-    const r = filterMouseChunk("", `${ESC}[<64;10;20M`);
-    expect(r.scrolls).toEqual(["up"]);
-    expect(r.emit).toBe("");
-  });
-
-  test("dispatches scroll-down", () => {
-    expect(filterMouseChunk("", `${ESC}[<65;1;1M`).scrolls).toEqual(["down"]);
-  });
-
-  test("reassembles a mouse sequence split across two reads", () => {
-    const a = filterMouseChunk("", `${ESC}[<64;10`);
-    expect(a.emit).toBe(""); // incomplete prefix held
-    expect(a.buffer).toBe(`${ESC}[<64;10`);
-    const b = filterMouseChunk(a.buffer, ";20M");
-    expect(b.scrolls).toEqual(["up"]);
-    expect(b.emit).toBe("");
-  });
-
-  test("ordinary keystrokes pass through untouched", () => {
-    const r = filterMouseChunk("", "hello");
-    expect(r.emit).toBe("hello");
+  test("a full arrow-key sequence passes through untouched", () => {
+    const r = processMouseChunk("", `${ESC}[A`);
+    expect(r.output).toBe(`${ESC}[A`);
     expect(r.buffer).toBe("");
   });
 
-  test("an SS3 arrow (ESC O A) is not trapped", () => {
-    const r = filterMouseChunk("", `${ESC}OA`);
-    expect(r.emit).toBe(`${ESC}OA`);
-    expect(r.buffer).toBe("");
+  test("strips a wheel-up SGR mouse report and emits a scroll", () => {
+    const r = processMouseChunk("", `${ESC}[<64;10;20M`);
+    expect(r.scrolls).toEqual(["up"]);
+    expect(r.output).toBe("");
   });
 
-  test("Ctrl+C mixed with a real scroll: scroll dispatched, Ctrl+C emitted", () => {
-    const r = filterMouseChunk("", `${ESC}[<64;5;5M${ETX}`);
+  test("wheel-down maps to a down scroll", () => {
+    const r = processMouseChunk("", `${ESC}[<65;1;1M`);
+    expect(r.scrolls).toEqual(["down"]);
+  });
+
+  test("mouse sequence mixed with real input keeps the real bytes", () => {
+    const r = processMouseChunk("", `a${ESC}[<64;1;1Mb`);
     expect(r.scrolls).toEqual(["up"]);
-    expect(r.emit).toBe(ETX);
+    expect(r.output).toBe("ab");
+  });
+
+  test("holds an incomplete CSI tail, completes it on the next chunk", () => {
+    const first = processMouseChunk("", `${ESC}[<64;10`);
+    expect(first.output).toBe(""); // nothing emitted yet
+    expect(first.buffer).toBe(`${ESC}[<64;10`); // held
+    const second = processMouseChunk(first.buffer, ";20M");
+    expect(second.scrolls).toEqual(["up"]);
+    expect(second.output).toBe("");
+  });
+
+  test("ESC followed by a printable is not treated as an incomplete CSI", () => {
+    // "ESC a" — no "[" after ESC, so it must not be held; both bytes pass through.
+    const r = processMouseChunk("", `${ESC}a`);
+    expect(r.buffer).toBe("");
+    expect(r.output).toBe(`${ESC}a`);
   });
 });

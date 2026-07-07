@@ -1,0 +1,15 @@
+diff --git a/ts/slug.ts b/ts/slug.ts
+index 29deb0e..4b78fe8 100644
+--- a/ts/slug.ts
++++ b/ts/slug.ts
+@@ -19,5 +19,9 @@
+  *   - A title with no alphanumerics at all yields `""`.
+  */
+ export function slugify(title: string): string {
+-  throw new Error("kata: implement slugify");
++  return title
++    .replace(/['\u2019]/g, "")
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, "-")
++    .replace(/^-+|-+$/g, "");
+ }

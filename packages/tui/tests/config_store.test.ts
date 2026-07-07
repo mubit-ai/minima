@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   backendName,
+  fieldFor,
   get,
   hydrateEnv,
   location,
@@ -85,5 +86,21 @@ describe("config_store (file backend)", () => {
   test("backendName reports file when no native keychain is available", async () => {
     freshDir();
     expect(await backendName()).toMatch(/file|keychain/);
+  });
+
+  test("EXA_API_KEY is a first-class secret credential that round-trips and hydrates", async () => {
+    freshDir();
+    const field = fieldFor("EXA_API_KEY");
+    expect(field).toBeDefined();
+    expect(field?.secret).toBe(true);
+    expect(field?.optional).toBe(true);
+
+    await setValue("EXA_API_KEY", "exa-secret");
+    expect(await get("EXA_API_KEY")).toBe("exa-secret");
+
+    delete process.env.EXA_API_KEY;
+    await hydrateEnv();
+    expect(process.env.EXA_API_KEY).toBe("exa-secret");
+    delete process.env.EXA_API_KEY;
   });
 });

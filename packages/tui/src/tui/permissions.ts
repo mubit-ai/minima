@@ -17,7 +17,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { expand } from "../tools/_io.ts";
 
-const READ_TOOLS = new Set(["read", "ls"]);
+// Read-only tools: gated by a first-use, directory-scoped prompt (see checkPermission). glob/grep
+// scan the filesystem read-only just like read/ls, so they belong here (and the PermissionOverlay
+// already labels them "READ").
+const READ_TOOLS = new Set(["read", "ls", "glob", "grep"]);
+// Tools that never need approval: pure UI interaction with zero side effects. Asking the user a
+// question is not an action to gate — it *is* the user interaction.
+const NO_PROMPT_TOOLS = new Set(["question"]);
 
 export type PermissionDecision = "allow" | "always" | "deny";
 
@@ -59,6 +65,10 @@ function isWithin(filePath: string, dir: string): boolean {
 export function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
   if (toolName === "bash") return String(args.command ?? "");
   if (toolName === "read" || toolName === "ls") return String(args.path ?? args.file_path ?? ".");
+  if (toolName === "glob" || toolName === "grep") {
+    const p = String(args.path ?? ".");
+    return `${String(args.pattern ?? "")}${p && p !== "." ? ` in ${p}` : ""}`;
+  }
   if (toolName === "write") return String(args.path ?? args.file_path ?? "?");
   if (toolName === "edit") return String(args.filePath ?? args.path ?? "?");
   return JSON.stringify(args).slice(0, 120);
@@ -72,7 +82,20 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
  * was declined, e.g. "the bash call" or "read access to /repo/src".
  */
 export function denialReason(subject: string): string {
-  return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Other tools remain available; do not retry the identical call.`;
+  return `The user declined ${subject} — this is a user choice, not an environment restriction or sandbox limit. Do not retry the call and do not attempt the same action through other tools; continue without it or ask the user how to proceed.`;
+}
+
+/**
+ * One-line label for the live "current action" indicator: tool name + a compact arg
+ * summary (`bash: git diff --stat`). `args` is null when the model named an unknown tool
+ * or its params failed validation — fall back to the bare tool name.
+ */
+export function formatActionLabel(toolName: string, args: unknown): string {
+  if (args && typeof args === "object") {
+    const summary = formatToolArgs(toolName, args as Record<string, unknown>);
+    return summary ? `${toolName}: ${summary}` : toolName;
+  }
+  return toolName;
 }
 
 export type PromptFn = (prompt: PermissionPrompt) => void;
@@ -83,10 +106,13 @@ export function checkPermission(
   state: PermissionState,
   promptFn: PromptFn,
 ): Promise<{ block: boolean; reason: string } | null> {
+  // Zero-side-effect UI tools (e.g. question): never prompt.
+  if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
+
   // Tool globally allowed (write/edit/bash with "always")
   if (state.allowAlways.has(toolName)) return Promise.resolve(null);
 
-  // For read/ls: check directory-level access
+  // For read-only tools (read/ls/glob/grep): check directory-level access
   if (READ_TOOLS.has(toolName)) {
     const rawPath = extractPath(args);
     if (!rawPath) return Promise.resolve(null);
@@ -97,9 +123,9 @@ export function checkPermission(
       if (isWithin(fullPath, dir)) return Promise.resolve(null);
     }
 
-    // Determine the directory to ask about (the target dir itself for ls,
-    // or the file's parent dir for read)
-    const targetDir = toolName === "ls" ? fullPath : dirname(fullPath);
+    // Determine the directory to ask about: `read` targets a file, so ask about its parent dir;
+    // ls/glob/grep target a directory (their `path` arg), so ask about it directly.
+    const targetDir = toolName === "read" ? dirname(fullPath) : fullPath;
 
     return new Promise((resolve) => {
       promptFn({

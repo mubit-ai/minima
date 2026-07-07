@@ -35,7 +35,7 @@ function resetAll() {
   resetModelRegistry();
 }
 
-function mockService() {
+function mockService(feedbackResponse: Record<string, unknown> = { accepted: true }) {
   const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
     const u = new URL(url);
     const method = init?.method ?? "GET";
@@ -61,15 +61,18 @@ function mockService() {
       };
     }
     if (method === "POST" && u.pathname === "/v1/feedback") {
-      return { status: 200, json: async () => ({ accepted: true }) };
+      return { status: 200, json: async () => feedbackResponse };
     }
     return { status: 404, json: async () => ({ detail: "nf" }) };
   };
   return fetchLike;
 }
 
-function buildAgent() {
-  const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: mockService() });
+function buildAgent(feedbackResponse?: Record<string, unknown>) {
+  const client = new MinimaClient({
+    baseUrl: "http://svc.local",
+    fetch: mockService(feedbackResponse),
+  });
   const config = harnessConfig({
     candidates: ["test-faux"],
     minimaApiKey: "k",
@@ -146,6 +149,49 @@ describe("runJson", () => {
     expect(types[0]).toBe("start");
     expect(types).toContain("text_delta");
     expect(types[types.length - 1]).toBe("done");
+    expect(types).not.toContain("feedback_error"); // accepted feedback → no rejection line
+    reg.unregister();
+  });
+
+  test("an accepted=false feedback emits a feedback_error line (not run failure)", async () => {
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("hello")] })]);
+
+    const agent = buildAgent({ accepted: false, warnings: ["memory_write_failed"] });
+    const { out, code } = await captureStdout(() => runJson(agent, "say hello"));
+    expect(code).toBe(0); // the turn succeeded; only the learning write-back was rejected
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const fb = lines.find((l) => l.type === "feedback_error");
+    expect(fb).toBeDefined();
+    expect(String(fb?.message)).toContain("memory_write_failed");
+    reg.unregister();
+  });
+});
+
+describe("lastFeedbackError is per-turn (no stale learning-loop note)", () => {
+  test("an earlier turn's rejection does not persist onto a later pinned turn", async () => {
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("one")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("two")], stop_reason: "stop" }),
+    ]);
+    const agent = buildAgent({ accepted: false, warnings: ["memory_write_failed"] });
+
+    // Turn 1: routed with a recommendation → feedback is sent and rejected → error surfaces.
+    await agent.promptRouted("first");
+    expect(agent.lastFeedbackError).not.toBeNull();
+
+    // Turn 2: pinned → no recommendation, so feedbackSafely early-returns and sends nothing.
+    // The stale rejection from turn 1 must NOT carry over (else the TUI re-shows the note).
+    agent.config.pinned = true;
+    await agent.promptRouted("second");
+    expect(agent.lastFeedbackError).toBeNull();
+
     reg.unregister();
   });
 });

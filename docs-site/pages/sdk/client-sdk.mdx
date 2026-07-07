@@ -17,7 +17,7 @@ The `minima_client` package is the official thin, typed Python client for the ho
 pip install minima-cli
 ```
 
-The SDK is published on PyPI as part of [**`minima-cli`**](https://pypi.org/project/minima-cli/) — one package that ships both the CLI agent and the `minima_client` SDK (also available via `brew install mubit-ai/minima/minima`). Import it as `minima_client`:
+The SDK is published on PyPI as part of [**`minima-cli`**](https://pypi.org/project/minima-cli/) — the Python package that ships the `minima_client` SDK and the Minima server tooling. It does **not** include the `minima` terminal agent: the CLI is a native binary installed with [Homebrew](/harness/installation) (`brew install mubit-ai/minima/minima`). Import the SDK as `minima_client`:
 
 ```python
 from minima_client import MinimaClient, AsyncMinimaClient, MinimaError, autocapture

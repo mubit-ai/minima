@@ -1,0 +1,68 @@
+diff --git a/src/stats.ts b/src/stats.ts
+index 8d60523..ad40239 100644
+--- a/src/stats.ts
++++ b/src/stats.ts
+@@ -113,8 +113,17 @@ export interface HistogramBin {
+ }
+ 
+ export interface HistogramOptions {
+-  /** Number of equal-width bins. Must be a positive integer. Default 10. */
++  /**
++   * Number of equal-width bins. Must be a positive integer. Default 10.
++   * Ignored when `edges` is given.
++   */
+   bins?: number;
++  /**
++   * Explicit bin edges: at least two values, strictly increasing. Bin `i`
++   * covers `[edges[i], edges[i+1])`, except the last bin which also
++   * includes the final edge. Values outside the edge range are ignored.
++   */
++  edges?: number[];
+ }
+ 
+ /**
+@@ -130,6 +139,9 @@ export function histogram(
+   values: ReadonlyArray<number>,
+   options: HistogramOptions = {},
+ ): HistogramBin[] {
++  if (options.edges !== undefined) {
++    return histogramWithEdges(values, options.edges);
++  }
+   const bins = options.bins ?? 10;
+   if (!Number.isInteger(bins) || bins < 1) {
+     throw new RangeError("bins must be a positive integer");
+@@ -154,3 +166,34 @@ export function histogram(
+   }
+   return result;
+ }
++
++/** Bin values using explicit edges; see {@link HistogramOptions.edges}. */
++function histogramWithEdges(
++  values: ReadonlyArray<number>,
++  edges: ReadonlyArray<number>,
++): HistogramBin[] {
++  if (edges.length < 2) {
++    throw new RangeError("edges must contain at least two values");
++  }
++  for (let i = 1; i < edges.length; i++) {
++    if (!(edges[i]! > edges[i - 1]!)) {
++      throw new RangeError("edges must be strictly increasing");
++    }
++  }
++  const result: HistogramBin[] = [];
++  for (let b = 0; b < edges.length - 1; b++) {
++    result.push({ x0: edges[b]!, x1: edges[b + 1]!, count: 0 });
++  }
++  const lo = edges[0]!;
++  const hi = edges[edges.length - 1]!;
++  for (const v of values) {
++    if (v < lo || v > hi) continue;
++    let idx = result.length - 1;
++    if (v < hi) {
++      idx = 0;
++      while (v >= edges[idx + 1]!) idx += 1;
++    }
++    result[idx]!.count += 1;
++  }
++  return result;
++}

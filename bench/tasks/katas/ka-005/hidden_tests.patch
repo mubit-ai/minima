@@ -1,0 +1,40 @@
+diff --git a/tests/ts/brackets/hidden.test.ts b/tests/ts/brackets/hidden.test.ts
+new file mode 100644
+index 0000000..3d0c10a
+--- /dev/null
++++ b/tests/ts/brackets/hidden.test.ts
+@@ -0,0 +1,34 @@
++import { expect, test } from "bun:test";
++import { isBalanced } from "../../../ts/brackets.ts";
++
++test("balanced mixed pairs", () => {
++  expect(isBalanced("([]{})<>")).toBe(true);
++  expect(isBalanced("<([])>")).toBe(true);
++});
++
++test("unbalanced sequences", () => {
++  expect(isBalanced("(]")).toBe(false);
++  expect(isBalanced(")(")).toBe(false);
++  expect(isBalanced("<(>)")).toBe(false);
++});
++
++test("empty string is balanced", () => {
++  expect(isBalanced("")).toBe(true);
++});
++
++test("brackets inside quotes are ignored", () => {
++  expect(isBalanced('f("[unclosed")')).toBe(true);
++  expect(isBalanced('{"}"}')).toBe(true);
++});
++
++test("escaped quotes stay inside the literal", () => {
++  expect(isBalanced('("a\\"b[")')).toBe(true);
++});
++
++test("unterminated string literal is unbalanced", () => {
++  expect(isBalanced('("abc')).toBe(false);
++});
++
++test("non-bracket noise is ignored", () => {
++  expect(isBalanced("let x = arr[i] + f(y);")).toBe(true);
++});

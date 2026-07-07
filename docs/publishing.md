@@ -1,8 +1,10 @@
-# Publishing checklist — Minima + `minima-harness`
+# Publishing checklist — `minima-cli` (PyPI)
 
-The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.targets.wheel`):
-`src/minima` (recommender API), `src/minima_harness` (TUI agent), `client_sdk/minima_client`
-(HTTP SDK). Entry points: `minima-harness`, `minima-seed`, `minima-calibration-report`.
+The wheel ships two packages together (`pyproject.toml` → `tool.hatch.build.targets.wheel`):
+`src/minima` (recommender API) and `client_sdk/minima_client` (HTTP SDK). Entry points:
+`minima-seed`, `minima-calibration-report`. The `minima` CLI/TUI is NOT part of this wheel —
+it ships as a TypeScript binary via Homebrew (`brew tap mubit-ai/minima`); the Python harness
+was removed in v0.7.0.
 
 > **License is `FSL-1.1-Apache-2.0`** (source-available, non-compete; auto-converts to Apache-2.0
 > after 2 years). The repo is public, so **public PyPI is fine** — PyPI permits non-OSI licenses.
@@ -14,20 +16,19 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 
 ## 2. Version & changelog
 - [ ] Bump `version` in `pyproject.toml` (currently `0.3.0`) per semver.
-- [ ] Add a `CHANGELOG.md` entry (config command, keyring storage, UI/overlay redesign, footer key display).
+- [ ] Add a `CHANGELOG.md` entry for the release.
 - [ ] Confirm `requires-python = ">=3.11"` still holds for all new code.
 
 ## 3. Repo hygiene & secrets
 - [ ] No secrets committed: `git grep -nE 'sk-(ant|proj)|AIza|MUBIT_API_KEY=.+' -- . ':!*.example'` returns nothing.
 - [ ] `.env`, `.env.harness` are git-ignored; only `.env.example` / stub `.env.harness` (empty keys) are tracked.
-- [ ] `~/.minima-harness/config.env` is never created in-repo (it's per-user); keyring is the default backend.
 - [ ] Working tree clean; release branch merged/tagged off `main`.
 
 ## 4. Packaging metadata
 - [ ] `pyproject.toml`: `description`, `readme`, `authors`, and add `[project.urls]` (Homepage/Docs/Repository).
-- [ ] Optional-dependency extras correct: `harness`, `tui` (now includes `keyring>=24`), `seed`, `reasoner-anthropic`, `reasoner-gemini`, `dev`.
-- [ ] Wheel `packages` list includes all three dirs; non-Python data (e.g. `capability_priors.json`, any JSON catalogs) ships — verify in step 6.
-- [ ] Entry points resolve: `minima-harness`, `minima-seed`, `minima-calibration-report`.
+- [ ] Optional-dependency extras correct: `server`, `seed`, `reasoner-anthropic`, `reasoner-gemini`, `dev`.
+- [ ] Wheel `packages` list includes both dirs; non-Python data (e.g. `capability_priors.json`, any JSON catalogs) ships — verify in step 6.
+- [ ] Entry points resolve: `minima-seed`, `minima-calibration-report`.
 
 ## 5. Quality gates (must pass)
 - [ ] `uv run pytest -m "not live and not eval" -q` — full non-live suite green.
@@ -37,18 +38,14 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 ## 6. Build & verify the artifact
 - [ ] `uv build` → produces `dist/*.whl` + `dist/*.tar.gz`.
 - [ ] `uvx twine check dist/*` passes (metadata/readme render).
-- [ ] Inspect wheel contents: `python -m zipfile -l dist/*.whl` includes `minima/`, `minima_harness/`, `minima_client/`, and required data files.
-- [ ] Clean-room smoke test (fresh venv, install from the built wheel with `[tui]`):
-  - [ ] `minima --help` and `minima-seed --help` run.
-  - [ ] `minima config list` shows both sections (all MISSING) without error.
-  - [ ] `minima config set ANTHROPIC_API_KEY <dummy>` → `config list` masks it; `config path` prints the location.
-  - [ ] `minima config doctor` reports presence + Minima `/v1/health` reachability (no secret values printed).
-  - [ ] Demo mode runs offline: `python examples/harness_warmup.py`.
-  - [ ] TUI launches and quits cleanly; `/config` overlay opens.
+- [ ] Inspect wheel contents: `python -m zipfile -l dist/*.whl` includes `minima/`, `minima_client/`, and required data files.
+- [ ] Clean-room smoke test (fresh venv, install from the built wheel):
+  - [ ] `minima-seed --help` and `minima-calibration-report --help` run.
+  - [ ] `python -c "from minima_client import MinimaClient"` works.
+  - [ ] With `[server]`: `uvicorn minima.main:app` starts and `/v1/health` responds.
 
 ## 7. Docs
-- [ ] `README.md` quickstart current; `docs/harness.md` documents `minima config` (done) + keyring/0600 fallback + precedence.
-- [ ] First-run path documented: where `MUBIT_API_KEY` + provider keys go (config command → keyring/`~/.minima-harness/config.env`).
+- [ ] `README.md` quickstart current (CLI install = Homebrew; pip = SDK + server tooling).
 - [ ] `docs/configuration.md` lists any new env vars; links not broken.
 
 ## 8. Release
@@ -60,5 +57,5 @@ The wheel ships three packages together (`pyproject.toml` → `tool.hatch.build.
 
 ## 9. Post-publish verification
 - [ ] Install the *published* artifact in a clean venv (not the local wheel) and re-run the step-6 smoke tests.
-- [ ] Confirm `minima config` works against the hosted Minima (`MINIMA_URL=https://api.minima.sh`) end to end.
+- [ ] Confirm the SDK works against the hosted Minima (`MINIMA_URL=https://api.minima.sh`) end to end.
 - [ ] Announce / update any install docs with the new version + the config-first setup flow.

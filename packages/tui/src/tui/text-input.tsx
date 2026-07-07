@@ -41,8 +41,14 @@ export function TextInput({
 
   useInput((input, key) => {
     if (disabled) return;
-    if (key.return) {
-      const trimmed = value.trim();
+    // key.return fires for '\r' (standard interactive path).
+    // The ICRNL PTY path: '\r' is translated to '\n' on the slave, and may arrive
+    // batched with preceding text (e.g. "hello\n"). Strip the trailing '\n' and
+    // include the preceding text in the submitted value.
+    const endsWithLF = !key.return && input.length > 0 && input[input.length - 1] === "\n";
+    if (key.return || endsWithLF) {
+      const extra = endsWithLF ? input.slice(0, -1) : "";
+      const trimmed = (value + extra).trim();
       if (trimmed) {
         onSubmit(trimmed);
         updateValue("");

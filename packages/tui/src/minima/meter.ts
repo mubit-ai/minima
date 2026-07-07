@@ -1,7 +1,7 @@
 /**
  * CostMeter — per-prompt cost observability for a MinimaAgent run.
  *
- * Port of minima_harness/minima/meter.py. The routing decision isn't part of the
+ * Port of the Python harness's minima/meter.py. The routing decision isn't part of the
  * AgentEvent stream, so the meter is fed directly from prompt() rather than via
  * subscribe(). Accumulates one row per prompt and renders a report + summary totals.
  */

@@ -1,14 +1,14 @@
 /**
  * HarnessApp — the interactive Ink shell.
  *
- * A focused port of minima_harness/tui/app.py: renders the conversation (user prompts,
+ * A focused port of the Python harness's tui/app.py: renders the conversation (user prompts,
  * streamed assistant replies, terse tool lines) plus a status bar, and drives the
  * MinimaAgent. Ctrl+C quits; Esc aborts the in-flight run. (The Python app's overlays,
  * diff approval, mouse capture, sessions, and themes land in later passes.)
  */
 
-import { Box, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef } from "react";
+import { Box, Static, Text, useApp, useInput } from "ink";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
@@ -20,13 +20,28 @@ import { errText } from "../errtext.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import type { ChildEvent } from "../minima/spawn.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
+import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
+import { BusyIndicator } from "./busy.tsx";
+import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
-import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
-import { type ChatMessage, Messages } from "./messages.tsx";
+import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import {
+  SCROLLBACK_SAFETY_ROWS,
+  childTreeHeight,
+  getScrollableMessages,
+  markdownBodyHeight,
+  questionDisplayText,
+  questionOverlayHeight,
+  streamTailBudget,
+  tailToFit,
+  wrappedLineCount,
+} from "./layout.ts";
+import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
 import {
@@ -39,10 +54,21 @@ import { repoIdentity, setProject } from "./projects.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
+import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
   banner?: string;
+  /** Late-bound slot the `question` tool reads; populated here once the overlay is wired. */
+  askUserRef?: AskUserRef;
+  /** Mutable ref written by main.ts so HarnessApp can receive sub-agent events. */
+  childEventRef?: { handler: ((e: ChildEvent) => void) | null };
+  /**
+   * Fullscreen renderer (default): alternate screen, full-height frame, prompt glued to the bottom
+   * row, history scrolled in-app (PgUp/PgDn + optional wheel). When false, the inline renderer is
+   * used (main buffer + <Static> + native OS scroll). Set by main.ts from the CLI flag/env.
+   */
+  fullscreen?: boolean;
 }
 
 /** True when at least one key-requiring model provider has its key set. */
@@ -117,17 +143,18 @@ const COMMANDS = [
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
   { name: "session", desc: "Show session info" },
-  { name: "tree", desc: "View the session tree" },
-  { name: "fork", desc: "Fork from an entry ID" },
-  { name: "clone", desc: "Clone the current session" },
+  { name: "tree", desc: "Toggle the sub-agent tree panel" },
+  { name: "mouse", desc: "Toggle mouse-wheel scroll (fullscreen; disables text select)" },
+  { name: "fork", desc: "Fork a session (not implemented yet)" },
+  { name: "clone", desc: "Clone a session (not implemented yet)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
-  { name: "thoughts", desc: "Toggle streaming model's thinking" },
-  { name: "mouse", desc: "Toggle mouse capture (scroll vs select/copy)" },
+  { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (read-only)" },
+  { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
 export interface CommandPickerProps {
@@ -196,15 +223,26 @@ export interface SessionPickerProps {
 
 export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProps) {
   const [cursor, setCursor] = useState(0);
+  // Latch so a fast double-Enter can't resolve twice (duplicate loadRun / "Resumed" messages).
+  const [closed, setClosed] = useState(false);
+  const pick = (path: string) => {
+    if (closed) return;
+    setClosed(true);
+    onPick(path);
+  };
 
   useInput((input, key) => {
-    if (key.escape) return onDismiss();
+    if (closed) return;
+    if (key.escape) {
+      setClosed(true);
+      return onDismiss();
+    }
     if (sessions.length === 0) return;
     if (key.upArrow) return setCursor((c) => (c - 1 + sessions.length) % sessions.length);
     if (key.downArrow) return setCursor((c) => (c + 1) % sessions.length);
-    if (key.return) return onPick(sessions[cursor]!.path);
+    if (key.return) return pick(sessions[cursor]!.path);
     const n = Number(input);
-    if (Number.isInteger(n) && n >= 1 && n <= sessions.length) return onPick(sessions[n - 1]!.path);
+    if (Number.isInteger(n) && n >= 1 && n <= sessions.length) return pick(sessions[n - 1]!.path);
   });
 
   return (
@@ -317,6 +355,138 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
   );
 }
 
+export interface QuestionPromptData {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  allow_freetext: boolean;
+  resolve: (answer: string | null) => void;
+}
+
+/**
+ * Overlay for the `question` tool: pick an option, type a custom answer, or dismiss (Esc).
+ * The question text and option list are model-supplied and unbounded, so both are clamped
+ * to fit the screen: the question via questionDisplayText, the options via a cursor-
+ * following window of `maxOptionRows` single (truncated) rows with ↑/↓ overflow markers.
+ * Must stay in lockstep with questionOverlayHeight() in layout.ts.
+ */
+export function QuestionOverlay({
+  prompt,
+  cols,
+  maxOptionRows,
+}: {
+  prompt: QuestionPromptData;
+  cols: number;
+  maxOptionRows: number;
+}) {
+  const optionCount = prompt.options.length;
+  const rowCount = optionCount + (prompt.allow_freetext ? 1 : 0);
+  const [cursor, setCursor] = useState(0);
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState("");
+  const maxVisible = Math.max(1, maxOptionRows);
+  const winStart = Math.min(
+    Math.max(0, cursor - maxVisible + 1),
+    Math.max(0, rowCount - maxVisible),
+  );
+  const winEnd = Math.min(rowCount, winStart + maxVisible);
+
+  useInput((input, key) => {
+    if (typing) {
+      if (key.return) {
+        const v = draft.trim();
+        if (v) prompt.resolve(v);
+        return;
+      }
+      if (key.escape) {
+        setTyping(false);
+        setDraft("");
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setDraft((v) => v.slice(0, -1));
+        return;
+      }
+      if (key.ctrl || key.meta) return;
+      if (input) setDraft((v) => v + input);
+      return;
+    }
+    if (key.escape) {
+      prompt.resolve(null);
+      return;
+    }
+    if (input === "t" && prompt.allow_freetext) {
+      setTyping(true);
+      return;
+    }
+    if (key.upArrow) {
+      setCursor((c) => (c - 1 + rowCount) % rowCount);
+      return;
+    }
+    if (key.downArrow) {
+      setCursor((c) => (c + 1) % rowCount);
+      return;
+    }
+    if (key.return) {
+      if (prompt.allow_freetext && cursor === optionCount) {
+        setTyping(true);
+        return;
+      }
+      const opt = prompt.options[cursor];
+      if (opt) prompt.resolve(opt.label);
+    }
+  });
+
+  return (
+    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" width="100%">
+      <Box position="absolute" marginTop={-1} marginLeft={2}>
+        <Text color="cyan" bold>
+          {prompt.header ? ` ${prompt.header} ` : " question "}
+        </Text>
+      </Box>
+      <Text color="white" bold>
+        {questionDisplayText(prompt.question, cols)}
+      </Text>
+      {typing ? (
+        <Box marginTop={0}>
+          <Text color="gray">{"› "}</Text>
+          {/* truncate-start keeps the draft to ONE row (showing its tail) so the overlay never
+              outgrows the rows questionOverlayHeight() reserved for it in the layout budget. */}
+          <Text color="white" wrap="truncate-start">
+            {draft}
+          </Text>
+          <Text color="gray">{"▋"}</Text>
+        </Box>
+      ) : (
+        <Box flexDirection="column" marginTop={0}>
+          {winStart > 0 ? <Text color="gray"> ↑ +{winStart} more</Text> : null}
+          {prompt.options.slice(winStart, Math.min(winEnd, optionCount)).map((opt, idx) => {
+            const i = winStart + idx;
+            return (
+              <Text key={opt.label} color={i === cursor ? "cyan" : "white"} wrap="truncate">
+                {i === cursor ? "› " : "  "}
+                {opt.label}
+                {opt.description ? <Text color="gray"> — {opt.description}</Text> : null}
+              </Text>
+            );
+          })}
+          {prompt.allow_freetext && winEnd === rowCount ? (
+            <Text color={cursor === optionCount ? "cyan" : "gray"} wrap="truncate">
+              {cursor === optionCount ? "› " : "  "}✎ Other (type a custom answer)
+            </Text>
+          ) : null}
+          {winEnd < rowCount ? <Text color="gray"> ↓ +{rowCount - winEnd} more</Text> : null}
+        </Box>
+      )}
+      <Text color="gray" wrap="truncate">
+        {typing
+          ? "⏎ submit · Esc cancel"
+          : `↑↓ select · ⏎ confirm${prompt.allow_freetext ? " · t type" : ""} · Esc dismiss`}
+      </Text>
+    </Box>
+  );
+}
+
 export interface ConfigOverlayProps {
   onDismiss: () => void;
 }
@@ -411,7 +581,9 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
             const idx = allFields.indexOf(f);
             const isActive = idx === cursor;
             const val = values[f.key] ?? "";
-            const shown = f.secret && !isActive ? mask(val) : f.secret && isActive ? val : val;
+            // Always mask secrets in the list — never reveal a full key just because the cursor
+            // landed on its row. (Editing uses a separate, also-masked buffer.)
+            const shown = f.secret ? mask(val) : val;
             return (
               <Text key={f.key} color={isActive ? "cyan" : undefined}>
                 {isActive ? "❯" : " "} {f.key.padEnd(20)}
@@ -437,9 +609,19 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   );
 }
 
-export function HarnessApp({ agent, banner: _banner }: AppProps) {
+export function HarnessApp({
+  agent,
+  banner: _banner,
+  askUserRef,
+  childEventRef,
+  fullscreen = true,
+}: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Bumped whenever `messages` is REPLACED wholesale (clear / new / resume / load-session) rather
+  // than appended to. It keys the <Static> transcript so it remounts and reprints from scratch
+  // instead of trying to append onto a now-different list (Static is otherwise append-only).
+  const [transcriptGen, setTranscriptGen] = useState(0);
   const [streaming, setStreaming] = useState("");
   const [streamingThoughts, setStreamingThoughts] = useState("");
   const streamingBufRef = useRef("");
@@ -447,16 +629,14 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [busyState, setBusyState] = useState<"ready" | "thinking" | "working">("ready");
+  const [busyState, setBusyState] = useState<"ready" | "reasoning" | "running">("ready");
+  // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
+  // "current action" line in the footer; cleared per-tool on tool_execution_end.
+  const [activeActions, setActiveActions] = useState<ActiveAction[]>([]);
   const [actualCost, setActualCost] = useState<number>();
   const [quitArmed, setQuitArmed] = useState(false);
-  // Source of truth for the double-tap check — a ref can't go stale between two
-  // fast Ctrl+C presses the way the `quitArmed` state closure can. The state is
-  // kept only to drive the footer hint.
-  const quitArmedRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [mouseEnabled, setMouseEnabled] = useState(true);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionsList, setSessionsList] = useState<SessionSummary[]>([]);
   const [configOverlayOpen, setConfigOverlayOpen] = useState(false);
@@ -464,10 +644,20 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // at render) reflects newly-registered models even if it's already open.
   const [, setCatalogVersion] = useState(0);
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
+  // Startup tips (ON by default): a rotating tip shown on the empty welcome splash. `/tip on|off`
+  // toggles the persisted preference; `startupTip` holds the tip rendered this launch.
+  const [tipsEnabled, setTipsEnabledState] = useState(isTipsEnabled());
+  const [startupTip, setStartupTip] = useState<string | null>(null);
+
+  // Sub-agent tree: childrenState tracks each in-flight child; treeOpen toggles the panel.
+  const [childrenState, setChildrenState] = useState<Map<string, ChildRow>>(new Map());
+  const [treeOpen, setTreeOpen] = useState(false);
 
   // On mount: nudge if routing is set but no model-provider key is, and pull the live model
   // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
   useEffect(() => {
+    // Rotate a fresh startup tip for the welcome splash (ON by default; persisted preference).
+    if (isTipsEnabled()) setStartupTip(formatTip(advanceTip()));
     if (!anyProviderKeyPresent()) {
       setMessages((m) => [
         ...m,
@@ -503,20 +693,74 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     setBudgetStatus(agent.budget?.status() ?? null);
   }, [agent]);
 
+  // Wire the sub-agent event feed so ChildTree stays live during multi-step runs.
+  useEffect(() => {
+    if (!childEventRef) return;
+    childEventRef.handler = (e: ChildEvent) => {
+      setChildrenState((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(e.childId);
+        // Determine status from the incoming AgentEvent kind.
+        const kind = (e.event as { kind?: string }).kind ?? "";
+        const isDone = kind === "run_complete" || kind === "error";
+        const isAborted = kind === "aborted";
+        const status: ChildRow["status"] = isAborted
+          ? "aborted"
+          : isDone
+            ? "success" === (e.event as { outcome?: string }).outcome
+              ? "done"
+              : "failure"
+            : "running";
+        const costUsd =
+          (e.event as { cost?: { total?: number } }).cost?.total ?? existing?.costUsd ?? 0;
+        next.set(e.childId, { stepId: e.stepId, depth: e.depth, status, costUsd });
+        return next;
+      });
+    };
+    return () => {
+      childEventRef.handler = null;
+    };
+  }, [childEventRef]);
+
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
   const permStateRef = useRef<PermissionState>(createPermissionState(process.cwd()));
 
+  // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
+  const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
+  useEffect(() => {
+    if (!askUserRef) return;
+    askUserRef.current = (params) =>
+      new Promise<string | null>((resolve) => {
+        setQuestionPrompt({ ...params, resolve });
+      });
+    return () => {
+      askUserRef.current = null;
+    };
+  }, [askUserRef]);
+
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
   const planModeRef = useRef(false);
+  /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
+  const quitArmedAtRef = useRef(0);
   useEffect(() => {
     planModeRef.current = planMode;
   }, [planMode]);
 
-  // Sizing & alternate screen setup
+  // Terminal sizing (rows/cols).
   const [rows, setRows] = useState(process.stdout.rows || 24);
   const [cols, setCols] = useState(process.stdout.columns || 80);
+
+  // Fullscreen scroll state: 0 = pinned to the newest line (bottom); positive = scrolled up N
+  // rows. Only used in fullscreen mode; inline mode uses the terminal's native scrollback.
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const atBottomRef = useRef(true);
+  const maxChatHeightRef = useRef(1);
+  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. ON by default so the wheel/trackpad
+  // scrolls the in-app history like Claude Code; run /mouse to turn it OFF and restore native
+  // click-drag text selection (which mouse capture disables).
+  const [mouseEnabled, setMouseEnabled] = useState(true);
 
   useEffect(() => {
     const handleResize = () => {
@@ -525,15 +769,16 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     };
     process.stdout.on("resize", handleResize);
 
-    // Register the mouse scroll callback (the stdin.read() filter is already
-    // installed in main.ts; here we just wire it to our scroll state).
-    setMouseScrollCallback((dir) => {
-      if (dir === "up") {
-        setScrollOffset((p) => p + 3);
-      } else {
-        setScrollOffset((p) => Math.max(0, p - 3));
-      }
-    });
+    if (fullscreen) {
+      // Wheel notches (decoded by installMouseScrollFilter in main.ts) adjust the scroll offset.
+      setMouseScrollCallback((dir) =>
+        setScrollOffset((p) => (dir === "up" ? p + 3 : Math.max(0, p - 3))),
+      );
+    } else {
+      // Inline: mouse tracking stays OFF so native scroll/select/copy work with <Static>.
+      process.stdout.write("\u001b[?1000l");
+      process.stdout.write("\u001b[?1006l");
+    }
 
     return () => {
       process.stdout.off("resize", handleResize);
@@ -541,12 +786,12 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
     };
-  }, []);
+  }, [fullscreen]);
 
-  // Toggle SGR mouse reporting on/off based on mouseEnabled state.
-  // ON: mouse wheel scroll works, but terminal native select/copy is suppressed.
-  // OFF: native select/copy works (drag to select, Cmd/Ctrl+C to copy), but no wheel scroll.
+  // Toggle SGR mouse reporting as the user flips /mouse (fullscreen only). ON = wheel scroll
+  // (native selection disabled); OFF = native selection restored.
   useEffect(() => {
+    if (!fullscreen) return;
     if (mouseEnabled) {
       process.stdout.write("\u001b[?1000h");
       process.stdout.write("\u001b[?1006h");
@@ -554,18 +799,25 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
     }
-  }, [mouseEnabled]);
+  }, [fullscreen, mouseEnabled]);
+
+  // Follow the newest content only when already pinned at the bottom (fullscreen). The message/
+  // stream deps are intentional triggers (re-run when new content arrives), not values read here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are the follow-on-new-content triggers
+  useEffect(() => {
+    if (fullscreen && atBottomRef.current) setScrollOffset(0);
+  }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
   // Wire the beforeToolCall permission hook.
   // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
   useEffect(() => {
     agent.setBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash"];
+        const blocked = ["write", "edit", "bash", "apply_patch"];
         if (blocked.includes(ctx.toolCall.name)) {
           return {
             block: true,
-            reason: "Plan mode is ON — write/edit/bash are blocked. Use /plan to exit.",
+            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
           };
         }
       }
@@ -579,14 +831,8 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     });
   }, [agent]);
 
-  // Scroll state: 0 = at bottom (latest); positive = scrolled up N lines
-  const [scrollOffset, setScrollOffset] = useState(0);
-
-  // Auto-scroll to bottom when new messages arrive or streaming updates
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on content changes
-  useEffect(() => {
-    setScrollOffset(0);
-  }, [messages.length, streaming, streamingThoughts]);
+  // Scrolling is handled by the terminal itself (the finalized transcript renders into native
+  // scrollback via <Static>), so there is no in-app scroll offset to track.
 
   // Status Bar states
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
@@ -599,15 +845,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Input history states
   const [history, setHistory] = useState<string[]>([]);
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  // The in-progress line stashed when the user first presses Up into history, restored on the way back.
+  const draftRef = useRef("");
 
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
 
   const hasSpace = typedText.includes(" ");
-  const matchingCommands =
+  const MAX_SUGGESTIONS = 8;
+  const allMatchingCommands =
     typedText.startsWith("/") && !hasSpace
       ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
       : [];
+  // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
+  // reserved height past a short terminal and shove the input/status off-screen.
+  const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
+  const hiddenSuggestions = allMatchingCommands.length - matchingCommands.length;
 
   const [showThinking, setShowThinking] = useState(false);
   const showThinkingRef = useRef(showThinking);
@@ -631,7 +884,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           const s = ev.assistantMessageEvent;
           if (s?.type === "thinking_start") {
             thinkingStartRef.current = Date.now();
-            setBusyState("thinking");
+            setBusyState("reasoning");
             streamingThoughtsBufRef.current = "";
           } else if (s?.type === "thinking_delta") {
             thoughtsRef.current += s.delta;
@@ -643,7 +896,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               }, 80);
             }
           } else if (s?.type === "text_delta") {
-            setBusyState("working");
+            setBusyState("running");
             streamingBufRef.current += s.delta;
             if (!streamFlushRef.current) {
               streamFlushRef.current = setTimeout(() => {
@@ -717,7 +970,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           }
           break;
         case "tool_execution_start":
-          setBusyState("working");
+          setBusyState("running");
+          setActiveActions((a) => reduceActiveActions(a, ev));
+          break;
+        case "tool_execution_end":
+          setActiveActions((a) => reduceActiveActions(a, ev));
           break;
       }
     });
@@ -726,37 +983,58 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
-    // Ctrl+C is handled FIRST — before the overlay/busy guards below — so it can
-    // always quit. A second press within 1.5s force-quits even while a run is
-    // in flight or an overlay is open; the first press also aborts any run.
-    if (key.ctrl && input === "c") {
-      if (quitArmedRef.current) {
-        exit();
-        // Hard fallback: if Ink's teardown stalls (raw mode / open handles),
-        // kill the process anyway so Ctrl+C twice ALWAYS exits.
-        setTimeout(() => process.exit(0), 100);
-        return;
-      }
-      if (busy) agent.abort();
-      quitArmedRef.current = true;
-      setQuitArmed(true);
-      setTimeout(() => {
-        quitArmedRef.current = false;
-        setQuitArmed(false);
-      }, 1500);
+    if (
+      pickerOpen ||
+      paletteOpen ||
+      sessionPickerOpen ||
+      permPrompt ||
+      questionPrompt ||
+      configOverlayOpen
+    )
       return;
-    }
 
-    if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return;
-
-    // Esc aborts the in-flight run — must run BEFORE the busy guard below,
-    // otherwise the guard swallows it exactly when there's a run to abort.
-    if (key.escape && busy) {
+    // Abort a running turn. MUST be handled before the busy-guard below — otherwise these are
+    // dead code and the advertised "esc to abort" does nothing. (Ctrl+C is also intercepted by
+    // Ink unless exitOnCtrlC:false is passed to render — see main.ts.) Abort is best-effort:
+    // some provider streams cannot be cancelled mid-flight (see google.ts), so a SECOND Ctrl+C
+    // within 2.5s force-quits — without it a wedged stream leaves the TUI unkillable.
+    if (busy && (key.escape || (key.ctrl && input === "c"))) {
+      if (key.ctrl && input === "c") {
+        if (Date.now() - quitArmedAtRef.current < 2_500) {
+          exit();
+          return;
+        }
+        quitArmedAtRef.current = Date.now();
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: "Aborting… press Ctrl+C again within 2.5s to force-quit.",
+            toolName: "abort",
+          },
+        ]);
+      }
       agent.abort();
       return;
     }
 
-    if (busy) return; // don't open overlays mid-run
+    // Fullscreen: scroll the in-app history viewport (allowed mid-run, so you can read back while a
+    // reply streams). Inline mode leaves scrolling to the terminal's native scrollback.
+    if (fullscreen) {
+      const page = Math.max(1, maxChatHeightRef.current - 2);
+      if (key.pageUp) {
+        setScrollOffset((p) => p + page);
+        return;
+      }
+      if (key.pageDown) {
+        setScrollOffset((p) => Math.max(0, p - page));
+        return;
+      }
+    }
+
+    // Everything below opens an overlay / changes mode — not allowed mid-run.
+    if (busy) return;
+
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
       return;
@@ -769,24 +1047,12 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
     }
-    // Scrolling: PageUp/PageDown, Home/End
-    const chatHeight = rows - 6;
-    if (key.pageUp) {
-      setScrollOffset((prev) => prev + Math.max(1, chatHeight - 2));
-      return;
-    }
-    if (key.pageDown || (key.shift && input === " ")) {
-      setScrollOffset((prev) => Math.max(0, prev - Math.max(1, chatHeight - 2)));
-      return;
-    }
-    if (key.ctrl && input === "g") {
-      // Ctrl+G = Home (jump to top)
-      setScrollOffset(99999);
-      return;
-    }
-    if (key.ctrl && input === "e") {
-      // Ctrl+E = End (jump to bottom)
-      setScrollOffset(0);
+    if (key.ctrl && input === "c") {
+      if (quitArmed) exit();
+      else {
+        setQuitArmed(true);
+        setTimeout(() => setQuitArmed(false), 1500);
+      }
       return;
     }
   });
@@ -826,10 +1092,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     setThinkingLevel(nxt);
   }
 
-  function handleHistoryUp(): string | undefined {
+  function handleHistoryUp(current: string): string | undefined {
     let nextIdx = historyIdx;
     if (nextIdx === null) {
       if (history.length === 0) return undefined;
+      draftRef.current = current; // stash the in-progress draft before entering history
       nextIdx = history.length - 1;
     } else if (nextIdx > 0) {
       nextIdx = nextIdx - 1;
@@ -845,7 +1112,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     const nextIdx = historyIdx + 1;
     if (nextIdx >= history.length) {
       setHistoryIdx(null);
-      return "";
+      return draftRef.current; // restore the stashed draft, not an empty line
     }
     setHistoryIdx(nextIdx);
     return history[nextIdx];
@@ -880,6 +1147,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd);
     const label = r.run.display_name || runId.slice(0, 12);
+    setTranscriptGen((g) => g + 1);
     setMessages([
       ...chat,
       {
@@ -920,6 +1188,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       }
     }
 
+    setTranscriptGen((g) => g + 1);
     setMessages(list);
     agent.agentState.messages = agentMsgs;
 
@@ -938,6 +1207,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
       case "clear":
+        setTranscriptGen((g) => g + 1);
         setMessages([]);
         break;
       case "perms": {
@@ -969,6 +1239,34 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           ...m,
           { role: "user", text: `/${name}` },
           { role: "tool", text: lines.join("\n"), toolName: "perms" },
+        ]);
+        break;
+      }
+      case "mouse": {
+        if (!fullscreen) {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name}` },
+            {
+              role: "tool",
+              text: "Mouse-wheel scroll is a fullscreen-mode feature; this session is inline (the terminal's native scroll already works). Restart without --no-fullscreen / MINIMA_TUI_INLINE to use it.",
+              toolName: "mouse",
+            },
+          ]);
+          break;
+        }
+        const nextMouse = !mouseEnabled;
+        setMouseEnabled(nextMouse);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          {
+            role: "tool",
+            text: nextMouse
+              ? "Mouse-wheel scroll ON — the wheel now scrolls history; native click-drag text selection is disabled until you run /mouse again."
+              : "Mouse-wheel scroll OFF — native click-drag text selection restored; scroll history with PgUp/PgDn.",
+            toolName: "mouse",
+          },
         ]);
         break;
       }
@@ -1123,7 +1421,13 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             },
             {
               role: "tool",
-              text: `${key} stored (${backend}). ${key === "MUBIT_API_KEY" || key === "MINIMA_API_KEY" ? "Router reconnected." : "Set in env."}`,
+              text: `${key} stored (${backend}). ${
+                key === "MUBIT_API_KEY" || key === "MINIMA_API_KEY"
+                  ? "Router reconnected."
+                  : key === "EXA_API_KEY"
+                    ? "Web search now prefers Exa (falls back to DuckDuckGo)."
+                    : "Set in env."
+              }`,
               toolName: "config",
             },
           ]);
@@ -1326,6 +1630,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       case "new":
         agent.setSessionId(Math.random().toString(16).slice(2, 14));
         agent.reset();
+        setTranscriptGen((g) => g + 1);
         setMessages([]);
         setActualCost(0);
         setInputTokens(0);
@@ -1382,6 +1687,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         ]);
         break;
       case "tree":
+        setTreeOpen((o) => !o);
         setMessages((m) => [
           ...m,
           {
@@ -1390,7 +1696,10 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: `Session Tree:\n  └─ ${agent.sessionId ?? "ephemeral"} (active tip)\n     entries: ${messages.length}`,
+            text:
+              childrenState.size > 0
+                ? `Sub-agent tree toggled (${childrenState.size} tracked). Use /tree again to collapse.`
+                : "No sub-agents active. The tree panel will appear during multi-step task runs.",
             toolName: "tree",
           },
         ]);
@@ -1404,7 +1713,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: `Forked session successfully from: ${args || "tip"}`,
+            text: "/fork isn't implemented yet — session branching is planned. For now use /resume to reopen a past session or /new to start fresh.",
             toolName: "fork",
           },
         ]);
@@ -1418,7 +1727,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: "Cloned session successfully.",
+            text: "/clone isn't implemented yet — session copy is planned. For now use /resume to reopen a past session or /new to start fresh.",
             toolName: "clone",
           },
         ]);
@@ -1489,6 +1798,29 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         }
         break;
       }
+      case "tip": {
+        const arg = args.trim().toLowerCase();
+        if (arg === "on" || arg === "off") {
+          const on = arg === "on";
+          setTipsEnabled(on);
+          setTipsEnabledState(on);
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/tip ${arg}` },
+            {
+              role: "tool",
+              text: `startup tips ${on ? "on" : "off"}`,
+              toolName: "tip",
+            },
+          ]);
+          break;
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: formatTip(advanceTip()), toolName: "tip" },
+        ]);
+        break;
+      }
       case "judge": {
         const on = args.trim().toLowerCase() in { on: 1, "1": 1, true: 1, yes: 1 };
         agent.config.judgeEvery = on ? 1 : 0;
@@ -1531,33 +1863,8 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           },
           {
             role: "tool",
-            text: `thoughts: ${on ? "ON" : "off"}${on ? " — model's reasoning streams above each answer" : ""}`,
+            text: `reasoning: ${on ? "ON" : "off"}${on ? " — model's reasoning streams above each answer" : ""}`,
             toolName: "thoughts",
-          },
-        ]);
-        break;
-      }
-      case "mouse": {
-        const target = args.trim().toLowerCase();
-        let on = !mouseEnabled;
-        if (target === "on" || target === "1" || target === "true" || target === "yes") {
-          on = true;
-        } else if (target === "off" || target === "0" || target === "false" || target === "no") {
-          on = false;
-        }
-        setMouseEnabled(on);
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: on
-              ? "mouse: ON — wheel scroll enabled · native select/copy disabled · /mouse off to toggle"
-              : "mouse: OFF — native select/copy enabled (drag to select) · wheel scroll disabled · /mouse on to toggle",
-            toolName: "mouse",
           },
         ]);
         break;
@@ -1639,6 +1946,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
 
   async function onSubmit(text: string) {
     setTypedText("");
+    setScrollOffset(0); // jump back to the newest content when the user sends (fullscreen viewport)
     setHistory((h) => {
       const trimmed = text.trim();
       if (trimmed && (h.length === 0 || h[h.length - 1] !== trimmed)) {
@@ -1658,19 +1966,13 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     }
 
     setBusy(true);
-    setBusyState("thinking");
+    setBusyState("reasoning");
     setStreaming("");
     setStreamingThoughts("");
     try {
       const expanded = expandAtFiles(text, process.cwd());
       const routing = await agent.promptRouted(expanded);
-      if (agent.lastAborted) {
-        // Esc during routing — nothing ran. Say so plainly instead of a routed/offline note.
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: "⏹ aborted during routing", toolName: "routing", isError: false },
-        ]);
-      } else if (routing) {
+      if (routing) {
         setBasis(routing.decisionBasis || "minima");
         // Recommend-path warnings are all benign/informational (routing succeeded or degraded
         // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
@@ -1681,6 +1983,21 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
             {
               role: "tool",
               text: `ℹ ${info.join("; ")}`,
+              toolName: "routing",
+              isError: false,
+            },
+          ]);
+        }
+        // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
+        // land in lastFeedbackError but previously nothing read it — a server-side write
+        // outage starved the learning loop invisibly (observed live). Muted note, not red:
+        // the turn itself succeeded, only the learning write-back failed.
+        if (agent.lastFeedbackError) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `ℹ learning loop: ${agent.lastFeedbackError}`,
               toolName: "routing",
               isError: false,
             },
@@ -1713,6 +2030,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     } finally {
       setBusy(false);
       setBusyState("ready");
+      setActiveActions([]);
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
@@ -1744,100 +2062,225 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     }
   }
 
-  // Calculate dynamic sizing for the chat list based on terminal size. The chat region is the
-  // ONE flex-grow child; every other bottom region is a fixed sibling and must be subtracted so
-  // the windowed history + live streaming fit the frame. (The region ALSO hard-clips via
-  // overflow:"hidden" as a safety net — see the render tree — so an estimate error can never
-  // corrupt the terminal, only shave a line at the fold.)
-  const footerHeight = 6; // StatusBar (2 rows + margin) + keybinding row + quit line (generous)
-  const suggestionsHeight = matchingCommands.length > 0 ? matchingCommands.length + 2 : 0;
+  // The finalized transcript is printed to native scrollback via <Static>; only the LIVE region
+  // (streaming reply + thoughts + busy + input + status) is re-diffed by Ink, so it must fit the
+  // screen. Because we render inline in the MAIN buffer, a live frame that reaches `rows` makes Ink
+  // clearTerminal (CSI 3J) and WIPE the scrollback (all <Static> history) — so we reserve rows for
+  // each live element and bound the streaming preview to keep the total strictly below `rows` (see
+  // streamTailBudget). The full reply is committed to <Static> when the turn ends, so nothing is lost.
+  // +1 row for the live current-action line while a tool is running, so the chat window
+  // shrinks instead of clipping.
+  const currentAction = currentActionLine(activeActions);
+  const footerHeight = 6 + (currentAction ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line
+  const suggestionsHeight =
+    matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
-  // bottom region (see the render tree). Plan mode adds its banner (+3).
-  const inputBoxHeight = overlayOpen || permPrompt ? 0 : planMode ? 7 : 4;
+  // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
+  // inside the box, so grow the reserve by the extra wrapped lines.
+  const inputHidden = overlayOpen || permPrompt || questionPrompt;
+  const inputExtraLines = inputHidden ? 0 : Math.max(1, wrappedLineCount(typedText, cols - 4)) - 1;
+  const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   const permPromptHeight = permPrompt
     ? 3 + // round border (2) + prompt line (1)
       (permPrompt.argsSummary && !permPrompt.diffPreview ? 1 : 0) +
       (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
       1 // hint line
     : 0;
-  // Live streaming renders INSIDE the chat region, below the history. Reserve its true height:
-  // count newlines + wrapping at the turn-box interior width (cols-4), plus box chrome (border 2 +
-  // outer marginBottom 1 + inner marginY 2 + header 1 = 6). The old `2 + ceil(len/cols)` collapsed
-  // newlines and undercounted, letting a multi-line reply overflow.
-  const streamingHeight = streaming ? 6 + wrappedLineCount(streaming, cols - 4) : 0;
-  // The thoughts peek is wrap="truncate" (fixed ~4 rows), so it never grows with content.
-  const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 4 : 0;
+  // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
+  // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
+  const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
+  // The busy indicator (spinner + tip) renders as one line above the input box while a turn
+  // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
+  const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
+  const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
+  // The question overlay owns the bottom region when no permission prompt does (matching the
+  // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
+  // content must be made to fit: the question text is clamped (questionDisplayText) and the
+  // option list is windowed to the rows actually left after the safety margin, footer,
+  // suggestions, and the overlay's own chrome (border 2 + question + 2 window markers + hint).
+  // Component and reservation use the same numbers, so estimate == render.
+  const questionChrome = questionPrompt
+    ? 5 +
+      wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
+    : 0;
+  const questionMaxOptionRows = Math.max(
+    1,
+    rows - SCROLLBACK_SAFETY_ROWS - footerHeight - suggestionsHeight - questionChrome,
+  );
+  const questionPromptHeight =
+    questionPrompt && !permPrompt
+      ? questionOverlayHeight(questionPrompt, cols, questionMaxOptionRows)
+      : 0;
+  // /tree panel renders above the status bar. Its row cap is derived from the rows the other
+  // fixed live elements leave free (a naive rows/3 could push the fixed stack past terminal
+  // height — inline scrollback wipe / fullscreen clip); capped additionally at a third of the
+  // screen so the chat region survives, and hidden entirely when not even one row fits.
+  const TREE_CHROME = 5; // border(2) + header(1) + possible "+k more"(1) + marginBottom(1)
+  const treeMaxRows = Math.min(
+    Math.floor(rows / 3),
+    rows -
+      SCROLLBACK_SAFETY_ROWS -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      permPromptHeight -
+      questionPromptHeight -
+      busyIndicatorHeight -
+      TREE_CHROME,
+  );
+  const treeVisible = treeOpen && treeMaxRows > 0;
+  const treeHeight = treeVisible ? childTreeHeight(childrenState.size, treeMaxRows) : 0;
+  // Rows left for the live streaming reply after the other live elements; bound its preview to that
+  // (keeping the newest lines) so the re-diffed region never exceeds the terminal.
+  const streamReserved =
+    footerHeight +
+    suggestionsHeight +
+    inputBoxHeight +
+    permPromptHeight +
+    questionPromptHeight +
+    treeHeight +
+    busyIndicatorHeight +
+    streamingThoughtsHeight +
+    2; // "◆ assistant" header + marginTop
+  const streamTail = streaming
+    ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
+    : "";
+
+  // Fullscreen: window the transcript into the chat region above the fixed footer, RESERVING rows for
+  // the in-viewport live extras (streaming reply, reasoning peek, scroll hint) so that messages + live
+  // content together never exceed chatRegionHeight. If they did, the flex-end + overflow:"hidden"
+  // viewport would receive a taller-than-itself stack and stock Ink decimates/fuses lines (the scroll
+  // garble). The extras are mutually exclusive by scroll state: PINNED (offset 0) shows the stream /
+  // thoughts at the bottom; scrolled up shows the "↑ scrolled up" hint instead. Gating the reservation
+  // and the render on the same `pinned` (not on scrollWin.atBottom, which depends on the very budget we
+  // compute here) keeps them consistent and avoids a circular dependency.
   const chatRegionHeight = Math.max(
     1,
-    rows - footerHeight - suggestionsHeight - inputBoxHeight - permPromptHeight,
+    rows -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      permPromptHeight -
+      questionPromptHeight -
+      treeHeight -
+      busyIndicatorHeight,
   );
-  const maxChatHeight = Math.max(1, chatRegionHeight - streamingHeight - streamingThoughtsHeight);
+  const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
+  const fsThoughtsRows =
+    fullscreen && pinned && busy && streamingThoughts && showThinkingRef.current ? 5 : 0;
+  const fsHintRows = fullscreen && !pinned ? 1 : 0;
+  const fsStreamTail =
+    fullscreen && pinned && busy && streaming
+      ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
+        tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
+      : "";
+  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
+  const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
+  const scrollWin = fullscreen
+    ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols)
+    : null;
+  if (scrollWin) {
+    maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
+    atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
+  }
 
-  const { visible: visibleMsgs, atBottom } = getScrollableMessages(
-    messages,
-    maxChatHeight,
-    scrollOffset,
-    cols,
-  );
+  // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
+  // show a single resize notice instead of a clipped, garbled UI.
+  if (rows < 10 || cols < 40) {
+    return (
+      <Box
+        height={rows}
+        width="100%"
+        flexDirection="column"
+        justifyContent="center"
+        alignItems="center"
+        overflow="hidden"
+      >
+        <Text color="yellow" bold>
+          Terminal too small
+        </Text>
+        <Text color="gray">{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
+      </Box>
+    );
+  }
+
+  const bannerBlock =
+    messages.length === 0 && matchingCommands.length === 0 && !overlayOpen ? (
+      <Box flexDirection="column" alignItems="center" marginTop={1}>
+        <Text color="green" bold>
+          {getAsciiBanner("MINIMA")}
+        </Text>
+        <Box marginTop={1}>
+          <Text color="gray">CLI · cost-aware model routing</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color="gray">recommend → run → judge → feedback → memory</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color="gray">type a prompt, or / for commands</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color="gray">
+            {fullscreen
+              ? "scroll history with the wheel / trackpad or PgUp / PgDn · /mouse for text-select"
+              : "scroll with your terminal (wheel / trackpad) · select & copy freely"}
+          </Text>
+        </Box>
+        {tipsEnabled && startupTip ? (
+          <Box marginTop={1}>
+            <Text color="yellow">{startupTip}</Text>
+          </Box>
+        ) : null}
+      </Box>
+    ) : null;
 
   return (
-    // Global overflow guard: bound the whole frame to exactly `rows` and clip anything beyond.
-    // This keeps Ink's output from ever exceeding the terminal height (which is what desyncs its
-    // cursor-relative diff into garbled output), covering not just the chat region but oversized
-    // overlays (command palette, config, permission diffs) on short terminals too.
-    <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
-      {messages.length === 0 &&
-      !pickerOpen &&
-      !paletteOpen &&
-      !sessionPickerOpen &&
-      !configOverlayOpen ? (
-        <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-          <Text color="green" bold>
-            {getAsciiBanner("MINIMA")}
-          </Text>
-          <Box marginTop={1}>
-            <Text color="gray">CLI · cost-aware model routing</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">recommend → run → judge → feedback → memory</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">type a prompt, or / for commands</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">
-              {mouseEnabled
-                ? "wheel scroll ON · /mouse off to select & copy · PgUp/PgDn always works"
-                : "select & copy ON · /mouse on for wheel scroll · PgUp/PgDn always works"}
-            </Text>
-          </Box>
-        </Box>
-      ) : (
-        // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat
-        // to exceed its allotted rows regardless of any height-estimate error — this is what stops
-        // Ink's cursor-relative diff from desyncing into garbled/overlapping output. flex-end
-        // bottom-aligns the conversation so the clip eats the OLDEST content at the top fold,
-        // keeping the newest answer + live streaming visible (correct chat semantics).
+    // Two layouts share one fixed footer (suggestions + input/overlays + status bar). FULLSCREEN wraps
+    // the transcript in a bottom-anchored, in-app-scrolled viewport inside a height={rows} frame, so
+    // the prompt is glued to the last row (like Claude Code's fullscreen mode). INLINE prints the
+    // transcript to the terminal's native scrollback via <Static> and lets the terminal scroll it.
+    <Box
+      flexDirection="column"
+      width="100%"
+      height={fullscreen ? rows : undefined}
+      overflow={fullscreen ? "hidden" : "visible"}
+    >
+      {fullscreen ? (
         <Box
-          flexDirection="column"
           flexGrow={1}
           minHeight={0}
           overflow="hidden"
+          flexDirection="column"
           justifyContent="flex-end"
         >
-          <Messages
-            messages={visibleMsgs}
-            streaming={busy && atBottom ? streaming : ""}
-            streamingThoughts={busy && atBottom && showThinkingRef.current ? streamingThoughts : ""}
-          />
-          {!atBottom && (
-            <Text color="gray">
-              {" "}
-              ↑ scrolled up {scrollOffset} lines · PgDn or End to jump to bottom
-            </Text>
-          )}
+          {bannerBlock}
+          {(scrollWin?.visible ?? []).map((msg, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
+            <MessageRow key={i} msg={msg} cols={cols} />
+          ))}
+          {pinned && busy && streamingThoughts && showThinkingRef.current ? (
+            <StreamingThoughts text={streamingThoughts} />
+          ) : null}
+          {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
+          {scrollWin && !pinned ? (
+            <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
+          ) : null}
         </Box>
+      ) : (
+        <>
+          {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
+          <Static key={transcriptGen} items={messages}>
+            {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
+          </Static>
+          {bannerBlock}
+          {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
+              never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
+          {busy && streamingThoughts && showThinkingRef.current ? (
+            <StreamingThoughts text={streamingThoughts} />
+          ) : null}
+          {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
+        </>
       )}
 
       {matchingCommands.length > 0 && (
@@ -1848,6 +2291,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           flexDirection="column"
           width="100%"
           marginBottom={0}
+          flexShrink={0}
         >
           <Box position="absolute" marginTop={-1} marginLeft={2}>
             <Text color="gray"> commands </Text>
@@ -1858,8 +2302,13 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               <Text color="gray">{cmd.desc}</Text>
             </Box>
           ))}
+          {hiddenSuggestions > 0 && (
+            <Text color="gray">…+{hiddenSuggestions} more · keep typing or Tab to complete</Text>
+          )}
         </Box>
       )}
+
+      {busyIndicatorVisible && <BusyIndicator active showTip={tipsEnabled} />}
 
       {pickerOpen ? (
         <ModelPicker
@@ -1913,7 +2362,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         />
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : permPrompt ? null : ( // permission prompt owns the bottom region (rendered below)
+      ) : permPrompt || questionPrompt ? null : ( // permission/question prompt owns the bottom region (rendered below)
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
@@ -1961,7 +2410,27 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
         />
       )}
 
+      {questionPrompt && !permPrompt && (
+        <QuestionOverlay
+          prompt={{
+            ...questionPrompt,
+            resolve: (answer) => {
+              setQuestionPrompt(null);
+              questionPrompt.resolve(answer);
+            },
+          }}
+          cols={cols}
+          maxOptionRows={questionMaxOptionRows}
+        />
+      )}
+
       <Box flexDirection="column" flexShrink={0}>
+        {treeVisible && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
+        {currentAction ? (
+          <Text color="yellow" wrap="truncate">
+            {currentAction}
+          </Text>
+        ) : null}
         <StatusBar
           model={agent.agentState.model?.id ?? "(none)"}
           basis={basis}
@@ -1979,14 +2448,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           planMode={planMode}
           readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
           alwaysTools={[...permStateRef.current.allowAlways]}
+          activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
         />
 
         <Box justifyContent="space-between" width="100%">
           <Box>
-            <Text color="yellow">pgup </Text>
-            <Text color="gray">PgUp </Text>
-            <Text color="yellow">pgdn </Text>
-            <Text color="gray">PgDn </Text>
             <Text color="yellow">ctrl+l </Text>
             <Text color="gray">Model </Text>
             <Text color="yellow">ctrl+r </Text>

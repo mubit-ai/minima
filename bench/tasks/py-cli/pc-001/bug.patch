@@ -1,0 +1,13 @@
+diff --git a/taskman/query.py b/taskman/query.py
+index f739ef8..c445687 100644
+--- a/taskman/query.py
++++ b/taskman/query.py
+@@ -88,7 +88,7 @@ def due_within(tasks: Iterable[Task], days: int, today: date) -> list[Task]:
+         for t in tasks
+         if t.due is not None
+         and not t.is_done
+-        and today <= t.due <= horizon
++        and today <= t.due < horizon
+     ]
+ 
+ 

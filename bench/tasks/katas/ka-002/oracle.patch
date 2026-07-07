@@ -1,0 +1,27 @@
+diff --git a/py/rle.py b/py/rle.py
+index 579953a..6adfa49 100644
+--- a/py/rle.py
++++ b/py/rle.py
+@@ -24,4 +24,21 @@ def rle_encode(text):
+     The empty string encodes to the empty string. ``text`` must be a
+     ``str``; anything else raises ``TypeError``.
+     """
+-    raise NotImplementedError("kata: implement rle_encode")
++    if not isinstance(text, str):
++        raise TypeError("text must be a str")
++
++    def emit(ch):
++        return "\\" + ch if ch.isdigit() or ch == "\\" else ch
++
++    out = []
++    i = 0
++    while i < len(text):
++        j = i
++        while j < len(text) and text[j] == text[i]:
++            j += 1
++        run = j - i
++        if run >= 2:
++            out.append(str(run))
++        out.append(emit(text[i]))
++        i = j
++    return "".join(out)

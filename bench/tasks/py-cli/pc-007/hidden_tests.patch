@@ -1,0 +1,84 @@
+diff --git a/tests/test_hidden_v1_due_dates.py b/tests/test_hidden_v1_due_dates.py
+new file mode 100644
+index 0000000..947ede3
+--- /dev/null
++++ b/tests/test_hidden_v1_due_dates.py
+@@ -0,0 +1,78 @@
++"""Hidden fail-to-pass tests: v1-era files keep their due dates."""
++
++import json
++from datetime import date
++
++from taskman.cli import main
++from taskman.migrations import migrate
++from taskman.storage import Store
++
++V1_DOC = {
++    "schema": 1,
++    "tasks": [
++        {
++            "id": 1,
++            "title": "Renew insurance",
++            "priority": "high",
++            "tags": "admin",
++            "due": "2026-03-10",
++            "done": False,
++            "created": "2025-12-01",
++        },
++        {
++            "id": 2,
++            "title": "Plan retreat",
++            "priority": "medium",
++            "tags": "work,planning",
++            "due": "2026-03-18",
++            "done": False,
++            "created": "2025-12-02",
++        },
++    ],
++}
++
++
++def write_v1(path):
++    path.write_text(json.dumps(V1_DOC), encoding="utf-8")
++
++
++def test_migrate_preserves_v1_due_dates():
++    doc = migrate(json.loads(json.dumps(V1_DOC)))
++    assert doc["schema"] == 3
++    assert [rec.get("due") for rec in doc["tasks"]] == ["2026-03-10", "2026-03-18"]
++
++
++def test_v1_file_loads_with_due_dates(store_path):
++    write_v1(store_path)
++    tasks = Store(store_path).load()
++    assert tasks[0].due == date(2026, 3, 10)
++    assert tasks[1].due == date(2026, 3, 18)
++
++
++def test_v1_overdue_filter_after_migration(store_path, capsys):
++    write_v1(store_path)
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    rc = main([*base, "list", "--overdue"])
++    assert rc == 0
++    out = capsys.readouterr().out
++    assert "Renew insurance" in out
++    assert "Plan retreat" not in out
++
++
++def test_v1_report_counts_after_migration(store_path, capsys):
++    write_v1(store_path)
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    rc = main([*base, "report"])
++    assert rc == 0
++    out = capsys.readouterr().out
++    assert "overdue:     1" in out
++    assert "unscheduled: 0" in out
++
++
++def test_v1_roundtrip_persists_due_dates(store_path):
++    write_v1(store_path)
++    store = Store(store_path)
++    store.save(store.load())
++    doc = json.loads(store_path.read_text(encoding="utf-8"))
++    assert doc["schema"] == 3
++    assert doc["tasks"][0]["due"] == "2026-03-10"

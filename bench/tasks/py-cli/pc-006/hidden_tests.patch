@@ -1,0 +1,39 @@
+diff --git a/tests/test_hidden_priority_percent.py b/tests/test_hidden_priority_percent.py
+new file mode 100644
+index 0000000..7cbb173
+--- /dev/null
++++ b/tests/test_hidden_priority_percent.py
+@@ -0,0 +1,33 @@
++"""Hidden fail-to-pass tests: priority percentages cover ALL tasks."""
++
++from taskman.report import group_by_priority
++
++from .conftest import make_task
++
++
++def test_percent_computed_over_all_tasks_including_done():
++    tasks = [
++        make_task(id=1, priority=1),
++        make_task(id=2, priority=1, status="done"),
++        make_task(id=3, priority=3),
++        make_task(id=4, priority=3),
++    ]
++    rows = group_by_priority(tasks)
++    assert [r["count"] for r in rows] == [2, 0, 2]
++    assert [r["percent"] for r in rows] == [50.0, 0.0, 50.0]
++
++
++def test_percent_for_fully_completed_collection():
++    rows = group_by_priority([make_task(id=1, priority=2, status="done")])
++    assert [r["percent"] for r in rows] == [0.0, 100.0, 0.0]
++
++
++def test_percents_sum_to_100_with_mixed_statuses():
++    tasks = [
++        make_task(id=1, priority=1),
++        make_task(id=2, priority=2, status="done"),
++        make_task(id=3, priority=3, status="done"),
++        make_task(id=4, priority=3),
++    ]
++    rows = group_by_priority(tasks)
++    assert sum(r["percent"] for r in rows) == 100.0

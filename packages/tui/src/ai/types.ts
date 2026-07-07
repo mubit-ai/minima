@@ -1,5 +1,5 @@
 /**
- * Core LLM types — TypeScript port of minima_harness/ai/types.ts (itself a port of
+ * Core LLM types — TypeScript port of the Python harness's ai/types.ts (itself a port of
  * @earendil-works/pi-ai's data model).
  *
  * Wire-contract discriminator values (`type` / `role` / `stopReason`) are kept

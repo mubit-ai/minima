@@ -1,5 +1,5 @@
 /**
- * `minima` CLI entry point — port of minima_harness/tui/cli.py.
+ * `minima` CLI entry point — port of the Python harness's tui/cli.py.
  *
  * Parses args, loads .env, builds the HarnessConfig + toolset + MinimaAgent, and
  * dispatches to one of: --print (one-shot), --mode json (event stream), or the
@@ -22,9 +22,9 @@ import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
-import { createSpawn } from "../minima/spawn.ts";
+import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
-import { builtinTools } from "../tools/index.ts";
+import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
@@ -172,6 +172,12 @@ interface CliArgs {
   budgetEnforce: boolean;
   /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
   slider?: number;
+  /**
+   * Fullscreen renderer: alternate screen buffer, prompt glued to the bottom row, in-app scroll
+   * (PgUp/PgDn + optional mouse wheel) — like Claude Code's fullscreen mode. Default true; disable
+   * with `--no-fullscreen` or `MINIMA_TUI_INLINE=1` to fall back to the inline/native-scroll mode.
+   */
+  fullscreen: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -183,6 +189,7 @@ function parseArgs(argv: string[]): CliArgs {
     mode: "interactive",
     noTools: false,
     budgetEnforce: false,
+    fullscreen: !process.env.MINIMA_TUI_INLINE,
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -210,6 +217,12 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--offline":
         opts.offline = true;
+        break;
+      case "--no-fullscreen":
+        opts.fullscreen = false;
+        break;
+      case "--fullscreen":
+        opts.fullscreen = true;
         break;
       case "-t":
       case "--tools":
@@ -266,6 +279,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider NAME      provider for a pinned --model
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
+      --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -366,6 +380,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  // Apply the --thinking CLI flag to the initial reasoning level. It was parsed but never used;
+  // the agent kept its default, so the flag was a silent no-op.
+  const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  if (THINKING_LEVELS.includes(args.thinking)) {
+    agent.agentState.thinkingLevel = args.thinking as typeof agent.agentState.thinkingLevel;
+  }
+
   // Effort routing Phase A (staged default-off): the server's classified difficulty picks
   // each prompt's thinking level — routing (model, effort), not just model.
   agent.autoEffort = process.env.MINIMA_AUTO_EFFORT === "1";
@@ -375,6 +396,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // namespace, else the repo identity) so recall surfaces prior outcomes across runs and
   // write-backs accumulate under it — random-per-run ids would make recall see nothing.
   const memorySession = config.namespace ?? repoIdentity(process.cwd());
+  // Also scope server-side recall (/v1/recommend) to this stable id: prod memory is keyed
+  // by user_id, so without it decision_basis can never leave `prior`. router.ts reads
+  // config.memorySession by reference at recommend time.
+  config.memorySession = memorySession;
   agent.memory = await createMubitMemory(memorySession);
 
   // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
@@ -410,13 +435,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
   // Children get their own routed model, meter, confined tools, and budget slice; their
   // rows land in the same run under agentId=childId.
+  //
+  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
+  // React state without the TUI needing to exist at createSpawn time.
+  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
   agent.agentState.tools.push(
     taskTool({
-      spawn: createSpawn({ parent: agent, workdir: process.cwd() }),
+      spawn: createSpawn({
+        parent: agent,
+        workdir: process.cwd(),
+        onChildEvent: (e) => childEventRef.handler?.(e),
+      }),
       spawnDepth: 0,
       maxDepth: 2,
     }),
   );
+
+  // The `question` tool lets the model ask the user a structured clarifying question mid-run.
+  // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
+  // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
+  const askUserRef: AskUserRef = { current: null };
+  agent.agentState.tools.push(questionTool(askUserRef));
 
   // Budget following: --budget creates a session-scoped ledger (warn mode unless
   // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
@@ -464,26 +503,40 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return rc;
   }
 
-  // Install the stdin.read() filter so SGR mouse wheel sequences are stripped
-  // before Ink's parseKeypress ever sees them (prevents garbage in TextInput).
-  installMouseScrollFilter();
-
-  // Enter alternate screen + hide cursor BEFORE render() so Ink's first paint
-  // lands in the alternate buffer (otherwise the screen is blank until a key is pressed).
-  process.stdout.write("\u001b[?1049h");
-  process.stdout.write("\u001b[?25l");
+  // Two renderers (like Claude Code):
+  //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
+  //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
+  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
+  //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
+  //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
+  //    reserve seats the prompt at the bottom on first paint.
+  if (args.fullscreen) {
+    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
+    process.stdout.write("\u001b[?1049h"); // enter alternate screen
+    process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
+  } else {
+    process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
+    process.stdout.write("\u001b[?25l");
+  }
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
-  // exitOnCtrlC:false — the app owns Ctrl+C (double-tap to quit); Ink's built-in
-  // single-press exit would otherwise race and pre-empt the double-tap contract.
-  const instance = render(React.createElement(HarnessApp, { agent, banner: "minima" }), {
-    exitOnCtrlC: false,
-  });
+  // exitOnCtrlC:false hands Ctrl+C to our own useInput handler — during a run it aborts the
+  // turn, when idle it arms the double-press quit — instead of Ink killing the app outright.
+  const instance = render(
+    React.createElement(HarnessApp, {
+      agent,
+      banner: "minima",
+      askUserRef,
+      childEventRef,
+      fullscreen: args.fullscreen,
+    }),
+    { exitOnCtrlC: false },
+  );
   await instance.waitUntilExit();
 
-  // Exit alternate screen + restore cursor on shutdown.
-  process.stdout.write("\u001b[?1049l");
+  // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
+  if (args.fullscreen) process.stdout.write("\u001b[?1049l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");

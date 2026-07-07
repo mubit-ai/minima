@@ -1,0 +1,12 @@
+{
+  "id": "ka-011",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement parseDuration(spec) in js/duration.js, converting compact duration strings such as \"1h30m15s\" into total seconds (5415). A spec is one or more components, each being one or more decimal digits followed by a unit h, m or s. Units must appear in strictly descending order, each at most once, though any may be skipped (\"1h5s\" is 3605). Values are unbounded (\"90m\" is 5400) and leading zeros are allowed. No whitespace, signs, or other characters may appear, and at least one component is required; any malformed spec throws an Error. Verify with bun test tests/js/duration.",
+  "test_cmd": "bun test tests/js/duration",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 6,
+  "timeout_sec": 60
+}

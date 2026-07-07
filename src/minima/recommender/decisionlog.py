@@ -119,7 +119,10 @@ class Reconciliation:
 
     model_id: str
     outcome: str
-    quality: float
+    # None for UNJUDGED feedback (judged=False): never fabricate a quality for
+    # rows the harness didn't judge (M-J2). _apply stores it straight through to
+    # DecisionRecord.realized_quality, which is likewise `float | None` (NULL).
+    quality: float | None
     cost_usd: float | None = None
     latency_ms: int | None = None
     ts: float = 0.0

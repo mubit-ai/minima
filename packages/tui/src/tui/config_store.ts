@@ -1,7 +1,7 @@
 /**
  * Per-user credential store — keychain-first, 0600-file fallback.
  *
- * Port of minima_harness/tui/config_store.py. Secrets go to the OS keychain (via
+ * Port of the Python harness's tui/config_store.py. Secrets go to the OS keychain (via
  * `keytar`, when importable) — otherwise to `~/.minima-harness/config.env` written 0600.
  * Non-secret config (URLs) always lives in the file. hydrateEnv() materialises stored
  * values into process.env with setdefault precedence (real shell env + project .env win).
@@ -94,6 +94,18 @@ export const SECTIONS: Section[] = [
         secret: false,
         optional: true,
         default: "https://console.mubit.ai",
+      },
+    ],
+  },
+  {
+    title: "Web tools",
+    note: "Exa API key for the web_search / web_fetch tools (https://exa.ai). Optional — the web tools stay unavailable until it is set.",
+    fields: [
+      {
+        key: "EXA_API_KEY",
+        label: "Exa API key (web search)",
+        secret: true,
+        optional: true,
       },
     ],
   },

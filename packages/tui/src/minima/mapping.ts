@@ -1,7 +1,7 @@
 /**
  * Map a Minima RankedModel to a harness Model.
  *
- * Port of minima_harness/minima/mapping.py. Minima's routing catalogue and the harness
+ * Port of the Python harness's minima/mapping.py. Minima's routing catalogue and the harness
  * calling registry are kept separate: Minima is the source of truth for routing, the
  * harness registry for calling. A tolerant lookup (exact -> id-only -> provider/model
  * split -> fallback) resolves a recommendation to a callable model even when ids drift.

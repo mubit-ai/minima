@@ -1,7 +1,7 @@
 /**
  * MinimaRouter — the thin seam between the harness and a running Minima service.
  *
- * Port of minima_harness/minima/router.py. Owns the two halves of the Minima loop on
+ * Port of the Python harness's minima/router.py. Owns the two halves of the Minima loop on
  * the harness side: recommend (ask Minima which model, map it to a callable harness
  * model) and feedback (report realized tokens / cost / latency / quality so Minima's
  * memory sharpens). Realized cost comes from the provider's actual usage, NOT Minima's
@@ -13,7 +13,14 @@ import { MinimaClient } from "./client.ts";
 import type { HarnessConfig } from "./config.ts";
 import { MinimaError } from "./errors.ts";
 import { ModelMapping } from "./mapping.ts";
-import type { Constraints, FeedbackResponse, RankedModel, TaskInput, TaskType } from "./schemas.ts";
+import type {
+  CapabilitiesResponse,
+  Constraints,
+  FeedbackResponse,
+  RankedModel,
+  TaskInput,
+  TaskType,
+} from "./schemas.ts";
 
 /** A harness-native view of one ranked candidate (no minima schema leak). */
 export interface Ranking {
@@ -105,6 +112,8 @@ export class MinimaRouter {
   readonly config: HarnessConfig;
   readonly mapping: ModelMapping;
   private readonly client: MinimaClient;
+  /** Cached per-session; fetched once on first use. */
+  private _capabilities: CapabilitiesResponse | null = null;
 
   constructor(opts: MinimaRouterOptions) {
     this.client = opts.client;
@@ -174,6 +183,10 @@ export class MinimaRouter {
       cost_quality_tradeoff: opts.slider ?? this.config.costQualityTradeoff,
       constraints: Object.keys(constraints).length ? constraints : undefined,
       namespace: this.config.namespace ?? undefined,
+      // Server memory recall is scoped by user_id — without a stable one the server
+      // surfaces nothing and decision_basis never leaves `prior` (so the run can't recall
+      // its own prior outcomes). Send the stable memory-session id; fall back to namespace.
+      user_id: this.config.memorySession ?? this.config.namespace ?? undefined,
       baseline_model_id: this.config.baselineModelId ?? undefined,
       max_candidates: opts.maxCandidates,
       allow_llm_escalation: opts.allowLlmEscalation,
@@ -206,6 +219,26 @@ export class MinimaRouter {
     };
   }
 
+  /**
+   * Server capability handshake — cached per session.
+   * Fails-open: returns a minimal "all false" object when the server is unreachable or
+   * running an older version that doesn't have /v1/capabilities.
+   */
+  async capabilities(): Promise<CapabilitiesResponse> {
+    if (this._capabilities) return this._capabilities;
+    try {
+      this._capabilities = await this.client.capabilities();
+    } catch {
+      this._capabilities = {
+        plan: false,
+        workflow: false,
+        api_version: "unknown",
+        honored_constraints: [],
+      };
+    }
+    return this._capabilities;
+  }
+
   /** Fleet-level savings truth from the server (org-scoped; dual-baseline vocabulary). */
   savings(opts: { days?: number } = {}): Promise<import("./schemas.ts").SavingsResponse> {
     return this.client.savings({
@@ -229,6 +262,12 @@ export class MinimaRouter {
      * learning loop (it substitutes quality 0.9 for null-quality successes).
      */
     verifiedInProduction: boolean;
+    /**
+     * Whether a quality judge ran on this turn. False = cadence-skip or abstain.
+     * The server uses this to store NULL quality instead of the 0.9 fabricated default,
+     * keeping calibration metrics and OPE weights honest.
+     */
+    judged: boolean;
     /** Provenance tag, e.g. "judged=false" for cadence-skipped/abstained turns. */
     notes?: string;
   }): Promise<FeedbackResponse> {
@@ -243,6 +282,7 @@ export class MinimaRouter {
       latency_ms: opts.latencyMs,
       iterations: opts.iterations,
       verified_in_production: opts.verifiedInProduction,
+      judged: opts.judged,
       notes: opts.notes,
     });
   }

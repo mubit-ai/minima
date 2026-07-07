@@ -1,0 +1,26 @@
+diff --git a/js/droot.js b/js/droot.js
+index 2f382a2..3e91d0a 100644
+--- a/js/droot.js
++++ b/js/droot.js
+@@ -20,5 +20,20 @@
+  * Example: digitalRoot(255, 16) -> 15 (FF -> 1E -> F).
+  */
+ export function digitalRoot(value, base) {
+-  throw new Error("kata: implement digitalRoot");
++  if (!Number.isInteger(value) || value < 0) {
++    throw new RangeError("value must be a non-negative integer");
++  }
++  if (!Number.isInteger(base) || base < 2 || base > 36) {
++    throw new RangeError("base must be an integer in 2..36");
++  }
++  while (value >= base) {
++    let sum = 0;
++    let rest = value;
++    while (rest > 0) {
++      sum += rest % base;
++      rest = Math.floor(rest / base);
++    }
++    value = sum;
++  }
++  return value;
+ }

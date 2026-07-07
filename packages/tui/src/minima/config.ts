@@ -1,7 +1,7 @@
 /**
  * Harness configuration: where Minima lives, the candidate pool, and judge policy.
  *
- * Port of minima_harness/minima/config.py. Defaults target the hosted Minima so a
+ * Port of the Python harness's minima/config.py. Defaults target the hosted Minima so a
  * fresh install works once MUBIT_API_KEY + a provider key are set; for local dev set
  * MINIMA_URL=http://localhost:8080.
  */
@@ -27,6 +27,11 @@ export interface HarnessConfig {
   pinned: boolean;
   /** Memory isolation lane (-> namespace). null = default lane. */
   namespace: string | null;
+  /** Stable per-actor recall id (-> recommend user_id). Prod memory recall is scoped by
+   * user_id; without it the server surfaces nothing, so decision_basis never leaves
+   * `prior`. Set to the same stable id as the memory session (namespace ?? repo identity)
+   * so a run recalls its own prior outcomes. null = omit (recall stays empty). */
+  memorySession: string | null;
   /** cost/quality slider: 0=cheapest acceptable, 10=highest quality. */
   costQualityTradeoff: number;
   judgeModel: string;
@@ -46,6 +51,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     candidates: [...DEFAULT_CANDIDATES],
     pinned: false,
     namespace: null,
+    memorySession: null,
     costQualityTradeoff: 5.0,
     judgeModel: DEFAULT_JUDGE_MODEL,
     judgeEvery: 1,

@@ -1,5 +1,5 @@
 /**
- * Non-interactive run modes — port of minima_harness/tui/run_modes.py.
+ * Non-interactive run modes — port of the Python harness's tui/run_modes.py.
  *
  *   --print       one-shot: run the prompt, print the final assistant text, exit.
  *   --mode json   stream every AgentEvent as a JSON line, then exit.
@@ -73,6 +73,14 @@ export async function runJson(agent: MinimaAgent, prompt: string): Promise<numbe
     process.stdout.write(`${JSON.stringify(dict)}\n`);
   });
   await agent.promptRouted(prompt);
+  // Learning-loop rejections (HTTP-200 accepted=false, e.g. memory_write_failed) never
+  // appear as agent events — emit one line so scripts/CI can detect a starving loop.
+  // Not counted as run failure: the turn succeeded, only the learning write-back failed.
+  if (agent.lastFeedbackError) {
+    process.stdout.write(
+      `${JSON.stringify({ type: "feedback_error", message: agent.lastFeedbackError })}\n`,
+    );
+  }
   const last = lastAssistant(agent);
   // Reflect failure in the exit code so scripts/CI can gate on it: a streamed error event,
   // a hard-error final message, or offline-with-no-output all count as failure.

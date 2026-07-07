@@ -2,7 +2,7 @@
  * MinimaAgent — an Agent that routes each prompt through Minima and feeds the realized
  * outcome back.
  *
- * Port of minima_harness/minima/runtime.py (focused core). Per promptRouted(): (1) ask
+ * Port of the Python harness's minima/runtime.py (focused core). Per promptRouted(): (1) ask
  * Minima which model and set state.model, (2) run the agent loop, (3) judge the final
  * answer and send POST /v1/feedback with realized tokens/cost/latency. Routing is
  * bypassable: if Minima is unreachable and allowOffline is set, the run proceeds on the
@@ -164,6 +164,11 @@ export class MinimaAgent extends Agent {
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
+    // The surfaced learning-loop note must reflect THIS turn only. Reset here because
+    // feedbackSafely early-returns without touching the field on turns that send no feedback
+    // (pinned / offline / no-recommendation) — otherwise an earlier rejection would re-display
+    // indefinitely on later pinned turns.
+    this.lastFeedbackError = null;
 
     // Fresh abort scope for THIS prompt's routing phase; abort() (Esc) cancels it.
     const routeController = new AbortController();
@@ -596,6 +601,7 @@ export class MinimaAgent extends Agent {
         latencyMs,
         iterations: turnsTaken || undefined,
         verifiedInProduction: false,
+        judged,
         notes: judged ? undefined : "judged=false",
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record

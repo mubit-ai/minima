@@ -1,6 +1,6 @@
 /**
  * Status bar — the bottom line: current model, turn count, and any offline/reroute note.
- * Port of minima_harness/tui/widgets/footer.py.
+ * Port of the Python harness's tui/widgets/footer.py.
  */
 
 import { Box, Text } from "ink";
@@ -18,12 +18,14 @@ export interface StatusBarProps {
   sessionId: string;
   routingOffline: boolean;
   offlineReason?: string | null;
-  statusText: "ready" | "thinking" | "working";
+  statusText: "ready" | "reasoning" | "running";
   planMode?: boolean;
   readDirs?: string[];
   alwaysTools?: string[];
   /** "spent/limit (mode)" budget note; null hides the segment. */
   budget?: { spentUsd: number; limitUsd: number; fraction: number; mode: string } | null;
+  /** Number of sub-agents currently in flight; 0 or undefined hides the badge. */
+  activeChildren?: number;
 }
 
 export function StatusBar({
@@ -43,6 +45,7 @@ export function StatusBar({
   readDirs,
   alwaysTools,
   budget,
+  activeChildren,
 }: StatusBarProps) {
   const budgetColor = budget
     ? budget.fraction >= 0.9
@@ -60,7 +63,10 @@ export function StatusBar({
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box>
+      {/* Each row is a single truncating line so a long status never wraps to extra rows and
+          pushes itself (or the perms line) off the bottom past the frame clip — footerHeight
+          in app.tsx assumes exactly two status rows. */}
+      <Text wrap="truncate">
         {planMode && (
           <Text color="yellow" bold>
             {" "}
@@ -76,7 +82,7 @@ export function StatusBar({
         <Text color="gray"> · route: </Text>
         <Text color={routeStyle}>{routeMode}</Text>
 
-        <Text color="gray"> · think: </Text>
+        <Text color="gray"> · reason: </Text>
         <Text color={thinkStyle}>{thinkingLevel}</Text>
 
         <Text color="gray"> │ ctx </Text>
@@ -105,11 +111,18 @@ export function StatusBar({
         <Text color="gray"> · </Text>
         <Text color={statusColor}>{statusText}</Text>
 
+        {activeChildren ? (
+          <>
+            <Text color="gray"> · </Text>
+            <Text color="cyan">▸ {activeChildren} active</Text>
+          </>
+        ) : null}
+
         {routingOffline && (
           <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
         )}
-      </Box>
-      <Box>
+      </Text>
+      <Text wrap="truncate">
         <Text color="gray">perms: </Text>
         <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
         {alwaysTools && alwaysTools.length > 0 ? (
@@ -118,7 +131,7 @@ export function StatusBar({
           <Text color="gray"> · w/e/b: ask</Text>
         )}
         {planMode && <Text color="magenta"> · PLAN (ro)</Text>}
-      </Box>
+      </Text>
     </Box>
   );
 }

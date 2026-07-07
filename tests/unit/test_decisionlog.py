@@ -99,6 +99,27 @@ class TestBackend:
         assert got.feedback_ts is not None
         assert got.late_feedback is False
 
+    def test_reconcile_unjudged_stores_null_quality(self, backend):
+        # M-J2: UNJUDGED feedback (judged=False) carries quality=None and must be
+        # stored straight through as NULL realized_quality — never fabricated to a
+        # label-based default. Reconciliation.quality is `float | None` for this.
+        backend.put(make_decision("rid-unjudged"))
+        ok = backend.reconcile(
+            "rid-unjudged",
+            Reconciliation(
+                model_id="claude-haiku-4-5",
+                outcome="success",
+                quality=None,
+                cost_usd=0.0021,
+            ),
+        )
+        assert ok is True
+        got = backend.get("rid-unjudged")
+        assert got.reconciled
+        assert got.realized_outcome == "success"
+        assert got.realized_quality is None
+        assert got.realized_cost_usd == 0.0021
+
     def test_reconcile_unknown_id_returns_false(self, backend):
         assert backend.reconcile("nope", Reconciliation("m", "success", 0.9)) is False
 

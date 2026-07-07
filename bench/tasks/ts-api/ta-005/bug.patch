@@ -1,0 +1,21 @@
+diff --git a/src/ratelimit.ts b/src/ratelimit.ts
+index 4ee8f0d..bad4653 100644
+--- a/src/ratelimit.ts
++++ b/src/ratelimit.ts
+@@ -64,10 +64,12 @@ export class FixedWindowLimiter {
+    */
+   hit(key: string): RateDecision {
+     const now = this.now();
+-    const entry = this.entries.get(key);
+-    if (entry === undefined || now - entry.windowStart >= this.windowMs) {
+-      this.entries.set(key, { windowStart: now, count: 1 });
+-      return { allowed: true, remaining: this.limit - 1, retryAfterMs: 0 };
++    let entry = this.entries.get(key);
++    if (entry === undefined) {
++      entry = { windowStart: now, count: 0 };
++      this.entries.set(key, entry);
++    } else if (now - entry.windowStart >= this.windowMs) {
++      entry.windowStart = now;
+     }
+     entry.count += 1;
+     if (entry.count > this.limit) {

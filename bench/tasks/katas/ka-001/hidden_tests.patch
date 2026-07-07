@@ -1,0 +1,40 @@
+diff --git a/tests/py/test_roman_hidden.py b/tests/py/test_roman_hidden.py
+new file mode 100644
+index 0000000..e633608
+--- /dev/null
++++ b/tests/py/test_roman_hidden.py
+@@ -0,0 +1,34 @@
++import pytest
++import roman
++
++
++def test_zero_is_nulla():
++    assert roman.to_roman(0) == "N"
++
++
++def test_subtractive_forms():
++    assert roman.to_roman(1994) == "MCMXCIV"
++    assert roman.to_roman(49) == "XLIX"
++    assert roman.to_roman(944) == "CMXLIV"
++
++
++def test_additive_forms():
++    assert roman.to_roman(3888) == "MMMDCCCLXXXVIII"
++    assert roman.to_roman(6) == "VI"
++
++
++def test_bounds():
++    assert roman.to_roman(1) == "I"
++    assert roman.to_roman(3999) == "MMMCMXCIX"
++
++
++def test_out_of_range_raises():
++    with pytest.raises(ValueError):
++        roman.to_roman(-1)
++    with pytest.raises(ValueError):
++        roman.to_roman(4000)
++
++
++def test_non_int_raises():
++    with pytest.raises(ValueError):
++        roman.to_roman(3.0)

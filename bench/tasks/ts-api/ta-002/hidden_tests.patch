@@ -1,0 +1,68 @@
+diff --git a/tests/hidden/expiry.test.ts b/tests/hidden/expiry.test.ts
+new file mode 100644
+index 0000000..dcdf4a6
+--- /dev/null
++++ b/tests/hidden/expiry.test.ts
+@@ -0,0 +1,62 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++const token = TOKENS.alice;
++
++describe("link expiry", () => {
++  test("create with ttlSeconds computes expiresAt from the clock", () => {
++    const { app } = makeApp();
++    const res = app.handle(
++      req("POST", "/api/links", {
++        token,
++        body: { url: "https://example.com/e", slug: "soon", ttlSeconds: 3600 },
++      }),
++    );
++    expect(res.status).toBe(201);
++    const body = res.body as { createdAt: string; expiresAt: string };
++    expect(body.createdAt).toBe("2026-01-01T00:00:00.000Z");
++    expect(body.expiresAt).toBe("2026-01-01T01:00:00.000Z");
++  });
++
++  test("links created without a ttl carry expiresAt null everywhere", () => {
++    const { app } = makeApp();
++    app.handle(
++      req("POST", "/api/links", { token, body: { url: "https://example.com/f", slug: "keep" } }),
++    );
++    const fetched = app.handle(req("GET", "/api/links/keep", { token }));
++    expect((fetched.body as { expiresAt: unknown }).expiresAt).toBeNull();
++    const list = app.handle(req("GET", "/api/links", { token }));
++    const items = (list.body as { items: { expiresAt: unknown }[] }).items;
++    expect(items[0]!.expiresAt).toBeNull();
++  });
++
++  test("rejects non-positive, fractional or non-numeric ttlSeconds", () => {
++    const { app } = makeApp();
++    for (const ttlSeconds of [0, -5, 1.5, "3600"]) {
++      const res = app.handle(
++        req("POST", "/api/links", { token, body: { url: "https://example.com", ttlSeconds } }),
++      );
++      expect(res.status).toBe(400);
++      expect((res.body as { error: string }).error).toBe("invalid_ttl");
++    }
++  });
++
++  test("resolve serves the link until expiry, then answers 410 without counting", () => {
++    const { app, clock } = makeApp();
++    app.handle(
++      req("POST", "/api/links", {
++        token,
++        body: { url: "https://example.com/g", slug: "flash", ttlSeconds: 60 },
++      }),
++    );
++    clock.advance(59_999);
++    expect(app.handle(req("GET", "/r/flash")).status).toBe(302);
++    clock.advance(1);
++    const expired = app.handle(req("GET", "/r/flash"));
++    expect(expired.status).toBe(410);
++    expect((expired.body as { error: string }).error).toBe("link_expired");
++    const record = app.handle(req("GET", "/api/links/flash", { token }));
++    expect(record.status).toBe(200);
++    expect((record.body as { clicks: number }).clicks).toBe(1);
++  });
++});

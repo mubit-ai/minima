@@ -6,6 +6,12 @@ from minima.config import Settings
 from minima.main import create_app
 from tests.factories import FakeMemory
 
+
+class _BrokenMemory(FakeMemory):
+    async def surface_strategies(self, **_kwargs):
+        raise RuntimeError("mubit unreachable (401)")
+
+
 EMERGENT = {
     "strategy_id": "s1",
     "description": "Route code:easy tasks to claude-haiku-4-5.",
@@ -41,4 +47,19 @@ def test_strategies_endpoint_empty():
         "lane": "minima:default",
         "strategies": [],
         "count": 0,
+        "warnings": [],
     }
+
+
+def test_strategies_endpoint_degrades_when_memory_unavailable():
+    # A Mubit outage must not 500 this read — it degrades like the recommend hot path.
+    app = create_app(
+        settings=Settings(mubit_api_key="t"), memory=_BrokenMemory(), start_refresh=False
+    )
+    with TestClient(app, headers={"Authorization": "Bearer mbt_test_kid_secret"}) as client:
+        resp = client.get("/v1/strategies", params={"namespace": "acme"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["strategies"] == []
+    assert body["count"] == 0
+    assert body["warnings"] == ["memory_unavailable"]
