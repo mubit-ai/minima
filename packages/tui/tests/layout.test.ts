@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
   type ChatMessage,
   MAX_TOOL_LINES,
+  QUESTION_TEXT_MAX_ROWS,
   SCROLLBACK_SAFETY_ROWS,
+  childTreeHeight,
   clampToolText,
   computeMsgHeight,
   getScrollableMessages,
   markdownBodyHeight,
+  questionDisplayText,
+  questionOverlayHeight,
   streamTailBudget,
   tailToFit,
   wrappedLineCount,
@@ -244,5 +248,73 @@ describe("tailToFit budget enforcement", () => {
   test("budget 1 with a long line still fits one row", () => {
     const out = tailToFit("x".repeat(500), 50, 1);
     expect(markdownBodyHeight(out, 50)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("questionDisplayText", () => {
+  test("short questions pass through untouched", () => {
+    expect(questionDisplayText("Which approach?", 80)).toBe("Which approach?");
+  });
+  test("an over-long single line is sliced to the row budget and ellipsized", () => {
+    const out = questionDisplayText("x".repeat(1000), 80); // interior 76, budget 4 rows
+    expect(out.endsWith("…")).toBe(true);
+    expect(wrappedLineCount(out, 76)).toBeLessThanOrEqual(QUESTION_TEXT_MAX_ROWS + 1);
+  });
+  test("newline-heavy questions are clamped by rendered rows, not characters", () => {
+    const out = questionDisplayText(Array(50).fill("line").join("\n"), 80);
+    expect(wrappedLineCount(out, 76)).toBeLessThanOrEqual(QUESTION_TEXT_MAX_ROWS + 1);
+    expect(out.endsWith("…")).toBe(true);
+  });
+});
+
+describe("questionOverlayHeight", () => {
+  const q = (over: Partial<Parameters<typeof questionOverlayHeight>[0]> = {}) => ({
+    question: "Which approach?",
+    options: [
+      { label: "A", description: "first" },
+      { label: "B", description: null },
+    ],
+    allow_freetext: true,
+    ...over,
+  });
+  test("border + question + option rows + Other row + hint", () => {
+    // cols 80: 2 (border) + 1 (question) + 2 (options) + 1 (Other) + 1 (hint), window not trimmed
+    expect(questionOverlayHeight(q(), 80, 10)).toBe(7);
+  });
+  test("no free-text drops the Other row", () => {
+    expect(questionOverlayHeight(q({ allow_freetext: false }), 80, 10)).toBe(6);
+  });
+  test("a huge option list is windowed: cap + 2 marker rows, not one row per option", () => {
+    const many = q({
+      options: Array.from({ length: 30 }, (_, i) => ({ label: `opt-${i}`, description: null })),
+    });
+    // 2 border + 1 question + 5 visible + 2 markers + 1 hint — NOT 31 option rows
+    expect(questionOverlayHeight(many, 80, 5)).toBe(11);
+  });
+  test("a huge question is clamped near QUESTION_TEXT_MAX_ROWS", () => {
+    const tall = q({ question: "word ".repeat(500) });
+    // 2 border + <=5 question rows + 2 options + 1 Other + 1 hint
+    expect(questionOverlayHeight(tall, 80, 10)).toBeLessThanOrEqual(
+      2 + QUESTION_TEXT_MAX_ROWS + 1 + 2 + 1 + 1,
+    );
+  });
+  test("option rows are truncated, never wrapped — long descriptions don't grow the estimate", () => {
+    const wide = q({ options: [{ label: "opt", description: "y".repeat(300) }] });
+    expect(questionOverlayHeight(wide, 40, 10)).toBe(2 + 1 + 1 + 1 + 1);
+  });
+});
+
+describe("childTreeHeight", () => {
+  test("zero children renders nothing", () => {
+    expect(childTreeHeight(0, 8)).toBe(0);
+  });
+  test("border(2) + header(1) + rows + marginBottom(1)", () => {
+    expect(childTreeHeight(3, 8)).toBe(7);
+  });
+  test("caps at maxRows and adds one '+k more' row", () => {
+    expect(childTreeHeight(20, 8)).toBe(4 + 8 + 1);
+  });
+  test("cap floors at one visible row", () => {
+    expect(childTreeHeight(5, 0)).toBe(4 + 1 + 1);
   });
 });

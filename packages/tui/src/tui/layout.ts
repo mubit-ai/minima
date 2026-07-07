@@ -177,6 +177,75 @@ export function streamTailBudget(rows: number, reserved: number): number {
   return Math.max(0, rows - reserved - SCROLLBACK_SAFETY_ROWS);
 }
 
+/** Max wrapped rows the question text may occupy in the overlay (see questionDisplayText). */
+export const QUESTION_TEXT_MAX_ROWS = 4;
+
+/**
+ * The question text as QuestionOverlay actually renders it: clamped to roughly
+ * QUESTION_TEXT_MAX_ROWS rendered rows so a huge model-supplied question can't outgrow
+ * the screen. Keeps whole source lines while they fit, then char-slices the first line
+ * that doesn't (word wrap packs looser than a char slice, so the result may run one row
+ * over — the height helper measures this same string, keeping estimate == render).
+ * Shared by component and height math.
+ */
+export function questionDisplayText(question: string, cols: number): string {
+  const interior = Math.max(20, cols - 4);
+  const out: string[] = [];
+  let rows = 0;
+  for (const line of question.split("\n")) {
+    const h = wrappedLineCount(line, interior);
+    if (rows + h <= QUESTION_TEXT_MAX_ROWS) {
+      out.push(line);
+      rows += h;
+      continue;
+    }
+    const remaining = QUESTION_TEXT_MAX_ROWS - rows;
+    if (remaining > 0) out.push(`${line.slice(0, remaining * interior - 1)}…`);
+    else if (out.length > 0) out[out.length - 1] = `${out[out.length - 1]}…`;
+    break;
+  }
+  return out.join("\n");
+}
+
+/**
+ * Rows the `question` tool overlay occupies, mirroring QuestionOverlay in app.tsx:
+ * round border (2) + clamped question text + one row per VISIBLE option (each option
+ * renders wrap="truncate", so exactly one row; at most `maxOptionRows` are shown in a
+ * cursor-following window) + up to 2 "↑/↓ +k more" marker rows when the window trims +
+ * one truncated hint row. The typing view is never taller (draft row is truncated),
+ * so this estimate stays >= the real render. `cols` is the terminal width; the overlay
+ * interior is cols-4 (border + paddingX).
+ */
+export function questionOverlayHeight(
+  q: {
+    question: string;
+    options: { label: string; description?: string | null }[];
+    allow_freetext: boolean;
+  },
+  cols: number,
+  maxOptionRows: number,
+): number {
+  const interior = Math.max(1, cols - 4);
+  const totalRows = q.options.length + (q.allow_freetext ? 1 : 0);
+  const visible = Math.min(totalRows, Math.max(1, maxOptionRows));
+  const markers = totalRows > visible ? 2 : 0; // worst case: trimmed above AND below
+  return (
+    2 + wrappedLineCount(questionDisplayText(q.question, cols), interior) + visible + markers + 1
+  );
+}
+
+/**
+ * Rows the ChildTree panel occupies, mirroring child_tree.tsx: round border (2) +
+ * header (1) + one row per visible child (capped at `maxRows`, with a "+k more" row
+ * when the cap trims) + marginBottom (1). Zero when there are no children — the
+ * component renders null.
+ */
+export function childTreeHeight(childCount: number, maxRows: number): number {
+  if (childCount <= 0) return 0;
+  const visible = Math.min(childCount, Math.max(1, maxRows));
+  return 4 + visible + (childCount > visible ? 1 : 0);
+}
+
 /**
  * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly, so the
  * fullscreen viewport (getScrollableMessages) can window history without overflowing the frame.
