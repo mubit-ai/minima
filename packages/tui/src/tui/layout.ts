@@ -19,6 +19,97 @@ export interface ChatMessage {
   toolName?: string;
   isError?: boolean;
   thoughtDurationSecs?: number;
+  /**
+   * When true, long output is collapsed to a head/tail preview FOR DISPLAY ONLY (see
+   * collapseToolText). Set on agent tool results (bash/read/grep/…) whose full text can flood
+   * the transcript; the untouched output still lives in the model context and the DB. Left unset
+   * on synthetic UI tool messages (/help, /perms, budget, …) which should always render in full.
+   */
+  collapsible?: boolean;
+}
+
+// ANSI escape sequences (CSI colour/cursor, OSC title, and single 2-byte escapes). Written
+// with \x escapes so no literal control byte sits in the source.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal control output
+const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+// C0 control bytes + DEL, keeping tab (\x09) and newline (\x0a); \x0d (CR) IS removed since it
+// returns the cursor to column 0 and makes later text overwrite earlier text (visible overlap).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal control output
+const CONTROL_PATTERN = /[\x00-\x08\x0b-\x1f\x7f]/g;
+
+/**
+ * Strip terminal control noise that corrupts Ink's line-based layout — ANSI escapes, carriage
+ * returns, and other C0/DEL control bytes — keeping only newlines and tabs. Applied to tool
+ * output at DISPLAY time (inline preview and the Ctrl+O pager); the raw bytes are untouched in
+ * the model context and the DB.
+ */
+export function stripControl(text: string): string {
+  return text.replace(ANSI_PATTERN, "").replace(CONTROL_PATTERN, "");
+}
+
+/** Head/tail line counts kept when collapsing a long tool result for display. */
+export const TOOL_PREVIEW_HEAD = 10;
+export const TOOL_PREVIEW_TAIL = 5;
+
+/**
+ * Collapse long tool output to `head` lines + a "… N more lines" marker + `tail` lines. This is a
+ * DISPLAY transform only — callers keep the full text for the model. Returns the input unchanged
+ * when collapsing would hide fewer than 2 lines (the marker itself costs a line, so there'd be no
+ * saving). Pure and width-agnostic; wrapping is handled downstream by wrappedLineCount/Ink.
+ */
+export function collapseToolText(
+  text: string,
+  head: number = TOOL_PREVIEW_HEAD,
+  tail: number = TOOL_PREVIEW_TAIL,
+): string {
+  const lines = text.split("\n");
+  const hidden = lines.length - head - tail;
+  if (hidden < 2) return text;
+  const marker = `… ${hidden} more lines`;
+  return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)].join("\n");
+}
+
+/**
+ * The text a tool message actually renders inline: collapsed preview when `collapsible`, else
+ * full. The complete output stays reachable via the Ctrl+O pager (see app.tsx), so the inline
+ * transcript never has to grow a box taller than the frame.
+ */
+export function toolDisplayText(msg: ChatMessage): string {
+  const clean = stripControl(msg.text);
+  return msg.collapsible ? collapseToolText(clean) : clean;
+}
+
+export interface PagerView {
+  lines: string[];
+  start: number; // 0-based index of the first shown line
+  end: number; // exclusive index of the last shown line
+  total: number;
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/**
+ * Window `text` into at most `bodyRows` lines for the Ctrl+O pager overlay. `scroll` of 0 pins to
+ * the bottom (latest output / exit code); increasing it walks toward the top, clamped so it never
+ * scrolls past the first line. Each source line counts as exactly one row — the pager truncates
+ * long lines rather than wrapping — so the returned slice can never be taller than `bodyRows`,
+ * which is what keeps the overlay inside the frame.
+ */
+export function pagerSlice(text: string, bodyRows: number, scroll: number): PagerView {
+  const all = text.split("\n");
+  const rows = Math.max(1, bodyRows);
+  const maxScroll = Math.max(0, all.length - rows);
+  const off = Math.min(Math.max(0, scroll), maxScroll);
+  const end = all.length - off;
+  const start = Math.max(0, end - rows);
+  return {
+    lines: all.slice(start, end),
+    start,
+    end,
+    total: all.length,
+    atTop: off >= maxScroll,
+    atBottom: off === 0,
+  };
 }
 
 export interface Turn {
@@ -71,8 +162,9 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
   const interior = cols - 4;
   if (msg.role === "tool") {
     // ⚙ header line (1) + wrapped body. (Was hard-coded to 1 — the worst-offender undercount:
-    // /help, /perms, /model lists, etc. are all multi-line tool messages.)
-    return 1 + wrappedLineCount(msg.text, interior);
+    // /help, /perms, /model lists, etc. are all multi-line tool messages.) Body must match what
+    // messages.tsx renders, so honour the same collapse transform here.
+    return 1 + wrappedLineCount(toolDisplayText(msg), interior);
   }
   if (msg.role === "thinking") {
     // single border (2) + marginY (2) + header line (1) = 5 chrome; body is paddingLeft={2} => cols-8.

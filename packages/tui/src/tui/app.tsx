@@ -25,7 +25,7 @@ import { expandAtFiles } from "../tools/at_mentions.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
-import { getScrollableMessages, wrappedLineCount } from "./layout.ts";
+import { getScrollableMessages, pagerSlice, stripControl, wrappedLineCount } from "./layout.ts";
 import { type ChatMessage, Messages } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
@@ -90,6 +90,56 @@ function getAsciiBanner(word: string): string {
     rows.push(chars.join(" "));
   }
   return rows.join("\n");
+}
+
+/**
+ * Full-frame scrollable pager for a tool result's complete output (opened with Ctrl+O). Bounded
+ * to `rows` with overflow:"hidden" and long lines truncated (wrap="truncate-end"), so every line
+ * is exactly one row and the body can never spill outside the frame.
+ */
+function OutputPager({
+  title,
+  text,
+  scroll,
+  rows,
+}: {
+  title: string;
+  text: string;
+  scroll: number;
+  rows: number;
+}) {
+  const bodyRows = Math.max(1, rows - 4); // round border (2) + title (1) + hint (1)
+  const view = pagerSlice(text, bodyRows, scroll);
+  return (
+    <Box
+      flexDirection="column"
+      height={rows}
+      width="100%"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+      overflow="hidden"
+    >
+      <Text color="cyan" bold>
+        {`⚙ ${title} output — lines ${view.start + 1}–${view.end} of ${view.total}`}
+      </Text>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        {view.lines.map((line, i) => (
+          <Text
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-order slice of stable text
+            key={view.start + i}
+            wrap="truncate-end"
+          >
+            {line || " "}
+          </Text>
+        ))}
+      </Box>
+      <Text color="gray">
+        {view.atTop ? "TOP" : "↑ more"} · {view.atBottom ? "BOTTOM" : "↓ more"} · PgUp/PgDn or ↑/↓
+        scroll · g/G top/bottom · Ctrl+O or Esc close
+      </Text>
+    </Box>
+  );
 }
 
 function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
@@ -582,6 +632,11 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
   // Scroll state: 0 = at bottom (latest); positive = scrolled up N lines
   const [scrollOffset, setScrollOffset] = useState(0);
 
+  // Ctrl+O: open a scrollable pager over a tool result's FULL output (bash/read/… whose inline
+  // view is a collapsed head-tail preview). Bounded to the frame, so it never overflows.
+  const [pager, setPager] = useState<{ title: string; text: string } | null>(null);
+  const [pagerScroll, setPagerScroll] = useState(0);
+
   // Auto-scroll to bottom when new messages arrive or streaming updates
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally trigger on content changes
   useEffect(() => {
@@ -712,6 +767,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
                 text: ev.message!.textContent,
                 toolName: ev.message!.tool_name,
                 isError: ev.message!.is_error,
+                collapsible: true,
               },
             ]);
           }
@@ -747,6 +803,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
       return;
     }
 
+    // While the Ctrl+O output pager is open it owns all input: scroll or close, nothing else.
+    if (pager) {
+      if (key.escape || (key.ctrl && input === "o") || input === "q") {
+        setPager(null);
+        return;
+      }
+      const page = Math.max(1, rows - 6);
+      if (key.pageUp) return setPagerScroll((p) => p + page);
+      if (key.upArrow) return setPagerScroll((p) => p + 1);
+      if (key.pageDown) return setPagerScroll((p) => Math.max(0, p - page));
+      if (key.downArrow) return setPagerScroll((p) => Math.max(0, p - 1));
+      if (input === "g") return setPagerScroll(Number.MAX_SAFE_INTEGER); // top
+      if (input === "G") return setPagerScroll(0); // bottom
+      return;
+    }
+
     if (pickerOpen || paletteOpen || sessionPickerOpen || permPrompt || configOverlayOpen) return;
 
     // Esc aborts the in-flight run — must run BEFORE the busy guard below,
@@ -757,6 +829,17 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     }
 
     if (busy) return; // don't open overlays mid-run
+
+    // Ctrl+O opens a scrollable pager over the most recent tool result's full output. Bounded to
+    // the frame and control-sanitized, so it can't overflow or overlap the transcript.
+    if (key.ctrl && input === "o") {
+      const last = [...messages].reverse().find((m) => m.role === "tool" && m.collapsible);
+      if (last) {
+        setPager({ title: last.toolName ?? "tool", text: stripControl(last.text) });
+        setPagerScroll(0);
+      }
+      return;
+    }
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
       return;
@@ -875,6 +958,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           text: m.textContent,
           toolName: (m as AgentMessage & { tool_name?: string }).tool_name ?? "tool",
           isError: (m as AgentMessage & { is_error?: boolean }).is_error ?? false,
+          collapsible: true,
         });
     }
     const totals = agent.meter?.totals();
@@ -908,6 +992,7 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
           text,
           toolName: (entry.payload.tool_name as string) || "tool",
           isError: (entry.payload.is_error as boolean) || false,
+          collapsible: true,
         });
         agentMsgs.push(
           new AgentMessage({
@@ -1787,221 +1872,233 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
     // cursor-relative diff into garbled output), covering not just the chat region but oversized
     // overlays (command palette, config, permission diffs) on short terminals too.
     <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
-      {messages.length === 0 &&
-      !pickerOpen &&
-      !paletteOpen &&
-      !sessionPickerOpen &&
-      !configOverlayOpen ? (
-        <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-          <Text color="green" bold>
-            {getAsciiBanner("MINIMA")}
-          </Text>
-          <Box marginTop={1}>
-            <Text color="gray">CLI · cost-aware model routing</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">recommend → run → judge → feedback → memory</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">type a prompt, or / for commands</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text color="gray">
-              {mouseEnabled
-                ? "wheel scroll ON · /mouse off to select & copy · PgUp/PgDn always works"
-                : "select & copy ON · /mouse on for wheel scroll · PgUp/PgDn always works"}
-            </Text>
-          </Box>
-        </Box>
+      {pager ? (
+        <OutputPager title={pager.title} text={pager.text} scroll={pagerScroll} rows={rows} />
       ) : (
-        // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat
-        // to exceed its allotted rows regardless of any height-estimate error — this is what stops
-        // Ink's cursor-relative diff from desyncing into garbled/overlapping output. flex-end
-        // bottom-aligns the conversation so the clip eats the OLDEST content at the top fold,
-        // keeping the newest answer + live streaming visible (correct chat semantics).
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-          justifyContent="flex-end"
-        >
-          <Messages
-            messages={visibleMsgs}
-            streaming={busy && atBottom ? streaming : ""}
-            streamingThoughts={busy && atBottom && showThinkingRef.current ? streamingThoughts : ""}
-          />
-          {!atBottom && (
-            <Text color="gray">
-              {" "}
-              ↑ scrolled up {scrollOffset} lines · PgDn or End to jump to bottom
-            </Text>
-          )}
-        </Box>
-      )}
-
-      {matchingCommands.length > 0 && (
-        <Box
-          borderStyle="round"
-          borderColor="gray"
-          paddingX={1}
-          flexDirection="column"
-          width="100%"
-          marginBottom={0}
-        >
-          <Box position="absolute" marginTop={-1} marginLeft={2}>
-            <Text color="gray"> commands </Text>
-          </Box>
-          {matchingCommands.map((cmd) => (
-            <Box key={cmd.name}>
-              <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
-              <Text color="gray">{cmd.desc}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-
-      {pickerOpen ? (
-        <ModelPicker
-          models={allModels()}
-          currentId={agent.agentState.model?.id ?? ""}
-          onPick={pickModel}
-          onDismiss={() => setPickerOpen(false)}
-        />
-      ) : paletteOpen ? (
-        <CommandPicker
-          commands={COMMANDS}
-          onPick={(name) => {
-            setPaletteOpen(false);
-            handleCommand(name, "").catch((exc) => {
-              setMessages((m) => [
-                ...m,
-                {
-                  role: "tool",
-                  text: `Command /${name} failed: ${errText(exc)}`,
-                  toolName: "error",
-                  isError: true,
-                },
-              ]);
-            });
-          }}
-          onDismiss={() => setPaletteOpen(false)}
-        />
-      ) : sessionPickerOpen ? (
-        <SessionPicker
-          sessions={sessionsList}
-          onPick={async (path) => {
-            setSessionPickerOpen(false);
-            if (path.startsWith("run:")) {
-              await loadRun(path.slice(4)).catch((exc) => {
-                setMessages((m) => [
-                  ...m,
-                  {
-                    role: "tool",
-                    text: `Failed to resume run: ${errText(exc)}`,
-                    toolName: "resume",
-                    isError: true,
-                  },
-                ]);
-              });
-            } else {
-              const store = await SessionStore.fileBacked(path);
-              await loadSession(store);
-            }
-          }}
-          onDismiss={() => setSessionPickerOpen(false)}
-        />
-      ) : configOverlayOpen ? (
-        <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : permPrompt ? null : ( // permission prompt owns the bottom region (rendered below)
-        <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
-          {planMode && (
-            <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
-              <Text color="magenta" bold>
-                {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+        <Box flexDirection="column" flexGrow={1} width="100%" overflow="hidden">
+          {messages.length === 0 &&
+          !pickerOpen &&
+          !paletteOpen &&
+          !sessionPickerOpen &&
+          !configOverlayOpen ? (
+            <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
+              <Text color="green" bold>
+                {getAsciiBanner("MINIMA")}
               </Text>
+              <Box marginTop={1}>
+                <Text color="gray">CLI · cost-aware model routing</Text>
+              </Box>
+              <Box marginTop={1}>
+                <Text color="gray">recommend → run → judge → feedback → memory</Text>
+              </Box>
+              <Box marginTop={1}>
+                <Text color="gray">type a prompt, or / for commands</Text>
+              </Box>
+              <Box marginTop={1}>
+                <Text color="gray">
+                  {mouseEnabled
+                    ? "wheel scroll ON · /mouse off to select & copy · PgUp/PgDn always works"
+                    : "select & copy ON · /mouse on for wheel scroll · PgUp/PgDn always works"}
+                </Text>
+              </Box>
+            </Box>
+          ) : (
+            // Hard overflow clamp: overflow="hidden" + minHeight={0} make it IMPOSSIBLE for the chat
+            // to exceed its allotted rows regardless of any height-estimate error — this is what stops
+            // Ink's cursor-relative diff from desyncing into garbled/overlapping output. flex-end
+            // bottom-aligns the conversation so the clip eats the OLDEST content at the top fold,
+            // keeping the newest answer + live streaming visible (correct chat semantics).
+            <Box
+              flexDirection="column"
+              flexGrow={1}
+              minHeight={0}
+              overflow="hidden"
+              justifyContent="flex-end"
+            >
+              <Messages
+                messages={visibleMsgs}
+                streaming={busy && atBottom ? streaming : ""}
+                streamingThoughts={
+                  busy && atBottom && showThinkingRef.current ? streamingThoughts : ""
+                }
+              />
+              {!atBottom && (
+                <Text color="gray">
+                  {" "}
+                  ↑ scrolled up {scrollOffset} lines · PgDn or End to jump to bottom
+                </Text>
+              )}
             </Box>
           )}
-          <Box
-            borderStyle="round"
-            borderColor={planMode ? "magenta" : "yellow"}
-            paddingX={1}
-            flexDirection="column"
-            width="100%"
-          >
-            <Box position="absolute" marginTop={-1} marginLeft={2}>
-              <Text color={planMode ? "magenta" : "yellow"}>
-                {planMode ? " plan mode " : " prompt "}
-              </Text>
+
+          {matchingCommands.length > 0 && (
+            <Box
+              borderStyle="round"
+              borderColor="gray"
+              paddingX={1}
+              flexDirection="column"
+              width="100%"
+              marginBottom={0}
+            >
+              <Box position="absolute" marginTop={-1} marginLeft={2}>
+                <Text color="gray"> commands </Text>
+              </Box>
+              {matchingCommands.map((cmd) => (
+                <Box key={cmd.name}>
+                  <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
+                  <Text color="gray">{cmd.desc}</Text>
+                </Box>
+              ))}
             </Box>
-            <TextInput
-              onSubmit={onSubmit}
-              onChange={setTypedText}
-              onTab={handleTabComplete}
-              onShiftTab={cycleThinkingLevel}
-              onUp={handleHistoryUp}
-              onDown={handleHistoryDown}
-              disabled={busy}
-              placeholder=""
-              showPrefix={false}
+          )}
+
+          {pickerOpen ? (
+            <ModelPicker
+              models={allModels()}
+              currentId={agent.agentState.model?.id ?? ""}
+              onPick={pickModel}
+              onDismiss={() => setPickerOpen(false)}
             />
+          ) : paletteOpen ? (
+            <CommandPicker
+              commands={COMMANDS}
+              onPick={(name) => {
+                setPaletteOpen(false);
+                handleCommand(name, "").catch((exc) => {
+                  setMessages((m) => [
+                    ...m,
+                    {
+                      role: "tool",
+                      text: `Command /${name} failed: ${errText(exc)}`,
+                      toolName: "error",
+                      isError: true,
+                    },
+                  ]);
+                });
+              }}
+              onDismiss={() => setPaletteOpen(false)}
+            />
+          ) : sessionPickerOpen ? (
+            <SessionPicker
+              sessions={sessionsList}
+              onPick={async (path) => {
+                setSessionPickerOpen(false);
+                if (path.startsWith("run:")) {
+                  await loadRun(path.slice(4)).catch((exc) => {
+                    setMessages((m) => [
+                      ...m,
+                      {
+                        role: "tool",
+                        text: `Failed to resume run: ${errText(exc)}`,
+                        toolName: "resume",
+                        isError: true,
+                      },
+                    ]);
+                  });
+                } else {
+                  const store = await SessionStore.fileBacked(path);
+                  await loadSession(store);
+                }
+              }}
+              onDismiss={() => setSessionPickerOpen(false)}
+            />
+          ) : configOverlayOpen ? (
+            <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
+          ) : permPrompt ? null : ( // permission prompt owns the bottom region (rendered below)
+            <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
+              {planMode && (
+                <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
+                  <Text color="magenta" bold>
+                    {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+                  </Text>
+                </Box>
+              )}
+              <Box
+                borderStyle="round"
+                borderColor={planMode ? "magenta" : "yellow"}
+                paddingX={1}
+                flexDirection="column"
+                width="100%"
+              >
+                <Box position="absolute" marginTop={-1} marginLeft={2}>
+                  <Text color={planMode ? "magenta" : "yellow"}>
+                    {planMode ? " plan mode " : " prompt "}
+                  </Text>
+                </Box>
+                <TextInput
+                  onSubmit={onSubmit}
+                  onChange={setTypedText}
+                  onTab={handleTabComplete}
+                  onShiftTab={cycleThinkingLevel}
+                  onUp={handleHistoryUp}
+                  onDown={handleHistoryDown}
+                  disabled={busy}
+                  placeholder=""
+                  showPrefix={false}
+                />
+              </Box>
+            </Box>
+          )}
+
+          {permPrompt && (
+            <PermissionOverlay
+              prompt={{
+                ...permPrompt,
+                resolve: (decision) => {
+                  setPermPrompt(null);
+                  permPrompt.resolve(decision);
+                },
+              }}
+            />
+          )}
+
+          <Box flexDirection="column" flexShrink={0}>
+            <StatusBar
+              model={agent.agentState.model?.id ?? "(none)"}
+              basis={basis}
+              routeMode={routeMode}
+              thinkingLevel={thinkingLevel}
+              ctxPct={ctxPct}
+              inputTokens={inputTokens}
+              outputTokens={outputTokens}
+              actualCostUsd={actualCost}
+              budget={budgetStatus}
+              sessionId={agent.sessionId ?? "ephemeral"}
+              routingOffline={agent.offlineReason !== null}
+              offlineReason={agent.offlineReason}
+              statusText={busyState}
+              planMode={planMode}
+              readDirs={[...permStateRef.current.allowedDirs].map((d) =>
+                d.replace(process.cwd(), "."),
+              )}
+              alwaysTools={[...permStateRef.current.allowAlways]}
+            />
+
+            <Box justifyContent="space-between" width="100%">
+              <Box>
+                <Text color="yellow">pgup </Text>
+                <Text color="gray">PgUp </Text>
+                <Text color="yellow">pgdn </Text>
+                <Text color="gray">PgDn </Text>
+                <Text color="yellow">ctrl+l </Text>
+                <Text color="gray">Model </Text>
+                <Text color="yellow">ctrl+r </Text>
+                <Text color="gray">Route </Text>
+                <Text color="yellow">ctrl+o </Text>
+                <Text color="gray">Output </Text>
+                <Text color="yellow">esc </Text>
+                <Text color="gray">Abort</Text>
+              </Box>
+              <Box>
+                <Text color="yellow">ctrl+p </Text>
+                <Text color="gray">palette</Text>
+              </Box>
+            </Box>
+
+            {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
           </Box>
         </Box>
       )}
-
-      {permPrompt && (
-        <PermissionOverlay
-          prompt={{
-            ...permPrompt,
-            resolve: (decision) => {
-              setPermPrompt(null);
-              permPrompt.resolve(decision);
-            },
-          }}
-        />
-      )}
-
-      <Box flexDirection="column" flexShrink={0}>
-        <StatusBar
-          model={agent.agentState.model?.id ?? "(none)"}
-          basis={basis}
-          routeMode={routeMode}
-          thinkingLevel={thinkingLevel}
-          ctxPct={ctxPct}
-          inputTokens={inputTokens}
-          outputTokens={outputTokens}
-          actualCostUsd={actualCost}
-          budget={budgetStatus}
-          sessionId={agent.sessionId ?? "ephemeral"}
-          routingOffline={agent.offlineReason !== null}
-          offlineReason={agent.offlineReason}
-          statusText={busyState}
-          planMode={planMode}
-          readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
-          alwaysTools={[...permStateRef.current.allowAlways]}
-        />
-
-        <Box justifyContent="space-between" width="100%">
-          <Box>
-            <Text color="yellow">pgup </Text>
-            <Text color="gray">PgUp </Text>
-            <Text color="yellow">pgdn </Text>
-            <Text color="gray">PgDn </Text>
-            <Text color="yellow">ctrl+l </Text>
-            <Text color="gray">Model </Text>
-            <Text color="yellow">ctrl+r </Text>
-            <Text color="gray">Route </Text>
-            <Text color="yellow">esc </Text>
-            <Text color="gray">Abort</Text>
-          </Box>
-          <Box>
-            <Text color="yellow">ctrl+p </Text>
-            <Text color="gray">palette</Text>
-          </Box>
-        </Box>
-
-        {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
-      </Box>
     </Box>
   );
 }
