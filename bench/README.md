@@ -140,37 +140,39 @@ tool loops. Real savings are LARGER than /v1/savings claims, but the estimate is
 a credible counterfactual for agentic workloads — measured paired baselines are.
 (Feeds the GT-8 observed-best/IPS work.)
 
-## Learning loop (F12) — RESOLVED (it was the key, not the server)
+## Learning loop (F12) — GREEN (took TWO fixes: the key AND user_id)
 
 `flows/f12_learning_loop.ts` (live-lane, ~$0.60/run): first a free WRITE-HEALTH probe
 (direct recommend→feedback, hard check on the feedback BODY's `accepted` field,
 early-exit on failure), then warms a fresh namespace with 8 judged kata runs (separate
 sessions) and re-runs 4 of the SAME tasks as probes in warm-vs-cold namespaces.
 
-- **RESOLVED (2026-07-07, A/B live probe): not a server bug — the earlier failure was a
-  MISCONFIGURED KEY.** Minima uses pass-through auth (`src/minima/api/auth.py`): the
-  `MUBIT_API_KEY` the harness (and the spawned binary) send as `Authorization: Bearer`
-  IS the key Minima uses against Mubit. The repo `.env` ships the LOCAL dev key
-  `mbt_local_admin` (instance segment `local`), whose Mubit instance prod can't reach →
-  `memory_unavailable` on recall + `accepted=false`/`memory_write_failed` on feedback.
-  The DEPLOYED key in **`.env.harness`** works: same api.minima.sh endpoint, identical
-  payload, only the key differs → `accepted=true`, real `record_id`, `updated_confidence`
-  0.6→0.7. Full loop verified live: cold recommend `basis=prior`/`evidence=0`/`cold_start`
-  → 4 accepted writes → warm recommend **`basis=memory`**, `evidence=1`, cold_start +
-  low_confidence warnings gone.
-- **The fix is wired in:** `driver/env.ts` `loadBenchEnv()` layers `.env.harness` over
-  Bun's auto-loaded `.env`, forcing the pass-through routing keys (`MUBIT_API_KEY`,
-  `MINIMA_URL`, `MINIMA_API_KEY`) to the deployed values so both the direct probes and
-  the spawned binary persist memory. Called from `run.ts`, `gen/savings_ab.ts`, and
-  `f12()`. Escape hatches: `BENCH_NO_HARNESS_ENV=1` keeps the local key (to test a
-  locally-run server + ricedb); `BENCH_MUBIT_API_KEY=…` is a file-free CI override.
+**Verified PASS 2026-07-07 (5/5 hard + 4/4 soft)** against `api.minima.sh` with a binary
+carrying BOTH fixes below — cold probes route `prior`, all four warm probes flip to
+`memory`. It needed two independent fixes; #1 alone left the flip still red.
+
+- **FIX 1 — writes (the key).** Minima uses pass-through auth (`src/minima/api/auth.py`):
+  the `MUBIT_API_KEY` the harness/binary send as `Authorization: Bearer` IS the key
+  Minima uses against Mubit. Repo `.env` ships the LOCAL dev key `mbt_local_admin` (instance
+  `local`) that prod can't reach → `accepted=false`/`memory_write_failed`. `.env.harness`
+  has the DEPLOYED key that writes. Wired via `driver/env.ts` `loadBenchEnv()` (layers
+  `.env.harness` over Bun's auto-loaded `.env`, forcing `MUBIT_API_KEY`/`MINIMA_URL`/
+  `MINIMA_API_KEY`; called from `run.ts`, `gen/savings_ab.ts`, `f12()`). Escape hatches:
+  `BENCH_NO_HARNESS_ENV=1`, `BENCH_MUBIT_API_KEY=…`.
+- **FIX 2 — recall (user_id), PR #90.** Fixing #1 uncovered this: prod recall is scoped
+  by `user_id`, and `router.ts` recommend omitted it → the server surfaced nothing and
+  `decision_basis` never left `prior`, so the binary couldn't recall its own writes.
+  Direct A/B: single write+read in one namespace flips to `basis=memory,ev=1` WITH a
+  user_id, stays `prior,ev=0` WITHOUT. PR #90 sends the stable `memorySession`
+  (`namespace ?? repo identity`) as `user_id`. **The installed brew binary does NOT have
+  #90 yet** — until a release ships it, run F12 against a local build:
+  `cd packages/tui && bun run build` then
+  `BENCH_MINIMA_BIN="$PWD/dist/minima" bun bench/run.ts f12`.
 - Still worth keeping: the write-health probe (asserts on the BODY — HTTP 200 hid the
-  failure) and PR #84 (the binary swallowed the rejection in a write-only
+  write failure) and PR #84 (the binary swallowed the rejection in a write-only
   `lastFeedbackError`; #84 surfaces it as a TUI line + `--mode json` `feedback_error`).
-  Both made this diagnosable and will catch a genuinely-bad key next time.
-- Optional server hardening (defense-in-depth, no longer a prod-bug fix): the SDK treats
-  a done ingest-job with `writes[].success=false` as success; `recall.degraded` is parsed
-  but never read.
+- Optional server hardening (defense-in-depth): the SDK treats a done ingest-job with
+  `writes[].success=false` as success; `recall.degraded` is parsed but never read.
 - Also noteworthy: routing drifted flash→pro for identical kata prompts within hours
   (catalog/prior drift) — validates the suite-wide rule of never asserting model ids.
 
@@ -197,20 +199,26 @@ hosted api.minima.sh; ~3.3 min, ~$0.15/run.
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
 
-### 2026-07-07 — memory loop RESOLVED: it was the key, and it's now wired
-- **Not a server bug.** Minima is pass-through auth (`api/auth.py`): the client's
-  `Authorization: Bearer <mubit_key>` IS the key used against Mubit. A/B against
-  api.minima.sh (same endpoint + payload, only the key differs): repo `.env`
-  `mbt_local_admin` → `accepted=false`/`memory_write_failed`; `.env.harness` deployed key
-  → `accepted=true`, real record_id, confidence 0.6→0.7.
-- **Full loop closes with the deployed key:** cold `basis=prior`/evidence=0/cold_start →
-  4 accepted writes → warm `basis=memory`, evidence=1, cold_start+low_confidence gone.
-- **Wired:** `driver/env.ts` `loadBenchEnv()` forces `.env.harness`'s pass-through routing
-  keys over Bun's auto-loaded `.env`; called from `run.ts`, `gen/savings_ab.ts`, `f12()`.
-  `BENCH_NO_HARNESS_ENV=1` keeps the local key; `BENCH_MUBIT_API_KEY=…` is a CI override.
-  Verified: write-health probe returns `accepted=true` through the wired path.
-- The prior "blocked SERVER-side" framing was wrong about the cause but right about the
-  symptom; the write-health probe + PR #84 (surface the swallowed rejection) stay useful.
+### 2026-07-07 — memory loop GREEN: TWO bugs (key + user_id); F12 PASS 5/5
+- Two independent bugs; fixing the first uncovered the second. Neither is a server bug.
+- **BUG 1 (writes) — the key.** Minima is pass-through auth (`api/auth.py`): the client's
+  `Authorization: Bearer <mubit_key>` IS the key used against Mubit. A/B (same endpoint +
+  payload, only the key differs): repo `.env` `mbt_local_admin` →
+  `accepted=false`/`memory_write_failed`; `.env.harness` deployed key → `accepted=true`,
+  real record_id. Wired via `driver/env.ts` `loadBenchEnv()` (forces `.env.harness`'s
+  routing keys over Bun's auto-loaded `.env`; `run.ts`/`savings_ab.ts`/`f12()`;
+  `BENCH_NO_HARNESS_ENV=1` / `BENCH_MUBIT_API_KEY=…` escape hatches).
+- **BUG 2 (recall) — user_id, PR #90.** After BUG 1, F12 warm probes STILL all `prior`.
+  A/B: single write+read in one namespace flips to `basis=memory,ev=1` WITH a `user_id`,
+  stays `prior,ev=0` WITHOUT. `router.ts` recommend omitted `user_id` → prod recall
+  (user-scoped) surfaced nothing → basis never left `prior`; the binary couldn't recall
+  its own writes (affects every user, any key). PR #90 sends the stable `memorySession`
+  as `user_id`.
+- **F12 PASS 5/5 (+4/4 soft)** against api.minima.sh with a binary carrying #90: cold
+  probes `prior`, all 4 warm probes `memory`. Installed brew binary lacks #90 → run F12
+  against a local `packages/tui` build until a release ships it.
+- The earlier "blocked SERVER-side" framing was wrong on cause, right on symptom; the
+  write-health probe + PR #84 (surface the swallowed rejection) stay useful.
 
 ### 2026-07-06 (later) — memory-loop root cause + write-health detector
 - **Every memory write is rejected by the server**: direct `POST /v1/feedback` returns
