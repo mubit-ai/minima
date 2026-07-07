@@ -140,34 +140,37 @@ tool loops. Real savings are LARGER than /v1/savings claims, but the estimate is
 a credible counterfactual for agentic workloads — measured paired baselines are.
 (Feeds the GT-8 observed-best/IPS work.)
 
-## Learning loop (F12) — currently blocked SERVER-side
+## Learning loop (F12) — RESOLVED (it was the key, not the server)
 
-`flows/f12_learning_loop.ts` (live-lane, ~$0.60/run when writes are healthy): first a
-free WRITE-HEALTH probe (direct recommend→feedback, hard check on the feedback BODY's
-`accepted` field, early-exit on failure), then warms a fresh namespace with 8 judged
-kata runs (separate sessions) and re-runs 4 of the SAME tasks as probes in warm-vs-cold
-namespaces.
+`flows/f12_learning_loop.ts` (live-lane, ~$0.60/run): first a free WRITE-HEALTH probe
+(direct recommend→feedback, hard check on the feedback BODY's `accepted` field,
+early-exit on failure), then warms a fresh namespace with 8 judged kata runs (separate
+sessions) and re-runs 4 of the SAME tasks as probes in warm-vs-cold namespaces.
 
-- **ROOT CAUSE FOUND (2026-07-06, direct API probe): the server rejects every memory
-  write.** `POST /v1/feedback` returns HTTP 200 with `accepted=false, record_id=null,
-  warnings=["memory_write_failed"]`; recommends carry `memory_unavailable`
-  intermittently (it was absent during the post-0.7.2 F12 run — a red herring that
-  briefly pointed suspicion at thresholds). With zero writes landing, the prior→memory
-  flip can never happen; every earlier F12 failure traces to this.
-- The harness swallowed the rejection: `MinimaAgent.lastFeedbackError` captured it but
-  nothing read the field (fixed in PR #84 — TUI info line + `--mode json`
-  `feedback_error` event). F12's write-health check asserts on the response body
-  directly, so it needs no new binary and fails in <1s at the true cause.
-- Next hop: the Minima↔Mubit boundary — the write fails inside the server's
-  `remember_outcome` → Mubit ingest path (the repo `.env` key is `mbt_local_admin`,
-  the dev key with known api.mubit.ai instance-routing problems). Definitive local
-  experiment: run the server against a local ricedb (where that key is valid) and
-  repeat the probe; if it closes locally, it's Mubit-side instance routing for the
-  key, not this repo. Server hardening sketch (separate PR): validate ingest-job
-  `writes[].success` in `memory/adapter.py` instead of treating a done-job-with-failed-
-  writes as success; surface the parsed-but-unread `recall.degraded`.
-- Consequence: the demo's "learning over time" beat stays blocked until writes land
-  for the demo key. F12 flips green by itself when they do.
+- **RESOLVED (2026-07-07, A/B live probe): not a server bug — the earlier failure was a
+  MISCONFIGURED KEY.** Minima uses pass-through auth (`src/minima/api/auth.py`): the
+  `MUBIT_API_KEY` the harness (and the spawned binary) send as `Authorization: Bearer`
+  IS the key Minima uses against Mubit. The repo `.env` ships the LOCAL dev key
+  `mbt_local_admin` (instance segment `local`), whose Mubit instance prod can't reach →
+  `memory_unavailable` on recall + `accepted=false`/`memory_write_failed` on feedback.
+  The DEPLOYED key in **`.env.harness`** works: same api.minima.sh endpoint, identical
+  payload, only the key differs → `accepted=true`, real `record_id`, `updated_confidence`
+  0.6→0.7. Full loop verified live: cold recommend `basis=prior`/`evidence=0`/`cold_start`
+  → 4 accepted writes → warm recommend **`basis=memory`**, `evidence=1`, cold_start +
+  low_confidence warnings gone.
+- **The fix is wired in:** `driver/env.ts` `loadBenchEnv()` layers `.env.harness` over
+  Bun's auto-loaded `.env`, forcing the pass-through routing keys (`MUBIT_API_KEY`,
+  `MINIMA_URL`, `MINIMA_API_KEY`) to the deployed values so both the direct probes and
+  the spawned binary persist memory. Called from `run.ts`, `gen/savings_ab.ts`, and
+  `f12()`. Escape hatches: `BENCH_NO_HARNESS_ENV=1` keeps the local key (to test a
+  locally-run server + ricedb); `BENCH_MUBIT_API_KEY=…` is a file-free CI override.
+- Still worth keeping: the write-health probe (asserts on the BODY — HTTP 200 hid the
+  failure) and PR #84 (the binary swallowed the rejection in a write-only
+  `lastFeedbackError`; #84 surfaces it as a TUI line + `--mode json` `feedback_error`).
+  Both made this diagnosable and will catch a genuinely-bad key next time.
+- Optional server hardening (defense-in-depth, no longer a prod-bug fix): the SDK treats
+  a done ingest-job with `writes[].success=false` as success; `recall.degraded` is parsed
+  but never read.
 - Also noteworthy: routing drifted flash→pro for identical kata prompts within hours
   (catalog/prior drift) — validates the suite-wide rule of never asserting model ids.
 
@@ -193,6 +196,21 @@ hosted api.minima.sh; ~3.3 min, ~$0.15/run.
 ## Findings log
 
 Datestamped facts discovered while building/running the flows — kept current; newest first.
+
+### 2026-07-07 — memory loop RESOLVED: it was the key, and it's now wired
+- **Not a server bug.** Minima is pass-through auth (`api/auth.py`): the client's
+  `Authorization: Bearer <mubit_key>` IS the key used against Mubit. A/B against
+  api.minima.sh (same endpoint + payload, only the key differs): repo `.env`
+  `mbt_local_admin` → `accepted=false`/`memory_write_failed`; `.env.harness` deployed key
+  → `accepted=true`, real record_id, confidence 0.6→0.7.
+- **Full loop closes with the deployed key:** cold `basis=prior`/evidence=0/cold_start →
+  4 accepted writes → warm `basis=memory`, evidence=1, cold_start+low_confidence gone.
+- **Wired:** `driver/env.ts` `loadBenchEnv()` forces `.env.harness`'s pass-through routing
+  keys over Bun's auto-loaded `.env`; called from `run.ts`, `gen/savings_ab.ts`, `f12()`.
+  `BENCH_NO_HARNESS_ENV=1` keeps the local key; `BENCH_MUBIT_API_KEY=…` is a CI override.
+  Verified: write-health probe returns `accepted=true` through the wired path.
+- The prior "blocked SERVER-side" framing was wrong about the cause but right about the
+  symptom; the write-health probe + PR #84 (surface the swallowed rejection) stay useful.
 
 ### 2026-07-06 (later) — memory-loop root cause + write-health detector
 - **Every memory write is rejected by the server**: direct `POST /v1/feedback` returns

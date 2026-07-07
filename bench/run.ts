@@ -6,6 +6,7 @@
  */
 
 import type { Checks } from "./assert/check.ts";
+import { loadBenchEnv } from "./driver/env.ts";
 import { f1 } from "./flows/f1_headless.ts";
 import { f4 } from "./flows/f4_cost_budget.ts";
 import { f5 } from "./flows/f5_task_dag_worktree.ts";
@@ -14,6 +15,11 @@ import { f7 } from "./flows/f7_permissions_plan.ts";
 import { f9 } from "./flows/f9_offline_reconnect.ts";
 import { f10 } from "./flows/f10_recovery_ladder.ts";
 import { f12 } from "./flows/f12_learning_loop.ts";
+
+// Force the deployed pass-through key (.env.harness) over Bun's auto-loaded .env before
+// any flow spawns the binary — otherwise the local `mbt_local_admin` key wins and every
+// memory write is rejected (see driver/env.ts).
+loadBenchEnv();
 
 // f12 is live-lane only (16 routed runs + judge): not part of the default sweep.
 const REGISTRY: Record<string, () => Promise<Checks>> = { f1, f9, f4, f5, f6, f7, f10, f12 };

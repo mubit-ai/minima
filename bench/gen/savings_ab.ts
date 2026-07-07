@@ -14,8 +14,13 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadBenchEnv } from "../driver/env.ts";
 import { discoverTaskDirs, runAttempt } from "./attempt.ts";
 import { loadTask, TASKS_ROOT } from "./materialize.ts";
+
+// Routed arm learns live: force the deployed pass-through key so feedback actually
+// persists (the local .env key's writes are rejected — see driver/env.ts).
+loadBenchEnv();
 
 function flags(): Record<string, string> {
   const out: Record<string, string> = {};

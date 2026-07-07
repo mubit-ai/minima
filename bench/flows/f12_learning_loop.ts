@@ -25,6 +25,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Checks } from "../assert/check.ts";
+import { loadBenchEnv } from "../driver/env.ts";
 import { type AttemptResult, runAttempt } from "../gen/attempt.ts";
 import { TASKS_ROOT } from "../gen/materialize.ts";
 
@@ -49,7 +50,10 @@ async function pool<T>(items: T[], width: number, fn: (t: T) => Promise<void>): 
   );
 }
 
-/** Same key the binary would use: real env wins, repo .env as fallback. Never printed. */
+/** Same key the binary would use. loadBenchEnv() has already forced the deployed
+ * `.env.harness` key into process.env (unless BENCH_NO_HARNESS_ENV=1, which intentionally
+ * keeps the local key); repo `.env` is only a last resort if nothing else set it. Never
+ * printed. */
 function serverAuth(): { url: string; key: string | null } {
   const url = process.env.MINIMA_URL ?? "https://api.minima.sh";
   let key = process.env.MINIMA_API_KEY ?? process.env.MUBIT_API_KEY ?? null;
@@ -137,6 +141,7 @@ async function memoryWriteHealth(namespace: string): Promise<WriteHealth | strin
 }
 
 export async function f12(): Promise<Checks> {
+  loadBenchEnv(); // idempotent: ensures the deployed key wins even when f12 runs standalone
   const c = new Checks("f12_learning_loop");
   const tag = crypto.randomUUID().slice(0, 8);
   const warmNs = `bench-f12-warm-${tag}`;
