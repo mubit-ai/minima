@@ -1,0 +1,12 @@
+{
+  "id": "ka-008",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement driftEncode(text, shift) in ts/drift.ts, a Caesar cipher whose shift drifts. The first letter of the text is rotated by shift, the second letter by shift+1, the third by shift+2, and so on, wrapping modulo 26 and preserving case. Non-letter characters are copied through unchanged and do not advance the drift counter. Negative shifts and shifts beyond 26 are legal; a non-integer shift throws a RangeError. For example driftEncode(\"abc\", 0) returns \"ace\". The empty string maps to itself. Verify with bun test tests/ts/drift.",
+  "test_cmd": "bun test tests/ts/drift",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 16,
+  "timeout_sec": 60
+}

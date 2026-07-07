@@ -1,0 +1,13 @@
+diff --git a/taskman/report.py b/taskman/report.py
+index 8623e09..f9554bc 100644
+--- a/taskman/report.py
++++ b/taskman/report.py
+@@ -115,7 +115,7 @@ def summary(tasks: Iterable[Task], today: date) -> dict[str, object]:
+     total = len(items)
+     done = sum(1 for t in items if t.status == STATUS_DONE)
+     open_count = sum(1 for t in items if t.status == STATUS_OPEN)
+-    overdue = sum(1 for t in items if is_overdue(t, today))
++    overdue = sum(1 for t in items if t.due is not None and t.due < today)
+     unscheduled = sum(1 for t in items if t.due is None and not t.is_done)
+     rate = (done / total) if total else 0.0
+     return {

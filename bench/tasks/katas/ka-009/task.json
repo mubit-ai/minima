@@ -1,0 +1,12 @@
+{
+  "id": "ka-009",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement chunk(items, size, pad) in js/chunk.js. Split the array into consecutive chunks of size elements, returning a new array of new arrays and never modifying the input. size must be an integer of at least 1, otherwise throw a RangeError. When the input length is not a multiple of size, the final chunk stays short — unless pad is provided (any value other than undefined, including null), in which case the final chunk is filled with pad up to exactly size elements. Empty input returns an empty array. Verify with bun test tests/js/chunk.",
+  "test_cmd": "bun test tests/js/chunk",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 11,
+  "timeout_sec": 60
+}

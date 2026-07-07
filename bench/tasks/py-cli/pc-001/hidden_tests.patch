@@ -1,0 +1,31 @@
+diff --git a/tests/test_hidden_due_window_boundary.py b/tests/test_hidden_due_window_boundary.py
+new file mode 100644
+index 0000000..fecfb2e
+--- /dev/null
++++ b/tests/test_hidden_due_window_boundary.py
+@@ -0,0 +1,25 @@
++"""Hidden fail-to-pass tests: the due window must include its last day."""
++
++from taskman.cli import main
++from taskman.query import due_within
++
++from .conftest import TODAY, make_task, rel
++
++
++def test_due_within_includes_last_day_of_window():
++    tasks = [make_task(id=1, due=rel(7)), make_task(id=2, due=rel(8))]
++    assert [t.id for t in due_within(tasks, 7, TODAY)] == [1]
++
++
++def test_due_within_zero_days_selects_today():
++    tasks = [make_task(id=1, due=TODAY), make_task(id=2, due=rel(1))]
++    assert [t.id for t in due_within(tasks, 0, TODAY)] == [1]
++
++
++def test_cli_due_within_includes_boundary_day(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    main([*base, "add", "Week edge", "-p", "2", "--due", "2026-03-22"])
++    capsys.readouterr()
++    rc = main([*base, "list", "--due-within", "7"])
++    assert rc == 0
++    assert "Week edge" in capsys.readouterr().out

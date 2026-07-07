@@ -1,0 +1,49 @@
+diff --git a/tests/hidden/slug-conflict.test.ts b/tests/hidden/slug-conflict.test.ts
+new file mode 100644
+index 0000000..40690b9
+--- /dev/null
++++ b/tests/hidden/slug-conflict.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++const token = TOKENS.alice;
++
++function create(app: ReturnType<typeof makeApp>["app"], body: unknown) {
++  return app.handle(req("POST", "/api/links", { token, body }));
++}
++
++describe("custom slug collisions", () => {
++  test("recreating a taken slug answers 409 slug_taken", () => {
++    const { app } = makeApp();
++    expect(create(app, { url: "https://first.example.com", slug: "docs" }).status).toBe(201);
++    const dup = create(app, { url: "https://second.example.com", slug: "docs" });
++    expect(dup.status).toBe(409);
++    expect((dup.body as { error: string }).error).toBe("slug_taken");
++  });
++
++  test("the original link survives a collision attempt untouched", () => {
++    const { app } = makeApp();
++    create(app, { url: "https://first.example.com", slug: "team" });
++    app.handle(req("GET", "/r/team"));
++    create(app, { url: "https://second.example.com", slug: "team" });
++
++    const fetched = app.handle(req("GET", "/api/links/team", { token }));
++    expect((fetched.body as { url: string }).url).toBe("https://first.example.com");
++    expect((fetched.body as { clicks: number }).clicks).toBe(1);
++    const follow = app.handle(req("GET", "/r/team"));
++    expect(follow.headers?.location).toBe("https://first.example.com");
++  });
++
++  test("a failed duplicate never adds a phantom record", () => {
++    const { app } = makeApp();
++    create(app, { url: "https://first.example.com", slug: "solo" });
++    create(app, { url: "https://second.example.com", slug: "solo" });
++    const list = app.handle(req("GET", "/api/links", { token }));
++    const body = list.body as { items: { slug: string }[]; total: number };
++    expect(body.total).toBe(1);
++    expect(body.items).toHaveLength(1);
++    const top = app.handle(req("GET", "/api/stats/links/top", { token }));
++    expect((top.body as { items: unknown[] }).items).toHaveLength(1);
++  });
++});

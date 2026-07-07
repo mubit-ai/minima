@@ -1,0 +1,12 @@
+{
+  "id": "jl-001",
+  "repo": "js-lib",
+  "category": "bugfix",
+  "problem_statement": "When exporting tabular data to CSV, values that contain a bare carriage-return character (one not followed by a line feed) are written into the output without any protection, so reading the output back splits those values across extra rows and the data no longer matches what was exported. Values containing commas, quote characters, or ordinary newlines are handled correctly. Please fix the export path so that affected values survive a write-then-read round trip unchanged.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 2,
+  "timeout_sec": 60
+}

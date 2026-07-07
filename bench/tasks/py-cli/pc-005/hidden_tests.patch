@@ -1,0 +1,38 @@
+diff --git a/tests/test_hidden_agenda_boundary.py b/tests/test_hidden_agenda_boundary.py
+new file mode 100644
+index 0000000..c30e062
+--- /dev/null
++++ b/tests/test_hidden_agenda_boundary.py
+@@ -0,0 +1,32 @@
++"""Hidden fail-to-pass tests: the upcoming window includes its last day."""
++
++from taskman.cli import main
++from taskman.query import UPCOMING_WINDOW_DAYS, bucket_by_due
++
++from .conftest import TODAY, make_task, rel
++
++
++def test_window_last_day_is_upcoming():
++    tasks = [make_task(id=1, due=rel(UPCOMING_WINDOW_DAYS))]
++    buckets = bucket_by_due(tasks, TODAY)
++    assert [t.id for t in buckets["upcoming"]] == [1]
++    assert buckets["later"] == []
++
++
++def test_day_after_window_is_later():
++    tasks = [make_task(id=1, due=rel(UPCOMING_WINDOW_DAYS + 1))]
++    buckets = bucket_by_due(tasks, TODAY)
++    assert [t.id for t in buckets["later"]] == [1]
++    assert buckets["upcoming"] == []
++
++
++def test_cli_agenda_places_week_boundary_in_upcoming(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    main([*base, "add", "Week edge", "-p", "2", "--due", "2026-03-22"])
++    capsys.readouterr()
++    rc = main([*base, "agenda"])
++    assert rc == 0
++    out = capsys.readouterr().out
++    assert "UPCOMING:" in out
++    assert "LATER:" not in out
++    assert "Week edge" in out

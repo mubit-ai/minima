@@ -1,0 +1,24 @@
+diff --git a/taskman/query.py b/taskman/query.py
+index f739ef8..5ea4ee3 100644
+--- a/taskman/query.py
++++ b/taskman/query.py
+@@ -66,9 +66,16 @@ def filter_tags(tasks: Iterable[Task], tags: Iterable[str]) -> list[Task]:
+     match is case-insensitive.  An empty request matches every task.
+     """
+     wanted = normalize_tags(tags)
+-    if not wanted:
+-        return list(tasks)
+-    return [t for t in tasks if all(tag in t.tags for tag in wanted)]
++    matched: list[Task] = []
++    for task in tasks:
++        if not wanted:
++            matched.append(task)
++            continue
++        for tag in wanted:
++            if tag in task.tags:
++                matched.append(task)
++                break
++    return matched
+ 
+ 
+ def filter_overdue(tasks: Iterable[Task], today: date) -> list[Task]:

@@ -1,0 +1,21 @@
+diff --git a/tests/test_hidden_mean.py b/tests/test_hidden_mean.py
+new file mode 100644
+index 0000000..fd1f07e
+--- /dev/null
++++ b/tests/test_hidden_mean.py
+@@ -0,0 +1,15 @@
++import pytest
++from mathx import mean
++
++
++def test_mean_basic():
++    assert mean([2.0, 4.0]) == 3.0
++
++
++def test_mean_single():
++    assert mean([7.0]) == 7.0
++
++
++def test_mean_empty_raises():
++    with pytest.raises(ValueError):
++        mean([])

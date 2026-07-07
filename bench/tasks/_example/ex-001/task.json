@@ -1,0 +1,13 @@
+{
+  "id": "ex-001",
+  "repo": "_example",
+  "category": "bugfix",
+  "problem_statement": "Users report that averaging results in the mathx helpers are consistently lower than expected. For instance, averaging the two readings 2.0 and 4.0 yields 2.0 instead of the correct 3.0, and averaging a single value returns half of it. Addition-related behavior seems unaffected. Please find the defect responsible for the skewed averages and correct it without changing the module's public interface.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 60,
+  "notes": "Validator smoke example — not part of the real task set; index builder skips _-prefixed repos."
+}

@@ -1,0 +1,102 @@
+diff --git a/src/csv.ts b/src/csv.ts
+index b1ab6c1..2d344b7 100644
+--- a/src/csv.ts
++++ b/src/csv.ts
+@@ -57,57 +57,40 @@ export function parseCsv(text: string, options: CsvParseOptions = {}): string[][
+   checkDelimiter(delimiter);
+ 
+   const rows: string[][] = [];
+-  let row: string[] = [];
+-  let field = "";
+-  let fieldQuoted = false; // current field began with an opening quote
+-  let inQuotes = false;
+-  let i = 0;
+-  const n = text.length;
+-
+-  while (i < n) {
+-    const ch = text[i]!;
+-    if (inQuotes) {
+-      if (ch === '"') {
+-        if (text[i + 1] === '"') {
+-          field += '"'; // escaped quote
+-          i += 2;
++  for (const line of text.split(/\r\n|\r|\n/)) {
++    if (line === "") continue; // skip blank lines and the trailing terminator
++    const row: string[] = [];
++    let field = "";
++    let fieldQuoted = false;
++    let inQuotes = false;
++    for (let i = 0; i < line.length; i++) {
++      const ch = line[i]!;
++      if (inQuotes) {
++        if (ch === '"') {
++          if (line[i + 1] === '"') {
++            field += '"'; // escaped quote
++            i += 1;
++          } else {
++            inQuotes = false; // closing quote
++          }
+         } else {
+-          inQuotes = false; // closing quote
+-          i += 1;
++          field += ch;
+         }
+-      } else {
+-        field += ch; // delimiters and line breaks are literal inside quotes
+-        i += 1;
++        continue;
+       }
+-      continue;
+-    }
+-    if (ch === '"' && field === "" && !fieldQuoted) {
+-      inQuotes = true;
+-      fieldQuoted = true;
+-      i += 1;
+-      continue;
+-    }
+-    if (ch === delimiter) {
+-      row.push(field);
+-      field = "";
+-      fieldQuoted = false;
+-      i += 1;
+-      continue;
+-    }
+-    if (ch === "\n" || ch === "\r") {
+-      row.push(field);
+-      rows.push(row);
+-      row = [];
+-      field = "";
+-      fieldQuoted = false;
+-      i += ch === "\r" && text[i + 1] === "\n" ? 2 : 1;
+-      continue;
++      if (ch === '"' && field === "" && !fieldQuoted) {
++        inQuotes = true;
++        fieldQuoted = true;
++        continue;
++      }
++      if (ch === delimiter) {
++        row.push(field);
++        field = "";
++        fieldQuoted = false;
++        continue;
++      }
++      field += ch;
+     }
+-    field += ch;
+-    i += 1;
+-  }
+-
+-  if (field.length > 0 || fieldQuoted || row.length > 0) {
+     row.push(field);
+     rows.push(row);
+   }
+@@ -126,7 +109,8 @@ function needsQuoting(field: string, delimiter: string): boolean {
+ 
+ /** Encode one field, quoting and escaping only when necessary. */
+ function encodeField(value: unknown, delimiter: string): string {
+-  const field = value === null || value === undefined ? "" : String(value);
++  const raw = value === null || value === undefined ? "" : String(value);
++  const field = raw.replaceAll("\r\n", "\n"); // normalize line endings
+   if (!needsQuoting(field, delimiter)) return field;
+   return '"' + field.replaceAll('"', '""') + '"';
+ }

@@ -1,0 +1,35 @@
+diff --git a/tests/py/test_checksum_hidden.py b/tests/py/test_checksum_hidden.py
+new file mode 100644
+index 0000000..d137ac1
+--- /dev/null
++++ b/tests/py/test_checksum_hidden.py
+@@ -0,0 +1,29 @@
++import pytest
++import checksum
++
++
++def test_valid_codes():
++    assert checksum.is_valid_code("MINIMAJ") is True
++    assert checksum.is_valid_code("2025M") is True
++
++
++def test_normalisation():
++    assert checksum.is_valid_code("minima-j") is True
++    assert checksum.is_valid_code("20 25-m") is True
++
++
++def test_invalid_codes():
++    assert checksum.is_valid_code("MINIMAK") is False
++    assert checksum.is_valid_code("2025N") is False
++
++
++def test_too_short_raises():
++    with pytest.raises(ValueError):
++        checksum.is_valid_code("J")
++    with pytest.raises(ValueError):
++        checksum.is_valid_code(" - ")
++
++
++def test_bad_character_raises():
++    with pytest.raises(ValueError):
++        checksum.is_valid_code("MIN!MAJ")

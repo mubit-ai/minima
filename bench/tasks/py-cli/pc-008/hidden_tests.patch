@@ -1,0 +1,37 @@
+diff --git a/tests/test_hidden_report_overdue.py b/tests/test_hidden_report_overdue.py
+new file mode 100644
+index 0000000..608bb1b
+--- /dev/null
++++ b/tests/test_hidden_report_overdue.py
+@@ -0,0 +1,31 @@
++"""Hidden fail-to-pass tests: completed tasks never count as overdue."""
++
++from taskman.cli import main
++from taskman.report import summary
++
++from .conftest import TODAY, make_task, rel
++
++
++def test_summary_overdue_excludes_completed_tasks():
++    tasks = [
++        make_task(id=1, due=rel(-5)),
++        make_task(id=2, due=rel(-30), status="done"),
++        make_task(id=3, due=rel(-2), status="done"),
++    ]
++    assert summary(tasks, TODAY)["overdue"] == 1
++
++
++def test_summary_overdue_zero_when_all_past_due_are_done():
++    tasks = [make_task(id=1, due=rel(-10), status="done")]
++    assert summary(tasks, TODAY)["overdue"] == 0
++
++
++def test_cli_report_overdue_count_ignores_finished_work(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    main([*base, "add", "Old but finished", "-p", "2", "--due", "2026-03-01"])
++    main([*base, "done", "1"])
++    main([*base, "add", "Genuinely late", "-p", "1", "--due", "2026-03-12"])
++    capsys.readouterr()
++    rc = main([*base, "report"])
++    assert rc == 0
++    assert "overdue:     1" in capsys.readouterr().out

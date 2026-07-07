@@ -1,0 +1,68 @@
+diff --git a/src/handlers/links.ts b/src/handlers/links.ts
+index e470c72..1b0cc25 100644
+--- a/src/handlers/links.ts
++++ b/src/handlers/links.ts
+@@ -35,11 +35,17 @@ export function linkRoutes({ store }: LinkDeps): RouteDef[] {
+       method: "POST",
+       pattern: "/api/links",
+       scope: "write",
+-      handler: (req) => {
++      handler: (req, ctx) => {
+         const parsed = validateLinkCreate(req.body);
+         if (!parsed.ok) return json(400, { error: "invalid_link", details: parsed.errors });
++        const ttl = (req.body as Record<string, unknown>).ttlSeconds;
++        if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl <= 0)) {
++          return json(400, { error: "invalid_ttl" });
++        }
++        const expiresAt =
++          ttl === undefined ? null : new Date(ctx.now() + (ttl as number) * 1000).toISOString();
+         try {
+-          const record = store.createLink(parsed.value);
++          const record = store.createLink({ ...parsed.value, expiresAt });
+           return json(201, linkView(store, record));
+         } catch (err) {
+           if (err instanceof ConflictError) return json(409, { error: "slug_taken" });
+@@ -106,6 +112,9 @@ export function linkRoutes({ store }: LinkDeps): RouteDef[] {
+       handler: (_req, ctx) => {
+         const record = store.getLinkBySlug(ctx.params.slug!);
+         if (record === undefined) return json(404, { error: "not_found" });
++        if (record.expiresAt !== null && ctx.now() >= Date.parse(record.expiresAt)) {
++          return json(410, { error: "link_expired" });
++        }
+         store.recordClick(record.slug);
+         return redirect(record.url);
+       },
+diff --git a/src/store.ts b/src/store.ts
+index 619d162..8940b1d 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -80,7 +80,7 @@ export class Store {
+    * fresh slug is generated (regenerating on the astronomically unlikely
+    * collision). Throws {@link ConflictError} when a requested slug is taken.
+    */
+-  createLink(input: { url: string; slug?: string }): LinkRecord {
++  createLink(input: { url: string; slug?: string; expiresAt?: string | null }): LinkRecord {
+     let slug: string;
+     if (input.slug !== undefined) {
+       if (this.slugIndex.has(input.slug)) {
+@@ -99,6 +99,7 @@ export class Store {
+       slug,
+       url: input.url,
+       createdAt: new Date(this.now()).toISOString(),
++      expiresAt: input.expiresAt ?? null,
+     };
+     this.links.set(id, record);
+     this.slugIndex.set(slug, id);
+diff --git a/src/types.ts b/src/types.ts
+index 945ab7c..ec3f78e 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -83,6 +83,8 @@ export interface LinkRecord {
+   url: string;
+   /** ISO-8601 creation timestamp derived from the injected clock. */
+   createdAt: string;
++  /** ISO-8601 expiry timestamp, or `null` when the link never expires. */
++  expiresAt: string | null;
+ }
+ 
+ /** A stored note. */
