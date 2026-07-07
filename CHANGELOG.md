@@ -4,6 +4,28 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-07
+
+### Fixed
+- **Learning loop now takes effect** — the client sends a stable `user_id` on every
+  recommend, so Minima's memory recall actually surfaces your prior outcomes and routing
+  can move off the cold-start prior. Previously no `user_id` was sent, so server-side
+  recall was always empty and `decision_basis` never left `prior`.
+- **Esc reliably aborts** — pressing Esc now cancels during the routing/recommend phase
+  too (it was a no-op there, so the model still ran), and an aborted turn no longer leaves
+  a dangling message that made the next prompt re-answer the previous one.
+- **Web search/fetch work without an Exa key** — `web_search` and `web_fetch` fall back to
+  DuckDuckGo when `EXA_API_KEY` is unset (they previously failed at call time); with a key
+  set they still prefer Exa.
+- **Rendering** — long lines (routing warnings, reasoning, tool output) are clipped inside
+  their bordered cells instead of drawing past the border; the `escalation_suggested`
+  internal hint is no longer leaked into the info line; the question and `/tree` overlays
+  reserve their height so they can't corrupt terminal scrollback.
+
+### Changed
+- Learning-loop write failures are now surfaced — a muted `ℹ learning loop: …` line in the
+  TUI and a `feedback_error` event in `--mode json` — instead of being silently swallowed.
+
 ## [0.7.2] - 2026-07-06
 
 ### Added (TUI)
