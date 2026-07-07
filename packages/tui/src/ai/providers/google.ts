@@ -99,6 +99,9 @@ export class GoogleProvider {
     yield startEv(assistant);
 
     try {
+      // Thread the abort signal through the request config so Esc cancels the
+      // in-flight generation (the @google/genai SDK reads it as `abortSignal`).
+      if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const contents = toContents(context);
       // NOTE: @google/genai 0.3.x exposes no abortSignal on generateContentStream, so opts.signal
       // cannot cancel an in-flight Gemini stream here (unlike the Anthropic/OpenAI providers).
@@ -106,7 +109,7 @@ export class GoogleProvider {
       const stream = await client.models.generateContentStream({
         model: model.id,
         contents,
-        config,
+        config: opts.signal ? { ...config, abortSignal: opts.signal } : config,
       });
       for await (const chunk of stream) {
         const usage = chunk.usageMetadata ?? chunk.usage_metadata;

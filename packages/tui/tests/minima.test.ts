@@ -166,6 +166,55 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     reg.unregister();
   });
 
+  test("Esc during routing aborts the recommend call and never runs the model", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("must not run")] })]);
+
+    const feedbackCalls: unknown[] = [];
+    let recommendReached = false;
+    // /v1/recommend hangs until the request's AbortSignal fires.
+    const hangingFetch = async (
+      url: string,
+      init?: { method?: string; body?: string; signal?: AbortSignal },
+    ) => {
+      const u = new URL(url);
+      if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
+        recommendReached = true;
+        await new Promise<never>((_, reject) => {
+          const sig = init?.signal;
+          const fail = () => reject(new DOMException("Aborted", "AbortError"));
+          if (sig?.aborted) return fail();
+          sig?.addEventListener("abort", fail, { once: true });
+        });
+      }
+      if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/feedback") {
+        feedbackCalls.push(init?.body);
+        return { status: 200, json: async () => ({ accepted: true, record_id: "o1" }) };
+      }
+      return { status: 404, json: async () => ({ detail: "not found" }) };
+    };
+
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: hangingFetch });
+    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+    const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9), tools: [] });
+
+    const p = agent.promptRouted("route me then stop");
+    // Let promptRouted reach the (hanging) recommend call, then abort as Esc would.
+    while (!recommendReached) await new Promise((r) => setTimeout(r, 1));
+    agent.abort();
+    const routing = await p; // resolves promptly — no hang, no run
+
+    expect(agent.lastAborted).toBe(true);
+    expect(routing).toBeNull();
+    // The model never ran and no feedback was recorded.
+    expect(agent.agentState.messages.some((m) => m.role === "assistant")).toBe(false);
+    expect(feedbackCalls).toHaveLength(0);
+    reg.unregister();
+  });
+
   test("judge abstention sends feedback with no fabricated quality", async () => {
     resetAll();
     registerModel(FAUX_MODEL);

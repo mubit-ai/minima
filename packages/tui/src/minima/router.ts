@@ -148,6 +148,8 @@ export class MinimaRouter {
     maxCandidates?: number;
     /** Cost-control opt-out of the server's LLM-reasoner consult. */
     allowLlmEscalation?: boolean;
+    /** Abort the in-flight recommend HTTP call (Esc during routing). */
+    signal?: AbortSignal;
   }): Promise<RoutingResult> {
     if (!(this.config.minimaUrl || "").trim()) {
       throw new Error("routing disabled (offline mode)");
@@ -188,6 +190,7 @@ export class MinimaRouter {
       baseline_model_id: this.config.baselineModelId ?? undefined,
       max_candidates: opts.maxCandidates,
       allow_llm_escalation: opts.allowLlmEscalation,
+      signal: opts.signal,
     });
 
     const ranked = rec.recommended_model;
