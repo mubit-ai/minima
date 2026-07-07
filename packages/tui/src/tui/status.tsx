@@ -57,39 +57,39 @@ export function StatusBar({
     thinkingLevel === "high" ? "yellow" : thinkingLevel === "off" ? "gray" : "cyan";
   const ctxStyle = ctxPct > 80 ? "red" : "gray";
   const statusColor = statusText === "ready" ? "green" : "yellow";
+  const dirCount = readDirs?.length ?? 0;
 
+  // Each row is a SINGLE `<Text wrap="truncate-end">` with nested colour spans. Ink wraps every
+  // child <Text> independently, so a row built from sibling <Text> boxes garbles into interleaved
+  // lines once the content outgrows the terminal width. Nesting under one wrap-controlled parent
+  // keeps the row on one line and truncates cleanly at the right edge instead. Segments are ordered
+  // most-important-first so the low-value tail (session id) is what gets dropped when narrow.
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box>
+      <Text wrap="truncate-end">
         {planMode && (
           <Text color="yellow" bold>
-            {" "}
             [PLAN]{" "}
           </Text>
         )}
-
-        <Text color="gray"> model: </Text>
+        <Text color={statusColor}>● </Text>
         <Text color={modelStyle}>
           {model} ▸ {basis}
         </Text>
-
-        <Text color="gray"> · route: </Text>
+        {routingOffline && (
+          <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
+        )}
+        <Text color="gray"> · </Text>
         <Text color={routeStyle}>{routeMode}</Text>
-
-        <Text color="gray"> · think: </Text>
+        <Text color="gray"> · think:</Text>
         <Text color={thinkStyle}>{thinkingLevel}</Text>
-
         <Text color="gray"> │ ctx </Text>
         <Text color={ctxStyle}>{ctxPct.toFixed(0)}%</Text>
-
         <Text color="gray">
           {" "}
-          · ↑{inputTokens} ↓{outputTokens}
+          · ↑{inputTokens} ↓{outputTokens} ·{" "}
         </Text>
-
-        <Text color="gray"> · </Text>
         <Text color="yellow">${actualCostUsd.toFixed(4)}</Text>
-
         {budget && (
           <>
             <Text color="gray"> / </Text>
@@ -99,26 +99,18 @@ export function StatusBar({
             </Text>
           </>
         )}
-
         <Text color="gray"> · sess {sessionId.slice(0, 12)}</Text>
-
-        <Text color="gray"> · </Text>
-        <Text color={statusColor}>{statusText}</Text>
-
-        {routingOffline && (
-          <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
-        )}
-      </Box>
-      <Box>
+      </Text>
+      <Text wrap="truncate-end">
         <Text color="gray">perms: </Text>
-        <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
+        <Text color="green">{`r-x ${dirCount} dir${dirCount === 1 ? "" : "s"}`}</Text>
         {alwaysTools && alwaysTools.length > 0 ? (
           <Text color="yellow"> {`· --x ${alwaysTools.join(", ")}`}</Text>
         ) : (
           <Text color="gray"> · w/e/b: ask</Text>
         )}
         {planMode && <Text color="magenta"> · PLAN (ro)</Text>}
-      </Box>
+      </Text>
     </Box>
   );
 }

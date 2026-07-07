@@ -2074,26 +2074,22 @@ export function HarnessApp({ agent, banner: _banner }: AppProps) {
               alwaysTools={[...permStateRef.current.allowAlways]}
             />
 
-            <Box justifyContent="space-between" width="100%">
-              <Box>
-                <Text color="yellow">pgup </Text>
-                <Text color="gray">PgUp </Text>
-                <Text color="yellow">pgdn </Text>
-                <Text color="gray">PgDn </Text>
-                <Text color="yellow">ctrl+l </Text>
-                <Text color="gray">Model </Text>
-                <Text color="yellow">ctrl+r </Text>
-                <Text color="gray">Route </Text>
-                <Text color="yellow">ctrl+o </Text>
-                <Text color="gray">Output </Text>
-                <Text color="yellow">esc </Text>
-                <Text color="gray">Abort</Text>
-              </Box>
-              <Box>
-                <Text color="yellow">ctrl+p </Text>
-                <Text color="gray">palette</Text>
-              </Box>
-            </Box>
+            {/* One wrap-controlled Text so the hint stays on a single clean line and truncates at
+                the edge on narrow terminals instead of garbling into interleaved rows. */}
+            <Text wrap="truncate-end">
+              <Text color="yellow">pgup/pgdn </Text>
+              <Text color="gray">scroll · </Text>
+              <Text color="yellow">^l </Text>
+              <Text color="gray">model · </Text>
+              <Text color="yellow">^r </Text>
+              <Text color="gray">route · </Text>
+              <Text color="yellow">^o </Text>
+              <Text color="gray">output · </Text>
+              <Text color="yellow">^p </Text>
+              <Text color="gray">palette · </Text>
+              <Text color="yellow">esc </Text>
+              <Text color="gray">abort</Text>
+            </Text>
 
             {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
           </Box>
