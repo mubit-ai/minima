@@ -155,6 +155,12 @@ export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
         paddingLeft={2}
         borderStyle="single"
         borderColor="gray"
+        // Hard guard against horizontal spill past the border: Ink only wraps when
+        // string-width judges a line too wide, and it under-counts glyphs like 🧠/wide
+        // emoji, so those lines skip wrapping and draw PAST the right border. Clip
+        // horizontally at the border; vertical growth (wrapping) is unaffected.
+        width="100%"
+        overflowX="hidden"
       >
         <Text color="gray" italic>
           {`🧠 reasoning (${msg.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s)`}
