@@ -172,5 +172,29 @@ describe("runJson", () => {
   });
 });
 
+describe("lastFeedbackError is per-turn (no stale learning-loop note)", () => {
+  test("an earlier turn's rejection does not persist onto a later pinned turn", async () => {
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("one")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("two")], stop_reason: "stop" }),
+    ]);
+    const agent = buildAgent({ accepted: false, warnings: ["memory_write_failed"] });
+
+    // Turn 1: routed with a recommendation → feedback is sent and rejected → error surfaces.
+    await agent.promptRouted("first");
+    expect(agent.lastFeedbackError).not.toBeNull();
+
+    // Turn 2: pinned → no recommendation, so feedbackSafely early-returns and sends nothing.
+    // The stale rejection from turn 1 must NOT carry over (else the TUI re-shows the note).
+    agent.config.pinned = true;
+    await agent.promptRouted("second");
+    expect(agent.lastFeedbackError).toBeNull();
+
+    reg.unregister();
+  });
+});
+
 // keep mock referenced (bun:test import)
 void mock;
