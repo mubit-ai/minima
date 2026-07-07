@@ -1,0 +1,22 @@
+diff --git a/tests/hidden_jl002.test.ts b/tests/hidden_jl002.test.ts
+new file mode 100644
+index 0000000..2be5c29
+--- /dev/null
++++ b/tests/hidden_jl002.test.ts
+@@ -0,0 +1,16 @@
++import { describe, expect, test } from "bun:test";
++import { median, quantile } from "../src/stats.ts";
++
++describe("quantile interpolation", () => {
++  test("interpolates between order statistics (R-7 rule)", () => {
++    expect(quantile([1, 2, 3, 4], 0.5)).toBe(2.5);
++    expect(quantile([15, 20, 35, 40, 50], 0.25)).toBe(20);
++    expect(quantile([10, 20, 30], 0.75)).toBe(25);
++    expect(quantile([1, 2], 0.5)).toBe(1.5);
++  });
++
++  test("median of even- and odd-length arrays", () => {
++    expect(median([1, 2, 3, 4])).toBe(2.5);
++    expect(median([3, 1, 2])).toBe(2);
++  });
++});

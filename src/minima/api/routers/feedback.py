@@ -91,6 +91,7 @@ async def feedback(
         output_tokens=req.output_tokens or 0,
         cost_usd=req.actual_cost_usd or 0.0,
         latency_ms=req.latency_ms,
+        iterations=req.iterations,
         quality_score=quality,
         outcome=req.outcome.value,
         recommendation_id=req.recommendation_id,
@@ -102,6 +103,12 @@ async def feedback(
         req.recommendation_id, req.chosen_model_id
     )
     importance = "high" if (req.verified_in_production and is_success) else "medium"
+
+    # Reconcile the decision-log row BEFORE the Mubit memory write: realized cost/outcome
+    # are local analytics facts and must survive a memory outage. (Observed live: a Mubit
+    # 503 made every feedback return early and /v1/savings showed 0 reconciled rows for a
+    # whole day of traffic.)
+    _reconcile_decision(tenant, req, quality, late=False)
 
     try:
         record_id = await memory.remember_outcome(
@@ -190,8 +197,6 @@ async def feedback(
         _fire_reflect(memory, stored.lane, stored.user_id)
         reflection_triggered = True
 
-    _reconcile_decision(tenant, req, quality, late=False)
-
     return FeedbackResponse(
         accepted=True,
         record_id=record_id,
@@ -209,13 +214,19 @@ def _reconcile_decision(
     """Fill the decision-log row's realized columns (best-effort analytics)."""
     if tenant.decision_log is None:
         return
+    # When the harness explicitly says this turn was not judged (cadence-skip or
+    # LLM-judge abstain), record NULL quality in the analytics store — never
+    # substitute a label-based default (e.g. 0.9 for success), as that fabricated
+    # value corrupts calibration metrics and OPE weighting.
+    # Backwards-compat: judged=None (old clients) keeps the quality_from_outcome path.
+    reconciled_quality: float | None = None if req.judged is False else quality
     try:
         tenant.decision_log.reconcile(
             req.recommendation_id,
             Reconciliation(
                 model_id=req.chosen_model_id,
                 outcome=req.outcome.value,
-                quality=quality,
+                quality=reconciled_quality,
                 cost_usd=req.actual_cost_usd,
                 latency_ms=req.latency_ms,
                 ts=time.time(),
@@ -248,6 +259,7 @@ async def _late_feedback(
         output_tokens=req.output_tokens or 0,
         cost_usd=req.actual_cost_usd or 0.0,
         latency_ms=req.latency_ms,
+        iterations=req.iterations,
         quality_score=quality,
         outcome=req.outcome.value,
         recommendation_id=req.recommendation_id,
@@ -257,6 +269,9 @@ async def _late_feedback(
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
+    # Realized analytics first — must survive a memory outage (same ordering as the
+    # main path).
+    _reconcile_decision(tenant, req, quality, late=True)
     try:
         record_id = await tenant.memory.remember_outcome(
             content=decision.content,
@@ -273,5 +288,4 @@ async def _late_feedback(
         log.warning("late_remember_outcome_failed", error=str(exc))
         return FeedbackResponse(accepted=False, warnings=["memory_write_failed", *warnings])
 
-    _reconcile_decision(tenant, req, quality, late=True)
     return FeedbackResponse(accepted=True, record_id=record_id, warnings=warnings)

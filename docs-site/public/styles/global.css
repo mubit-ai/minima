@@ -1,0 +1,63 @@
+/*
+ * Global docs overrides.
+ *
+ * The "Get API Key" entry in the top nav (vocs.config.ts -> topNav) is the
+ * ONLY external link rendered in the top navigation, so `.vocs_ExternalLink`
+ * inside a top-nav container uniquely identifies it. Promote it from a plain
+ * text link to a filled, accent-colored CTA button so it stands out.
+ *
+ * Colors use Vocs' accent CSS variables (which respect theme.accentColor in
+ * vocs.config.ts) with hardcoded fallbacks.
+ */
+
+.vocs_DesktopTopNav .vocs_ExternalLink,
+.vocs_MobileTopNav .vocs_ExternalLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4ch;
+  margin-left: 0.35rem;
+  padding: 0.4rem 0.95rem !important;
+  border: 1px solid transparent !important;
+  border-radius: 9999px !important;
+  background-color: var(--vocs-color_backgroundAccent, #ff4500) !important;
+  color: var(--vocs-color_backgroundAccentText, #ffffff) !important;
+  font-weight: 600 !important;
+  text-decoration: none !important;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.08s ease;
+}
+
+.vocs_DesktopTopNav .vocs_ExternalLink:hover,
+.vocs_MobileTopNav .vocs_ExternalLink:hover {
+  background-color: var(--vocs-color_backgroundAccentHover, #ff5e1a) !important;
+  color: var(--vocs-color_backgroundAccentText, #ffffff) !important;
+  box-shadow: 0 4px 12px rgba(255, 69, 0, 0.38);
+  transform: translateY(-1px);
+}
+
+.vocs_DesktopTopNav .vocs_ExternalLink:active,
+.vocs_MobileTopNav .vocs_ExternalLink:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* Keep the external-link glyph legible on the filled background. */
+.vocs_DesktopTopNav .vocs_ExternalLink svg,
+.vocs_MobileTopNav .vocs_ExternalLink svg {
+  color: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vocs_DesktopTopNav .vocs_ExternalLink,
+  .vocs_MobileTopNav .vocs_ExternalLink {
+    transition: none;
+  }
+  .vocs_DesktopTopNav .vocs_ExternalLink:hover,
+  .vocs_MobileTopNav .vocs_ExternalLink:hover {
+    transform: none;
+  }
+}

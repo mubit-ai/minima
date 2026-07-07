@@ -1,0 +1,13 @@
+diff --git a/taskman/models.py b/taskman/models.py
+index 64d62b6..acfbe98 100644
+--- a/taskman/models.py
++++ b/taskman/models.py
+@@ -34,7 +34,7 @@ PRIORITY_LABELS: dict[int, str] = {
+ LABEL_TO_PRIORITY: dict[str, int] = {v: k for k, v in PRIORITY_LABELS.items()}
+ 
+ #: Priority assigned when the user does not specify one.
+-DEFAULT_PRIORITY = PRIORITY_MEDIUM
++DEFAULT_PRIORITY = PRIORITY_HIGH
+ 
+ # --------------------------------------------------------------------------
+ # Statuses

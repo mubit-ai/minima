@@ -1,0 +1,12 @@
+{
+  "id": "ka-003",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement merge_intervals(intervals, merge_touching=True) in py/intervals.py. Given a list of closed numeric (start, end) tuples in any order, return a new ascending-sorted list where every group of overlapping intervals is collapsed into one spanning interval. The merge_touching flag controls the boundary policy: when True (default), intervals that merely touch — one ending exactly where the next starts — also merge; when False they stay separate. Raise ValueError if any interval has start greater than end, never modify the input list, and return [] for empty input. Verify with python3 -m pytest -q tests/py/test_intervals*.py.",
+  "test_cmd": "python3 -m pytest -q tests/py/test_intervals*.py",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 11,
+  "timeout_sec": 60
+}

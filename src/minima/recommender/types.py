@@ -101,6 +101,36 @@ class ModelAggregate:
             return None
         return _weighted_quantile(pairs, q)
 
+    def observed_cost_band(
+        self, min_n: int, q_low: float = 0.25, q_high: float = 0.75
+    ) -> tuple[float, float] | None:
+        """Robust p_low–p_high band of realized $/call (default p25–p75) — the data-grounded
+        predictable cost range. Same (cost, similarity) pairs and similarity-only weighting as
+        :meth:`observed_cost`; None when fewer than ``min_n`` neighbors carry a positive cost.
+        """
+        pairs = [
+            (ev.record.cost_usd, max(0.0, ev.score))
+            for ev in self.evidence
+            if ev.record is not None and ev.record.cost_usd and ev.record.cost_usd > 0.0
+        ]
+        if len(pairs) < min_n:
+            return None
+        return (_weighted_quantile(pairs, q_low), _weighted_quantile(pairs, q_high))
+
+    def observed_output_tokens_band(
+        self, min_n: int, q_low: float = 0.25, q_high: float = 0.75
+    ) -> tuple[float, float] | None:
+        """Robust p_low–p_high band of realized output tokens/call — for re-pricing the cost
+        band to the current request's input size (rescaled basis). None below ``min_n``."""
+        pairs = [
+            (float(ev.record.output_tokens), max(0.0, ev.score))
+            for ev in self.evidence
+            if ev.record is not None and ev.record.output_tokens and ev.record.output_tokens > 0
+        ]
+        if len(pairs) < min_n:
+            return None
+        return (_weighted_quantile(pairs, q_low), _weighted_quantile(pairs, q_high))
+
 
 @dataclass(slots=True)
 class CandidateScore:
@@ -116,3 +146,21 @@ class CandidateScore:
     # Observed latency percentile (ms) from recalled outcomes; None without evidence.
     est_latency_ms: float | None = None
     latency_basis: str = ""
+    # Data-grounded predictable cost band (low, high) matching the chosen basis; None when
+    # evidence is too thin to estimate a range. ``cost_band_basis`` labels its source
+    # (e.g. "observed_p25_p75", "rescaled_p25_p75", "heuristic").
+    est_cost_low: float | None = None
+    est_cost_high: float | None = None
+    cost_band_basis: str = ""
+    # 95% credible-interval width of the success estimate (1.0 = no evidence). Powers the
+    # routing-collapse margin guard and the harness green/amber/red confidence signal.
+    interval_width: float = 1.0
+    # Beta posterior parameters for the (uncalibrated) success estimate — used by Thompson
+    # sampling when that selection policy is enabled.
+    alpha: float = 0.0
+    beta: float = 0.0
+    # The pre-calibration, pre-exploration-bonus Beta-posterior mean — the HONEST
+    # evidence-based probability. ``predicted_success`` above is the deployed value
+    # (calibrated + exploration bonus); this raw value is what calibration is fit on,
+    # so the recalibration loop converges instead of oscillating. None when unset.
+    raw_predicted_success: float | None = None

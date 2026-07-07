@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-06-15T10:17:39.089964+00:00",
+  "strategy_count": 5,
+  "total_lessons": 876,
+  "strategies": [
+    {
+      "description": "Pattern around 'coding': 371 lessons share this theme. Example: Gemini-2.5-pro is a reliable and stable choice for mediu",
+      "lessons": 371
+    },
+    {
+      "description": "Pattern around 'tasks': 233 lessons share this theme. Example: gemini-2.5-flash is highly efficient for trivial tasks li",
+      "lessons": 233
+    },
+    {
+      "description": "Pattern around 'choice': 243 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, co",
+      "lessons": 243
+    },
+    {
+      "description": "Pattern around 'classification': 17 lessons share this theme. Example: Gemini-2.5-flash is efficient for trivial tasks b",
+      "lessons": 17
+    },
+    {
+      "description": "Pattern around 'complex': 12 lessons share this theme. Example: gpt-4o-mini demonstrates superior consistency for comple",
+      "lessons": 12
+    }
+  ],
+  "probes": [
+    {
+      "probe": "easy",
+      "model": "gemini-2.5-flash",
+      "basis": "prior",
+      "evidence_count": 0
+    },
+    {
+      "probe": "hard",
+      "model": "gemini-2.5-pro",
+      "basis": "prior",
+      "evidence_count": 0
+    },
+    {
+      "probe": "reasoning",
+      "model": "gemini-2.5-pro",
+      "basis": "prior",
+      "evidence_count": 0
+    }
+  ],
+  "memory_warmth": "STRATEGIES ONLY \u2014 lessons exist but recall not surfacing them yet"
+}

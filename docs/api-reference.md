@@ -98,6 +98,7 @@ Recommend a model for a single task.
 | `catalog_version` | string | Catalog version that priced the candidates. |
 | `catalog_stale` | bool | Prices older than the staleness window. |
 | `latency_ms` | int | Minima-side recommendation latency. |
+| `classification_profile` | object \| null | Structured trace of the classifier path: rule checks, feature vector, source, and timings. |
 | `warnings` | string[] | See **Warnings** below. |
 
 **`RankedModel`**
@@ -142,7 +143,7 @@ Recommend a model for a single task.
 | `reasoner_consulted` | The cheap-LLM reasoner was consulted and changed scores. |
 | `reasoner_failed` | The reasoner errored or returned unusable output; deterministic result used. |
 | `reasoner_disabled` | Escalation suggested but no reasoner is configured. |
-| `llm_classified` | The reasoner refined an ambiguous task classification. |
+| `reasoner_skipped_low_value` | Fast reasoner mode skipped a tie/near-threshold-only escalation. |
 
 ### Example
 

@@ -131,8 +131,8 @@ def aggregate_by_model(
     return aggs
 
 
-def is_conflicted(agg: ModelAggregate, min_n: int = 4, lo: float = 0.4, hi: float = 0.6) -> bool:
-    """A model whose neighbors split between success and failure."""
+def is_conflicted(agg: ModelAggregate, min_n: int = 4, lo: float = 0.35, hi: float = 0.70) -> bool:
+    """A model whose neighbors show mixed success — broadened to catch degrading models."""
     return agg.n >= min_n and lo <= agg.weighted_success_rate <= hi
 
 

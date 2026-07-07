@@ -1,0 +1,28 @@
+diff --git a/py/checksum.py b/py/checksum.py
+index b7836d1..2b3d87f 100644
+--- a/py/checksum.py
++++ b/py/checksum.py
+@@ -24,4 +24,22 @@ def is_valid_code(code):
+     all resulting values; the code is valid iff the total is divisible
+     by 36.
+     """
+-    raise NotImplementedError("kata: implement is_valid_code")
++    stripped = code.upper().replace(" ", "").replace("-", "")
++    if len(stripped) < 2:
++        raise ValueError("code must have at least two alphanumeric characters")
++    values = []
++    for ch in stripped:
++        if "0" <= ch <= "9":
++            values.append(ord(ch) - ord("0"))
++        elif "A" <= ch <= "Z":
++            values.append(ord(ch) - ord("A") + 10)
++        else:
++            raise ValueError(f"invalid character: {ch!r}")
++    total = 0
++    for offset, value in enumerate(reversed(values)):
++        if offset % 2 == 1:
++            value *= 2
++            if value >= 36:
++                value -= 35
++        total += value
++    return total % 36 == 0

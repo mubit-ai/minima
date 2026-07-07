@@ -1,0 +1,12 @@
+{
+  "id": "ka-006",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement slugify(title) in ts/slug.ts to turn a human-readable title into a URL slug. First remove apostrophes entirely — both ASCII ' and typographic ’ — so their neighbours join (\"Don't\" becomes \"dont\"). Then lowercase the text, replace every maximal run of characters outside a-z and 0-9 with a single hyphen, and trim any leading or trailing hyphens. A title containing no alphanumeric characters at all yields the empty string. Verify with bun test tests/ts/slug.",
+  "test_cmd": "bun test tests/ts/slug",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 5,
+  "timeout_sec": 60
+}

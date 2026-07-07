@@ -1,0 +1,96 @@
+---
+title: CLI usage
+description: Non-interactive modes, flags, and the auth and config subcommands.
+---
+
+import { PageHeader, Note, Tip } from '@components'
+
+<PageHeader />
+
+# CLI usage
+
+Besides the interactive TUI, `minima` runs in two non-interactive modes and exposes two subcommands.
+
+## Usage
+
+```
+minima [prompt] [--print|--mode json] [options]
+minima auth              sign in to Mubit + provision this repo's project
+minima config [set|get]  manage stored credentials
+```
+
+## Run modes
+
+| Mode | Invocation | Behavior |
+|------|------------|----------|
+| **Interactive** (default) | `minima` | Full Ink TUI. See [Interactive TUI](/harness/interactive). |
+| **One-shot print** | `minima -p "…"` | Runs the prompt, prints the final reply, exits. |
+| **Event stream** | `minima --mode json "…"` | Streams agent events as JSON lines for scripting. |
+
+```bash
+# one-shot
+minima -p "explain this repo"
+
+# machine-readable event stream
+minima --mode json "refactor the config loader" | jq .
+```
+
+<Note>
+`--print` / `--mode json` require a prompt argument. Without one, the harness exits with an error.
+</Note>
+
+## Options
+
+| Flag | Argument | Meaning |
+|------|----------|---------|
+| `-p`, `--print` | — | One-shot: print the reply and exit. |
+| `--mode` | `interactive` \| `print` \| `json` | Select the run mode explicitly. |
+| `--model` | `ID` | Pin a model, bypassing routing. |
+| `--provider` | `NAME` | Provider for a pinned `--model` (registers unknown models on the fly). |
+| `--thinking` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | Extended-thinking level for models that support it. |
+| `--offline` | — | Bypass Minima routing entirely. |
+| `-t`, `--tools` | `LIST` | Comma-separated tool allowlist (only these run). |
+| `-xt`, `--exclude-tools` | `LIST` | Comma-separated tool denylist. |
+| `-nt`, `--no-tools` | — | Disable all tools. |
+| `-b`, `--budget` | `USD` | Session budget with graduated warnings at 50/75/90/100%. |
+| `--budget-enforce` | — | Refuse new runs once the budget is exhausted (default: warn only). |
+| `--slider` | `0–10` | Cost/quality tradeoff — 0 = cheapest acceptable, 10 = highest quality (default 5). |
+| `-h`, `--help` | — | Print usage and exit. |
+
+```bash
+# pin a specific model and raise thinking effort
+minima --model claude-opus-4-8 --provider anthropic --thinking high -p "review this diff"
+
+# read-only, no shell: allow only read/ls/grep
+minima -t read,ls,grep -p "where is auth handled?"
+
+# run without the recommender at all
+minima --offline --model gpt-4o-mini --provider openai -p "quick summary"
+```
+
+<Tip>
+`--model` (optionally with `--provider`) pins one model and skips routing; `--offline` skips the recommender while still using the seeded catalog. See [Model routing](/harness/routing) for how these interact. Tool filtering with `-t`/`-xt`/`-nt` composes with the interactive [permission system](/harness/tools).
+</Tip>
+
+## `minima auth`
+
+Browser login → provisions a Mubit project for the current repo → stores `MUBIT_API_KEY` (and `MINIMA_URL`) → records the repo mapping in `~/.minima-harness/projects.json`.
+
+```bash
+minima auth                 # default region
+minima auth --region eu     # or --region us
+```
+
+The console URL defaults to `https://console.mubit.ai` (override with `MUBIT_CONSOLE_URL`).
+
+## `minima config`
+
+Manage the per-user credential store without opening the TUI — works before any keys exist.
+
+```bash
+minima config                    # list every key (secrets masked)
+minima config set MUBIT_API_KEY mbt_…
+minima config get MINIMA_URL
+```
+
+See [Configuration](/harness/configuration) for every key, storage backend, and precedence rules.

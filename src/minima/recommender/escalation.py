@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from minima.config import Settings
 from minima.recommender.aggregate import is_conflicted
 from minima.recommender.types import CandidateScore, ModelAggregate
+from minima.schemas.common import TaskType
 
 
 @dataclass(slots=True)
@@ -30,6 +31,11 @@ def evaluate(
     ranked: list[CandidateScore],
     aggregates: dict[str, ModelAggregate],
     recommended_interval_width: float | None = None,
+    recommended_predicted_success: float = 0.0,
+    tau: float = 0.0,
+    classification_task_type: TaskType | None = None,
+    classification_confidence: float = 0.0,
+    classification_easy_route: bool = False,
 ) -> EscalationDecision:
     """Decide whether the cheap-LLM reasoner should be consulted.
 
@@ -45,6 +51,19 @@ def evaluate(
     if not allow:
         return decision
 
+    if (
+        settings.minima_reasoner_skip_confident_classifications
+        and classification_easy_route
+        and classification_confidence >= settings.minima_reasoner_confidence_skip_threshold
+        and classification_task_type in {
+            TaskType.summarization,
+            TaskType.extraction,
+            TaskType.classification,
+            TaskType.translation,
+        }
+    ):
+        return decision
+
     uncertainty_mode = settings.minima_escalation_mode.lower() == "uncertainty"
     if uncertainty_mode and recommended_interval_width is not None:
         if recommended_interval_width > settings.minima_escalation_interval_width:
@@ -58,6 +77,16 @@ def evaluate(
 
         if recommended_confidence < settings.minima_escalation_c_min:
             decision.reasons.append("low_confidence")
+
+    near_delta = settings.minima_escalation_near_threshold_delta
+    if (
+        near_delta > 0
+        and tau > 0
+        and recommended_predicted_success > 0
+        and recommended_confidence > 0.2  # only when there's actual evidence, not a cold prior
+        and (recommended_predicted_success - tau) < near_delta
+    ):
+        decision.reasons.append("near_threshold")
 
     if len(ranked) >= 2:
         gap = ranked[0].score - ranked[1].score

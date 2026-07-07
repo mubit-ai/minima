@@ -1,0 +1,37 @@
+{
+  "run": 3,
+  "timestamp": "2026-06-15T10:31:17.346444+00:00",
+  "strategy_count": 5,
+  "strategies": [
+    {
+      "id": "strat-6fd443f1-316a-48ce-84c3-6855b656c5b7",
+      "description": "Pattern around 'coding': 390 lessons share this theme. Example: Claude-3.5-Sonnet is the most reliable model for medium-complexity coding and reasoning tasks.",
+      "lessons": 390,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-14a75fcc-203e-447b-b62b-dc4e9304899b",
+      "description": "Pattern around 'tasks': 251 lessons share this theme. Example: Gemini-2.5-flash is a cost-effective choice for trivial tasks, but performance varies on medium-complexity tasks.",
+      "lessons": 251,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-e2d5bcaa-7cdb-4e0c-9033-e5b91a33a7c4",
+      "description": "Pattern around 'choice': 283 lessons share this theme. Example: For summarization:easy tasks, gemini-2.5-flash is a reliable, cost-effective choice (verified in production at ~100% qua...",
+      "lessons": 283,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-cb79e217-6be2-4f04-bebd-329fd6f39ec4",
+      "description": "Pattern around 'classification': 24 lessons share this theme. Example: Gemini-2.5-Flash is a cost-effective choice for trivial classification, extraction, and translation tasks.",
+      "lessons": 24,
+      "confidence": -0.0
+    },
+    {
+      "id": "strat-4cf7e8aa-3571-461a-a3c8-e354f3e0f0f3",
+      "description": "Pattern around 'complex': 12 lessons share this theme. Example: gpt-4o-mini demonstrates superior consistency for complex coding tasks and data structure implementations.",
+      "lessons": 12,
+      "confidence": -0.0
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "pc-005",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "The agenda view misfiles tasks that are due exactly one week out. With today pinned at 2026-03-15, a task due 2026-03-22 shows up under the LATER heading, even though the upcoming section is supposed to cover the next seven days inclusive \u2014 that last day of the week silently falls out of UPCOMING. Tasks due six days ahead are placed correctly, overdue and today's items are fine, and undated tasks land in UNSCHEDULED as usual, so the whole view is right except for being off by a single day at the window's far edge. This breaks our weekly planning ritual because Sunday's deadline never appears in the coming-week section.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 12,
+  "timeout_sec": 120,
+  "notes": "bucket_by_due rewritten around a day-delta; upcoming check drifted to delta < UPCOMING_WINDOW_DAYS (exclusive), so day 7 lands in 'later'. | RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved.",
+  "authored_difficulty": "medium"
+}

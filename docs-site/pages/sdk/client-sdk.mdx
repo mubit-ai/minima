@@ -1,0 +1,196 @@
+---
+title: Python Client SDK
+description: The minima_client package — sync and async clients, autocapture, and error handling.
+---
+
+import { PageHeader, Warning } from '@components'
+
+<PageHeader />
+
+# Python Client SDK
+
+The `minima_client` package is the official thin, typed Python client for the hosted Minima API, plus an optional zero-code intake helper.
+
+## Install
+
+```bash
+pip install minima-cli
+```
+
+The SDK is published on PyPI as part of [**`minima-cli`**](https://pypi.org/project/minima-cli/) — the Python package that ships the `minima_client` SDK and the Minima server tooling. It does **not** include the `minima` terminal agent: the CLI is a native binary installed with [Homebrew](/harness/installation) (`brew install mubit-ai/minima/minima`). Import the SDK as `minima_client`:
+
+```python
+from minima_client import MinimaClient, AsyncMinimaClient, MinimaError, autocapture
+```
+
+## Clients
+
+Both `MinimaClient` (sync) and `AsyncMinimaClient` (async) share the same surface.
+
+```python
+from minima_client import MinimaClient
+
+with MinimaClient("https://api.minima.sh", api_key="mbt_…", timeout=10.0) as minima:
+    rec = minima.recommend("Summarize this incident report into 3 bullets.",
+                           cost_quality_tradeoff=3)
+    print(rec.recommended_model.model_id)
+```
+
+- `base_url` — the Minima API base URL (`https://api.minima.sh`).
+- `api_key` — your **Mubit** API key (`mbt_…`), sent as `Authorization: Bearer <key>` and passed through to Mubit. Required.
+- `timeout` — HTTP timeout in seconds.
+
+The async client mirrors every method with `await`; use it inside FastAPI/async apps:
+
+```python
+async with AsyncMinimaClient("https://api.minima.sh", api_key="mbt_…") as minima:
+    rec = await minima.recommend(task)
+```
+
+## `recommend(task, *, ...)`
+
+Returns a `RecommendResponse`.
+
+```python
+rec = minima.recommend(
+    task,                              # str | TaskInput | dict
+    cost_quality_tradeoff=5.0,         # 0..10
+    constraints=None,                  # Constraints | None
+    user_id=None,
+    namespace=None,
+    allow_llm_escalation=True,
+    explain=True,
+    baseline_model_id=None,            # the model you'd use without Minima -> savings()
+)
+```
+
+`task` is flexible:
+
+```python
+minima.recommend("plain prompt text")                       # str
+minima.recommend({"task": "…", "task_type": "code"})        # dict
+
+from minima_client import TaskInput, Constraints
+minima.recommend(
+    TaskInput(task="…", difficulty="hard"),
+    constraints=Constraints(min_quality=0.85, max_cost_per_call=0.02),
+)
+```
+
+## `recommend_workflow(req)`
+
+Takes a `WorkflowRequest`, returns a `WorkflowResponse`.
+
+```python
+from minima_client import WorkflowRequest, WorkflowStep, TaskInput
+
+req = WorkflowRequest(
+    steps=[
+        WorkflowStep(step_id="extract",
+                     task=TaskInput(task="Extract entities from …",
+                                    task_type="extraction")),
+        WorkflowStep(step_id="reason",
+                     task=TaskInput(task="Decide next action given …",
+                                    task_type="reasoning", difficulty="hard")),
+    ],
+    cost_quality_tradeoff=4,
+)
+wf = minima.recommend_workflow(req)
+print(wf.total_est_cost_usd, "vs", wf.total_est_cost_if_all_premium)
+```
+
+## `feedback(recommendation_id, chosen_model_id, outcome, **kwargs)`
+
+Returns a `FeedbackResponse`. `outcome` is `"success"` | `"partial"` | `"failure"`. Pass realized numbers to power the observed/rescaled cost tiers:
+
+```python
+minima.feedback(
+    rec.recommendation_id,
+    rec.recommended_model.model_id,
+    "success",
+    quality_score=0.95,
+    input_tokens=180,
+    output_tokens=640,
+    actual_cost_usd=0.0034,
+    latency_ms=2100,
+    verified_in_production=True,
+    idempotency_key="…",  # optional
+)
+```
+
+## `models(...)`, `strategies(...)`, `health()`
+
+```python
+catalog = minima.models(provider="anthropic", max_cost=10.0)      # ModelsResponse
+strat   = minima.strategies(namespace="team-payments", max_strategies=5)
+status  = minima.health()                                          # dict
+```
+
+## `savings(...)` and `calibration(...)`
+
+The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/endpoints#get-v1savings) for every field).
+
+```python
+report = minima.savings(namespace="team-payments", days=30, group_by="task_type")
+print(report.summary.estimated.savings_vs_premium_usd,   # generous baseline
+      report.summary.estimated.savings_vs_declared_usd,  # your declared default
+      report.health["feedback_coverage"])                # how much to trust "realized"
+
+cal = minima.calibration(days=30)
+for r in cal.reports:
+    print(r.slice_key, r.n, r.ece, r.ece_shrunk)
+for flag in cal.drift_flags:
+    print(flag.cluster, flag.model_id, flag.direction)   # sustained prediction drift
+```
+
+Pass `baseline_model_id` on `recommend()` and realized `actual_cost_usd` on `feedback()` to turn the savings report from an estimate into a measurement.
+
+## Errors
+
+Non-2xx responses raise `MinimaError` (which carries the problem+json detail):
+
+```python
+from minima_client import MinimaError
+
+try:
+    rec = minima.recommend(task)
+except MinimaError as exc:
+    # fall back to a default model
+    ...
+```
+
+---
+
+## Zero-code intake: `autocapture`
+
+`minima_client.autocapture` is a thin wrapper over `mubit.learn`. Calling `enable()` pins a learn session to the same memory lane Minima recalls from (`minima:<namespace>`) and monkeypatches your OpenAI/Anthropic/LiteLLM/Google-GenAI clients, so every LLM call auto-ingests its trace — no code changes at the call site. Requires `mubit-sdk`.
+
+```python
+from minima_client import autocapture
+
+autocapture.enable(
+    api_key="<mubit-key>",
+    endpoint="https://api.mubit.ai",
+    namespace="team-payments",
+    user_id="svc-router",
+)
+
+# ... your normal OpenAI/Anthropic/LiteLLM calls happen here, auto-captured ...
+
+# mubit.learn does NOT fabricate a success signal — close the loop explicitly:
+autocapture.feedback(good=True)   # or score in [-1, 1]
+autocapture.disable()             # restore original client behavior
+```
+
+<Warning>
+**What autocapture does and doesn't do.** Autocapture lands traces + lessons in Minima's lane (enriching the reasoner's memory block and Mubit's reflection), but it does **not** by itself produce the `kind="outcome"` records the deterministic k-NN aggregator scores. To fully close the loop, either call `autocapture.feedback(...)` or send a quality score to `POST /v1/feedback`.
+</Warning>
+
+Other helpers:
+
+```python
+autocapture.wrap(client)                           # enrich one client instead of global patching
+autocapture.capture(messages, response)            # manual ingest for raw HTTP / unsupported libs
+```
+
+See the [zero-code intake example](/sdk/examples#5-zero-code-intake).

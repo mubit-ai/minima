@@ -1,6 +1,6 @@
 {
-  "version": "fallback-snapshot-2026-06",
-  "note": "Cold-start fallback only. Live cost is overlaid from LiteLLM/OpenRouter at runtime; capability_by_task_type are normalized [0,1] heuristic priors, intended to be corrected by accumulated memory. Prices are approximate USD per million tokens.",
+  "version": "fallback-snapshot-2026-07",
+  "note": "Cold-start fallback only.",
   "models": [
     {
       "model_id": "claude-haiku-4-5",
@@ -8,15 +8,52 @@
       "display_name": "Claude Haiku 4.5",
       "input_cost_per_mtok": 1.0,
       "output_cost_per_mtok": 5.0,
-      "cache_read_cost_per_mtok": 0.1,
+      "cache_read_cost_per_mtok": 0.09999999999999999,
       "supports_prompt_caching": true,
       "context_window": 200000,
       "max_output_tokens": 64000,
-      "capability_priors": {"intelligence_index": 0.5},
+      "capability_priors": {
+        "intelligence_index": 0.5
+      },
       "capability_by_task_type": {
-        "code": 0.7, "summarization": 0.85, "extraction": 0.88, "qa": 0.8,
-        "reasoning": 0.6, "classification": 0.9, "translation": 0.85,
-        "creative": 0.75, "rag": 0.82, "tool_use": 0.75, "other": 0.72
+        "code": 0.7,
+        "summarization": 0.85,
+        "extraction": 0.88,
+        "qa": 0.8,
+        "reasoning": 0.6,
+        "classification": 0.9,
+        "translation": 0.85,
+        "creative": 0.75,
+        "rag": 0.82,
+        "tool_use": 0.75,
+        "other": 0.72
+      }
+    },
+    {
+      "model_id": "claude-opus-4-8",
+      "provider": "anthropic",
+      "display_name": "Claude Opus 4.8",
+      "input_cost_per_mtok": 5.0,
+      "output_cost_per_mtok": 25.0,
+      "cache_read_cost_per_mtok": 0.5,
+      "supports_prompt_caching": true,
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "capability_priors": {
+        "intelligence_index": 0.95
+      },
+      "capability_by_task_type": {
+        "code": 0.96,
+        "summarization": 0.93,
+        "extraction": 0.94,
+        "qa": 0.95,
+        "reasoning": 0.97,
+        "classification": 0.95,
+        "translation": 0.93,
+        "creative": 0.94,
+        "rag": 0.94,
+        "tool_use": 0.95,
+        "other": 0.93
       }
     },
     {
@@ -27,47 +64,212 @@
       "output_cost_per_mtok": 15.0,
       "cache_read_cost_per_mtok": 0.3,
       "supports_prompt_caching": true,
-      "context_window": 200000,
+      "context_window": 1000000,
       "max_output_tokens": 64000,
-      "capability_priors": {"intelligence_index": 0.72},
+      "capability_priors": {
+        "intelligence_index": 0.72
+      },
       "capability_by_task_type": {
-        "code": 0.88, "summarization": 0.9, "extraction": 0.92, "qa": 0.9,
-        "reasoning": 0.85, "classification": 0.93, "translation": 0.9,
-        "creative": 0.88, "rag": 0.9, "tool_use": 0.9, "other": 0.86
+        "code": 0.88,
+        "summarization": 0.9,
+        "extraction": 0.92,
+        "qa": 0.9,
+        "reasoning": 0.85,
+        "classification": 0.93,
+        "translation": 0.9,
+        "creative": 0.88,
+        "rag": 0.9,
+        "tool_use": 0.9,
+        "other": 0.86
       }
     },
     {
-      "model_id": "claude-opus-4-8",
-      "provider": "anthropic",
-      "display_name": "Claude Opus 4.8",
-      "input_cost_per_mtok": 15.0,
-      "output_cost_per_mtok": 75.0,
-      "cache_read_cost_per_mtok": 1.5,
+      "model_id": "gemini-2.5-flash",
+      "provider": "google",
+      "display_name": "Gemini 2.5 Flash",
+      "input_cost_per_mtok": 0.3,
+      "output_cost_per_mtok": 2.5,
+      "cache_read_cost_per_mtok": 0.03,
       "supports_prompt_caching": true,
-      "context_window": 200000,
-      "max_output_tokens": 64000,
-      "capability_priors": {"intelligence_index": 0.95},
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.55
+      },
       "capability_by_task_type": {
-        "code": 0.96, "summarization": 0.93, "extraction": 0.94, "qa": 0.95,
-        "reasoning": 0.97, "classification": 0.95, "translation": 0.93,
-        "creative": 0.94, "rag": 0.94, "tool_use": 0.95, "other": 0.93
+        "code": 0.74,
+        "summarization": 0.88,
+        "extraction": 0.88,
+        "qa": 0.82,
+        "reasoning": 0.66,
+        "classification": 0.9,
+        "translation": 0.88,
+        "creative": 0.78,
+        "rag": 0.86,
+        "tool_use": 0.8,
+        "other": 0.76
       }
     },
     {
-      "model_id": "gpt-4o-mini",
-      "provider": "openai",
-      "display_name": "GPT-4o mini",
-      "input_cost_per_mtok": 0.15,
-      "output_cost_per_mtok": 0.6,
-      "cache_read_cost_per_mtok": 0.075,
+      "model_id": "gemini-2.5-flash-lite",
+      "provider": "google",
+      "display_name": "Gemini 2.5 Flash-Lite",
+      "input_cost_per_mtok": 0.09999999999999999,
+      "output_cost_per_mtok": 0.39999999999999997,
+      "cache_read_cost_per_mtok": 0.01,
       "supports_prompt_caching": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "capability_priors": {"intelligence_index": 0.45},
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.4
+      },
       "capability_by_task_type": {
-        "code": 0.68, "summarization": 0.84, "extraction": 0.86, "qa": 0.78,
-        "reasoning": 0.55, "classification": 0.9, "translation": 0.83,
-        "creative": 0.72, "rag": 0.8, "tool_use": 0.72, "other": 0.7
+        "code": 0.62,
+        "summarization": 0.8,
+        "extraction": 0.84,
+        "qa": 0.74,
+        "reasoning": 0.5,
+        "classification": 0.86,
+        "translation": 0.82,
+        "creative": 0.68,
+        "rag": 0.78,
+        "tool_use": 0.68,
+        "other": 0.64
+      }
+    },
+    {
+      "model_id": "gemini-2.5-pro",
+      "provider": "google",
+      "display_name": "Gemini 2.5 Pro",
+      "input_cost_per_mtok": 1.25,
+      "output_cost_per_mtok": 10.0,
+      "cache_read_cost_per_mtok": 0.125,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.8
+      },
+      "capability_by_task_type": {
+        "code": 0.9,
+        "summarization": 0.92,
+        "extraction": 0.92,
+        "qa": 0.91,
+        "reasoning": 0.88,
+        "classification": 0.93,
+        "translation": 0.92,
+        "creative": 0.89,
+        "rag": 0.91,
+        "tool_use": 0.9,
+        "other": 0.88
+      }
+    },
+    {
+      "model_id": "gemini-3-flash-preview",
+      "provider": "google",
+      "display_name": "Gemini 3 Flash (Preview)",
+      "input_cost_per_mtok": 0.5,
+      "output_cost_per_mtok": 3.0,
+      "cache_read_cost_per_mtok": 0.049999999999999996,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.62
+      },
+      "capability_by_task_type": {
+        "code": 0.8,
+        "summarization": 0.87,
+        "extraction": 0.88,
+        "qa": 0.83,
+        "reasoning": 0.7,
+        "classification": 0.9,
+        "translation": 0.87,
+        "creative": 0.8,
+        "rag": 0.85,
+        "tool_use": 0.84,
+        "other": 0.78
+      }
+    },
+    {
+      "model_id": "gemini-3.1-flash-lite",
+      "provider": "google",
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "input_cost_per_mtok": 0.25,
+      "output_cost_per_mtok": 1.5,
+      "cache_read_cost_per_mtok": 0.024999999999999998,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.48
+      },
+      "capability_by_task_type": {
+        "code": 0.68,
+        "summarization": 0.83,
+        "extraction": 0.86,
+        "qa": 0.78,
+        "reasoning": 0.58,
+        "classification": 0.88,
+        "translation": 0.84,
+        "creative": 0.72,
+        "rag": 0.8,
+        "tool_use": 0.72,
+        "other": 0.68
+      }
+    },
+    {
+      "model_id": "gemini-3.1-pro-preview",
+      "provider": "google",
+      "display_name": "Gemini 3.1 Pro (Preview)",
+      "input_cost_per_mtok": 2.0,
+      "output_cost_per_mtok": 12.0,
+      "cache_read_cost_per_mtok": 0.19999999999999998,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.9
+      },
+      "capability_by_task_type": {
+        "code": 0.93,
+        "summarization": 0.93,
+        "extraction": 0.93,
+        "qa": 0.93,
+        "reasoning": 0.95,
+        "classification": 0.94,
+        "translation": 0.93,
+        "creative": 0.91,
+        "rag": 0.93,
+        "tool_use": 0.92,
+        "other": 0.91
+      }
+    },
+    {
+      "model_id": "gemini-3.5-flash",
+      "provider": "google",
+      "display_name": "Gemini 3.5 Flash",
+      "input_cost_per_mtok": 1.5,
+      "output_cost_per_mtok": 9.0,
+      "cache_read_cost_per_mtok": 0.15,
+      "supports_prompt_caching": true,
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "capability_priors": {
+        "intelligence_index": 0.65
+      },
+      "capability_by_task_type": {
+        "code": 0.85,
+        "summarization": 0.88,
+        "extraction": 0.9,
+        "qa": 0.84,
+        "reasoning": 0.72,
+        "classification": 0.91,
+        "translation": 0.88,
+        "creative": 0.82,
+        "rag": 0.87,
+        "tool_use": 0.88,
+        "other": 0.8
       }
     },
     {
@@ -80,45 +282,48 @@
       "supports_prompt_caching": true,
       "context_window": 128000,
       "max_output_tokens": 16384,
-      "capability_priors": {"intelligence_index": 0.7},
+      "capability_priors": {
+        "intelligence_index": 0.7
+      },
       "capability_by_task_type": {
-        "code": 0.85, "summarization": 0.9, "extraction": 0.9, "qa": 0.89,
-        "reasoning": 0.82, "classification": 0.92, "translation": 0.9,
-        "creative": 0.87, "rag": 0.89, "tool_use": 0.89, "other": 0.85
+        "code": 0.85,
+        "summarization": 0.9,
+        "extraction": 0.9,
+        "qa": 0.89,
+        "reasoning": 0.82,
+        "classification": 0.92,
+        "translation": 0.9,
+        "creative": 0.87,
+        "rag": 0.89,
+        "tool_use": 0.89,
+        "other": 0.85
       }
     },
     {
-      "model_id": "gemini-2.5-flash",
-      "provider": "google",
-      "display_name": "Gemini 2.5 Flash",
-      "input_cost_per_mtok": 0.3,
-      "output_cost_per_mtok": 2.5,
+      "model_id": "gpt-4o-mini",
+      "provider": "openai",
+      "display_name": "GPT-4o mini",
+      "input_cost_per_mtok": 0.15,
+      "output_cost_per_mtok": 0.6,
       "cache_read_cost_per_mtok": 0.075,
       "supports_prompt_caching": true,
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "capability_priors": {"intelligence_index": 0.55},
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "capability_priors": {
+        "intelligence_index": 0.45
+      },
       "capability_by_task_type": {
-        "code": 0.74, "summarization": 0.88, "extraction": 0.88, "qa": 0.82,
-        "reasoning": 0.66, "classification": 0.9, "translation": 0.88,
-        "creative": 0.78, "rag": 0.86, "tool_use": 0.8, "other": 0.76
-      }
-    },
-    {
-      "model_id": "gemini-2.5-pro",
-      "provider": "google",
-      "display_name": "Gemini 2.5 Pro",
-      "input_cost_per_mtok": 1.25,
-      "output_cost_per_mtok": 10.0,
-      "cache_read_cost_per_mtok": 0.31,
-      "supports_prompt_caching": true,
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "capability_priors": {"intelligence_index": 0.8},
-      "capability_by_task_type": {
-        "code": 0.9, "summarization": 0.92, "extraction": 0.92, "qa": 0.91,
-        "reasoning": 0.88, "classification": 0.93, "translation": 0.92,
-        "creative": 0.89, "rag": 0.91, "tool_use": 0.9, "other": 0.88
+        "code": 0.68,
+        "summarization": 0.84,
+        "extraction": 0.86,
+        "qa": 0.78,
+        "reasoning": 0.55,
+        "classification": 0.9,
+        "translation": 0.83,
+        "creative": 0.72,
+        "rag": 0.8,
+        "tool_use": 0.72,
+        "other": 0.7
       }
     }
   ]

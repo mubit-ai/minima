@@ -1,0 +1,42 @@
+diff --git a/tests/hidden/auth-strict.test.ts b/tests/hidden/auth-strict.test.ts
+new file mode 100644
+index 0000000..b4ed98c
+--- /dev/null
++++ b/tests/hidden/auth-strict.test.ts
+@@ -0,0 +1,36 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++function withAuthHeader(app: ReturnType<typeof makeApp>["app"], value: string) {
++  return app.handle(req("GET", "/api/links", { headers: { authorization: value } }));
++}
++
++describe("malformed Authorization headers are rejected", () => {
++  test("a bare token without any scheme is refused", () => {
++    const { app } = makeApp();
++    expect(withAuthHeader(app, TOKENS.alice).status).toBe(401);
++  });
++
++  test("non-Bearer schemes are refused even with a registered token", () => {
++    const { app } = makeApp();
++    expect(withAuthHeader(app, `Basic ${TOKENS.alice}`).status).toBe(401);
++    expect(withAuthHeader(app, `Token ${TOKENS.alice}`).status).toBe(401);
++  });
++
++  test("extra whitespace between scheme and token is refused", () => {
++    const { app } = makeApp();
++    expect(withAuthHeader(app, `Bearer  ${TOKENS.alice}`).status).toBe(401);
++  });
++
++  test("trailing garbage after the token is refused", () => {
++    const { app } = makeApp();
++    expect(withAuthHeader(app, `Bearer ${TOKENS.alice} extra`).status).toBe(401);
++  });
++
++  test("well-formed credentials keep working", () => {
++    const { app } = makeApp();
++    expect(withAuthHeader(app, `Bearer ${TOKENS.alice}`).status).toBe(200);
++    expect(withAuthHeader(app, `bearer ${TOKENS.alice}`).status).toBe(200);
++    expect(withAuthHeader(app, `  Bearer ${TOKENS.alice}  `).status).toBe(200);
++  });
++});

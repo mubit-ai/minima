@@ -1,0 +1,12 @@
+{
+  "id": "ka-004",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement is_valid_code(code) in py/checksum.py, a Luhn-style check over base-36. Uppercase the code and strip spaces and hyphens first. The result must be at least two characters, all from 0-9 or A-Z; otherwise raise ValueError. Map digits to 0-9 and letters A-Z to 10-35. Walking from the rightmost character, double the value of every second character (2nd, 4th, ... from the right); if a doubled value reaches 36 or more, subtract 35. Sum everything and return True exactly when the total is divisible by 36. Verify with python3 -m pytest -q tests/py/test_checksum*.py.",
+  "test_cmd": "python3 -m pytest -q tests/py/test_checksum*.py",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 19,
+  "timeout_sec": 60
+}

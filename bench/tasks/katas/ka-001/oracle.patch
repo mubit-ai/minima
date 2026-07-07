@@ -1,0 +1,24 @@
+diff --git a/py/roman.py b/py/roman.py
+index 05dddb3..1d7df2e 100644
+--- a/py/roman.py
++++ b/py/roman.py
+@@ -18,4 +18,18 @@ def to_roman(value):
+         4 -> ``"IV"``, 9 -> ``"IX"``, 40 -> ``"XL"``, 90 -> ``"XC"``,
+         400 -> ``"CD"``, 900 -> ``"CM"``; e.g. 1994 -> ``"MCMXCIV"``.
+     """
+-    raise NotImplementedError("kata: implement to_roman")
++    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 3999:
++        raise ValueError("value must be an int in 0..3999")
++    if value == 0:
++        return "N"
++    pairs = [
++        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
++        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
++        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
++    ]
++    parts = []
++    for amount, glyph in pairs:
++        while value >= amount:
++            parts.append(glyph)
++            value -= amount
++    return "".join(parts)

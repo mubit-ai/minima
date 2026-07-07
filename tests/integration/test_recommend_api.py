@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 
 def test_recommend_cold_start(client):
     resp = client.post(
@@ -19,6 +21,33 @@ def test_recommend_cold_start(client):
     assert body["recommended_model"]["model_id"]
     assert body["recommendation_id"]
     assert body["ranked"]
+    assert body["stage_latency_ms"]["total"] >= 0
+
+
+def test_recommend_uses_configured_single_tenant_key_without_auth_header(app):
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/recommend",
+            json={
+                "task": {
+                    "task": "Summarize this incident report into 3 bullets.",
+                    "task_type": "summarization",
+                },
+                "cost_quality_tradeoff": 3,
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recommendation_id"]
+    assert body["recommended_model"]["model_id"]
+    assert body["classified_task_type"] == "summarization"
+    profile = body["classification_profile"]
+    assert profile["task_type_source"] == "caller"
+    assert profile["selected_rule"] == "summarization"
+    assert any(
+        rule["task_type"] == "summarization" and rule["matched"]
+        for rule in profile["rule_checks"]
+    )
 
 
 def test_recommend_no_candidates_returns_422(client):
@@ -27,6 +56,49 @@ def test_recommend_no_candidates_returns_422(client):
         json={"task": {"task": "hi"}, "constraints": {"candidate_models": ["does-not-exist"]}},
     )
     assert resp.status_code == 422
+
+
+def test_recommend_max_cost_infeasible_returns_422(client):
+    # A budget below any model's estimated cost empties the eligible set. Because
+    # max_cost_per_call is a hard filter, this is the same "nothing fits" condition
+    # as an impossible candidate set and must surface as a 422 (not a 200 with an
+    # over-budget model + "no_model_within_cost_budget" warning).
+    resp = client.post(
+        "/v1/recommend",
+        json={
+            "task": {"task": "Write a python function to add two numbers", "task_type": "code"},
+            "constraints": {"max_cost_per_call": 1e-12},
+        },
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["title"] == "No candidate models"
+    assert body["detail"] == "no model within max_cost_per_call budget"
+
+
+def test_recommend_max_cost_feasible_keeps_only_in_budget(client):
+    payload = {
+        "task": {"task": "Write a python function to add two numbers", "task_type": "code"},
+    }
+    baseline = client.post("/v1/recommend", json=payload)
+    assert baseline.status_code == 200
+    costs = sorted(m["est_cost_usd"] for m in baseline.json()["ranked"])
+    assert len(costs) >= 2
+    # A budget between the cheapest and most expensive model: some models fit, some
+    # do not. The response must stay 200 and expose ONLY in-budget models.
+    budget = (costs[0] + costs[-1]) / 2
+    assert costs[0] <= budget < costs[-1]
+
+    resp = client.post(
+        "/v1/recommend",
+        json={**payload, "constraints": {"max_cost_per_call": budget}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "no_model_within_cost_budget" not in body["warnings"]
+    assert body["ranked"]
+    assert all(m["est_cost_usd"] <= budget for m in body["ranked"])
+    assert body["recommended_model"]["est_cost_usd"] <= budget
 
 
 def test_recommend_cheapest_eligible_with_memory(client, fake_memory):

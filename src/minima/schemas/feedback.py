@@ -16,7 +16,19 @@ class FeedbackRequest(BaseModel):
     output_tokens: int | None = Field(None, ge=0)
     actual_cost_usd: float | None = Field(None, ge=0)
     latency_ms: int | None = Field(None, ge=0)
+    iterations: int | None = Field(
+        None, ge=0, description="agent loop turns to resolution (token-yield signal)"
+    )
     verified_in_production: bool = False
+    judged: bool | None = Field(
+        None,
+        description=(
+            "Whether the harness ran a quality judge on this turn. "
+            "False = cadence-skip or abstain — the decision log stores NULL quality "
+            "instead of a label-based default (quality_from_outcome). "
+            "None = old client, backward-compat behaviour preserved."
+        ),
+    )
     notes: str | None = None
     idempotency_key: str | None = None
 

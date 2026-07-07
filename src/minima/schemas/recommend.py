@@ -7,6 +7,33 @@ from pydantic import BaseModel, ConfigDict, Field
 from minima.schemas.common import Constraints, DecisionBasis, Difficulty, TaskInput, TaskType
 
 
+class ClassificationRuleProfile(BaseModel):
+    task_type: TaskType
+    pattern: str
+    matched: bool
+    feature_boosts: dict[str, float] = Field(default_factory=dict)
+
+
+class ClassificationProfile(BaseModel):
+    task_type_source: str
+    difficulty_source: str
+    caller_task_type: TaskType | None = None
+    caller_difficulty: Difficulty | None = None
+    heuristic_task_type: TaskType
+    heuristic_difficulty: Difficulty
+    final_task_type: TaskType
+    final_difficulty: Difficulty
+    selected_rule: str | None = None
+    rule_checks: list[ClassificationRuleProfile] = Field(default_factory=list)
+    extracted_features: dict[str, float] = Field(default_factory=dict)
+    uncertainty: float = Field(..., ge=0, le=1)
+    confidence: float = Field(..., ge=0, le=1)
+    easy_route: bool = False
+    neighbor_support: float = Field(0.0, ge=0, le=1)
+    neighbor_count: int = Field(0, ge=0)
+    timings_ms: dict[str, float] = Field(default_factory=dict)
+
+
 class RecommendRequest(BaseModel):
     task: TaskInput
     cost_quality_tradeoff: float = Field(
@@ -67,6 +94,18 @@ class RankedModel(BaseModel):
         None, description="observed latency percentile from similar past outcomes (ms)"
     )
     latency_basis: str = Field("", description='e.g. "observed_p75"; empty without evidence')
+    est_cost_low: float | None = Field(
+        None, ge=0, description="low end of the data-grounded predictable cost band ($)"
+    )
+    est_cost_high: float | None = Field(
+        None, ge=0, description="high end of the data-grounded predictable cost band ($)"
+    )
+    cost_band_basis: str = Field(
+        "", description='e.g. "observed_p25_p75" | "rescaled_p25_p75"; empty without a band'
+    )
+    success_interval_width: float = Field(
+        0.0, ge=0, le=1, description="95% credible-interval width of predicted_success"
+    )
 
 
 class RecommendResponse(BaseModel):
@@ -82,7 +121,15 @@ class RecommendResponse(BaseModel):
     catalog_version: str
     catalog_stale: bool = False
     latency_ms: int = 0
+    classification_profile: ClassificationProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     selection_policy: str = Field(
         "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
+    )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        description="near-free cost-saving actions to apply (e.g. enable_prompt_cache)",
+    )
+    stage_latency_ms: dict[str, float] = Field(
+        default_factory=dict, description="per-stage latency breakdown in milliseconds"
     )

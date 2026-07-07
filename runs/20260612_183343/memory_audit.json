@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-06-12T18:33:51.169973+00:00",
+  "strategy_count": 5,
+  "total_lessons": 460,
+  "strategies": [
+    {
+      "description": "Pattern around 'coding': 204 lessons share this theme. Example: gpt-4o-mini is more consistent and reliable for complex,",
+      "lessons": 204
+    },
+    {
+      "description": "Pattern around 'tasks': 134 lessons share this theme. Example: gemini-2.5-flash is highly efficient for trivial tasks li",
+      "lessons": 134
+    },
+    {
+      "description": "Pattern around 'choice': 111 lessons share this theme. Example: For other:easy tasks, gemini-2.5-flash is a reliable, co",
+      "lessons": 111
+    },
+    {
+      "description": "Pattern around 'classification': 6 lessons share this theme. Example: Gemini-2.5-flash is efficient for trivial tasks bu",
+      "lessons": 6
+    },
+    {
+      "description": "Pattern around 'data': 5 lessons share this theme. Example: gpt-4o-mini demonstrates superior consistency for complex co",
+      "lessons": 5
+    }
+  ],
+  "probes": [
+    {
+      "probe": "easy",
+      "model": "gemini-2.5-flash",
+      "basis": "memory",
+      "evidence_count": 5
+    },
+    {
+      "probe": "hard",
+      "model": "gemini-2.5-pro",
+      "basis": "prior",
+      "evidence_count": 0
+    },
+    {
+      "probe": "reasoning",
+      "model": "gemini-2.5-flash",
+      "basis": "memory",
+      "evidence_count": 2
+    }
+  ],
+  "memory_warmth": "WARM \u2014 partial memory; some tasks will recall evidence in run 1"
+}

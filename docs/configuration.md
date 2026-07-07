@@ -11,7 +11,7 @@ single-tenant mode). A complete annotated template ships as
 |----------|---------|-------|
 | `MUBIT_ENDPOINT` | `http://127.0.0.1:3000` | The Mubit runtime Minima reads/writes. |
 | `MUBIT_API_KEY` | — | Mubit **data-plane** key. Required single-tenant; leave blank multi-tenant (resolved per org). |
-| `MUBIT_TRANSPORT` | `auto` | `auto` \| `grpc` \| `http`. Use `http` for the local runtime (recall's `direct_bypass` mode isn't in its gRPC enum). |
+| `MUBIT_TRANSPORT` | `auto` | `auto` \| `grpc` \| `http`. Use `http` for the local runtime (the gRPC `QueryMode` enum does not include `direct_bypass`, and auto may select gRPC). |
 | `MUBIT_TIMEOUT_MS` | `30000` | Mubit client timeout. |
 
 ## Memory read path
@@ -20,7 +20,7 @@ single-tenant mode). A complete annotated template ships as
 |----------|---------|-------|
 | `MINIMA_MEMORY_RECALL_TIMEOUT_MS` | `2500` | Hard recall timeout; on breach, prior-only. Latency is embedder-bound (~100–300ms GPU, ~1.5s local CPU). |
 | `MINIMA_MEMORY_RECALL_LIMIT` | `25` | Max neighbors recalled per request. |
-| `MINIMA_RECALL_MODE` | `direct_bypass` | `direct_bypass` (retrieval-only) \| `agent_routed`. |
+| `MINIMA_RECALL_MODE` | `agent_routed` | `agent_routed` \| `direct_bypass` (faster but requires `enable_direct_search=true` on the Mubit instance — off by default on hosted Mubit). |
 | `MINIMA_LANE_PREFIX` | `minima` | Lane prefix; lane = `<prefix>:<namespace or "default">`. |
 | `MINIMA_SEED_LANE` | `minima:default` | Default lane for `minima-seed`. |
 
@@ -55,8 +55,13 @@ Off by default. Requires the matching extra: `uv sync --extra reasoner-anthropic
 | `MINIMA_REASONER_MODEL` | — | Defaults per provider (Anthropic → `claude-haiku-4-5`). |
 | `MINIMA_REASONER_TIMEOUT_MS` | `15000` | Per-attempt; the reasoner is the explicit slow tier. A real ranking call takes ~6–8s. |
 | `MINIMA_REASONER_MAX_TOKENS` | `4096` | Output cap. Gemini 3.x reasons before emitting JSON; a small cap truncates it. |
+| `MINIMA_REASONER_FAST_MODE` | `false` | Trim the reasoner prompt and skip tie/near-threshold-only escalations. |
+| `MINIMA_REASONER_FAST_MEMORY_TOKEN_BUDGET` | `500` | Memory context token budget used in fast mode. |
+| `MINIMA_REASONER_FAST_CANDIDATE_LIMIT` | `6` | Max candidates sent to the reasoner in fast mode. |
+| `MINIMA_REASONER_FAST_SKIP_LOW_VALUE` | `true` | Whether fast mode can skip low-value escalations. |
+| `MINIMA_REASONER_SKIP_CONFIDENT_CLASSIFICATIONS` | `true` | Skip the reasoner when the classifier is confident on an easy task. |
+| `MINIMA_REASONER_CONFIDENCE_SKIP_THRESHOLD` | `0.72` | Minimum classifier confidence needed to skip the reasoner. |
 | `MINIMA_REASONER_BLEND` | `0.5` | Weight on the LLM estimate vs the deterministic one. |
-| `MINIMA_REASONER_CLASSIFY` | `true` | Let the reasoner refine ambiguous task classification. |
 | `ANTHROPIC_API_KEY` | — | Required if provider is `anthropic`. |
 | `GEMINI_API_KEY` | — | Required if provider is `gemini`. |
 

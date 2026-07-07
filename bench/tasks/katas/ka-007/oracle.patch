@@ -1,0 +1,22 @@
+diff --git a/ts/ordinal.ts b/ts/ordinal.ts
+index ff571c7..618417c 100644
+--- a/ts/ordinal.ts
++++ b/ts/ordinal.ts
+@@ -18,5 +18,16 @@
+  *   - Zero takes "th": 0 -> "0th".
+  */
+ export function ordinal(n: number): string {
+-  throw new Error("kata: implement ordinal");
++  if (!Number.isInteger(n) || n < 0) {
++    throw new RangeError("n must be a non-negative integer");
++  }
++  const lastTwo = n % 100;
++  const last = n % 10;
++  let suffix = "th";
++  if (lastTwo < 11 || lastTwo > 13) {
++    if (last === 1) suffix = "st";
++    else if (last === 2) suffix = "nd";
++    else if (last === 3) suffix = "rd";
++  }
++  return `${n}${suffix}`;
+ }

@@ -1,0 +1,421 @@
+---
+title: API Reference
+description: Every Minima endpoint — full request and response schemas, warnings, and error formats.
+---
+
+import { PageHeader, Note, Badge } from '@components'
+
+<PageHeader />
+
+# API Reference
+
+Base URL: `https://api.minima.sh`. Base path: `/v1`. All request and response bodies are JSON. Interactive OpenAPI docs are served at [`https://api.minima.sh/docs`](https://api.minima.sh/docs).
+
+## Authentication
+
+Minima uses **pass-through auth**: present your own **Mubit API key** as a bearer token. There is no separate Minima key — Minima forwards the key to Mubit to read and write your `task → model → outcome` history on your behalf.
+
+```
+Authorization: Bearer mbt_<instance>_<keyid>_<secret>
+```
+
+A missing or invalid key returns `401`. Your Mubit key determines which Mubit instance Minima reads and writes — it's your data boundary. Only two endpoints work without a key: `GET /v1/health` (service liveness) and `GET /v1/capabilities` (structural metadata).
+
+`user_id` and `namespace` are scoping fields **within your Mubit instance**, not auth boundaries — use them to partition recall and learning across teams, projects, or environments.
+
+## Errors
+
+Errors are returned as `application/problem+json` (RFC 7807-style):
+
+```json
+{ "type": "about:blank", "title": "No candidate models", "status": 422,
+  "detail": "no models match the supplied constraints" }
+```
+
+| Status | Title | When |
+|--------|-------|------|
+| `400` | Invalid request | Request body fails validation. |
+| `401` | Unauthorized | Missing or invalid Mubit key. |
+| `422` | No candidate models | Constraints eliminated every catalog model. |
+
+<Note>
+`POST /v1/feedback` does **not** error on an unknown `recommendation_id`. It returns `200` with `accepted: false` and an `unknown_recommendation` warning, so retried or cross-instance feedback fails safely.
+</Note>
+
+---
+
+## `POST /v1/recommend`
+
+<Badge text="core" variant="success" />
+
+Recommend a model for a single task.
+
+### Request — `RecommendRequest`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `task` | `TaskInput` | required | The task to route (see below). |
+| `cost_quality_tradeoff` | float `0–10` | `5.0` | 0 = cheapest acceptable, 10 = highest quality. Sets the quality threshold `τ`. |
+| `constraints` | `Constraints` | `{}` | Hard limits on the candidate set (see below). |
+| `user_id` | string \| null | `null` | Within-account actor label. Scopes recall. |
+| `namespace` | string \| null | `null` | Within-account sub-scope (team / project / environment). Isolates recall and learning. |
+| `max_candidates` | int `1–64` | `8` | Cap on candidates considered. |
+| `allow_llm_escalation` | bool | `true` | Allow the cheap-LLM reasoner when evidence is thin. |
+| `explain` | bool | `true` | Include `evidence[]` refs on each ranked model. |
+| `baseline_model_id` | string \| null | `null` | The model you would have used without Minima. Powers the honest `vs_declared` baseline in [`GET /v1/savings`](#get-v1savings). |
+
+#### `TaskInput`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `task` | string | required | Raw task/prompt text; embedded by Mubit for recall. |
+| `task_type` | enum \| null | `null` | `code` \| `summarization` \| `extraction` \| `qa` \| `reasoning` \| `classification` \| `translation` \| `creative` \| `rag` \| `tool_use` \| `other`. Heuristic-classified if omitted. |
+| `difficulty` | enum \| null | `null` | `trivial` \| `easy` \| `medium` \| `hard` \| `expert`. |
+| `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; a per-task-type default is used if omitted. |
+| `expected_output_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate. |
+| `tags` | string[] | `[]` | Propagated to Mubit `env_tags` (e.g. `lang:python`) for version-aware recall. |
+
+#### `Constraints` (all optional)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `allowed_providers` | string[] \| null | Whitelist by provider. |
+| `candidate_models` | string[] \| null | Restrict to these model ids. |
+| `excluded_models` | string[] \| null | Blacklist by model id. |
+| `max_cost_per_call` | float ≥ 0 \| null | USD hard filter on estimated cost. |
+| `min_quality` | float `0–1` \| null | Predicted-success floor; raises `τ`. |
+| `require_prompt_caching` | bool | Keep only models that support prompt caching. |
+| `max_latency_ms` | int > 0 \| null | Drop candidates whose **observed** latency (p75 from similar past outcomes) exceeds this. A model with no latency history is never excluded. |
+| `require_context_window` | int > 0 \| null | Keep only models with at least this context window. |
+
+### Response — `RecommendResponse`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `recommendation_id` | string | Quote this back to `POST /v1/feedback`. |
+| `recommended_model` | `RankedModel` | The chosen model. |
+| `ranked` | `RankedModel[]` | Every candidate, sorted by final score. |
+| `fallback_model` | `RankedModel` \| null | A more reliable retry target. |
+| `confidence` | float `0–1` | Overall confidence in the pick. |
+| `decision_basis` | enum | `memory` \| `prior` \| `llm` — which path produced the pick. |
+| `threshold_used` | float | The quality threshold `τ` applied. |
+| `classified_task_type` | enum | Final task type used. |
+| `classified_difficulty` | enum | Final difficulty used. |
+| `catalog_version` | string | Catalog version that priced the candidates. |
+| `catalog_stale` | bool | Prices older than the staleness window. |
+| `latency_ms` | int | Minima-side recommendation latency. |
+| `warnings` | string[] | See **Warnings** below. |
+| `selection_policy` | enum | `argmin` (deterministic cheapest-eligible, the default) \| `epsilon_softmax` (account opted into bounded exploration within the eligible set). |
+
+#### `RankedModel`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `model_id` | string | |
+| `provider` | string | |
+| `predicted_success` | float `0–1` | Probability the model clears the task. |
+| `est_cost_usd` | float ≥ 0 | Estimated cost for this request, per the chosen cost basis. |
+| `est_cost_breakdown` | object | Keys depend on the basis: `{rescaled, obs_output_tokens}`, `{observed_avg}`, or `{input, output}`. See [Cost-basis tiers](/sdk/concepts#cost-basis-tiers-estimate--observed--rescaled). |
+| `score` | float | Final objective score; the sorting key. |
+| `rationale` | string | Human-readable reason (tags cost as `obs` or `est`). |
+| `decision_basis` | enum | Per-model basis: `memory` \| `prior` \| `llm`. |
+| `evidence` | `EvidenceRef[]` | Recalled neighbors that informed this candidate (empty if `explain=false`). |
+| `supports_prompt_caching` | bool | |
+| `context_window` | int | |
+| `est_latency_ms` | float \| null | Observed latency percentile from similar past outcomes; `null` without latency history. |
+| `latency_basis` | string | e.g. `observed_p75`; empty without latency history. |
+
+#### `EvidenceRef`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `entry_id` | string | Mubit `QueryEvidence.id` (used for outcome attribution). |
+| `reference_id` | string \| null | Stable reference id. |
+| `model_id` | string | The model this past outcome was about. |
+| `score` | float | Retrieval similarity. |
+| `knowledge_confidence` | float `0–1` | Mubit's reliability estimate for the entry. |
+| `observed_success` | float `0–1` | The recorded quality of that past outcome. |
+| `is_stale` | bool | Whether the entry is marked stale. |
+
+### Warnings
+
+| Warning | Meaning |
+|---------|---------|
+| `cold_start` | No recalled outcomes; prior-only. |
+| `recall_timeout` | Mubit recall exceeded the timeout; prior-only. |
+| `memory_unavailable` | Recall errored; prior-only. |
+| `prices_stale` | Catalog prices older than the staleness window. |
+| `no_model_meets_threshold` | No candidate cleared `τ`; recommended the highest-success one. |
+| `no_model_within_cost_budget` | `max_cost_per_call` eliminated all; constraint relaxed for ranking. |
+| `no_model_within_latency_budget` | `max_latency_ms` eliminated every candidate with latency history; constraint relaxed for ranking. |
+| `escalation_suggested:<reason>` | Escalation criteria met (`thin_evidence`, `low_confidence`, `tie`, `conflict`, `wide_interval`). |
+| `exploration_pick` | The opt-in exploration policy sampled a different eligible model than the deterministic pick. |
+| `reasoner_consulted` | The cheap-LLM reasoner was consulted and changed scores. |
+| `reasoner_failed` | The reasoner errored or returned unusable output; deterministic result used. |
+| `reasoner_disabled` | Escalation suggested but no reasoner is configured. |
+| `llm_classified` | The reasoner refined an ambiguous task classification. |
+
+### Example
+
+```bash
+curl -s https://api.minima.sh/v1/recommend \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
+  -H 'content-type: application/json' -d '{
+  "task": {"task": "Write a Python function that merges k sorted linked lists.",
+           "task_type": "code", "difficulty": "hard",
+           "expected_input_tokens": 180, "expected_output_tokens": 600,
+           "tags": ["lang:python"]},
+  "cost_quality_tradeoff": 3,
+  "constraints": {"min_quality": 0.8, "excluded_models": ["some-deprecated-model"]},
+  "namespace": "team-payments"
+}' | jq
+```
+
+---
+
+## `POST /v1/recommend/workflow`
+
+<Badge text="workflow" variant="note" />
+
+Recommend a model for each step of a multi-step workflow. Each step runs the same engine independently and gets its own `recommendation_id` for per-step feedback.
+
+### Request — `WorkflowRequest`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `steps` | `WorkflowStep[]` | required | The steps to route. |
+| `cost_quality_tradeoff` | float `0–10` | `5.0` | Applied to every step. |
+| `constraints` | `Constraints` | `{}` | Global constraints; each step may override. |
+| `user_id` | string \| null | `null` | |
+| `namespace` | string \| null | `null` | |
+| `allow_llm_escalation` | bool | `true` | |
+
+#### `WorkflowStep`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `step_id` | string | Caller-defined id (echoed in the response). |
+| `task` | `TaskInput` | The step's task. |
+| `constraints` | `Constraints` \| null | Per-step override, **merged over** the global constraints. |
+| `depends_on` | string[] | Declared dependencies (informational; steps are scored independently). |
+
+### Response — `WorkflowResponse`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `workflow_recommendation_id` | string | Id for the whole workflow. |
+| `steps` | `StepRecommendation[]` | `{step_id, recommendation: RecommendResponse}` per step. |
+| `total_est_cost_usd` | float | Sum of recommended-model costs across steps. |
+| `total_est_cost_if_all_premium` | float | Sum if each step used its most expensive candidate — the savings baseline. |
+| `confidence` | float `0–1` | Mean step confidence. |
+
+See the [multi-step workflow example](/sdk/examples#4-multi-step-workflow).
+
+---
+
+## `POST /v1/feedback`
+
+<Badge text="core" variant="success" />
+
+Report an outcome and close the learning loop. This reinforces the memories that drove the recommendation **and** records realized cost/token history that powers the observed and rescaled cost-basis tiers.
+
+### Request — `FeedbackRequest`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `recommendation_id` | string | required | From a prior `/recommend` (or a workflow step). |
+| `chosen_model_id` | string | required | The model you **actually ran** (may differ from the recommendation). |
+| `outcome` | enum | required | `success` \| `partial` \| `failure`. |
+| `quality_score` | float `0–1` \| null | `null` | Caller-supplied; no LLM judge. Defaults applied per outcome if omitted (0.9 / 0.5 / 0.1). A score that flatly contradicts the outcome label (e.g. `failure` at `0.95`) is clamped into a consistent band with a `quality_outcome_mismatch` warning. |
+| `input_tokens` | int ≥ 0 \| null | `null` | Realized input tokens — **populate this** to enable the rescaled cost tier. |
+| `output_tokens` | int ≥ 0 \| null | `null` | Realized output tokens (captures reasoning/thinking) — **populate this** for the rescaled tier. |
+| `actual_cost_usd` | float ≥ 0 \| null | `null` | Realized $/call — enables the observed cost tier. |
+| `latency_ms` | int ≥ 0 \| null | `null` | |
+| `iterations` | int ≥ 0 \| null | `null` | Agent-loop turns to resolution — a token-yield signal recorded on the outcome. |
+| `verified_in_production` | bool | `false` | Marks a real production outcome; gates lesson promotion. |
+| `judged` | bool \| null | `null` | Whether a quality judge actually ran on this outcome. `false` = quality was **not measured** (cadence-skip or judge abstain) — the decision log reconciles quality as `NULL` instead of a label-based default, so calibration and savings metrics never trust a fabricated score. Omitted (`null`) preserves the old-client behavior (per-outcome defaults). |
+| `notes` | string \| null | `null` | |
+| `idempotency_key` | string \| null | `null` | Dedupe key; derived from `recommendation_id + model` if omitted. |
+
+### Response — `FeedbackResponse`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `accepted` | bool | `false` with a warning on failure. |
+| `record_id` | string \| null | The Mubit id of the upserted outcome record. |
+| `reinforced_entry_ids` | string[] | The neighbor entry ids credited. |
+| `updated_confidence` | float \| null | Mubit's updated `knowledge_confidence` for the primary entry. |
+| `reflection_triggered` | bool | Whether reflection fired this call. |
+| `lesson_promoted` | bool | Whether a durable lesson was promoted. |
+| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`. |
+
+<Note>
+**How late can feedback arrive?** A `recommendation_id` accepts fully-attributed feedback for **7 days**. After that the outcome is still accepted and still teaches the recommender (the durable outcome record is written), but the specific recalled neighbors can no longer be credited — the response carries a `late_feedback_no_attribution` warning.
+</Note>
+
+### Example
+
+```bash
+curl -s https://api.minima.sh/v1/feedback \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
+  -H 'content-type: application/json' -d '{
+  "recommendation_id": "…",
+  "chosen_model_id": "claude-haiku-4-5",
+  "outcome": "success",
+  "quality_score": 0.95,
+  "input_tokens": 180, "output_tokens": 640, "actual_cost_usd": 0.0034,
+  "verified_in_production": true
+}' | jq
+```
+
+---
+
+## `GET /v1/models`
+
+The current model catalog (cost + capability priors).
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `provider` | string | — | Filter by provider (case-insensitive). |
+| `task_type` | enum | — | Keep only models with a capability prior for this task type. |
+| `max_cost` | float | — | Keep only models whose max(input, output) $/Mtok ≤ this. |
+| `include_stale` | bool | `true` | Prefer fresh-priced models when false. |
+
+### Response
+
+`{ models: ModelCard[], catalog_version, refreshed_at, stale }`, sorted by input price.
+
+**`ModelCard`** fields include: `model_id`, `provider`, `display_name`, `input_cost_per_mtok`, `output_cost_per_mtok`, `cache_read_cost_per_mtok`, `supports_prompt_caching`, `context_window`, `max_output_tokens`, `capability_priors`, `capability_by_task_type`, `cost_source`, `cost_fetched_at`, `cost_stale`, `capability_source`.
+
+---
+
+## `GET /v1/strategies`
+
+Surfaces the rules Mubit has promoted for a namespace — the "why" behind routing patterns.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string | — | Within-account sub-scope to read strategies for. |
+| `lesson_types` | string[] | — | Filter by lesson type. |
+| `max_strategies` | int `1–50` | `5` | |
+
+### Response
+
+`{ namespace, lane, strategies: Strategy[], count }`, where each `Strategy` has `strategy_id`, `description`, `supporting_lesson_count`, `avg_confidence`, `avg_reinforcement`, `dominant_lesson_type`, `dominant_scope`, `lesson_ids[]`.
+
+---
+
+## `GET /v1/savings`
+
+<Badge text="measurement" variant="tip" />
+
+What Minima actually saved you. Every recommendation is logged with its counterfactual cost baselines and reconciled with the realized cost you report to `/v1/feedback` — this endpoint aggregates that ledger for your account.
+
+Two baselines are always reported side by side, explicitly labeled: **`vs premium`** (the most expensive candidate that was scored for each request — generous; overstates savings if you'd never have used the premium model) and **`vs declared`** (your own stated default via `baseline_model_id` — honest, but only present on requests where you declared one). Estimated and realized figures are never mixed into one number.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string | — | Restrict to one namespace. |
+| `days` | float `>0–365` | `30` | Lookback window (must be greater than 0). |
+| `group_by` | enum | — | `cluster` \| `task_type` \| `lane` — optional breakdown. |
+
+### Response
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `summary.estimated` | object | `n`, `cost_recommended_usd`, `cost_premium_usd`, `savings_vs_premium_usd`, plus `n_declared` / `cost_declared_usd` / `savings_vs_declared_usd` over the declared-baseline subset. |
+| `summary.realized` | object | A **different** field set over the **reconciled** subset (feedback received with `actual_cost_usd`): `n_reconciled`, `realized_cost_usd`, `est_cost_recommended_usd`, `est_cost_premium_usd`, `savings_vs_premium_est_usd`, plus `n_declared` / `est_cost_declared_usd` / `savings_vs_declared_est_usd` — your realized cost measured against the estimated baselines. |
+| `health` | object | `recommendations`, `feedback_coverage` (share of recommendations that ever got feedback — the number that decides how much to trust `realized`), `late_feedback_share`, `escalation_rate`, `exploration_share`, `epsilon_policy_share`. |
+| `groups` | array | Per-`group_by` key: the same `summary` + `health`. |
+
+```bash
+curl -s "https://api.minima.sh/v1/savings?days=30&group_by=task_type" \
+  -H "authorization: Bearer $MUBIT_API_KEY" | jq '.summary, .health'
+```
+
+<Note>
+Send `baseline_model_id` on your `/v1/recommend` calls and realized `actual_cost_usd` on your `/v1/feedback` calls — they turn the savings report from an estimate into a measurement.
+</Note>
+
+---
+
+## `GET /v1/calibration`
+
+<Badge text="measurement" variant="tip" />
+
+Is `predicted_success` telling the truth for your traffic? Compares each recommendation's predicted success against the realized outcome you reported, per task type.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string | — | Restrict to one namespace. |
+| `days` | float `>0–365` | `30` | Lookback window (must be greater than 0). |
+
+### Response
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `reports` | array | Per slice (first entry is `global`, then each task type): `n`, `ece` (expected calibration error — 0 is perfect), `ece_shrunk` (sparse slices pulled toward the global estimate so 3 feedbacks don't read as a verdict), `ece_quality` (quality-score-weighted variant), and reliability `bins` (`lo`, `hi`, `n`, `avg_predicted`, `avg_realized`). |
+| `drift_flags` | array | Sustained prediction drift per `(cluster, model)` — `direction` is `over_predicting` (the model got worse than the evidence says; the expensive failure mode) or `under_predicting`. |
+| `health` | object | Same routing-health rates as `/v1/savings`. |
+
+```bash
+curl -s "https://api.minima.sh/v1/calibration?days=30" \
+  -H "authorization: Bearer $MUBIT_API_KEY" | jq '.reports[] | {slice_key, n, ece, ece_shrunk}'
+```
+
+---
+
+## `GET /v1/capabilities`
+
+Server feature handshake: which optional endpoints and constraint fields the running server honors. Read it once at startup and cache it per session — gate optional features (like workflow routing) on what the server actually supports instead of guessing. No auth required — this is structural metadata, not account-scoped data.
+
+### Response — `CapabilitiesResponse`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `plan` | bool | `POST /v1/plan` (goal → Delegation DAG) is available. Currently `false`. |
+| `workflow` | bool | `POST /v1/recommend/workflow` is available. |
+| `api_version` | string | Running server version. |
+| `honored_constraints` | string[] | Constraint fields the engine **actively filters on** (not merely accepts). |
+
+```bash
+curl -s https://api.minima.sh/v1/capabilities | jq
+```
+
+```json
+{
+  "plan": false,
+  "workflow": true,
+  "api_version": "0.7.0",
+  "honored_constraints": ["candidate_models", "excluded_models", "max_cost_per_call",
+    "min_quality", "require_prompt_caching", "max_latency_ms",
+    "require_context_window", "allowed_providers"]
+}
+```
+
+---
+
+## `GET /v1/health`
+
+Always returns `200`; reports degraded state in the body. Doesn't require a key (an unauthenticated probe gets service liveness; a key-bearing probe additionally confirms your account's memory reachability).
+
+```json
+{
+  "status": "ok",
+  "mubit": {"reachable": true, "latency_ms": 12, "endpoint": "https://api.mubit.ai", "org_id": "…"},
+  "auth": "passthrough",
+  "catalog": {"version": "…", "cost_source": "litellm", "stale": false, "models": 42},
+  "reasoner": {"provider": "gemini", "configured": true},
+  "version": "0.7.0"
+}
+```
+
+An unauthenticated probe (no key) returns `"mubit": {"reachable": null, "scope": "unauthenticated"}` and `status: "ok"` — liveness only. `status` is `degraded` only when a **key-bearing** probe finds your memory backend unreachable (`mubit.reachable == false`); in that state `/recommend` still serves prior-only recommendations.

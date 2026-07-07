@@ -1,0 +1,14 @@
+{
+  "id": "jl-004",
+  "repo": "js-lib",
+  "category": "bugfix",
+  "problem_statement": "The configurable array-combination behavior of the deep merge utility only takes effect for arrays sitting directly under the top level of the merged objects. Arrays nested any deeper, for example a list under config.tags, are silently replaced wholesale by the source list even when the caller asked for concatenation or union semantics. The default replace behavior looks right at every depth, which is probably why nobody noticed until now. The documentation says the chosen strategy applies no matter how deeply the arrays are nested. Please make the configured behavior apply consistently at every depth.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 20,
+  "timeout_sec": 60,
+  "authored_difficulty": "medium",
+  "notes": "RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved."
+}

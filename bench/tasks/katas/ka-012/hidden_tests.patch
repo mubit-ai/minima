@@ -1,0 +1,41 @@
+diff --git a/tests/js/droot/hidden.test.js b/tests/js/droot/hidden.test.js
+new file mode 100644
+index 0000000..9659f19
+--- /dev/null
++++ b/tests/js/droot/hidden.test.js
+@@ -0,0 +1,35 @@
++import { expect, test } from "bun:test";
++import { digitalRoot } from "../../../js/droot.js";
++
++test("zero in any base", () => {
++  expect(digitalRoot(0, 10)).toBe(0);
++  expect(digitalRoot(0, 2)).toBe(0);
++});
++
++test("base ten", () => {
++  expect(digitalRoot(12345, 10)).toBe(6);
++  expect(digitalRoot(99, 10)).toBe(9);
++});
++
++test("hexadecimal", () => {
++  expect(digitalRoot(255, 16)).toBe(15);
++});
++
++test("binary collapses to one", () => {
++  expect(digitalRoot(7, 2)).toBe(1);
++});
++
++test("single digit is its own root", () => {
++  expect(digitalRoot(35, 36)).toBe(35);
++});
++
++test("bad value throws RangeError", () => {
++  expect(() => digitalRoot(-1, 10)).toThrow(RangeError);
++  expect(() => digitalRoot(2.5, 10)).toThrow(RangeError);
++});
++
++test("bad base throws RangeError", () => {
++  expect(() => digitalRoot(10, 1)).toThrow(RangeError);
++  expect(() => digitalRoot(10, 37)).toThrow(RangeError);
++  expect(() => digitalRoot(10, 16.5)).toThrow(RangeError);
++});

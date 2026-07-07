@@ -3,16 +3,34 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "minima"
-version = "0.2.0"
-description = "Recommend cheaper LLM models for a task to cut token cost, backed by Mubit memory."
+# Distribution name on PyPI (the `minima` name is taken by an unrelated project). The import
+# package stays `minima`. This package ships the server + client SDK only; the `minima` CLI
+# is the TypeScript binary installed via Homebrew (brew tap mubit-ai/minima).
+name = "minima-cli"
+version = "0.7.2"
+description = "Minima CLI: cost-aware LLM model routing — recommend cheaper models, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { text = "FSL-1.1-Apache-2.0" }
+license-files = ["LICENSE"]
 authors = [{ name = "Mubit" }]
+keywords = ["llm", "routing", "cost-optimization", "model-router", "mubit", "agent"]
+# No "License :: OSI Approved" classifier — FSL-1.1 is source-available, not OSI-open-source.
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# Core = the recommender library + HTTP client. The server stack (fastapi/uvicorn/psycopg2/
+# redis) lives in the `server` extra: Minima is a hosted service, so the public package's
+# audience is CLI/library users hitting api.minima.sh — only the operator's container (and
+# self-hosters) runs the API and needs `[server]`.
 dependencies = [
-  "fastapi>=0.115",
-  "uvicorn[standard]>=0.30",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
   "httpx>=0.27",
@@ -22,11 +40,26 @@ dependencies = [
   "mubit-sdk>=0.10.0",
 ]
 
+[project.urls]
+Homepage = "https://docs.minima.sh"
+Documentation = "https://docs.minima.sh"
+Repository = "https://github.com/mubit-ai/minima"
+Issues = "https://github.com/mubit-ai/minima/issues"
+
 [project.optional-dependencies]
+# Run the Minima API server (operator/self-host only — hosted users don't need this).
+server = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
+]
 reasoner-anthropic = ["anthropic>=0.40"]
 reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
+# dev pulls every runtime extra so the full test suite (server API tests, reasoners) runs.
 dev = [
+  "minima-cli[server,reasoner-anthropic,reasoner-gemini]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
@@ -35,6 +68,8 @@ dev = [
 ]
 
 [project.scripts]
+# The `minima` CLI/TUI is NOT here — it is the TypeScript binary (packages/tui) shipped via
+# Homebrew. This package only exposes the server-side operator tools.
 minima-seed = "minima.seeding.run_seed:main"
 minima-calibration-report = "minima.metrics.report:main"
 
@@ -60,9 +95,14 @@ select = ["E", "F", "I", "UP", "B", "C4"]
 ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/minima/recommender/classify.py" = ["E501"]  # regex pattern tables
-"tests/eval/*" = ["E501", "E702"]  # dense report/format lines + compact numeric loops
-"tests/live/*" = ["E501"]  # inline request bodies + progress prints in live e2e demos
+"src/minima/recommender/classify.py" = ["E501"] # regex pattern tables
+"tests/eval/*" = [
+  "E501",
+  "E702",
+] # dense report/format lines + compact numeric loops
+"tests/live/*" = [
+  "E501",
+] # inline request bodies + progress prints in live e2e demos
 
 [tool.mypy]
 python_version = "3.11"

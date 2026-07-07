@@ -69,9 +69,7 @@ class RecommendationStore:
             self._purge_locked()
             self._data[rec.recommendation_id] = rec
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         with self._lock:
             rec = self._data.get(recommendation_id)
             if rec is None:
@@ -169,9 +167,7 @@ class SqliteRecommendationStore:
                 (rec.recommendation_id, created, _serialize(rec), rec.org_id),
             )
 
-    def get(
-        self, recommendation_id: str, org_id: str | None = None
-    ) -> StoredRecommendation | None:
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT created_at, payload, org_id FROM recommendations "
@@ -216,13 +212,146 @@ class OrgScopedRecStore:
         return self._backend.get(recommendation_id, self._org_id)  # type: ignore[call-arg]
 
 
+class PostgresRecommendationStore:
+    """Durable recommendation store backed by PostgreSQL (Cloud SQL via Auth Proxy)."""
+
+    def __init__(self, database_url: str, ttl_seconds: int = 86_400):
+        from minima.recommender._pg_pool import cursor as _cursor
+
+        self._ttl = ttl_seconds
+        self._url = database_url
+        self._cursor = _cursor
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendations (
+                    recommendation_id TEXT PRIMARY KEY,
+                    created_at DOUBLE PRECISION NOT NULL,
+                    payload TEXT NOT NULL,
+                    org_id TEXT NOT NULL DEFAULT 'default'
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS ix_recs_created_at ON recommendations(created_at)"
+            )
+
+    def put(self, rec: StoredRecommendation) -> None:
+        import time
+
+        created = time.time() if rec.created_at == 0.0 else rec.created_at
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                "DELETE FROM recommendations WHERE created_at < %s", (time.time() - self._ttl,)
+            )
+            cur.execute(
+                """
+                INSERT INTO recommendations (recommendation_id, created_at, payload, org_id)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (recommendation_id) DO UPDATE SET
+                    created_at = EXCLUDED.created_at,
+                    payload    = EXCLUDED.payload,
+                    org_id     = EXCLUDED.org_id
+                """,
+                (rec.recommendation_id, created, _serialize(rec), rec.org_id),
+            )
+
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
+        import time
+
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                "SELECT created_at, payload, org_id FROM recommendations"
+                " WHERE recommendation_id = %s",
+                (recommendation_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        created_at, payload, row_org = float(row[0]), str(row[1]), str(row[2])
+        if time.time() - created_at > self._ttl:
+            with self._cursor(self._url) as cur:
+                cur.execute(
+                    "DELETE FROM recommendations WHERE recommendation_id = %s",
+                    (recommendation_id,),
+                )
+            return None
+        if org_id is not None and row_org != org_id:
+            return None
+        return _deserialize(recommendation_id, payload, created_at, row_org)
+
+
+class RedisRecommendationStore:
+    """Recommendation store backed by Redis (Cloud Memorystore).
+
+    Each recommendation is stored as a Redis hash at key ``rec:{recommendation_id}``
+    with a wall-clock TTL. Org isolation is enforced by checking the ``org_id`` field
+    on every get.
+    """
+
+    def __init__(self, redis_url: str, ttl_seconds: int = 86_400):
+        from minima.recommender._redis_client import get_client
+
+        self._ttl = ttl_seconds
+        self._r = get_client(redis_url)
+
+    def _key(self, recommendation_id: str) -> str:
+        return f"rec:{recommendation_id}"
+
+    def put(self, rec: StoredRecommendation) -> None:
+        import time
+
+        created = time.time() if rec.created_at == 0.0 else rec.created_at
+        key = self._key(rec.recommendation_id)
+        self._r.hset(
+            key,
+            mapping={
+                "payload": _serialize(rec),
+                "created_at": str(created),
+                "org_id": rec.org_id,
+            },
+        )
+        self._r.expire(key, self._ttl)
+
+    def get(self, recommendation_id: str, org_id: str | None = None) -> StoredRecommendation | None:
+        import time
+
+        key = self._key(recommendation_id)
+        row = self._r.hgetall(key)
+        if not row:
+            return None
+        created_at = float(row["created_at"])
+        if time.time() - created_at > self._ttl:
+            self._r.delete(key)
+            return None
+        row_org = row.get("org_id", "default")
+        if org_id is not None and row_org != org_id:
+            return None
+        from minima.recommender._redis_client import decode
+
+        return _deserialize(recommendation_id, decode(row["payload"]), created_at, decode(row_org))
+
+
 def build_recstore(settings: Settings) -> RecStore:
-    backend = settings.minima_recommendation_store.lower()
+    # MINIMA_RECSTORE_BACKEND overrides the backend for RecStore + DurableRefs only.
+    # Falls back to MINIMA_RECOMMENDATION_STORE when not set.
+    backend = (
+        settings.minima_recstore_backend.strip().lower()
+        or settings.minima_recommendation_store.strip().lower()
+    )
     ttl = settings.minima_recommendation_ttl_seconds
+    if backend == "redis":
+        if not settings.minima_redis_url:
+            raise RuntimeError("MINIMA_REDIS_URL is required when MINIMA_RECSTORE_BACKEND=redis")
+        return RedisRecommendationStore(settings.minima_redis_url, ttl)
+    if backend in ("cloudsql", "postgres", "postgresql"):
+        if not settings.minima_database_url:
+            raise RuntimeError(
+                "MINIMA_DATABASE_URL is required when MINIMA_RECOMMENDATION_STORE=cloudsql"
+            )
+        return PostgresRecommendationStore(settings.minima_database_url, ttl)
     if backend == "sqlite":
         return SqliteRecommendationStore(settings.minima_sqlite_path, ttl)
-    if backend == "redis":
-        log.warning("recstore_redis_unavailable", detail="redis backend not bundled; using memory")
     return RecommendationStore(ttl)
 
 

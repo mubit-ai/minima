@@ -1,0 +1,100 @@
+name: Catalog — refresh vendored snapshot
+
+# Keeps the vendored cold-start model catalog fresh so it stops drifting by hand.
+#
+# WHAT/WHY: src/minima/catalog/data/capability_priors.json is the cold-start
+# fallback the server loads when the live cost feed (LiteLLM/OpenRouter) is
+# unreachable — see src/minima/catalog/store.py (load_snapshot_cards) and the
+# /v1/models router. It used to be hand-maintained and drifted stale (e.g.
+# missing the gpt-5 family). This job pulls the *live* served catalog from
+# api.minima.sh/v1/models — the source-of-truth that already merges curated
+# capability priors with live cost — normalizes it (via jq) into the EXACT
+# shape the loader reads, and opens a PR only when it actually changed.
+#
+# We deliberately DO NOT commit straight to main and DO NOT hand-edit the JSON:
+# a reviewer sees the diff, and the automation (not a human) keeps it current.
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily (~every 24h); minute offset avoids the top-of-hour rush
+  workflow_dispatch: {}
+
+concurrency:
+  group: catalog-snapshot
+  cancel-in-progress: false
+
+# Least privilege: only what's needed to push a chore branch and open a PR.
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # Source-of-truth: the live served catalog. Override via repo/environment var
+  # CATALOG_SOURCE_URL if the prod host ever changes.
+  CATALOG_URL: ${{ vars.CATALOG_SOURCE_URL || 'https://api.minima.sh/v1/models' }}
+  SNAPSHOT_PATH: src/minima/catalog/data/capability_priors.json
+  BRANCH: chore/catalog-snapshot-auto
+
+jobs:
+  refresh:
+    name: Fetch live catalog → PR if changed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Fetch + normalize live catalog into the vendored snapshot shape
+        run: |
+          set -euo pipefail
+          # /v1/models returns {models:[ModelCard...], catalog_version, stale}.
+          # ModelCard is a superset of the snapshot object, so we project it back
+          # to the exact fields load_snapshot_cards() reads and drop the runtime
+          # metadata (cost_source/cost_fetched_at/cost_stale/capability_source),
+          # which the loader always re-stamps as "fallback-snapshot".
+          curl -fsSL --retry 3 --retry-delay 5 --max-time 60 "$CATALOG_URL" -o live.json
+
+          count="$(jq '.models | length' live.json)"
+          if [ "$count" -lt 5 ]; then
+            echo "::error::live catalog returned only $count models (<5); refusing to overwrite snapshot"
+            exit 1
+          fi
+
+          version="fallback-snapshot-$(date -u +%Y-%m)"
+          note="Cold-start fallback only. Auto-refreshed by .github/workflows/catalog-snapshot.yml from the live /v1/models catalog — do not hand-edit. Live cost is overlaid from LiteLLM/OpenRouter at runtime; capability_by_task_type are normalized [0,1] heuristic priors, corrected by accumulated memory. Prices are approximate USD per million tokens."
+
+          jq \
+             --arg version "$version" \
+             --arg note "$note" '{
+               version: $version,
+               note: $note,
+               models: (.models | sort_by(.model_id) | map({
+                 model_id, provider, display_name,
+                 input_cost_per_mtok, output_cost_per_mtok, cache_read_cost_per_mtok,
+                 supports_prompt_caching, context_window, max_output_tokens,
+                 capability_priors, capability_by_task_type
+               }))
+             }' live.json > "$SNAPSHOT_PATH.tmp"
+          mv "$SNAPSHOT_PATH.tmp" "$SNAPSHOT_PATH"
+          rm -f live.json
+          echo "Normalized $count models into $SNAPSHOT_PATH"
+
+      - name: Commit + open PR only if the snapshot changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$SNAPSHOT_PATH"; then
+            echo "Snapshot already up to date; nothing to do."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add "$SNAPSHOT_PATH"
+          git commit -m "chore(catalog): refresh vendored model snapshot from live /v1/models"
+          git push -u origin "$BRANCH" --force-with-lease
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(catalog): refresh vendored model snapshot" \
+            --body "Automated refresh of \`$SNAPSHOT_PATH\` from the live catalog at \`$CATALOG_URL\` (normalized to the loader's shape). Opened by \`.github/workflows/catalog-snapshot.yml\`. Review the diff — this is the cold-start fallback the server serves when the live cost feed is unreachable." \
+            || echo "PR already open for $BRANCH; pushed update."

@@ -127,7 +127,63 @@ class OrgScopedPropensity:
         return self._backend.propensities(lane, cluster, model_ids, self._org_id)  # type: ignore[call-arg]
 
 
+class PostgresPropensityTracker:
+    """Durable propensity counts backed by PostgreSQL."""
+
+    def __init__(self, database_url: str):
+        from minima.recommender._pg_pool import cursor as _cursor
+
+        self._url = database_url
+        self._cursor = _cursor
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS propensity (
+                    org_id   TEXT    NOT NULL DEFAULT 'default',
+                    lane     TEXT    NOT NULL,
+                    cluster  TEXT    NOT NULL,
+                    model_id TEXT    NOT NULL,
+                    count    INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(org_id, lane, cluster, model_id)
+                )
+                """
+            )
+
+    def record(self, lane: str, cluster: str, model_id: str, org_id: str = "default") -> None:
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                """
+                INSERT INTO propensity (org_id, lane, cluster, model_id, count)
+                VALUES (%s, %s, %s, %s, 1)
+                ON CONFLICT (org_id, lane, cluster, model_id) DO UPDATE
+                    SET count = propensity.count + 1
+                """,
+                (org_id, lane, cluster, model_id),
+            )
+
+    def propensities(
+        self, lane: str, cluster: str, model_ids: Iterable[str], org_id: str = "default"
+    ) -> dict[str, float]:
+        ids = list(model_ids)
+        with self._cursor(self._url) as cur:
+            cur.execute(
+                "SELECT model_id, count FROM propensity"
+                " WHERE org_id = %s AND lane = %s AND cluster = %s",
+                (org_id, lane, cluster),
+            )
+            rows = cur.fetchall()
+        bucket = {str(mid): int(cnt) for mid, cnt in rows}
+        return _laplace_shares(bucket, ids)
+
+
 def build_propensity(settings: Settings) -> Propensity:
-    if settings.minima_recommendation_store.lower() == "sqlite":
+    backend = settings.minima_recommendation_store.strip().lower()
+    if backend in ("cloudsql", "postgres", "postgresql"):
+        if not settings.minima_database_url:
+            raise RuntimeError(
+                "MINIMA_DATABASE_URL is required when MINIMA_RECOMMENDATION_STORE=cloudsql"
+            )
+        return PostgresPropensityTracker(settings.minima_database_url)
+    if backend == "sqlite":
         return SqlitePropensityTracker(settings.minima_sqlite_path)
     return PropensityTracker()

@@ -1,0 +1,27 @@
+diff --git a/ts/drift.ts b/ts/drift.ts
+index b52728e..9f84ef8 100644
+--- a/ts/drift.ts
++++ b/ts/drift.ts
+@@ -22,5 +22,21 @@
+  * Example: driftEncode("abc", 0) === "ace".
+  */
+ export function driftEncode(text: string, shift: number): string {
+-  throw new Error("kata: implement driftEncode");
++  if (!Number.isInteger(shift)) {
++    throw new RangeError("shift must be an integer");
++  }
++  let drift = 0;
++  let out = "";
++  for (const ch of text) {
++    const code = ch.charCodeAt(0);
++    const base = code >= 65 && code <= 90 ? 65 : code >= 97 && code <= 122 ? 97 : -1;
++    if (base === -1) {
++      out += ch;
++      continue;
++    }
++    const rotated = (((code - base + shift + drift) % 26) + 26) % 26;
++    out += String.fromCharCode(base + rotated);
++    drift += 1;
++  }
++  return out;
+ }

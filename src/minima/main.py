@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from minima.api.errors import register_error_handlers
 from minima.api.routers import (
     calibration,
+    capabilities,
     feedback,
     health,
     models,
@@ -96,6 +97,7 @@ def create_app(
     app.state._start_refresh = start_refresh
 
     register_error_handlers(app)
+    app.include_router(capabilities.router)
     app.include_router(recommend.router)
     app.include_router(feedback.router)
     app.include_router(models.router)

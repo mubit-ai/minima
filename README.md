@@ -129,6 +129,21 @@ Runnable, progressively advanced — in **[`examples/`](examples/)**:
 | 6 | [`06_routed_llm_call.py`](examples/06_routed_llm_call.py) | Routing a real Claude call + feedback. |
 | 7 | [`07_multitenant_admin.py`](examples/07_multitenant_admin.py) | Provision an org, call as that tenant. |
 
+## The `minima` CLI
+
+The `minima` CLI/TUI — a coding agent that routes every prompt through Minima and feeds
+realized tokens/cost/quality back — is a TypeScript/Bun binary that lives in
+[`packages/tui/`](packages/tui/) and installs via Homebrew:
+
+```bash
+brew tap mubit-ai/minima
+brew install minima
+```
+
+The PyPI package (`pip install minima-cli`) is **not** the CLI: it ships the Python
+client SDK (`minima_client`) and the server + operator tooling (`minima-seed`,
+`minima-calibration-report`). The old Python harness/TUI was removed in v0.7.0.
+
 ## Configuration
 
 All configuration is via environment variables (see [`.env.example`](.env.example) and
@@ -164,7 +179,22 @@ src/minima/
   tenancy/          runtime · registry · context · keys · secrets
   seeding/          routerbench · synthetic · run_seed (minima-seed CLI)
   schemas/          common · recommend · workflow · feedback · models_catalog · strategies · admin
+packages/tui/         the `minima` CLI/TUI (TypeScript/Bun, ships via Homebrew)
 client_sdk/minima_client/   client (sync+async) · autocapture · errors
 docs/               full documentation       examples/   runnable examples
 tests/              unit · integration (FakeMemory) · live (-m live) · eval (-m eval)
 ```
+
+## License
+
+Minima is **source-available** under the [Functional Source License,
+Version 1.1, Apache 2.0 Future License](LICENSE) (`FSL-1.1-Apache-2.0`).
+
+You may use, copy, modify, and self-host Minima for any **Permitted Purpose** —
+internal use, non-commercial education/research, and professional services for a
+licensee. The one restriction is a **Competing Use**: you may not offer Minima
+(or a substantially similar product/service) to others as a commercial or hosted
+offering that competes with us. Two years after each version is published, that
+version automatically converts to the **Apache License 2.0**.
+
+Copyright 2026 Mubit.

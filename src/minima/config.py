@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     # --- Memory read path ---
     minima_memory_recall_timeout_ms: int = 2500
     minima_memory_recall_limit: int = 25
-    minima_recall_mode: str = "direct_bypass"  # direct_bypass (retrieval-only) | agent_routed
+    # direct_bypass is faster but requires enable_direct_search=true on the Mubit instance
+    # (off by default on hosted api.mubit.ai). agent_routed works on all instance types.
+    minima_recall_mode: str = "agent_routed"  # agent_routed | direct_bypass
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types
@@ -63,6 +65,10 @@ class Settings(BaseSettings):
     # switching the default.
     minima_escalation_mode: str = "legacy"  # legacy | uncertainty
     minima_escalation_interval_width: float = 0.25
+    # "near_threshold" trigger: escalate when the recommended model's predicted success is
+    # within this margin above tau — a fragile pick that one more failure round would drop.
+    # 0.0 = disabled. Recommended starting value: 0.10.
+    minima_escalation_near_threshold_delta: float = 0.10
     minima_default_input_tokens: int = 1500
     minima_default_output_tokens: int = 500
     minima_reflect_every_n: int = 25
@@ -121,7 +127,12 @@ class Settings(BaseSettings):
     # minima_reasoner_blend. Heavy evidence barely moves; cold candidates lean on the LLM.
     minima_reasoner_blend_adaptive: bool = True
     minima_reasoner_blend_max: float = 0.8
-    minima_reasoner_classify: bool = True  # let the reasoner refine ambiguous task classification
+    minima_reasoner_fast_mode: bool = False
+    minima_reasoner_fast_memory_token_budget: int = 500
+    minima_reasoner_fast_candidate_limit: int = 6
+    minima_reasoner_fast_skip_low_value: bool = True
+    minima_reasoner_skip_confident_classifications: bool = True
+    minima_reasoner_confidence_skip_threshold: float = 0.72
     anthropic_api_key: str | None = None
     gemini_api_key: str | None = None
 
@@ -157,12 +168,24 @@ class Settings(BaseSettings):
     minima_host: str = "0.0.0.0"
     minima_port: int = 8080
     minima_log_level: str = "info"
-    minima_recommendation_store: str = "memory"  # memory | sqlite | redis
+    # memory | sqlite | cloudsql — controls DecisionLog, Propensity, and (unless
+    # MINIMA_RECSTORE_BACKEND overrides) RecStore + DurableRefs.
+    minima_recommendation_store: str = "memory"
     # 7 days: feedback often arrives well after the recommendation (batch evals, prod
     # verification). Past the TTL the late-feedback degraded path still accepts the
     # outcome (without neighbor attribution) via the decision log.
     minima_recommendation_ttl_seconds: int = 604_800
     minima_sqlite_path: str = "minima_state.db"  # durable recstore + propensity backing file
+
+    # --- Persistent store backends (Cloud SQL + Redis) ---
+    # PostgreSQL DSN for DecisionLog, Propensity, and optionally RecStore + DurableRefs.
+    # Cloud Run format: postgresql://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE
+    minima_database_url: str | None = None
+    # Redis URL for RecStore + DurableRefs when MINIMA_RECSTORE_BACKEND=redis.
+    minima_redis_url: str = "redis://localhost:6379/0"
+    # Backend override for RecStore + DurableRefs only (memory | sqlite | cloudsql | redis).
+    # Empty string means inherit from MINIMA_RECOMMENDATION_STORE.
+    minima_recstore_backend: str = ""
     # Accept feedback whose recommendation_id has expired from the recstore by falling
     # back to the decision log: the outcome record is still written (the durable
     # (cluster, model) upsert), but neighbor attribution and lesson promotion are skipped.
@@ -180,6 +203,12 @@ class Settings(BaseSettings):
     minima_epsilon_selection_orgs: str = ""
     minima_epsilon: float = 0.03
     minima_epsilon_softmax_temperature: float = 0.1
+    # Orgs (comma-separated) that opt into Thompson (posterior-sampling) selection instead of
+    # epsilon-softmax: each decision samples theta_m ~ Beta(alpha_m, beta_m) and picks the
+    # cheapest model clearing tau under the sample. Monte-Carlo selection frequencies are
+    # logged as propensities so IPW/OPE stay valid. Takes precedence over epsilon if both set.
+    minima_thompson_selection_orgs: str = ""
+    minima_thompson_samples: int = 128
 
     # --- Calibration monitoring ---
     minima_calibration_window_days: int = 30
@@ -191,6 +220,52 @@ class Settings(BaseSettings):
     # Smaller values flag every healthy stream.
     minima_cusum_k: float = 0.25
     minima_cusum_h: float = 2.0
+
+    # --- Calibration APPLY (remap predicted_success before the tau decision) ---
+    # The monitoring above MEASURES calibration; these control whether a fitted isotonic
+    # remap is actually applied so predicted_success is a truthful probability. Safe by
+    # construction: with < min_n reconciled outcomes the fit returns identity (no-op), and
+    # each slice shrinks toward identity by n/(n+shrinkage_k). Reuses the calibration
+    # window + shrinkage_k above. Refit is lazy and cached per Recommender (org).
+    minima_calibration_apply: bool = True
+    minima_calibration_min_n: int = 30
+    minima_calibration_refresh_seconds: int = 600
+
+    # --- Routing-collapse margin guard ---
+    # Scalar-score + cheapest-clearing-tau can collapse to the single most expensive model
+    # at high quality bars (arXiv 2602.03478). When the cheapest-eligible pick IS the
+    # priciest candidate, prefer a cheaper candidate whose success credible interval could
+    # still clear tau. The optimism is TAU-AWARE so it shrinks as the quality bar rises:
+    #   eligible_optimistic = predicted + margin * (1 - tau) * 0.5 * interval_width.
+    # margin >= 0: 0 disables the guard. The (1 - tau) factor keeps the guard gentle at high
+    # cost_quality (where the user wants quality) and active at low (cost-leaning). The judge
+    # / escalation loop is the safety net that catches an over-optimistic cheap pick.
+    minima_collapse_margin: float = 1.0
+
+    # --- Lever-aware cost (prompt caching) ---
+    # When on, the ESTIMATE cost tier prices a cache-supporting model's input at a blend of
+    # its cache-read and full rates (assuming the caller applies prompt caching, as the
+    # harness does), so ranking can favor a cache-friendly model that is cheaper in practice.
+    # Off by default (no behavior change). Observed/rescaled tiers stay evidence-based — they
+    # already reflect real caching via the realized cost in feedback, so they self-correct.
+    # recommend() also returns `recommended_actions` (e.g. enable_prompt_cache) regardless.
+    minima_cost_lever_aware: bool = False
+    minima_cost_cache_input_fraction: float = 0.5
+
+    # --- Neighbor-vote classification ---
+    # When the heuristic classifier returns `other`, disambiguate the task_type from the
+    # ANN-recalled semantic neighbors' types (free + semantic) instead of (or before) a paid
+    # LLM-classify call. Embedding-based routing already happens via recall; this just makes
+    # the cluster KEY semantically coherent for ambiguous prompts.
+    minima_neighbor_classify: bool = True
+
+    # --- Shadow bandit (advisory only) ---
+    # When on, a UCB contextual-bandit policy computes what it WOULD pick and logs it on the
+    # decision row (shadow_chosen_model_id) alongside the deployed conjugate pick. It NEVER
+    # overrides the recommendation — it exists so we can measure agreement / regret offline
+    # before considering promotion. alpha scales the exploration optimism.
+    minima_shadow_bandit: bool = False
+    minima_shadow_ucb_alpha: float = 1.0
 
     # --- Durable-record fast path ---
     # Dereference the durable (cluster, model) outcome records alongside ANN recall so the

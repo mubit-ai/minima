@@ -25,14 +25,23 @@ class FakeMemory:
         self.batches: list[tuple[str, list[dict]]] = []
         self.reflects: list[dict[str, Any]] = []
         self.recall_calls: list[dict[str, Any]] = []
+        self.lookup_calls: list[dict[str, Any]] = []
         self.dereference_calls: list[dict[str, Any]] = []
         self.deref_results: dict[str, RecalledEvidence] = {}
+        self.lookup_results: list[RecalledEvidence] = []
         self._strategies = list(strategies or [])
         self.next_record_id = "rec-fake-1"
+        self.get_context_calls: list[dict[str, Any]] = []
 
     async def recall(self, **kwargs: Any) -> RecallResult:
         self.recall_calls.append(kwargs)
         return RecallResult(evidence=list(self.evidence))
+
+    async def lookup(
+        self, *, lane: str, match: list[dict], limit: int = 256
+    ) -> list[RecalledEvidence]:
+        self.lookup_calls.append({"lane": lane, "match": match})
+        return list(self.lookup_results)
 
     async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
         self.dereference_calls.append({"lane": lane, "reference_id": reference_id})
@@ -57,6 +66,7 @@ class FakeMemory:
         return {"count": len(items), "success": True}
 
     async def get_context(self, **_kwargs: Any) -> str:
+        self.get_context_calls.append(_kwargs)
         return ""
 
     async def reflect(self, **kwargs: Any) -> dict:
