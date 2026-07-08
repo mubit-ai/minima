@@ -96,6 +96,18 @@ export class MinimaAgent extends Agent {
   /** Effort routing Phase A (staged, default OFF): map the server's classified difficulty
    * to a per-prompt thinking level — route (model, effort), not just model. */
   autoEffort = false;
+  /** Aborts the routing phase (the recommend HTTP call) — the base Agent's own
+   * controller only covers the run phase. Set for the lifetime of promptRouted. */
+  private routeController: AbortController | null = null;
+  /** True when the last promptRouted was cut short by Esc during routing (so the
+   * UI shows "aborted" instead of a misleading "routing offline" note). */
+  lastAborted = false;
+
+  /** Esc must stop BOTH phases: the in-flight route and the model run. */
+  override abort(): void {
+    this.routeController?.abort();
+    super.abort();
+  }
 
   constructor(opts: MinimaAgentOptions) {
     const {
@@ -152,6 +164,16 @@ export class MinimaAgent extends Agent {
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
+    // The surfaced learning-loop note must reflect THIS turn only. Reset here because
+    // feedbackSafely early-returns without touching the field on turns that send no feedback
+    // (pinned / offline / no-recommendation) — otherwise an earlier rejection would re-display
+    // indefinitely on later pinned turns.
+    this.lastFeedbackError = null;
+
+    // Fresh abort scope for THIS prompt's routing phase; abort() (Esc) cancels it.
+    const routeController = new AbortController();
+    this.routeController = routeController;
+    this.lastAborted = false;
 
     // Recall-before-route: inject task-relevant prior Mubit context into THIS turn's system
     // prompt (restored in `finally` — no leak across turns). No-op unless memory is wired.
@@ -182,16 +204,34 @@ export class MinimaAgent extends Agent {
             `budget exhausted: $${s.spentUsd.toFixed(4)} spent of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
           );
         }
-        const routing = await this.route(content, {
-          taskType: effectiveTaskType ?? null,
-          slider: opts.slider ?? null,
-          tags: opts.tags,
-          difficulty: opts.difficulty,
-          // The remaining budget rides into the server as a (soft) per-call cost cap.
-          maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
-          minQuality: opts.minQuality,
-          excludedModels: excluded.length ? excluded : undefined,
-        });
+        let routing: RoutingResult | null;
+        try {
+          routing = await this.route(content, {
+            taskType: effectiveTaskType ?? null,
+            slider: opts.slider ?? null,
+            tags: opts.tags,
+            difficulty: opts.difficulty,
+            // The remaining budget rides into the server as a (soft) per-call cost cap.
+            maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
+            minQuality: opts.minQuality,
+            excludedModels: excluded.length ? excluded : undefined,
+            signal: routeController.signal,
+          });
+        } catch (exc) {
+          // Esc during routing: stop cleanly, don't run the model, don't record.
+          if (routeController.signal.aborted) {
+            this.offlineReason = null;
+            this.lastAborted = true;
+            return lastRouting;
+          }
+          throw exc;
+        }
+        // Aborted the instant routing returned (before any spend): end right here.
+        if (routeController.signal.aborted) {
+          this.offlineReason = null;
+          this.lastAborted = true;
+          return routing;
+        }
         lastRouting = routing;
         if (firstRecId === null) firstRecId = routing?.recommendationId ?? null;
 
@@ -313,6 +353,7 @@ export class MinimaAgent extends Agent {
       // Never let this turn's recalled context or effort override leak into the next turn.
       this.agentState.systemPrompt = origSystem;
       if (this.autoEffort) this.agentState.thinkingLevel = origThinking;
+      if (this.routeController === routeController) this.routeController = null;
     }
   }
 
@@ -441,6 +482,7 @@ export class MinimaAgent extends Agent {
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
+      signal?: AbortSignal;
     },
   ): Promise<RoutingResult | null> {
     // A hard pin bypasses Minima entirely: run that model directly.
@@ -481,6 +523,7 @@ export class MinimaAgent extends Agent {
         // The server caps candidate selection at 8 by default; widen when the pool is larger.
         maxCandidates:
           effective && effective.length > 8 ? Math.min(effective.length, 16) : undefined,
+        signal: opts.signal,
       });
       this.offlineReason = null;
       if (this.beforeRouteHook) {
@@ -490,6 +533,9 @@ export class MinimaAgent extends Agent {
       this.agentState.model = routing.model;
       return routing;
     } catch (exc) {
+      // An Esc during routing is a user abort, NOT a routing failure — never
+      // degrade it to an offline run; let promptRouted short-circuit cleanly.
+      if (opts.signal?.aborted) throw exc;
       if (this.config.allowOffline) {
         this.offlineReason = errText(exc);
         return null;

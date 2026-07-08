@@ -1,0 +1,67 @@
+diff --git a/tests/hidden/note-owners.test.ts b/tests/hidden/note-owners.test.ts
+new file mode 100644
+index 0000000..a6c5dec
+--- /dev/null
++++ b/tests/hidden/note-owners.test.ts
+@@ -0,0 +1,61 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++function createNote(app: ReturnType<typeof makeApp>["app"], token: string, body: unknown) {
++  return app.handle(req("POST", "/api/notes", { token, body }));
++}
++
++describe("note ownership", () => {
++  test("create records the calling token as owner in the response", () => {
++    const { app } = makeApp();
++    const res = createNote(app, TOKENS.alice, { title: "mine" });
++    expect(res.status).toBe(201);
++    expect((res.body as { owner: string }).owner).toBe("alice");
++  });
++
++  test("listing only returns the caller's notes", () => {
++    const { app } = makeApp();
++    createNote(app, TOKENS.alice, { title: "a1", tags: ["work"] });
++    createNote(app, TOKENS.alice, { title: "a2" });
++    createNote(app, TOKENS.bob, { title: "b1", tags: ["work"] });
++
++    const asAlice = app.handle(req("GET", "/api/notes", { token: TOKENS.alice }));
++    expect((asAlice.body as { total: number }).total).toBe(2);
++    const asBob = app.handle(req("GET", "/api/notes", { token: TOKENS.bob }));
++    const bobItems = (asBob.body as { items: { title: string; owner: string }[] }).items;
++    expect(bobItems.map((n) => n.title)).toEqual(["b1"]);
++    expect(bobItems[0]!.owner).toBe("bob");
++
++    const tagged = app.handle(
++      req("GET", "/api/notes", { token: TOKENS.bob, query: { tag: "work" } }),
++    );
++    expect((tagged.body as { items: { title: string }[] }).items.map((n) => n.title)).toEqual([
++      "b1",
++    ]);
++  });
++
++  test("fetching another token's note answers 404 as if it did not exist", () => {
++    const { app } = makeApp();
++    const created = createNote(app, TOKENS.alice, { title: "secret" });
++    const id = (created.body as { id: string }).id;
++    expect(app.handle(req("GET", `/api/notes/${id}`, { token: TOKENS.bob })).status).toBe(404);
++    expect(app.handle(req("GET", `/api/notes/${id}`, { token: TOKENS.alice })).status).toBe(200);
++  });
++
++  test("deleting another token's note answers 404 and leaves it intact", () => {
++    const { app } = makeApp();
++    const created = createNote(app, TOKENS.alice, { title: "keep me" });
++    const id = (created.body as { id: string }).id;
++    expect(app.handle(req("DELETE", `/api/notes/${id}`, { token: TOKENS.bob })).status).toBe(404);
++    const still = app.handle(req("GET", `/api/notes/${id}`, { token: TOKENS.alice }));
++    expect(still.status).toBe(200);
++    expect(app.handle(req("DELETE", `/api/notes/${id}`, { token: TOKENS.alice })).status).toBe(204);
++  });
++
++  test("admin-scoped tokens get no special visibility", () => {
++    const { app } = makeApp();
++    createNote(app, TOKENS.alice, { title: "private" });
++    const asRoot = app.handle(req("GET", "/api/notes", { token: TOKENS.root }));
++    expect((asRoot.body as { total: number }).total).toBe(0);
++  });
++});

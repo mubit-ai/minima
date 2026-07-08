@@ -29,7 +29,12 @@ import type {
 /** Minimal fetch-like transport. Real callers omit this (uses global fetch). */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
 ) => Promise<{ status: number; json(): Promise<unknown> }>;
 
 function coerceTask(task: TaskLike): TaskInput {
@@ -97,11 +102,12 @@ export class MinimaClient {
     return body as T;
   }
 
-  private async post<T>(path: string, payload: unknown): Promise<T> {
+  private async post<T>(path: string, payload: unknown, signal?: AbortSignal): Promise<T> {
     const resp = await this.fetchImpl(this.url(path), {
       method: "POST",
       headers: headers(this.apiKey),
       body: JSON.stringify(payload),
+      signal,
     });
     const body = await resp.json();
     raiseForStatus(resp.status, body);
@@ -121,6 +127,7 @@ export class MinimaClient {
       allow_llm_escalation?: boolean;
       explain?: boolean;
       baseline_model_id?: string;
+      signal?: AbortSignal;
     } = {},
   ): Promise<RecommendResponse> {
     const req: RecommendRequest = {
@@ -136,7 +143,7 @@ export class MinimaClient {
         baseline_model_id: opts.baseline_model_id,
       }),
     };
-    return this.post<RecommendResponse>("/v1/recommend", req);
+    return this.post<RecommendResponse>("/v1/recommend", req, opts.signal);
   }
 
   recommendWorkflow(req: WorkflowRequest): Promise<WorkflowResponse> {

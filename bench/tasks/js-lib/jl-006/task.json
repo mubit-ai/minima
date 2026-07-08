@@ -1,0 +1,13 @@
+{
+  "id": "jl-006",
+  "repo": "js-lib",
+  "category": "bugfix",
+  "problem_statement": "CSV data containing multi-line text fields gets corrupted somewhere between writing and reading. Quoted values with embedded line breaks come back split across multiple malformed rows, stray quote characters appear inside restored values, and Windows-style CRLF line breaks within a field are altered even though the value was properly quoted on output. The corruption then propagates into downstream processing: after a write-then-read round trip, grouping the restored records produces phantom extra groups and wrong group counts. Single-line data, quoting of embedded commas, and doubled-quote escaping all still behave correctly, so the problem only surfaces once field values span lines. Please restore the documented round-trip guarantee for multi-line fields.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "hard",
+  "expected_route": "frontier",
+  "est_files": 1,
+  "est_loc": 60,
+  "timeout_sec": 60,
+  "notes": "Cross-module invariant: parse(serialize(x)) identity, symptoms observed through transform.groupBy over round-tripped records. Defect spans the parser state machine and serializer field encoding."
+}

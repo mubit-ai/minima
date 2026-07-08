@@ -1,0 +1,33 @@
+diff --git a/tests/ts/slug/hidden.test.ts b/tests/ts/slug/hidden.test.ts
+new file mode 100644
+index 0000000..6529612
+--- /dev/null
++++ b/tests/ts/slug/hidden.test.ts
+@@ -0,0 +1,27 @@
++import { expect, test } from "bun:test";
++import { slugify } from "../../../ts/slug.ts";
++
++test("basic title", () => {
++  expect(slugify("Hello, World!")).toBe("hello-world");
++});
++
++test("ascii apostrophes vanish", () => {
++  expect(slugify("Don't Stop Me Now")).toBe("dont-stop-me-now");
++});
++
++test("typographic apostrophes vanish", () => {
++  expect(slugify("Rock ’n’ Roll")).toBe("rock-n-roll");
++});
++
++test("edges trimmed and runs collapsed", () => {
++  expect(slugify("  --Already   Sluggish--  ")).toBe("already-sluggish");
++});
++
++test("digits survive", () => {
++  expect(slugify("Episode 42: The Answer")).toBe("episode-42-the-answer");
++});
++
++test("no alphanumerics yields empty slug", () => {
++  expect(slugify("!!!")).toBe("");
++  expect(slugify("")).toBe("");
++});

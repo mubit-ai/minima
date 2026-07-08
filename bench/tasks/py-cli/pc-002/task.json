@@ -1,0 +1,13 @@
+{
+  "id": "pc-002",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "Tasks added without explicitly picking a priority are being treated as if they were the most urgent kind. After adding a quick note with no priority flag, it jumps to the top of priority-sorted lists and is counted in the most-urgent band of the report breakdown. Our expectation (and long-standing behaviour) is that leaving the priority unspecified gives a middle-of-the-road task that neither jumps queues nor gets buried. Adding tasks with an explicit priority still works exactly as it should; only the unspecified case has gone wrong.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 120,
+  "notes": "Wrong default: DEFAULT_PRIORITY constant flipped from PRIORITY_MEDIUM to PRIORITY_HIGH."
+}

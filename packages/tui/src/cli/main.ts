@@ -396,6 +396,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // namespace, else the repo identity) so recall surfaces prior outcomes across runs and
   // write-backs accumulate under it — random-per-run ids would make recall see nothing.
   const memorySession = config.namespace ?? repoIdentity(process.cwd());
+  // Also scope server-side recall (/v1/recommend) to this stable id: prod memory is keyed
+  // by user_id, so without it decision_basis can never leave `prior`. router.ts reads
+  // config.memorySession by reference at recommend time.
+  config.memorySession = memorySession;
   agent.memory = await createMubitMemory(memorySession);
 
   // Persistence spine: open the local DB, register {project_key, run_id}, and attach the

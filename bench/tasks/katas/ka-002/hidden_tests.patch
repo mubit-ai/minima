@@ -1,0 +1,39 @@
+diff --git a/tests/py/test_rle_hidden.py b/tests/py/test_rle_hidden.py
+new file mode 100644
+index 0000000..fc29891
+--- /dev/null
++++ b/tests/py/test_rle_hidden.py
+@@ -0,0 +1,33 @@
++import pytest
++import rle
++
++
++def test_empty():
++    assert rle.rle_encode("") == ""
++
++
++def test_no_runs_passthrough():
++    assert rle.rle_encode("abc") == "abc"
++
++
++def test_basic_runs():
++    assert rle.rle_encode("aaab") == "3ab"
++    assert rle.rle_encode("aab") == "2ab"
++
++
++def test_multi_digit_count():
++    assert rle.rle_encode("a" * 12 + "b") == "12ab"
++
++
++def test_digit_characters_escaped():
++    assert rle.rle_encode("1222") == "\\13\\2"
++
++
++def test_backslash_escaped():
++    assert rle.rle_encode("\\") == "\\\\"
++    assert rle.rle_encode("\\\\") == "2\\\\"
++
++
++def test_non_str_raises():
++    with pytest.raises(TypeError):
++        rle.rle_encode(42)

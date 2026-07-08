@@ -1,0 +1,42 @@
+diff --git a/tests/js/wrap/hidden.test.js b/tests/js/wrap/hidden.test.js
+new file mode 100644
+index 0000000..15ccef3
+--- /dev/null
++++ b/tests/js/wrap/hidden.test.js
+@@ -0,0 +1,36 @@
++import { expect, test } from "bun:test";
++import { wordWrap } from "../../../js/wrap.js";
++
++test("greedy fill", () => {
++  expect(wordWrap("the quick brown fox", 10)).toEqual(["the quick", "brown fox"]);
++});
++
++test("word never squeezed past the width", () => {
++  expect(wordWrap("a bb ccc", 3)).toEqual(["a", "bb", "ccc"]);
++});
++
++test("long word hard-broken into slices", () => {
++  expect(wordWrap("extraordinary", 5)).toEqual(["extra", "ordin", "ary"]);
++});
++
++test("current line flushed before a hard break", () => {
++  expect(wordWrap("hi extraordinary", 5)).toEqual(["hi", "extra", "ordin", "ary"]);
++});
++
++test("words may join the final short slice", () => {
++  expect(wordWrap("abcdefg hi", 5)).toEqual(["abcde", "fg hi"]);
++});
++
++test("whitespace runs collapse", () => {
++  expect(wordWrap("one\n  two\t three", 20)).toEqual(["one two three"]);
++});
++
++test("blank input yields no lines", () => {
++  expect(wordWrap("", 4)).toEqual([]);
++  expect(wordWrap("   ", 4)).toEqual([]);
++});
++
++test("bad width throws RangeError", () => {
++  expect(() => wordWrap("hi", 0)).toThrow(RangeError);
++  expect(() => wordWrap("hi", 3.5)).toThrow(RangeError);
++});

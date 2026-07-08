@@ -1,0 +1,14 @@
+{
+  "id": "ta-005",
+  "repo": "ts-api",
+  "category": "bugfix",
+  "problem_statement": "Our redirect endpoint has started returning 429 to clients that are nowhere near the documented request budget. The clearest repro: a client that gets briefly throttled during one burst then stays throttled indefinitely, even many minutes later when its traffic has completely stopped and the throttling window should long since have rolled over. Worse, clients that never exceed the per-window budget eventually start collecting 429s too if they keep up a slow steady request rate for long enough. Restarting the process clears everything and behaviour inside a single window (first requests admitted, over-budget requests refused with a retry hint) looks exactly right. Please restore the documented recovery behaviour.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 14,
+  "timeout_sec": 120,
+  "authored_difficulty": "medium",
+  "notes": "RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved."
+}

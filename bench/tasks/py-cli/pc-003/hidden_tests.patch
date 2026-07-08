@@ -1,0 +1,34 @@
+diff --git a/tests/test_hidden_search_case.py b/tests/test_hidden_search_case.py
+new file mode 100644
+index 0000000..4abc133
+--- /dev/null
++++ b/tests/test_hidden_search_case.py
+@@ -0,0 +1,28 @@
++"""Hidden fail-to-pass tests: free-text search must be case-insensitive."""
++
++from taskman.cli import main
++from taskman.query import matches_text, search
++
++from .conftest import make_task
++
++
++def test_mixed_case_needle_matches_title():
++    task = make_task(title="Buy milk")
++    assert matches_text(task, "MILK")
++    assert matches_text(task, "Milk")
++    assert matches_text(task, "buy MILK")
++
++
++def test_mixed_case_needle_matches_tags():
++    task = make_task(title="Untitled", tags=("errands",))
++    assert matches_text(task, "Errand")
++    assert [t.id for t in search([task], "ERRANDS")] == [1]
++
++
++def test_cli_search_is_case_insensitive(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    main([*base, "add", "Call plumber about sink", "-p", "2"])
++    capsys.readouterr()
++    rc = main([*base, "list", "--search", "Plumber"])
++    assert rc == 0
++    assert "Call plumber" in capsys.readouterr().out

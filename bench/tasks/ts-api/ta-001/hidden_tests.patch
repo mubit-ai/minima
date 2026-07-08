@@ -1,0 +1,41 @@
+diff --git a/tests/hidden/overview.test.ts b/tests/hidden/overview.test.ts
+new file mode 100644
+index 0000000..53bd370
+--- /dev/null
++++ b/tests/hidden/overview.test.ts
+@@ -0,0 +1,35 @@
++import { describe, expect, test } from "bun:test";
++import { TOKENS, makeApp, req } from "../helpers.ts";
++
++const token = TOKENS.alice;
++
++describe("GET /api/stats/overview", () => {
++  test("returns zeros on a fresh instance", () => {
++    const { app } = makeApp();
++    const res = app.handle(req("GET", "/api/stats/overview", { token }));
++    expect(res.status).toBe(200);
++    expect(res.body).toEqual({ links: 0, notes: 0, totalClicks: 0 });
++  });
++
++  test("aggregates link, note and click totals", () => {
++    const { app } = makeApp();
++    app.handle(
++      req("POST", "/api/links", { token, body: { url: "https://example.com/a", slug: "aa" } }),
++    );
++    app.handle(
++      req("POST", "/api/links", { token, body: { url: "https://example.com/b", slug: "bb" } }),
++    );
++    app.handle(req("POST", "/api/notes", { token, body: { title: "only note" } }));
++    app.handle(req("GET", "/r/aa"));
++    app.handle(req("GET", "/r/aa"));
++    app.handle(req("GET", "/r/bb"));
++    const res = app.handle(req("GET", "/api/stats/overview", { token }));
++    expect(res.status).toBe(200);
++    expect(res.body).toEqual({ links: 2, notes: 1, totalClicks: 3 });
++  });
++
++  test("requires a token with the read scope", () => {
++    const { app } = makeApp();
++    expect(app.handle(req("GET", "/api/stats/overview")).status).toBe(401);
++  });
++});

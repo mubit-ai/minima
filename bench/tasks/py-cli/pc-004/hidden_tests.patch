@@ -1,0 +1,45 @@
+diff --git a/tests/test_hidden_multi_tag.py b/tests/test_hidden_multi_tag.py
+new file mode 100644
+index 0000000..01fe483
+--- /dev/null
++++ b/tests/test_hidden_multi_tag.py
+@@ -0,0 +1,39 @@
++"""Hidden fail-to-pass tests: multi-tag filters require ALL tags (AND)."""
++
++from taskman.cli import main
++from taskman.query import filter_tags
++
++from .conftest import make_task
++
++
++def ids(tasks):
++    return [t.id for t in tasks]
++
++
++def test_multi_tag_requires_every_tag():
++    tasks = [
++        make_task(id=1, tags=("home", "errand")),
++        make_task(id=2, tags=("home",)),
++        make_task(id=3, tags=("errand",)),
++        make_task(id=4, tags=("home", "errand", "urgent")),
++        make_task(id=5, tags=("work",)),
++    ]
++    assert ids(filter_tags(tasks, ["home", "errand"])) == [1, 4]
++    assert ids(filter_tags(tasks, ["home", "errand", "urgent"])) == [4]
++
++
++def test_multi_tag_disjoint_tags_match_nothing():
++    tasks = [make_task(id=1, tags=("home",)), make_task(id=2, tags=("work",))]
++    assert ids(filter_tags(tasks, ["home", "work"])) == []
++
++
++def test_cli_repeated_tag_flags_are_anded(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    main([*base, "add", "Both tags", "-p", "2", "--tags", "home,urgent"])
++    main([*base, "add", "Only home", "-p", "2", "--tags", "home"])
++    capsys.readouterr()
++    rc = main([*base, "list", "--tag", "home", "--tag", "urgent"])
++    assert rc == 0
++    out = capsys.readouterr().out
++    assert "Both tags" in out
++    assert "Only home" not in out

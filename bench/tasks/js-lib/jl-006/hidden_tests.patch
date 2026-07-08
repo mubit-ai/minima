@@ -1,0 +1,46 @@
+diff --git a/tests/hidden_jl006.test.ts b/tests/hidden_jl006.test.ts
+new file mode 100644
+index 0000000..6e6a003
+--- /dev/null
++++ b/tests/hidden_jl006.test.ts
+@@ -0,0 +1,40 @@
++import { describe, expect, test } from "bun:test";
++import { parseCsv, parseRecords, serializeCsv, serializeRecords } from "../src/csv.ts";
++import { groupBy } from "../src/transform.ts";
++
++describe("multi-line quoted fields", () => {
++  test("parses embedded line breaks inside quoted fields", () => {
++    expect(parseCsv('"a\nb",c\nd,e')).toEqual([
++      ["a\nb", "c"],
++      ["d", "e"],
++    ]);
++  });
++
++  test("round-trips fields containing LF and CRLF exactly", () => {
++    const rows = [["a\r\nb"], ["c\nd"]];
++    expect(parseCsv(serializeCsv(rows))).toEqual(rows);
++  });
++
++  test("record round-trip preserves multi-line values", () => {
++    const records = [
++      { team: "red", note: "line1\nline2" },
++      { team: "red", note: "x" },
++      { team: "blue", note: "y" },
++    ];
++    expect(parseRecords(serializeRecords(records))).toEqual(records);
++  });
++
++  test("grouping is stable across a CSV round trip with multi-line fields", () => {
++    const records = [
++      { team: "red", note: "line1\nline2" },
++      { team: "red", note: "x" },
++      { team: "blue", note: "y" },
++    ];
++    const back = parseRecords(serializeRecords(records));
++    const sizes = [...groupBy(back, (r) => r.team)].map(([k, g]) => [k, g.length]);
++    expect(sizes).toEqual([
++      ["red", 2],
++      ["blue", 1],
++    ]);
++  });
++});

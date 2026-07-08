@@ -1,0 +1,12 @@
+{
+  "id": "ka-007",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement ordinal(n) in ts/ordinal.ts, returning the number followed by its English ordinal suffix as a string. Numbers ending in 1, 2 or 3 take st, nd or rd respectively (1st, 42nd, 63rd) and everything else takes th — except the teens rule: when the last two digits are 11, 12 or 13 the suffix is th (11th, 112th, 1013th). Zero yields \"0th\". Negative, fractional, NaN or infinite inputs must throw a RangeError. Verify with bun test tests/ts/ordinal.",
+  "test_cmd": "bun test tests/ts/ordinal",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 12,
+  "timeout_sec": 60
+}

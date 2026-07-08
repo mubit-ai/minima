@@ -1,0 +1,31 @@
+diff --git a/tests/test_hidden_default_priority.py b/tests/test_hidden_default_priority.py
+new file mode 100644
+index 0000000..55afd01
+--- /dev/null
++++ b/tests/test_hidden_default_priority.py
+@@ -0,0 +1,25 @@
++"""Hidden fail-to-pass tests: unspecified priority must default to medium."""
++
++import json
++
++from taskman.cli import main
++from taskman.models import DEFAULT_PRIORITY, PRIORITY_MEDIUM, Task
++
++
++def test_default_priority_constant_is_medium():
++    assert DEFAULT_PRIORITY == PRIORITY_MEDIUM
++
++
++def test_task_without_priority_is_medium():
++    task = Task(id=1, title="No priority given")
++    assert task.priority == PRIORITY_MEDIUM
++    assert task.priority_name == "medium"
++
++
++def test_cli_add_defaults_to_medium(store_path, capsys):
++    base = ["--file", str(store_path), "--today", "2026-03-15"]
++    rc = main([*base, "add", "Just a note"])
++    assert rc == 0
++    assert "[medium]" in capsys.readouterr().out
++    doc = json.loads(store_path.read_text(encoding="utf-8"))
++    assert doc["tasks"][0]["priority"] == 2

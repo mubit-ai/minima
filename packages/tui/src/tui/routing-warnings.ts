@@ -16,6 +16,10 @@ const HIDDEN_PREFIXES = [
   "cold_start",
   "reasoner_disabled",
   "reasoner_consulted",
+  // Arrives as `escalation_suggested:<reason>` — a purely-internal thin/conflicted-evidence
+  // signal (like reasoner_consulted). Surfacing the raw string spills a long unbreakable token
+  // past the bordered turn cell; the reference Python harness treats it as inline-only too.
+  "escalation_suggested",
   "recall_timeout",
   "prices_stale",
   "thompson_pick",

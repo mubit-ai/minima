@@ -1,0 +1,12 @@
+{
+  "id": "ka-001",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement the to_roman(value) function in py/roman.py. It converts an integer to an uppercase Roman numeral using standard subtractive notation (IV, IX, XL, XC, CD, CM), so 1994 becomes MCMXCIV and 49 becomes XLIX. One twist: zero is representable and returns the medieval nulla symbol \"N\". Accept only int values from 0 through 3999 inclusive; raise ValueError for floats, negatives, or anything above 3999. Verify with python3 -m pytest -q tests/py/test_roman*.py.",
+  "test_cmd": "python3 -m pytest -q tests/py/test_roman*.py",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 16,
+  "timeout_sec": 60
+}

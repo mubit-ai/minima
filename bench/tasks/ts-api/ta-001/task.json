@@ -1,0 +1,12 @@
+{
+  "id": "ta-001",
+  "repo": "ts-api",
+  "category": "feature",
+  "problem_statement": "Our dashboard currently has to stitch together three separate API calls just to render its little summary card, which is slow and racy. Please add a single overview endpoint to the service: GET /api/stats/overview should behave like the other stats routes with respect to authentication (it must return 401 when no valid token is presented and it requires the read scope) and on success respond 200 with a JSON body of exactly this shape: {\"links\": <number of stored links>, \"notes\": <number of stored notes>, \"totalClicks\": <sum of all recorded link clicks>}. On a completely fresh instance all three numbers should be 0. The data needed already exists in the store; no new bookkeeping should be required.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 12,
+  "timeout_sec": 120
+}
