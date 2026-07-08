@@ -439,17 +439,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
   // React state without the TUI needing to exist at createSpawn time.
   const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
+  const spawnFactory = createSpawn({
+    parent: agent,
+    workdir: process.cwd(),
+    onChildEvent: (e) => childEventRef.handler?.(e),
+  });
   agent.agentState.tools.push(
     taskTool({
-      spawn: createSpawn({
-        parent: agent,
-        workdir: process.cwd(),
-        onChildEvent: (e) => childEventRef.handler?.(e),
-      }),
+      spawn: spawnFactory,
       spawnDepth: 0,
       maxDepth: 2,
     }),
   );
+
+  // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
+  const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();
 
   // The `question` tool lets the model ask the user a structured clarifying question mid-run.
   // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
@@ -530,6 +534,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       askUserRef,
       childEventRef,
       fullscreen: args.fullscreen,
+      planSpawn: spawnFactory,
+      planMetaModel,
     }),
     { exitOnCtrlC: false },
   );
