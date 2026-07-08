@@ -21,6 +21,7 @@ import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
+import { groundTruthAfterToolCall } from "../minima/ground_truth.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
@@ -418,6 +419,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     sink = attachDbSink(agent, db, { runId });
+    // Ground-Truth ledger (M1.1/M2.1/M2.2): after each tool call, keep the SQLite plan of
+    // record in step with what the agent actually did — upsert the plan from todowrite and
+    // attribute file writes as on_plan/off_plan changes. Off unless MINIMA_TUI_GROUND_TRUTH=1.
+    // The sink is fail-open (reads live agent.db/agent.runId; swallows its own errors) and uses
+    // the free afterToolCall hook — the event persistence sink above rides agent.subscribe().
+    if (config.groundTruth) {
+      agent.setAfterToolCall(groundTruthAfterToolCall(agent));
+    }
   } catch (exc) {
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;

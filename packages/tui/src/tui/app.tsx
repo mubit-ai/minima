@@ -155,6 +155,7 @@ const COMMANDS = [
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (read-only)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+  { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
 ];
 
 export interface CommandPickerProps {
@@ -1925,6 +1926,45 @@ export function HarnessApp({
             ]);
           }
         }
+        break;
+      }
+      case "gt": {
+        const on = agent.config.groundTruth === true;
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: on
+              ? `Ground-Truth: ON (MINIMA_TUI_GROUND_TRUTH=1) — run ${agent.runId ?? "?"}`
+              : "Ground-Truth: OFF — set MINIMA_TUI_GROUND_TRUTH=1 to enable",
+            toolName: "gt",
+          },
+        ]);
+        break;
+      }
+      case "gt-seed": {
+        let text: string;
+        if (agent.config.groundTruth !== true) {
+          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 before seeding.";
+        } else if (!agent.db || !agent.runId) {
+          text = "No DB / run available to seed.";
+        } else {
+          const { planId, stepIds } = agent.db.upsertPlanFromTodos(
+            agent.runId,
+            [
+              { content: "Seed step one", status: "in_progress" },
+              { content: "Seed step two", status: "pending" },
+            ],
+            "Ground-Truth seed plan",
+          );
+          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}.`;
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text, toolName: "gt" },
+        ]);
         break;
       }
       default:

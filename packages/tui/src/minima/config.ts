@@ -42,6 +42,9 @@ export interface HarnessConfig {
   allowOffline: boolean;
   cacheEnabled: boolean;
   cacheThreshold: number;
+  /** Ground-Truth ledger (staged, default OFF): persist/project the plan, attribute file
+   * changes, and record verification gates. Gated by MINIMA_TUI_GROUND_TRUTH=1. */
+  groundTruth: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -60,6 +63,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     allowOffline: true,
     cacheEnabled: false,
     cacheThreshold: 0.95,
+    groundTruth: false,
     ...overrides,
   };
 }
@@ -73,6 +77,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const t = Number(timeoutEnv);
     if (Number.isFinite(t)) cfg.timeout = t;
   }
+  cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH === "1";
   return { ...cfg, ...overrides };
 }
 

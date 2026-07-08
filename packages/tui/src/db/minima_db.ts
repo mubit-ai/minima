@@ -127,6 +127,71 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN reinforced_entry_ids TEXT",
     "ALTER TABLE routing_decisions ADD COLUMN lesson_promoted INTEGER",
   ],
+  // v3 — Ground-Truth ledger: the plan + its steps (behind MINIMA_TUI_GROUND_TRUTH).
+  // `verify` (M3.1) and `baseline` (M3.3) are carried from the start so the red→green
+  // machinery can fill them without another migration.
+  [
+    `CREATE TABLE IF NOT EXISTS plans (
+       id         TEXT PRIMARY KEY,
+       session_id TEXT,              -- the run this plan belongs to (runs.run_id)
+       title      TEXT,
+       status     TEXT,              -- active|done
+       created_at TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_plans_session ON plans(session_id, created_at)",
+    `CREATE TABLE IF NOT EXISTS plan_steps (
+       id         TEXT PRIMARY KEY,
+       plan_id    TEXT NOT NULL REFERENCES plans(id),
+       idx        INTEGER NOT NULL,  -- 0-based position within the plan
+       content    TEXT,
+       status     TEXT,              -- pending|in_progress|completed
+       verify     TEXT,              -- M3.1: proposed check command (NULL until attached)
+       baseline   TEXT,              -- M3.3: red|green|unrunnable (NULL until captured)
+       created_at TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_plan_steps_plan ON plan_steps(plan_id, idx)",
+  ],
+  // v4 — file_changes: every agent write/edit attributed to the in-progress step, with a
+  // drift marker (origin) when the path was not claimed by that step.
+  [
+    `CREATE TABLE IF NOT EXISTS file_changes (
+       id         TEXT PRIMARY KEY,
+       plan_id    TEXT NOT NULL REFERENCES plans(id),
+       step_id    TEXT REFERENCES plan_steps(id),  -- NULL when no step is in progress
+       path       TEXT NOT NULL,
+       kind       TEXT,              -- created|modified|deleted
+       origin     TEXT,              -- on_plan|off_plan (drift)
+       created_at TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_file_changes_plan ON file_changes(plan_id, created_at)",
+  ],
+  // v5 — verification records: gate rows, user overrides, and the grounded outcome stamped
+  // back onto the routing decision (distinct GT columns so they never clobber the
+  // judge/feedback `outcome`/`confidence`).
+  [
+    `CREATE TABLE IF NOT EXISTS gates (
+       id           TEXT PRIMARY KEY,
+       plan_id      TEXT REFERENCES plans(id),
+       step_id      TEXT REFERENCES plan_steps(id),
+       kind         TEXT,            -- step_check|milestone
+       outcome      TEXT,            -- verified|failed|unrunnable
+       confidence   TEXT,            -- green|yellow|red (NULL until computed)
+       verified_by  TEXT,            -- deterministic|judge|user
+       factors_json TEXT,            -- JSON of the raw factors
+       created_at   TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_gates_plan ON gates(plan_id, created_at)",
+    `CREATE TABLE IF NOT EXISTS user_signals (
+       id      TEXT PRIMARY KEY,
+       gate_id TEXT REFERENCES gates(id),
+       action  TEXT,                 -- accept|reject|steer
+       at      TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_user_signals_gate ON user_signals(gate_id, at)",
+    "ALTER TABLE routing_decisions ADD COLUMN gt_outcome TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN gt_verified_by TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN gt_confidence TEXT",
+  ],
 ];
 
 export interface RunRow {
@@ -181,6 +246,55 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
+}
+
+// ---------------------------------------------------------------- ground-truth rows
+export interface PlanRow {
+  id: string;
+  session_id: string | null;
+  title: string | null;
+  status: string | null;
+  created_at: string | null;
+}
+
+export interface PlanStepRow {
+  id: string;
+  plan_id: string;
+  idx: number;
+  content: string | null;
+  status: string | null;
+  verify: string | null;
+  baseline: string | null;
+  created_at: string | null;
+}
+
+export interface FileChangeRow {
+  id: string;
+  plan_id: string;
+  step_id: string | null;
+  path: string;
+  kind: string | null;
+  origin: string | null;
+  created_at: string | null;
+}
+
+export interface GateRow {
+  id: string;
+  plan_id: string | null;
+  step_id: string | null;
+  kind: string | null;
+  outcome: string | null;
+  confidence: string | null;
+  verified_by: string | null;
+  factors_json: string | null;
+  created_at: string | null;
+}
+
+/** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
+export interface TodoInput {
+  content: string;
+  status: string;
+  verify?: string | null;
 }
 
 export class MinimaDb {
@@ -434,6 +548,238 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM routing_decisions WHERE run_id = ? ORDER BY ts")
       .all(runId) as Record<string, unknown>[];
+  }
+
+  // ================================================================ ground-truth ledger
+  // Writers/readers behind MINIMA_TUI_GROUND_TRUTH. Fail-open at the call site (a broken
+  // write must never break a turn); these throw only on genuine DB errors.
+
+  /** M0.2: create a plan row. Returns its id. */
+  insertPlan(opts: {
+    id?: string;
+    sessionId?: string | null;
+    title?: string | null;
+    status?: string;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run("INSERT INTO plans (id, session_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)", [
+      id,
+      opts.sessionId ?? null,
+      opts.title ?? null,
+      opts.status ?? "active",
+      new Date().toISOString(),
+    ]);
+    return id;
+  }
+
+  /** The newest still-active plan for a session (run), or null. */
+  getActivePlan(sessionId: string): PlanRow | null {
+    return (
+      (this.db
+        .query(
+          "SELECT * FROM plans WHERE session_id = ? AND status = 'active' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        )
+        .get(sessionId) as PlanRow) ?? null
+    );
+  }
+
+  getPlan(planId: string): PlanRow | null {
+    return (this.db.query("SELECT * FROM plans WHERE id = ?").get(planId) as PlanRow) ?? null;
+  }
+
+  setPlanStatus(planId: string, status: string): void {
+    this.db.run("UPDATE plans SET status = ? WHERE id = ?", [status, planId]);
+  }
+
+  /** M0.3: insert one step. Returns its id. */
+  insertStep(opts: {
+    id?: string;
+    planId: string;
+    idx: number;
+    content?: string | null;
+    status?: string;
+    verify?: string | null;
+    baseline?: string | null;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.planId,
+        opts.idx,
+        opts.content ?? null,
+        opts.status ?? "pending",
+        opts.verify ?? null,
+        opts.baseline ?? null,
+        new Date().toISOString(),
+      ],
+    );
+    return id;
+  }
+
+  getPlanSteps(planId: string): PlanStepRow[] {
+    return this.db
+      .query("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY idx")
+      .all(planId) as PlanStepRow[];
+  }
+
+  /** The first in-progress step of a plan (the one file changes attribute to), or null. */
+  getInProgressStep(planId: string): PlanStepRow | null {
+    return (
+      (this.db
+        .query("SELECT * FROM plan_steps WHERE plan_id = ? AND status = 'in_progress' ORDER BY idx LIMIT 1")
+        .get(planId) as PlanStepRow) ?? null
+    );
+  }
+
+  setStepStatus(stepId: string, status: string): void {
+    this.db.run("UPDATE plan_steps SET status = ? WHERE id = ?", [status, stepId]);
+  }
+
+  /** M3.3: record the pre-work baseline (red|green|unrunnable) for a step. */
+  setStepBaseline(stepId: string, baseline: string): void {
+    this.db.run("UPDATE plan_steps SET baseline = ? WHERE id = ?", [baseline, stepId]);
+  }
+
+  /**
+   * M1.1: upsert the agent's todo list as a plan + steps for `sessionId`. Reuses the active
+   * plan (once per task) and matches steps by `idx`, so step ids stay stable across
+   * todowrite calls (file_changes / baselines keep pointing at the same step). Trailing
+   * steps are dropped when the list shrinks. A step's `verify` is preserved unless a new
+   * value is supplied.
+   */
+  upsertPlanFromTodos(
+    sessionId: string,
+    tasks: TodoInput[],
+    title?: string | null,
+  ): { planId: string; stepIds: string[] } {
+    const existingPlan = this.getActivePlan(sessionId);
+    const planId =
+      existingPlan?.id ??
+      this.insertPlan({ sessionId, title: title ?? tasks[0]?.content ?? null, status: "active" });
+    const byIdx = new Map(this.getPlanSteps(planId).map((s) => [s.idx, s]));
+    const stepIds: string[] = [];
+    const tx = this.db.transaction(() => {
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i]!;
+        const prev = byIdx.get(i);
+        if (prev) {
+          this.db.run("UPDATE plan_steps SET content = ?, status = ?, verify = COALESCE(?, verify) WHERE id = ?", [
+            t.content,
+            t.status,
+            t.verify ?? null,
+            prev.id,
+          ]);
+          stepIds.push(prev.id);
+        } else {
+          stepIds.push(
+            this.insertStep({ planId, idx: i, content: t.content, status: t.status, verify: t.verify ?? null }),
+          );
+        }
+      }
+      this.db.run("DELETE FROM plan_steps WHERE plan_id = ? AND idx >= ?", [planId, tasks.length]);
+    });
+    tx();
+    return { planId, stepIds };
+  }
+
+  // ---------------------------------------------------------------- file changes (M2.1/M2.2)
+  insertFileChange(opts: {
+    id?: string;
+    planId: string;
+    stepId?: string | null;
+    path: string;
+    kind?: string | null;
+    origin?: string | null;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      "INSERT INTO file_changes (id, plan_id, step_id, path, kind, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.planId,
+        opts.stepId ?? null,
+        opts.path,
+        opts.kind ?? null,
+        opts.origin ?? null,
+        new Date().toISOString(),
+      ],
+    );
+    return id;
+  }
+
+  getFileChanges(planId: string): FileChangeRow[] {
+    return this.db
+      .query("SELECT * FROM file_changes WHERE plan_id = ? ORDER BY created_at, rowid")
+      .all(planId) as FileChangeRow[];
+  }
+
+  /** M2.3: how many off-plan (drift) file changes exist for a plan. */
+  countOffPlanChanges(planId: string): number {
+    const row = this.db
+      .query("SELECT count(*) AS n FROM file_changes WHERE plan_id = ? AND origin = 'off_plan'")
+      .get(planId) as { n: number };
+    return row.n;
+  }
+
+  // ---------------------------------------------------------------- gates / signals (M4.3/M6.3)
+  insertGate(opts: {
+    id?: string;
+    planId?: string | null;
+    stepId?: string | null;
+    kind?: string;
+    outcome?: string;
+    confidence?: string | null;
+    verifiedBy?: string | null;
+    factors?: unknown;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      "INSERT INTO gates (id, plan_id, step_id, kind, outcome, confidence, verified_by, factors_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.planId ?? null,
+        opts.stepId ?? null,
+        opts.kind ?? "step_check",
+        opts.outcome ?? null,
+        opts.confidence ?? null,
+        opts.verifiedBy ?? null,
+        opts.factors === undefined ? null : JSON.stringify(opts.factors),
+        new Date().toISOString(),
+      ],
+    );
+    return id;
+  }
+
+  getGates(planId: string): GateRow[] {
+    return this.db
+      .query("SELECT * FROM gates WHERE plan_id = ? ORDER BY created_at, rowid")
+      .all(planId) as GateRow[];
+  }
+
+  /** M6.3: record a user override against a gate (accept|reject|steer). */
+  recordUserSignal(gateId: string, action: string): string {
+    const id = newId();
+    this.db.run("INSERT INTO user_signals (id, gate_id, action, at) VALUES (?, ?, ?, ?)", [
+      id,
+      gateId,
+      action,
+      new Date().toISOString(),
+    ]);
+    return id;
+  }
+
+  // ---------------------------------------------------------------- grounded outcome (M7.1)
+  /** Stamp the step's real (deterministic) result onto its routing decision. */
+  attachGroundedOutcome(
+    recId: string,
+    o: { outcome: string; verifiedBy: string; confidence?: string | null },
+  ): void {
+    this.db.run(
+      "UPDATE routing_decisions SET gt_outcome = ?, gt_verified_by = ?, gt_confidence = ? WHERE rec_id = ?",
+      [o.outcome, o.verifiedBy, o.confidence ?? null, recId],
+    );
   }
 
   close(): void {
