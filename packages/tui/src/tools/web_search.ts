@@ -8,10 +8,41 @@
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
+import { attr, resolveHref, textFromHtml } from "./_ddg.ts";
 import { WebSearchError, searchWeb } from "./_search.ts";
 import { objectSchema } from "./schema.ts";
 
 const DEFAULT_RESULTS = 5;
+
+/** A parsed DuckDuckGo HTML SERP hit: a title/url pair with its snippet. */
+export interface ParsedResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/**
+ * Parse a DuckDuckGo HTML SERP into `{ title, url, snippet }` hits. Each result is a
+ * `result__a` anchor (title text + a `/l/?uddg=` redirect href we unwrap) paired with the
+ * following `result__snippet` anchor. Best-effort regex scan; stops at `limit`.
+ */
+export function parseResults(html: string, limit: number): ParsedResult[] {
+  const out: ParsedResult[] = [];
+  let pending: { title: string; url: string } | null = null;
+  const anchor = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const m of html.matchAll(anchor)) {
+    if (out.length >= limit) break;
+    const cls = attr(m[1]!, "class") ?? "";
+    if (/\bresult__a\b/i.test(cls)) {
+      const href = attr(m[1]!, "href");
+      pending = href ? { title: textFromHtml(m[2]!), url: resolveHref(href) } : null;
+    } else if (/\bresult__snippet\b/i.test(cls) && pending) {
+      out.push({ title: pending.title, url: pending.url, snippet: textFromHtml(m[2]!) });
+      pending = null;
+    }
+  }
+  return out;
+}
 
 const parameters = objectSchema(
   {
