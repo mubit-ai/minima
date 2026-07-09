@@ -1,9 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   type CouncilRoundResult,
+  type GroundTruthSynthesis,
   PlanSessionStore,
   buildPlannerSystemPrompt,
 } from "../src/minima/plan_session.ts";
+
+const synth = (over: Partial<GroundTruthSynthesis> = {}): GroundTruthSynthesis => ({
+  title: "",
+  goal: "",
+  overview: "",
+  requirements: [],
+  constraints: [],
+  decisions: [],
+  approach: [],
+  risks: [],
+  successCriteria: [],
+  openItems: [],
+  ...over,
+});
 
 const emptyResult = (over: Partial<CouncilRoundResult> = {}): CouncilRoundResult => ({
   draftDelta: "",
@@ -206,6 +221,41 @@ describe("PlanSessionStore.toMarkdown", () => {
     expect(md).toContain("User prefers TypeScript");
   });
 
+  test("renders the council's own-words title and goal restatement over the raw input", () => {
+    const store = new PlanSessionStore("hello plan me somehing useless (i need to test you)");
+    store.applyCouncilResult(
+      emptyResult({
+        title: "Throwaway test plan",
+        refinedGoal: "Produce a minimal, low-effort plan to exercise the planning council.",
+        draftDelta: "Do a trivial thing.",
+      }),
+    );
+    const md = store.toMarkdown();
+
+    expect(md).toContain("# Ground Truth: Throwaway test plan");
+    expect(md).toContain(
+      "## Goal\n\nProduce a minimal, low-effort plan to exercise the planning council.",
+    );
+    // The raw user input is NOT echoed as the title/goal.
+    expect(md).not.toContain("somehing useless");
+  });
+
+  test("first council round's title/goal wins and stays stable across later rounds", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(emptyResult({ title: "First title", refinedGoal: "First goal." }));
+    store.applyCouncilResult(emptyResult({ title: "Second title", refinedGoal: "Second goal." }));
+    expect(store.session.title).toBe("First title");
+    expect(store.session.refinedGoal).toBe("First goal.");
+  });
+
+  test("falls back to the raw goal when the council supplies no title/goal", () => {
+    const store = new PlanSessionStore("Add rate limiting");
+    store.applyCouncilResult(emptyResult({ draftDelta: "some plan" }));
+    const md = store.toMarkdown();
+    expect(md).toContain("# Ground Truth: Add rate limiting");
+    expect(md).toContain("## Goal\n\nAdd rate limiting");
+  });
+
   test("answered questions drop out of the Open Questions section", () => {
     const store = new PlanSessionStore("g");
     store.addSurfacedQuestions(
@@ -273,5 +323,70 @@ describe("PlanSessionStore.hasSubstance", () => {
       emptyResult({ decisions: [{ topic: "t", decision: "d", rationale: "r" }] }),
     );
     expect(withDecision.hasSubstance()).toBe(true);
+  });
+});
+
+describe("PlanSessionStore.toGroundTruth", () => {
+  test("renders a rich, detailed doc from an LLM synthesis (even with zero council rounds)", () => {
+    const store = new PlanSessionStore("lets build binary searches");
+    const md = store.toGroundTruth(
+      synth({
+        title: "Binary search library in Python",
+        goal: "Implement iterative and recursive binary search over sorted lists in Python.",
+        overview: "A small, dependency-free Python module with a clean public API and tests.",
+        requirements: ["Return the index of the target or -1", "Support any comparable element type"],
+        constraints: ["Language: Python 3", "No third-party dependencies"],
+        decisions: [
+          { topic: "Language", decision: "Python 3", rationale: "user asked for Python" },
+        ],
+        approach: ["Create binary_search.py", "Implement bisect-style search", "Add pytest cases"],
+        risks: ["Off-by-one on the midpoint", "Unsorted input is undefined behavior"],
+        successCriteria: ["All pytest cases pass"],
+        openItems: [],
+      }),
+    );
+
+    expect(md).toContain("# Ground Truth: Binary search library in Python");
+    // Zero rounds → the header does NOT claim rounds/cost.
+    expect(md).toContain("from the planning conversation");
+    expect(md).not.toContain("0 rounds");
+    expect(md).toContain("## Goal\n\nImplement iterative and recursive binary search");
+    expect(md).toContain("## Overview");
+    expect(md).toContain("## Requirements");
+    expect(md).toContain("- Return the index of the target or -1");
+    expect(md).toContain("## Constraints");
+    expect(md).toContain("- Language: Python 3");
+    expect(md).toContain("### Language");
+    expect(md).toContain("**Decision:** Python 3");
+    expect(md).toContain("## Implementation Plan");
+    // Ordered, numbered steps.
+    expect(md).toContain("1. Create binary_search.py");
+    expect(md).toContain("3. Add pytest cases");
+    expect(md).toContain("## Risks & Edge Cases");
+    expect(md).toContain("## Success Criteria");
+    // Empty sections are omitted, not rendered as "_None_".
+    expect(md).not.toContain("Deferred / Open Items");
+    expect(md).not.toContain("_None recorded._");
+  });
+
+  test("uses council-accumulated constraints/decisions as a floor when the synthesis omits them", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(
+      emptyResult({
+        constraints: ["must stay offline"],
+        decisions: [{ topic: "Store", decision: "SQLite", rationale: "embedded" }],
+      }),
+    );
+    // Synthesis provides prose but no constraints/decisions → fall back to session state.
+    const md = store.toGroundTruth(synth({ title: "T", goal: "do the thing", approach: ["step"] }));
+    expect(md).toContain("- must stay offline");
+    expect(md).toContain("### Store");
+    expect(md).toContain("**Decision:** SQLite");
+  });
+
+  test("falls back to deterministic toMarkdown() when there is no synthesis", () => {
+    const store = new PlanSessionStore("Build a widget");
+    store.applyCouncilResult(emptyResult({ draftDelta: "Do the widget." }));
+    expect(store.toGroundTruth(null)).toBe(store.toMarkdown());
   });
 });

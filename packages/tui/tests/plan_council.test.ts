@@ -13,8 +13,10 @@ import {
 import {
   type CouncilOptions,
   Critic,
+  answerOpenQuestions,
   runCouncilRound,
   shouldConveneCouncil,
+  synthesizeGroundTruth,
 } from "../src/minima/plan_council.ts";
 import { PlanSessionStore } from "../src/minima/plan_session.ts";
 import type { ChildResult, Delegation, SpawnFn } from "../src/tools/task.ts";
@@ -254,5 +256,141 @@ describe("Critic.attack", () => {
     const faults = await critic.attack("goal", "the approach", "the findings");
     expect(faults).toHaveLength(1);
     expect(faults[0]).toEqual({ summary: "unstated assumption about auth", severity: "blocker" });
+  });
+});
+
+describe("answerOpenQuestions", () => {
+  test("accepts each question's recommended (first) option as assumed-true, with NO model call", async () => {
+    const store = new PlanSessionStore("build a thing");
+    store.addSurfacedQuestions(
+      [
+        {
+          question: "Which store?",
+          header: "h",
+          why: "affects deps",
+          options: [
+            { label: "SQLite (Recommended)", description: "embedded" },
+            { label: "Postgres", description: "server" },
+          ],
+        },
+      ],
+      1,
+    );
+    const resolved = await answerOpenQuestions(store.session, { metaModel: META_MODEL });
+    expect(resolved).toEqual([
+      {
+        question: "Which store?",
+        answer: "SQLite (Recommended)",
+        rationale: "assumed accepted (recommended option) at finalize",
+      },
+    ]);
+    // The recommended option is taken verbatim — the model is never consulted.
+    expect(reg.state.callCount).toBe(0);
+  });
+
+  test("mixes recommended-option acceptance with a model call only for option-less questions", async () => {
+    reg.setResponses([json([{ answer: "Ship without auth", rationale: "internal tool" }])]);
+    const store = new PlanSessionStore("build a thing");
+    store.addSurfacedQuestions(
+      [
+        { question: "Which store?", header: "h", why: "", options: [{ label: "SQLite" }] },
+        { question: "Auth?", header: "h", why: "security", options: [] },
+      ],
+      1,
+    );
+    const resolved = await answerOpenQuestions(store.session, { metaModel: META_MODEL });
+    // Order is preserved; option-bearing question accepted verbatim, option-less answered by model.
+    expect(resolved[0]!.answer).toBe("SQLite");
+    expect(resolved[1]!.answer).toBe("Ship without auth");
+    // Exactly ONE model call — only the option-less question needed it.
+    expect(reg.state.callCount).toBe(1);
+  });
+
+  test("resolves each option-less question positionally with the model's answer + rationale", async () => {
+    reg.setResponses([
+      json([
+        { answer: "Use the embedded SQLite store", rationale: "already a dependency" },
+        { answer: "Ship without auth for now", rationale: "internal tool" },
+      ]),
+    ]);
+    const store = new PlanSessionStore("build a thing");
+    store.addSurfacedQuestions(
+      [
+        { question: "Which store?", header: "h", options: [], why: "affects deps" },
+        { question: "Auth?", header: "h", options: [], why: "security" },
+      ],
+      1,
+    );
+    const resolved = await answerOpenQuestions(store.session, { metaModel: META_MODEL });
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]).toEqual({
+      question: "Which store?",
+      answer: "Use the embedded SQLite store",
+      rationale: "already a dependency",
+    });
+    expect(resolved[1]!.answer).toBe("Ship without auth for now");
+    expect(reg.state.callCount).toBe(1);
+  });
+
+  test("returns [] and makes NO model call when nothing is open", async () => {
+    const store = new PlanSessionStore("g");
+    const resolved = await answerOpenQuestions(store.session, { metaModel: META_MODEL });
+    expect(resolved).toHaveLength(0);
+    expect(reg.state.callCount).toBe(0);
+  });
+
+  test("falls back to a reasonable default when the model under-answers", async () => {
+    reg.setResponses([json([])]); // model returned nothing usable
+    const store = new PlanSessionStore("g");
+    store.addSurfacedQuestions([{ question: "Q1?", header: "h", options: [], why: "" }], 1);
+    const resolved = await answerOpenQuestions(store.session, { metaModel: META_MODEL });
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.question).toBe("Q1?");
+    expect(resolved[0]!.answer.length).toBeGreaterThan(0);
+    expect(resolved[0]!.rationale).toBe("assumed accepted at finalize");
+  });
+});
+
+describe("synthesizeGroundTruth", () => {
+  test("distils the conversation into a rich structured ground truth", async () => {
+    reg.setResponses([
+      json({
+        title: "Binary search in Python",
+        goal: "Implement binary search over sorted lists in Python.",
+        overview: "A small dependency-free module with tests.",
+        requirements: ["Return index or -1"],
+        constraints: ["Python 3", "no third-party deps"],
+        decisions: [{ topic: "Language", decision: "Python 3", rationale: "user asked" }],
+        approach: ["Write binary_search.py", "Add pytest cases"],
+        risks: ["off-by-one on midpoint"],
+        successCriteria: ["pytest passes"],
+        openItems: [],
+      }),
+    ]);
+    const store = new PlanSessionStore("lets build binary searches");
+    const result = await synthesizeGroundTruth(
+      store.session,
+      "User: lets build binary searches\n\nPlanner: which language?\n\nUser: python",
+      { metaModel: META_MODEL },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.title).toBe("Binary search in Python");
+    expect(result!.constraints).toContain("Python 3");
+    expect(result!.approach).toEqual(["Write binary_search.py", "Add pytest cases"]);
+    expect(reg.state.callCount).toBe(1);
+  });
+
+  test("returns null on an essentially-empty model reply so finalize falls back", async () => {
+    reg.setResponses([json({})]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: hi", { metaModel: META_MODEL });
+    expect(result).toBeNull();
+  });
+
+  test("returns null (never throws) when the model errors", async () => {
+    reg.setResponses([msg("not json at all — total garbage")]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: hi", { metaModel: META_MODEL });
+    expect(result).toBeNull();
   });
 });

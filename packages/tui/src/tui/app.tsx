@@ -22,9 +22,11 @@ import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
   PlanSessionStore,
   type RoutingResult,
+  answerOpenQuestions,
   buildPlannerSystemPrompt,
   runCouncilRound,
   shouldConveneCouncil,
+  synthesizeGroundTruth,
 } from "../minima/index.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
@@ -91,7 +93,7 @@ const PLANNER_PERSONA =
   "constraints, and open questions — the current ground-truth snapshot injected below is " +
   "authoritative; reason from it. Ask sharp clarifying questions only when a genuine decision-point " +
   "is unresolved, and keep the draft plan tight and actionable. When it is solid, tell the user to " +
-  "run /plan finalize to review the ground-truth document.";
+  "run /plan finalize to write the ground-truth document to the project root.";
 
 /** True when at least one key-requiring model provider has its key set. */
 function anyProviderKeyPresent(): boolean {
@@ -175,7 +177,7 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
-  { name: "plan", desc: "Plan mode + design council (start·status·finalize·approve·cancel)" },
+  { name: "plan", desc: "Plan mode + design council (start·status·finalize·cancel)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
@@ -767,12 +769,10 @@ export function HarnessApp({
   const [planMode, setPlanMode] = useState(false);
   const planModeRef = useRef(false);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
-  // ground-truth .md written on /plan approve.
+  // ground-truth .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
   const plannerBaseSystemPromptRef = useRef<string | null>(null);
   const councilControllerRef = useRef<AbortController | null>(null);
-  const planDraftRef = useRef<string | null>(null);
-  const [awaitingPlanApproval, setAwaitingPlanApproval] = useState(false);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
   useEffect(() => {
@@ -1497,14 +1497,10 @@ export function HarnessApp({
           planSessionRef.current = new PlanSessionStore(goal);
           plannerBaseSystemPromptRef.current = agent.agentState.systemPrompt ?? "";
           agent.agentState.systemPrompt = PLANNER_PERSONA;
-          setAwaitingPlanApproval(false);
-          planDraftRef.current = null;
         };
         const exitPlanMode = () => {
           setPlanMode(false);
           planSessionRef.current = null;
-          planDraftRef.current = null;
-          setAwaitingPlanApproval(false);
           councilControllerRef.current?.abort();
           councilControllerRef.current = null;
           if (plannerBaseSystemPromptRef.current != null) {
@@ -1519,8 +1515,8 @@ export function HarnessApp({
             enterPlanMode("");
             pushPlan(
               "Plan mode ON — read-only (write/edit/bash blocked). Talk through the plan; the " +
-                "design council convenes on substantive turns. /plan status · /plan finalize · " +
-                "/plan approve · /plan cancel.",
+                "design council convenes on substantive turns. /plan finalize writes the " +
+                "ground truth to the project root. /plan status · /plan cancel.",
             );
           } else if (!next) {
             exitPlanMode();
@@ -1545,9 +1541,8 @@ export function HarnessApp({
             pushPlan("Not in plan mode. /plan start <goal> to begin.", true);
             break;
           }
-          const approvalNote = awaitingPlanApproval ? "\n(awaiting /plan approve)" : "";
           pushPlan(
-            `${store.summary()}\ncouncil cost: $${store.session.totalCouncilCostUsd.toFixed(4)}${approvalNote}`,
+            `${store.summary()}\ncouncil cost: $${store.session.totalCouncilCostUsd.toFixed(4)}`,
           );
           break;
         }
@@ -1558,46 +1553,65 @@ export function HarnessApp({
             pushPlan("Not in plan mode. /plan start <goal> to begin.", true);
             break;
           }
-          if (!store.hasSubstance()) {
-            pushPlan("Nothing to finalize yet — talk through the plan first.", true);
-            break;
+          const signal = councilControllerRef.current?.signal ?? null;
+          // Auto-resolve any lingering open questions with a reasonable default so the ground
+          // truth is complete and decisive. Fail-open: a flaky model just leaves them unanswered.
+          if (planMetaModel) {
+            try {
+              const resolved = await answerOpenQuestions(store.session, {
+                metaModel: planMetaModel,
+                signal,
+              });
+              for (const r of resolved) {
+                store.answerQuestion(r.question, r.answer, "council", r.rationale);
+              }
+            } catch {
+              // fail-open
+            }
           }
-          const md = store.toMarkdown();
-          planDraftRef.current = md;
-          setAwaitingPlanApproval(true);
-          setMessages((m) => [
-            ...m,
-            { role: "user", text: `/${name} ${args}`.trim() },
-            { role: "tool", text: md, toolName: "plan" },
-            {
-              role: "tool",
-              text: `Review the ground-truth above. /plan approve [path] to write it (default ${
-                rest || "GROUND_TRUTH.md"
-              }), or keep talking to refine.`,
-              toolName: "plan",
-            },
-          ]);
-          break;
-        }
-
-        if (sub === "approve") {
-          const store = planSessionRef.current;
-          const md = planDraftRef.current ?? (store?.hasSubstance() ? store.toMarkdown() : null);
-          if (!store || md == null) {
-            pushPlan("Nothing to approve — run /plan finalize first.", true);
-            break;
+          // Distil the WHOLE planning conversation (not just accumulated council state) into a
+          // detailed, structured ground truth. Fail-open: on any error the deterministic assembly
+          // (toGroundTruth(null) → toMarkdown()) is used instead so finalize always writes a doc.
+          let synth = null;
+          if (planMetaModel) {
+            const transcript = agent.agentState.messages
+              .filter((msg) => msg.role === "user" || msg.role === "assistant")
+              .map((msg) => {
+                const body = msg.textContent.trim();
+                return body ? `${msg.role === "user" ? "User" : "Planner"}: ${body}` : "";
+              })
+              .filter(Boolean)
+              .join("\n\n");
+            try {
+              synth = await synthesizeGroundTruth(store.session, transcript, {
+                metaModel: planMetaModel,
+                signal,
+              });
+            } catch {
+              // fail-open
+            }
           }
-          const outPath = `${process.cwd()}/${rest || "GROUND_TRUTH.md"}`;
+          const md = store.toGroundTruth(synth);
+          // Ground truth always lands in the project root; write DIRECTLY (not via the agent tool
+          // loop) so the read-only plan-mode block does not apply to the harness's own artifact.
+          const outPath = `${process.cwd()}/GROUND_TRUTH.md`;
           try {
-            // Write DIRECTLY (not via the agent tool loop) so the read-only plan-mode block
-            // does not apply to the harness's own durable artifact.
             await Bun.write(outPath, md);
           } catch (exc) {
             pushPlan(`Failed to write ${outPath}: ${errText(exc)}`, true);
             break;
           }
           exitPlanMode();
-          pushPlan(`Ground truth written: ${outPath}. Plan mode OFF — write access restored.`);
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            { role: "tool", text: md, toolName: "plan" },
+            {
+              role: "tool",
+              text: `Ground truth written: ${outPath}. Plan mode OFF — write access restored.`,
+              toolName: "plan",
+            },
+          ]);
           break;
         }
 
@@ -1609,7 +1623,7 @@ export function HarnessApp({
         }
 
         pushPlan(
-          `Unknown /plan subcommand: ${sub}. Use: (toggle) · start <goal> · status · finalize [path] · approve [path] · cancel.`,
+          `Unknown /plan subcommand: ${sub}. Use: (toggle) · start <goal> · status · finalize · cancel.`,
           true,
         );
         break;
@@ -2139,8 +2153,6 @@ export function HarnessApp({
   async function runPlanTurn(text: string) {
     const store = planSessionRef.current;
     if (!store) return;
-    setAwaitingPlanApproval(false);
-    planDraftRef.current = null;
     store.adoptGoalIfEmpty(text);
     store.recordUserTurn(text);
 

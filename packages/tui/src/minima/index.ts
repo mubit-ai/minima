@@ -38,7 +38,14 @@ export type {
   PlanFact,
   SurfacedQuestion,
   CouncilRoundResult,
+  GroundTruthSynthesis,
   PlanSession,
 } from "./plan_session.ts";
-export { runCouncilRound, Critic, shouldConveneCouncil } from "./plan_council.ts";
-export type { CouncilOptions, CouncilEvent } from "./plan_council.ts";
+export {
+  runCouncilRound,
+  answerOpenQuestions,
+  synthesizeGroundTruth,
+  Critic,
+  shouldConveneCouncil,
+} from "./plan_council.ts";
+export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_council.ts";

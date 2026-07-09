@@ -20,7 +20,13 @@ import { complete } from "../ai/stream.ts";
 import { Message, type Model } from "../ai/types.ts";
 import { type ChildResult, type Delegation, type SpawnFn, executeDag } from "../tools/task.ts";
 import { midTruncate } from "./judge.ts";
-import type { CouncilRoundResult, PlanSession, SurfacedQuestion } from "./plan_session.ts";
+import type {
+  CouncilRoundResult,
+  GroundTruthSynthesis,
+  OpenQuestion,
+  PlanSession,
+  SurfacedQuestion,
+} from "./plan_session.ts";
 import type { MinimaAgent } from "./runtime.ts";
 import { type ChildEvent, createSpawn } from "./spawn.ts";
 
@@ -208,7 +214,7 @@ const REVISE_SYSTEM = `You are the SYNTHESIST of a planning council revising a p
 
 const CRITIC_SYSTEM = `You are an adversarial CRITIC on a planning council. Attack the proposed approach: find concrete faults — unstated assumptions, missing steps, risks, contradictions with the findings, ways it fails. Be specific and terse; do not rewrite the plan. Reply with ONLY a JSON array of {"summary": "the fault, one line", "severity": "info|concern|blocker"}. If the approach is genuinely sound, return []. ${UNTRUSTED}`;
 
-const SYNTH_SYSTEM = `You are the RECORDER of a planning council. Turn the plan, findings, critic faults, and the user's latest message into a structured round result. RESOLVE trivial or self-answerable questions YOURSELF as decisions or facts; SURFACE only genuine decision-points that need the user's judgement (at most 2). Reply with ONLY a JSON object: {"draftDelta": "the plan prose to append (may be empty)", "decisions": [{"topic": "...", "decision": "...", "rationale": "..."}], "findings": [{"source": "researcher|critic|keeper", "summary": "...", "severity": "info|concern|blocker"}], "questions": [{"question": "...", "header": "short label", "options": [{"label": "...", "description": "..."}], "why": "why it matters"}], "facts": ["established fact"], "constraints": ["hard constraint"]}. Omit or empty any field with nothing to add. ${UNTRUSTED}`;
+const SYNTH_SYSTEM = `You are the RECORDER of a planning council. Turn the plan, findings, critic faults, and the user's latest message into a structured round result. RESOLVE trivial or self-answerable questions YOURSELF as decisions or facts; SURFACE only genuine decision-points that need the user's judgement (at most 2). Also write, IN YOUR OWN CONCISE WORDS (never a verbatim copy of the user's message), a short "title" (a noun phrase of at most 8 words naming what this plan achieves) and "goal" (one or two plain sentences restating the objective). Reply with ONLY a JSON object: {"title": "concise plan title", "goal": "concise goal restatement", "draftDelta": "the plan prose to append (may be empty)", "decisions": [{"topic": "...", "decision": "...", "rationale": "..."}], "findings": [{"source": "researcher|critic|keeper", "summary": "...", "severity": "info|concern|blocker"}], "questions": [{"question": "...", "header": "short label", "options": [{"label": "...", "description": "..."}], "why": "why it matters"}], "facts": ["established fact"], "constraints": ["hard constraint"]}. Omit or empty any field with nothing to add. ${UNTRUSTED}`;
 
 // --------------------------------------------------------------------- council stages
 
@@ -390,6 +396,8 @@ async function reviseDraft(
 }
 
 interface SynthOutput {
+  title: string;
+  goal: string;
   draftDelta: string;
   decisions: { topic: string; decision: string; rationale: string }[];
   findings: Finding[];
@@ -425,6 +433,8 @@ async function synthesize(
     { apiKey: opts.apiKey, signal: opts.signal },
   );
   return {
+    title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
+    goal: clip(asStr(raw.goal).replace(/\s+/g, " "), 400),
     draftDelta: asStr(raw.draftDelta),
     decisions: sanitizeDecisions(raw.decisions),
     findings: sanitizeFindings(raw.findings, "researcher"),
@@ -432,6 +442,164 @@ async function synthesize(
     facts: asStrList(raw.facts),
     constraints: asStrList(raw.constraints),
   };
+}
+
+/** Trim to `max` chars on a word boundary, appending an ellipsis when truncated. */
+function clip(s: string, max: number): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1).trimEnd()}…`;
+}
+
+const RESOLVE_SYSTEM = `You are the RECORDER of a planning council finalizing the ground-truth plan. The user has ACCEPTED the plan and its recommendations as-is — assume every open question resolves the way the plan already leans (its affirmative / recommended default). Resolve each question NOW with that assumed-true answer; never defer, hedge, or leave it open. Reply with ONLY a JSON array, one entry per question in the SAME ORDER given: {"answer": "the assumed-true answer, concise", "rationale": "one line why"}. ${UNTRUSTED}`;
+
+export interface ResolvedQuestion {
+  question: string;
+  answer: string;
+  rationale: string;
+}
+
+/**
+ * Resolve every open question on /plan finalize by ASSUMING the previous council question is
+ * answered in the affirmative: a question that carried options is accepted at its recommended
+ * (first) option verbatim — no model call. Only option-less questions consult the meta-model
+ * (positional, in order), and it too is told to assume the plan's recommended direction is true.
+ * Off the routing loop, fail-open — a flaky model yields a generic default so finalize never
+ * blocks. Returns [] when there is nothing open.
+ */
+export async function answerOpenQuestions(
+  session: PlanSession,
+  opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
+): Promise<ResolvedQuestion[]> {
+  const open = session.openQuestions.filter((q) => q.status === "open");
+  if (open.length === 0) return [];
+
+  const resolved = new Map<OpenQuestion, ResolvedQuestion>();
+  const needModel: OpenQuestion[] = [];
+  for (const q of open) {
+    const recommended = q.options?.find((o) => o.label.trim())?.label.trim();
+    if (recommended) {
+      resolved.set(q, {
+        question: q.question,
+        answer: recommended,
+        rationale: "assumed accepted (recommended option) at finalize",
+      });
+    } else {
+      needModel.push(q);
+    }
+  }
+
+  if (needModel.length > 0) {
+    const context = [
+      `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>`,
+      `<draft>\n${midTruncate(session.draft || "(empty)", 6000)}\n</draft>`,
+      session.decisions.length
+        ? `Decisions so far:\n${session.decisions.map((d) => `- ${d.topic}: ${d.decision}`).join("\n")}`
+        : "",
+      `Open questions to resolve (answer each, in order):\n${needModel
+        .map((q, i) => `${i + 1}. ${q.question}${q.why ? ` — ${q.why}` : ""}`)
+        .join("\n")}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const raw = await completeJson<unknown>(opts.metaModel, RESOLVE_SYSTEM, context, [], {
+      apiKey: opts.apiKey,
+      signal: opts.signal,
+    });
+    const answers = asRecords(raw).map((r) => ({
+      answer: asStr(r.answer) || asStr(r.decision),
+      rationale: asStr(r.rationale),
+    }));
+    needModel.forEach((q, i) => {
+      resolved.set(q, {
+        question: q.question,
+        answer: answers[i]?.answer || "Proceed as proposed in the plan.",
+        rationale: answers[i]?.rationale || "assumed accepted at finalize",
+      });
+    });
+  }
+
+  return open.map((q) => resolved.get(q) as ResolvedQuestion);
+}
+
+const GROUND_TRUTH_SYSTEM = `You are the RECORDER of a planning council writing the FINAL, authoritative ground-truth specification for a coding task, distilled from the ENTIRE planning conversation plus the council's accumulated state. The user has ACCEPTED the plan — assume any open question resolves to its recommended/affirmative answer. Capture EVERY concrete detail the conversation established: language, runtime, libraries, file/module layout, data structures, algorithms, function/API shapes, naming, edge cases, and scope. Be specific, concrete, and thorough — an engineer should be able to implement from this alone. Ground every claim in the conversation or state; never fabricate requirements the user did not imply, but DO make reasonable, explicit engineering decisions where the conversation left a gap (and note them). Reply with ONLY a JSON object:
+{"title": "concise plan title, <=8 words, your own words",
+ "goal": "1-3 sentence restatement of the objective",
+ "overview": "1-3 short paragraphs describing the agreed approach",
+ "requirements": ["specific functional/behavioral requirement", "..."],
+ "constraints": ["hard constraint: language, runtime, no-deps, style, etc.", "..."],
+ "decisions": [{"topic": "short label", "decision": "what was decided", "rationale": "why"}],
+ "approach": ["ordered, detailed implementation step", "..."],
+ "risks": ["risk, edge case, or gotcha to handle", "..."],
+ "successCriteria": ["how to verify it is done / tests to pass", "..."],
+ "openItems": ["anything genuinely deferred — should be rare", "..."]}
+Fill every field as richly as the conversation supports; only leave a field empty when there is truly nothing to say. ${UNTRUSTED}`;
+
+/**
+ * Distil the whole planning conversation + accumulated council state into a detailed, structured
+ * ground-truth (rendered by PlanSessionStore.toGroundTruth). Off the routing loop. Returns null on
+ * any failure or an essentially-empty result, so /plan finalize falls back to deterministic
+ * assembly — it never blocks writing the doc.
+ */
+export async function synthesizeGroundTruth(
+  session: PlanSession,
+  transcript: string,
+  opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
+): Promise<GroundTruthSynthesis | null> {
+  const stateDigest = [
+    session.decisions.length
+      ? `Decisions:\n${session.decisions
+          .map((d) => `- ${d.topic}: ${d.decision}${d.rationale ? ` (${d.rationale})` : ""}`)
+          .join("\n")}`
+      : "",
+    session.constraints.length
+      ? `Constraints:\n${session.constraints.map((c) => `- ${c.text}`).join("\n")}`
+      : "",
+    session.findings.length
+      ? `Findings:\n${session.findings.map((f) => `- (${f.source}) ${f.summary}`).join("\n")}`
+      : "",
+    session.draft.trim() ? `Working draft:\n${session.draft.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const user = [
+    `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>`,
+    `<conversation>\n${midTruncate(transcript || "(no conversation captured)", 16000)}\n</conversation>`,
+    stateDigest ? `<state>\n${midTruncate(stateDigest, 6000)}\n</state>` : "",
+    "Write the final ground-truth specification now.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const raw = await completeJson<Record<string, unknown>>(
+    opts.metaModel,
+    GROUND_TRUTH_SYSTEM,
+    user,
+    {},
+    { apiKey: opts.apiKey, signal: opts.signal, timeout: 60 },
+  );
+  const synth: GroundTruthSynthesis = {
+    title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
+    goal: clip(asStr(raw.goal).replace(/\s+/g, " "), 600),
+    overview: asStr(raw.overview),
+    requirements: asStrList(raw.requirements),
+    constraints: asStrList(raw.constraints),
+    decisions: sanitizeDecisions(raw.decisions),
+    approach: asStrList(raw.approach),
+    risks: asStrList(raw.risks),
+    successCriteria: asStrList(raw.successCriteria),
+    openItems: asStrList(raw.openItems),
+  };
+  const isEmpty =
+    !synth.title &&
+    !synth.goal &&
+    !synth.overview &&
+    synth.requirements.length === 0 &&
+    synth.constraints.length === 0 &&
+    synth.decisions.length === 0 &&
+    synth.approach.length === 0;
+  return isEmpty ? null : synth;
 }
 
 // --------------------------------------------------------------------------- sanitizers
@@ -607,6 +775,8 @@ export async function runCouncilRound(
     emit("synth", "synthesizing decisions and questions");
     const synth = await synthesize(session, userTurn, draft, digest, keeperFindings, faults, opts);
 
+    result.title = synth.title;
+    result.refinedGoal = synth.goal;
     result.draftDelta = synth.draftDelta || draft.trim();
     result.decisions = synth.decisions;
     result.findings = [...synth.findings, ...keeperFindings];
