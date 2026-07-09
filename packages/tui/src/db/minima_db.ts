@@ -17,6 +17,14 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type {
+  Baseline,
+  ConfidenceTier,
+  GateKind,
+  GateOutcome,
+  UserAction,
+  VerifiedBy,
+} from "../minima/gt_contract.ts";
 
 export function defaultDbPath(): string {
   return process.env.MINIMA_DB_PATH?.trim() || join(homedir(), ".minima-harness", "minima.db");
@@ -264,7 +272,7 @@ export interface PlanStepRow {
   content: string | null;
   status: string | null;
   verify: string | null;
-  baseline: string | null;
+  baseline: Baseline | null;
   created_at: string | null;
 }
 
@@ -282,10 +290,10 @@ export interface GateRow {
   id: string;
   plan_id: string | null;
   step_id: string | null;
-  kind: string | null;
-  outcome: string | null;
-  confidence: string | null;
-  verified_by: string | null;
+  kind: GateKind | null;
+  outcome: GateOutcome | null;
+  confidence: ConfidenceTier | null;
+  verified_by: VerifiedBy | null;
   factors_json: string | null;
   created_at: string | null;
 }
@@ -599,7 +607,7 @@ export class MinimaDb {
     content?: string | null;
     status?: string;
     verify?: string | null;
-    baseline?: string | null;
+    baseline?: Baseline | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
@@ -638,7 +646,7 @@ export class MinimaDb {
   }
 
   /** M3.3: record the pre-work baseline (red|green|unrunnable) for a step. */
-  setStepBaseline(stepId: string, baseline: string): void {
+  setStepBaseline(stepId: string, baseline: Baseline): void {
     this.db.run("UPDATE plan_steps SET baseline = ? WHERE id = ?", [baseline, stepId]);
   }
 
@@ -728,10 +736,10 @@ export class MinimaDb {
     id?: string;
     planId?: string | null;
     stepId?: string | null;
-    kind?: string;
-    outcome?: string;
-    confidence?: string | null;
-    verifiedBy?: string | null;
+    kind?: GateKind;
+    outcome?: GateOutcome;
+    confidence?: ConfidenceTier | null;
+    verifiedBy?: VerifiedBy | null;
     factors?: unknown;
   }): string {
     const id = opts.id ?? newId();
@@ -759,7 +767,7 @@ export class MinimaDb {
   }
 
   /** M6.3: record a user override against a gate (accept|reject|steer). */
-  recordUserSignal(gateId: string, action: string): string {
+  recordUserSignal(gateId: string, action: UserAction): string {
     const id = newId();
     this.db.run("INSERT INTO user_signals (id, gate_id, action, at) VALUES (?, ?, ?, ?)", [
       id,
@@ -774,7 +782,7 @@ export class MinimaDb {
   /** Stamp the step's real (deterministic) result onto its routing decision. */
   attachGroundedOutcome(
     recId: string,
-    o: { outcome: string; verifiedBy: string; confidence?: string | null },
+    o: { outcome: GateOutcome; verifiedBy: VerifiedBy; confidence?: ConfidenceTier | null },
   ): void {
     this.db.run(
       "UPDATE routing_decisions SET gt_outcome = ?, gt_verified_by = ?, gt_confidence = ? WHERE rec_id = ?",
