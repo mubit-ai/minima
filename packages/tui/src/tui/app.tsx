@@ -20,6 +20,12 @@ import { errText } from "../errtext.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
+  type PlanStripInfo,
+  planStripDrift,
+  planStripInfo,
+  planStripLabel,
+} from "../minima/ground_truth.ts";
+import {
   PlanSessionStore,
   type RoutingResult,
   answerOpenQuestions,
@@ -769,6 +775,9 @@ export function HarnessApp({
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
   const planModeRef = useRef(false);
+  // Ground-Truth plan-of-record footer strip (M1.3/M2.3). Null when GT is off or there is no
+  // plan yet; refreshed from the DB on each tool_execution_end (todowrite → step, write → drift).
+  const [planStrip, setPlanStrip] = useState<PlanStripInfo | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
   // ground-truth .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
@@ -1007,10 +1016,30 @@ export function HarnessApp({
           break;
         case "tool_execution_end":
           setActiveActions((a) => reduceActiveActions(a, ev));
+          // Keep the GT footer strip in step with the ledger the afterToolCall sink just wrote:
+          // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
+          if (agent.config.groundTruth === true) {
+            try {
+              setPlanStrip(planStripInfo(agent.db, agent.runId));
+            } catch {
+              setPlanStrip(null);
+            }
+          }
           break;
       }
     });
     return unsub;
+  }, [agent]);
+
+  // GT footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
+  // already has a plan shows it immediately; tool_execution_end keeps it current thereafter.
+  useEffect(() => {
+    if (agent.config.groundTruth !== true) return;
+    try {
+      setPlanStrip(planStripInfo(agent.db, agent.runId));
+    } catch {
+      setPlanStrip(null);
+    }
   }, [agent]);
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
@@ -2342,7 +2371,7 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const footerHeight = 6 + (currentAction ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line
+  const footerHeight = 6 + (currentAction ? 1 : 0) + (planStrip ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -2639,6 +2668,16 @@ export function HarnessApp({
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold>
                 {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+              </Text>
+            </Box>
+          )}
+          {planStrip && (
+            <Box paddingX={1} width="100%">
+              <Text color="cyan" wrap="truncate-end">
+                {planStripLabel(planStrip)}
+                {planStrip.drift > 0 ? (
+                  <Text color="yellow">{planStripDrift(planStrip.drift)}</Text>
+                ) : null}
               </Text>
             </Box>
           )}

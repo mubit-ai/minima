@@ -23,6 +23,7 @@ import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
+import { planProjectionFor } from "./ground_truth.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
@@ -183,6 +184,17 @@ export class MinimaAgent extends Agent {
     if (recalled.length > 0) {
       const block = formatRecallBlock(recalled);
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
+    }
+    // Ground-Truth (M1.2): project the persisted plan of record into THIS turn's system
+    // prompt so the model always sees the current numbered plan with its active step marked.
+    // Appended after recall and reverted together in `finally`. Off unless groundTruth is set;
+    // planProjectionFor returns null when there is no plan yet, so this is inert until one exists.
+    if (this.config.groundTruth) {
+      const planBlock = planProjectionFor(this.db, this.runId);
+      if (planBlock) {
+        const cur = this.agentState.systemPrompt;
+        this.agentState.systemPrompt = cur ? `${cur}\n\n${planBlock}` : planBlock;
+      }
     }
     try {
       // Recovery ladder: walk SERVER-SUPPLIED rungs (fresh recommend per rung with the

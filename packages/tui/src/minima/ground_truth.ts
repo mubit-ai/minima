@@ -154,6 +154,19 @@ export function planStripInfo(db: MinimaDb | null, sessionId: string | null): Pl
   };
 }
 
+/** M1.3: the footer plan-of-record line, e.g. `▸ plan 2/5 — Wire the router`. */
+export function planStripLabel(info: PlanStripInfo): string {
+  return `▸ plan ${info.stepPos}/${info.stepTotal} — ${info.title}`;
+}
+
+/**
+ * M2.3: the drift suffix appended (in yellow) after the label when off-plan changes exist,
+ * e.g. `   ⚠ 3 off-plan (drift)`. Returns "" for zero drift so the caller renders nothing.
+ */
+export function planStripDrift(drift: number): string {
+  return drift > 0 ? `   ⚠ ${drift} off-plan (drift)` : "";
+}
+
 /**
  * 1-based active step: the first in-progress step, else the first not-yet-completed step,
  * else the last (all done). Never returns 0 for a non-empty list.
