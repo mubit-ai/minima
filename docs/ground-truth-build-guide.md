@@ -107,10 +107,10 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 6     | M6.2 tier → behavior            | ✅    | `behavior.ts` (tier→UI) + `ledgerBehavior` footer note/block + PTY proof     |
 | 6     | M6.3 log overrides              | ✅    | `getUserSignals` reader + inline `a/r/s`→`recordUserSignal` at the 🔴 block; `ledgerBehavior` suppresses answered gates; PTY+DB proof |
 | 7     | M7.1 grounded outcome → routing | ✅    | `stampGroundedOutcome` wired into `runtime.persistDecision`; `/gt-seed` writes+stamps a routing row; PTY+DB proof |
-| 7     | M7.2 feedback path              | ⬜    |                                                                              |
-| 7     | M7.3 recovery ladder            | ⬜    |                                                                              |
+| 7     | M7.2 feedback path              | ✅    | `groundedOutcomeFor` seam; deterministic gate → outcome label + `verified_in_production` (green-tier only), no fabricated quality, judge skipped; `tests/feedback-grounded.test.ts` |
+| 7     | M7.3 recovery ladder            | ✅    | grounded 🔴 (`failed`/`unrunnable`) is a 3rd escalation trigger in `promptRouted`; reuses exclude+re-route; failure@A + success@B; `tests/ladder.test.ts` |
 | 8     | M8.1 `/why`                     | ✅    | ledger-backed command + seeded PTY proof; ready for live gate rows           |
-| 8     | M8.2 E2E demo                   | ⬜    |                                                                              |
+| 8     | M8.2 E2E demo                   | ✅    | `tests/gt-e2e.test.ts` — seeded 🟢🟡🔴+drift footer snapshot + DB dump, and a live route→run→feedback→escalation loop stamping grounded outcomes (Track-B seeded; live-gate join awaits Track A M4.3) |
 
 > **The whole DB layer is already built (schema v5).** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). **No further migrations are required.** The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit migrations v1–v5; if a genuinely new column is ever needed, append a **v6**.
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
-import { stampGroundedOutcome } from "../src/minima/ground_truth.ts";
+import { groundedOutcomeFor, stampGroundedOutcome } from "../src/minima/ground_truth.ts";
 import type { Factors } from "../src/minima/gt_contract.ts";
 
 // Week 3 Track B new seams: the M6.3 user_signals reader and the M7.1 grounded-outcome stamp.
@@ -137,5 +137,58 @@ describe("stampGroundedOutcome (M7.1)", () => {
     expect(() => stampGroundedOutcome(null, "run1", "rec1")).not.toThrow();
     expect(() => stampGroundedOutcome(d, null, "rec1")).not.toThrow();
     expect(() => stampGroundedOutcome(d, "run1", null)).not.toThrow();
+  });
+});
+
+describe("groundedOutcomeFor (M7.2/M7.3 shared reader)", () => {
+  test("returns the most recent gate's verdict on the active plan", () => {
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+      { content: "B", status: "in_progress" },
+    ]);
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      confidence: gateConfidence(GREEN),
+      verifiedBy: "deterministic",
+      factors: GREEN,
+    });
+    d.insertGate({
+      planId,
+      stepId: stepIds[1]!,
+      outcome: "failed",
+      confidence: gateConfidence(RED),
+      verifiedBy: "deterministic",
+      factors: RED,
+    });
+    const g = groundedOutcomeFor(d, "run1");
+    expect(g?.outcome).toBe("failed");
+    expect(g?.verifiedBy).toBe("deterministic");
+    expect(g?.confidence).toBe("red");
+    expect(typeof g?.gateId).toBe("string");
+  });
+
+  test("null when there is no active plan / no gate / gate missing outcome or verifier", () => {
+    const noPlan = db();
+    expect(groundedOutcomeFor(noPlan, "run1")).toBeNull();
+
+    const noGate = db();
+    noGate.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    expect(groundedOutcomeFor(noGate, "run1")).toBeNull();
+
+    const noVerifier = db();
+    const { planId, stepIds } = noVerifier.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+    ]);
+    // A gate with an outcome but no verifier is not a grounded verdict yet.
+    noVerifier.insertGate({ planId, stepId: stepIds[0]!, outcome: "verified" });
+    expect(groundedOutcomeFor(noVerifier, "run1")).toBeNull();
+  });
+
+  test("fails open on null db / session (never throws)", () => {
+    expect(groundedOutcomeFor(null, "run1")).toBeNull();
+    expect(groundedOutcomeFor(db(), null)).toBeNull();
   });
 });

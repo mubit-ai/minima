@@ -16,6 +16,7 @@ import type {
   PlanStepRow,
   TodoInput,
 } from "../db/minima_db.ts";
+import type { ConfidenceTier, GateOutcome, VerifiedBy } from "./gt_contract.ts";
 
 /** Minimal structural view of MinimaAgent — avoids a runtime import cycle. */
 export interface GtAgentRef {
@@ -187,8 +188,49 @@ function activeStepPos(steps: PlanStepRow[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// M7.1 grounded outcome — stamp a step's real verdict onto its routing decision.
+// M7.1/M7.2/M7.3 grounded outcome — the run's most recent verified step's verdict.
 // ---------------------------------------------------------------------------
+
+/** The grounded verdict of the step verified under a prompt (M7.1 stamp, M7.2 feedback, M7.3 ladder). */
+export interface GroundedOutcome {
+  gateId: string;
+  outcome: GateOutcome; // verified | failed | unrunnable
+  verifiedBy: VerifiedBy; // deterministic | judge | user
+  confidence: ConfidenceTier | null; // green | yellow | red (null when factors couldn't tier)
+}
+
+/**
+ * Read the grounded verdict of the run's most recent verified step: the last gate on the active plan.
+ * The single seam three milestones share — M7.1 stamps it onto `routing_decisions.gt_*`, M7.2 prefers
+ * it over the LLM judge in feedback, M7.3 escalates on a failed one.
+ *
+ * Join rule: one `recId` per routed prompt ⇒ the *most recent* gate is the step just verified under
+ * this decision. As Track A lands a gate per prompt this is a clean 1:1; today it is last-write-wins.
+ *
+ * Total + fail-open: null db/session, no active plan, no gate, or a gate missing outcome/verifier
+ * returns `null` (never throws into the feedback path).
+ */
+export function groundedOutcomeFor(
+  db: MinimaDb | null,
+  sessionId: string | null,
+): GroundedOutcome | null {
+  if (!db || !sessionId) return null;
+  try {
+    const plan = db.getActivePlan(sessionId);
+    if (!plan) return null;
+    const gates = db.getGates(plan.id); // oldest-first; the last is the most recent verdict
+    const gate: GateRow | undefined = gates[gates.length - 1];
+    if (!gate || !gate.outcome || !gate.verified_by) return null;
+    return {
+      gateId: gate.id,
+      outcome: gate.outcome,
+      verifiedBy: gate.verified_by,
+      confidence: gate.confidence,
+    };
+  } catch {
+    return null; // fail-open: a broken ledger read must never break the turn.
+  }
+}
 
 /**
  * M7.1: stamp the grounded (deterministic) outcome of the run's most recent verified step onto
@@ -196,30 +238,22 @@ function activeStepPos(steps: PlanStepRow[]): number {
  * of "the judge guessed 0.7". Called from the runtime feedback seam once a prompt's decision row
  * exists (see runtime.persistDecision), where `recId` and the active plan are both in hand.
  *
- * Join rule: there is one `recId` per routed prompt, so `routing_decisions.gt_*` is a single triple
- * — we stamp the *most recent* gate on the active plan (the step just verified under this decision).
- * As Track A lands a gate per prompt this is a clean 1:1; today it is last-write-wins.
- *
- * Total + fail-open: a null db/session, no active plan, no gate, or a gate missing outcome/verifier
- * is a silent no-op (never throws into the feedback path). A gate whose factors couldn't produce a
- * confidence tier still stamps outcome + verifier, with `gt_confidence` left null.
+ * Total + fail-open: a null db/session/recId or no grounded gate is a silent no-op. A gate whose
+ * factors couldn't produce a confidence tier still stamps outcome + verifier, `gt_confidence` null.
  */
 export function stampGroundedOutcome(
   db: MinimaDb | null,
   sessionId: string | null,
   recId: string | null,
 ): void {
-  if (!db || !sessionId || !recId) return;
+  if (!db || !recId) return;
+  const grounded = groundedOutcomeFor(db, sessionId);
+  if (!grounded) return;
   try {
-    const plan = db.getActivePlan(sessionId);
-    if (!plan) return;
-    const gates = db.getGates(plan.id); // oldest-first; the last is the most recent verdict
-    const gate: GateRow | undefined = gates[gates.length - 1];
-    if (!gate || !gate.outcome || !gate.verified_by) return;
     db.attachGroundedOutcome(recId, {
-      outcome: gate.outcome,
-      verifiedBy: gate.verified_by,
-      confidence: gate.confidence,
+      outcome: grounded.outcome,
+      verifiedBy: grounded.verifiedBy,
+      confidence: grounded.confidence,
     });
   } catch {
     // fail-open: grounded stamping must never break the feedback path.
