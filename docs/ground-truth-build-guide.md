@@ -104,7 +104,7 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 5     | M5.2 coverage touch             | ⬜    |                                                                              |
 | 5     | M5.3 tamper                     | ⬜    |                                                                              |
 | 6     | M6.1 confidence fn              | ✅    | pure `confidence(Factors)` rule ladder + exhaustive tests                    |
-| 6     | M6.2 tier → behavior            | ⬜    |                                                                              |
+| 6     | M6.2 tier → behavior            | ✅    | `behavior.ts` (tier→UI) + `ledgerBehavior` footer note/block + PTY proof     |
 | 6     | M6.3 log overrides              | 🟨    | `user_signals` table + `recordUserSignal` exist; **capture ⬜**              |
 | 7     | M7.1 grounded outcome → routing | 🟨    | `gt_*` columns + `attachGroundedOutcome` exist; **stamping ⬜**              |
 | 7     | M7.2 feedback path              | ⬜    |                                                                              |

@@ -17,6 +17,7 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
@@ -780,6 +781,9 @@ export function HarnessApp({
   // Ground-Truth plan-of-record footer strip (M1.3/M2.3). Null when GT is off or there is no
   // plan yet; refreshed from the DB on each tool_execution_end (todowrite → step, write → drift).
   const [planStrip, setPlanStrip] = useState<PlanStripInfo | null>(null);
+  // GT tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
+  // and the earliest 🔴 block. Refreshed alongside planStrip; fails open to null (no note/block).
+  const [gtBehavior, setGtBehavior] = useState<LedgerBehavior | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
   // ground-truth .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
@@ -1023,8 +1027,10 @@ export function HarnessApp({
           if (agent.config.groundTruth === true) {
             try {
               setPlanStrip(planStripInfo(agent.db, agent.runId));
+              setGtBehavior(ledgerBehavior(agent.db, agent.runId));
             } catch {
               setPlanStrip(null);
+              setGtBehavior(null);
             }
           }
           break;
@@ -1039,8 +1045,10 @@ export function HarnessApp({
     if (agent.config.groundTruth !== true) return;
     try {
       setPlanStrip(planStripInfo(agent.db, agent.runId));
+      setGtBehavior(ledgerBehavior(agent.db, agent.runId));
     } catch {
       setPlanStrip(null);
+      setGtBehavior(null);
     }
   }, [agent]);
 
@@ -2161,8 +2169,13 @@ export function HarnessApp({
               },
               {
                 content: "Seed flagged verification",
-                status: "in_progress",
+                status: "completed",
                 verify: "bun test packages/tui/tests/why.test.ts",
+              },
+              {
+                content: "Seed blocked verification",
+                status: "in_progress",
+                verify: "bun test packages/tui/tests/behavior.test.ts",
               },
             ],
             "Ground-Truth seed plan",
@@ -2175,21 +2188,34 @@ export function HarnessApp({
               coverageHit: true as const,
               tamper: false,
             };
+            // Store the confidence the ladder derives (M6.2) so seeded rows match live gates:
+            // 🟢 trusted, 🟡 self-written, 🔴 failed check → footer note + approval prompt.
+            const green = { ...common, checkOrigin: "pre_existing" as const };
+            const yellow = { ...common, checkOrigin: "agent_new" as const };
+            const red = { ...common, pass: false, checkOrigin: "pre_existing" as const };
             agent.db.insertGate({
               planId,
               stepId: stepIds[0],
               outcome: "verified",
-              confidence: "green",
+              confidence: gateConfidence(green),
               verifiedBy: "deterministic",
-              factors: { ...common, checkOrigin: "pre_existing" },
+              factors: green,
             });
             agent.db.insertGate({
               planId,
               stepId: stepIds[1],
               outcome: "verified",
-              confidence: "yellow",
+              confidence: gateConfidence(yellow),
               verifiedBy: "deterministic",
-              factors: { ...common, checkOrigin: "agent_new" },
+              factors: yellow,
+            });
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[2],
+              outcome: "failed",
+              confidence: gateConfidence(red),
+              verifiedBy: "deterministic",
+              factors: red,
             });
           }
           if (agent.db.getFileChanges(planId).length === 0) {
@@ -2201,6 +2227,10 @@ export function HarnessApp({
               origin: "off_plan",
             });
           }
+          // Reflect the seeded plan + gates in the footer immediately (a real run refreshes on
+          // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
+          setPlanStrip(planStripInfo(agent.db, agent.runId));
+          setGtBehavior(ledgerBehavior(agent.db, agent.runId));
           text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}. Run /why to inspect it.`;
         }
         setMessages((m) => [
@@ -2427,7 +2457,12 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const footerHeight = 6 + (currentAction ? 1 : 0) + (planStrip ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip
+  // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
+  const gtFooterNote = gtBehavior?.footerNote ?? null;
+  const gtBlock = gtBehavior?.block ?? null;
+  const gtRows = (gtFooterNote ? 1 : 0) + (gtBlock ? 1 : 0);
+  // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows.
+  const footerHeight = 6 + (currentAction ? 1 : 0) + (planStrip ? 1 : 0) + gtRows;
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -2734,6 +2769,23 @@ export function HarnessApp({
                 {planStrip.drift > 0 ? (
                   <Text color="yellow">{planStripDrift(planStrip.drift)}</Text>
                 ) : null}
+              </Text>
+            </Box>
+          )}
+          {/* GT tier→behavior (M6.2): 🟡 milestone-review note, then the 🔴 block prompt. Each is
+              one truncated row (counted in footerHeight). The 🔴 line is a display banner here;
+              interactive [v]iew/[a]ccept/[s]teer capture lands in M6.3. */}
+          {gtFooterNote && (
+            <Box paddingX={1} width="100%">
+              <Text color="yellow" wrap="truncate-end">
+                {gtFooterNote}
+              </Text>
+            </Box>
+          )}
+          {gtBlock && (
+            <Box paddingX={1} width="100%">
+              <Text color="red" bold wrap="truncate-end">
+                {gtBlock.prompt}
               </Text>
             </Box>
           )}

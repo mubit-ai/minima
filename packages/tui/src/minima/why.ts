@@ -9,7 +9,12 @@ const TIER_GLYPHS: Record<ConfidenceTier, string> = {
   red: "🔴",
 };
 
-interface GateDisplay {
+/**
+ * A gate reduced to what the UI needs: its recorded outcome, the confidence tier (stored, or
+ * derived from `factors_json` when Track A hasn't stamped one yet), and a human reason. Shared
+ * between `/why` and the M6.2 tier→behavior wiring so both read a gate identically.
+ */
+export interface GateVerdict {
   outcome: GateRow["outcome"];
   tier: ConfidenceTier | null;
   reason: string;
@@ -43,7 +48,7 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
   if (steps.length === 0) lines.push("No plan steps recorded.");
   for (const step of steps) {
     const gate = latestGateByStep.get(step.id);
-    const display = gateDisplay(gate);
+    const display = gateVerdictFor(gate);
     const icon = display.outcome === "verified" ? "✓" : display.outcome ? "✗" : "○";
     const verdict = display.tier
       ? `${TIER_GLYPHS[display.tier]} ${display.reason}`
@@ -56,7 +61,12 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
   return lines.join("\n");
 }
 
-function gateDisplay(gate: GateRow | undefined): GateDisplay {
+/**
+ * Reduce a gate row to a {@link GateVerdict}. Prefers the tier Track A stamped onto the row; when
+ * that column is empty (older rows, or a gate written before the reasoner ran) it recomputes the
+ * tier from `factors_json` so tier→behavior decisions never silently fall back to "no verdict".
+ */
+export function gateVerdictFor(gate: GateRow | undefined): GateVerdict {
   if (!gate) return { outcome: null, tier: null, reason: "not verified" };
   const factors = parseFactors(gate.factors_json);
   if (factors) {
@@ -73,7 +83,12 @@ function gateDisplay(gate: GateRow | undefined): GateDisplay {
   };
 }
 
-function parseFactors(raw: string | null): Factors | null {
+/**
+ * Parse and structurally validate a `factors_json` blob into {@link Factors}, returning null when
+ * the column is empty or malformed. Exported so tier→behavior wiring validates gates identically
+ * to `/why` rather than trusting an unchecked `JSON.parse`.
+ */
+export function parseFactors(raw: string | null): Factors | null {
   if (!raw) return null;
   let value: unknown;
   try {
