@@ -4,6 +4,30 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-10
+
+### Added
+- **Ground-Truth verification spine (experimental, opt-in via `MINIMA_TUI_GROUND_TRUTH=1`)** —
+  the agent's plan steps can carry `verify` shell commands; the harness runs them
+  (pre-work baseline → done-gate red→green), records every verdict in the SQLite ledger,
+  and derives a confidence tier that drives the UI (🟢 glide / 🟡 flag / 🔴 stop) plus
+  grounded, deterministic-over-judge feedback to Minima. Includes `/why` (inspect why the
+  harness trusts/distrusts a step), a plan footer strip, and red-gate override capture.
+  Off by default — with the flag unset the CLI behaves exactly as 0.8.x.
+- **`/plan` planning workflow (part of the same experimental gate)** — a planner persona
+  plus a design council of sub-agents that researches, drafts, critiques, and synthesizes
+  a `GROUND_TRUTH.md` design document (`/plan start · status · finalize · cancel`).
+  Without the flag, `/plan` stays the read-only toggle it always was.
+- Permission hardening for verify commands: every LLM-authored `verify` is shown verbatim
+  in the approval overlay (with an explicit "… +N more lines" marker when truncated), and
+  a stored "always allow" on todowrite never covers a verify command the user hasn't seen.
+
+### Changed
+- Transcript rendering is memoized (windowing + `memo()` message rows, render-time ref
+  mutations moved to effects) — typing no longer re-renders the whole transcript per
+  keystroke.
+- Repo-root `CLAUDE.md` added (agent-facing repo guide).
+
 ## [0.8.0] - 2026-07-07
 
 ### Fixed
