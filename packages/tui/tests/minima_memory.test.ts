@@ -102,6 +102,7 @@ function buildAgent(opts: {
   judge?: { grade: (t: string, o: string) => Promise<number | null> };
   systemPrompt?: string;
   failing?: boolean;
+  groundTruth?: boolean;
   beforeRoute?: (r: unknown, t: string) => Promise<null>;
 }) {
   const fetchLike = opts.failing
@@ -112,6 +113,7 @@ function buildAgent(opts: {
     candidates: ["test-faux"],
     allowOffline: opts.failing ?? false,
     minimaApiKey: "k",
+    groundTruth: opts.groundTruth ?? false,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   return new MinimaAgent({
@@ -169,6 +171,56 @@ describe("MinimaAgent <-> Mubit memory", () => {
     const agent = buildAgent({ memory: mem, judge: { grade: async () => null } });
     await agent.promptRouted("do something");
     expect(mem.outcomeCalls[0]!.quality).toBeNull();
+    reg.unregister();
+  });
+
+  // The plan-authoring gap: the verify contract must reach the model on turn 1 — BEFORE any plan
+  // exists — or it authors the whole plan with no checks (the plan projection alone is inert until
+  // the first todowrite). The static guidance is injected whenever groundTruth is on and reverted
+  // like recall, so it leaks into no later turn and never appears when the flag is off.
+  test("ground-truth ON injects the verify contract on turn 1 (no plan yet), then restores it", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("ok")], stop_reason: "stop" })]);
+
+    let seenSystem: string | null = null;
+    const agent = buildAgent({
+      systemPrompt: "BASE",
+      groundTruth: true,
+      beforeRoute: async () => {
+        seenSystem = agent.agentState.systemPrompt;
+        return null;
+      },
+    });
+    // No agent.db / no plan — planProjectionFor is null, so only the static contract can appear.
+    await agent.promptRouted("scaffold a project");
+
+    expect(seenSystem ?? "").toContain("Ground-Truth verification is ON");
+    expect(seenSystem ?? "").toContain("`verify`");
+    expect(seenSystem ?? "").toContain("BASE");
+    expect(agent.agentState.systemPrompt).toBe("BASE"); // reverted — no leak into later turns
+    reg.unregister();
+  });
+
+  test("ground-truth OFF injects no verify contract", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("ok")], stop_reason: "stop" })]);
+
+    let seenSystem: string | null = null;
+    const agent = buildAgent({
+      systemPrompt: "BASE",
+      groundTruth: false,
+      beforeRoute: async () => {
+        seenSystem = agent.agentState.systemPrompt;
+        return null;
+      },
+    });
+    await agent.promptRouted("scaffold a project");
+
+    expect(seenSystem ?? "").toBe("BASE");
     reg.unregister();
   });
 

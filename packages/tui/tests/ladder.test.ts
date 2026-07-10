@@ -95,19 +95,24 @@ function ladderService() {
   return { fetchLike, recommendCalls, feedbackCalls };
 }
 
-function setup(judge: ConstJudge, db?: MinimaDb) {
+function setup(
+  judge: ConstJudge,
+  db?: MinimaDb,
+  opts: { svc?: ReturnType<typeof ladderService>; groundTruth?: boolean } = {},
+) {
   resetRegistry();
   resetProviderRegistration();
   resetModelRegistry();
   registerModel(CHEAP);
   registerModel(BIG);
   const reg = registerFauxProvider([CHEAP, BIG]);
-  const svc = ladderService();
+  const svc = opts.svc ?? ladderService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: svc.fetchLike });
   const config = harnessConfig({
     candidates: ["cheap-model", "big-model"],
     allowOffline: false,
     minimaApiKey: "k",
+    groundTruth: opts.groundTruth ?? false,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const agent = new MinimaAgent({ config, router, judge, meter: new CostMeter(), tools: [] });
@@ -116,6 +121,60 @@ function setup(judge: ConstJudge, db?: MinimaDb) {
     agent.runId = db.startRun({ projectKey: "p" });
   }
   return { agent, reg, svc };
+}
+
+/**
+ * M7.3: same routing as ladderService, but the moment the escalation rung is requested
+ * (cheap-model excluded → big-model picked) it runs `onEscalationRung` — the test uses this to
+ * flip the active plan's latest gate to verified, so the recovered rung reads green (red→green).
+ */
+function gatedLadderService(onEscalationRung: () => void) {
+  const recommendCalls: Record<string, unknown>[] = [];
+  const feedbackCalls: Record<string, unknown>[] = [];
+  const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
+    const u = new URL(url);
+    if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
+      const req = init?.body ? JSON.parse(init.body) : {};
+      recommendCalls.push(req);
+      const excluded: string[] = req.constraints?.excluded_models ?? [];
+      const pick = excluded.includes("cheap-model") ? "big-model" : "cheap-model";
+      if (pick === "big-model") onEscalationRung();
+      return {
+        status: 200,
+        json: async () => ({
+          recommendation_id: `rec-${recommendCalls.length}`,
+          recommended_model: {
+            model_id: pick,
+            provider: "faux",
+            predicted_success: 0.9,
+            est_cost_usd: pick === "cheap-model" ? 0.001 : 0.01,
+            score: 0.001,
+          },
+          ranked: [
+            {
+              model_id: pick,
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 1,
+            },
+          ],
+          confidence: 0.8,
+          decision_basis: "memory",
+          threshold_used: 0.7,
+          classified_task_type: "code",
+          classified_difficulty: "easy",
+          catalog_version: "v1",
+        }),
+      };
+    }
+    if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/feedback") {
+      feedbackCalls.push(init?.body ? JSON.parse(init.body) : {});
+      return { status: 200, json: async () => ({ accepted: true }) };
+    }
+    return { status: 404, json: async () => ({ detail: "nope" }) };
+  };
+  return { fetchLike, recommendCalls, feedbackCalls };
 }
 
 describe("recovery ladder", () => {
@@ -203,5 +262,118 @@ describe("recovery ladder", () => {
     expect(agent.ladderEscalations).toBe(0);
     expect((svc.feedbackCalls[0] as Record<string, unknown>).outcome).toBe("failure");
     reg.unregister();
+  });
+});
+
+describe("recovery ladder — grounded checks (M7.3)", () => {
+  test("a grounded RED check escalates; the recovered rung records failure@A + success@B", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    let installVerifiedGate = () => {};
+    const svc = gatedLadderService(() => installVerifiedGate());
+    const { agent, reg } = setup(new ConstJudge(0.9), db, { svc, groundTruth: true });
+
+    const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
+      { content: "wire the endpoint", status: "in_progress" },
+    ]);
+    // Rung 1 sees a failed check on the active plan.
+    db.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "failed",
+      verifiedBy: "deterministic",
+      confidence: "red",
+    });
+    // When the ladder re-routes to big-model, the step verifies (red → green).
+    installVerifiedGate = () => {
+      db.insertGate({
+        planId,
+        stepId: stepIds[0]!,
+        outcome: "verified",
+        verifiedBy: "deterministic",
+        confidence: "green",
+      });
+    };
+
+    reg.setResponses([
+      new AssistantMessage({ content: [text("attempt on cheap")] }),
+      new AssistantMessage({ content: [text("fixed on big")] }),
+    ]);
+
+    const routing = await agent.promptRouted("do the thing");
+
+    // The grounded fail excluded cheap-model → the server picked the bigger one.
+    expect(routing?.chosenModelId).toBe("big-model");
+    expect(svc.recommendCalls).toHaveLength(2);
+    expect((svc.recommendCalls[1] as any).constraints.excluded_models).toEqual(["cheap-model"]);
+    expect(agent.ladderEscalations).toBe(1);
+
+    // failure@A then success@B — the grounded loss AND the recovery both reach Minima.
+    expect(svc.feedbackCalls).toHaveLength(2);
+    expect((svc.feedbackCalls[0] as any).outcome).toBe("failure");
+    expect((svc.feedbackCalls[0] as any).notes).toContain("verified_by=deterministic");
+    expect((svc.feedbackCalls[1] as any).outcome).toBe("success");
+    expect((svc.feedbackCalls[1] as any).verified_in_production).toBe(true); // green rung
+
+    // Both rungs persisted per model, chained by parent_rec_id.
+    const rows = db.getRunDecisions(agent.runId!);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.outcome).toBe("failure");
+    expect(rows[1]!.outcome).toBe("success");
+    expect(rows[1]!.parent_rec_id).toBe(String(rows[0]!.rec_id));
+    reg.unregister();
+    db.close();
+  });
+
+  test("a grounded GREEN check does NOT escalate", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
+      { content: "A", status: "in_progress" },
+    ]);
+    db.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      verifiedBy: "deterministic",
+      confidence: "green",
+    });
+    reg.setResponses([new AssistantMessage({ content: [text("done")] })]);
+    await agent.promptRouted("easy");
+    expect(svc.recommendCalls).toHaveLength(1);
+    expect(agent.ladderEscalations).toBe(0);
+    expect((svc.feedbackCalls[0] as any).outcome).toBe("success");
+    expect((svc.feedbackCalls[0] as any).verified_in_production).toBe(true);
+    reg.unregister();
+    db.close();
+  });
+
+  test("a persistent RED check walks every rung", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
+      { content: "A", status: "in_progress" },
+    ]);
+    db.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "failed",
+      verifiedBy: "deterministic",
+      confidence: "red",
+    });
+    reg.setResponses([
+      new AssistantMessage({ content: [text("1")] }),
+      new AssistantMessage({ content: [text("2")] }),
+      new AssistantMessage({ content: [text("3")] }),
+    ]);
+    await agent.promptRouted("hard");
+    // 1 + 2 retries, like a judge that fails every rung — the red gate never clears.
+    expect(svc.recommendCalls).toHaveLength(3);
+    expect(agent.ladderEscalations).toBe(2);
+    expect(svc.feedbackCalls.every((f) => (f as any).outcome === "failure")).toBe(true);
+    reg.unregister();
+    db.close();
   });
 });
