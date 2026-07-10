@@ -29,3 +29,9 @@ docs/PLAN/
 # Meta files
 .codaph 
 .claude
+
+# macOS junk
+.DS_Store
+
+# accidental session dumps
+context_window.json
