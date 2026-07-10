@@ -34,6 +34,13 @@ import type {
 } from "../db/minima_db.ts";
 import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
 import type { Factors } from "./gt_contract.ts";
+import {
+  type FactorFs,
+  classifyCheckOrigin,
+  computeCoverageHit,
+  defaultFactorFs,
+  detectTamper,
+} from "./gt_factors.ts";
 
 /**
  * Minimal structural view of MinimaAgent — avoids a runtime import cycle. `runSignal` (the
@@ -399,9 +406,10 @@ const SAME_BATCH_BLOCK =
  */
 export function groundTruthHooks(
   ref: GtAgentRef,
-  opts?: { gateBudgetMs?: number },
+  opts?: { gateBudgetMs?: number; fs?: FactorFs },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
+  const fs = opts?.fs ?? defaultFactorFs;
   const sink = groundTruthAfterToolCall(ref);
   const pending = new Map<string, GateVerdict[]>();
   const inFlight = new Set<string>();
@@ -432,6 +440,19 @@ export function groundTruthHooks(
         return null;
       }
 
+      // Stage 5 factor inputs: this run's file_changes (provenance/coverage/tamper), read once.
+      // gatePlanId is reused below for the blocked-attempt rows. tamper is a run-level fact —
+      // computed once for the whole batch, not per flip.
+      let gatePlanId: string | null = null;
+      let fileChanges: FileChangeRow[] = [];
+      try {
+        gatePlanId = db.getActivePlan(session)?.id ?? null;
+        if (gatePlanId) fileChanges = db.getFileChanges(gatePlanId);
+      } catch {
+        // no ledger read — Stage 5 factors degrade to their neutral defaults.
+      }
+      const tamper = detectTamper(fileChanges, fs);
+
       const verdicts: GateVerdict[] = [];
       const failures: {
         flip: CompletionFlip;
@@ -446,7 +467,7 @@ export function groundTruthHooks(
             content: flip.content,
             stepId: flip.stepId,
             outcome: "unchecked",
-            factors: uncheckedFactors(),
+            factors: { ...uncheckedFactors(), tamper },
           });
           continue;
         }
@@ -456,7 +477,7 @@ export function groundTruthHooks(
             flip,
             outcome: "unrunnable",
             why: `could not run (the ${budgetMs} ms gate budget was exhausted by earlier checks)`,
-            factors: { ...uncheckedFactors(), hasCheck: true },
+            factors: { ...uncheckedFactors(), hasCheck: true, tamper },
           });
           continue;
         }
@@ -469,10 +490,10 @@ export function groundTruthHooks(
           pass: result.pass,
           redToGreen: flip.baseline === "red" && result.pass,
           hasCheck: true,
-          // M5.1 refines provenance; today every check originates from the agent's todowrite.
-          checkOrigin: "agent_new",
-          coverageHit: "unknown",
-          tamper: false,
+          // M5.1 provenance / M5.2 coverage / M5.3 tamper — computed from this run's file_changes.
+          checkOrigin: classifyCheckOrigin(flip.verify, fileChanges),
+          coverageHit: computeCoverageHit(flip.verify, fileChanges, fs),
+          tamper,
           outputTail: outputTail(result.output),
           durationMs: result.durationMs,
           exitCode: result.exitCode,
@@ -508,12 +529,7 @@ export function groundTruthHooks(
       if (failures.length > 0) {
         // M4.1 attempt rows: every blocked attempt is a durable observation (Stage 7 reads
         // the attempts count). Written NOW — a blocked call's after-hook never fires.
-        let planId: string | null = null;
-        try {
-          planId = db.getActivePlan(session)?.id ?? null;
-        } catch {
-          // no plan id — the rows still land, unattached.
-        }
+        const planId = gatePlanId;
         for (const f of failures) {
           try {
             db.insertGate({

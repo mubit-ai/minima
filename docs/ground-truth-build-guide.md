@@ -100,9 +100,9 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 4     | M4.1 block `done` on fail       | ✅    | gate in the beforeToolCall stack; whole-call reject; one todowrite/batch; attempt rows |
 | 4     | M4.2 require red→green          | ✅    | `redToGreen` in factors_json (baseline red + post-work pass)                 |
 | 4     | M4.3 `gates` row                | ✅    | verified/unchecked rows on every allowed flip; failed/unrunnable on blocks   |
-| 5     | M5.1 provenance                 | ⬜    |                                                                              |
-| 5     | M5.2 coverage touch             | ⬜    |                                                                              |
-| 5     | M5.3 tamper                     | ⬜    |                                                                              |
+| 5     | M5.1 provenance                 | ✅    | `classifyCheckOrigin` in `src/minima/gt_factors.ts`; agent_new vs pre_existing from file_changes |
+| 5     | M5.2 coverage touch             | ✅    | `computeCoverageHit` (static grep test→changed source); true/false/unknown  |
+| 5     | M5.3 tamper                     | ✅    | `detectTamper` (deleted/skip/xfail on touched test files); conservative markers |
 | 6     | M6.1 confidence fn              | ⬜    |                                                                              |
 | 6     | M6.2 tier → behavior            | ⬜    |                                                                              |
 | 6     | M6.3 log overrides              | 🟨    | `user_signals` table + `recordUserSignal` exist; **capture ⬜**              |

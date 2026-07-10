@@ -661,3 +661,70 @@ describe("done-gate after-hook (M4.3)", () => {
     expect(gates(real)).toHaveLength(1); // the second verdict still landed
   });
 });
+
+// --------------------------------------------------------------------------- Stage 5 factors
+
+// End-to-end wiring of M5.1 provenance / M5.2 coverage / M5.3 tamper through the real
+// before/after hooks: real file_changes rows in the ledger + an injected FactorFs for the
+// on-disk test contents. `true <path>` is a passing check (true ignores its args) whose verify
+// string still names a test file, so provenance can parse it without the check failing.
+describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
+  function fsFrom(contents: Record<string, string>) {
+    return {
+      read: (p: string) => contents[p] ?? null,
+      exists: (p: string) => p in contents,
+    };
+  }
+
+  test("agent_new + coverageHit + no tamper: agent wrote the test, and it references the change", async () => {
+    const d = db();
+    const fs = fsFrom({ "src/foo.test.ts": 'import { foo } from "./foo";' });
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true src/foo.test.ts" },
+    ]);
+    d.insertFileChange({ planId, stepId: stepIds[0]!, path: "src/foo.ts", kind: "modified" });
+    d.insertFileChange({ planId, stepId: stepIds[0]!, path: "src/foo.test.ts", kind: "created" });
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos))).toBeNull();
+    await after(actx(todos));
+    const rows = gates(d);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.outcome).toBe("verified");
+    const f = factorsOf(rows[0]!);
+    expect(f.checkOrigin).toBe("agent_new");
+    expect(f.coverageHit).toBe(true);
+    expect(f.tamper).toBe(false);
+  });
+
+  test("pre_existing + coverage false: an untouched test that doesn't reference the change", async () => {
+    const d = db();
+    const fs = fsFrom({ "src/foo.test.ts": 'import { other } from "./other";' });
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true src/foo.test.ts" },
+    ]);
+    d.insertFileChange({ planId, stepId: stepIds[0]!, path: "src/foo.ts", kind: "modified" });
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos))).toBeNull();
+    await after(actx(todos));
+    const f = factorsOf(gates(d)[0]!);
+    expect(f.checkOrigin).toBe("pre_existing");
+    expect(f.coverageHit).toBe(false);
+    expect(f.tamper).toBe(false);
+  });
+
+  test("tamper true: a test file the agent touched now carries a skip marker", async () => {
+    const d = db();
+    const fs = fsFrom({ "src/foo.test.ts": "it.skip('x', () => {})" });
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true" },
+    ]);
+    d.insertFileChange({ planId, stepId: stepIds[0]!, path: "src/foo.test.ts", kind: "modified" });
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos))).toBeNull();
+    await after(actx(todos));
+    expect(factorsOf(gates(d)[0]!).tamper).toBe(true);
+  });
+});
