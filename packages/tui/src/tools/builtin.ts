@@ -39,6 +39,12 @@ export interface BuiltinToolsOptions {
    * behavior (the historical default for the lead agent).
    */
   workdir?: string;
+  /**
+   * Ground-truth mode (MINIMA_TUI_GROUND_TRUTH=1): todowrite advertises + enforces per-task
+   * `verify` commands and runs sequentially. Leave unset for the plain task list — sub-agents
+   * always get the plain tool because the ground-truth hooks only exist on the lead agent.
+   */
+  groundTruth?: boolean;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
@@ -53,7 +59,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     lsTool(fs),
     globTool(fs),
     grepTool(fs),
-    todowriteTool(),
+    todowriteTool([], { groundTruth: opts.groundTruth === true }),
     webSearchTool(),
     webFetchTool(),
   ];

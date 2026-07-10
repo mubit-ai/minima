@@ -30,24 +30,33 @@ const parameters = objectSchema(
  * singleton — an isolation hazard for sub-agents.) Pass `state` to observe the list from
  * outside (e.g. a TUI panel).
  *
- * M3.3: executionMode "sequential" — any batch containing todowrite runs in emission order,
- * so the ground-truth sink's pre-work baseline check (afterToolCall) observes the repo before
- * sibling edit/write/bash calls mutate it, and two todowrites in one batch cannot interleave.
+ * M3.3 (ground truth only): executionMode "sequential" — any batch containing todowrite runs
+ * in emission order, so the ground-truth sink's pre-work baseline check (afterToolCall)
+ * observes the repo before sibling edit/write/bash calls mutate it, and two todowrites in one
+ * batch cannot interleave. With ground truth OFF none of that machinery exists, so the tool
+ * keeps its historical parallel-friendly description and mode — the model must not be told of
+ * a verify gate that will never run.
  */
-export function todowriteTool(state: TodoTask[] = []): AgentTool {
+export function todowriteTool(
+  state: TodoTask[] = [],
+  opts: { groundTruth?: boolean } = {},
+): AgentTool {
   return {
     name: "todowrite",
-    description:
-      "Track a task list for multi-step coding work. Pass a JSON array: " +
-      '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
-      "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
-      "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
-      "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
-      "feature, a fix, a test) — a real test/build command that proves it. A pure-scaffolding task " +
-      "with no runnable check may omit it. " +
-      "Marking a task completed runs its verify first — the completion is refused unless the check passes.",
+    description: opts.groundTruth
+      ? "Track a task list for multi-step coding work. Pass a JSON array: " +
+        '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
+        "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
+        "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
+        "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
+        "feature, a fix, a test) — a real test/build command that proves it. A pure-scaffolding task " +
+        "with no runnable check may omit it. " +
+        "Marking a task completed runs its verify first — the completion is refused unless the check passes."
+      : "Track a task list for multi-step coding work. Pass a JSON array: " +
+        '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
+        "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
     parameters,
-    executionMode: "sequential",
+    ...(opts.groundTruth ? { executionMode: "sequential" as const } : {}),
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
       try {
         const parsed = JSON.parse(String(params.tasks));

@@ -375,17 +375,29 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
       </Box>
       {prompt.diffPreview ? (
         <Box flexDirection="column" marginTop={0}>
-          {prompt.diffPreview
-            .split("\n")
-            .slice(0, 12)
-            .map((line) => (
-              <Text
-                key={line.slice(0, 40)}
-                color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
-              >
-                {line}
-              </Text>
-            ))}
+          {(() => {
+            // Never hide content silently: approving this prompt can authorize shell
+            // execution (todowrite verify), so a truncated preview must SAY it is truncated.
+            // Budget stays 12 rows: 11 content lines + 1 marker when over.
+            const lines = prompt.diffPreview.split("\n");
+            const shown = lines.length > 12 ? lines.slice(0, 11) : lines;
+            const hidden = lines.length - shown.length;
+            return (
+              <>
+                {shown.map((line) => (
+                  <Text
+                    key={line.slice(0, 40)}
+                    color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
+                  >
+                    {line}
+                  </Text>
+                ))}
+                {hidden > 0 ? (
+                  <Text color="yellow">… +{hidden} more lines not shown — reject if unsure</Text>
+                ) : null}
+              </>
+            );
+          })()}
         </Box>
       ) : null}
       <Text color="gray">
@@ -769,7 +781,9 @@ export function HarnessApp({
 
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
-  const permStateRef = useRef<PermissionState>(createPermissionState(process.cwd()));
+  const permStateRef = useRef<PermissionState>(
+    createPermissionState(process.cwd(), { groundTruth: agent.config.groundTruth === true }),
+  );
 
   // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
   const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
@@ -871,16 +885,21 @@ export function HarnessApp({
   useEffect(() => {
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        // todowrite is blocked too: with ground truth on, a todowrite triggers the done-gate /
+        // With ground truth on, todowrite is blocked too: it triggers the done-gate /
         // baseline capture, which EXECUTES the step's `verify` shell command — plan mode
-        // advertises read-only, so nothing that spawns a shell may pass.
-        const blocked = ["write", "edit", "bash", "apply_patch", "todowrite"];
+        // advertises read-only, so nothing that spawns a shell may pass. With ground truth
+        // off todowrite is inert bookkeeping and stays allowed (historical behavior).
+        const gtOn = agent.config.groundTruth === true;
+        const blocked = gtOn
+          ? ["write", "edit", "bash", "apply_patch", "todowrite"]
+          : ["write", "edit", "bash", "apply_patch"];
         if (blocked.includes(ctx.toolCall.name)) {
           return {
             block: true,
-            reason:
-              "Plan mode is ON — write/edit/bash/apply_patch/todowrite are blocked " +
-              "(todowrite can run `verify` shell checks). Use /plan to exit.",
+            reason: gtOn
+              ? "Plan mode is ON — write/edit/bash/apply_patch/todowrite are blocked " +
+                "(todowrite can run `verify` shell checks). Use /plan to exit."
+              : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
           };
         }
       }
@@ -1138,19 +1157,36 @@ export function HarnessApp({
       const action =
         input === "a" ? "accept" : input === "r" ? "reject" : input === "s" ? "steer" : null;
       if (action) {
-        gtDb.recordUserSignal(gtBlock.gateId, action);
-        setGtBehavior(ledgerBehavior(gtDb, agent.runId));
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
-        ]);
+        // Fail-open like every other GT touchpoint: a ledger error must not crash the TUI
+        // from inside Ink's input dispatch.
+        try {
+          gtDb.recordUserSignal(gtBlock.gateId, action);
+          setGtBehavior(ledgerBehavior(gtDb, agent.runId));
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              toolName: "gt",
+              text: `⚠ gate signal not recorded: ${errText(exc)}`,
+              isError: true,
+            },
+          ]);
+        }
         return;
       }
       if (input === "v") {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: whyReportFor(gtDb, agent.runId), toolName: "why" },
-        ]);
+        let report: string;
+        try {
+          report = whyReportFor(gtDb, agent.runId);
+        } catch (exc) {
+          report = `⚠ /why unavailable: ${errText(exc)}`;
+        }
+        setMessages((m) => [...m, { role: "tool", text: report, toolName: "why" }]);
         return;
       }
     }
@@ -1580,10 +1616,36 @@ export function HarnessApp({
             { role: "user", text: `/${name} ${args}`.trim() },
             { role: "tool", text, toolName: "plan", isError },
           ]);
+        // The planning workflow (planner persona + design council + GROUND_TRUTH.md) ships
+        // behind MINIMA_TUI_GROUND_TRUTH=1. Without it /plan stays what it always was: a pure
+        // read-only toggle — no prompt swap, no LLM spend, no file writes.
+        if (agent.config.groundTruth !== true) {
+          if (sub === "" || sub === "on" || sub === "off" || sub === "toggle") {
+            const next = sub === "on" ? true : sub === "off" ? false : !planModeRef.current;
+            setPlanMode(next);
+            pushPlan(
+              next
+                ? "Plan mode ON — write/edit/bash/apply_patch are blocked. Use /plan to exit."
+                : "Plan mode OFF — full write access restored.",
+            );
+          } else {
+            pushPlan(
+              `/plan ${sub} is part of the ground-truth planning workflow (set MINIMA_TUI_GROUND_TRUTH=1). Without it, /plan is a read-only toggle.`,
+              true,
+            );
+          }
+          break;
+        }
+
         const enterPlanMode = (goal: string) => {
           setPlanMode(true);
           planSessionRef.current = new PlanSessionStore(goal);
-          plannerBaseSystemPromptRef.current = agent.agentState.systemPrompt ?? "";
+          // Snapshot the base prompt only once per plan session — re-entering (e.g. /plan
+          // start while already planning) must not overwrite the snapshot with the planner
+          // persona, or the agent's real system prompt is lost on exit.
+          if (plannerBaseSystemPromptRef.current == null) {
+            plannerBaseSystemPromptRef.current = agent.agentState.systemPrompt ?? "";
+          }
           agent.agentState.systemPrompt = PLANNER_PERSONA;
         };
         const exitPlanMode = () => {

@@ -118,7 +118,7 @@ function decodeEntities(s: string): string {
 }
 
 /** Read one HTML attribute out of an opening-tag's attribute string. */
-export function attr(attrs: string, name: string): string | null {
+function attr(attrs: string, name: string): string | null {
   const quoted = attrs.match(new RegExp(`\\b${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"));
   if (quoted) return quoted[2]!;
   const bare = attrs.match(new RegExp(`\\b${name}\\s*=\\s*([^\\s>]+)`, "i"));
@@ -130,7 +130,7 @@ export function attr(attrs: string, name: string): string | null {
  * `//duckduckgo.com/l/?uddg=<encoded>&…` redirect; unwrap it. Protocol-relative hrefs get
  * an https scheme.
  */
-export function resolveHref(href: string): string {
+function resolveHref(href: string): string {
   let raw = decodeEntities(href.trim());
   if (raw.startsWith("//")) raw = `https:${raw}`;
   try {
@@ -144,7 +144,7 @@ export function resolveHref(href: string): string {
 }
 
 /** Strip tags and decode entities to plain text (title/inner-link text). */
-export function textFromHtml(html: string): string {
+function textFromHtml(html: string): string {
   return decodeEntities(html.replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
     .trim();

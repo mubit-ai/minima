@@ -39,13 +39,22 @@ export interface PermissionState {
   allowAlways: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
+  /** Ground-truth mode: todowrite `verify` commands are actually executed by the harness. */
+  groundTruth: boolean;
+  /** verify commands the user has already seen and approved (exact-string). */
+  approvedVerifies: Set<string>;
 }
 
-export function createPermissionState(cwd: string): PermissionState {
+export function createPermissionState(
+  cwd: string,
+  opts: { groundTruth?: boolean } = {},
+): PermissionState {
   return {
     allowAlways: new Set<string>(),
     allowedDirs: new Set<string>(), // NOT pre-approved — user must grant cwd access
     cwd,
+    groundTruth: opts.groundTruth === true,
+    approvedVerifies: new Set<string>(),
   };
 }
 
@@ -135,8 +144,17 @@ export function checkPermission(
   // Zero-side-effect UI tools (e.g. question): never prompt.
   if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
 
-  // Tool globally allowed (write/edit/bash with "always")
-  if (state.allowAlways.has(toolName)) return Promise.resolve(null);
+  // Tool globally allowed (write/edit/bash with "always"). Exception: with ground truth on,
+  // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
+  // command (baseline capture + done-gate), so a stored "always" only covers verify commands
+  // the user has already seen — a call carrying a new or changed verify re-prompts.
+  if (state.allowAlways.has(toolName)) {
+    const newVerify =
+      toolName === "todowrite" &&
+      state.groundTruth &&
+      verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
+    if (!newVerify) return Promise.resolve(null);
+  }
 
   // For read-only tools (read/ls/glob/grep): check directory-level access
   if (READ_TOOLS.has(toolName)) {
@@ -173,7 +191,7 @@ export function checkPermission(
   }
 
   // Sensitive tools (write/edit/bash): always prompt
-  const diffPreview = buildDiffPreview(toolName, args, state.cwd);
+  const diffPreview = buildDiffPreview(toolName, args, state);
   return new Promise((resolve) => {
     promptFn({
       toolName,
@@ -183,6 +201,11 @@ export function checkPermission(
       resolve: (decision) => {
         if (decision === "always") state.allowAlways.add(toolName);
         if (decision === "allow" || decision === "always") {
+          // The user has now seen these verify commands — an "always" grant covers them,
+          // but any future NEW verify still re-prompts (see the allowAlways exception above).
+          if (toolName === "todowrite") {
+            for (const v of verifyCommands(args)) state.approvedVerifies.add(v);
+          }
           resolve(null);
         } else {
           resolve({ block: true, reason: denialReason(`the ${toolName} call`) });
@@ -192,11 +215,19 @@ export function checkPermission(
   });
 }
 
+/** Every non-empty `verify` shell command in a todowrite call's tasks. */
+function verifyCommands(args: Record<string, unknown>): string[] {
+  const tasks = parseTodowriteTasks(args);
+  if (!tasks) return [];
+  return tasks.map((t) => t.verify).filter((v): v is string => typeof v === "string" && v !== "");
+}
+
 function buildDiffPreview(
   toolName: string,
   args: Record<string, unknown>,
-  cwd: string,
+  state: PermissionState,
 ): string | null {
+  const cwd = state.cwd;
   try {
     if (toolName === "edit") {
       const filePath = expand(String(args.filePath ?? args.path ?? ""));
@@ -235,7 +266,10 @@ function buildDiffPreview(
       if (!tasks || tasks.length === 0) return null;
       const lines = tasks.map((t, i) => {
         const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
-        const verify = t.verify ? `\n     verify (runs as a shell command): ${t.verify}` : "";
+        const verifyLabel = state.groundTruth
+          ? "verify (runs as a shell command)"
+          : "verify (recorded only — runs only with MINIMA_TUI_GROUND_TRUTH=1)";
+        const verify = t.verify ? `\n     ${verifyLabel}: ${t.verify}` : "";
         return `${i + 1}. [${mark}] ${t.content}${verify}`;
       });
       return lines.join("\n");
