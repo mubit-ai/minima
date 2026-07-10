@@ -39,10 +39,12 @@ export function todowriteTool(state: TodoTask[] = []): AgentTool {
     name: "todowrite",
     description:
       "Track a task list for multi-step coding work. Pass a JSON array: " +
-      '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
+      '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
       "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
       "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
-      "Attach a `verify` shell command to any task where a runnable check proves it is done. " +
+      "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
+      "feature, a fix, a test) — a real test/build command that proves it. A pure-scaffolding task " +
+      "with no runnable check may omit it. " +
       "Marking a task completed runs its verify first — the completion is refused unless the check passes.",
     parameters,
     executionMode: "sequential",

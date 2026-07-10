@@ -49,7 +49,15 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
   for (const step of steps) {
     const gate = latestGateByStep.get(step.id);
     const display = gateVerdictFor(gate);
-    const icon = display.outcome === "verified" ? "✓" : display.outcome ? "✗" : "○";
+    // ✓ verified · ✗ a real check that failed/couldn't run · ○ everything else (unchecked step,
+    // or no gate). `unchecked` is NOT a failure — a step that completed with no check must not
+    // read as ✗, or every check-less plan looks like a wall of failures.
+    const icon =
+      display.outcome === "verified"
+        ? "✓"
+        : display.outcome === "failed" || display.outcome === "unrunnable"
+          ? "✗"
+          : "○";
     const verdict = display.tier
       ? `${TIER_GLYPHS[display.tier]} ${display.reason}`
       : display.reason;

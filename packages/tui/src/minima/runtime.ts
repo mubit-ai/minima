@@ -24,6 +24,7 @@ import { errText } from "../errtext.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import {
+  GROUND_TRUTH_SYSTEM_GUIDANCE,
   type GroundedOutcome,
   groundedOutcomeFor,
   planProjectionFor,
@@ -190,11 +191,18 @@ export class MinimaAgent extends Agent {
       const block = formatRecallBlock(recalled);
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
     }
-    // Ground-Truth (M1.2): project the persisted plan of record into THIS turn's system
-    // prompt so the model always sees the current numbered plan with its active step marked.
-    // Appended after recall and reverted together in `finally`. Off unless groundTruth is set;
-    // planProjectionFor returns null when there is no plan yet, so this is inert until one exists.
+    // Ground-Truth: inject the verify contract + the plan of record into THIS turn's system
+    // prompt (appended after recall, reverted together in `finally`). Off unless groundTruth is set.
+    //   1. The static contract (GROUND_TRUTH_SYSTEM_GUIDANCE) goes in EVERY groundTruth turn,
+    //      including the first — before any plan exists — so the model learns to attach a `verify`
+    //      to each checkable step WHEN IT AUTHORS THE PLAN, not one turn late.
+    //   2. The plan projection (M1.2) then shows the current numbered plan with its active step;
+    //      planProjectionFor returns null until the first todowrite has created a plan.
     if (this.config.groundTruth) {
+      const withGuidance = this.agentState.systemPrompt;
+      this.agentState.systemPrompt = withGuidance
+        ? `${withGuidance}\n\n${GROUND_TRUTH_SYSTEM_GUIDANCE}`
+        : GROUND_TRUTH_SYSTEM_GUIDANCE;
       const planBlock = planProjectionFor(this.db, this.runId);
       if (planBlock) {
         const cur = this.agentState.systemPrompt;

@@ -161,6 +161,27 @@ export function isPathClaimed(stepContent: string | null | undefined, path: stri
 }
 
 /**
+ * The always-on Ground-Truth contract, injected into the system prompt whenever `groundTruth` is
+ * on — INDEPENDENT of whether a plan exists yet. This is the fix for the plan-authoring gap: the
+ * plan projection ({@link formatPlanProjection}) carries the "attach a verify" nudge but is inert
+ * until the first todowrite has already created the plan, so without this block the model authors
+ * its whole plan before ever seeing the contract. Kept honest per the build guide §6 — genuinely
+ * uncheckable scaffolding steps may omit `verify` (they stay flagged, not verified); the model must
+ * not fabricate throwaway checks to dodge the gate.
+ */
+export const GROUND_TRUTH_SYSTEM_GUIDANCE = [
+  "# Ground-Truth verification is ON",
+  "You plan with the todowrite tool and the harness verifies each step against a real command.",
+  "When you FIRST create a step that produces something a command can check — a feature, a fix, a",
+  "test — attach a `verify` shell command that proves it (a real test/build command, e.g.",
+  "`bun test tests/foo.test.ts`). Do not wait until the step is done to add it.",
+  "Marking a step completed runs its `verify` first; the completion is REFUSED unless the check",
+  "passes, so a step whose check you cannot yet make pass is simply not done.",
+  "A pure-scaffolding step with no runnable check may omit `verify` — it will be flagged for review,",
+  "not verified. Never write a throwaway test just to have a green check.",
+].join("\n");
+
+/**
  * M1.2 + M3.1: project a persisted plan into a compact, numbered system-prompt block with the
  * active step marked, so the model always sees the plan of record. Steps that carry a `verify`
  * command render it inline so the model knows the check it must keep green. Returns null for
@@ -175,7 +196,7 @@ export function formatPlanProjection(plan: PlanRow, steps: PlanStepRow[]): strin
     return `${i + 1}. [${mark}] ${s.content ?? ""}${verify}`;
   });
   const header = `# Current plan (step ${pos}/${steps.length}${plan.title ? ` — ${plan.title}` : ""})`;
-  return `${header}\n${lines.join("\n")}\n\nStay on this plan. As you work, keep it current with todowrite (mark steps in_progress/completed); do not silently drift onto unrelated files. Attach a \`verify\` command to each step where a runnable check exists. Marking a step completed runs its \`verify\` first; the completion is refused unless the check passes.`;
+  return `${header}\n${lines.join("\n")}\n\nStay on this plan. As you work, keep it current with todowrite (mark steps in_progress/completed); do not silently drift onto unrelated files. Any step above without a \`verify\` and where a runnable check exists still needs one: add it now with todowrite. Marking a step completed runs its \`verify\` first; the completion is refused unless the check passes.`;
 }
 
 /** Convenience for runtime.ts: fetch + project the active plan for a session. */

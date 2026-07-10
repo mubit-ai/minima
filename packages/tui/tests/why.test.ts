@@ -106,6 +106,23 @@ describe("whyReportFor", () => {
     expect(report).not.toContain("check did not pass");
   });
 
+  test("an unchecked step renders ○ (not ✗) — completed without a check is not a failure", () => {
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "Scaffold project", status: "completed" },
+    ]);
+    // M4.3 verify-less flip: outcome 'unchecked', verified_by null, hasCheck false.
+    d.insertGate({
+      planId,
+      stepId: stepIds[0],
+      outcome: "unchecked",
+      factors: { ...GREEN, pass: false, redToGreen: false, hasCheck: false },
+    });
+    const report = whyReportFor(d, "run1");
+    expect(report).toContain("○ step 1 🟡 no acceptance check - Scaffold project");
+    expect(report).not.toContain("✗ step 1");
+  });
+
   test("falls back to the recorded outcome when factors are unavailable", () => {
     const d = db();
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
