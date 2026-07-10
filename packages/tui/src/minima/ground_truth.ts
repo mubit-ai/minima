@@ -42,6 +42,7 @@ import {
   defaultFactorFs,
   detectTamper,
 } from "./gt_factors.ts";
+import { gateVerdictFor } from "./why.ts";
 
 /**
  * Minimal structural view of MinimaAgent — avoids a runtime import cycle. `runSignal` (the
@@ -236,7 +237,7 @@ export interface GroundedOutcome {
   gateId: string;
   outcome: GateOutcome; // verified | failed | unrunnable
   verifiedBy: VerifiedBy; // deterministic | judge | user
-  confidence: ConfidenceTier | null; // green | yellow | red (null when factors couldn't tier)
+  confidence: ConfidenceTier | null; // green | yellow | red — stored tier, else derived from factors
 }
 
 /**
@@ -265,7 +266,10 @@ export function groundedOutcomeFor(
       gateId: gate.id,
       outcome: gate.outcome,
       verifiedBy: gate.verified_by,
-      confidence: gate.confidence,
+      // Resolve the tier exactly like /why and the footer: the stored `confidence` when the
+      // writer set one (seeded rows), else the ladder's verdict derived from `factors_json`
+      // (the live hooks store `confidence` null — the M8.2 live-gate join reads through this).
+      confidence: gateVerdictFor(gate).tier,
     };
   } catch {
     return null; // fail-open: a broken ledger read must never break the turn.
@@ -278,8 +282,9 @@ export function groundedOutcomeFor(
  * of "the judge guessed 0.7". Called from the runtime feedback seam once a prompt's decision row
  * exists (see runtime.persistDecision), where `recId` and the active plan are both in hand.
  *
- * Total + fail-open: a null db/session/recId or no grounded gate is a silent no-op. A gate whose
- * factors couldn't produce a confidence tier still stamps outcome + verifier, `gt_confidence` null.
+ * Total + fail-open: a null db/session/recId or no grounded gate is a silent no-op. `gt_confidence`
+ * resolves through {@link gateVerdictFor} (stored tier, else the ladder's verdict from
+ * `factors_json`) and stays null only when neither can produce a tier.
  */
 export function stampGroundedOutcome(
   db: MinimaDb | null,

@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AfterToolCallContext, BeforeToolCallContext } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
   type Model,
@@ -17,6 +21,7 @@ import {
   redPrompt,
 } from "../src/minima/behavior.ts";
 import {
+  groundTruthHooks,
   planStripDrift,
   planStripInfo,
   planStripLabel,
@@ -33,10 +38,31 @@ import {
   harnessConfig,
 } from "../src/minima/index.ts";
 
-// M8.2 — the ground-truth spine end-to-end, pinned as a regression. Track A does not yet write live
-// gates, so the plan+gates are seeded (the /gt-seed / seedPlan pattern), but everything downstream —
-// footer snapshot, tiers, drift, the M7.1 stamp, and the M7.2/M7.3 route→run→feedback→escalation
-// loop — is exercised for real against an in-memory MinimaDb + faux provider.
+// M8.2 — the ground-truth spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
+// /gt-seed / seedPlan pattern) to pin the full footer snapshot — tiers, drift, and the M7.1 stamp —
+// in one glance. Test 2 is the live-gate join: the plan, the red baseline, and every gate row are
+// written by the real todowrite hooks (before-gate + after-sink) running a real check, while the
+// M7.2/M7.3 route→run→feedback→escalation loop runs against an in-memory MinimaDb + faux provider.
+
+// Hook-context builders — the gate reads only toolCall + args / isError (same shape gate.test.ts uses).
+function bctx(todos: unknown[], id: string): BeforeToolCallContext {
+  const args = { tasks: JSON.stringify(todos) };
+  return {
+    toolCall: { type: "toolCall", id, name: "todowrite", arguments: args },
+    args,
+  } as unknown as BeforeToolCallContext;
+}
+function actx(todos: unknown[], id: string): AfterToolCallContext {
+  return {
+    toolCall: {
+      type: "toolCall",
+      id,
+      name: "todowrite",
+      arguments: { tasks: JSON.stringify(todos) },
+    },
+    isError: false,
+  } as unknown as AfterToolCallContext;
+}
 
 const GREEN: Factors = {
   pass: true,
@@ -164,9 +190,10 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
 
-    // A gated mock: routes cheap→big when cheap is excluded, and when it re-routes to big it flips
-    // the plan's latest gate to verified (the red→green a stronger model achieves).
-    let onEscalationRung = () => {};
+    // A gated mock: routes cheap→big when cheap is excluded. When it re-routes to big, the awaited
+    // callback below "does the work" (the red→green a stronger model achieves) through the real
+    // done-gate rather than by seeding rows.
+    let onEscalationRung: () => Promise<void> = async () => {};
     const recommendCalls: Record<string, unknown>[] = [];
     const feedbackCalls: Record<string, unknown>[] = [];
     const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
@@ -176,7 +203,7 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
         recommendCalls.push(req);
         const excluded: string[] = req.constraints?.excluded_models ?? [];
         const pick = excluded.includes("cheap-model") ? "big-model" : "cheap-model";
-        if (pick === "big-model") onEscalationRung();
+        if (pick === "big-model") await onEscalationRung();
         return {
           status: 200,
           json: async () => ({
@@ -241,24 +268,36 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     agent.db = db;
     agent.runId = db.startRun({ projectKey: "p" });
 
-    const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId, [
-      { content: "wire the endpoint", status: "in_progress" },
-    ]);
-    db.insertGate({
-      planId,
-      stepId: stepIds[0]!,
-      outcome: "failed",
-      verifiedBy: "deterministic",
-      confidence: "red",
-    });
-    onEscalationRung = () => {
-      db.insertGate({
-        planId,
-        stepId: stepIds[0]!,
-        outcome: "verified",
-        verifiedBy: "deterministic",
-        confidence: "green",
-      });
+    // M8.2 live-gate join — nothing below is seeded. The flag file IS the ground truth: the
+    // step's check (`test -f`) is red until the "work" creates it. The flag name avoids
+    // test/spec so the factor heuristics read it as a pre-existing check with unknown coverage.
+    const dir = mkdtempSync(join(tmpdir(), "gt-e2e-"));
+    const flag = join(dir, "done.flag");
+    const { before: beforeGate, after: afterGate } = groundTruthHooks(agent);
+    const start = [
+      { content: "wire the endpoint", status: "in_progress", verify: `test -f ${flag}` },
+    ];
+    const done = [{ content: "wire the endpoint", status: "completed", verify: `test -f ${flag}` }];
+
+    // Turn 1: the plan lands through the sink, which captures the pre-work baseline (flag absent → red).
+    expect(await beforeGate(bctx(start, "tc-plan"))).toBeNull();
+    await afterGate(actx(start, "tc-plan"));
+    const plan = db.getActivePlan(agent.runId)!;
+    const step = db.getPlanSteps(plan.id)[0]!;
+    expect(step.baseline).toBe("red");
+
+    // Turn 2: the cheap rung claims completion while the check is still red — the done-gate
+    // blocks the todowrite and records the failed attempt (M4.1): the grounded 🔴 the ladder sees.
+    const blocked = await beforeGate(bctx(done, "tc-red"));
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("Step not verified");
+
+    // The escalation rung "does the work": the check goes green and the retried todowrite passes
+    // the gate — the verdict parks in the before-hook and lands as a verified row in the after-hook.
+    onEscalationRung = async () => {
+      writeFileSync(flag, "ok\n");
+      expect(await beforeGate(bctx(done, "tc-green"))).toBeNull();
+      await afterGate(actx(done, "tc-green"));
     };
 
     const routing = await agent.promptRouted("do the thing");
@@ -268,8 +307,20 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(agent.ladderEscalations).toBe(1);
     expect(feedbackCalls.map((f) => (f as any).outcome)).toEqual(["failure", "success"]);
 
+    // Gate rows written by the hooks, not seeded — the blocked attempt then the recovered pass,
+    // both attributed to the same step, with measured factors (the red→green flip is real).
+    const gateRows = db.getGates(plan.id);
+    expect(gateRows.map((g) => g.outcome)).toEqual(["failed", "verified"]);
+    expect(gateRows.map((g) => g.step_id)).toEqual([step.id, step.id]);
+    const passFactors = JSON.parse(gateRows[1]!.factors_json!) as Record<string, unknown>;
+    expect(passFactors.redToGreen).toBe(true); // measured against the captured baseline
+    expect(db.getPlanSteps(plan.id)[0]!.status).toBe("completed");
+
     // DB dump: two routing rows, per model, each with a grounded outcome stamped (M7.1) and the
-    // grounded loss/win recorded (M7.3), chained by parent_rec_id.
+    // grounded loss/win recorded (M7.3), chained by parent_rec_id. Live tiers are honest: the
+    // failed attempt derives red; the pass derives yellow, not green — no file_changes were
+    // recorded, so coverage is unknown and the ladder withholds green (the seeded test above
+    // pins the full green story).
     const rows = db.getRunDecisions(agent.runId);
     expect(rows).toHaveLength(2);
     expect(rows[0]!.chosen_model).toBe("cheap-model");
@@ -279,9 +330,10 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(rows[1]!.chosen_model).toBe("big-model");
     expect(rows[1]!.outcome).toBe("success");
     expect(rows[1]!.gt_outcome).toBe("verified");
-    expect(rows[1]!.gt_confidence).toBe("green");
+    expect(rows[1]!.gt_confidence).toBe("yellow");
     expect(rows[1]!.parent_rec_id).toBe(String(rows[0]!.rec_id));
     reg.unregister();
+    rmSync(dir, { recursive: true, force: true });
     db.close();
   });
 });
