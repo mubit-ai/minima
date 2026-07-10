@@ -8,7 +8,7 @@
  */
 
 import { Box, Static, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -2639,13 +2639,25 @@ export function HarnessApp({
       : "";
   const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
   const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
-  const scrollWin = fullscreen
-    ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols)
-    : null;
-  if (scrollWin) {
-    maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
-    atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
-  }
+  // Windowing the transcript is O(messages) (two full height passes over the whole history), so
+  // memoize it on its real inputs. HarnessApp re-renders on every keystroke (typedText), and without
+  // this that recompute — plus the re-render of every visible MessageRow — ran per character. The deps
+  // are exactly what getScrollableMessages reads; messagesBudget already folds in rows/reserved, and a
+  // single-line prompt keeps it stable across keystrokes, so typing no longer re-windows the transcript.
+  const scrollWin = useMemo(
+    () => (fullscreen ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols) : null),
+    [fullscreen, messages, messagesBudget, scrollOffset, cols],
+  );
+  // Publish the fullscreen viewport metrics AFTER render — mutating refs during render breaks React
+  // purity (order/StrictMode/concurrent-unsafe). PgUp/PgDn reads maxChatHeightRef at key-time and the
+  // follow-on-new-content effect reads atBottomRef a render later; both tolerate the one-render lag
+  // because scrollOffset (not the ref) is the source of truth for scroll position.
+  useEffect(() => {
+    if (scrollWin) {
+      maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
+      atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
+    }
+  }, [scrollWin, messagesBudget]);
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
