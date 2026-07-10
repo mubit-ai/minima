@@ -10,14 +10,14 @@
  */
 
 import { Box, Text } from "ink";
-import type React from "react";
+import { type ReactNode, memo } from "react";
 import { type ChatMessage, clampToolText } from "./layout.ts";
 
 // Re-exported so app.tsx keeps a single import site.
 export type { ChatMessage };
 
-function renderInlineMarkdown(text: string): React.ReactNode {
-  const tokens: React.ReactNode[] = [];
+function renderInlineMarkdown(text: string): ReactNode {
+  const tokens: ReactNode[] = [];
   const currentText = text;
 
   const regex = /(\*\*|`)/g;
@@ -61,7 +61,7 @@ function renderInlineMarkdown(text: string): React.ReactNode {
   return <>{tokens}</>;
 }
 
-export function MarkdownRenderer({ text }: { text: string }) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string }) {
   const lines = text.split("\n");
 
   return (
@@ -117,13 +117,21 @@ export function MarkdownRenderer({ text }: { text: string }) {
       })}
     </Box>
   );
-}
+});
 
 /**
  * One finalized message, rendered inline (no per-turn box). Used as a <Static> item — printed once
  * into scrollback. A `marginTop` gives visual separation between messages.
+ *
+ * memo: in the fullscreen viewport the whole visible window is re-mapped on every HarnessApp render
+ * (e.g. each keystroke). Props are (msg, cols); getScrollableMessages preserves the object reference
+ * of un-clipped messages, so memo lets every row except the fold-straddling one bail out of re-render
+ * (and its markdown re-parse). Inline mode renders each row once via <Static>, where memo is a no-op.
  */
-export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
+export const MessageRow = memo(function MessageRow({
+  msg,
+  cols,
+}: { msg: ChatMessage; cols: number }) {
   if (msg.role === "user") {
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -178,7 +186,7 @@ export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
       <MarkdownRenderer text={msg.text} />
     </Box>
   );
-}
+});
 
 /** The live streaming assistant reply (dynamic region; finalizes into a MessageRow when done). */
 export function StreamingReply({ text }: { text: string }) {

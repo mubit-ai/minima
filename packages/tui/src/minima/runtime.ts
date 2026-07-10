@@ -23,6 +23,13 @@ import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
+import {
+  GROUND_TRUTH_SYSTEM_GUIDANCE,
+  type GroundedOutcome,
+  groundedOutcomeFor,
+  planProjectionFor,
+  stampGroundedOutcome,
+} from "./ground_truth.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
@@ -184,6 +191,24 @@ export class MinimaAgent extends Agent {
       const block = formatRecallBlock(recalled);
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
     }
+    // Ground-Truth: inject the verify contract + the plan of record into THIS turn's system
+    // prompt (appended after recall, reverted together in `finally`). Off unless groundTruth is set.
+    //   1. The static contract (GROUND_TRUTH_SYSTEM_GUIDANCE) goes in EVERY groundTruth turn,
+    //      including the first — before any plan exists — so the model learns to attach a `verify`
+    //      to each checkable step WHEN IT AUTHORS THE PLAN, not one turn late.
+    //   2. The plan projection (M1.2) then shows the current numbered plan with its active step;
+    //      planProjectionFor returns null until the first todowrite has created a plan.
+    if (this.config.groundTruth) {
+      const withGuidance = this.agentState.systemPrompt;
+      this.agentState.systemPrompt = withGuidance
+        ? `${withGuidance}\n\n${GROUND_TRUTH_SYSTEM_GUIDANCE}`
+        : GROUND_TRUTH_SYSTEM_GUIDANCE;
+      const planBlock = planProjectionFor(this.db, this.runId);
+      if (planBlock) {
+        const cur = this.agentState.systemPrompt;
+        this.agentState.systemPrompt = cur ? `${cur}\n\n${planBlock}` : planBlock;
+      }
+    }
     try {
       // Recovery ladder: walk SERVER-SUPPLIED rungs (fresh recommend per rung with the
       // failed model excluded — never a client-side re-rank, which would corrupt the
@@ -293,14 +318,8 @@ export class MinimaAgent extends Agent {
 
         // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
         // the signal that sharpens the next recommendation.
-        const { quality, outcome, reinforcedEntryIds, lessonPromoted } = await this.feedbackSafely(
-          content,
-          routing,
-          runUsage,
-          latencyMs,
-          failed,
-          turnsTaken,
-        );
+        const { quality, outcome, reinforcedEntryIds, lessonPromoted, grounded } =
+          await this.feedbackSafely(content, routing, runUsage, latencyMs, failed, turnsTaken);
 
         if (this.meter) {
           this.meter.record({
@@ -329,13 +348,18 @@ export class MinimaAgent extends Agent {
         });
 
         // Escalate? Only with a rung left, a routed (non-pinned) decision to learn from,
-        // and a REAL trigger: provider failure, or a non-null judge grade below τ.
+        // and a REAL trigger: provider failure, a non-null judge grade below τ, or a grounded
+        // check that failed. M7.3: a red gate (failed|unrunnable) outranks the judge as a
+        // trigger — the same ladder that recovers judge-failures now recovers check-failures.
         const judgeFailed =
           !failed && quality !== null && routing !== null && quality < routing.thresholdUsed;
+        const gateFailed = grounded !== null && grounded.outcome !== "verified";
         const failedModel =
           routing !== null && routing.recommendationId !== null ? routing.chosenModelId : null;
         const canEscalate =
-          attempt < this.recoveryRungs && failedModel !== null && (failed || judgeFailed);
+          attempt < this.recoveryRungs &&
+          failedModel !== null &&
+          (failed || judgeFailed || gateFailed);
         if (!canEscalate) {
           if (runError !== null) throw runError;
           return routing;
@@ -433,6 +457,12 @@ export class MinimaAgent extends Agent {
         reinforcedEntryIds: o.reinforcedEntryIds ?? null,
         lessonPromoted: o.lessonPromoted ?? null,
       });
+      // M7.1: once the decision row exists, stamp the grounded (deterministic) verdict of the
+      // step verified under it onto gt_* — a real check outranks the judge. Inert until gates
+      // exist (Track A / /gt-seed); fail-open inside the helper.
+      if (this.config.groundTruth) {
+        stampGroundedOutcome(this.db, this.runId, recId);
+      }
     } catch {
       try {
         this.db.markDegraded(this.runId);
@@ -557,9 +587,21 @@ export class MinimaAgent extends Agent {
     outcome: "success" | "partial" | "failure";
     reinforcedEntryIds: string[] | null;
     lessonPromoted: boolean | null;
+    /** M7.2/M7.3: the grounded verdict of the step verified under this prompt (null = none). */
+    grounded: GroundedOutcome | null;
   }> {
+    // M7.2: a real check (deterministic gate) outranks the judge. Read the run's most recent
+    // grounded verdict once; the escalation block reuses it (M7.3) so the ledger is read once.
+    const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, this.runId) : null;
+    const deterministic = grounded?.verifiedBy === "deterministic" ? grounded : null;
     if (!routing || routing.recommendationId === null || routing.chosenModelId === null) {
-      return { quality: null, outcome: "success", reinforcedEntryIds: null, lessonPromoted: null };
+      return {
+        quality: null,
+        outcome: "success",
+        reinforcedEntryIds: null,
+        lessonPromoted: null,
+        grounded,
+      };
     }
     let quality: number | null = null;
     let outcome: "success" | "partial" | "failure" = "success";
@@ -570,6 +612,11 @@ export class MinimaAgent extends Agent {
       if (failed) {
         quality = 0.0;
         outcome = "failure";
+      } else if (deterministic) {
+        // M7.2: the step carried a real check — its verdict IS the outcome (no judge, no
+        // fabricated quality). verified/failed/unrunnable → success/failure label only.
+        quality = null;
+        outcome = deterministic.outcome === "verified" ? "success" : "failure";
       } else if (!this.shouldJudge()) {
         quality = null;
         outcome = "success";
@@ -587,11 +634,14 @@ export class MinimaAgent extends Agent {
       }
       // Feedback truth (the learning loop is only as good as this call):
       //  - usage is the RUN TOTAL (all turns), not the last assistant message;
-      //  - verified_in_production is NEVER claimed — nothing here runs the project's tests
-      //    yet, and a fabricated flag makes the server treat unjudged successes as
-      //    high-importance ground truth (it substitutes quality 0.9 for null);
-      //  - unjudged turns are tagged so the server/analytics can discriminate them.
+      //  - a deterministic gate is the only source that flips verified_in_production, and only
+      //    when its tier is GREEN (trustworthy origin: pre-existing/user + red→green + coverage).
+      //    Yellow/agent_new stays false — a self-written test must never be claimed as ground
+      //    truth (the server promotes verified successes as high-importance, substituting 0.9);
+      //  - the judge path (no gate) never claims it, and quality is never fabricated;
+      //  - unjudged/deterministic turns are tagged so the server/analytics can discriminate them.
       const judged = quality !== null;
+      const verifiedInProduction = deterministic?.confidence === "green";
       const resp = await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
@@ -600,9 +650,13 @@ export class MinimaAgent extends Agent {
         usage: runUsage,
         latencyMs,
         iterations: turnsTaken || undefined,
-        verifiedInProduction: false,
+        verifiedInProduction,
         judged,
-        notes: judged ? undefined : "judged=false",
+        notes: deterministic
+          ? `verified_by=deterministic;tier=${deterministic.confidence ?? "unknown"}`
+          : judged
+            ? undefined
+            : "judged=false",
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
       // cites which memory entries this outcome reinforced.
@@ -633,7 +687,7 @@ export class MinimaAgent extends Agent {
       // the reason for diagnostics (/reconnect, tests, debugging the learning loop).
       this.lastFeedbackError = errText(exc);
     }
-    return { quality, outcome, reinforcedEntryIds, lessonPromoted };
+    return { quality, outcome, reinforcedEntryIds, lessonPromoted, grounded };
   }
 
   // ----------------------------------------------------------------- helpers
