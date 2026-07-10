@@ -1,0 +1,196 @@
+import { beforeEach, describe, expect, test } from "bun:test";
+import {
+  AssistantMessage,
+  type Model,
+  registerFauxProvider,
+  registerModel,
+  resetModelRegistry,
+  resetProviderRegistration,
+  resetRegistry,
+  text,
+} from "../src/ai/index.ts";
+import { MinimaDb } from "../src/db/minima_db.ts";
+import type { ConfidenceTier, GateOutcome } from "../src/minima/gt_contract.ts";
+import {
+  CostMeter,
+  MinimaAgent,
+  MinimaClient,
+  MinimaRouter,
+  ModelMapping,
+  harnessConfig,
+} from "../src/minima/index.ts";
+
+// M7.2: a deterministic gate outranks the LLM judge in the feedback path. The verdict becomes
+// the OUTCOME label (never a fabricated quality), and verified_in_production is claimed ONLY when
+// the gate tier is green (trustworthy origin). All hermetic: faux provider + injected fetch.
+
+const FAUX_MODEL: Model = {
+  id: "test-faux",
+  provider: "faux",
+  api: "faux",
+  name: "Test Faux",
+  cost: { input: 1, output: 2 },
+  context_window: 8192,
+  max_tokens: 4096,
+};
+
+/** A judge that counts its invocations — lets a test prove the judge was skipped. */
+function countingJudge(score: number | null) {
+  return {
+    calls: 0,
+    async grade(): Promise<number | null> {
+      this.calls += 1;
+      return score;
+    },
+  };
+}
+
+function mockService() {
+  const feedbackCalls: Record<string, unknown>[] = [];
+  const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
+    const u = new URL(url);
+    const method = init?.method ?? "GET";
+    if (method === "POST" && u.pathname === "/v1/recommend") {
+      return {
+        status: 200,
+        json: async () => ({
+          recommendation_id: "rec-xyz",
+          recommended_model: {
+            model_id: "test-faux",
+            provider: "faux",
+            predicted_success: 0.9,
+            est_cost_usd: 0.001,
+            score: 0.001,
+          },
+          ranked: [
+            {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
+          ],
+          confidence: 0.8,
+          decision_basis: "memory",
+          threshold_used: 0.5,
+          classified_task_type: "code",
+          classified_difficulty: "easy",
+          catalog_version: "v1",
+        }),
+      };
+    }
+    if (method === "POST" && u.pathname === "/v1/feedback") {
+      feedbackCalls.push(init?.body ? JSON.parse(init.body) : {});
+      return { status: 200, json: async () => ({ accepted: true, record_id: "o1" }) };
+    }
+    return { status: 404, json: async () => ({ detail: "not found" }) };
+  };
+  return { fetchLike, feedbackCalls };
+}
+
+function setup(judge: ReturnType<typeof countingJudge>) {
+  resetRegistry();
+  resetProviderRegistration();
+  resetModelRegistry();
+  registerModel(FAUX_MODEL);
+  const reg = registerFauxProvider([FAUX_MODEL]);
+  reg.setResponses([new AssistantMessage({ content: [text("answer")], stop_reason: "stop" })]);
+  const { fetchLike, feedbackCalls } = mockService();
+  const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
+  const config = harnessConfig({
+    candidates: ["test-faux"],
+    allowOffline: false,
+    minimaApiKey: "k",
+    groundTruth: true,
+  });
+  const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+  const db = new MinimaDb(":memory:");
+  db.ensureProject("p");
+  const runId = db.startRun({ projectKey: "p" });
+  const agent = new MinimaAgent({ config, router, judge, meter: new CostMeter(), tools: [] });
+  agent.db = db;
+  agent.runId = runId;
+  return { agent, reg, feedbackCalls, db, runId };
+}
+
+/** Seed the active plan with one step + a single deterministic gate of the given verdict. */
+function seedGate(db: MinimaDb, runId: string, outcome: GateOutcome, confidence: ConfidenceTier) {
+  const { planId, stepIds } = db.upsertPlanFromTodos(runId, [
+    { content: "wire the endpoint", status: "in_progress" },
+  ]);
+  db.insertGate({ planId, stepId: stepIds[0]!, outcome, verifiedBy: "deterministic", confidence });
+}
+
+describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
+  let judge: ReturnType<typeof countingJudge>;
+  beforeEach(() => {
+    judge = countingJudge(0.9);
+  });
+
+  test("green gate → success, verified_in_production=true, no fabricated quality, judge skipped", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    seedGate(db, runId, "verified", "green");
+
+    await agent.promptRouted("do the thing");
+
+    expect(feedbackCalls).toHaveLength(1);
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("success");
+    expect(fb.verified_in_production).toBe(true);
+    expect(fb.quality_score).toBeUndefined(); // gate verdict → label only, never a fabricated score
+    expect(fb.judged).toBe(false);
+    expect(String(fb.notes)).toContain("verified_by=deterministic");
+    expect(String(fb.notes)).toContain("tier=green");
+    expect(judge.calls).toBe(0); // the judge was NOT consulted
+    reg.unregister();
+    db.close();
+  });
+
+  test("yellow gate (self-written test) → success but verified_in_production=false", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    seedGate(db, runId, "verified", "yellow");
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("success");
+    expect(fb.verified_in_production).toBe(false); // agent-authored trust is never ground truth
+    expect(String(fb.notes)).toContain("tier=yellow");
+    expect(judge.calls).toBe(0);
+    reg.unregister();
+    db.close();
+  });
+
+  test("red gate → failure, verified_in_production=false (judge skipped)", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    agent.recoveryRungs = 0; // isolate the feedback assertion from the M7.3 ladder
+    seedGate(db, runId, "failed", "red");
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("failure");
+    expect(fb.verified_in_production).toBe(false);
+    expect(fb.quality_score).toBeUndefined();
+    expect(judge.calls).toBe(0);
+    reg.unregister();
+    db.close();
+  });
+
+  test("no gate → falls back to the judge (verified_in_production=false)", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    // Active plan but no gate → no grounded verdict → judge path unchanged.
+    db.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress" }]);
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("success");
+    expect(fb.quality_score).toBe(0.9); // the judge's grade, not a gate
+    expect(fb.verified_in_production).toBe(false);
+    expect(judge.calls).toBe(1); // the judge WAS consulted
+    reg.unregister();
+    db.close();
+  });
+});

@@ -22,6 +22,7 @@ import {
 } from "./state.ts";
 import type {
   AfterToolCall,
+  AfterToolCallResult,
   AgentTool,
   BeforeToolCall,
   ThinkingLevel,
@@ -56,8 +57,8 @@ export class Agent {
   private readonly convertToLlm: ConvertToLlm;
   private readonly transformContext: TransformContext | null;
   private toolExecution: ToolExecutionMode;
-  private beforeToolCallHook: BeforeToolCall | null;
-  private afterToolCallHook: AfterToolCall | null;
+  private readonly beforeToolCallHooks: { fn: BeforeToolCall }[] = [];
+  private readonly afterToolCallHooks: { fn: AfterToolCall }[] = [];
   private readonly thinkingBudgets: Record<string, number> | null;
   private readonly maxTurns: number;
   public sessionId: string | null;
@@ -82,8 +83,8 @@ export class Agent {
     this.convertToLlm = opts.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = opts.transformContext ?? null;
     this.toolExecution = opts.toolExecution ?? "parallel";
-    this.beforeToolCallHook = opts.beforeToolCall ?? null;
-    this.afterToolCallHook = opts.afterToolCall ?? null;
+    if (opts.beforeToolCall) this.beforeToolCallHooks.push({ fn: opts.beforeToolCall });
+    if (opts.afterToolCall) this.afterToolCallHooks.push({ fn: opts.afterToolCall });
     this.thinkingBudgets = opts.thinkingBudgets ?? null;
     this.maxTurns = opts.maxTurns ?? 50;
     this.sessionId = opts.sessionId ?? null;
@@ -108,11 +109,27 @@ export class Agent {
   setToolExecution(mode: ToolExecutionMode): void {
     this.toolExecution = mode;
   }
-  setBeforeToolCall(fn: BeforeToolCall | null): void {
-    this.beforeToolCallHook = fn;
+  /** Append a before-hook to the ordered stack; returns a disposer that removes
+   * exactly this registration (idempotent — safe to call twice, and safe when the
+   * same fn is registered more than once). First hook returning block:true wins. */
+  addBeforeToolCall(fn: BeforeToolCall): () => void {
+    const entry = { fn };
+    this.beforeToolCallHooks.push(entry);
+    return () => {
+      const i = this.beforeToolCallHooks.indexOf(entry);
+      if (i >= 0) this.beforeToolCallHooks.splice(i, 1);
+    };
   }
-  setAfterToolCall(fn: AfterToolCall | null): void {
-    this.afterToolCallHook = fn;
+  /** Append an after-hook to the ordered stack; returns a disposer (same semantics
+   * as addBeforeToolCall). Hooks fold: each sees the result as modified by the
+   * previous hooks' returns; the composed return accumulates all modifications. */
+  addAfterToolCall(fn: AfterToolCall): () => void {
+    const entry = { fn };
+    this.afterToolCallHooks.push(entry);
+    return () => {
+      const i = this.afterToolCallHooks.indexOf(entry);
+      if (i >= 0) this.afterToolCallHooks.splice(i, 1);
+    };
   }
   setSessionId(id: string | null): void {
     this.sessionId = id;
@@ -185,6 +202,13 @@ export class Agent {
     this.controller?.abort();
   }
 
+  /** The in-flight run's AbortSignal (null when idle). Lets hooks (e.g. the Ground-Truth
+   * done-gate) make their own child processes cancellable by the same abort() that stops
+   * the run — BeforeToolCallContext carries AgentState, not the loop config's signal. */
+  get runSignal(): AbortSignal | null {
+    return this.controller?.signal ?? null;
+  }
+
   /** Await the current run's completion (for background-task usage). */
   async waitForIdle(): Promise<void> {
     if (this.idle) return;
@@ -210,14 +234,49 @@ export class Agent {
   }
 
   // --- internals ---
+  // The loop accepts a single before/after closure; the Agent composes its ordered
+  // stacks into one of each. Reads the live arrays at invocation time so hooks
+  // registered or disposed mid-run take effect on the next tool call.
+  private readonly composedBeforeToolCall: BeforeToolCall = async (ctx) => {
+    for (const { fn } of [...this.beforeToolCallHooks]) {
+      const decision = await fn(ctx);
+      if (decision?.block) return decision;
+    }
+    return null;
+  };
+
+  private readonly composedAfterToolCall: AfterToolCall = async (ctx) => {
+    let result = ctx.result;
+    const acc: AfterToolCallResult = {};
+    let any = false;
+    for (const { fn } of [...this.afterToolCallHooks]) {
+      const ar = await fn({ ...ctx, result });
+      if (!ar) continue;
+      any = true;
+      if (ar.terminate) {
+        acc.terminate = true;
+        result = { ...result, terminate: true };
+      }
+      if (ar.details) {
+        acc.details = { ...(acc.details ?? {}), ...ar.details };
+        result = { ...result, details: { ...(result.details ?? {}), ...ar.details } };
+      }
+      if (ar.content) {
+        acc.content = ar.content;
+        result = { ...result, content: ar.content };
+      }
+    }
+    return any ? acc : null;
+  };
+
   private buildConfig(signal: AbortSignal): AgentLoopConfig {
     if (!this.state.model) throw new Error("model is required");
     return {
       model: this.state.model,
       convertToLlm: this.convertToLlm,
       toolExecution: this.toolExecution,
-      beforeToolCall: this.beforeToolCallHook,
-      afterToolCall: this.afterToolCallHook,
+      beforeToolCall: this.composedBeforeToolCall,
+      afterToolCall: this.composedAfterToolCall,
       transformContext: this.transformContext,
       shouldStopAfterTurn: this.shouldStopAfterTurn,
       thinkingBudgets: this.thinkingBudgets,

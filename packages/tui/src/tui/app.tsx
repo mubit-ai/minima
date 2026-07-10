@@ -8,8 +8,9 @@
  */
 
 import { Box, Static, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import type { BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -17,13 +18,32 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
+import {
+  type PlanStripInfo,
+  planStripDrift,
+  planStripInfo,
+  planStripLabel,
+  stampGroundedOutcome,
+} from "../minima/ground_truth.ts";
+import {
+  PlanSessionStore,
+  type RoutingResult,
+  answerOpenQuestions,
+  buildPlannerSystemPrompt,
+  runCouncilRound,
+  shouldConveneCouncil,
+  synthesizeGroundTruth,
+} from "../minima/index.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { whyReportFor } from "../minima/why.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
+import type { SpawnFn } from "../tools/task.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
@@ -69,7 +89,27 @@ export interface AppProps {
    * used (main buffer + <Static> + native OS scroll). Set by main.ts from the CLI flag/env.
    */
   fullscreen?: boolean;
+  /** Injectable spawn for plan-mode council researchers (child MinimaAgents). From cli/main.ts. */
+  planSpawn?: SpawnFn;
+  /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
+  planMetaModel?: Model;
+  /**
+   * Ground-Truth done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_GROUND_TRUTH.
+   * Registered HERE, after the permission hook, so permission always runs first (first block
+   * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
+   */
+  gtGateBefore?: BeforeToolCall | null;
 }
+
+/** Persona the lead adopts in plan mode; the council's ground-truth snapshot is appended each turn. */
+const PLANNER_PERSONA =
+  "You are the planning lead in an interactive, read-only plan-mode session: you cannot edit " +
+  "files, run bash, or write anything. Converse with the user to shape a concrete, well-reasoned " +
+  "plan. A background council of read-only researchers and critics feeds you findings, decisions, " +
+  "constraints, and open questions — the current ground-truth snapshot injected below is " +
+  "authoritative; reason from it. Ask sharp clarifying questions only when a genuine decision-point " +
+  "is unresolved, and keep the draft plan tight and actionable. When it is solid, tell the user to " +
+  "run /plan finalize to write the ground-truth document to the project root.";
 
 /** True when at least one key-requiring model provider has its key set. */
 function anyProviderKeyPresent(): boolean {
@@ -153,8 +193,10 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
-  { name: "plan", desc: "Toggle plan mode (read-only)" },
+  { name: "plan", desc: "Plan mode + design council (start·status·finalize·cancel)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+  { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
+  { name: "why", desc: "Show per-step Ground-Truth verification" },
 ];
 
 export interface CommandPickerProps {
@@ -333,17 +375,29 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
       </Box>
       {prompt.diffPreview ? (
         <Box flexDirection="column" marginTop={0}>
-          {prompt.diffPreview
-            .split("\n")
-            .slice(0, 12)
-            .map((line) => (
-              <Text
-                key={line.slice(0, 40)}
-                color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
-              >
-                {line}
-              </Text>
-            ))}
+          {(() => {
+            // Never hide content silently: approving this prompt can authorize shell
+            // execution (todowrite verify), so a truncated preview must SAY it is truncated.
+            // Budget stays 12 rows: 11 content lines + 1 marker when over.
+            const lines = prompt.diffPreview.split("\n");
+            const shown = lines.length > 12 ? lines.slice(0, 11) : lines;
+            const hidden = lines.length - shown.length;
+            return (
+              <>
+                {shown.map((line) => (
+                  <Text
+                    key={line.slice(0, 40)}
+                    color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
+                  >
+                    {line}
+                  </Text>
+                ))}
+                {hidden > 0 ? (
+                  <Text color="yellow">… +{hidden} more lines not shown — reject if unsure</Text>
+                ) : null}
+              </>
+            );
+          })()}
         </Box>
       ) : null}
       <Text color="gray">
@@ -615,6 +669,9 @@ export function HarnessApp({
   askUserRef,
   childEventRef,
   fullscreen = true,
+  planSpawn,
+  planMetaModel,
+  gtGateBefore,
 }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -724,7 +781,9 @@ export function HarnessApp({
 
   // Permission system
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
-  const permStateRef = useRef<PermissionState>(createPermissionState(process.cwd()));
+  const permStateRef = useRef<PermissionState>(
+    createPermissionState(process.cwd(), { groundTruth: agent.config.groundTruth === true }),
+  );
 
   // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
   const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
@@ -742,6 +801,17 @@ export function HarnessApp({
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
   const planModeRef = useRef(false);
+  // Ground-Truth plan-of-record footer strip (M1.3/M2.3). Null when GT is off or there is no
+  // plan yet; refreshed from the DB on each tool_execution_end (todowrite → step, write → drift).
+  const [planStrip, setPlanStrip] = useState<PlanStripInfo | null>(null);
+  // GT tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
+  // and the earliest 🔴 block. Refreshed alongside planStrip; fails open to null (no note/block).
+  const [gtBehavior, setGtBehavior] = useState<LedgerBehavior | null>(null);
+  // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
+  // ground-truth .md written to the project root on /plan finalize.
+  const planSessionRef = useRef<PlanSessionStore | null>(null);
+  const plannerBaseSystemPromptRef = useRef<string | null>(null);
+  const councilControllerRef = useRef<AbortController | null>(null);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
   useEffect(() => {
@@ -808,16 +878,28 @@ export function HarnessApp({
     if (fullscreen && atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
-  // Wire the beforeToolCall permission hook.
-  // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
+  // Wire the beforeToolCall permission hook, then the Ground-Truth done-gate (when on) so
+  // permission always runs first — first block wins, and no gate check ever executes for a
+  // call the user declines. Sensitive tools (write/edit/bash) always prompt; read/ls
+  // auto-allow within cwd.
   useEffect(() => {
-    agent.setBeforeToolCall(async (ctx) => {
+    const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash", "apply_patch"];
+        // With ground truth on, todowrite is blocked too: it triggers the done-gate /
+        // baseline capture, which EXECUTES the step's `verify` shell command — plan mode
+        // advertises read-only, so nothing that spawns a shell may pass. With ground truth
+        // off todowrite is inert bookkeeping and stays allowed (historical behavior).
+        const gtOn = agent.config.groundTruth === true;
+        const blocked = gtOn
+          ? ["write", "edit", "bash", "apply_patch", "todowrite"]
+          : ["write", "edit", "bash", "apply_patch"];
         if (blocked.includes(ctx.toolCall.name)) {
           return {
             block: true,
-            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
+            reason: gtOn
+              ? "Plan mode is ON — write/edit/bash/apply_patch/todowrite are blocked " +
+                "(todowrite can run `verify` shell checks). Use /plan to exit."
+              : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
           };
         }
       }
@@ -829,7 +911,12 @@ export function HarnessApp({
       );
       return result;
     });
-  }, [agent]);
+    const disposeGate = gtGateBefore ? agent.addBeforeToolCall(gtGateBefore) : null;
+    return () => {
+      disposeGate?.();
+      disposePermission();
+    };
+  }, [agent, gtGateBefore]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
@@ -975,10 +1062,34 @@ export function HarnessApp({
           break;
         case "tool_execution_end":
           setActiveActions((a) => reduceActiveActions(a, ev));
+          // Keep the GT footer strip in step with the ledger the afterToolCall sink just wrote:
+          // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
+          if (agent.config.groundTruth === true) {
+            try {
+              setPlanStrip(planStripInfo(agent.db, agent.runId));
+              setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+            } catch {
+              setPlanStrip(null);
+              setGtBehavior(null);
+            }
+          }
           break;
       }
     });
     return unsub;
+  }, [agent]);
+
+  // GT footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
+  // already has a plan shows it immediately; tool_execution_end keeps it current thereafter.
+  useEffect(() => {
+    if (agent.config.groundTruth !== true) return;
+    try {
+      setPlanStrip(planStripInfo(agent.db, agent.runId));
+      setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+    } catch {
+      setPlanStrip(null);
+      setGtBehavior(null);
+    }
   }, [agent]);
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
@@ -1014,6 +1125,7 @@ export function HarnessApp({
           },
         ]);
       }
+      if (planModeRef.current) councilControllerRef.current?.abort();
       agent.abort();
       return;
     }
@@ -1034,6 +1146,50 @@ export function HarnessApp({
 
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
+
+    // M6.3: capture the override at a 🔴 gate the run stopped on, into user_signals. Only fires at
+    // an EMPTY prompt so bare letters still type normally while composing a message. a/r/s record
+    // the signal (which suppresses the block on the next refresh so the run can surface the next
+    // unanswered red); v shows the /why detail (no signal). The 🔴 banner advertises these keys.
+    const gtBlock = gtBehavior?.block ?? null;
+    const gtDb = agent.db;
+    if (agent.config.groundTruth === true && gtDb && gtBlock && typedText.trim() === "") {
+      const action =
+        input === "a" ? "accept" : input === "r" ? "reject" : input === "s" ? "steer" : null;
+      if (action) {
+        // Fail-open like every other GT touchpoint: a ledger error must not crash the TUI
+        // from inside Ink's input dispatch.
+        try {
+          gtDb.recordUserSignal(gtBlock.gateId, action);
+          setGtBehavior(ledgerBehavior(gtDb, agent.runId));
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              toolName: "gt",
+              text: `⚠ gate signal not recorded: ${errText(exc)}`,
+              isError: true,
+            },
+          ]);
+        }
+        return;
+      }
+      if (input === "v") {
+        let report: string;
+        try {
+          report = whyReportFor(gtDb, agent.runId);
+        } catch (exc) {
+          report = `⚠ /why unavailable: ${errText(exc)}`;
+        }
+        setMessages((m) => [...m, { role: "tool", text: report, toolName: "why" }]);
+        return;
+      }
+    }
 
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
@@ -1452,22 +1608,174 @@ export function HarnessApp({
         break;
       }
       case "plan": {
-        const next = !planMode;
-        setPlanMode(next);
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: next
-              ? "Plan mode ON — read-only (write/edit/bash blocked). Use /plan again to exit."
-              : "Plan mode OFF — full write access restored.",
-            toolName: "plan",
-          },
-        ]);
+        const sub = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+        const rest = args.trim().slice(sub.length).trim();
+        const pushPlan = (text: string, isError = false) =>
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            { role: "tool", text, toolName: "plan", isError },
+          ]);
+        // The planning workflow (planner persona + design council + GROUND_TRUTH.md) ships
+        // behind MINIMA_TUI_GROUND_TRUTH=1. Without it /plan stays what it always was: a pure
+        // read-only toggle — no prompt swap, no LLM spend, no file writes.
+        if (agent.config.groundTruth !== true) {
+          if (sub === "" || sub === "on" || sub === "off" || sub === "toggle") {
+            const next = sub === "on" ? true : sub === "off" ? false : !planModeRef.current;
+            setPlanMode(next);
+            pushPlan(
+              next
+                ? "Plan mode ON — write/edit/bash/apply_patch are blocked. Use /plan to exit."
+                : "Plan mode OFF — full write access restored.",
+            );
+          } else {
+            pushPlan(
+              `/plan ${sub} is part of the ground-truth planning workflow (set MINIMA_TUI_GROUND_TRUTH=1). Without it, /plan is a read-only toggle.`,
+              true,
+            );
+          }
+          break;
+        }
+
+        const enterPlanMode = (goal: string) => {
+          setPlanMode(true);
+          planSessionRef.current = new PlanSessionStore(goal);
+          // Snapshot the base prompt only once per plan session — re-entering (e.g. /plan
+          // start while already planning) must not overwrite the snapshot with the planner
+          // persona, or the agent's real system prompt is lost on exit.
+          if (plannerBaseSystemPromptRef.current == null) {
+            plannerBaseSystemPromptRef.current = agent.agentState.systemPrompt ?? "";
+          }
+          agent.agentState.systemPrompt = PLANNER_PERSONA;
+        };
+        const exitPlanMode = () => {
+          setPlanMode(false);
+          planSessionRef.current = null;
+          councilControllerRef.current?.abort();
+          councilControllerRef.current = null;
+          if (plannerBaseSystemPromptRef.current != null) {
+            agent.agentState.systemPrompt = plannerBaseSystemPromptRef.current;
+            plannerBaseSystemPromptRef.current = null;
+          }
+        };
+
+        if (sub === "" || sub === "on" || sub === "off" || sub === "toggle") {
+          const next = sub === "on" ? true : sub === "off" ? false : !planModeRef.current;
+          if (next && !planSessionRef.current) {
+            enterPlanMode("");
+            pushPlan(
+              "Plan mode ON — read-only (write/edit/bash blocked). Talk through the plan; the " +
+                "design council convenes on substantive turns. /plan finalize writes the " +
+                "ground truth to the project root. /plan status · /plan cancel.",
+            );
+          } else if (!next) {
+            exitPlanMode();
+            pushPlan("Plan mode OFF — full write access restored.");
+          } else {
+            pushPlan("Plan mode is already ON. /plan status · /plan finalize · /plan cancel.");
+          }
+          break;
+        }
+
+        if (sub === "start") {
+          enterPlanMode(rest);
+          pushPlan(
+            rest ? `Plan mode ON — goal: ${rest}` : "Plan mode ON — describe the goal to begin.",
+          );
+          break;
+        }
+
+        if (sub === "status") {
+          const store = planSessionRef.current;
+          if (!store) {
+            pushPlan("Not in plan mode. /plan start <goal> to begin.", true);
+            break;
+          }
+          pushPlan(
+            `${store.summary()}\ncouncil cost: $${store.session.totalCouncilCostUsd.toFixed(4)}`,
+          );
+          break;
+        }
+
+        if (sub === "finalize") {
+          const store = planSessionRef.current;
+          if (!store) {
+            pushPlan("Not in plan mode. /plan start <goal> to begin.", true);
+            break;
+          }
+          const signal = councilControllerRef.current?.signal ?? null;
+          // Auto-resolve any lingering open questions with a reasonable default so the ground
+          // truth is complete and decisive. Fail-open: a flaky model just leaves them unanswered.
+          if (planMetaModel) {
+            try {
+              const resolved = await answerOpenQuestions(store.session, {
+                metaModel: planMetaModel,
+                signal,
+              });
+              for (const r of resolved) {
+                store.answerQuestion(r.question, r.answer, "council", r.rationale);
+              }
+            } catch {
+              // fail-open
+            }
+          }
+          // Distil the WHOLE planning conversation (not just accumulated council state) into a
+          // detailed, structured ground truth. Fail-open: on any error the deterministic assembly
+          // (toGroundTruth(null) → toMarkdown()) is used instead so finalize always writes a doc.
+          let synth = null;
+          if (planMetaModel) {
+            const transcript = agent.agentState.messages
+              .filter((msg) => msg.role === "user" || msg.role === "assistant")
+              .map((msg) => {
+                const body = msg.textContent.trim();
+                return body ? `${msg.role === "user" ? "User" : "Planner"}: ${body}` : "";
+              })
+              .filter(Boolean)
+              .join("\n\n");
+            try {
+              synth = await synthesizeGroundTruth(store.session, transcript, {
+                metaModel: planMetaModel,
+                signal,
+              });
+            } catch {
+              // fail-open
+            }
+          }
+          const md = store.toGroundTruth(synth);
+          // Ground truth always lands in the project root; write DIRECTLY (not via the agent tool
+          // loop) so the read-only plan-mode block does not apply to the harness's own artifact.
+          const outPath = `${process.cwd()}/GROUND_TRUTH.md`;
+          try {
+            await Bun.write(outPath, md);
+          } catch (exc) {
+            pushPlan(`Failed to write ${outPath}: ${errText(exc)}`, true);
+            break;
+          }
+          exitPlanMode();
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            { role: "tool", text: md, toolName: "plan" },
+            {
+              role: "tool",
+              text: `Ground truth written: ${outPath}. Plan mode OFF — write access restored.`,
+              toolName: "plan",
+            },
+          ]);
+          break;
+        }
+
+        if (sub === "cancel") {
+          const had = planSessionRef.current != null;
+          exitPlanMode();
+          pushPlan(had ? "Plan session discarded. Plan mode OFF." : "No plan session to cancel.");
+          break;
+        }
+
+        pushPlan(
+          `Unknown /plan subcommand: ${sub}. Use: (toggle) · start <goal> · status · finalize · cancel.`,
+          true,
+        );
         break;
       }
       case "help":
@@ -1927,6 +2235,144 @@ export function HarnessApp({
         }
         break;
       }
+      case "gt": {
+        const on = agent.config.groundTruth === true;
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: on
+              ? `Ground-Truth: ON (MINIMA_TUI_GROUND_TRUTH=1) — run ${agent.runId ?? "?"}`
+              : "Ground-Truth: OFF — set MINIMA_TUI_GROUND_TRUTH=1 to enable",
+            toolName: "gt",
+          },
+        ]);
+        break;
+      }
+      case "why": {
+        const text =
+          agent.config.groundTruth !== true
+            ? "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification."
+            : whyReportFor(agent.db, agent.runId);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text, toolName: "why" },
+        ]);
+        break;
+      }
+      case "gt-seed": {
+        let text: string;
+        if (agent.config.groundTruth !== true) {
+          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 before seeding.";
+        } else if (!agent.db || !agent.runId) {
+          text = "No DB / run available to seed.";
+        } else {
+          const { planId, stepIds } = agent.db.upsertPlanFromTodos(
+            agent.runId,
+            [
+              {
+                content: "Seed trusted verification",
+                status: "completed",
+                verify: "bun test packages/tui/tests/confidence.test.ts",
+              },
+              {
+                content: "Seed flagged verification",
+                status: "completed",
+                verify: "bun test packages/tui/tests/why.test.ts",
+              },
+              {
+                content: "Seed blocked verification",
+                status: "in_progress",
+                verify: "bun test packages/tui/tests/behavior.test.ts",
+              },
+            ],
+            "Ground-Truth seed plan",
+          );
+          if (agent.db.getGates(planId).length === 0) {
+            const common = {
+              pass: true,
+              redToGreen: true,
+              hasCheck: true,
+              coverageHit: true as const,
+              tamper: false,
+            };
+            // Store the confidence the ladder derives (M6.2) so seeded rows match live gates:
+            // 🟢 trusted, 🟡 self-written, 🔴 failed check → footer note + approval prompt.
+            const green = { ...common, checkOrigin: "pre_existing" as const };
+            const yellow = { ...common, checkOrigin: "agent_new" as const };
+            const red = { ...common, pass: false, checkOrigin: "pre_existing" as const };
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[0],
+              outcome: "verified",
+              confidence: gateConfidence(green),
+              verifiedBy: "deterministic",
+              factors: green,
+            });
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[1],
+              outcome: "verified",
+              confidence: gateConfidence(yellow),
+              verifiedBy: "deterministic",
+              factors: yellow,
+            });
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[2],
+              outcome: "failed",
+              confidence: gateConfidence(red),
+              verifiedBy: "deterministic",
+              factors: red,
+            });
+          }
+          if (agent.db.getFileChanges(planId).length === 0) {
+            agent.db.insertFileChange({
+              planId,
+              stepId: stepIds[1],
+              path: "src/off-plan-seed.ts",
+              kind: "modified",
+              origin: "off_plan",
+            });
+          }
+          // M7.1 demo: give the run a routing decision, then stamp the grounded outcome onto it so
+          // `SELECT chosen_model, gt_outcome, gt_verified_by FROM routing_decisions` shows the real
+          // verdict attached to the model. Deterministic rec_id → re-seeding upserts (never dupes).
+          const seedRecId = `seed-rec-${agent.runId}`;
+          agent.db.writeDecision({
+            recId: seedRecId,
+            runId: agent.runId,
+            taskLabel: "Ground-Truth seed",
+            chosenModel: "anthropic/claude-sonnet-5",
+            decisionBasis: "seed",
+            confidence: 0,
+            thresholdUsed: 0,
+            ranked: [],
+            estCostUsd: 0,
+            actualCostUsd: 0,
+            quality: null,
+            judged: false,
+            outcome: "failure",
+            turns: 1,
+            latencyMs: 0,
+            routed: "server",
+          });
+          stampGroundedOutcome(agent.db, agent.runId, seedRecId);
+          // Reflect the seeded plan + gates in the footer immediately (a real run refreshes on
+          // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
+          setPlanStrip(planStripInfo(agent.db, agent.runId));
+          setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped grounded outcome onto ${seedRecId}. Run /why to inspect it.`;
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text, toolName: "gt" },
+        ]);
+        break;
+      }
       default:
         setMessages((m) => [
           ...m,
@@ -1942,6 +2388,119 @@ export function HarnessApp({
           },
         ]);
     }
+  }
+
+  // Surface the outcome of a routed turn (warnings / feedback / offline notes). Shared by the
+  // normal path and the plan-mode planner reply so both report routing identically.
+  function surfaceRouting(routing: RoutingResult | null) {
+    if (routing) {
+      setBasis(routing.decisionBasis || "minima");
+      // Recommend-path warnings are all benign/informational (routing succeeded or degraded
+      // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
+      const info = routingInfoWarnings(routing.warnings);
+      if (info.length > 0) {
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: `ℹ ${info.join("; ")}`, toolName: "routing", isError: false },
+        ]);
+      }
+      // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
+      // land in lastFeedbackError but previously nothing read it — a server-side write
+      // outage starved the learning loop invisibly (observed live). Muted note, not red:
+      // the turn itself succeeded, only the learning write-back failed.
+      if (agent.lastFeedbackError) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: `ℹ learning loop: ${agent.lastFeedbackError}`,
+            toolName: "routing",
+            isError: false,
+          },
+        ]);
+      }
+    } else {
+      setBasis("offline");
+      const reason = agent.offlineReason ?? "Minima unreachable";
+      // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
+          toolName: "routing",
+          isError: false,
+        },
+      ]);
+    }
+  }
+
+  // A plan-mode conversational turn: optionally convene the design council (heavy logic lives in
+  // ../minima/plan_council.ts), fold its result into the in-memory session, surface any decision
+  // questions, then re-anchor the planner's system prompt and let it reply. Fail-open throughout.
+  async function runPlanTurn(text: string) {
+    const store = planSessionRef.current;
+    if (!store) return;
+    store.adoptGoalIfEmpty(text);
+    store.recordUserTurn(text);
+
+    if (shouldConveneCouncil(text) && planSpawn && planMetaModel) {
+      const controller = new AbortController();
+      councilControllerRef.current = controller;
+      try {
+        const result = await runCouncilRound(store.session, text, {
+          parent: agent,
+          metaModel: planMetaModel,
+          spawn: planSpawn,
+          signal: controller.signal,
+          onEvent: (e) =>
+            setMessages((m) => [
+              ...m,
+              { role: "tool", toolName: "council", text: `· ${e.phase}: ${e.note}` },
+            ]),
+          onChildEvent: childEventRef?.handler ?? undefined,
+        });
+        store.applyCouncilResult(result);
+        const lines: string[] = [];
+        if (result.aborted) lines.push("(council aborted early)");
+        for (const f of result.faults) lines.push(`⚠ ${f.severity}: ${f.summary}`);
+        for (const f of result.findings) lines.push(`• ${f.source}: ${f.summary}`);
+        lines.push(`council cost $${result.costUsd.toFixed(4)} · round ${store.session.rounds}`);
+        setMessages((m) => [...m, { role: "tool", toolName: "council", text: lines.join("\n") }]);
+        // Surface only genuine decision-points to the user; record chosen answers into the session.
+        if (askUserRef?.current) {
+          for (const q of result.questions) {
+            const answer = await askUserRef.current({
+              question: q.why ? `${q.question}\n(${q.why})` : q.question,
+              header: q.header,
+              options: q.options.map((o) => ({ label: o.label, description: o.description })),
+              allow_freetext: true,
+            });
+            if (answer != null) store.answerQuestion(q.question, answer);
+          }
+        }
+      } catch (exc) {
+        // Fail-open: fall back to just the planner turn.
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            toolName: "council",
+            text: `ℹ council skipped: ${errText(exc)}`,
+            isError: false,
+          },
+        ]);
+      } finally {
+        councilControllerRef.current = null;
+      }
+    }
+
+    // Re-anchor the planner on the current ground-truth snapshot, then let it reply. The base is
+    // the planner persona (NOT plannerBaseSystemPromptRef, which holds the original agent prompt
+    // reserved for restoration on exit) so the read-only planner framing never leaks away.
+    agent.agentState.systemPrompt = buildPlannerSystemPrompt(PLANNER_PERSONA, store);
+    const routing = await agent.promptRouted(text);
+    surfaceRouting(routing);
   }
 
   async function onSubmit(text: string) {
@@ -1970,52 +2529,12 @@ export function HarnessApp({
     setStreaming("");
     setStreamingThoughts("");
     try {
-      const expanded = expandAtFiles(text, process.cwd());
-      const routing = await agent.promptRouted(expanded);
-      if (routing) {
-        setBasis(routing.decisionBasis || "minima");
-        // Recommend-path warnings are all benign/informational (routing succeeded or degraded
-        // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
-        const info = routingInfoWarnings(routing.warnings);
-        if (info.length > 0) {
-          setMessages((m) => [
-            ...m,
-            {
-              role: "tool",
-              text: `ℹ ${info.join("; ")}`,
-              toolName: "routing",
-              isError: false,
-            },
-          ]);
-        }
-        // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
-        // land in lastFeedbackError but previously nothing read it — a server-side write
-        // outage starved the learning loop invisibly (observed live). Muted note, not red:
-        // the turn itself succeeded, only the learning write-back failed.
-        if (agent.lastFeedbackError) {
-          setMessages((m) => [
-            ...m,
-            {
-              role: "tool",
-              text: `ℹ learning loop: ${agent.lastFeedbackError}`,
-              toolName: "routing",
-              isError: false,
-            },
-          ]);
-        }
+      if (planModeRef.current && planSessionRef.current && planSpawn && planMetaModel) {
+        await runPlanTurn(text);
       } else {
-        setBasis("offline");
-        const reason = agent.offlineReason ?? "Minima unreachable";
-        // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
-            toolName: "routing",
-            isError: false,
-          },
-        ]);
+        const expanded = expandAtFiles(text, process.cwd());
+        const routing = await agent.promptRouted(expanded);
+        surfaceRouting(routing);
       }
     } catch (exc) {
       setMessages((m) => [
@@ -2071,7 +2590,12 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const footerHeight = 6 + (currentAction ? 1 : 0); // StatusBar (2 rows + margin) + keys row + quit line
+  // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
+  const gtFooterNote = gtBehavior?.footerNote ?? null;
+  const gtBlock = gtBehavior?.block ?? null;
+  const gtRows = (gtFooterNote ? 1 : 0) + (gtBlock ? 1 : 0);
+  // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows.
+  const footerHeight = 6 + (currentAction ? 1 : 0) + (planStrip ? 1 : 0) + gtRows;
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -2177,13 +2701,25 @@ export function HarnessApp({
       : "";
   const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
   const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
-  const scrollWin = fullscreen
-    ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols)
-    : null;
-  if (scrollWin) {
-    maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
-    atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
-  }
+  // Windowing the transcript is O(messages) (two full height passes over the whole history), so
+  // memoize it on its real inputs. HarnessApp re-renders on every keystroke (typedText), and without
+  // this that recompute — plus the re-render of every visible MessageRow — ran per character. The deps
+  // are exactly what getScrollableMessages reads; messagesBudget already folds in rows/reserved, and a
+  // single-line prompt keeps it stable across keystrokes, so typing no longer re-windows the transcript.
+  const scrollWin = useMemo(
+    () => (fullscreen ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols) : null),
+    [fullscreen, messages, messagesBudget, scrollOffset, cols],
+  );
+  // Publish the fullscreen viewport metrics AFTER render — mutating refs during render breaks React
+  // purity (order/StrictMode/concurrent-unsafe). PgUp/PgDn reads maxChatHeightRef at key-time and the
+  // follow-on-new-content effect reads atBottomRef a render later; both tolerate the one-render lag
+  // because scrollOffset (not the ref) is the source of truth for scroll position.
+  useEffect(() => {
+    if (scrollWin) {
+      maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
+      atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
+    }
+  }, [scrollWin, messagesBudget]);
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -2368,6 +2904,33 @@ export function HarnessApp({
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold>
                 {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+              </Text>
+            </Box>
+          )}
+          {planStrip && (
+            <Box paddingX={1} width="100%">
+              <Text color="cyan" wrap="truncate-end">
+                {planStripLabel(planStrip)}
+                {planStrip.drift > 0 ? (
+                  <Text color="yellow">{planStripDrift(planStrip.drift)}</Text>
+                ) : null}
+              </Text>
+            </Box>
+          )}
+          {/* GT tier→behavior (M6.2): 🟡 milestone-review note, then the 🔴 block prompt. Each is
+              one truncated row (counted in footerHeight). The 🔴 line is a display banner here;
+              interactive [v]iew/[a]ccept/[s]teer capture lands in M6.3. */}
+          {gtFooterNote && (
+            <Box paddingX={1} width="100%">
+              <Text color="yellow" wrap="truncate-end">
+                {gtFooterNote}
+              </Text>
+            </Box>
+          )}
+          {gtBlock && (
+            <Box paddingX={1} width="100%">
+              <Text color="red" bold wrap="truncate-end">
+                {gtBlock.prompt}
               </Text>
             </Box>
           )}

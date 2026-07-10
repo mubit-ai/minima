@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import type { BeforeToolCall } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
@@ -19,6 +20,7 @@ import { MinimaDb } from "../db/minima_db.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
+import { groundTruthHooks } from "../minima/ground_truth.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
@@ -289,8 +291,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -h, --help
 `;
 
-function toolsFor(args: CliArgs) {
-  let tools = args.noTools ? [] : builtinTools();
+function toolsFor(args: CliArgs, groundTruth: boolean) {
+  let tools = args.noTools ? [] : builtinTools({ groundTruth });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -353,7 +355,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const mapping = await getProject(repoIdentity(process.cwd()));
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
-  const tools = toolsFor(args);
+  const tools = toolsFor(args, config.groundTruth === true);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
@@ -406,6 +408,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
   let db: MinimaDb | null = null;
   let sink: DbSinkHandle | null = null;
+  let gtGateBefore: BeforeToolCall | null = null;
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
@@ -418,6 +421,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     sink = attachDbSink(agent, db, { runId });
+    // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
+    // sink keeps the SQLite plan of record in step with what the agent actually did (plan
+    // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
+    // each todowrite the gate refuses completions whose `verify` does not pass. Off unless
+    // MINIMA_TUI_GROUND_TRUTH=1. Bookkeeping stays fail-open (reads live agent.db/agent.runId;
+    // swallows its own errors); only the gate's check verdicts fail closed. The before-hook is
+    // registered later — headless below, or by the TUI AFTER its permission hook so permission
+    // always runs first (first block wins) and no check runs on a call the user would deny.
+    if (config.groundTruth) {
+      const { before, after } = groundTruthHooks(agent);
+      agent.addAfterToolCall(after);
+      gtGateBefore = before;
+    }
   } catch (exc) {
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;
@@ -439,17 +455,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
   // React state without the TUI needing to exist at createSpawn time.
   const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
+  const spawnFactory = createSpawn({
+    parent: agent,
+    workdir: process.cwd(),
+    onChildEvent: (e) => childEventRef.handler?.(e),
+  });
   agent.agentState.tools.push(
     taskTool({
-      spawn: createSpawn({
-        parent: agent,
-        workdir: process.cwd(),
-        onChildEvent: (e) => childEventRef.handler?.(e),
-      }),
+      spawn: spawnFactory,
       spawnDepth: 0,
       maxDepth: 2,
     }),
   );
+
+  // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
+  const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();
 
   // The `question` tool lets the model ask the user a structured clarifying question mid-run.
   // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
@@ -481,6 +501,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     });
   }
+  // Headless has no permission hook, so the done-gate registers directly (sole before-hook).
+  if (nonInteractive && gtGateBefore) agent.addBeforeToolCall(gtGateBefore);
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
@@ -530,6 +552,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       askUserRef,
       childEventRef,
       fullscreen: args.fullscreen,
+      planSpawn: spawnFactory,
+      planMetaModel,
+      gtGateBefore,
     }),
     { exitOnCtrlC: false },
   );
