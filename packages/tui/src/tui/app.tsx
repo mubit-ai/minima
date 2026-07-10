@@ -25,6 +25,7 @@ import {
   planStripDrift,
   planStripInfo,
   planStripLabel,
+  stampGroundedOutcome,
 } from "../minima/ground_truth.ts";
 import {
   PlanSessionStore,
@@ -1106,6 +1107,33 @@ export function HarnessApp({
 
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
+
+    // M6.3: capture the override at a 🔴 gate the run stopped on, into user_signals. Only fires at
+    // an EMPTY prompt so bare letters still type normally while composing a message. a/r/s record
+    // the signal (which suppresses the block on the next refresh so the run can surface the next
+    // unanswered red); v shows the /why detail (no signal). The 🔴 banner advertises these keys.
+    const gtBlock = gtBehavior?.block ?? null;
+    const gtDb = agent.db;
+    if (agent.config.groundTruth === true && gtDb && gtBlock && typedText.trim() === "") {
+      const action =
+        input === "a" ? "accept" : input === "r" ? "reject" : input === "s" ? "steer" : null;
+      if (action) {
+        gtDb.recordUserSignal(gtBlock.gateId, action);
+        setGtBehavior(ledgerBehavior(gtDb, agent.runId));
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
+        ]);
+        return;
+      }
+      if (input === "v") {
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: whyReportFor(gtDb, agent.runId), toolName: "why" },
+        ]);
+        return;
+      }
+    }
 
     if (key.ctrl && input === "l") {
       setPickerOpen(true);
@@ -2227,11 +2255,34 @@ export function HarnessApp({
               origin: "off_plan",
             });
           }
+          // M7.1 demo: give the run a routing decision, then stamp the grounded outcome onto it so
+          // `SELECT chosen_model, gt_outcome, gt_verified_by FROM routing_decisions` shows the real
+          // verdict attached to the model. Deterministic rec_id → re-seeding upserts (never dupes).
+          const seedRecId = `seed-rec-${agent.runId}`;
+          agent.db.writeDecision({
+            recId: seedRecId,
+            runId: agent.runId,
+            taskLabel: "Ground-Truth seed",
+            chosenModel: "anthropic/claude-sonnet-5",
+            decisionBasis: "seed",
+            confidence: 0,
+            thresholdUsed: 0,
+            ranked: [],
+            estCostUsd: 0,
+            actualCostUsd: 0,
+            quality: null,
+            judged: false,
+            outcome: "failure",
+            turns: 1,
+            latencyMs: 0,
+            routed: "server",
+          });
+          stampGroundedOutcome(agent.db, agent.runId, seedRecId);
           // Reflect the seeded plan + gates in the footer immediately (a real run refreshes on
           // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
           setPlanStrip(planStripInfo(agent.db, agent.runId));
           setGtBehavior(ledgerBehavior(agent.db, agent.runId));
-          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}. Run /why to inspect it.`;
+          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped grounded outcome onto ${seedRecId}. Run /why to inspect it.`;
         }
         setMessages((m) => [
           ...m,

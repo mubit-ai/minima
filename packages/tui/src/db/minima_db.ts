@@ -298,6 +298,13 @@ export interface GateRow {
   created_at: string | null;
 }
 
+export interface UserSignalRow {
+  id: string;
+  gate_id: string | null;
+  action: UserAction | null;
+  at: string | null;
+}
+
 /** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
 export interface TodoInput {
   content: string;
@@ -786,6 +793,13 @@ export class MinimaDb {
       new Date().toISOString(),
     ]);
     return id;
+  }
+
+  /** M6.3: the overrides recorded against a gate, oldest first. Empty when never answered. */
+  getUserSignals(gateId: string): UserSignalRow[] {
+    return this.db
+      .query("SELECT * FROM user_signals WHERE gate_id = ? ORDER BY at, rowid")
+      .all(gateId) as UserSignalRow[];
   }
 
   // ---------------------------------------------------------------- grounded outcome (M7.1)

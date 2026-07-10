@@ -109,9 +109,9 @@ describe("flaggedFooter", () => {
 });
 
 describe("redPrompt", () => {
-  test("renders the [v]iew/[a]ccept/[s]teer approval line", () => {
+  test("renders the [v]iew/[a]ccept/[r]eject/[s]teer approval line", () => {
     expect(redPrompt("check did not pass")).toBe(
-      "🔴 check did not pass — [v]iew / [a]ccept / [s]teer",
+      "🔴 check did not pass — [v]iew / [a]ccept / [r]eject / [s]teer",
     );
   });
 });
@@ -165,7 +165,7 @@ describe("ledgerBehavior", () => {
     expect(b.block).not.toBeNull();
     expect(b.block?.stepId).toBe(stepIds[1]);
     expect(b.block?.reason).toBe("check did not pass");
-    expect(b.block?.prompt).toBe("🔴 check did not pass — [v]iew / [a]ccept / [s]teer");
+    expect(b.block?.prompt).toBe("🔴 check did not pass — [v]iew / [a]ccept / [r]eject / [s]teer");
   });
 
   test("a 🟡 before a 🔴 is both flagged and blocked", () => {
@@ -175,6 +175,24 @@ describe("ledgerBehavior", () => {
     expect(b.flaggedCount).toBe(1);
     expect(b.footerNote).toBe("🟡 1 step flagged — review at milestone");
     expect(b.block?.stepId).toBe(stepIds[1]);
+  });
+
+  // M6.3: a gate the user has answered (accept/reject/steer) is resolved and stops re-raising.
+  test("an answered 🔴 no longer blocks — the next unanswered red surfaces", () => {
+    const d = db();
+    const { planId, stepIds } = seedPlan(d, "run1", [RED, RED]);
+    const firstRed = d.getGates(planId).find((g) => g.step_id === stepIds[0]);
+    d.recordUserSignal(firstRed!.id, "accept");
+    // The first red is resolved, so the block moves to the still-unanswered second red.
+    expect(ledgerBehavior(d, "run1").block?.stepId).toBe(stepIds[1]);
+  });
+
+  test("answering the only 🔴 clears the block entirely", () => {
+    const d = db();
+    const { planId, stepIds } = seedPlan(d, "run1", [GREEN, RED]);
+    const red = d.getGates(planId).find((g) => g.step_id === stepIds[1]);
+    d.recordUserSignal(red!.id, "reject");
+    expect(ledgerBehavior(d, "run1").block).toBeNull();
   });
 
   test("the newest gate per step supersedes an earlier one (a retry clears a red)", () => {
@@ -281,5 +299,20 @@ describe("tui/app.tsx wires tier→behavior", () => {
     // The stored confidence is the ladder's own verdict, not a hardcoded string.
     expect(src).toContain("confidence: gateConfidence(green)");
     expect(src).toContain("confidence: gateConfidence(red)");
+  });
+
+  // M6.3: the 🔴 block captures the override into user_signals, only at an empty prompt so bare
+  // letters still type normally; v shows the /why detail without recording a signal.
+  test("M6.3: the 🔴 block captures a/r/s into user_signals at an empty prompt", () => {
+    expect(src).toContain("gtDb.recordUserSignal(gtBlock.gateId, action)");
+    expect(src).toContain('typedText.trim() === ""');
+    expect(src).toContain('input === "a" ? "accept"');
+  });
+
+  // M7.1: /gt-seed gives the run a routing decision then stamps the grounded outcome onto it, so
+  // the DB query in the issue's "see it work" shows gt_* attached to the model.
+  test("M7.1: /gt-seed writes a routing decision and stamps the grounded outcome", () => {
+    expect(src).toContain("agent.db.writeDecision({");
+    expect(src).toContain("stampGroundedOutcome(agent.db, agent.runId, seedRecId)");
   });
 });

@@ -56,9 +56,9 @@ export function flaggedFooter(count: number): string | null {
   return `🟡 ${count} step${count === 1 ? "" : "s"} flagged — review at milestone`;
 }
 
-/** The 🔴 approval prompt line (M6.2): `🔴 <reason> — [v]iew / [a]ccept / [s]teer`. */
+/** The 🔴 approval prompt line: `🔴 <reason> — [v]iew / [a]ccept / [r]eject / [s]teer` (M6.2/M6.3). */
 export function redPrompt(reason: string): string {
-  return `🔴 ${reason} — [v]iew / [a]ccept / [s]teer`;
+  return `🔴 ${reason} — [v]iew / [a]ccept / [r]eject / [s]teer`;
 }
 
 /** A blocking 🔴 gate the run stopped on, with the prompt text the footer should raise. */
@@ -119,8 +119,9 @@ export function ledgerBehavior(db: MinimaDb | null, sessionId: string | null): L
       const step_behavior = tierBehavior(verdict.tier, verdict.reason);
       if (step_behavior.flagged) flaggedCount += 1;
       // The first red in plan order is where the run stopped; keep it, ignore later reds.
-      // M6.3 will suppress a block that already carries a user_signal (accept/reject/steer).
-      if (!step_behavior.proceed && !block) {
+      // M6.3: a gate the user has already answered (accept/reject/steer) is resolved — it no
+      // longer blocks, so skip it and let the run surface the next unanswered red (if any).
+      if (!step_behavior.proceed && !block && db.getUserSignals(gate.id).length === 0) {
         block = {
           gateId: gate.id,
           stepId: step.id,

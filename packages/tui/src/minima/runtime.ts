@@ -23,7 +23,7 @@ import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
-import { planProjectionFor } from "./ground_truth.ts";
+import { planProjectionFor, stampGroundedOutcome } from "./ground_truth.ts";
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
@@ -445,6 +445,12 @@ export class MinimaAgent extends Agent {
         reinforcedEntryIds: o.reinforcedEntryIds ?? null,
         lessonPromoted: o.lessonPromoted ?? null,
       });
+      // M7.1: once the decision row exists, stamp the grounded (deterministic) verdict of the
+      // step verified under it onto gt_* — a real check outranks the judge. Inert until gates
+      // exist (Track A / /gt-seed); fail-open inside the helper.
+      if (this.config.groundTruth) {
+        stampGroundedOutcome(this.db, this.runId, recId);
+      }
     } catch {
       try {
         this.db.markDegraded(this.runId);

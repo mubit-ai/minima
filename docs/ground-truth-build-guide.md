@@ -105,8 +105,8 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 5     | M5.3 tamper                     | ⬜    |                                                                              |
 | 6     | M6.1 confidence fn              | ✅    | pure `confidence(Factors)` rule ladder + exhaustive tests                    |
 | 6     | M6.2 tier → behavior            | ✅    | `behavior.ts` (tier→UI) + `ledgerBehavior` footer note/block + PTY proof     |
-| 6     | M6.3 log overrides              | 🟨    | `user_signals` table + `recordUserSignal` exist; **capture ⬜**              |
-| 7     | M7.1 grounded outcome → routing | 🟨    | `gt_*` columns + `attachGroundedOutcome` exist; **stamping ⬜**              |
+| 6     | M6.3 log overrides              | ✅    | `getUserSignals` reader + inline `a/r/s`→`recordUserSignal` at the 🔴 block; `ledgerBehavior` suppresses answered gates; PTY+DB proof |
+| 7     | M7.1 grounded outcome → routing | ✅    | `stampGroundedOutcome` wired into `runtime.persistDecision`; `/gt-seed` writes+stamps a routing row; PTY+DB proof |
 | 7     | M7.2 feedback path              | ⬜    |                                                                              |
 | 7     | M7.3 recovery ladder            | ⬜    |                                                                              |
 | 8     | M8.1 `/why`                     | ✅    | ledger-backed command + seeded PTY proof; ready for live gate rows           |
