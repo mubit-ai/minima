@@ -21,7 +21,7 @@ function db(): MinimaDb {
 
 describe("gt_contract frozen value sets", () => {
   test("enum spellings are frozen (regression guard)", () => {
-    expect(GATE_OUTCOMES).toEqual(["verified", "failed", "unrunnable"]);
+    expect(GATE_OUTCOMES).toEqual(["verified", "failed", "unrunnable", "unchecked"]);
     expect(CONFIDENCE_TIERS).toEqual(["green", "yellow", "red"]);
     expect(VERIFIED_BY).toEqual(["deterministic", "judge", "user"]);
     expect(GATE_KINDS).toEqual(["step_check", "milestone"]);

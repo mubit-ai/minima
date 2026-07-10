@@ -71,7 +71,33 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
   }
   if (toolName === "write") return String(args.path ?? args.file_path ?? "?");
   if (toolName === "edit") return String(args.filePath ?? args.path ?? "?");
+  if (toolName === "todowrite") {
+    const tasks = parseTodowriteTasks(args);
+    if (tasks) {
+      const withVerify = tasks.filter((t) => t.verify).length;
+      return `${tasks.length} task${tasks.length === 1 ? "" : "s"}${
+        withVerify > 0 ? ` (${withVerify} with a verify shell command)` : ""
+      }`;
+    }
+  }
   return JSON.stringify(args).slice(0, 120);
+}
+
+/** Best-effort parse of todowrite's `tasks` JSON-string arg (null when malformed). */
+function parseTodowriteTasks(
+  args: Record<string, unknown>,
+): { content: string; status: string; verify: string | null }[] | null {
+  try {
+    const parsed = JSON.parse(String(args.tasks));
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((t) => ({
+      content: String(t?.content ?? ""),
+      status: String(t?.status ?? "pending"),
+      verify: typeof t?.verify === "string" && t.verify.trim() ? t.verify.trim() : null,
+    }));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -200,6 +226,19 @@ function buildDiffPreview(
       if (!existing) return `(new file: ${filePath}, ${content.split("\n").length} lines)`;
       const preview = content.split("\n").slice(0, 8).join("\n");
       return `--- ${filePath} (old)\n+++ ${filePath} (new, first 8 lines)\n${preview}`;
+    }
+    if (toolName === "todowrite") {
+      // With ground truth on, approving a todowrite authorizes running each task's `verify`
+      // as a shell command (done-gate + baseline capture) — the user must SEE those commands,
+      // not a truncated JSON blob, before granting that.
+      const tasks = parseTodowriteTasks(args);
+      if (!tasks || tasks.length === 0) return null;
+      const lines = tasks.map((t, i) => {
+        const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
+        const verify = t.verify ? `\n     verify (runs as a shell command): ${t.verify}` : "";
+        return `${i + 1}. [${mark}] ${t.content}${verify}`;
+      });
+      return lines.join("\n");
     }
   } catch {
     // diff preview is best-effort

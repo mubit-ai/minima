@@ -10,6 +10,7 @@
 import { Box, Static, Text, useApp, useInput } from "ink";
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import type { BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -89,6 +90,12 @@ export interface AppProps {
   planSpawn?: SpawnFn;
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
+  /**
+   * Ground-Truth done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_GROUND_TRUTH.
+   * Registered HERE, after the permission hook, so permission always runs first (first block
+   * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
+   */
+  gtGateBefore?: BeforeToolCall | null;
 }
 
 /** Persona the lead adopts in plan mode; the council's ground-truth snapshot is appended each turn. */
@@ -648,6 +655,7 @@ export function HarnessApp({
   fullscreen = true,
   planSpawn,
   planMetaModel,
+  gtGateBefore,
 }: AppProps) {
   const { exit } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -849,16 +857,23 @@ export function HarnessApp({
     if (fullscreen && atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
-  // Wire the beforeToolCall permission hook.
-  // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
+  // Wire the beforeToolCall permission hook, then the Ground-Truth done-gate (when on) so
+  // permission always runs first — first block wins, and no gate check ever executes for a
+  // call the user declines. Sensitive tools (write/edit/bash) always prompt; read/ls
+  // auto-allow within cwd.
   useEffect(() => {
-    agent.setBeforeToolCall(async (ctx) => {
+    const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash", "apply_patch"];
+        // todowrite is blocked too: with ground truth on, a todowrite triggers the done-gate /
+        // baseline capture, which EXECUTES the step's `verify` shell command — plan mode
+        // advertises read-only, so nothing that spawns a shell may pass.
+        const blocked = ["write", "edit", "bash", "apply_patch", "todowrite"];
         if (blocked.includes(ctx.toolCall.name)) {
           return {
             block: true,
-            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
+            reason:
+              "Plan mode is ON — write/edit/bash/apply_patch/todowrite are blocked " +
+              "(todowrite can run `verify` shell checks). Use /plan to exit.",
           };
         }
       }
@@ -870,7 +885,12 @@ export function HarnessApp({
       );
       return result;
     });
-  }, [agent]);
+    const disposeGate = gtGateBefore ? agent.addBeforeToolCall(gtGateBefore) : null;
+    return () => {
+      disposeGate?.();
+      disposePermission();
+    };
+  }, [agent, gtGateBefore]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
