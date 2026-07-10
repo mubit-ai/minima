@@ -103,13 +103,13 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 5     | M5.1 provenance                 | ⬜    |                                                                              |
 | 5     | M5.2 coverage touch             | ⬜    |                                                                              |
 | 5     | M5.3 tamper                     | ⬜    |                                                                              |
-| 6     | M6.1 confidence fn              | ⬜    |                                                                              |
+| 6     | M6.1 confidence fn              | ✅    | pure `confidence(Factors)` rule ladder + exhaustive tests                    |
 | 6     | M6.2 tier → behavior            | ⬜    |                                                                              |
 | 6     | M6.3 log overrides              | 🟨    | `user_signals` table + `recordUserSignal` exist; **capture ⬜**              |
 | 7     | M7.1 grounded outcome → routing | 🟨    | `gt_*` columns + `attachGroundedOutcome` exist; **stamping ⬜**              |
 | 7     | M7.2 feedback path              | ⬜    |                                                                              |
 | 7     | M7.3 recovery ladder            | ⬜    |                                                                              |
-| 8     | M8.1 `/why`                     | ⬜    |                                                                              |
+| 8     | M8.1 `/why`                     | ✅    | ledger-backed command + seeded PTY proof; ready for live gate rows           |
 | 8     | M8.2 E2E demo                   | ⬜    |                                                                              |
 
 > **The whole DB layer is already built (schema v5).** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). **No further migrations are required.** The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit migrations v1–v5; if a genuinely new column is ever needed, append a **v6**.

@@ -591,6 +591,16 @@ export class MinimaDb {
     );
   }
 
+  getLatestPlan(sessionId: string): PlanRow | null {
+    return (
+      (this.db
+        .query(
+          "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        )
+        .get(sessionId) as PlanRow) ?? null
+    );
+  }
+
   getPlan(planId: string): PlanRow | null {
     return (this.db.query("SELECT * FROM plans WHERE id = ?").get(planId) as PlanRow) ?? null;
   }

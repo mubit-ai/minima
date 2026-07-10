@@ -36,6 +36,7 @@ import {
 } from "../minima/index.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { whyReportFor } from "../minima/why.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
@@ -186,6 +187,7 @@ const COMMANDS = [
   { name: "plan", desc: "Plan mode + design council (start·status·finalize·cancel)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
+  { name: "why", desc: "Show per-step Ground-Truth verification" },
 ];
 
 export interface CommandPickerProps {
@@ -2130,6 +2132,18 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "why": {
+        const text =
+          agent.config.groundTruth !== true
+            ? "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification."
+            : whyReportFor(agent.db, agent.runId);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text, toolName: "why" },
+        ]);
+        break;
+      }
       case "gt-seed": {
         let text: string;
         if (agent.config.groundTruth !== true) {
@@ -2140,12 +2154,54 @@ export function HarnessApp({
           const { planId, stepIds } = agent.db.upsertPlanFromTodos(
             agent.runId,
             [
-              { content: "Seed step one", status: "in_progress" },
-              { content: "Seed step two", status: "pending" },
+              {
+                content: "Seed trusted verification",
+                status: "completed",
+                verify: "bun test packages/tui/tests/confidence.test.ts",
+              },
+              {
+                content: "Seed flagged verification",
+                status: "in_progress",
+                verify: "bun test packages/tui/tests/why.test.ts",
+              },
             ],
             "Ground-Truth seed plan",
           );
-          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}.`;
+          if (agent.db.getGates(planId).length === 0) {
+            const common = {
+              pass: true,
+              redToGreen: true,
+              hasCheck: true,
+              coverageHit: true as const,
+              tamper: false,
+            };
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[0],
+              outcome: "verified",
+              confidence: "green",
+              verifiedBy: "deterministic",
+              factors: { ...common, checkOrigin: "pre_existing" },
+            });
+            agent.db.insertGate({
+              planId,
+              stepId: stepIds[1],
+              outcome: "verified",
+              confidence: "yellow",
+              verifiedBy: "deterministic",
+              factors: { ...common, checkOrigin: "agent_new" },
+            });
+          }
+          if (agent.db.getFileChanges(planId).length === 0) {
+            agent.db.insertFileChange({
+              planId,
+              stepId: stepIds[1],
+              path: "src/off-plan-seed.ts",
+              kind: "modified",
+              origin: "off_plan",
+            });
+          }
+          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}. Run /why to inspect it.`;
         }
         setMessages((m) => [
           ...m,
