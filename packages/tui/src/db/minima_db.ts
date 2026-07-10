@@ -312,6 +312,17 @@ export interface TodoInput {
   verify?: string | null;
 }
 
+/** M4.1: one step a todowrite would flip to completed — the done-gate's unit of work. */
+export interface CompletionFlip {
+  content: string;
+  /** Matched existing step id; null for a brand-new todo inserted directly as completed. */
+  stepId: string | null;
+  /** Post-COALESCE effective verify: the todo's, else the matched step's, else null. */
+  verify: string | null;
+  /** The matched step's pre-work baseline (null for new steps or when never captured). */
+  baseline: Baseline | null;
+}
+
 export class MinimaDb {
   readonly db: Database;
   readonly path: string;
@@ -577,13 +588,16 @@ export class MinimaDb {
     status?: string;
   }): string {
     const id = opts.id ?? newId();
-    this.db.run("INSERT INTO plans (id, session_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)", [
-      id,
-      opts.sessionId ?? null,
-      opts.title ?? null,
-      opts.status ?? "active",
-      new Date().toISOString(),
-    ]);
+    this.db.run(
+      "INSERT INTO plans (id, session_id, title, status, created_at) VALUES (?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.sessionId ?? null,
+        opts.title ?? null,
+        opts.status ?? "active",
+        new Date().toISOString(),
+      ],
+    );
     return id;
   }
 
@@ -653,7 +667,9 @@ export class MinimaDb {
   getInProgressStep(planId: string): PlanStepRow | null {
     return (
       (this.db
-        .query("SELECT * FROM plan_steps WHERE plan_id = ? AND status = 'in_progress' ORDER BY idx LIMIT 1")
+        .query(
+          "SELECT * FROM plan_steps WHERE plan_id = ? AND status = 'in_progress' ORDER BY idx LIMIT 1",
+        )
         .get(planId) as PlanStepRow) ?? null
     );
   }
@@ -668,45 +684,119 @@ export class MinimaDb {
   }
 
   /**
-   * M1.1: upsert the agent's todo list as a plan + steps for `sessionId`. Reuses the active
-   * plan (once per task) and matches steps by `idx`, so step ids stay stable across
-   * todowrite calls (file_changes / baselines keep pointing at the same step). Trailing
-   * steps are dropped when the list shrinks. A step's `verify` is preserved unless a new
-   * value is supplied.
+   * The content-based step matcher SHARED by upsertPlanFromTodos and completionsForTodos —
+   * one implementation so the done-gate's preview (M4.1) can never match steps differently
+   * than the upsert it previews (if they drifted, the gate would check the wrong step).
+   * Trimmed content, first-come queue on duplicates; each call consumes at most one row, so
+   * callers must invoke it once per incoming todo, in list order, statuses notwithstanding.
+   */
+  private stepMatcher(existing: PlanStepRow[]): (content: string) => PlanStepRow | undefined {
+    const byContent = new Map<string, PlanStepRow[]>();
+    for (const s of existing) {
+      const key = (s.content ?? "").trim();
+      const queue = byContent.get(key);
+      if (queue) queue.push(s);
+      else byContent.set(key, [s]);
+    }
+    return (content) => byContent.get(content.trim())?.shift();
+  }
+
+  /**
+   * M4.1 preview: which steps WOULD flip to completed if `tasks` were applied via
+   * upsertPlanFromTodos. READ-ONLY — writes nothing — and reuses the upsert's exact matching
+   * (stepMatcher above). A flip is a todo proposed as completed whose matched step is not
+   * already completed, including a brand-new todo inserted directly as completed (stepId
+   * null). With no active plan every completed todo is a flip. Each flip carries the
+   * post-COALESCE effective verify and the matched step's baseline so the gate can run the
+   * right check and score red→green. The preview is only valid against the CURRENT rows:
+   * it cannot see other todowrites queued in the same batch, which is why the done-gate
+   * enforces one todowrite per assistant message (ground_truth.ts same-batch guard).
+   */
+  completionsForTodos(sessionId: string, tasks: TodoInput[]): CompletionFlip[] {
+    const plan = this.getActivePlan(sessionId);
+    const nextMatch = this.stepMatcher(plan ? this.getPlanSteps(plan.id) : []);
+    const flips: CompletionFlip[] = [];
+    for (const t of tasks) {
+      const prev = nextMatch(t.content);
+      if (t.status !== "completed" || prev?.status === "completed") continue;
+      flips.push({
+        content: t.content,
+        stepId: prev?.id ?? null,
+        verify: t.verify ?? prev?.verify ?? null,
+        baseline: prev?.baseline ?? null,
+      });
+    }
+    return flips;
+  }
+
+  /**
+   * M1.1 + M3.3: upsert the agent's todo list as a plan + steps for `sessionId`. Reuses the
+   * active plan (once per task) and matches steps by *content* (trimmed, first-come on
+   * duplicates), so step ids — and everything keyed to them: verify, baseline, file_changes —
+   * follow the logical step across inserts and reorders instead of binding to whatever row
+   * happens to sit at each idx. Rows whose content no longer appears in the list (removed or
+   * reworded steps) are dropped, detaching their file_changes/gates first; a reworded step
+   * therefore re-enters fresh with NULL verify/baseline — ground truth is lost, never
+   * misattributed. A matched step's `verify` is preserved unless a new value is supplied.
+   *
+   * M3.3: `started` reports the steps whose pre-work baseline should be captured now — a step
+   * entering in_progress, a fresh step inserted directly as in_progress, or an in_progress
+   * step gaining its first `verify` — always gated on baseline still NULL (capture is
+   * once-only). Each entry carries the post-COALESCE effective `verify` (may be null —
+   * filtering verify-less steps is the caller's job).
    */
   upsertPlanFromTodos(
     sessionId: string,
     tasks: TodoInput[],
     title?: string | null,
-  ): { planId: string; stepIds: string[] } {
+  ): { planId: string; stepIds: string[]; started: { id: string; verify: string | null }[] } {
     const existingPlan = this.getActivePlan(sessionId);
     const planId =
       existingPlan?.id ??
       this.insertPlan({ sessionId, title: title ?? tasks[0]?.content ?? null, status: "active" });
-    const byIdx = new Map(this.getPlanSteps(planId).map((s) => [s.idx, s]));
+    const existing = this.getPlanSteps(planId);
+    const nextMatch = this.stepMatcher(existing);
     const stepIds: string[] = [];
+    const started: { id: string; verify: string | null }[] = [];
     const tx = this.db.transaction(() => {
+      const matched = new Set<string>();
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i]!;
-        const prev = byIdx.get(i);
+        const prev = nextMatch(t.content);
         if (prev) {
-          this.db.run("UPDATE plan_steps SET content = ?, status = ?, verify = COALESCE(?, verify) WHERE id = ?", [
-            t.content,
-            t.status,
-            t.verify ?? null,
-            prev.id,
-          ]);
-          stepIds.push(prev.id);
-        } else {
-          stepIds.push(
-            this.insertStep({ planId, idx: i, content: t.content, status: t.status, verify: t.verify ?? null }),
+          matched.add(prev.id);
+          this.db.run(
+            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, verify = COALESCE(?, verify) WHERE id = ?",
+            [i, t.content, t.status, t.verify ?? null, prev.id],
           );
+          stepIds.push(prev.id);
+          const entered = t.status === "in_progress" && prev.status !== "in_progress";
+          const gainedVerify =
+            t.status === "in_progress" && prev.verify === null && t.verify != null;
+          if ((entered || gainedVerify) && prev.baseline === null) {
+            started.push({ id: prev.id, verify: t.verify ?? prev.verify ?? null });
+          }
+        } else {
+          const id = this.insertStep({
+            planId,
+            idx: i,
+            content: t.content,
+            status: t.status,
+            verify: t.verify ?? null,
+          });
+          stepIds.push(id);
+          if (t.status === "in_progress") started.push({ id, verify: t.verify ?? null });
         }
       }
-      this.db.run("DELETE FROM plan_steps WHERE plan_id = ? AND idx >= ?", [planId, tasks.length]);
+      for (const s of existing) {
+        if (matched.has(s.id)) continue;
+        this.db.run("UPDATE file_changes SET step_id = NULL WHERE step_id = ?", [s.id]);
+        this.db.run("UPDATE gates SET step_id = NULL WHERE step_id = ?", [s.id]);
+        this.db.run("DELETE FROM plan_steps WHERE id = ?", [s.id]);
+      }
     });
     tx();
-    return { planId, stepIds };
+    return { planId, stepIds, started };
   }
 
   // ---------------------------------------------------------------- file changes (M2.1/M2.2)

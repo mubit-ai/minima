@@ -23,8 +23,12 @@
 // Frozen value sets → derived unions. The tuple is the single source of truth.
 // ---------------------------------------------------------------------------
 
-/** A gate's verdict — `gates.outcome`. */
-export const GATE_OUTCOMES = ["verified", "failed", "unrunnable"] as const;
+/**
+ * A gate's verdict — `gates.outcome`. `unchecked` (M4.3): the step was allowed to complete
+ * with no `verify` attached — no evidence either way, recorded so the completion still leaves
+ * a durable row (verified_by NULL, factors.hasCheck false).
+ */
+export const GATE_OUTCOMES = ["verified", "failed", "unrunnable", "unchecked"] as const;
 export type GateOutcome = (typeof GATE_OUTCOMES)[number];
 
 /** Confidence tier — `gates.confidence` / `routing_decisions.gt_confidence`. Also the UI tier. */

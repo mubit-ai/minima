@@ -94,15 +94,15 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 2     | M2.1 `file_changes`             | ✅    | table + `insertFileChange`                                                   |
 | 2     | M2.2 record every write         | ✅    | sink attributes each path to the in-progress step                            |
 | 2     | M2.3 DRIFT footer               | ✅    | `isPathClaimed` + `countOffPlanChanges` + `planStripDrift`                   |
-| 3     | M3.1 step carries `verify`      | 🟨    | `verify` column + COALESCE-preserve exist; **tool schema to attach it ⬜**   |
-| 3     | M3.2 `runCheck(cmd)`            | ⬜    | the shell-out primitive — not started                                        |
-| 3     | M3.3 capture baseline           | 🟨    | `baseline` column + `setStepBaseline` writer exist; **capture-on-start ⬜**  |
-| 4     | M4.1 block `done` on fail       | ⬜    | needs `beforeToolCall` interception                                          |
-| 4     | M4.2 require red→green          | ⬜    |                                                                              |
-| 4     | M4.3 `gates` row                | 🟨    | `gates` table + `insertGate`/`getGates` exist; **write-on-verified-done ⬜** |
-| 5     | M5.1 provenance                 | ⬜    |                                                                              |
-| 5     | M5.2 coverage touch             | ⬜    |                                                                              |
-| 5     | M5.3 tamper                     | ⬜    |                                                                              |
+| 3     | M3.1 step carries `verify`      | ✅    | todowrite schema + `parseTodos` carry `verify` (sticky: overwrite, never clear) |
+| 3     | M3.2 `runCheck(cmd)`            | ✅    | `src/minima/check.ts` — never throws, capped output, abortable, kill-hard    |
+| 3     | M3.3 capture baseline           | ✅    | sink captures red/green/unrunnable on in_progress entry, once-only, budgeted |
+| 4     | M4.1 block `done` on fail       | ✅    | gate in the beforeToolCall stack; whole-call reject; one todowrite/batch; attempt rows |
+| 4     | M4.2 require red→green          | ✅    | `redToGreen` in factors_json (baseline red + post-work pass)                 |
+| 4     | M4.3 `gates` row                | ✅    | verified/unchecked rows on every allowed flip; failed/unrunnable on blocks   |
+| 5     | M5.1 provenance                 | ✅    | `classifyCheckOrigin` in `src/minima/gt_factors.ts`; agent_new vs pre_existing from file_changes |
+| 5     | M5.2 coverage touch             | ✅    | `computeCoverageHit` (static grep test→changed source); true/false/unknown  |
+| 5     | M5.3 tamper                     | ✅    | `detectTamper` (deleted/skip/xfail on touched test files); conservative markers |
 | 6     | M6.1 confidence fn              | ✅    | pure `confidence(Factors)` rule ladder + exhaustive tests                    |
 | 6     | M6.2 tier → behavior            | ✅    | `behavior.ts` (tier→UI) + `ledgerBehavior` footer note/block + PTY proof     |
 | 6     | M6.3 log overrides              | ✅    | `getUserSignals` reader + inline `a/r/s`→`recordUserSignal` at the 🔴 block; `ledgerBehavior` suppresses answered gates; PTY+DB proof |
@@ -114,14 +114,15 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 
 > **The whole DB layer is already built (schema v5).** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). **No further migrations are required.** The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit migrations v1–v5; if a genuinely new column is ever needed, append a **v6**.
 
-**Next steps — the critical path ("make it verifiable").** Stages 0–2 gave a _watchable_ system; the payoff now is making it _verifiable_. Do these in order:
+**Next steps — the critical path ("make it trustworthy").** Stages 0–4 shipped: the system is _watchable_ and _verifiable_ (a step cannot reach done unless its `verify` passes; every completion leaves a durable gate row). The payoff now is making those verdicts _trustworthy_ and feeding them back. Do these in order:
 
-1. **M3.2 `runCheck(cmd)`** — zero-dependency primitive; start immediately (new `src/minima/check.ts`, mirror the `/undo` git shell-out: spawn, capture exit + stdout/stderr, `MINIMA_TIMEOUT`).
-2. **M3.1** — extend the `todowrite`/plan tool schema so a step can carry `verify: "<cmd>"` (persistence already handled by the column + `COALESCE` in `upsertPlanFromTodos`; `parseTodos` just needs to stop dropping `verify`).
-3. **M3.3** — when a step flips to `in_progress`, `runCheck(verify)` and `setStepBaseline(red|green|unrunnable)`.
-4. **M4.1 → M4.2 → M4.3** — refuse `set_status(done)` until the check goes red→green, then `insertGate(...)`.
+1. **M5.1 provenance** — replace the gate's hardcoded `checkOrigin: "agent_new"` with real classification (pre-existing test vs agent-authored this run vs user-supplied at approval) recorded into `factors_json`.
+2. **M5.2 coverage touch** — does the check actually exercise the files the step changed? Fill `coverageHit` from `file_changes` (today always `"unknown"`).
+3. **M5.3 tamper** — detect skipped/deleted/weakened tests during a step and force `tamper: true`.
+4. **M6.1 → M6.2 → M6.3** — the `confidence()` tiering over `Factors`, tier-driven UI/behavior, and capturing user overrides into `user_signals` (table + writer already exist).
+5. **Stage 7** — stamp grounded outcomes onto `routing_decisions` (`attachGroundedOutcome` exists) and carry them into `/v1/feedback`; the attempts signal (failed/unrunnable gate rows per step) is already being recorded.
 
-That chain is the first shippable slice of the _verifiable_ core; everything in Stages 5–8 reads from those gate rows.
+Everything above reads from the gate rows Stage 4 now writes; no new migrations are expected before Stage 7.
 
 ---
 

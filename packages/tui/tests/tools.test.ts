@@ -169,6 +169,11 @@ describe("builtinTools", () => {
       "write",
     ]);
   });
+
+  test("todowrite runs sequentially so baseline checks see the pre-work repo (M3.3)", () => {
+    const todo = builtinTools().find((t) => t.name === "todowrite")!;
+    expect(todo.executionMode).toBe("sequential");
+  });
 });
 
 // --- Exa-backed web tools ---------------------------------------------------

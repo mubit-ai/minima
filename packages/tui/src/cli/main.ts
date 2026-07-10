@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import type { BeforeToolCall } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
@@ -19,9 +20,9 @@ import { MinimaDb } from "../db/minima_db.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
+import { groundTruthHooks } from "../minima/ground_truth.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
-import { groundTruthAfterToolCall } from "../minima/ground_truth.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
@@ -407,6 +408,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
   let db: MinimaDb | null = null;
   let sink: DbSinkHandle | null = null;
+  let gtGateBefore: BeforeToolCall | null = null;
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
@@ -419,13 +421,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     sink = attachDbSink(agent, db, { runId });
-    // Ground-Truth ledger (M1.1/M2.1/M2.2): after each tool call, keep the SQLite plan of
-    // record in step with what the agent actually did — upsert the plan from todowrite and
-    // attribute file writes as on_plan/off_plan changes. Off unless MINIMA_TUI_GROUND_TRUTH=1.
-    // The sink is fail-open (reads live agent.db/agent.runId; swallows its own errors) and uses
-    // the free afterToolCall hook — the event persistence sink above rides agent.subscribe().
+    // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
+    // sink keeps the SQLite plan of record in step with what the agent actually did (plan
+    // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
+    // each todowrite the gate refuses completions whose `verify` does not pass. Off unless
+    // MINIMA_TUI_GROUND_TRUTH=1. Bookkeeping stays fail-open (reads live agent.db/agent.runId;
+    // swallows its own errors); only the gate's check verdicts fail closed. The before-hook is
+    // registered later — headless below, or by the TUI AFTER its permission hook so permission
+    // always runs first (first block wins) and no check runs on a call the user would deny.
     if (config.groundTruth) {
-      agent.setAfterToolCall(groundTruthAfterToolCall(agent));
+      const { before, after } = groundTruthHooks(agent);
+      agent.addAfterToolCall(after);
+      gtGateBefore = before;
     }
   } catch (exc) {
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
@@ -494,6 +501,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     });
   }
+  // Headless has no permission hook, so the done-gate registers directly (sole before-hook).
+  if (nonInteractive && gtGateBefore) agent.addBeforeToolCall(gtGateBefore);
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
@@ -545,6 +554,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fullscreen: args.fullscreen,
       planSpawn: spawnFactory,
       planMetaModel,
+      gtGateBefore,
     }),
     { exitOnCtrlC: false },
   );

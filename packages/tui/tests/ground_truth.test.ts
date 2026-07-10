@@ -96,10 +96,24 @@ describe("parseTodos", () => {
     expect(parseTodos(raw).map((t) => t.status)).toEqual(["pending", "in_progress", "completed", "pending"]);
   });
 
-  test("never sources `verify` from the todowrite payload", () => {
-    const out = parseTodos(JSON.stringify([{ content: "a", status: "pending", verify: "should-be-ignored" }]));
-    expect(out[0]).toEqual({ content: "a", status: "pending" });
-    expect(out[0]!.verify).toBeUndefined();
+  test("sources verify from the todowrite payload (M3.1)", () => {
+    const out = parseTodos(
+      JSON.stringify([
+        { content: "a", status: "pending", verify: "bun test tests/a.test.ts" },
+        { content: "b", status: "pending", verify: "   " },
+        { content: "c", status: "pending", verify: 42 },
+        { content: "d", status: "pending", verify: "  bun run check  " },
+        { content: "e", status: "pending" },
+      ]),
+    );
+    expect(out[0]).toEqual({ content: "a", status: "pending", verify: "bun test tests/a.test.ts" });
+    expect(out[1]).toEqual({ content: "b", status: "pending" });
+    expect(out[2]).toEqual({ content: "c", status: "pending" });
+    expect(out[3]).toEqual({ content: "d", status: "pending", verify: "bun run check" });
+    expect(out[4]).toEqual({ content: "e", status: "pending" });
+    expect("verify" in out[1]!).toBe(false);
+    expect("verify" in out[2]!).toBe(false);
+    expect("verify" in out[4]!).toBe(false);
   });
 });
 
@@ -215,6 +229,25 @@ describe("formatPlanProjection", () => {
     expect(out).toContain("# Current plan (step 1/1)");
     expect(out).not.toContain("—");
   });
+
+  test("renders the verify hint on steps that carry one (M3.1)", () => {
+    const steps = [
+      step({ idx: 0, content: "First", status: "in_progress", verify: "bun test tests/a.test.ts" }),
+      step({ idx: 1, content: "Second", status: "pending" }),
+    ];
+    const out = formatPlanProjection(PLAN, steps)!;
+    expect(out).toContain("1. [>] First — verify: `bun test tests/a.test.ts`");
+    expect(out).toContain("2. [ ] Second");
+  });
+
+  test("verify-less steps render exactly as before (no verify suffix)", () => {
+    const out = formatPlanProjection(PLAN, [
+      step({ idx: 0, content: "Only", status: "pending" }),
+    ])!;
+    const lines = out.split("\n");
+    expect(lines[1]).toBe("1. [ ] Only");
+    expect(out).not.toContain("verify: `");
+  });
 });
 
 // --------------------------------------------------------------------------- active-step selection
@@ -296,6 +329,146 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending", verify: "npm test" }]);
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
     expect(d.getPlanSteps(planId)[0]!.verify).toBe("npm test");
+  });
+
+  test("started is [] on a pure-pending upsert (M3.3)", () => {
+    const d = db();
+    const { started } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "pending" },
+      { content: "B", status: "pending", verify: "true" },
+    ]);
+    expect(started).toEqual([]);
+  });
+
+  test("started reports a pending→in_progress flip with the COALESCE'd effective verify (M3.3)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending", verify: "npm test" }]);
+    expect(first.started).toEqual([]);
+    const second = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "npm test" }]);
+  });
+
+  test("started excludes already-in_progress steps and steps that already have a baseline (M3.3)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true" },
+      { content: "B", status: "pending", verify: "true" },
+    ]);
+    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: "true" }]);
+    const again = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+      { content: "B", status: "pending" },
+    ]);
+    expect(again.started).toEqual([]);
+    d.setStepBaseline(first.stepIds[1]!, "red");
+    const flipped = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+      { content: "B", status: "in_progress" },
+    ]);
+    expect(flipped.started).toEqual([]);
+  });
+
+  test("started includes fresh in_progress inserts, verify null when absent (M3.3)", () => {
+    const d = db();
+    const { started, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "bun test" },
+      { content: "B", status: "in_progress" },
+      { content: "C", status: "pending" },
+    ]);
+    expect(started).toEqual([
+      { id: stepIds[0]!, verify: "bun test" },
+      { id: stepIds[1]!, verify: null },
+    ]);
+  });
+
+  test("matches steps by content: verify and baseline follow a step across a prepend", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Fix parser test", status: "pending", verify: "bun test parser" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "Upgrade dep", status: "in_progress" },
+      { content: "Fix parser test", status: "pending" },
+    ]);
+    const steps = d.getPlanSteps(first.planId);
+    expect(steps.map((s) => s.content)).toEqual(["Upgrade dep", "Fix parser test"]);
+    expect(steps[0]!.verify).toBeNull();
+    expect(steps[0]!.baseline).toBeNull();
+    expect(steps[1]!.id).toBe(first.stepIds[0]!);
+    expect(steps[1]!.verify).toBe("bun test parser");
+    expect(steps[1]!.baseline).toBe("red");
+    expect(second.started).toEqual([{ id: second.stepIds[0]!, verify: null }]);
+  });
+
+  test("a reorder keeps identity: the new occupant of an idx never inherits a baseline", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "task A", status: "in_progress", verify: "exit 1" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    d.upsertPlanFromTodos("run1", [
+      { content: "task B", status: "in_progress", verify: "true" },
+      { content: "task A", status: "completed" },
+    ]);
+    const steps = d.getPlanSteps(first.planId);
+    expect(steps.map((s) => s.content)).toEqual(["task B", "task A"]);
+    expect(steps[0]!.verify).toBe("true");
+    expect(steps[0]!.baseline).toBeNull();
+    expect(steps[1]!.id).toBe(first.stepIds[0]!);
+    expect(steps[1]!.status).toBe("completed");
+    expect(steps[1]!.baseline).toBe("red");
+  });
+
+  test("a reworded step re-enters fresh: the old row's verify/baseline are dropped, never reattached", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Fix parser", status: "pending", verify: "bun test parser" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "Fix the parser", status: "pending" },
+    ]);
+    const steps = d.getPlanSteps(first.planId);
+    expect(steps).toHaveLength(1);
+    expect(second.stepIds[0]).not.toBe(first.stepIds[0]);
+    expect(steps[0]!.verify).toBeNull();
+    expect(steps[0]!.baseline).toBeNull();
+  });
+
+  test("started reports an in_progress step gaining its first verify, once-only (M3.3)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: null }]);
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true" },
+    ]);
+    expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "true" }]);
+    d.setStepBaseline(first.stepIds[0]!, "green");
+    const third = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "exit 1" },
+    ]);
+    expect(third.started).toEqual([]);
+  });
+
+  test("dropping a step with recorded file_changes detaches them instead of throwing (FK-safe)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+      { content: "B", status: "pending" },
+    ]);
+    d.insertFileChange({
+      planId: first.planId,
+      stepId: first.stepIds[1]!,
+      path: "b.ts",
+      kind: "modified",
+      origin: "on_plan",
+    });
+    d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    expect(d.getPlanSteps(first.planId)).toHaveLength(1);
+    const changes = d.getFileChanges(first.planId);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.step_id).toBeNull();
   });
 });
 
@@ -462,6 +635,24 @@ describe("groundTruthAfterToolCall", () => {
     expect(d.getPlanSteps(plan.id).map((s) => s.content)).toEqual(["Alpha", "Beta"]);
   });
 
+  test("round-trips verify: todowrite → ledger, preserved when a later call omits it (M3.1)", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await sink(
+      ctx("todowrite", {
+        tasks: JSON.stringify([
+          { content: "Alpha", status: "in_progress", verify: "bun test tests/a.test.ts" },
+        ]),
+      }),
+    );
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.verify).toBe("bun test tests/a.test.ts");
+    await sink(ctx("todowrite", { tasks: JSON.stringify([{ content: "Alpha", status: "completed" }]) }));
+    const steps = d.getPlanSteps(plan.id);
+    expect(steps[0]!.status).toBe("completed");
+    expect(steps[0]!.verify).toBe("bun test tests/a.test.ts");
+  });
+
   test("todowrite with no valid todos creates no plan", async () => {
     const d = db();
     await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("todowrite", { tasks: "[]" }));
@@ -532,5 +723,110 @@ describe("groundTruthAfterToolCall", () => {
       sink(ctx("todowrite", { tasks: JSON.stringify([{ content: "A", status: "pending" }]) })),
     ).resolves.toBeNull();
     await expect(sink(ctx("write", { path: "a.ts" }))).resolves.toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------- baseline capture (M3.3)
+
+describe("baseline capture (M3.3)", () => {
+  /** Send a todo list through the sink as a todowrite call. */
+  const send = (sink: ReturnType<typeof groundTruthAfterToolCall>, todos: unknown[]) =>
+    sink(ctx("todowrite", { tasks: JSON.stringify(todos) }));
+
+  test("pending→in_progress flip runs the verify: failing check records red", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "pending", verify: "exit 1" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
+    await send(sink, [{ content: "A", status: "in_progress" }]);
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+  });
+
+  test("pending→in_progress flip with a passing check records green", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "pending", verify: "true" }]);
+    await send(sink, [{ content: "A", status: "in_progress" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
+  });
+
+  test("a new step inserted directly as in_progress gets its baseline captured", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "in_progress", verify: "true" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
+  });
+
+  test("baseline is captured once-only: a later in_progress with a new verify does not re-run", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+    await send(sink, [{ content: "A", status: "pending" }]);
+    await send(sink, [{ content: "A", status: "in_progress", verify: "true" }]);
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+  });
+
+  test("a verify-less flip leaves the baseline null (no check to run)", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "pending" }]);
+    await send(sink, [{ content: "A", status: "in_progress" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
+  });
+
+  test("fail-open: a throwing setStepBaseline never propagates", async () => {
+    const real = db();
+    const faked = {
+      upsertPlanFromTodos: real.upsertPlanFromTodos.bind(real),
+      setStepBaseline() {
+        throw new Error("boom");
+      },
+    } as unknown as MinimaDb;
+    const sink = groundTruthAfterToolCall({ db: faked, runId: "run1" });
+    await expect(
+      send(sink, [{ content: "A", status: "in_progress", verify: "true" }]),
+    ).resolves.toBeNull();
+    const plan = real.getActivePlan("run1")!;
+    expect(real.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
+  });
+
+  test("attaching a verify to an already-in_progress step still captures its baseline", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "in_progress" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
+    await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+  });
+
+  test("per-step fail-open: one throwing setStepBaseline does not starve the remaining steps", async () => {
+    const real = db();
+    let calls = 0;
+    const faked = {
+      upsertPlanFromTodos: real.upsertPlanFromTodos.bind(real),
+      setStepBaseline(...args: Parameters<MinimaDb["setStepBaseline"]>) {
+        calls += 1;
+        if (calls === 1) throw new Error("boom");
+        real.setStepBaseline(...args);
+      },
+    } as unknown as MinimaDb;
+    const sink = groundTruthAfterToolCall({ db: faked, runId: "run1" });
+    await expect(
+      send(sink, [
+        { content: "A", status: "in_progress", verify: "true" },
+        { content: "B", status: "in_progress", verify: "exit 1" },
+      ]),
+    ).resolves.toBeNull();
+    const plan = real.getActivePlan("run1")!;
+    const steps = real.getPlanSteps(plan.id);
+    expect(steps[0]!.baseline).toBeNull();
+    expect(steps[1]!.baseline).toBe("red");
   });
 });
