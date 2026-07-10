@@ -145,6 +145,80 @@ export function kindForTool(toolName: string): "created" | "modified" {
 }
 
 /**
+ * Issue #1 (tamper via bash): candidate paths a `rm` / `git rm` command targets, so a test the
+ * agent deletes outside the write/edit/apply_patch tools still lands in the ledger and
+ * detectTamper (M5.3) can catch it. Because the deletion feeds an always-stop signal, this
+ * parser is deliberately CONSERVATIVE — it records a path only when it is confident the token
+ * is a real file argument, preferring a miss over a phantom deletion:
+ *
+ *   - Split the command on chain operators (`&&`/`||`/`;`/`|`/newline); a sub-command whose
+ *     first word is `rm` (or `git rm`) is an rm.
+ *   - Skip a sub-command that begins inside an unclosed quote (odd running `"`/`'` count from
+ *     earlier sub-commands) — its `rm` is text inside a string, not a command
+ *     (`echo "cleanup; rm test_x.py"`), so it must not be treated as a deletion.
+ *   - Stop at the first redirection token (`>`, `2>/dev/null`, `2>&1`, …) — everything after it
+ *     is I/O plumbing, not rm arguments.
+ *   - Reject flags, globs (`* ? [ ]`), and any token bearing a shell metacharacter
+ *     (`& $ \` ( ) { } = ~ ! " ' \\`) — variable/command expansion (`$VAR`, `$(…)`) names no
+ *     attributable file and would defeat the fs.exists backstop — and require a path-like shape
+ *     (a `/` or an extension).
+ *
+ * The sink still confirms each survivor is actually gone from disk before recording it. `mv` /
+ * `find -delete` are out of scope by decision (a legitimate rename must not trip tamper).
+ * Documented residual limits (rare, fail-open): heredoc bodies, `cd`-relative paths resolved
+ * against the harness cwd, and quoted paths containing spaces. Note the robust case — a test the
+ * agent CREATED/modified this run and then deleted — is caught by detectTamper's exists() check
+ * independently of this parser.
+ */
+export function deletedPathsFromBash(command: string): string[] {
+  if (!command) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let dq = 0;
+  let sq = 0;
+  for (const sub of command.split(/&&|\|\||[;\n|]/)) {
+    const insideString = dq % 2 === 1 || sq % 2 === 1;
+    for (const ch of sub) {
+      if (ch === '"') dq++;
+      else if (ch === "'") sq++;
+    }
+    if (insideString) continue; // this rm is quoted text, not a real command
+    const toks = sub.trim().split(/\s+/).filter(Boolean);
+    let i: number;
+    if (toks[0] === "rm") i = 1;
+    else if (toks[0] === "git" && toks[1] === "rm") i = 2;
+    else continue;
+    for (; i < toks.length; i++) {
+      const tok = toks[i]!;
+      if (/[<>]/.test(tok)) break; // redirection — the rest of this sub isn't rm args
+      if (tok === "--" || tok.startsWith("-")) continue; // flag / end-of-options
+      const path = tok.replace(/^['"]+|['"]+$/g, ""); // strip surrounding quotes
+      if (!path || /[&$`(){}=~!*?[\]"'\\]/.test(path)) continue; // shell metachar / glob
+      if (!path.includes("/") && !/\.[a-z0-9]+$/i.test(path)) continue; // require path-like
+      if (!seen.has(path)) {
+        seen.add(path);
+        out.push(path);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Issue #2: the ledger only records file changes against a plan, but the FIRST writes of a
+ * session can land before any todowrite has created one (writes-before-first-plan were being
+ * dropped, so a self-authored test then read pre_existing at the gate). Eagerly create an empty
+ * active plan so those writes are attributed; upsertPlanFromTodos reuses the session's active
+ * plan (minima_db.ts), so the first real todowrite adopts this one rather than orphaning it.
+ */
+function ensureActivePlan(db: MinimaDb, session: string): PlanRow | null {
+  const existing = db.getActivePlan(session);
+  if (existing) return existing;
+  const planId = db.insertPlan({ sessionId: session, title: null, status: "active" });
+  return db.getPlan(planId);
+}
+
+/**
  * M2.2/M2.3 drift heuristic: does the in-progress step's text lay claim to this path? Kept
  * deliberately simple — a full-path or basename mention counts as on-plan. Unmatched writes
  * are marked off_plan so the footer can surface drift.
@@ -250,7 +324,10 @@ export const BASELINE_BUDGET_MS = 120_000;
  * Errored tool calls are ignored (nothing durable happened). All failures are swallowed —
  * ledger bookkeeping must never break a turn.
  */
-export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
+export function groundTruthAfterToolCall(
+  ref: GtAgentRef,
+  fs: FactorFs = defaultFactorFs,
+): AfterToolCall {
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -286,15 +363,26 @@ export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
       }
 
       const paths = writePathsFromArgs(name, args);
-      if (paths.length === 0) return null;
-      const plan = db.getActivePlan(session);
-      if (!plan) return null; // no plan of record yet — nothing to attribute against
+      // Issue #1: a `rm`/`git rm` that actually removed a file (confirmed gone on disk) is a
+      // deletion the ledger must see, so detectTamper can flag a deleted test.
+      const deletions =
+        name === "bash"
+          ? deletedPathsFromBash(typeof args.command === "string" ? args.command : "").filter(
+              (p) => !fs.exists(p),
+            )
+          : [];
+      if (paths.length === 0 && deletions.length === 0) return null;
+      // Issue #2: create a plan if this is the first write of the session, so it is attributed
+      // (not silently dropped) and the first todowrite adopts this same plan.
+      const plan = ensureActivePlan(db, session);
+      if (!plan) return null; // ledger unavailable — nothing to attribute against
       const step = db.getInProgressStep(plan.id);
-      const kind = kindForTool(name);
-      for (const path of paths) {
+      const attribute = (path: string, kind: "created" | "modified" | "deleted") => {
         const origin = step && isPathClaimed(step.content, path) ? "on_plan" : "off_plan";
         db.insertFileChange({ planId: plan.id, stepId: step?.id ?? null, path, kind, origin });
-      }
+      };
+      for (const path of paths) attribute(path, kindForTool(name));
+      for (const path of deletions) attribute(path, "deleted");
     } catch {
       // fail-open: never let ledger bookkeeping break the turn.
     }
@@ -410,7 +498,7 @@ export function groundTruthHooks(
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
-  const sink = groundTruthAfterToolCall(ref);
+  const sink = groundTruthAfterToolCall(ref, fs);
   const pending = new Map<string, GateVerdict[]>();
   const inFlight = new Set<string>();
 

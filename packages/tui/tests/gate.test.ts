@@ -33,6 +33,14 @@ function actx(todos: unknown[], id = "tc", isError = false): AfterToolCallContex
   } as unknown as AfterToolCallContext;
 }
 
+/** After-hook context for a non-todowrite tool (e.g. a bash deletion). */
+function actxTool(name: string, args: Record<string, unknown>, id = "tc"): AfterToolCallContext {
+  return {
+    toolCall: { type: "toolCall", id, name, arguments: args },
+    isError: false,
+  } as unknown as AfterToolCallContext;
+}
+
 function gates(d: MinimaDb): GateRow[] {
   return d.db.query("SELECT * FROM gates ORDER BY created_at, rowid").all() as GateRow[];
 }
@@ -726,5 +734,20 @@ describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
     expect(factorsOf(gates(d)[0]!).tamper).toBe(true);
+  });
+
+  test("E2E tamper via delete: a bash `rm` of a test file is recorded and the next gate reports tamper", async () => {
+    const d = db();
+    // exists() false → the rm target is confirmed gone → recorded as a 'deleted' file_change.
+    const fs = { read: () => null, exists: () => false };
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
+    await after(actxTool("bash", { command: "rm tests/legacy.test.ts" }, "b1"));
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos, "t1"))).toBeNull();
+    await after(actx(todos, "t1"));
+    const rows = gates(d);
+    expect(rows[rows.length - 1]!.outcome).toBe("verified");
+    expect(factorsOf(rows[rows.length - 1]!).tamper).toBe(true);
   });
 });

@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { AfterToolCallContext } from "../src/agent/tools.ts";
 import type { PlanRow, PlanStepRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
+import type { FactorFs } from "../src/minima/gt_factors.ts";
 import {
+  deletedPathsFromBash,
   formatPlanProjection,
   groundTruthAfterToolCall,
   isPathClaimed,
@@ -177,6 +179,44 @@ describe("kindForTool", () => {
     expect(kindForTool("write")).toBe("created");
     expect(kindForTool("edit")).toBe("modified");
     expect(kindForTool("apply_patch")).toBe("modified");
+  });
+});
+
+// --------------------------------------------------------------------------- deletedPathsFromBash
+
+describe("deletedPathsFromBash (issue #1)", () => {
+  test("extracts rm and git rm targets, dropping flags", () => {
+    expect(deletedPathsFromBash("rm tests/old_test.py")).toEqual(["tests/old_test.py"]);
+    expect(deletedPathsFromBash("rm -rf a.ts b.ts")).toEqual(["a.ts", "b.ts"]);
+    expect(deletedPathsFromBash("git rm -f tests/y.test.ts")).toEqual(["tests/y.test.ts"]);
+    expect(deletedPathsFromBash("rm 'tests/legacy.py'")).toEqual(["tests/legacy.py"]);
+  });
+  test("handles command chains, only picking rm sub-commands", () => {
+    expect(deletedPathsFromBash("cd pkg && rm tests/z.py")).toEqual(["tests/z.py"]);
+    expect(deletedPathsFromBash("rm a.ts; echo done; rm b.ts")).toEqual(["a.ts", "b.ts"]);
+  });
+  test("ignores globs, non-rm commands, and rm mentioned as an argument", () => {
+    expect(deletedPathsFromBash("rm *.py")).toEqual([]);
+    expect(deletedPathsFromBash("rm tests/*.test.ts")).toEqual([]);
+    expect(deletedPathsFromBash("ls -la")).toEqual([]);
+    expect(deletedPathsFromBash("echo rm foo.ts")).toEqual([]);
+    expect(deletedPathsFromBash("mv old.ts new.ts")).toEqual([]);
+    expect(deletedPathsFromBash("")).toEqual([]);
+  });
+  test("drops redirection plumbing but keeps the real target", () => {
+    expect(deletedPathsFromBash("rm build.log 2>/dev/null")).toEqual(["build.log"]);
+    expect(deletedPathsFromBash("rm foo.py > out.txt")).toEqual(["foo.py"]);
+    expect(deletedPathsFromBash("rm foo.py 2>&1")).toEqual(["foo.py"]);
+  });
+  test("rejects variable/command expansion and bare non-path words", () => {
+    expect(deletedPathsFromBash("rm $VAR")).toEqual([]);
+    expect(deletedPathsFromBash('rm "${TEST}"')).toEqual([]);
+    expect(deletedPathsFromBash("rm $(cat list)")).toEqual([]);
+    expect(deletedPathsFromBash("rm somefile")).toEqual([]); // no slash, no extension
+  });
+  test("does not treat an rm inside a quoted string as a real deletion", () => {
+    expect(deletedPathsFromBash('echo "cleanup; rm tests/test_old.py"')).toEqual([]);
+    expect(deletedPathsFromBash("echo 'later: rm tests/test_x.py'")).toEqual([]);
   });
 });
 
@@ -694,18 +734,50 @@ describe("groundTruthAfterToolCall", () => {
     expect(changes[0]!.step_id).toBeNull();
   });
 
-  test("write with no active plan records nothing", async () => {
+  test("write with no active plan eagerly creates one and records the change (issue #2)", async () => {
     const d = db();
     await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
-    // No plan means no plan id to query against; assert via a freshly-created plan being empty.
+    const plan = d.getActivePlan("run1");
+    expect(plan).not.toBeNull();
+    const changes = d.getFileChanges(plan!.id);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.path).toBe("src/config.ts");
+    expect(changes[0]!.step_id).toBeNull();
+    // the first real todowrite ADOPTS that eager plan rather than orphaning the change
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "pending" }]);
+    expect(planId).toBe(plan!.id);
+    expect(d.getFileChanges(planId)).toHaveLength(1);
+  });
+
+  test("a non-deleting bash command records no file changes", async () => {
+    const d = db();
+    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "in_progress" }]);
+    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("bash", { command: "ls -la" }));
     expect(d.getFileChanges(planId)).toHaveLength(0);
   });
 
-  test("non-write tools record no file changes", async () => {
+  test("bash `rm` of a file confirmed gone on disk is recorded as a deletion (issue #1)", async () => {
     const d = db();
+    const gone: FactorFs = { read: () => null, exists: () => false };
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "in_progress" }]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("bash", { command: "ls" }));
+    await groundTruthAfterToolCall(
+      { db: d, runId: "run1" },
+      gone,
+    )(ctx("bash", { command: "rm tests/old_test.py && echo done" }));
+    const changes = d.getFileChanges(planId);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.kind).toBe("deleted");
+    expect(changes[0]!.path).toBe("tests/old_test.py");
+  });
+
+  test("bash `rm` whose target still exists is NOT recorded (confirmed-absent guard)", async () => {
+    const d = db();
+    const present: FactorFs = { read: () => null, exists: () => true };
+    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "in_progress" }]);
+    await groundTruthAfterToolCall(
+      { db: d, runId: "run1" },
+      present,
+    )(ctx("bash", { command: "rm tests/still_here.py" }));
     expect(d.getFileChanges(planId)).toHaveLength(0);
   });
 
