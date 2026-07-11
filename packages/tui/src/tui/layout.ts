@@ -234,6 +234,87 @@ export function questionOverlayHeight(
   );
 }
 
+/** The bold tool label the permission overlay renders before the prompt text. Shared by the
+ * component and permOverlayHeight so the header row measurement can never drift. */
+export function permToolLabel(toolName: string): string {
+  switch (toolName) {
+    case "read":
+    case "ls":
+    case "glob":
+    case "grep":
+      return "READ";
+    case "write":
+      return "WRITE (new file)";
+    case "edit":
+      return "EDIT (modify file)";
+    case "bash":
+      return "RUN COMMAND";
+    default:
+      return toolName.toUpperCase();
+  }
+}
+
+/** The explicit truncation marker under a clipped permission preview — content is never hidden
+ * silently, because approving the prompt can authorize shell execution (todowrite verify). */
+export function permHiddenMarker(hidden: number): string {
+  return `… +${hidden} more lines not shown — reject if unsure`;
+}
+
+/**
+ * The permission-overlay preview clipped to its RENDERED-row budget: whole source lines are
+ * kept while the wrapped total stays within 12 rows when everything fits, else 11 so the
+ * explicit marker row shares the same budget. A shown line is never char-truncated — a verify
+ * shell command the user is approving must stay visible in full, so each kept line still
+ * word-wraps and the first line is always kept even when it alone exceeds the budget (its true
+ * wrapped height is what permOverlayHeight then counts). `cols` is the terminal width; the
+ * overlay interior is cols-4 (border + paddingX), floored at 20 to match wrappedLineCount.
+ */
+export function permPreviewLines(
+  preview: string,
+  cols: number,
+): { lines: string[]; hidden: number } {
+  const w = Math.max(20, cols - 4);
+  const lines = preview.split("\n");
+  let total = 0;
+  for (const line of lines) total += wrapRows(line, w);
+  if (total <= 12) return { lines, hidden: 0 };
+  let rendered = 0;
+  let kept = 0;
+  for (const line of lines) {
+    const r = wrapRows(line, w);
+    if (kept > 0 && rendered + r > 11) break;
+    rendered += r;
+    kept++;
+  }
+  return { lines: lines.slice(0, kept), hidden: lines.length - kept };
+}
+
+/**
+ * Rows the permission overlay occupies, mirroring PermissionOverlay in app.tsx: round border (2)
+ * + the wrapped label+prompt line + the wrapped ` target:` line (only when there is no preview)
+ * + the wrapped rows of every shown preview line + the wrapped marker row when lines are hidden
+ * + one truncated hint row. Component and reservation consume the SAME helpers, so estimate ==
+ * render by construction — the source-line count this replaces under-reserved whenever a preview
+ * line word-wrapped at narrow widths, letting the live frame overflow its reservation (inline:
+ * Ink's scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+ */
+export function permOverlayHeight(
+  p: { toolName: string; promptText: string; argsSummary: string; diffPreview?: string | null },
+  cols: number,
+): number {
+  const interior = Math.max(20, cols - 4);
+  let rows = 2 + wrappedLineCount(`${permToolLabel(p.toolName)} ${p.promptText}`, interior);
+  if (p.argsSummary && !p.diffPreview) {
+    rows += wrappedLineCount(` target: ${p.argsSummary.slice(0, 80)}`, interior);
+  }
+  if (p.diffPreview) {
+    const { lines, hidden } = permPreviewLines(p.diffPreview, cols);
+    for (const line of lines) rows += wrapRows(line, interior);
+    if (hidden > 0) rows += wrapRows(permHiddenMarker(hidden), interior);
+  }
+  return rows + 1;
+}
+
 /**
  * Rows the ChildTree panel occupies, mirroring child_tree.tsx: round border (2) +
  * header (1) + one row per visible child (capped at `maxRows`, with a "+k more" row

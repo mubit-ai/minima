@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { permHiddenMarker, permOverlayHeight, permPreviewLines } from "../src/tui/layout.ts";
 import {
   checkPermission,
   createPermissionState,
@@ -211,6 +214,60 @@ describe("todowrite permission prompt surfaces verify commands", () => {
     });
     expect(res).toBeNull();
     expect(prompts).toBe(0);
+  });
+});
+
+// Guards the wrapped-row lockstep between PermissionOverlay and its footer reservation in
+// tui/app.tsx: both must consume the SAME layout helpers, so a preview line that word-wraps at a
+// narrow width can never render taller than the rows reserved for it (inline: Ink's
+// scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("reservation and render share the layout helpers (estimate == render)", () => {
+    expect(src).toContain("permOverlayHeight(permPrompt, cols)");
+    expect(src).toContain("permPreviewLines(prompt.diffPreview, cols)");
+    expect(src).toContain("permToolLabel(prompt.toolName)");
+    // The old source-line count is gone — it under-reserved whenever a line wrapped.
+    expect(src).not.toContain('Math.min(12, permPrompt.diffPreview.split("\\n").length)');
+    expect(src).not.toContain("lines.length > 12 ? lines.slice(0, 11) : lines");
+  });
+
+  test("the never-silently-hide marker still renders, verbatim", () => {
+    expect(src).toContain("permHiddenMarker(hidden)");
+    expect(permHiddenMarker(3)).toBe("… +3 more lines not shown — reject if unsure");
+  });
+
+  test("the hint row is truncated so it is exactly the one row the height math counts", () => {
+    const hintIdx = src.indexOf("[y] Yes once");
+    expect(hintIdx).toBeGreaterThan(-1);
+    const before = src.slice(hintIdx - 200, hintIdx);
+    expect(before).toContain('<Text color="gray" wrap="truncate">');
+  });
+
+  test("a real GT todowrite preview round-trips through the helpers without hiding the verify", async () => {
+    const state = createPermissionState("/repo", { groundTruth: true });
+    const tasks = JSON.stringify([
+      {
+        content: "wire the parser",
+        status: "pending",
+        verify: `bun test tests/${"deeply/nested/".repeat(8)}parser.test.ts`,
+      },
+    ]);
+    let prompt: PermissionPrompt | null = null;
+    await checkPermission("todowrite", { tasks }, state, (p) => {
+      prompt = p;
+      p.resolve("deny");
+    });
+    const preview = prompt!.diffPreview!;
+    // The verify command survives the clip whole at a narrow width, and the reservation counts
+    // its true wrapped rows (strictly more than its 2 source lines + chrome).
+    const { lines, hidden } = permPreviewLines(preview, 50);
+    expect(lines.join("\n")).toContain("parser.test.ts");
+    expect(hidden).toBe(0);
+    expect(permOverlayHeight({ ...prompt!, diffPreview: preview }, 50)).toBeGreaterThan(
+      3 + preview.split("\n").length + 1,
+    );
   });
 });
 

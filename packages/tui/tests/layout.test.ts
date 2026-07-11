@@ -10,6 +10,10 @@ import {
   getScrollableMessages,
   gtFooterFit,
   markdownBodyHeight,
+  permHiddenMarker,
+  permOverlayHeight,
+  permPreviewLines,
+  permToolLabel,
   questionDisplayText,
   questionOverlayHeight,
   streamTailBudget,
@@ -302,6 +306,118 @@ describe("questionOverlayHeight", () => {
   test("option rows are truncated, never wrapped — long descriptions don't grow the estimate", () => {
     const wide = q({ options: [{ label: "opt", description: "y".repeat(300) }] });
     expect(questionOverlayHeight(wide, 40, 10)).toBe(2 + 1 + 1 + 1 + 1);
+  });
+});
+
+describe("permToolLabel", () => {
+  test("maps each gated tool onto the overlay's header label", () => {
+    for (const t of ["read", "ls", "glob", "grep"]) expect(permToolLabel(t)).toBe("READ");
+    expect(permToolLabel("write")).toBe("WRITE (new file)");
+    expect(permToolLabel("edit")).toBe("EDIT (modify file)");
+    expect(permToolLabel("bash")).toBe("RUN COMMAND");
+    expect(permToolLabel("todowrite")).toBe("TODOWRITE");
+  });
+});
+
+describe("permPreviewLines — clips the permission preview by RENDERED rows", () => {
+  const shortLines = (n: number) =>
+    Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
+
+  test("source-line parity with the old budget when nothing wraps: 12 fit, 13+ clip to 11", () => {
+    expect(permPreviewLines(shortLines(12), 80)).toEqual({
+      lines: shortLines(12).split("\n"),
+      hidden: 0,
+    });
+    const thirteen = permPreviewLines(shortLines(13), 80);
+    expect(thirteen.lines).toHaveLength(11);
+    expect(thirteen.hidden).toBe(2);
+    const twenty = permPreviewLines(shortLines(20), 80);
+    expect(twenty.lines).toHaveLength(11);
+    expect(twenty.hidden).toBe(9);
+  });
+
+  test("a long verify line that word-wraps is kept WHOLE — never char-truncated", () => {
+    const verify = "x".repeat(200);
+    expect(permPreviewLines(verify, 50)).toEqual({ lines: [verify], hidden: 0 });
+  });
+
+  test("wrapped rows consume the budget, not source lines", () => {
+    // 10 lines of 50 chars at cols 40 (interior 36) render 2 rows each = 20 rows > 12, so only
+    // 5 source lines (10 rendered rows) fit under the 11-row cap — a source-line clip would
+    // have kept 10 and overflowed the reservation by 8 rows.
+    const preview = Array(10).fill("x".repeat(50)).join("\n");
+    const { lines, hidden } = permPreviewLines(preview, 40);
+    expect(lines).toHaveLength(5);
+    expect(hidden).toBe(5);
+  });
+
+  test("the first line is always kept even when it alone exceeds the budget", () => {
+    const huge = "x".repeat(46 * 15); // 15 rendered rows at cols 50 (interior 46)
+    const { lines, hidden } = permPreviewLines(`${huge}\ntail`, 50);
+    expect(lines).toEqual([huge]);
+    expect(hidden).toBe(1);
+  });
+
+  test("floors the interior width at 20 (no divide-by-tiny)", () => {
+    const { lines, hidden } = permPreviewLines("x".repeat(40), 10);
+    expect(lines).toEqual(["x".repeat(40)]); // 2 rows at width 20 — fits, kept whole
+    expect(hidden).toBe(0);
+  });
+});
+
+describe("permOverlayHeight — mirrors PermissionOverlay, estimate == render", () => {
+  test("border + header + preview rows + marker + hint when lines are hidden", () => {
+    // cols 80: 2 border + 1 header + 11 preview rows + 1 marker + 1 hint.
+    const preview = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
+    const p = { toolName: "bash", promptText: "run bash", argsSummary: "ls", diffPreview: preview };
+    expect(permOverlayHeight(p, 80)).toBe(16);
+  });
+
+  test("counts the wrapped rows of a long verify line — the under-reservation pinned", () => {
+    // One 200-char line at cols 50 (interior 46) renders 5 rows: 2 border + 1 header + 5 + 1
+    // hint = 9. The old source-line formula reserved 3 + 1 + 1 = 5 and overflowed by 4 rows.
+    const p = {
+      toolName: "bash",
+      promptText: "run bash",
+      argsSummary: "irrelevant",
+      diffPreview: "x".repeat(200),
+    };
+    expect(permOverlayHeight(p, 50)).toBe(9);
+  });
+
+  test("the target row is counted only when there is no preview (matching the render gate)", () => {
+    const base = { toolName: "read", promptText: "read from /tmp", argsSummary: "src/foo.ts" };
+    // 2 border + 1 header + 1 target + 1 hint.
+    expect(permOverlayHeight({ ...base, diffPreview: null }, 80)).toBe(5);
+    // 2 border + 1 header + 1 preview row + 1 hint — the target row is not rendered.
+    expect(permOverlayHeight({ ...base, diffPreview: "one line" }, 80)).toBe(5);
+  });
+
+  test("the hidden marker's own wrapping is counted at narrow widths", () => {
+    // cols 24 → interior 20: 20 one-row lines clip to 11 + the marker, which itself wraps to
+    // 3 rows at width 20. 2 border + 1 header ("RUN COMMAND run bash") + 11 + 3 + 1 hint = 18.
+    const preview = Array.from({ length: 20 }, (_, i) => `l${i + 1}`).join("\n");
+    const p = { toolName: "bash", promptText: "run bash", argsSummary: "", diffPreview: preview };
+    expect(permHiddenMarker(9)).toBe("… +9 more lines not shown — reject if unsure");
+    expect(permOverlayHeight(p, 24)).toBe(18);
+  });
+
+  test("a GT todowrite preview with a long verify command reserves its true rendered rows", () => {
+    const preview = [
+      "1. [ ] wire the parser",
+      `     verify (runs as a shell command): bun test tests/${"deeply/nested/".repeat(8)}parser.test.ts`,
+    ].join("\n");
+    const p = {
+      toolName: "todowrite",
+      promptText: "run todowrite",
+      argsSummary: "1 task (1 with a verify shell command)",
+      diffPreview: preview,
+    };
+    // Whatever the exact wrap count, the reservation must exceed the old source-line formula
+    // (3 + 2 lines + 1 = 6) because the verify line wraps at cols 50 — and the verify command
+    // itself must be shown in full (hidden = 0).
+    expect(permPreviewLines(preview, 50).hidden).toBe(0);
+    expect(permOverlayHeight(p, 50)).toBeGreaterThan(6);
   });
 });
 

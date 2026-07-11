@@ -56,6 +56,10 @@ import {
   getScrollableMessages,
   gtFooterFit,
   markdownBodyHeight,
+  permHiddenMarker,
+  permOverlayHeight,
+  permPreviewLines,
+  permToolLabel,
   questionDisplayText,
   questionOverlayHeight,
   streamTailBudget,
@@ -325,7 +329,12 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
   );
 }
 
-export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
+/**
+ * Approval overlay for a gated tool call. Its height math lives in permOverlayHeight() in
+ * layout.ts — component and reservation consume the same permToolLabel/permPreviewLines/
+ * permHiddenMarker helpers, so the estimate can never drift from the render.
+ */
+export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; cols: number }) {
   const isReadTool = prompt.toolName === "read" || prompt.toolName === "ls";
 
   useInput((input, key) => {
@@ -355,18 +364,7 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
       <Box flexDirection="column">
         <Text>
           <Text color="yellow" bold>
-            {prompt.toolName === "read" ||
-            prompt.toolName === "ls" ||
-            prompt.toolName === "glob" ||
-            prompt.toolName === "grep"
-              ? "READ"
-              : prompt.toolName === "write"
-                ? "WRITE (new file)"
-                : prompt.toolName === "edit"
-                  ? "EDIT (modify file)"
-                  : prompt.toolName === "bash"
-                    ? "RUN COMMAND"
-                    : prompt.toolName.toUpperCase()}
+            {permToolLabel(prompt.toolName)}
           </Text>
           <Text color="white"> {prompt.promptText}</Text>
         </Text>
@@ -379,13 +377,12 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
           {(() => {
             // Never hide content silently: approving this prompt can authorize shell
             // execution (todowrite verify), so a truncated preview must SAY it is truncated.
-            // Budget stays 12 rows: 11 content lines + 1 marker when over.
-            const lines = prompt.diffPreview.split("\n");
-            const shown = lines.length > 12 ? lines.slice(0, 11) : lines;
-            const hidden = lines.length - shown.length;
+            // permPreviewLines clips by RENDERED rows (shared with permOverlayHeight, so the
+            // reservation always matches) while every shown line still word-wraps in full.
+            const { lines, hidden } = permPreviewLines(prompt.diffPreview, cols);
             return (
               <>
-                {shown.map((line) => (
+                {lines.map((line) => (
                   <Text
                     key={line.slice(0, 40)}
                     color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
@@ -393,15 +390,13 @@ export function PermissionOverlay({ prompt }: { prompt: PermissionPrompt }) {
                     {line}
                   </Text>
                 ))}
-                {hidden > 0 ? (
-                  <Text color="yellow">… +{hidden} more lines not shown — reject if unsure</Text>
-                ) : null}
+                {hidden > 0 ? <Text color="yellow">{permHiddenMarker(hidden)}</Text> : null}
               </>
             );
           })()}
         </Box>
       ) : null}
-      <Text color="gray">
+      <Text color="gray" wrap="truncate">
         {isReadTool
           ? "[y] Yes once · [a] Always for this directory · [n] Reject"
           : "[y] Yes once · [a] Always allow this tool · [n] Reject"}
@@ -2683,12 +2678,9 @@ export function HarnessApp({
   const inputHidden = overlayOpen || permPrompt || questionPrompt;
   const inputExtraLines = inputHidden ? 0 : Math.max(1, wrappedLineCount(typedText, cols - 4)) - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
-  const permPromptHeight = permPrompt
-    ? 3 + // round border (2) + prompt line (1)
-      (permPrompt.argsSummary && !permPrompt.diffPreview ? 1 : 0) +
-      (permPrompt.diffPreview ? Math.min(12, permPrompt.diffPreview.split("\n").length) : 0) +
-      1 // hint line
-    : 0;
+  // Wrapped-row height from the same helpers the overlay renders with (estimate == render): a
+  // source-line count under-reserved whenever a preview line word-wrapped at narrow widths.
+  const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, cols) : 0;
   // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
   // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -3057,6 +3049,7 @@ export function HarnessApp({
               permPrompt.resolve(decision);
             },
           }}
+          cols={cols}
         />
       )}
 
