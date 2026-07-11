@@ -21,7 +21,7 @@ const synth = (over: Partial<GroundTruthSynthesis> = {}): GroundTruthSynthesis =
 });
 
 const emptyResult = (over: Partial<CouncilRoundResult> = {}): CouncilRoundResult => ({
-  draftDelta: "",
+  draft: "",
   decisions: [],
   findings: [],
   faults: [],
@@ -38,7 +38,7 @@ describe("PlanSessionStore.applyCouncilResult", () => {
     const store = new PlanSessionStore("Build a widget");
     store.applyCouncilResult(
       emptyResult({
-        draftDelta: "Step 1: sketch the API.",
+        draft: "Step 1: sketch the API.",
         decisions: [{ topic: "Storage", decision: "Use SQLite", rationale: "embedded" }],
         constraints: ["No network at build time"],
         questions: [
@@ -115,6 +115,68 @@ describe("PlanSessionStore.applyCouncilResult", () => {
     expect(s.findings[0]?.severity).toBe("blocker");
   });
 
+  test("a round's full plan REPLACES the previous draft (no append duplication)", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(emptyResult({ draft: "Plan A: do it the first way." }));
+    store.applyCouncilResult(emptyResult({ draft: "Plan B: do it the better way." }));
+
+    expect(store.session.draft).toBe("Plan B: do it the better way.");
+    const md = store.toMarkdown();
+    expect(md).toContain("Plan B: do it the better way.");
+    expect(md).not.toContain("Plan A");
+    // exactly once — replace, never append
+    expect(md.split("Plan B: do it the better way.")).toHaveLength(2);
+  });
+
+  test("an empty plan keeps the previous draft", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(emptyResult({ draft: "Plan A." }));
+    store.applyCouncilResult(emptyResult({ draft: "   " }));
+    expect(store.session.draft).toBe("Plan A.");
+  });
+
+  test("an aborted round never clobbers a non-empty draft, but its findings still merge", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(emptyResult({ draft: "Good full plan." }));
+    store.applyCouncilResult(
+      emptyResult({
+        draft: "Half-revised partial plan",
+        aborted: true,
+        findings: [{ source: "researcher", summary: "partial research kept", severity: "info" }],
+        costUsd: 0.01,
+      }),
+    );
+
+    const s = store.session;
+    expect(s.draft).toBe("Good full plan.");
+    expect(s.findings.map((f) => f.summary)).toContain("partial research kept");
+    expect(s.rounds).toBe(2);
+    expect(s.totalCouncilCostUsd).toBeCloseTo(0.01, 8);
+  });
+
+  test("an aborted round MAY seed an empty draft (research is kept)", () => {
+    const store = new PlanSessionStore("g");
+    store.applyCouncilResult(emptyResult({ draft: "Partial plan.", aborted: true }));
+    expect(store.session.draft).toBe("Partial plan.");
+  });
+
+  test("legacy draftDelta key is still read as the draft (one-release alias)", () => {
+    const store = new PlanSessionStore("g");
+    const legacy = {
+      ...emptyResult(),
+      draftDelta: "Legacy-keyed plan.",
+    } as unknown as CouncilRoundResult;
+    store.applyCouncilResult(legacy);
+    expect(store.session.draft).toBe("Legacy-keyed plan.");
+    // The new key wins when both are present.
+    const both = {
+      ...emptyResult({ draft: "New-keyed plan." }),
+      draftDelta: "stale",
+    } as unknown as CouncilRoundResult;
+    store.applyCouncilResult(both);
+    expect(store.session.draft).toBe("New-keyed plan.");
+  });
+
   test("is fail-open on a malformed result (never throws, no partial round bump)", () => {
     const store = new PlanSessionStore("g");
     // Malformed: decisions is not an array of objects — iterating/normalizing throws internally.
@@ -168,7 +230,7 @@ describe("PlanSessionStore.snapshotBlock", () => {
       emptyResult({
         decisions: [{ topic: "Storage", decision: "Use SQLite", rationale: "r" }],
         questions: [{ question: "Which runtime?", header: "h", options: [], why: "w" }],
-        draftDelta: "Draft body here.",
+        draft: "Draft body here.",
       }),
     );
     const snap = store.snapshotBlock();
@@ -184,6 +246,23 @@ describe("PlanSessionStore.snapshotBlock", () => {
     expect(prompt).toContain("You are the planner.");
     expect(prompt).toContain(store.snapshotBlock());
   });
+
+  test("clips a huge draft to ~6k chars (head+tail kept); toMarkdown keeps it whole", () => {
+    const store = new PlanSessionStore("g");
+    const draft = `HEAD-MARKER ${"x".repeat(50_000)} TAIL-MARKER`;
+    store.applyCouncilResult(emptyResult({ draft }));
+
+    const snap = store.snapshotBlock();
+    expect(snap).toContain("HEAD-MARKER");
+    expect(snap).toContain("TAIL-MARKER");
+    expect(snap).toContain("chars truncated");
+    // The projection is bounded regardless of draft size.
+    expect(snap.length).toBeLessThan(7_000);
+
+    const md = store.toMarkdown();
+    expect(md).toContain(draft);
+    expect(md).not.toContain("chars truncated");
+  });
 });
 
 describe("PlanSessionStore.toMarkdown", () => {
@@ -191,7 +270,7 @@ describe("PlanSessionStore.toMarkdown", () => {
     const store = new PlanSessionStore("Build a widget");
     store.applyCouncilResult(
       emptyResult({
-        draftDelta: "Build the widget in three phases.",
+        draft: "Build the widget in three phases.",
         decisions: [{ topic: "Storage", decision: "Use SQLite", rationale: "embedded" }],
         constraints: ["No network at build time"],
         findings: [{ source: "researcher", summary: "SQLite ships with Bun", severity: "info" }],
@@ -227,7 +306,7 @@ describe("PlanSessionStore.toMarkdown", () => {
       emptyResult({
         title: "Throwaway test plan",
         refinedGoal: "Produce a minimal, low-effort plan to exercise the planning council.",
-        draftDelta: "Do a trivial thing.",
+        draft: "Do a trivial thing.",
       }),
     );
     const md = store.toMarkdown();
@@ -250,7 +329,7 @@ describe("PlanSessionStore.toMarkdown", () => {
 
   test("falls back to the raw goal when the council supplies no title/goal", () => {
     const store = new PlanSessionStore("Add rate limiting");
-    store.applyCouncilResult(emptyResult({ draftDelta: "some plan" }));
+    store.applyCouncilResult(emptyResult({ draft: "some plan" }));
     const md = store.toMarkdown();
     expect(md).toContain("# Ground Truth: Add rate limiting");
     expect(md).toContain("## Goal\n\nAdd rate limiting");
@@ -315,7 +394,7 @@ describe("PlanSessionStore.hasSubstance", () => {
     expect(store.hasSubstance()).toBe(false);
 
     const withDraft = new PlanSessionStore("g");
-    withDraft.applyCouncilResult(emptyResult({ draftDelta: "some plan" }));
+    withDraft.applyCouncilResult(emptyResult({ draft: "some plan" }));
     expect(withDraft.hasSubstance()).toBe(true);
 
     const withDecision = new PlanSessionStore("g");
@@ -386,7 +465,7 @@ describe("PlanSessionStore.toGroundTruth", () => {
 
   test("falls back to deterministic toMarkdown() when there is no synthesis", () => {
     const store = new PlanSessionStore("Build a widget");
-    store.applyCouncilResult(emptyResult({ draftDelta: "Do the widget." }));
+    store.applyCouncilResult(emptyResult({ draft: "Do the widget." }));
     expect(store.toGroundTruth(null)).toBe(store.toMarkdown());
   });
 });

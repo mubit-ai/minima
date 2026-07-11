@@ -27,6 +27,39 @@ const NO_PROMPT_TOOLS = new Set(["question"]);
 
 export type PermissionDecision = "allow" | "always" | "deny";
 
+/**
+ * Tools the plan-mode beforeToolCall hook blocks at the LEAD's dispatcher (enforcement in
+ * the dispatcher, never prompt text). groundTruth=false is the HISTORICAL list — the
+ * default path must not change. groundTruth=true additionally blocks todowrite (approving
+ * one authorizes running each task's `verify` as a shell command) and task (delegated
+ * children are built hook-free with their own unrestricted toolset, so a task call is a
+ * write-access bypass; the plan council's researchers delegate read-only WITHOUT the task
+ * tool, so read-only research delegation stays available).
+ */
+export function planModeBlockedTools(groundTruth: boolean): string[] {
+  return groundTruth
+    ? ["write", "edit", "bash", "apply_patch", "todowrite", "task"]
+    : ["write", "edit", "bash", "apply_patch"];
+}
+
+/** The block reason handed back to the model for a plan-mode-blocked tool call. */
+export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
+  if (!groundTruth) {
+    return "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
+  }
+  if (toolName === "task") {
+    return (
+      "Plan mode is ON — task is blocked: delegated children get their own unrestricted " +
+      "toolset (write/edit/bash), while the plan council already provides read-only " +
+      "research delegation. Use /plan to exit."
+    );
+  }
+  return (
+    "Plan mode is ON — write/edit/bash/apply_patch/todowrite/task are blocked " +
+    "(todowrite can run `verify` shell checks). Use /plan to exit."
+  );
+}
+
 export interface PermissionPrompt {
   toolName: string;
   argsSummary: string;

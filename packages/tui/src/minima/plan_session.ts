@@ -19,6 +19,19 @@ const norm = (s: string): string => s.trim().replace(/\s+/g, " ").toLowerCase();
 
 const fmtUsd = (n: number): string => `$${(Number.isFinite(n) ? n : 0).toFixed(4)}`;
 
+/** Cap on the draft projected into the planner's system prompt each turn; toMarkdown /
+ *  toGroundTruth always keep the full draft. */
+const SNAPSHOT_DRAFT_CAP = 6000;
+
+/** Budget-bounded slice that keeps BOTH ends (local twin of judge.midTruncate — this
+ *  module stays zero-import). */
+const clipMiddle = (s: string, cap: number): string => {
+  if (s.length <= cap) return s;
+  const head = Math.ceil(cap / 2);
+  const tail = cap - head;
+  return `${s.slice(0, head)}\n[… ${s.length - cap} chars truncated …]\n${s.slice(s.length - tail)}`;
+};
+
 export interface PlanDecision {
   id: string;
   topic: string;
@@ -71,7 +84,9 @@ export interface CouncilRoundResult {
   title?: string;
   /** Concise LLM-authored restatement of the goal (own words). Empty if none produced. */
   refinedGoal?: string;
-  draftDelta: string;
+  /** The COMPLETE current plan prose — REPLACE semantics (empty keeps the previous draft).
+   *  The pre-rename `draftDelta` key is still read as a legacy alias for one release. */
+  draft: string;
   decisions: { topic: string; decision: string; rationale: string }[];
   findings: {
     source: "researcher" | "critic" | "keeper";
@@ -173,8 +188,13 @@ export class PlanSessionStore {
       const refinedGoal = (r.refinedGoal ?? "").trim();
       if (refinedGoal && !this.state.refinedGoal) this.state.refinedGoal = refinedGoal;
 
-      const delta = (r.draftDelta ?? "").trim();
-      if (delta) this.state.draft = this.state.draft ? `${this.state.draft}\n\n${delta}` : delta;
+      // REPLACE semantics: the round carries the full current plan, not a delta to append
+      // (appending duplicated the whole plan every round). An aborted round must never
+      // clobber a non-empty draft with a half-revised partial one — its findings/faults
+      // still merge below (the research was paid for).
+      const legacy = (r as CouncilRoundResult & { draftDelta?: string }).draftDelta ?? "";
+      const draft = ((r.draft ?? "") || legacy).trim();
+      if (draft && !(r.aborted && this.state.draft.trim())) this.state.draft = draft;
 
       const seenTopics = new Set(this.state.decisions.map((d) => norm(d.topic)));
       for (const d of r.decisions ?? []) {
@@ -305,7 +325,7 @@ export class PlanSessionStore {
     if (open.length === 0) lines.push("- (none)");
     else for (const q of open) lines.push(`- ${q.question}`);
 
-    lines.push("", "Current draft:", s.draft.trim() || "(empty)");
+    lines.push("", "Current draft:", clipMiddle(s.draft.trim(), SNAPSHOT_DRAFT_CAP) || "(empty)");
     lines.push("=== END SNAPSHOT ===");
     return lines.join("\n");
   }

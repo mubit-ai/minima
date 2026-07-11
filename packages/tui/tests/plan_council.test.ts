@@ -72,7 +72,7 @@ beforeEach(() => {
 afterEach(() => reg.unregister());
 
 describe("runCouncilRound — full round", () => {
-  test("returns researcher findings + critic faults + a draftDelta; sums child costs", async () => {
+  test("returns researcher findings + critic faults + a draft; sums child + meta spend", async () => {
     // Meta call order: deriveScopes → keeperPostCheck → draftPlan → attack#0 (faults) →
     // reviseDraft#0 → attack#1 (clean) → synth.  Researchers use the injected mock spawn.
     reg.setResponses([
@@ -96,7 +96,7 @@ describe("runCouncilRound — full round", () => {
       msg("Revised plan draft addressing error handling."), // reviser
       json([]), // attack#1: clean → loop stops before the cap
       json({
-        draftDelta: "", // empty → result falls back to the revised draft prose
+        plan: "", // empty → result falls back to the revised draft prose
         decisions: [
           { topic: "storage", decision: "use the embedded store", rationale: "already a dep" },
         ],
@@ -110,10 +110,11 @@ describe("runCouncilRound — full round", () => {
     ]);
 
     const spawn = spawnWith({ "research-1": 0.02, "research-2": 0.03 });
+    const captured: number[] = [];
     const result = await runCouncilRound(
       sessionFor("build a planning council"),
       "Design the council pipeline end to end",
-      makeOpts({ spawn, maxCriticPasses: 3 }),
+      makeOpts({ spawn, maxCriticPasses: 3, onCostUsd: (usd) => captured.push(usd) }),
     );
 
     // researcher finding surfaced
@@ -125,12 +126,15 @@ describe("runCouncilRound — full round", () => {
     // critic faults surfaced
     expect(result.faults).toHaveLength(1);
     expect(result.faults[0]!.summary).toBe("missing error handling");
-    // reviser RAN: draftDelta is the revised prose (synth draftDelta was empty)
-    expect(result.draftDelta).toBe("Revised plan draft addressing error handling.");
+    // reviser RAN: draft is the revised prose (synth plan was empty)
+    expect(result.draft).toBe("Revised plan draft addressing error handling.");
     // loop STOPPED at the clean pass, not the cap: exactly 7 meta calls
     expect(reg.state.callCount).toBe(7);
-    // costUsd sums both injected child costs
-    expect(result.costUsd).toBeCloseTo(0.05, 8);
+    // costUsd = injected child costs + every meta call's realized spend (onCostUsd saw each)
+    expect(captured).toHaveLength(7);
+    const metaSpend = captured.reduce((a, b) => a + b, 0);
+    expect(metaSpend).toBeGreaterThan(0);
+    expect(result.costUsd).toBeCloseTo(0.05 + metaSpend, 10);
     expect(result.decisions).toHaveLength(1);
     expect(result.facts).toContain("the harness runs on Bun");
     expect(result.constraints).toContain("must stay db-free for this feature");
@@ -146,7 +150,7 @@ describe("runCouncilRound — full round", () => {
       msg("Draft v2."), // revise#0
       json([{ summary: "fault B", severity: "concern" }]), // attack#1
       msg("Draft v3."), // revise#1
-      json({ draftDelta: "Final plan." }), // synth
+      json({ plan: "Final plan." }), // synth
       // Sentinel: a 3rd critic attack would consume this — the cap MUST prevent that.
       json([{ summary: "fault C (must never run)", severity: "blocker" }]),
     ]);
@@ -163,7 +167,56 @@ describe("runCouncilRound — full round", () => {
     // both distinct faults kept (deduped), the capped-out one absent
     expect(result.faults.map((f) => f.summary).sort()).toEqual(["fault A", "fault B"]);
     expect(result.faults.some((f) => f.summary.includes("fault C"))).toBe(false);
-    expect(result.draftDelta).toBe("Final plan.");
+    expect(result.draft).toBe("Final plan.");
+  });
+
+  test("raw.draftDelta legacy synth key still lands as the plan", async () => {
+    reg.setResponses([
+      json([{ focus: "x", boundaries: "read only", output_format: "notes", difficulty: "easy" }]),
+      json([]), // keeper
+      msg("Draft."),
+      json([]), // attack#0: clean
+      json({ draftDelta: "Legacy-keyed full plan." }), // synth echoing the pre-rename key
+    ]);
+    const result = await runCouncilRound(
+      sessionFor("goal"),
+      "A substantive turn requiring real deliberation here",
+      makeOpts({ spawn: spawnWith({}) }),
+    );
+    expect(result.draft).toBe("Legacy-keyed full plan.");
+  });
+
+  test("roundBudgetUsd soft-caps researcher launches once realized spend crosses it", async () => {
+    reg.setResponses([
+      json([
+        { focus: "a", boundaries: "read only", output_format: "notes", difficulty: "easy" },
+        { focus: "b", boundaries: "read only", output_format: "notes", difficulty: "easy" },
+      ]),
+      json([]), // keeper
+      msg("Plan."),
+      json([]), // attack#0: clean
+      json({ plan: "Done." }), // synth
+    ]);
+    const launched: string[] = [];
+    const spawn: SpawnFn = async (d: Delegation): Promise<ChildResult> => {
+      launched.push(d.step_id);
+      return {
+        step_id: d.step_id,
+        childId: `${d.step_id}-child`,
+        text: "finding",
+        costUsd: 0.02,
+        quality: null,
+        outcome: "success",
+        workdir: null,
+      };
+    };
+    await runCouncilRound(
+      sessionFor("goal"),
+      "A substantive turn requiring real deliberation here",
+      makeOpts({ spawn, roundBudgetUsd: 0.01, concurrency: 1, maxCriticPasses: 1 }),
+    );
+    // The first child's 0.02 realized spend crossed the 0.01 cap: the second never launches.
+    expect(launched).toEqual(["research-1"]);
   });
 
   test("synth resolves a trivial question as a decision but surfaces a genuine one", async () => {
@@ -173,7 +226,7 @@ describe("runCouncilRound — full round", () => {
       msg("Plan."),
       json([]), // attack#0: clean immediately
       json({
-        draftDelta: "Plan finalized.",
+        plan: "Plan finalized.",
         // trivial/self-answerable → RESOLVED as a decision
         decisions: [
           { topic: "module name", decision: "call it plan_council", rationale: "self-evident" },
@@ -220,7 +273,7 @@ describe("runCouncilRound — full round", () => {
 
     expect(result.aborted).toBe(true);
     expect(result.costUsd).toBe(0); // research never launched
-    expect(result.draftDelta).toBe("");
+    expect(result.draft).toBe("");
     expect(reg.state.callCount).toBe(0); // faux threw before counting the aborted call
   });
 });

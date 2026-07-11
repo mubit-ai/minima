@@ -6,6 +6,8 @@ import {
   formatActionLabel,
   formatToolArgs,
   type PermissionPrompt,
+  planModeBlockReason,
+  planModeBlockedTools,
 } from "../src/tui/permissions.ts";
 
 describe("checkPermission gating", () => {
@@ -229,5 +231,34 @@ describe("formatActionLabel", () => {
 
   test("uses the bare tool name when the arg summary is empty", () => {
     expect(formatActionLabel("bash", { command: "" })).toBe("bash");
+  });
+});
+
+describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
+  test("GT off: deep-equal to the exact historical array — the default path must not change", () => {
+    expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch"]);
+  });
+
+  test("GT on: keeps the historical set and additionally blocks todowrite and task", () => {
+    const blocked = planModeBlockedTools(true);
+    for (const t of planModeBlockedTools(false)) expect(blocked).toContain(t);
+    expect(blocked).toContain("todowrite");
+    expect(blocked).toContain("task");
+  });
+
+  test("GT-off block reason is the historical copy, byte-identical", () => {
+    expect(planModeBlockReason("write", false)).toBe(
+      "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
+    );
+    expect(planModeBlockReason("task", false)).toBe(planModeBlockReason("bash", false));
+  });
+
+  test("GT-on task reason explains hook-free children + council read-only delegation", () => {
+    const reason = planModeBlockReason("task", true);
+    expect(reason).toContain("task is blocked");
+    expect(reason).toContain("unrestricted toolset");
+    expect(reason).toContain("read-only");
+    // Other GT-on tools keep the general plan-mode copy naming the verify hazard.
+    expect(planModeBlockReason("todowrite", true)).toContain("`verify` shell checks");
   });
 });

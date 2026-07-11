@@ -143,3 +143,34 @@ describe("judge prompt hardening (live prompt-bench findings)", () => {
     expect(JUDGE_SYSTEM).toContain("<response>");
   });
 });
+
+describe("LLMJudge spend metering (onCostUsd)", () => {
+  test("invokes onCostUsd with the realized cost of each judge call", async () => {
+    const reg = setup();
+    reg.setResponses([new AssistantMessage({ content: [text("8")] })]);
+    const captured: number[] = [];
+    const judge = new LLMJudge(JUDGE_MODEL, { onCostUsd: (usd) => captured.push(usd) });
+    const score = await judge.grade("task", "a sufficiently long output to price");
+    expect(score).toBeCloseTo(0.8, 5);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!).toBeGreaterThan(0); // realized usage, never fabricated
+    reg.unregister();
+  });
+
+  test("a throwing hook never breaks grading; empty output makes no call and books nothing", async () => {
+    const reg = setup();
+    reg.setResponses([new AssistantMessage({ content: [text("7")] })]);
+    const judge = new LLMJudge(JUDGE_MODEL, {
+      onCostUsd: () => {
+        throw new Error("hook exploded");
+      },
+    });
+    expect(await judge.grade("task", "output")).toBeCloseTo(0.7, 5);
+
+    const captured: number[] = [];
+    const silent = new LLMJudge(JUDGE_MODEL, { onCostUsd: (usd) => captured.push(usd) });
+    expect(await silent.grade("task", "")).toBe(0); // scored directly, no complete()
+    expect(captured).toHaveLength(0);
+    reg.unregister();
+  });
+});

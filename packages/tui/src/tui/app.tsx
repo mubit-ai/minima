@@ -34,7 +34,7 @@ import {
   answerOpenQuestions,
   buildPlannerSystemPrompt,
   runCouncilRound,
-  shouldConveneCouncil,
+  runPlanTurn,
   synthesizeGroundTruth,
 } from "../minima/index.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
@@ -69,6 +69,8 @@ import {
   type PermissionState,
   checkPermission,
   createPermissionState,
+  planModeBlockReason,
+  planModeBlockedTools,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
@@ -885,22 +887,13 @@ export function HarnessApp({
   useEffect(() => {
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (planModeRef.current) {
-        // With ground truth on, todowrite is blocked too: it triggers the done-gate /
-        // baseline capture, which EXECUTES the step's `verify` shell command — plan mode
-        // advertises read-only, so nothing that spawns a shell may pass. With ground truth
-        // off todowrite is inert bookkeeping and stays allowed (historical behavior).
+        // The blocklist lives in permissions.ts (planModeBlockedTools) so it is a single
+        // tested source: GT off keeps the historical list byte-identical; GT on also blocks
+        // todowrite (its `verify` runs as a shell command) and task (delegated children are
+        // hook-free — a task call is a write bypass; council research delegation stays).
         const gtOn = agent.config.groundTruth === true;
-        const blocked = gtOn
-          ? ["write", "edit", "bash", "apply_patch", "todowrite"]
-          : ["write", "edit", "bash", "apply_patch"];
-        if (blocked.includes(ctx.toolCall.name)) {
-          return {
-            block: true,
-            reason: gtOn
-              ? "Plan mode is ON — write/edit/bash/apply_patch/todowrite are blocked " +
-                "(todowrite can run `verify` shell checks). Use /plan to exit."
-              : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
-          };
+        if (planModeBlockedTools(gtOn).includes(ctx.toolCall.name)) {
+          return { block: true, reason: planModeBlockReason(ctx.toolCall.name, gtOn) };
         }
       }
       const result = await checkPermission(
@@ -2455,72 +2448,47 @@ export function HarnessApp({
     }
   }
 
-  // A plan-mode conversational turn: optionally convene the design council (heavy logic lives in
-  // ../minima/plan_council.ts), fold its result into the in-memory session, surface any decision
-  // questions, then re-anchor the planner's system prompt and let it reply. Fail-open throughout.
-  async function runPlanTurn(text: string) {
+  // A plan-mode conversational turn, delegated to the testable seam in ../minima/plan_turn.ts:
+  // ONE AbortController (stashed in councilControllerRef) covers the whole turn, council spend
+  // books through the BudgetLedger + lead CostMeter, and an Esc mid-council ends the turn with
+  // the partial result merged — no question overlay, no fresh planner call. This wrapper only
+  // wires the deps; it is reachable only when config.groundTruth planted a PlanSessionStore.
+  async function handlePlanTurn(text: string) {
     const store = planSessionRef.current;
-    if (!store) return;
-    store.adoptGoalIfEmpty(text);
-    store.recordUserTurn(text);
-
-    if (shouldConveneCouncil(text) && planSpawn && planMetaModel) {
-      const controller = new AbortController();
-      councilControllerRef.current = controller;
-      try {
-        const result = await runCouncilRound(store.session, text, {
+    if (!store || !planSpawn || !planMetaModel) return;
+    await runPlanTurn(store, text, {
+      runRound: (session, turn, o) =>
+        runCouncilRound(session, turn, {
           parent: agent,
           metaModel: planMetaModel,
           spawn: planSpawn,
-          signal: controller.signal,
+          signal: o.signal,
+          roundBudgetUsd: o.roundBudgetUsd,
           onEvent: (e) =>
             setMessages((m) => [
               ...m,
               { role: "tool", toolName: "council", text: `· ${e.phase}: ${e.note}` },
             ]),
           onChildEvent: childEventRef?.handler ?? undefined,
-        });
-        store.applyCouncilResult(result);
-        const lines: string[] = [];
-        if (result.aborted) lines.push("(council aborted early)");
-        for (const f of result.faults) lines.push(`⚠ ${f.severity}: ${f.summary}`);
-        for (const f of result.findings) lines.push(`• ${f.source}: ${f.summary}`);
-        lines.push(`council cost $${result.costUsd.toFixed(4)} · round ${store.session.rounds}`);
-        setMessages((m) => [...m, { role: "tool", toolName: "council", text: lines.join("\n") }]);
-        // Surface only genuine decision-points to the user; record chosen answers into the session.
-        if (askUserRef?.current) {
-          for (const q of result.questions) {
-            const answer = await askUserRef.current({
-              question: q.why ? `${q.question}\n(${q.why})` : q.question,
-              header: q.header,
-              options: q.options.map((o) => ({ label: o.label, description: o.description })),
-              allow_freetext: true,
-            });
-            if (answer != null) store.answerQuestion(q.question, answer);
-          }
-        }
-      } catch (exc) {
-        // Fail-open: fall back to just the planner turn.
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            toolName: "council",
-            text: `ℹ council skipped: ${errText(exc)}`,
-            isError: false,
-          },
-        ]);
-      } finally {
-        councilControllerRef.current = null;
-      }
-    }
-
-    // Re-anchor the planner on the current ground-truth snapshot, then let it reply. The base is
-    // the planner persona (NOT plannerBaseSystemPromptRef, which holds the original agent prompt
-    // reserved for restoration on exit) so the read-only planner framing never leaks away.
-    agent.agentState.systemPrompt = buildPlannerSystemPrompt(PLANNER_PERSONA, store);
-    const routing = await agent.promptRouted(text);
-    surfaceRouting(routing);
+        }),
+      askUser: askUserRef?.current ?? null,
+      onNote: (note, isError) =>
+        setMessages((m) => [...m, { role: "tool", toolName: "council", text: note, isError }]),
+      // The base is the planner persona (NOT plannerBaseSystemPromptRef, which holds the
+      // original agent prompt reserved for restoration on exit) so the read-only planner
+      // framing never leaks away.
+      buildSystem: (s) => buildPlannerSystemPrompt(PLANNER_PERSONA, s),
+      promptPlanner: async (turn, systemPrompt) => {
+        agent.agentState.systemPrompt = systemPrompt;
+        const routing = await agent.promptRouted(turn);
+        surfaceRouting(routing);
+        return routing;
+      },
+      controllerRef: councilControllerRef,
+      budget: agent.budget,
+      meter: agent.meter,
+      roundBudgetUsd: agent.config.planRoundBudgetUsd,
+    });
   }
 
   async function onSubmit(text: string) {
@@ -2550,7 +2518,7 @@ export function HarnessApp({
     setStreamingThoughts("");
     try {
       if (planModeRef.current && planSessionRef.current && planSpawn && planMetaModel) {
-        await runPlanTurn(text);
+        await handlePlanTurn(text);
       } else {
         const expanded = expandAtFiles(text, process.cwd());
         const routing = await agent.promptRouted(expanded);
