@@ -34,6 +34,11 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
+function isBusyError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.includes("SQLITE_BUSY") || msg.includes("database is locked");
+}
+
 /** Ordered, idempotent migrations. schema_meta.version = index of the last applied + 1. */
 const MIGRATIONS: string[][] = [
   // v1 — core spine
@@ -331,27 +336,76 @@ export class MinimaDb {
     this.path = path;
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
-    this.db.exec("PRAGMA journal_mode=WAL");
-    this.db.exec("PRAGMA foreign_keys=ON");
     this.db.exec("PRAGMA busy_timeout=5000");
+    // The delete->WAL header flip needs a brief exclusive lock and does NOT honor the
+    // busy handler, so a concurrent fresh open can see SQLITE_BUSY here.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.db.exec("PRAGMA journal_mode=WAL");
+        break;
+      } catch (e) {
+        if (attempt < 20 && isBusyError(e)) {
+          Bun.sleepSync(25);
+          continue;
+        }
+        throw e;
+      }
+    }
+    this.db.exec("PRAGMA foreign_keys=ON");
     this.migrate();
   }
 
   private migrate(): void {
     this.db.exec("CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL)");
-    const row = this.db.query("SELECT version FROM schema_meta").get() as {
-      version: number;
-    } | null;
-    let version = row?.version ?? 0;
-    if (!row) this.db.exec("INSERT INTO schema_meta VALUES (0)");
-    while (version < MIGRATIONS.length) {
-      const steps = MIGRATIONS[version]!;
-      const apply = this.db.transaction(() => {
-        for (const ddl of steps) this.db.exec(ddl);
-        this.db.exec("UPDATE schema_meta SET version = ?", [version + 1]);
-      });
-      apply();
-      version += 1;
+    const settled = this.db
+      .query("SELECT COUNT(*) AS n, MAX(version) AS v FROM schema_meta")
+      .get() as {
+      n: number;
+      v: number | null;
+    };
+    if (settled.n === 1 && settled.v !== null && settled.v >= MIGRATIONS.length) return;
+    // One batch per IMMEDIATE transaction: the version re-read happens under the write
+    // lock, so concurrent openers serialize instead of double-applying a batch.
+    const step = this.db.transaction((): boolean => {
+      this.db.exec(
+        `DELETE FROM schema_meta WHERE rowid NOT IN
+           (SELECT rowid FROM schema_meta ORDER BY version DESC, rowid ASC LIMIT 1)`,
+      );
+      this.db.exec(
+        "INSERT INTO schema_meta (version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_meta)",
+      );
+      const version = (
+        this.db.query("SELECT version FROM schema_meta").get() as { version: number }
+      ).version;
+      if (version >= MIGRATIONS.length) return false;
+      for (const ddl of MIGRATIONS[version]!) this.execStep(ddl);
+      this.db.exec("UPDATE schema_meta SET version = ?", [version + 1]);
+      return version + 1 < MIGRATIONS.length;
+    });
+    for (;;) {
+      let more: boolean | undefined;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          more = step.immediate();
+          break;
+        } catch (e) {
+          if (attempt < 2 && isBusyError(e)) continue;
+          throw e;
+        }
+      }
+      if (!more) break;
+    }
+  }
+
+  // Self-heal for DBs wedged by the pre-fix race: version regressed while a later batch's
+  // columns are already present, so re-applying ADD COLUMN throws forever.
+  private execStep(ddl: string): void {
+    try {
+      this.db.exec(ddl);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/ADD COLUMN/i.test(ddl) && msg.includes("duplicate column name")) return;
+      throw e;
     }
   }
 
