@@ -9,6 +9,7 @@
 import { existsSync, statSync } from "node:fs";
 import { type AgentTool, type ToolResult, type ToolUpdate, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
+import { killProcessGroup } from "../minima/check.ts";
 import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
 import type { FsToolOptions } from "./types.ts";
@@ -66,6 +67,7 @@ async function execute(
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
+      detached: true,
     });
   } catch (exc) {
     return errorResult(`bash: failed to start: ${exc}`);
@@ -97,11 +99,10 @@ async function execute(
   ]);
 
   if (winner.kind === "timeout" || winner.kind === "aborted") {
-    try {
-      proc.kill();
-    } catch {
-      // already dead
-    }
+    // Kill the WHOLE process group: proc.kill() only signals the bash leader, so the
+    // grandchildren of a timed-out command survived and ran unbounded (same bug the GT
+    // check runner had). Clean exits are untouched — deliberately started daemons live.
+    killProcessGroup(proc);
     return errorResult(
       winner.kind === "timeout" ? `bash: timed out after ${timeoutMs} ms` : "bash: aborted",
     );
