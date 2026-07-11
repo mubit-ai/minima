@@ -24,6 +24,7 @@
  * (db gone, preview threw) falls back to allow.
  */
 import type { AfterToolCall, BeforeToolCall } from "../agent/tools.ts";
+import { AssistantMessage } from "../ai/index.ts";
 import type {
   CompletionFlip,
   FileChangeRow,
@@ -520,6 +521,37 @@ const SAME_BATCH_BLOCK =
   "call was refused before executing (none of its statuses were applied) — consolidate the " +
   "list into a single todowrite, or re-send this one in your next message.";
 
+/** Sibling tools whose execution can regress a check after its verdict was computed. */
+const MUTATING_SIBLINGS = new Set(["write", "edit", "apply_patch", "bash", "task"]);
+
+function soloCompletionReason(names: string[]): string {
+  return `This todowrite marks steps completed, but the same message also calls ${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
+}
+
+/**
+ * The tool calls of the CURRENT batch: during before-hooks, loop.ts has already appended the
+ * assistant message whose toolUse blocks are being dispatched, so the last AssistantMessage
+ * with stop_reason "toolUse" IS the batch. Stateless — nothing to leak or wedge when a batch
+ * unwinds via an error or abort. Total: any unexpected shape returns [] (rules disabled,
+ * fail-open for bare test refs).
+ */
+export function batchToolCalls(state: unknown): { id: string; name: string }[] {
+  const messages = (state as { messages?: unknown } | null | undefined)?.messages;
+  if (!Array.isArray(messages)) return [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m instanceof AssistantMessage) {
+      if (m.stop_reason !== "toolUse") return [];
+      const out: { id: string; name: string }[] = [];
+      for (const b of m.content) {
+        if (b.type === "toolCall") out.push({ id: b.id, name: b.name });
+      }
+      return out;
+    }
+  }
+  return [];
+}
+
 /**
  * M4.1–M4.3: the Ground-Truth hook pair. `after` is the existing ledger sink
  * (groundTruthAfterToolCall: plan upsert, baseline capture, file_change attribution) plus the
@@ -561,32 +593,37 @@ export function groundTruthHooks(
   const fs = opts?.fs ?? defaultFactorFs;
   const sink = groundTruthAfterToolCall(ref);
   const pending = new Map<string, GateVerdict[]>();
-  const inFlight = new Set<string>();
 
   const before: BeforeToolCall = async (ctx) => {
     try {
       const db = ref.db;
       const session = ref.runId;
       if (!db || !session || ctx.toolCall.name !== "todowrite") return null;
-      // Same-batch guard. Prune entries no longer pending (their batch is over — covers an
-      // abandoned batch whose after-hooks never fired) so a stale id can never wedge the gate
-      // and an orphaned parked verdict can never leak.
-      const live = ctx.context?.pendingToolCalls;
-      if (live) {
-        for (const id of inFlight) {
-          if (!live.has(id)) {
-            inFlight.delete(id);
-            pending.delete(id);
-          }
+      // Stateless batch rules over the CURRENT assistant message (nothing survives across
+      // batches, so an abandoned batch can never wedge the gate): (a) only the batch's FIRST
+      // todowrite may run — a second would be previewed against pre-batch DB state; (b) a
+      // parked verdict from a prior batch whose after-hook never fired is pruned here.
+      const batch = batchToolCalls(ctx.context);
+      if (batch.length > 0) {
+        const liveIds = new Set(batch.map((b) => b.id));
+        for (const id of pending.keys()) if (!liveIds.has(id)) pending.delete(id);
+        const firstTodowrite = batch.find((b) => b.name === "todowrite");
+        if (firstTodowrite && firstTodowrite.id !== ctx.toolCall.id) {
+          return { block: true, reason: SAME_BATCH_BLOCK };
         }
       }
-      if (inFlight.size > 0) return { block: true, reason: SAME_BATCH_BLOCK };
       const todos = parseTodos(ctx.args.tasks);
       if (todos.length === 0) return null;
       const flips = db.completionsForTodos(session, todos);
-      if (flips.length === 0) {
-        inFlight.add(ctx.toolCall.id);
-        return null;
+      if (flips.length === 0) return null;
+      // Solo-completion: a completion-flipping todowrite must be the only state-changing call
+      // in its message — a mutating sibling executes AFTER this verdict is computed and could
+      // regress the very state the check just verified.
+      const mutating = batch.filter(
+        (b) => b.id !== ctx.toolCall.id && MUTATING_SIBLINGS.has(b.name),
+      );
+      if (mutating.length > 0) {
+        return { block: true, reason: soloCompletionReason(mutating.map((b) => b.name)) };
       }
 
       // Stage 5 factor inputs: this run's file_changes (provenance/coverage/tamper), read once.
@@ -705,7 +742,6 @@ export function groundTruthHooks(
       }
 
       if (verdicts.length > 0) pending.set(ctx.toolCall.id, verdicts);
-      inFlight.add(ctx.toolCall.id);
       return null;
     } catch {
       // gate infrastructure broke — fail-open (the checks themselves fail closed above).
@@ -781,7 +817,6 @@ export function groundTruthHooks(
       // fail-open: gate bookkeeping must never break the turn.
     } finally {
       pending.delete(ctx.toolCall.id);
-      inFlight.delete(ctx.toolCall.id);
     }
     return out;
   };

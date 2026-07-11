@@ -420,7 +420,7 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     expect(steps[1]!.baseline).toBe("red");
   });
 
-  test("a reworded step re-enters fresh: the old row's verify/baseline are dropped, never reattached", () => {
+  test("a reworded step keeps its identity: verify/baseline survive the new wording (fuzzy match)", () => {
     const d = db();
     const first = d.upsertPlanFromTodos("run1", [
       { content: "Fix parser", status: "pending", verify: "bun test parser" },
@@ -428,6 +428,23 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     d.setStepBaseline(first.stepIds[0]!, "red");
     const second = d.upsertPlanFromTodos("run1", [
       { content: "Fix the parser", status: "pending" },
+    ]);
+    const steps = d.getPlanSteps(first.planId);
+    expect(steps).toHaveLength(1);
+    expect(second.stepIds[0]).toBe(first.stepIds[0]!);
+    expect(steps[0]!.content).toBe("Fix the parser");
+    expect(steps[0]!.verify).toBe("bun test parser");
+    expect(steps[0]!.baseline).toBe("red");
+  });
+
+  test("a genuinely different step still re-enters fresh (below the fuzzy threshold)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Fix parser", status: "pending", verify: "bun test parser" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "Write the deployment docs", status: "pending" },
     ]);
     const steps = d.getPlanSteps(first.planId);
     expect(steps).toHaveLength(1);
@@ -445,10 +462,26 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     ]);
     expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "true" }]);
     d.setStepBaseline(first.stepIds[0]!, "green");
-    const third = d.upsertPlanFromTodos("run1", [
+    const resend = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true" },
+    ]);
+    expect(resend.started).toEqual([]);
+  });
+
+  test("a CHANGED verify resets the baseline and re-reports the step for capture", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "true" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "green");
+    // Swapping the check invalidates the old baseline: red→green must be scoped to the
+    // check that produced the red, never credited to a different command.
+    const swapped = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "exit 1" },
     ]);
-    expect(third.started).toEqual([]);
+    expect(swapped.started).toEqual([{ id: first.stepIds[0]!, verify: "exit 1" }]);
+    expect(d.getPlanSteps(first.planId)[0]!.baseline).toBeNull();
+    expect(d.getPlanSteps(first.planId)[0]!.verify).toBe("exit 1");
   });
 
   test("dropping a step with recorded file_changes detaches them instead of throwing (FK-safe)", () => {
@@ -760,15 +793,25 @@ describe("baseline capture (M3.3)", () => {
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
   });
 
-  test("baseline is captured once-only: a later in_progress with a new verify does not re-run", async () => {
+  test("baseline is captured once-only for the SAME verify; a resend never re-runs", async () => {
     const d = db();
     const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
     await send(sink, [{ content: "A", status: "pending" }]);
-    await send(sink, [{ content: "A", status: "in_progress", verify: "true" }]);
+    await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+  });
+
+  test("a CHANGED verify recaptures the baseline against the new check", async () => {
+    const d = db();
+    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
+    const plan = d.getActivePlan("run1")!;
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
+    await send(sink, [{ content: "A", status: "in_progress", verify: "true" }]);
+    expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
   });
 
   test("a verify-less flip leaves the baseline null (no check to run)", async () => {

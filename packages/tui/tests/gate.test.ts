@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AfterToolCallContext, BeforeToolCallContext } from "../src/agent/tools.ts";
+import { AssistantMessage, toolCall } from "../src/ai/index.ts";
 import type { GateRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { groundTruthHooks } from "../src/minima/ground_truth.ts";
@@ -17,12 +18,28 @@ function db(): MinimaDb {
   return new MinimaDb(":memory:");
 }
 
-function bctx(todos: unknown[], id = "tc", live?: Set<string>): BeforeToolCallContext {
+/** The batch the dispatcher would see: one assistant toolUse message holding these calls. */
+function batchOf(entries: { id: string; name: string }[]) {
+  return {
+    messages: [
+      new AssistantMessage({
+        content: entries.map((e) => toolCall(e.id, e.name, {})),
+        stop_reason: "toolUse",
+      }),
+    ],
+  };
+}
+
+function bctx(
+  todos: unknown[],
+  id = "tc",
+  batch?: ReturnType<typeof batchOf>,
+): BeforeToolCallContext {
   const args = { tasks: JSON.stringify(todos) };
   return {
     toolCall: { type: "toolCall", id, name: "todowrite", arguments: args },
     args,
-    ...(live ? { context: { pendingToolCalls: live } } : {}),
+    ...(batch ? { context: batch } : {}),
   } as unknown as BeforeToolCallContext;
 }
 
@@ -71,6 +88,43 @@ describe("MinimaDb.completionsForTodos", () => {
     expect(flips).toEqual([
       { content: "A", stepId: first.stepIds[0]!, verify: "bun test a", baseline: "red" },
       { content: "B", stepId: first.stepIds[1]!, verify: "bun test b", baseline: null },
+    ]);
+  });
+
+  test("a reworded step's completion is still gated on the PRESERVED verify (fuzzy identity)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Fix parser", status: "in_progress", verify: "exit 1" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    // Reword + complete in ONE call: the fuzzy match adopts the old row, so the flip carries
+    // the sticky verify instead of sliding through as an unchecked brand-new todo.
+    const flips = d.completionsForTodos("run1", [
+      { content: "Fix parser correctly", status: "completed" },
+    ]);
+    expect(flips).toEqual([
+      {
+        content: "Fix parser correctly",
+        stepId: first.stepIds[0]!,
+        verify: "exit 1",
+        baseline: "red",
+      },
+    ]);
+  });
+
+  test("a verify swap voids the old baseline in the flip (no fabricated red→green)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress", verify: "exit 1" },
+    ]);
+    d.setStepBaseline(first.stepIds[0]!, "red");
+    // Swapping in an already-green check must NOT inherit the old check's red: redToGreen
+    // evidence is only meaningful against the command that produced the red.
+    const flips = d.completionsForTodos("run1", [
+      { content: "A", status: "completed", verify: "true" },
+    ]);
+    expect(flips).toEqual([
+      { content: "A", stepId: first.stepIds[0]!, verify: "true", baseline: null },
     ]);
   });
 
@@ -392,20 +446,22 @@ describe("done-gate same-batch guard", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "completed", verify: "exit 1" },
     ]);
-    const live = new Set(["t1", "t2"]);
+    const batch = batchOf([
+      { id: "t1", name: "todowrite" },
+      { id: "t2", name: "todowrite" },
+    ]);
     const reopen = [{ content: "A", status: "in_progress" }];
     const complete = [{ content: "A", status: "completed" }];
-    expect(await before(bctx(reopen, "t1", live))).toBeNull();
-    const decision = await before(bctx(complete, "t2", live));
+    expect(await before(bctx(reopen, "t1", batch))).toBeNull();
+    const decision = await before(bctx(complete, "t2", batch));
     expect(decision?.block).toBe(true);
     expect(decision?.reason).toContain("Only one todowrite per assistant message");
     // Only t1 executes (t2 was refused whole): A is back in_progress with zero gate rows.
     await after(actx(reopen, "t1"));
-    live.clear();
     expect(d.getPlanSteps(planId)[0]!.status).toBe("in_progress");
     expect(gates(d)).toHaveLength(0);
     // The NEXT message's completion previews live state and is blocked by the red check.
-    const retry = await before(bctx(complete, "t3", new Set(["t3"])));
+    const retry = await before(bctx(complete, "t3", batchOf([{ id: "t3", name: "todowrite" }])));
     expect(retry?.block).toBe(true);
     expect(retry?.reason).toContain("failed");
     expect(d.getPlanSteps(planId)[0]!.status).toBe("in_progress");
@@ -417,26 +473,75 @@ describe("done-gate same-batch guard", () => {
     const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
-    const live = new Set(["t1", "t2"]);
-    expect(await before(bctx(todos, "t1", live))).toBeNull();
-    const decision = await before(bctx(todos, "t2", live));
+    const batch = batchOf([
+      { id: "t1", name: "todowrite" },
+      { id: "t2", name: "todowrite" },
+    ]);
+    expect(await before(bctx(todos, "t1", batch))).toBeNull();
+    const decision = await before(bctx(todos, "t2", batch));
     expect(decision?.block).toBe(true);
     await after(actx(todos, "t1"));
     // Exactly one verified row for the one real flip.
     expect(gates(d).map((r) => r.outcome)).toEqual(["verified"]);
   });
 
-  test("a stale in-flight id from an abandoned batch is pruned via pendingToolCalls", async () => {
+  test("an abandoned batch's parked verdict never wedges or leaks into a later batch", async () => {
     const d = db();
     const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
-    // t1 is previewed but its batch dies before execution — its after-hook never fires.
-    expect(await before(bctx(todos, "t1", new Set(["t1"])))).toBeNull();
-    // A later batch (t1 no longer pending) must not be wedged by the orphan.
-    expect(await before(bctx(todos, "t2", new Set(["t2"])))).toBeNull();
+    // t1 is previewed (verdict parked) but its batch dies — its after-hook never fires.
+    expect(await before(bctx(todos, "t1", batchOf([{ id: "t1", name: "todowrite" }])))).toBeNull();
+    // The rules are stateless per batch, so the next message is never wedged...
+    expect(await before(bctx(todos, "t2", batchOf([{ id: "t2", name: "todowrite" }])))).toBeNull();
     await after(actx(todos, "t2"));
+    // ...and t1's orphaned parked verdict was pruned, never double-written.
     expect(gates(d).map((r) => r.outcome)).toEqual(["verified"]);
+  });
+
+  test("solo-completion: a completing todowrite is refused when a mutating sibling shares the batch", async () => {
+    const d = db();
+    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
+    const todos = [{ content: "A", status: "completed" }];
+    const batch = batchOf([
+      { id: "t1", name: "todowrite" },
+      { id: "e1", name: "edit" },
+    ]);
+    const decision = await before(bctx(todos, "t1", batch));
+    expect(decision?.block).toBe(true);
+    expect(decision?.reason).toContain("also calls edit");
+    expect(gates(d)).toHaveLength(0);
+  });
+
+  test("solo-completion: in_progress-only todowrite and read-only siblings never trip it", async () => {
+    const d = db();
+    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "pending", verify: "true" },
+      { content: "B", status: "completed", verify: "true" },
+    ]);
+    // No completion flips → mutating siblings are fine (edits before completion are the point).
+    const progress = [
+      { content: "A", status: "in_progress" },
+      { content: "B", status: "completed" },
+    ];
+    const withEdit = batchOf([
+      { id: "t1", name: "todowrite" },
+      { id: "e1", name: "edit" },
+    ]);
+    expect(await before(bctx(progress, "t1", withEdit))).toBeNull();
+    // Completion flips with only read-only siblings are fine too.
+    const complete = [
+      { content: "A", status: "completed" },
+      { content: "B", status: "completed" },
+    ];
+    const readOnly = batchOf([
+      { id: "t2", name: "todowrite" },
+      { id: "r1", name: "read" },
+      { id: "g1", name: "grep" },
+    ]);
+    expect(await before(bctx(complete, "t2", readOnly))).toBeNull();
   });
 
   test("sequential before/after pairs across messages never trip the guard", async () => {
