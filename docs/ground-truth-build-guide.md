@@ -246,7 +246,7 @@ _By the end of this stage each step carries a check command, and you can run it 
 - **Goal (plain):** a helper that runs a command and tells you pass/fail + output.
 - **Why:** the single primitive everything in Stages 4–6 leans on.
 - **Build:**
-  - Mirror the `/undo` git shell-out pattern: spawn the command, capture exit code + stdout/stderr, enforce a timeout (`MINIMA_TIMEOUT`), return `{ pass: boolean, output: string, durationMs }`.
+  - Mirror the `/undo` git shell-out pattern: spawn the command in its own process group with an allowlisted env (`MINIMA_TUI_CHECK_ENV` adds names), capture exit code + stdout/stderr, enforce a timeout (`MINIMA_TUI_CHECK_TIMEOUT`, seconds — independent of the `MINIMA_TIMEOUT` routing timeout), return `{ pass: boolean, output: string, durationMs }`.
 - **See it work:** unit test: `runCheck("true")` → pass; `runCheck("false")` → fail; a sleeping command → times out cleanly.
 - **Done when:** `bun test` covers pass, fail, and timeout.
 
