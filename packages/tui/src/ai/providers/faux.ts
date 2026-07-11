@@ -54,6 +54,8 @@ export interface FauxRequest {
   model: string;
   systemPrompt: string | null;
   messageCount: number;
+  /** Concatenated text of the LAST user message — the prompt under test. */
+  user: string;
 }
 
 /** Observable per-registration state. */
@@ -130,10 +132,12 @@ class FauxProvider implements Provider {
     // exercisable in hermetic tests.
     if (opts?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     this.state.callCount += 1;
+    const lastUser = [...context.messages].reverse().find((m) => m.role === "user");
     this.state.requests.push({
       model: model.id,
       systemPrompt: context.system_prompt ?? null,
       messageCount: context.messages.length,
+      user: lastUser?.textContent ?? "",
     });
     const queued = this.state.responses.shift();
     if (!queued) {
