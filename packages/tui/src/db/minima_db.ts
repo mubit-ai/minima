@@ -986,10 +986,11 @@ export class MinimaDb {
     path: string;
     kind?: string | null;
     origin?: string | null;
+    agentId?: string | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO file_changes (id, plan_id, step_id, path, kind, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO file_changes (id, plan_id, step_id, path, kind, origin, created_at, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -998,6 +999,7 @@ export class MinimaDb {
         opts.kind ?? null,
         opts.origin ?? null,
         new Date().toISOString(),
+        opts.agentId ?? null,
       ],
     );
     return id;
@@ -1056,6 +1058,25 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM gates WHERE plan_id = ? ORDER BY created_at, rowid")
       .all(planId) as GateRow[];
+  }
+
+  /** The run's commands for one tool (lead + children), oldest first — blind-factor input. */
+  getRunToolCommands(runId: string, toolName: string): string[] {
+    const rows = this.db
+      .query("SELECT args FROM tool_calls WHERE run_id = ? AND tool_name = ? ORDER BY ts, rowid")
+      .all(runId, toolName) as { args: string | null }[];
+    const out: string[] = [];
+    for (const r of rows) {
+      if (!r.args) continue;
+      try {
+        const parsed = JSON.parse(r.args) as Record<string, unknown> | null;
+        const cmd = parsed?.command;
+        if (typeof cmd === "string" && cmd.trim()) out.push(cmd);
+      } catch {
+        // unparsable args carry no command
+      }
+    }
+    return out;
   }
 
   /** Blocked-attempt rows written before any plan existed — reachable only by session. */
