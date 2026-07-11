@@ -20,9 +20,11 @@ import {
   harnessConfig,
 } from "../src/minima/index.ts";
 
-// M7.2: a deterministic gate outranks the LLM judge in the feedback path. The verdict becomes
-// the OUTCOME label (never a fabricated quality), and verified_in_production is claimed ONLY when
-// the gate tier is green (trustworthy origin). All hermetic: faux provider + injected fetch.
+// M7.2 under the v6 identity join: a deterministic gate outranks the LLM judge in the feedback
+// path ONLY for the rung that minted it (gates.rec_id). The verdict becomes the OUTCOME label
+// (never a fabricated quality); verified_in_production is claimed only on a green tier; a stale
+// gate from an earlier rec can never poison a later prompt; `unrunnable` is an environment
+// error — it falls back to the judge. All hermetic: faux provider + injected fetch.
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -45,16 +47,20 @@ function countingJudge(score: number | null) {
   };
 }
 
+/** Mints UNIQUE sequential rec ids (rec-1, rec-2, ...) — identity-scoped code must not pass by
+ * accident against a fixed id, and tests can predict the first rung's rec. */
 function mockService() {
   const feedbackCalls: Record<string, unknown>[] = [];
+  let recSeq = 0;
   const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
     const u = new URL(url);
     const method = init?.method ?? "GET";
     if (method === "POST" && u.pathname === "/v1/recommend") {
+      recSeq += 1;
       return {
         status: 200,
         json: async () => ({
-          recommendation_id: "rec-xyz",
+          recommendation_id: `rec-${recSeq}`,
           recommended_model: {
             model_id: "test-faux",
             provider: "faux",
@@ -114,12 +120,26 @@ function setup(judge: ReturnType<typeof countingJudge>) {
   return { agent, reg, feedbackCalls, db, runId };
 }
 
-/** Seed the active plan with one step + a single deterministic gate of the given verdict. */
-function seedGate(db: MinimaDb, runId: string, outcome: GateOutcome, confidence: ConfidenceTier) {
+/** Seed one step + a single deterministic gate of the given verdict, minted under `recId`. */
+function seedGate(
+  db: MinimaDb,
+  runId: string,
+  outcome: GateOutcome,
+  confidence: ConfidenceTier,
+  recId = "rec-1",
+) {
   const { planId, stepIds } = db.upsertPlanFromTodos(runId, [
     { content: "wire the endpoint", status: "in_progress" },
   ]);
-  db.insertGate({ planId, stepId: stepIds[0]!, outcome, verifiedBy: "deterministic", confidence });
+  db.insertGate({
+    planId,
+    stepId: stepIds[0]!,
+    outcome,
+    verifiedBy: "deterministic",
+    confidence,
+    recId,
+    sessionId: runId,
+  });
 }
 
 describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
@@ -174,6 +194,45 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     expect(fb.verified_in_production).toBe(false);
     expect(fb.quality_score).toBeUndefined();
     expect(judge.calls).toBe(0);
+    reg.unregister();
+    db.close();
+  });
+
+  test("unrunnable gate → environment error, judge path proceeds, no failure feedback", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    seedGate(db, runId, "unrunnable", "red");
+
+    await agent.promptRouted("do the thing");
+
+    expect(feedbackCalls).toHaveLength(1); // no ladder rung was burned
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("success");
+    expect(fb.quality_score).toBe(0.9); // the judge's grade — unrunnable is not evidence
+    expect(fb.verified_in_production).toBe(false);
+    expect(judge.calls).toBe(1);
+    reg.unregister();
+    db.close();
+  });
+
+  test("a stale gate from an earlier rec never poisons a later prompt", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("answer 1")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("answer 2")], stop_reason: "stop" }),
+    ]);
+    agent.recoveryRungs = 0;
+    seedGate(db, runId, "failed", "red"); // minted under rec-1
+
+    await agent.promptRouted("first prompt"); // rec-1: the red gate is THIS rung's verdict
+    await agent.promptRouted("second prompt"); // rec-2: the stale red must be invisible
+
+    expect(feedbackCalls).toHaveLength(2);
+    const first = feedbackCalls[0] as Record<string, unknown>;
+    const second = feedbackCalls[1] as Record<string, unknown>;
+    expect(first.outcome).toBe("failure");
+    expect(second.outcome).toBe("success");
+    expect(second.quality_score).toBe(0.9); // judge path — the gate did not outrank it
+    expect(judge.calls).toBe(1); // consulted only for the second prompt
     reg.unregister();
     db.close();
   });

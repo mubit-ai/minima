@@ -119,7 +119,10 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     let spent = 0;
     const budget = d.budget_usd;
     const child = new MinimaAgent({
-      config: { ...parent.config, pinned: false },
+      // groundTruth never inherits: children have no GT hooks (lead-only by design), so an
+      // inheriting child would get GT guidance + the LEAD's plan projection in its prompts
+      // and consult the shared gates ledger in its feedback — cross-agent poisoning.
+      config: { ...parent.config, pinned: false, groundTruth: false },
       // Share the parent's router (same client/transport/auth) — rebuilding one from
       // config would bypass injected transports and re-do auth per child.
       router: parent.router,

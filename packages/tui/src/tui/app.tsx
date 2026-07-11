@@ -2290,6 +2290,7 @@ export function HarnessApp({
             ],
             "Ground-Truth seed plan",
           );
+          const seedRecId = `seed-rec-${agent.runId}`;
           if (agent.db.getGates(planId).length === 0) {
             const common = {
               pass: true,
@@ -2310,6 +2311,8 @@ export function HarnessApp({
               confidence: gateConfidence(green),
               verifiedBy: "deterministic",
               factors: green,
+              recId: seedRecId,
+              sessionId: agent.runId,
             });
             agent.db.insertGate({
               planId,
@@ -2318,6 +2321,8 @@ export function HarnessApp({
               confidence: gateConfidence(yellow),
               verifiedBy: "deterministic",
               factors: yellow,
+              recId: seedRecId,
+              sessionId: agent.runId,
             });
             agent.db.insertGate({
               planId,
@@ -2326,6 +2331,8 @@ export function HarnessApp({
               confidence: gateConfidence(red),
               verifiedBy: "deterministic",
               factors: red,
+              recId: seedRecId,
+              sessionId: agent.runId,
             });
           }
           if (agent.db.getFileChanges(planId).length === 0) {
@@ -2340,7 +2347,6 @@ export function HarnessApp({
           // M7.1 demo: give the run a routing decision, then stamp the grounded outcome onto it so
           // `SELECT chosen_model, gt_outcome, gt_verified_by FROM routing_decisions` shows the real
           // verdict attached to the model. Deterministic rec_id → re-seeding upserts (never dupes).
-          const seedRecId = `seed-rec-${agent.runId}`;
           agent.db.writeDecision({
             recId: seedRecId,
             runId: agent.runId,
@@ -2359,7 +2365,7 @@ export function HarnessApp({
             latencyMs: 0,
             routed: "server",
           });
-          stampGroundedOutcome(agent.db, agent.runId, seedRecId);
+          stampGroundedOutcome(agent.db, seedRecId);
           // Reflect the seeded plan + gates in the footer immediately (a real run refreshes on
           // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
           setPlanStrip(planStripInfo(agent.db, agent.runId));

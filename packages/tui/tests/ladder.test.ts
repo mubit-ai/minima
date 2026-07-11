@@ -276,15 +276,16 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
       { content: "wire the endpoint", status: "in_progress" },
     ]);
-    // Rung 1 sees a failed check on the active plan.
+    // Rung 1 (rec-1) mints a failed check — identity join: the red belongs to THIS rung.
     db.insertGate({
       planId,
       stepId: stepIds[0]!,
       outcome: "failed",
       verifiedBy: "deterministic",
       confidence: "red",
+      recId: "rec-1",
     });
-    // When the ladder re-routes to big-model, the step verifies (red → green).
+    // When the ladder re-routes to big-model (rec-2), the step verifies (red → green).
     installVerifiedGate = () => {
       db.insertGate({
         planId,
@@ -292,6 +293,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
         outcome: "verified",
         verifiedBy: "deterministic",
         confidence: "green",
+        recId: "rec-2",
       });
     };
 
@@ -338,6 +340,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
       outcome: "verified",
       verifiedBy: "deterministic",
       confidence: "green",
+      recId: "rec-1",
     });
     reg.setResponses([new AssistantMessage({ content: [text("done")] })]);
     await agent.promptRouted("easy");
@@ -356,13 +359,18 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
       { content: "A", status: "in_progress" },
     ]);
-    db.insertGate({
-      planId,
-      stepId: stepIds[0]!,
-      outcome: "failed",
-      verifiedBy: "deterministic",
-      confidence: "red",
-    });
+    // A check that keeps failing mints a red under EVERY rung's rec (identity join: each
+    // rung only sees its own verdict, so persistence means one red per rec).
+    for (const recId of ["rec-1", "rec-2", "rec-3"]) {
+      db.insertGate({
+        planId,
+        stepId: stepIds[0]!,
+        outcome: "failed",
+        verifiedBy: "deterministic",
+        confidence: "red",
+        recId,
+      });
+    }
     reg.setResponses([
       new AssistantMessage({ content: [text("1")] }),
       new AssistantMessage({ content: [text("2")] }),

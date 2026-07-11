@@ -4,8 +4,9 @@ import { gateConfidence } from "../src/minima/behavior.ts";
 import { groundedOutcomeFor, stampGroundedOutcome } from "../src/minima/ground_truth.ts";
 import type { Factors } from "../src/minima/gt_contract.ts";
 
-// Week 3 Track B new seams: the M6.3 user_signals reader and the M7.1 grounded-outcome stamp.
-// Both are hermetic against an in-memory MinimaDb.
+// Week 3 Track B seams under the v6 identity join: the M6.3 user_signals reader and the M7.1
+// grounded-outcome stamp. Grounded verdicts are scoped to ONE routed rung by gates.rec_id —
+// recency and plan state no longer matter. Hermetic against an in-memory MinimaDb.
 
 const RED: Factors = {
   pass: false,
@@ -45,7 +46,7 @@ function seedRun(d: MinimaDb, runId: string, recId: string) {
 }
 
 describe("getUserSignals (M6.3 reader)", () => {
-  test("returns the overrides recorded against a gate, oldest first", () => {
+  test("returns the overrides recorded against a gate, oldest first, with notes", () => {
     const d = db();
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress" },
@@ -58,9 +59,10 @@ describe("getUserSignals (M6.3 reader)", () => {
     });
     expect(d.getUserSignals(gateId)).toEqual([]);
     d.recordUserSignal(gateId, "accept");
-    d.recordUserSignal(gateId, "steer");
+    d.recordUserSignal(gateId, "steer", "try the integration suite instead");
     const rows = d.getUserSignals(gateId);
     expect(rows.map((r) => r.action)).toEqual(["accept", "steer"]);
+    expect(rows.map((r) => r.note)).toEqual([null, "try the integration suite instead"]);
     expect(rows.every((r) => r.gate_id === gateId)).toBe(true);
   });
 
@@ -79,15 +81,14 @@ describe("getUserSignals (M6.3 reader)", () => {
   });
 });
 
-describe("stampGroundedOutcome (M7.1)", () => {
-  test("stamps the most recent gate's verdict onto the routing decision", () => {
+describe("stampGroundedOutcome (M7.1, identity join)", () => {
+  test("stamps the verdict of the gates minted under the rec — red wins over green", () => {
     const d = db();
     seedRun(d, "run1", "rec1");
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "completed" },
       { content: "B", status: "in_progress" },
     ]);
-    // Earlier green gate, then a later red gate — the red is the most recent verdict.
     d.insertGate({
       planId,
       stepId: stepIds[0]!,
@@ -95,6 +96,8 @@ describe("stampGroundedOutcome (M7.1)", () => {
       confidence: gateConfidence(GREEN),
       verifiedBy: "deterministic",
       factors: GREEN,
+      recId: "rec1",
+      sessionId: "run1",
     });
     d.insertGate({
       planId,
@@ -103,9 +106,11 @@ describe("stampGroundedOutcome (M7.1)", () => {
       confidence: gateConfidence(RED),
       verifiedBy: "deterministic",
       factors: RED,
+      recId: "rec1",
+      sessionId: "run1",
     });
 
-    stampGroundedOutcome(d, "run1", "rec1");
+    stampGroundedOutcome(d, "rec1");
 
     const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec1")!;
     expect(dec.gt_outcome).toBe("failed");
@@ -113,35 +118,57 @@ describe("stampGroundedOutcome (M7.1)", () => {
     expect(dec.gt_confidence).toBe("red");
   });
 
-  test("no gates on the active plan → no-op (routing row left unstamped)", () => {
+  test("gates minted under ANOTHER rec never stamp this decision (stale-gate immunity)", () => {
     const d = db();
-    seedRun(d, "run1", "rec1");
-    d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
-    stampGroundedOutcome(d, "run1", "rec1");
-    const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec1")!;
+    seedRun(d, "run1", "rec2");
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+    ]);
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "failed",
+      confidence: gateConfidence(RED),
+      verifiedBy: "deterministic",
+      factors: RED,
+      recId: "rec1",
+      sessionId: "run1",
+    });
+    stampGroundedOutcome(d, "rec2");
+    const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec2")!;
     expect(dec.gt_outcome).toBeNull();
     expect(dec.gt_verified_by).toBeNull();
   });
 
-  test("no active plan → no-op, no throw, routing row untouched", () => {
+  test("pre-identity gate rows (NULL rec_id) are invisible to every rec", () => {
     const d = db();
     seedRun(d, "run1", "rec1");
-    expect(() => stampGroundedOutcome(d, "run1", "rec1")).not.toThrow();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+    ]);
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "failed",
+      confidence: gateConfidence(RED),
+      verifiedBy: "deterministic",
+      factors: RED,
+    });
+    stampGroundedOutcome(d, "rec1");
     const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec1")!;
     expect(dec.gt_outcome).toBeNull();
   });
 
-  test("fails open on a null db / session / recId (never throws)", () => {
+  test("fails open on a null db / recId (never throws)", () => {
     const d = db();
     seedRun(d, "run1", "rec1");
-    expect(() => stampGroundedOutcome(null, "run1", "rec1")).not.toThrow();
-    expect(() => stampGroundedOutcome(d, null, "rec1")).not.toThrow();
-    expect(() => stampGroundedOutcome(d, "run1", null)).not.toThrow();
+    expect(() => stampGroundedOutcome(null, "rec1")).not.toThrow();
+    expect(() => stampGroundedOutcome(d, null)).not.toThrow();
   });
 });
 
-describe("groundedOutcomeFor (M7.2/M7.3 shared reader)", () => {
-  test("returns the most recent gate's verdict on the active plan", () => {
+describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
+  test("aggregates the rec's gates: any red wins regardless of insert order", () => {
     const d = db();
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "completed" },
@@ -149,46 +176,132 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader)", () => {
     ]);
     d.insertGate({
       planId,
-      stepId: stepIds[0]!,
-      outcome: "verified",
-      confidence: gateConfidence(GREEN),
-      verifiedBy: "deterministic",
-      factors: GREEN,
-    });
-    d.insertGate({
-      planId,
       stepId: stepIds[1]!,
       outcome: "failed",
       confidence: gateConfidence(RED),
       verifiedBy: "deterministic",
       factors: RED,
+      recId: "rec1",
     });
-    const g = groundedOutcomeFor(d, "run1");
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      confidence: gateConfidence(GREEN),
+      verifiedBy: "deterministic",
+      factors: GREEN,
+      recId: "rec1",
+    });
+    const g = groundedOutcomeFor(d, "rec1");
     expect(g?.outcome).toBe("failed");
     expect(g?.verifiedBy).toBe("deterministic");
     expect(g?.confidence).toBe("red");
     expect(typeof g?.gateId).toBe("string");
   });
 
-  test("null when there is no active plan / no gate / gate missing outcome or verifier", () => {
-    const noPlan = db();
-    expect(groundedOutcomeFor(noPlan, "run1")).toBeNull();
+  test("a later same-flip verdict supersedes an orphan blocked attempt (retry heals the red)", () => {
+    // The blocked attempt of a brand-new todo has step_id NULL (the refused call never ran the
+    // upsert) — only its flipContent links it to the retry's verdict, which resolved a step id.
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "ship the fix", status: "completed" },
+    ]);
+    d.insertGate({
+      planId: null,
+      stepId: null,
+      outcome: "failed",
+      verifiedBy: "deterministic",
+      factors: { ...RED, flipContent: "ship the fix" },
+      recId: "rec1",
+    });
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      verifiedBy: "deterministic",
+      factors: { ...GREEN, flipContent: "ship the fix" },
+      recId: "rec1",
+    });
+    const g = groundedOutcomeFor(d, "rec1");
+    expect(g?.outcome).toBe("verified");
+  });
 
-    const noGate = db();
-    noGate.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
-    expect(groundedOutcomeFor(noGate, "run1")).toBeNull();
+  test("an unchecked completion caps the tier at yellow (vip needs every flip verified green)", () => {
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+      { content: "B", status: "completed" },
+    ]);
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      verifiedBy: "deterministic",
+      factors: { ...GREEN, flipContent: "A" },
+      recId: "rec1",
+    });
+    d.insertGate({
+      planId,
+      stepId: stepIds[1]!,
+      outcome: "unchecked",
+      verifiedBy: null,
+      factors: { ...GREEN, pass: false, hasCheck: false, flipContent: "B" },
+      recId: "rec1",
+    });
+    const g = groundedOutcomeFor(d, "rec1");
+    expect(g?.outcome).toBe("verified");
+    expect(g?.confidence).toBe("yellow");
+  });
+
+  test("all flips verified green → green", () => {
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+      { content: "B", status: "completed" },
+    ]);
+    for (const [i, content] of (["A", "B"] as const).entries()) {
+      d.insertGate({
+        planId,
+        stepId: stepIds[i]!,
+        outcome: "verified",
+        verifiedBy: "deterministic",
+        factors: { ...GREEN, flipContent: content },
+        recId: "rec1",
+      });
+    }
+    expect(groundedOutcomeFor(d, "rec1")?.confidence).toBe("green");
+  });
+
+  test("only unchecked rows → null (no deterministic evidence; the judge path runs)", () => {
+    const d = db();
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "completed" },
+    ]);
+    d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "unchecked",
+      verifiedBy: null,
+      factors: { ...GREEN, pass: false, hasCheck: false, flipContent: "A" },
+      recId: "rec1",
+    });
+    expect(groundedOutcomeFor(d, "rec1")).toBeNull();
+  });
+
+  test("null when the rec has no gates / gate missing outcome or verifier", () => {
+    const empty = db();
+    expect(groundedOutcomeFor(empty, "rec1")).toBeNull();
 
     const noVerifier = db();
     const { planId, stepIds } = noVerifier.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress" },
     ]);
-    // A gate with an outcome but no verifier is not a grounded verdict yet.
-    noVerifier.insertGate({ planId, stepId: stepIds[0]!, outcome: "verified" });
-    expect(groundedOutcomeFor(noVerifier, "run1")).toBeNull();
+    noVerifier.insertGate({ planId, stepId: stepIds[0]!, outcome: "verified", recId: "rec1" });
+    expect(groundedOutcomeFor(noVerifier, "rec1")).toBeNull();
   });
 
-  test("fails open on null db / session (never throws)", () => {
-    expect(groundedOutcomeFor(null, "run1")).toBeNull();
+  test("fails open on null db / recId (never throws)", () => {
+    expect(groundedOutcomeFor(null, "rec1")).toBeNull();
     expect(groundedOutcomeFor(db(), null)).toBeNull();
   });
 });

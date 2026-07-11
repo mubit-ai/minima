@@ -152,7 +152,8 @@ describe("done-gate before-hook (M4.1)", () => {
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
-    const plan = d.getActivePlan("run1")!;
+    const plan = d.getLatestPlan("run1")!;
+    expect(plan.status).toBe("done");
     const steps = d.getPlanSteps(plan.id);
     expect(steps[0]!.status).toBe("completed");
     const rows = gates(d);
@@ -518,7 +519,7 @@ describe("done-gate step attribution (duplicate contents)", () => {
     ];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
-    const steps = d.getPlanSteps(d.getActivePlan("run1")!.id);
+    const steps = d.getPlanSteps(d.getLatestPlan("run1")!.id);
     const rows = gates(d);
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.step_id))).toEqual(new Set(steps.map((s) => s.id)));
@@ -606,7 +607,7 @@ describe("done-gate after-hook (M4.3)", () => {
     ];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
-    const plan = d.getActivePlan("run1")!;
+    const plan = d.getLatestPlan("run1")!;
     const steps = d.getPlanSteps(plan.id);
     const rows = gates(d);
     expect(rows).toHaveLength(2);
@@ -623,7 +624,7 @@ describe("done-gate after-hook (M4.3)", () => {
     const todos = [{ content: "New", status: "completed", verify: "true" }];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
-    const plan = d.getActivePlan("run1")!;
+    const plan = d.getLatestPlan("run1")!;
     const steps = d.getPlanSteps(plan.id);
     const rows = gates(d);
     expect(rows).toHaveLength(1);

@@ -106,6 +106,9 @@ export class MinimaAgent extends Agent {
   /** Aborts the routing phase (the recommend HTTP call) — the base Agent's own
    * controller only covers the run phase. Set for the lifetime of promptRouted. */
   private routeController: AbortController | null = null;
+  /** The routed rung currently executing (set around super.prompt) — gate rows minted during
+   * tool dispatch carry it as their identity (GtAgentRef.currentRecId). Null when idle. */
+  currentRecId: string | null = null;
   /** True when the last promptRouted was cut short by Esc during routing (so the
    * UI shows "aborted" instead of a misleading "routing offline" note). */
   lastAborted = false;
@@ -292,15 +295,20 @@ export class MinimaAgent extends Agent {
             return enforce && runSpend >= limitLeft;
           });
         }
-        // Everything appended from here belongs to THIS rung (for rung-total usage).
+        // Everything appended from here belongs to THIS rung (for rung-total usage). The
+        // rung's rec_id is minted BEFORE the run so every gate row written during tool
+        // dispatch (which only happens inside super.prompt) carries this turn's identity.
+        const rungRecId = routing?.recommendationId ?? `local-${newId()}`;
         const runStartIdx = this.agentState.messages.length;
         const start = Date.now();
         let runError: unknown = null;
+        this.currentRecId = rungRecId;
         try {
           await super.prompt(content);
         } catch (exc) {
           runError = exc;
         } finally {
+          this.currentRecId = null;
           if (this.budget) this.setShouldStopAfterTurn(null);
         }
         const latencyMs = Date.now() - start;
@@ -319,7 +327,15 @@ export class MinimaAgent extends Agent {
         // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
         // the signal that sharpens the next recommendation.
         const { quality, outcome, reinforcedEntryIds, lessonPromoted, grounded } =
-          await this.feedbackSafely(content, routing, runUsage, latencyMs, failed, turnsTaken);
+          await this.feedbackSafely(
+            content,
+            routing,
+            runUsage,
+            latencyMs,
+            failed,
+            turnsTaken,
+            rungRecId,
+          );
 
         if (this.meter) {
           this.meter.record({
@@ -334,6 +350,7 @@ export class MinimaAgent extends Agent {
         }
 
         this.persistDecision(content, routing, {
+          recId: rungRecId,
           actualCostUsd: runUsage.cost.total,
           quality: failed ? 0 : quality,
           judged: (failed ? 0 : quality) !== null,
@@ -349,11 +366,12 @@ export class MinimaAgent extends Agent {
 
         // Escalate? Only with a rung left, a routed (non-pinned) decision to learn from,
         // and a REAL trigger: provider failure, a non-null judge grade below τ, or a grounded
-        // check that failed. M7.3: a red gate (failed|unrunnable) outranks the judge as a
-        // trigger — the same ladder that recovers judge-failures now recovers check-failures.
+        // check that FAILED this rung. M7.3: a red gate outranks the judge as a trigger — but
+        // only `failed` (the check ran and said no); `unrunnable` is an environment error and
+        // must not roll back work, exclude an innocent model, or burn paid rungs.
         const judgeFailed =
           !failed && quality !== null && routing !== null && quality < routing.thresholdUsed;
-        const gateFailed = grounded !== null && grounded.outcome !== "verified";
+        const gateFailed = grounded !== null && grounded.outcome === "failed";
         const failedModel =
           routing !== null && routing.recommendationId !== null ? routing.chosenModelId : null;
         const canEscalate =
@@ -392,6 +410,8 @@ export class MinimaAgent extends Agent {
     taskText: string,
     routing: RoutingResult | null,
     o: {
+      /** The rung's identity, minted at rung start (routing rec_id, else a local-* id). */
+      recId: string;
       actualCostUsd: number;
       quality: number | null;
       judged: boolean;
@@ -411,7 +431,7 @@ export class MinimaAgent extends Agent {
     try {
       const routed: "server" | "offline" | "pinned" =
         routing === null ? "offline" : routing.recommendationId === null ? "pinned" : "server";
-      const recId = routing?.recommendationId ?? `local-${newId()}`;
+      const recId = o.recId;
       const eventId = this.db.appendEvent({
         runId: this.runId,
         agentId: this.agentId,
@@ -458,10 +478,10 @@ export class MinimaAgent extends Agent {
         lessonPromoted: o.lessonPromoted ?? null,
       });
       // M7.1: once the decision row exists, stamp the grounded (deterministic) verdict of the
-      // step verified under it onto gt_* — a real check outranks the judge. Inert until gates
-      // exist (Track A / /gt-seed); fail-open inside the helper.
+      // gates THIS rung minted onto gt_* — a real check outranks the judge. Identity join:
+      // gates from other rungs can never stamp this row. Fail-open inside the helper.
       if (this.config.groundTruth) {
-        stampGroundedOutcome(this.db, this.runId, recId);
+        stampGroundedOutcome(this.db, recId);
       }
     } catch {
       try {
@@ -582,6 +602,7 @@ export class MinimaAgent extends Agent {
     latencyMs: number,
     failed: boolean,
     turnsTaken: number,
+    recId: string | null,
   ): Promise<{
     quality: number | null;
     outcome: "success" | "partial" | "failure";
@@ -590,10 +611,17 @@ export class MinimaAgent extends Agent {
     /** M7.2/M7.3: the grounded verdict of the step verified under this prompt (null = none). */
     grounded: GroundedOutcome | null;
   }> {
-    // M7.2: a real check (deterministic gate) outranks the judge. Read the run's most recent
-    // grounded verdict once; the escalation block reuses it (M7.3) so the ledger is read once.
-    const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, this.runId) : null;
-    const deterministic = grounded?.verifiedBy === "deterministic" ? grounded : null;
+    // M7.2: a real check (deterministic gate) outranks the judge. Identity join: only gates
+    // THIS rung minted (rec_id) count — stale verdicts from earlier prompts are invisible.
+    // The escalation block reuses the verdict (M7.3) so the ledger is read once.
+    // `unrunnable` is an environmental error (spawn failure, timeout), not evidence about the
+    // model: it never outranks the judge and never sends failure feedback — the judge path
+    // proceeds and the red stays visible in the UI only.
+    const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, recId) : null;
+    const deterministic =
+      grounded?.verifiedBy === "deterministic" && grounded.outcome !== "unrunnable"
+        ? grounded
+        : null;
     if (!routing || routing.recommendationId === null || routing.chosenModelId === null) {
       return {
         quality: null,

@@ -54,6 +54,9 @@ export interface GtAgentRef {
   db: MinimaDb | null;
   runId: string | null;
   readonly runSignal?: AbortSignal | null;
+  /** The routed rung currently executing (set around super.prompt) — stamps gate identity. */
+  readonly currentRecId?: string | null;
+  readonly agentId?: string | null;
 }
 
 /** Compact footer facts about the active plan (M1.3 strip + M2.3 drift). */
@@ -262,35 +265,81 @@ export interface GroundedOutcome {
 }
 
 /**
- * Read the grounded verdict of the run's most recent verified step: the last gate on the active plan.
- * The single seam three milestones share — M7.1 stamps it onto `routing_decisions.gt_*`, M7.2 prefers
- * it over the LLM judge in feedback, M7.3 escalates on a failed one.
+ * A gate row's flip identity within one rung. Content-first: a brand-new todo completed in one
+ * shot has NO step row when its blocked attempt is written (the whole call was refused, so the
+ * upsert never ran), while the passing retry's verdict row does — only the flip's content links
+ * the two, so the retry can supersede the orphan red. step_id covers rows written without
+ * flipContent (seeded/legacy); the row's own id makes the key total.
+ */
+function flipKeyFor(gate: GateRow): string {
+  if (gate.factors_json) {
+    try {
+      const raw = JSON.parse(gate.factors_json) as Record<string, unknown>;
+      if (typeof raw.flipContent === "string" && raw.flipContent.trim())
+        return `c:${raw.flipContent.trim()}`;
+    } catch {
+      // fall through to step/row identity
+    }
+  }
+  if (gate.step_id) return `s:${gate.step_id}`;
+  return `g:${gate.id}`;
+}
+
+const TIER_BADNESS: Record<ConfidenceTier, number> = { green: 0, yellow: 1, red: 2 };
+
+/**
+ * Read the grounded verdict of the gates minted under ONE routed rung (`recId`) — identity join,
+ * never recency. The single seam three milestones share: M7.1 stamps it onto
+ * `routing_decisions.gt_*`, M7.2 prefers it over the LLM judge in feedback, M7.3 escalates on a
+ * failed one. Rows with NULL rec_id (pre-v6 history, manual seeds) match no rung and are invisible
+ * here by construction — stale gates cannot poison later prompts.
  *
- * Join rule: one `recId` per routed prompt ⇒ the *most recent* gate is the step just verified under
- * this decision. As Track A lands a gate per prompt this is a clean 1:1; today it is last-write-wins.
+ * Aggregation, over the LATEST row per flip (see {@link flipKeyFor}):
+ *  - any failed/unrunnable → that verdict (newest such row) — red always wins;
+ *  - else any verified → the newest verified row, with `confidence` = the WORST tier across
+ *    every flip this rung completed: verified rows resolve via {@link gateVerdictFor} (a null
+ *    tier counts yellow), and `unchecked` completions count yellow — so a green (and with it
+ *    verified_in_production) requires every completion flip to be verified green;
+ *  - only unchecked rows → null (no deterministic evidence either way; the judge path runs).
  *
- * Total + fail-open: null db/session, no active plan, no gate, or a gate missing outcome/verifier
- * returns `null` (never throws into the feedback path).
+ * Total + fail-open: null db/recId, no rows, or nothing with an outcome+verifier returns `null`
+ * (never throws into the feedback path).
  */
 export function groundedOutcomeFor(
   db: MinimaDb | null,
-  sessionId: string | null,
+  recId: string | null,
 ): GroundedOutcome | null {
-  if (!db || !sessionId) return null;
+  if (!db || !recId) return null;
   try {
-    const plan = db.getActivePlan(sessionId);
-    if (!plan) return null;
-    const gates = db.getGates(plan.id); // oldest-first; the last is the most recent verdict
-    const gate: GateRow | undefined = gates[gates.length - 1];
-    if (!gate || !gate.outcome || !gate.verified_by) return null;
+    const gates = db.getGatesForRec(recId); // oldest-first; later rows supersede per flip
+    if (gates.length === 0) return null;
+    const latest = new Map<string, GateRow>();
+    for (const g of gates) if (g.outcome) latest.set(flipKeyFor(g), g);
+    const rows = [...latest.values()];
+    const attributed = rows.filter((g) => g.outcome !== "unchecked" && g.verified_by);
+    if (attributed.length === 0) return null;
+    const reds = attributed.filter((g) => g.outcome !== "verified");
+    const gate = reds.length > 0 ? reds[reds.length - 1]! : attributed[attributed.length - 1]!;
+    if (!gate.outcome || !gate.verified_by) return null;
+    if (reds.length > 0) {
+      return {
+        gateId: gate.id,
+        outcome: gate.outcome,
+        verifiedBy: gate.verified_by,
+        confidence: gateVerdictFor(gate).tier,
+      };
+    }
+    let worst: ConfidenceTier = "green";
+    for (const g of rows) {
+      const tier: ConfidenceTier =
+        g.outcome === "unchecked" ? "yellow" : (gateVerdictFor(g).tier ?? "yellow");
+      if (TIER_BADNESS[tier] > TIER_BADNESS[worst]) worst = tier;
+    }
     return {
       gateId: gate.id,
       outcome: gate.outcome,
       verifiedBy: gate.verified_by,
-      // Resolve the tier exactly like /why and the footer: the stored `confidence` when the
-      // writer set one (seeded rows), else the ladder's verdict derived from `factors_json`
-      // (the live hooks store `confidence` null — the M8.2 live-gate join reads through this).
-      confidence: gateVerdictFor(gate).tier,
+      confidence: worst,
     };
   } catch {
     return null; // fail-open: a broken ledger read must never break the turn.
@@ -298,22 +347,16 @@ export function groundedOutcomeFor(
 }
 
 /**
- * M7.1: stamp the grounded (deterministic) outcome of the run's most recent verified step onto
- * the routing decision `recId` that picked the model — so Minima learns "the test passed" instead
- * of "the judge guessed 0.7". Called from the runtime feedback seam once a prompt's decision row
- * exists (see runtime.persistDecision), where `recId` and the active plan are both in hand.
+ * M7.1: stamp the grounded (deterministic) outcome of the gates minted under `recId` onto the
+ * routing decision that picked the model — so Minima learns "the test passed" instead of "the
+ * judge guessed 0.7". Called from the runtime feedback seam once a prompt's decision row exists
+ * (see runtime.persistDecision). Identity-scoped: only this rung's own gates can stamp it.
  *
- * Total + fail-open: a null db/session/recId or no grounded gate is a silent no-op. `gt_confidence`
- * resolves through {@link gateVerdictFor} (stored tier, else the ladder's verdict from
- * `factors_json`) and stays null only when neither can produce a tier.
+ * Total + fail-open: a null db/recId or no grounded gate is a silent no-op.
  */
-export function stampGroundedOutcome(
-  db: MinimaDb | null,
-  sessionId: string | null,
-  recId: string | null,
-): void {
+export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null): void {
   if (!db || !recId) return;
-  const grounded = groundedOutcomeFor(db, sessionId);
+  const grounded = groundedOutcomeFor(db, recId);
   if (!grounded) return;
   try {
     db.attachGroundedOutcome(recId, {
@@ -423,7 +466,13 @@ function outputTail(output: string): string {
 }
 
 /** The frozen Factors shape plus debug extras persisted alongside it in gates.factors_json. */
-type GateFactors = Factors & { outputTail?: string; durationMs?: number; exitCode?: number | null };
+type GateFactors = Factors & {
+  outputTail?: string;
+  durationMs?: number;
+  exitCode?: number | null;
+  /** The flip's trimmed content — the row's identity when it has no step_id (see flipKeyFor). */
+  flipContent?: string;
+};
 
 /**
  * A verdict computed in the before-hook, held until the after-hook writes its gate row.
@@ -567,7 +616,7 @@ export function groundTruthHooks(
             content: flip.content,
             stepId: flip.stepId,
             outcome: "unchecked",
-            factors: { ...uncheckedFactors(), tamper },
+            factors: { ...uncheckedFactors(), tamper, flipContent: flip.content },
           });
           continue;
         }
@@ -577,7 +626,7 @@ export function groundTruthHooks(
             flip,
             outcome: "unrunnable",
             why: `could not run (the ${budgetMs} ms gate budget was exhausted by earlier checks)`,
-            factors: { ...uncheckedFactors(), hasCheck: true, tamper },
+            factors: { ...uncheckedFactors(), hasCheck: true, tamper, flipContent: flip.content },
           });
           continue;
         }
@@ -597,6 +646,7 @@ export function groundTruthHooks(
           outputTail: outputTail(result.output),
           durationMs: result.durationMs,
           exitCode: result.exitCode,
+          flipContent: flip.content,
         };
         if (result.timedOut || result.spawnError !== null || wasAborted(result)) {
           failures.push({
@@ -640,6 +690,9 @@ export function groundTruthHooks(
               confidence: null,
               verifiedBy: "deterministic",
               factors: f.factors,
+              recId: ref.currentRecId ?? null,
+              sessionId: session,
+              agentId: ref.agentId ?? null,
             });
           } catch {
             // per-row fail-open: a broken attempt write must not cancel the block below.
@@ -705,10 +758,24 @@ export function groundTruthHooks(
             confidence: null,
             verifiedBy: v.outcome === "verified" ? "deterministic" : null,
             factors: v.factors,
+            recId: ref.currentRecId ?? null,
+            sessionId: session,
+            agentId: ref.agentId ?? null,
           });
         } catch {
           // per-verdict fail-open: one broken gate write must not starve its siblings.
         }
+      }
+      // 99B plan closure — strictly AFTER the verdict loop: the sink and the verdict
+      // attribution above both re-read the active plan; closing earlier would null those
+      // reads and silently drop the final turn's verified verdicts.
+      try {
+        const steps = db.getPlanSteps(plan.id);
+        if (steps.length > 0 && steps.every((s) => s.status === "completed")) {
+          db.setPlanStatus(plan.id, "done");
+        }
+      } catch {
+        // fail-open: closure bookkeeping must never break the turn.
       }
     } catch {
       // fail-open: gate bookkeeping must never break the turn.
