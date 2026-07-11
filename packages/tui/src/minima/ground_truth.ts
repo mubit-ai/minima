@@ -227,9 +227,14 @@ export function planStripInfo(db: MinimaDb | null, sessionId: string | null): Pl
   };
 }
 
-/** M1.3: the footer plan-of-record line, e.g. `▸ plan 2/5 — Wire the router`. */
+/**
+ * M1.3: the footer plan-of-record line, e.g. `▸ plan 2/5 — Wire the router`. Interior newline
+ * runs in the step content (plus surrounding indentation) collapse to a single space so the
+ * strip is provably one rendered row against its one-row footer reservation — projection-only:
+ * `plan_steps.content` stays verbatim in the DB.
+ */
 export function planStripLabel(info: PlanStripInfo): string {
-  return `▸ plan ${info.stepPos}/${info.stepTotal} — ${info.title}`;
+  return `▸ plan ${info.stepPos}/${info.stepTotal} — ${info.title.replace(/\s*[\r\n]+\s*/g, " ")}`;
 }
 
 /**

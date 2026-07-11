@@ -54,6 +54,7 @@ import {
   SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
   getScrollableMessages,
+  gtFooterFit,
   markdownBodyHeight,
   questionDisplayText,
   questionOverlayHeight,
@@ -807,6 +808,14 @@ export function HarnessApp({
   // GT tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
   // and the earliest 🔴 block. Refreshed alongside planStrip; fails open to null (no note/block).
   const [gtBehavior, setGtBehavior] = useState<LedgerBehavior | null>(null);
+  // M6.3 gate-focus modal: while a 🔴 block owns the keyboard the prompt input is disabled, so
+  // a/r/s/v/Esc reach ONLY the gate handler (Ink dispatches every keypress to ALL useInput hooks —
+  // mutual exclusion must come from state, not dispatch order). `noteEntry` is the steer sub-state,
+  // where the input is re-enabled to capture one line of guidance. Arms only when gtBehavior.block
+  // exists, which itself requires groundTruth on — structurally inert on the default path.
+  const [gateFocus, setGateFocus] = useState<{ gateId: string; noteEntry: boolean } | null>(null);
+  /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
+  const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
   // ground-truth .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
@@ -1092,6 +1101,46 @@ export function HarnessApp({
     }
   }, [agent]);
 
+  // Arm the gate-focus modal whenever an unanswered 🔴 block surfaces at an idle prompt; disarm
+  // when the block clears. An answered/superseded gate re-arms automatically because
+  // ledgerBehavior surfaces the next unanswered red under a new gateId.
+  const gtBlockId = gtBehavior?.block?.gateId ?? null;
+  useEffect(() => {
+    if (gtBlockId === null) {
+      setGateFocus(null);
+      return;
+    }
+    if (busy || gtBlockId === dismissedGateRef.current) return;
+    setGateFocus((g) => (g?.gateId === gtBlockId ? g : { gateId: gtBlockId, noteEntry: false }));
+  }, [gtBlockId, busy]);
+
+  /** M6.3: record a gate answer into user_signals and release the modal. Fail-open like every
+   * other GT touchpoint — a ledger error must not crash the TUI from inside Ink's input
+   * dispatch; on failure the modal stays armed so the keys still answer. */
+  function answerGate(gateId: string, action: "accept" | "reject" | "steer", note: string | null) {
+    try {
+      agent.db?.recordUserSignal(gateId, action, note);
+      setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+      setMessages((m) => [
+        ...m,
+        { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
+      ]);
+      setGateFocus(null);
+      setTypedText("");
+    } catch (exc) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          toolName: "gt",
+          text: `⚠ gate signal not recorded: ${errText(exc)}`,
+          isError: true,
+        },
+      ]);
+      setGateFocus({ gateId, noteEntry: false });
+    }
+  }
+
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
     if (
@@ -1147,48 +1196,53 @@ export function HarnessApp({
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
 
-    // M6.3: capture the override at a 🔴 gate the run stopped on, into user_signals. Only fires at
-    // an EMPTY prompt so bare letters still type normally while composing a message. a/r/s record
-    // the signal (which suppresses the block on the next refresh so the run can surface the next
-    // unanswered red); v shows the /why detail (no signal). The 🔴 banner advertises these keys.
-    const gtBlock = gtBehavior?.block ?? null;
+    // M6.3 gate-focus modal: while a 🔴 block is armed the prompt input below renders disabled,
+    // so these keys have ONE consumer — the first letter of a message can no longer both record
+    // a durable user_signal and type into the prompt. a/r answer and dismiss; s switches to the
+    // steer-note sub-state (input re-enabled); v shows the /why detail and stays armed; Esc
+    // dismisses recording NOTHING (ctrl+g below re-arms). Ctrl/meta combos fall through so
+    // quit/palette/picker keep working; other printable keys are inert while the input is
+    // disabled. Enforcement never moves: the done-gate stays in the tool dispatcher — this is
+    // signal-capture UI only.
     const gtDb = agent.db;
-    if (agent.config.groundTruth === true && gtDb && gtBlock && typedText.trim() === "") {
-      const action =
-        input === "a" ? "accept" : input === "r" ? "reject" : input === "s" ? "steer" : null;
-      if (action) {
-        // Fail-open like every other GT touchpoint: a ledger error must not crash the TUI
-        // from inside Ink's input dispatch.
-        try {
-          gtDb.recordUserSignal(gtBlock.gateId, action);
-          setGtBehavior(ledgerBehavior(gtDb, agent.runId));
-          setMessages((m) => [
-            ...m,
-            { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
-          ]);
-        } catch (exc) {
-          setMessages((m) => [
-            ...m,
-            {
-              role: "tool",
-              toolName: "gt",
-              text: `⚠ gate signal not recorded: ${errText(exc)}`,
-              isError: true,
-            },
-          ]);
+    if (gateFocus && gtDb && !key.ctrl && !key.meta) {
+      if (gateFocus.noteEntry) {
+        // Steer-note entry: the input is live and Enter-with-text records through onSubmit.
+        // Here only Esc (skip the note) and Enter at an empty line record the bare steer.
+        if (key.escape || (key.return && !typedText.trim())) {
+          answerGate(gateFocus.gateId, "steer", null);
+          return;
         }
-        return;
-      }
-      if (input === "v") {
-        let report: string;
-        try {
-          report = whyReportFor(gtDb, agent.runId);
-        } catch (exc) {
-          report = `⚠ /why unavailable: ${errText(exc)}`;
+      } else {
+        if (input === "a" || input === "r") {
+          answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null);
+          return;
         }
-        setMessages((m) => [...m, { role: "tool", text: report, toolName: "why" }]);
-        return;
+        if (input === "s") {
+          setGateFocus({ gateId: gateFocus.gateId, noteEntry: true });
+          return;
+        }
+        if (input === "v") {
+          let report: string;
+          try {
+            report = whyReportFor(gtDb, agent.runId);
+          } catch (exc) {
+            report = `⚠ /why unavailable: ${errText(exc)}`;
+          }
+          setMessages((m) => [...m, { role: "tool", text: report, toolName: "why" }]);
+          return;
+        }
+        if (key.escape) {
+          dismissedGateRef.current = gateFocus.gateId;
+          setGateFocus(null);
+          return;
+        }
       }
+    }
+    if (key.ctrl && input === "g" && gtBehavior?.block) {
+      dismissedGateRef.current = null;
+      setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
+      return;
     }
 
     if (key.ctrl && input === "l") {
@@ -2510,6 +2564,11 @@ export function HarnessApp({
   }
 
   async function onSubmit(text: string) {
+    // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
+    if (gateFocus?.noteEntry) {
+      answerGate(gateFocus.gateId, "steer", text.trim() || null);
+      return;
+    }
     setTypedText("");
     setScrollOffset(0); // jump back to the newest content when the user sends (fullscreen viewport)
     setHistory((h) => {
@@ -2599,9 +2658,22 @@ export function HarnessApp({
   // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
   const gtFooterNote = gtBehavior?.footerNote ?? null;
   const gtBlock = gtBehavior?.block ?? null;
-  const gtRows = (gtFooterNote ? 1 : 0) + (gtBlock ? 1 : 0);
+  // Fit-derived GT row collapse (the #93 recipe): grant footer rows in priority order block →
+  // strip → note from what the terminal spares beyond the fixed stack (base footer 6 + live-action
+  // row + input-box floor + safety margin + one chat row). Reservation and the three renders BOTH
+  // derive from gtFit, so they can never drift; all-absent in → all-absent out keeps the GT-off
+  // footer math untouched. A dropped 🔴 row is display-only — the gate stays enforced in the
+  // dispatcher and answerable via the gate-focus modal's input-box hint.
+  const gtBudget =
+    rows - (6 + (currentAction ? 1 : 0) + (planMode ? 7 : 4) + SCROLLBACK_SAFETY_ROWS + 1);
+  const gtFit = gtFooterFit(gtBudget, {
+    block: gtBlock !== null,
+    strip: planStrip !== null,
+    note: gtFooterNote !== null,
+  });
+  const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0);
   // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows.
-  const footerHeight = 6 + (currentAction ? 1 : 0) + (planStrip ? 1 : 0) + gtRows;
+  const footerHeight = 6 + (currentAction ? 1 : 0) + (gtFit.strip ? 1 : 0) + gtRows;
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -2913,7 +2985,7 @@ export function HarnessApp({
               </Text>
             </Box>
           )}
-          {planStrip && (
+          {planStrip && gtFit.strip && (
             <Box paddingX={1} width="100%">
               <Text color="cyan" wrap="truncate-end">
                 {planStripLabel(planStrip)}
@@ -2924,19 +2996,20 @@ export function HarnessApp({
             </Box>
           )}
           {/* GT tier→behavior (M6.2): 🟡 milestone-review note, then the 🔴 block prompt. Each is
-              one truncated row (counted in footerHeight). The 🔴 line is a display banner here;
-              interactive [v]iew/[a]ccept/[s]teer capture lands in M6.3. */}
-          {gtFooterNote && (
+              one truncated row, granted by gtFit in lockstep with footerHeight. The 🔴 answer keys
+              live in the gate-focus modal (M6.3) — this banner is display + the ctrl+g re-arm hint. */}
+          {gtFooterNote && gtFit.note && (
             <Box paddingX={1} width="100%">
               <Text color="yellow" wrap="truncate-end">
                 {gtFooterNote}
               </Text>
             </Box>
           )}
-          {gtBlock && (
+          {gtBlock && gtFit.block && (
             <Box paddingX={1} width="100%">
               <Text color="red" bold wrap="truncate-end">
                 {gtBlock.prompt}
+                {gateFocus ? "" : " · ctrl+g to answer"}
               </Text>
             </Box>
           )}
@@ -2953,14 +3026,22 @@ export function HarnessApp({
               </Text>
             </Box>
             <TextInput
+              key={gateFocus?.noteEntry ? "gate-note" : "prompt"}
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
               onShiftTab={cycleThinkingLevel}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
-              disabled={busy}
-              placeholder=""
+              disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
+              disabledLabel={
+                gateFocus && !busy
+                  ? "🔴 [a]ccept · [r]eject · [s]teer · [v]iew · esc to type"
+                  : undefined
+              }
+              placeholder={
+                gateFocus?.noteEntry ? "steer guidance — Enter to record, Esc to skip note" : ""
+              }
               showPrefix={false}
             />
           </Box>

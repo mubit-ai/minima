@@ -8,6 +8,7 @@ import {
   clampToolText,
   computeMsgHeight,
   getScrollableMessages,
+  gtFooterFit,
   markdownBodyHeight,
   questionDisplayText,
   questionOverlayHeight,
@@ -301,6 +302,50 @@ describe("questionOverlayHeight", () => {
   test("option rows are truncated, never wrapped — long descriptions don't grow the estimate", () => {
     const wide = q({ options: [{ label: "opt", description: "y".repeat(300) }] });
     expect(questionOverlayHeight(wide, 40, 10)).toBe(2 + 1 + 1 + 1 + 1);
+  });
+});
+
+describe("gtFooterFit — priority-ordered collapse of the GT footer rows", () => {
+  const all = { block: true, strip: true, note: true };
+
+  test("a roomy budget grants every present row", () => {
+    expect(gtFooterFit(3, all)).toEqual({ block: true, strip: true, note: true });
+    expect(gtFooterFit(10, all)).toEqual({ block: true, strip: true, note: true });
+  });
+
+  test("rows collapse in reverse priority: note first, then strip, then block", () => {
+    expect(gtFooterFit(2, all)).toEqual({ block: true, strip: true, note: false });
+    expect(gtFooterFit(1, all)).toEqual({ block: true, strip: false, note: false });
+  });
+
+  test("a zero or negative budget grants nothing", () => {
+    expect(gtFooterFit(0, all)).toEqual({ block: false, strip: false, note: false });
+    expect(gtFooterFit(-4, all)).toEqual({ block: false, strip: false, note: false });
+  });
+
+  test("all-absent in is all-absent out at ANY budget (default path structurally inert)", () => {
+    const absent = { block: false, strip: false, note: false };
+    for (const budget of [-1, 0, 1, 3, 10]) {
+      expect(gtFooterFit(budget, absent)).toEqual(absent);
+    }
+  });
+
+  test("partial presence: absent rows never consume a slot (no phantom grants)", () => {
+    expect(gtFooterFit(1, { block: false, strip: true, note: true })).toEqual({
+      block: false,
+      strip: true,
+      note: false,
+    });
+    expect(gtFooterFit(1, { block: false, strip: false, note: true })).toEqual({
+      block: false,
+      strip: false,
+      note: true,
+    });
+    expect(gtFooterFit(2, { block: true, strip: false, note: true })).toEqual({
+      block: true,
+      strip: false,
+      note: true,
+    });
   });
 });
 

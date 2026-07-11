@@ -598,6 +598,43 @@ describe("planStripLabel / planStripDrift", () => {
     const line = planStripLabel(info) + planStripDrift(info.drift);
     expect(line).toBe("▸ plan 1/2 — Edit config.ts   ⚠ 2 off-plan (drift)");
   });
+
+  // The footer reserves exactly one row for the strip, but step content may carry interior
+  // newlines — the label collapses them so the strip is provably one rendered row.
+  test("label collapses interior newlines in the title to single spaces", () => {
+    const label = planStripLabel({
+      stepPos: 2,
+      stepTotal: 5,
+      title: "Wire the router\nand the judge",
+      drift: 0,
+    });
+    expect(label).toBe("▸ plan 2/5 — Wire the router and the judge");
+    expect(label).not.toContain("\n");
+  });
+
+  test("label collapses \\r\\n and newline runs with surrounding indentation", () => {
+    expect(planStripLabel({ stepPos: 1, stepTotal: 1, title: "a\r\n  b\n\nc", drift: 0 })).toBe(
+      "▸ plan 1/1 — a b c",
+    );
+  });
+
+  test("newline-free titles render byte-identically (regression pin)", () => {
+    expect(planStripLabel({ stepPos: 2, stepTotal: 5, title: "Wire the router", drift: 0 })).toBe(
+      "▸ plan 2/5 — Wire the router",
+    );
+  });
+
+  test("round-trip: the label sanitizes the projection while the DB content stays verbatim", () => {
+    const d = db();
+    const todos = parseTodos(
+      JSON.stringify([{ content: "Wire the router\nand the judge", status: "in_progress" }]),
+    );
+    const { planId } = d.upsertPlanFromTodos("run1", todos);
+    expect(d.getPlanSteps(planId)[0]!.content).toBe("Wire the router\nand the judge");
+    const label = planStripLabel(planStripInfo(d, "run1")!);
+    expect(label).not.toContain("\n");
+    expect(label).toBe("▸ plan 1/1 — Wire the router and the judge");
+  });
 });
 
 // --------------------------------------------------------------------------- groundTruthAfterToolCall (sink)
