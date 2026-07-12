@@ -1358,7 +1358,7 @@ export function HarnessApp({
         });
     }
     const totals = agent.meter?.totals();
-    if (totals) setActualCost(totals.actualCostUsd);
+    if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
     const label = r.run.display_name || runId.slice(0, 12);
     setTranscriptGen((g) => g + 1);
     setMessages([
@@ -2596,7 +2596,7 @@ export function HarnessApp({
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
-      if (totals) setActualCost(totals.actualCostUsd);
+      if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
       if (agent.budget) setBudgetStatus(agent.budget.status());
 
       const last = getLastAssistant(agent);

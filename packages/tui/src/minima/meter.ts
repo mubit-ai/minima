@@ -24,6 +24,9 @@ export interface CostTotals {
   n: number;
   estCostUsd: number;
   actualCostUsd: number;
+  /** Harness overhead (LLM judge spend) — real money outside every routed row, so it is
+   * never part of actualCostUsd/savings and never reaches feedback's actual_cost_usd. */
+  overheadUsd: number;
   baselineCostUsd: number;
   baselineRows: number;
   successes: number;
@@ -37,6 +40,7 @@ export function emptyTotals(): CostTotals {
     n: 0,
     estCostUsd: 0,
     actualCostUsd: 0,
+    overheadUsd: 0,
     baselineCostUsd: 0,
     baselineRows: 0,
     successes: 0,
@@ -54,6 +58,13 @@ export function emptyTotals(): CostTotals {
 
 export class CostMeter {
   readonly rows: CostRow[] = [];
+  overheadUsd = 0;
+
+  /** Book harness overhead (judge spend). Rejects NaN/Infinity/negatives — the hook fires
+   * with 0 on judge transport errors and must never corrupt the accumulator. */
+  addOverhead(usd: number): void {
+    if (Number.isFinite(usd) && usd > 0) this.overheadUsd += usd;
+  }
 
   record(opts: {
     label: string;
@@ -81,6 +92,7 @@ export class CostMeter {
 
   totals(): CostTotals {
     const t = emptyTotals();
+    t.overheadUsd = this.overheadUsd;
     for (const r of this.rows) {
       t.n += 1;
       t.estCostUsd += r.estCostUsd;
@@ -134,6 +146,12 @@ export class CostMeter {
         `savings ${t.savingsPct.toFixed(1)}% ($${t.savingsUsd.toFixed(6)}) | ` +
         `success ${t.successRate.toFixed(1)}% (${t.successes}/${t.n})`,
     );
+    if (t.overheadUsd > 0) {
+      lines.push(
+        `judge overhead $${t.overheadUsd.toFixed(6)} | ` +
+          `session total $${(t.actualCostUsd + t.overheadUsd).toFixed(6)}`,
+      );
+    }
     return lines.join("\n");
   }
 }

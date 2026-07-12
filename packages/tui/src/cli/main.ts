@@ -360,13 +360,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
   // on real LLM grading (staged default-off: it spends money where ConstJudge spent zero).
+  // Judge spend books to the session wallet (meter overhead + budget) but NEVER into
+  // feedback's actual_cost_usd — folding it in would inflate the routed model's observed
+  // $/call and poison the observed/rescaled cost basis. Late-bound: the agent (and its
+  // optional budget) doesn't exist yet at judge construction.
+  let bookJudgeSpend: (usd: number) => void = () => {};
   let judge: ConstJudge | LLMJudge = new ConstJudge(null);
   if (process.env.MINIMA_LLM_JUDGE === "1") {
     const jm = findModelById(config.judgeModel);
     if (jm && providerKeyPresent(jm.provider)) {
-      judge = new LLMJudge(jm);
+      judge = new LLMJudge(jm, { onCostUsd: (usd) => bookJudgeSpend(usd) });
       process.stderr.write(
-        `minima: LLM judge on (${jm.id}) — grading adds a small per-prompt cost\n`,
+        `minima: LLM judge on (${jm.id}) — grading adds a small per-prompt cost (booked to /cost + budget)\n`,
       );
     } else {
       process.stderr.write(
@@ -382,6 +387,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  // agent.budget is attached later (--budget) — read it at call time. Children share this
+  // judge instance (spawn.ts), so their grading books here too, never into their own
+  // meter rows (which the parent reads as the child's routed cost).
+  bookJudgeSpend = (usd) => {
+    agent.meter?.addOverhead(usd);
+    agent.budget?.bookSpend(usd, "judge");
+  };
   // Apply the --thinking CLI flag to the initial reasoning level. It was parsed but never used;
   // the agent kept its default, so the flag was a silent no-op.
   const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
