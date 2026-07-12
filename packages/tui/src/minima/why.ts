@@ -23,7 +23,12 @@ export interface GateVerdict {
 export function whyReportFor(db: MinimaDb | null, sessionId: string | null): string {
   if (!db || !sessionId) return "No Ground-Truth ledger available.";
   const plan = db.getLatestPlan(sessionId);
-  if (!plan) return "No Ground-Truth plan recorded for this run.";
+  if (!plan) {
+    const orphans = orphanLines(db, sessionId);
+    return orphans.length > 0
+      ? ["No Ground-Truth plan recorded for this run.", ...orphans].join("\n")
+      : "No Ground-Truth plan recorded for this run.";
+  }
 
   const steps = db.getPlanSteps(plan.id);
   const latestGateByStep = new Map<string, GateRow>();
@@ -66,7 +71,35 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
     for (const path of driftByStep.get(step.id) ?? []) lines.push(`  ⚠ drift: ${path}`);
   }
   for (const path of unattributedDrift) lines.push(`⚠ drift: ${path} (unattributed)`);
+  lines.push(...orphanLines(db, sessionId));
   return lines.join("\n");
+}
+
+/**
+ * Blocked attempts written before any plan existed (plan_id NULL) are reachable only by
+ * session — surfaced in /why so a pre-plan red is never invisible. Reporting only: the
+ * feedback join stays rec_id-scoped.
+ */
+function orphanLines(db: MinimaDb, sessionId: string): string[] {
+  const orphans = db.getSessionOrphanGates(sessionId);
+  if (orphans.length === 0) return [];
+  const lines = ["⚠ unattributed blocked attempts (no plan existed at the time):"];
+  for (const gate of orphans) {
+    lines.push(`  ✗ ${gate.outcome ?? "?"} - ${flipContentOf(gate) ?? "(unknown step)"}`);
+  }
+  return lines;
+}
+
+function flipContentOf(gate: GateRow): string | null {
+  if (!gate.factors_json) return null;
+  try {
+    const raw = JSON.parse(gate.factors_json) as Record<string, unknown>;
+    return typeof raw.flipContent === "string" && raw.flipContent.trim()
+      ? raw.flipContent.trim()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

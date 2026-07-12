@@ -1287,6 +1287,20 @@ export function HarnessApp({
       } catch {
         // lineage is best-effort
       }
+      // GT resume: re-key the old run's still-active plan onto this run so sticky
+      // verify/baselines, the projection, and the done-gate survive the resume; without
+      // this the old plan stays 'active' under a dead run forever and the gate is
+      // silently bypassed. Old-run session-keyed gates are deliberately not adopted.
+      if (agent.config.groundTruth) {
+        try {
+          if (agent.db.adoptActivePlans(runId, agent.runId) > 0) {
+            setPlanStrip(planStripInfo(agent.db, agent.runId));
+            setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+          }
+        } catch {
+          // adoption is fail-open bookkeeping
+        }
+      }
     }
     const chat: ChatMessage[] = [];
     for (const m of r.messages) {

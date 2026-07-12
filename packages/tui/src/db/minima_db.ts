@@ -39,6 +39,22 @@ function isBusyError(e: unknown): boolean {
   return msg.includes("SQLITE_BUSY") || msg.includes("database is locked");
 }
 
+function tokenJaccard(a: string, b: string): number {
+  const tokens = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean),
+    );
+  const ta = tokens(a);
+  const tb = tokens(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let hit = 0;
+  for (const t of ta) if (tb.has(t)) hit += 1;
+  return hit / (ta.size + tb.size - hit);
+}
+
 /** Ordered, idempotent migrations. schema_meta.version = index of the last applied + 1. */
 const MIGRATIONS: string[][] = [
   // v1 — core spine
@@ -710,6 +726,21 @@ export class MinimaDb {
     );
   }
 
+  /**
+   * Re-key the old run's still-active plans onto the resuming run (MOVE semantics — the last
+   * resumer wins on a single-user local DB). Everything plan_id-keyed (steps, file_changes,
+   * gates) follows for free; the old run's session-keyed gate rows are deliberately NOT
+   * adopted — historical verdicts of past prompts must not leak into the resumed run's
+   * feedback. Returns the number of plans moved.
+   */
+  adoptActivePlans(fromSession: string, toSession: string): number {
+    this.db.run("UPDATE plans SET session_id = ? WHERE session_id = ? AND status = 'active'", [
+      toSession,
+      fromSession,
+    ]);
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
+  }
+
   /** M0.3: insert one step. Returns its id. */
   insertStep(opts: {
     id?: string;
@@ -764,13 +795,19 @@ export class MinimaDb {
   }
 
   /**
-   * The content-based step matcher SHARED by upsertPlanFromTodos and completionsForTodos —
-   * one implementation so the done-gate's preview (M4.1) can never match steps differently
-   * than the upsert it previews (if they drifted, the gate would check the wrong step).
-   * Trimmed content, first-come queue on duplicates; each call consumes at most one row, so
-   * callers must invoke it once per incoming todo, in list order, statuses notwithstanding.
+   * The step matcher SHARED by upsertPlanFromTodos and completionsForTodos — one
+   * implementation, computed ONCE per todo list, so the done-gate's preview (M4.1) can never
+   * match steps differently than the upsert it previews. Pass 1 is the historical exact
+   * trimmed-content match (first-come queues on duplicates). Pass 2 rescues reworded steps:
+   * still-unmatched todos adopt a still-unmatched row when their token-set Jaccard is >= 0.6
+   * (ties broken by smallest position distance) — so an accidental rewording keeps the step's
+   * id, sticky verify, and gate history instead of shedding them. Deterministic, zero deps.
    */
-  private stepMatcher(existing: PlanStepRow[]): (content: string) => PlanStepRow | undefined {
+  private matchStepsToTodos(
+    existing: PlanStepRow[],
+    tasks: TodoInput[],
+  ): (PlanStepRow | undefined)[] {
+    const out: (PlanStepRow | undefined)[] = new Array(tasks.length).fill(undefined);
     const byContent = new Map<string, PlanStepRow[]>();
     for (const s of existing) {
       const key = (s.content ?? "").trim();
@@ -778,7 +815,36 @@ export class MinimaDb {
       if (queue) queue.push(s);
       else byContent.set(key, [s]);
     }
-    return (content) => byContent.get(content.trim())?.shift();
+    const taken = new Set<string>();
+    for (let i = 0; i < tasks.length; i++) {
+      const s = byContent.get(tasks[i]!.content.trim())?.shift();
+      if (s) {
+        out[i] = s;
+        taken.add(s.id);
+      }
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      if (out[i]) continue;
+      let best: PlanStepRow | undefined;
+      let bestScore = 0;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const s of existing) {
+        if (taken.has(s.id)) continue;
+        const score = tokenJaccard(tasks[i]!.content, s.content ?? "");
+        if (score < 0.6) continue;
+        const dist = Math.abs(s.idx - i);
+        if (score > bestScore || (score === bestScore && dist < bestDist)) {
+          best = s;
+          bestScore = score;
+          bestDist = dist;
+        }
+      }
+      if (best) {
+        out[i] = best;
+        taken.add(best.id);
+      }
+    }
+    return out;
   }
 
   /**
@@ -794,16 +860,20 @@ export class MinimaDb {
    */
   completionsForTodos(sessionId: string, tasks: TodoInput[]): CompletionFlip[] {
     const plan = this.planForTodos(sessionId, tasks);
-    const nextMatch = this.stepMatcher(plan ? this.getPlanSteps(plan.id) : []);
+    const matched = this.matchStepsToTodos(plan ? this.getPlanSteps(plan.id) : [], tasks);
     const flips: CompletionFlip[] = [];
-    for (const t of tasks) {
-      const prev = nextMatch(t.content);
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i]!;
+      const prev = matched[i];
       if (t.status !== "completed" || prev?.status === "completed") continue;
+      // A verify swap invalidates the old baseline: red→green evidence is only meaningful
+      // against the check that produced the red, so the flip carries NULL instead.
+      const verifyChanged = t.verify != null && prev?.verify != null && t.verify !== prev.verify;
       flips.push({
         content: t.content,
         stepId: prev?.id ?? null,
         verify: t.verify ?? prev?.verify ?? null,
-        baseline: prev?.baseline ?? null,
+        baseline: verifyChanged ? null : (prev?.baseline ?? null),
       });
     }
     return flips;
@@ -856,25 +926,33 @@ export class MinimaDb {
       existingPlan?.id ??
       this.insertPlan({ sessionId, title: title ?? tasks[0]?.content ?? null, status: "active" });
     const existing = this.getPlanSteps(planId);
-    const nextMatch = this.stepMatcher(existing);
+    const matchedSteps = this.matchStepsToTodos(existing, tasks);
     const stepIds: string[] = [];
     const started: { id: string; verify: string | null }[] = [];
     const tx = this.db.transaction(() => {
       const matched = new Set<string>();
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i]!;
-        const prev = nextMatch(t.content);
+        const prev = matchedSteps[i];
         if (prev) {
           matched.add(prev.id);
+          // baseline resets whenever the effective verify CHANGES: red→green evidence must
+          // always be scoped to the check that produced the red (a swapped-in check crediting
+          // the old check's red would fabricate verified_in_production).
           this.db.run(
-            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, verify = COALESCE(?, verify) WHERE id = ?",
-            [i, t.content, t.status, t.verify ?? null, prev.id],
+            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify) WHERE id = ?",
+            [i, t.content, t.status, t.verify ?? null, t.verify ?? null, t.verify ?? null, prev.id],
           );
           stepIds.push(prev.id);
           const entered = t.status === "in_progress" && prev.status !== "in_progress";
           const gainedVerify =
             t.status === "in_progress" && prev.verify === null && t.verify != null;
-          if ((entered || gainedVerify) && prev.baseline === null) {
+          const changedVerify =
+            t.status === "in_progress" &&
+            t.verify != null &&
+            prev.verify !== null &&
+            t.verify !== prev.verify;
+          if (changedVerify || ((entered || gainedVerify) && prev.baseline === null)) {
             started.push({ id: prev.id, verify: t.verify ?? prev.verify ?? null });
           }
         } else {
@@ -978,6 +1056,15 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM gates WHERE plan_id = ? ORDER BY created_at, rowid")
       .all(planId) as GateRow[];
+  }
+
+  /** Blocked-attempt rows written before any plan existed — reachable only by session. */
+  getSessionOrphanGates(sessionId: string): GateRow[] {
+    return this.db
+      .query(
+        "SELECT * FROM gates WHERE session_id = ? AND plan_id IS NULL ORDER BY created_at, rowid",
+      )
+      .all(sessionId) as GateRow[];
   }
 
   /** Every gate minted under one routed rung (rec_id), oldest first — the feedback join. */
