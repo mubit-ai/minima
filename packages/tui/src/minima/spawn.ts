@@ -16,6 +16,7 @@ import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
+import { groundTruthAttributionSink, recordOpaqueMarker } from "./ground_truth.ts";
 import { CostMeter } from "./meter.ts";
 import { MinimaAgent } from "./runtime.ts";
 
@@ -155,6 +156,22 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       parent.db && parent.runId
         ? attachDbSink(child, parent.db, { runId: parent.runId, agentId: childId })
         : null;
+    // GT write attribution (file_changes ONLY — children never touch gates/baselines/plans):
+    // a shared-workdir child's writes land attributed to agent_id=childId; a worktree child's
+    // edits are invisible here AND its bash can still reach the parent repo via absolute
+    // paths, so it leaves one opaque marker instead — Factors.blind caps the tier at yellow
+    // (signal lost, never a false green).
+    if (parent.config.groundTruth && parent.db && parent.runId) {
+      if (worktreePath) {
+        try {
+          recordOpaqueMarker(parent.db, parent.runId, `subagent:${childId} (worktree)`, childId);
+        } catch {
+          // fail-open bookkeeping
+        }
+      } else {
+        child.addAfterToolCall(groundTruthAttributionSink(parent, childId));
+      }
+    }
 
     // Abort tree: parent abort → child abort; plus an effort-scaled wall-clock cap.
     let timedOut = false;

@@ -145,7 +145,8 @@ export function parseFactors(raw: string | null): Factors | null {
     typeof factors.hasCheck !== "boolean" ||
     !isCheckOrigin(factors.checkOrigin) ||
     (typeof factors.coverageHit !== "boolean" && factors.coverageHit !== "unknown") ||
-    typeof factors.tamper !== "boolean"
+    typeof factors.tamper !== "boolean" ||
+    (factors.blind !== undefined && typeof factors.blind !== "boolean")
   ) {
     return null;
   }

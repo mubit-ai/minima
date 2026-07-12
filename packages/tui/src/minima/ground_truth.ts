@@ -150,6 +150,176 @@ export function kindForTool(toolName: string): "created" | "modified" {
   return toolName === "write" ? "created" : "modified";
 }
 
+export interface BashWriteHints {
+  paths: { path: string; kind: "created" | "modified" | "deleted" }[];
+  /** The command mutates state in a way we cannot attribute to paths — signal lost. */
+  opaque: boolean;
+}
+
+/** Mutation forms whose targets cannot be extracted statically — they force `opaque`. */
+const OPAQUE_BASH =
+  /\bgit\s+(apply|checkout|reset|stash|merge|rebase|cherry-pick|clean|restore)\b|(^|[\s;|&])patch\b|\b(node|bun)\s+(-e|--eval)\b|\bpython3?\s+-c\b|<<|\|\s*(sh|bash|zsh)\b/;
+
+/**
+ * GT101-F5: best-effort write attribution for LLM-authored bash. Extracts the targets of the
+ * common explicit-write forms (redirects, tee, sed -i, mv/cp/rm/touch/mkdir); any mutation it
+ * cannot resolve to a concrete path (globs, variables, the OPAQUE_BASH forms) sets `opaque`
+ * instead — under-extraction degrades to a yellow cap via Factors.blind, never a false green.
+ * Pure reads return nothing. Total: never throws.
+ */
+export function bashWriteHints(command: string): BashWriteHints {
+  const paths: BashWriteHints["paths"] = [];
+  const seen = new Set<string>();
+  let opaque = OPAQUE_BASH.test(command);
+  const push = (raw: string, kind: "created" | "modified" | "deleted"): boolean => {
+    const p = raw.replace(/^['"`]+|['"`]+$/g, "").trim();
+    if (!p || p.startsWith("-") || p.startsWith("/dev/")) return true; // nothing to attribute
+    if (/[$*?{}[\]<>]/.test(p)) return false; // vars/globs — cannot resolve statically
+    const key = `${kind}:${p}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      paths.push({ path: p, kind });
+    }
+    return true;
+  };
+  for (const m of command.matchAll(/(?:^|[^>|\d])>{1,2}\s*([^\s;|&)]+)/g)) {
+    if (m[1]!.startsWith("&")) continue;
+    if (!push(m[1]!, "modified")) opaque = true;
+  }
+  for (const m of command.matchAll(/\btee\s+(?:-a\s+)?([^\s;|&)]+)/g)) {
+    if (!push(m[1]!, "modified")) opaque = true;
+  }
+  for (const segment of command.split(/&&|\|\||[;|]/)) {
+    const toks = segment.trim().split(/\s+/).filter(Boolean);
+    const head = toks[0] ?? "";
+    const args = toks.slice(1).filter((t) => !t.startsWith("-"));
+    switch (head) {
+      case "mv":
+      case "cp": {
+        const dest = args[args.length - 1];
+        if (dest === undefined || !push(dest, "modified")) opaque = true;
+        break;
+      }
+      case "rm":
+        if (args.length === 0) opaque = true;
+        for (const t of args) if (!push(t, "deleted")) opaque = true;
+        break;
+      case "touch":
+        for (const t of args) if (!push(t, "created")) opaque = true;
+        break;
+      case "mkdir":
+        for (const t of args) if (!push(t, "created")) opaque = true;
+        break;
+      case "sed": {
+        if (!/\s(-[a-zA-Z]*i[a-zA-Z]*|--in-place)\b/.test(segment)) break;
+        const last = toks[toks.length - 1] ?? "";
+        if (!/[./]/.test(last) || !push(last, "modified")) opaque = true;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { paths, opaque };
+}
+
+/**
+ * SHARED attribution sink body (lead + sub-agents): resolve a tool call's touched paths and
+ * record them as file_changes attributed to the in-progress step, `agent_id` marking who
+ * wrote (NULL = lead). bash goes through {@link bashWriteHints}; a mutation that cannot be
+ * attributed lands as ONE `kind='opaque'` row (origin `unknown`) that the factor filters
+ * exclude from provenance/coverage but Factors.blind reads as "evidence incomplete".
+ */
+export function recordFileChanges(
+  db: MinimaDb,
+  session: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  agentId: string | null,
+): void {
+  let entries: { path: string; kind: string }[] = [];
+  let opaque = false;
+  let opaqueLabel = "";
+  if (toolName === "bash") {
+    const cmd = typeof args.command === "string" ? args.command : "";
+    const hints = bashWriteHints(cmd);
+    entries = hints.paths;
+    opaque = hints.opaque;
+    opaqueLabel = `bash: ${cmd.trim().slice(0, 80)}`;
+    if (entries.length === 0 && !opaque) return;
+  } else {
+    entries = writePathsFromArgs(toolName, args).map((path) => ({
+      path,
+      kind: kindForTool(toolName),
+    }));
+    if (entries.length === 0) return;
+  }
+  const plan = db.getActivePlan(session);
+  if (!plan) return;
+  const step = db.getInProgressStep(plan.id);
+  for (const e of entries) {
+    const origin = step && isPathClaimed(step.content, e.path) ? "on_plan" : "off_plan";
+    db.insertFileChange({
+      planId: plan.id,
+      stepId: step?.id ?? null,
+      path: e.path,
+      kind: e.kind,
+      origin,
+      agentId,
+    });
+  }
+  if (opaque) {
+    db.insertFileChange({
+      planId: plan.id,
+      stepId: step?.id ?? null,
+      path: opaqueLabel,
+      kind: "opaque",
+      origin: "unknown",
+      agentId,
+    });
+  }
+}
+
+/** One opaque marker row (e.g. a worktree sub-agent whose writes are invisible here). */
+export function recordOpaqueMarker(
+  db: MinimaDb,
+  session: string,
+  label: string,
+  agentId: string | null,
+): void {
+  const plan = db.getActivePlan(session);
+  if (!plan) return;
+  db.insertFileChange({
+    planId: plan.id,
+    stepId: null,
+    path: label,
+    kind: "opaque",
+    origin: "unknown",
+    agentId,
+  });
+}
+
+/**
+ * The SUB-AGENT attribution sink: file_changes writes ONLY. It hard-skips todowrite (a child
+ * todowrite reaching upsertPlanFromTodos would DELETE the lead's steps via the prune) and
+ * never touches gates/baselines/plans — the done-gate stays lead-only by design. Registered
+ * by createSpawn under parent.config.groundTruth.
+ */
+export function groundTruthAttributionSink(ref: GtAgentRef, childId: string): AfterToolCall {
+  return async (ctx) => {
+    try {
+      const db = ref.db;
+      const session = ref.runId;
+      if (!db || !session || ctx.isError) return null;
+      if (ctx.toolCall.name === "todowrite") return null;
+      recordFileChanges(db, session, ctx.toolCall.name, ctx.toolCall.arguments ?? {}, childId);
+    } catch {
+      // fail-open: attribution bookkeeping must never break a child turn.
+    }
+    return null;
+  };
+}
+
 /**
  * M2.2/M2.3 drift heuristic: does the in-progress step's text lay claim to this path? Kept
  * deliberately simple — a full-path or basename mention counts as on-plan. Unmatched writes
@@ -429,16 +599,7 @@ export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
         return null;
       }
 
-      const paths = writePathsFromArgs(name, args);
-      if (paths.length === 0) return null;
-      const plan = db.getActivePlan(session);
-      if (!plan) return null; // no plan of record yet — nothing to attribute against
-      const step = db.getInProgressStep(plan.id);
-      const kind = kindForTool(name);
-      for (const path of paths) {
-        const origin = step && isPathClaimed(step.content, path) ? "on_plan" : "off_plan";
-        db.insertFileChange({ planId: plan.id, stepId: step?.id ?? null, path, kind, origin });
-      }
+      recordFileChanges(db, session, name, args, null);
     } catch {
       // fail-open: never let ledger bookkeeping break the turn.
     }
@@ -638,6 +799,17 @@ export function groundTruthHooks(
         // no ledger read — Stage 5 factors degrade to their neutral defaults.
       }
       const tamper = detectTamper(fileChanges, fs);
+      // Factors.blind — evidence completeness, RUN-scoped: any opaque row on the plan OR any
+      // opaque bash anywhere in this run's tool_calls (which covers pre-plan mutations that
+      // file_changes cannot hold — its plan_id is NOT NULL). Fail-open to false.
+      let blind = false;
+      try {
+        blind =
+          fileChanges.some((c) => c.kind === "opaque") ||
+          db.getRunToolCommands(session, "bash").some((cmd) => bashWriteHints(cmd).opaque);
+      } catch {
+        // no ledger read — the factor degrades to its neutral default.
+      }
 
       const verdicts: GateVerdict[] = [];
       const failures: {
@@ -653,7 +825,7 @@ export function groundTruthHooks(
             content: flip.content,
             stepId: flip.stepId,
             outcome: "unchecked",
-            factors: { ...uncheckedFactors(), tamper, flipContent: flip.content },
+            factors: { ...uncheckedFactors(), tamper, blind, flipContent: flip.content },
           });
           continue;
         }
@@ -663,7 +835,13 @@ export function groundTruthHooks(
             flip,
             outcome: "unrunnable",
             why: `could not run (the ${budgetMs} ms gate budget was exhausted by earlier checks)`,
-            factors: { ...uncheckedFactors(), hasCheck: true, tamper, flipContent: flip.content },
+            factors: {
+              ...uncheckedFactors(),
+              hasCheck: true,
+              tamper,
+              blind,
+              flipContent: flip.content,
+            },
           });
           continue;
         }
@@ -680,6 +858,7 @@ export function groundTruthHooks(
           checkOrigin: classifyCheckOrigin(flip.verify, fileChanges),
           coverageHit: computeCoverageHit(flip.verify, fileChanges, fs),
           tamper,
+          blind,
           outputTail: outputTail(result.output),
           durationMs: result.durationMs,
           exitCode: result.exitCode,

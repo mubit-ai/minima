@@ -77,6 +77,12 @@ export interface Factors {
   coverageHit: boolean | "unknown";
   /** Tests were skipped/deleted/weakened this step — always forces 🔴. (M5.3) */
   tamper: boolean;
+  /**
+   * Unattributable writes happened this run (opaque bash mutations, worktree sub-agents) —
+   * provenance/coverage were computed from knowably incomplete data, so the tier caps at 🟡:
+   * signal lost, never fabricated. Optional/additive (older factors_json rows lack it).
+   */
+  blind?: boolean;
 }
 
 /** Track B's `confidence()` output (M6.1): one tier plus a human-readable reason. */
