@@ -1,8 +1,10 @@
 /**
  * M3.2: runCheck — the deterministic check-runner primitive everything in Stages 4–6 leans
- * on. Runs a shell command via Bun.spawn (mirroring tools/bash.ts), captures combined
- * stdout+stderr, and reports pass/fail plus how the run ended (clean exit, timeout, abort,
- * or spawn failure). Total: `runCheck` NEVER throws — every failure mode is a return value.
+ * on. Runs a shell command via Bun.spawn in its own process group with a minimal allowlisted
+ * env (verify commands are LLM-authored — they never inherit harness secrets, and no check
+ * may leave background processes behind, pass or fail). Captures combined stdout+stderr and
+ * reports pass/fail plus how the run ended (clean exit, timeout, abort, or spawn failure).
+ * Total: `runCheck` NEVER throws — every failure mode is a return value.
  *
  * Zero runtime dependencies by design (only type imports from ./gt_contract.ts), so the
  * check engine can be exercised in isolation from the rest of the harness.
@@ -75,18 +77,70 @@ function streamDrain(stream: ReadableStream<Uint8Array> | null): {
 }
 
 /**
- * Timeout precedence: explicit option → MINIMA_TIMEOUT env (SECONDS, matching config.ts) →
+ * Timeout precedence: explicit option → MINIMA_TUI_CHECK_TIMEOUT env (SECONDS) →
  * DEFAULT_CHECK_TIMEOUT_MS. Read straight from process.env to keep this module dependency-free.
+ * Deliberately independent of MINIMA_TIMEOUT — that is the HTTP routing timeout (config.ts),
+ * and tuning routing latency must never rescale baseline/done-gate checks.
  * Exported so callers budgeting across several checks can cap each one at the same default.
  */
 export function resolveCheckTimeoutMs(opts?: RunCheckOptions): number {
   if (opts?.timeoutMs !== undefined) return opts.timeoutMs;
-  const env = process.env.MINIMA_TIMEOUT;
+  const env = process.env.MINIMA_TUI_CHECK_TIMEOUT;
   if (env) {
     const t = Number(env);
     if (Number.isFinite(t) && t > 0) return t * 1000;
   }
   return DEFAULT_CHECK_TIMEOUT_MS;
+}
+
+/**
+ * Env names a check child may inherit (exact matches; the LC_ locale family passes by
+ * prefix). Everything else — provider API keys, MUBIT_API_KEY, Bun-autoloaded .env
+ * contents — is denied by default; MINIMA_TUI_CHECK_ENV is the per-project escape hatch.
+ */
+export const CHECK_ENV_ALLOW = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "TERM",
+  "LANG",
+  "TZ",
+  "COLORTERM",
+  "NODE_ENV",
+  "VIRTUAL_ENV",
+  "PYENV_ROOT",
+  "NVM_DIR",
+  "GOPATH",
+  "GOROOT",
+  "CARGO_HOME",
+  "RUSTUP_HOME",
+  "JAVA_HOME",
+] as const;
+
+/**
+ * Default-deny allowlisted env for check children: only CHECK_ENV_ALLOW names and LC_*
+ * survive, plus any names listed in MINIMA_TUI_CHECK_ENV (comma-separated, whitespace
+ * trimmed, empties ignored; values still sourced from `base`) for checks that legitimately
+ * need more. A check broken by the narrower env fails visibly and fail-closed — never
+ * silently through with a leaked secret.
+ */
+export function checkEnv(
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const allowed = new Set<string>(CHECK_ENV_ALLOW);
+  for (const name of (base.MINIMA_TUI_CHECK_ENV ?? "").split(",")) {
+    const trimmed = name.trim();
+    if (trimmed) allowed.add(trimmed);
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    if (allowed.has(key) || key.startsWith("LC_")) env[key] = value;
+  }
+  return env;
 }
 
 /**
@@ -116,9 +170,11 @@ export async function runCheck(cmd: string, opts?: RunCheckOptions): Promise<Run
   try {
     proc = Bun.spawn(["bash", "-c", cmd], {
       cwd,
+      env: checkEnv(),
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
+      detached: true,
     });
   } catch (exc) {
     return {
@@ -169,7 +225,7 @@ export async function runCheck(cmd: string, opts?: RunCheckOptions): Promise<Run
   }
 
   if (winner.kind === "timeout" || winner.kind === "aborted") {
-    killHard(proc);
+    killProcessGroup(proc);
     stdout.cancel();
     stderr.cancel();
     const suffix = winner.kind === "timeout" ? `[timed out after ${timeoutMs} ms]` : "[aborted]";
@@ -184,6 +240,11 @@ export async function runCheck(cmd: string, opts?: RunCheckOptions): Promise<Run
   }
 
   const exitCode = await proc.exited;
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    // group already empty — the harmless post-exit sweep
+  }
   return {
     pass: exitCode === 0,
     output: `${winner.out}${winner.err}`,
@@ -195,25 +256,34 @@ export async function runCheck(cmd: string, opts?: RunCheckOptions): Promise<Run
 }
 
 /**
- * M3.2: put a timed-out/aborted check process down without pinning the parent: SIGTERM now,
- * SIGKILL after KILL_GRACE_MS if it is still alive, and unref both the escalation timer and
- * the subprocess so a TERM-trapping child never keeps the event loop alive past the result.
+ * Put a check's WHOLE process group down without pinning the parent: SIGTERM the group now
+ * (falling back to the direct child if the group signal throws), then an unref'd timer
+ * SIGKILLs the group after graceMs. The escalation is deliberately NOT cleared when the
+ * leader exits — grandchildren can outlive it, and once every member is dead the late kill
+ * is a harmless ESRCH. Requires the child to have been spawned with `detached: true` so its
+ * pid is the process-group id.
  */
-function killHard(proc: import("bun").Subprocess<"ignore", "pipe", "pipe">): void {
+export function killProcessGroup(
+  proc: Pick<import("bun").Subprocess, "pid" | "kill" | "unref">,
+  graceMs = KILL_GRACE_MS,
+): void {
   try {
-    proc.kill();
+    process.kill(-proc.pid, "SIGTERM");
   } catch {
-    // already dead
-  }
-  const hardKill = setTimeout(() => {
     try {
-      proc.kill("SIGKILL");
+      proc.kill();
     } catch {
       // already dead
     }
-  }, KILL_GRACE_MS);
+  }
+  const hardKill = setTimeout(() => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      // group already empty
+    }
+  }, graceMs);
   hardKill.unref();
-  void proc.exited.then(() => clearTimeout(hardKill));
   proc.unref();
 }
 
