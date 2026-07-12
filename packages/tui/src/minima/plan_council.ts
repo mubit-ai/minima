@@ -46,6 +46,9 @@ export interface CouncilOptions {
   maxCriticPasses?: number;
   /** Soft cap: stop launching researchers once realized spend crosses this. */
   roundBudgetUsd?: number;
+  /** Realized spend of every off-routing meta complete() (0 on throw/fallback). The round
+   *  already folds meta spend into result.costUsd; this hook is for external capture. */
+  onCostUsd?: (usd: number) => void;
   apiKey?: string;
   /** Injectable for tests; DEFAULT = createSpawn({ parent, workdir, onChildEvent }). */
   spawn?: SpawnFn;
@@ -68,6 +71,16 @@ interface MetaOpts {
   apiKey?: string;
   signal?: AbortSignal | null;
   timeout?: number;
+  onCostUsd?: (usd: number) => void;
+}
+
+/** Report a meta call's realized spend to the caller's hook — which must never break it. */
+function bookCost(o: MetaOpts, usd: number): void {
+  try {
+    o.onCostUsd?.(Number.isFinite(usd) ? usd : 0);
+  } catch {
+    // spend hook must never break a meta call
+  }
 }
 
 // --------------------------------------------------------------------------- coercers
@@ -162,10 +175,12 @@ async function completeJson<T>(
       },
       { options: metaOptions(o), signal: o.signal ?? undefined },
     );
+    bookCost(o, resp.usage.cost.total);
     if (resp.stop_reason === "error") return fallback;
     const parsed = extractJson(resp.textContent);
     return parsed === undefined ? fallback : (parsed as T);
   } catch {
+    bookCost(o, 0);
     return fallback;
   }
 }
@@ -188,10 +203,12 @@ async function completeText(
       },
       { options: metaOptions(o), signal: o.signal ?? undefined },
     );
+    bookCost(o, resp.usage.cost.total);
     if (resp.stop_reason === "error") return fallback;
     const t = resp.textContent.trim();
     return t || fallback;
   } catch {
+    bookCost(o, 0);
     return fallback;
   }
 }
@@ -214,7 +231,7 @@ const REVISE_SYSTEM = `You are the SYNTHESIST of a planning council revising a p
 
 const CRITIC_SYSTEM = `You are an adversarial CRITIC on a planning council. Attack the proposed approach: find concrete faults — unstated assumptions, missing steps, risks, contradictions with the findings, ways it fails. Be specific and terse; do not rewrite the plan. Reply with ONLY a JSON array of {"summary": "the fault, one line", "severity": "info|concern|blocker"}. If the approach is genuinely sound, return []. ${UNTRUSTED}`;
 
-const SYNTH_SYSTEM = `You are the RECORDER of a planning council. Turn the plan, findings, critic faults, and the user's latest message into a structured round result. RESOLVE trivial or self-answerable questions YOURSELF as decisions or facts; SURFACE only genuine decision-points that need the user's judgement (at most 2). Also write, IN YOUR OWN CONCISE WORDS (never a verbatim copy of the user's message), a short "title" (a noun phrase of at most 8 words naming what this plan achieves) and "goal" (one or two plain sentences restating the objective). Reply with ONLY a JSON object: {"title": "concise plan title", "goal": "concise goal restatement", "draftDelta": "the plan prose to append (may be empty)", "decisions": [{"topic": "...", "decision": "...", "rationale": "..."}], "findings": [{"source": "researcher|critic|keeper", "summary": "...", "severity": "info|concern|blocker"}], "questions": [{"question": "...", "header": "short label", "options": [{"label": "...", "description": "..."}], "why": "why it matters"}], "facts": ["established fact"], "constraints": ["hard constraint"]}. Omit or empty any field with nothing to add. ${UNTRUSTED}`;
+const SYNTH_SYSTEM = `You are the RECORDER of a planning council. Turn the plan, findings, critic faults, and the user's latest message into a structured round result. RESOLVE trivial or self-answerable questions YOURSELF as decisions or facts; SURFACE only genuine decision-points that need the user's judgement (at most 2). Also write, IN YOUR OWN CONCISE WORDS (never a verbatim copy of the user's message), a short "title" (a noun phrase of at most 8 words naming what this plan achieves) and "goal" (one or two plain sentences restating the objective). Reply with ONLY a JSON object: {"title": "concise plan title", "goal": "concise goal restatement", "plan": "the COMPLETE current plan prose (a full replacement, not a delta; empty keeps the previous draft)", "decisions": [{"topic": "...", "decision": "...", "rationale": "..."}], "findings": [{"source": "researcher|critic|keeper", "summary": "...", "severity": "info|concern|blocker"}], "questions": [{"question": "...", "header": "short label", "options": [{"label": "...", "description": "..."}], "why": "why it matters"}], "facts": ["established fact"], "constraints": ["hard constraint"]}. Omit or empty any field with nothing to add. ${UNTRUSTED}`;
 
 // --------------------------------------------------------------------- council stages
 
@@ -233,6 +250,7 @@ async function deriveScopes(
   const raw = await completeJson<unknown>(opts.metaModel, scopeSystem(max), user, undefined, {
     apiKey: opts.apiKey,
     signal: opts.signal,
+    onCostUsd: opts.onCostUsd,
   });
   const scopes = asRecords(raw)
     .map(
@@ -331,6 +349,7 @@ async function keeperPostCheck(
   const raw = await completeJson<unknown>(opts.metaModel, KEEPER_CHECK_SYSTEM, user, undefined, {
     apiKey: opts.apiKey,
     signal: opts.signal,
+    onCostUsd: opts.onCostUsd,
   });
   return sanitizeFindings(raw, "keeper");
 }
@@ -339,7 +358,11 @@ async function keeperPostCheck(
 export class Critic {
   constructor(
     private readonly model: Model,
-    private readonly opts: { apiKey?: string; timeout?: number } = {},
+    private readonly opts: {
+      apiKey?: string;
+      timeout?: number;
+      onCostUsd?: (usd: number) => void;
+    } = {},
   ) {}
 
   async attack(
@@ -353,6 +376,7 @@ export class Critic {
       apiKey: this.opts.apiKey,
       timeout: this.opts.timeout,
       signal,
+      onCostUsd: this.opts.onCostUsd,
     });
     return sanitizeFindings(raw, "critic").map((f) => ({
       summary: f.summary,
@@ -377,6 +401,7 @@ async function draftPlan(
   return completeText(opts.metaModel, DRAFT_SYSTEM, user, session.draft || "", {
     apiKey: opts.apiKey,
     signal: opts.signal,
+    onCostUsd: opts.onCostUsd,
   });
 }
 
@@ -392,13 +417,14 @@ async function reviseDraft(
   return completeText(opts.metaModel, REVISE_SYSTEM, user, draft, {
     apiKey: opts.apiKey,
     signal: opts.signal,
+    onCostUsd: opts.onCostUsd,
   });
 }
 
 interface SynthOutput {
   title: string;
   goal: string;
-  draftDelta: string;
+  plan: string;
   decisions: { topic: string; decision: string; rationale: string }[];
   findings: Finding[];
   questions: SurfacedQuestion[];
@@ -430,12 +456,14 @@ async function synthesize(
     SYNTH_SYSTEM,
     user,
     {},
-    { apiKey: opts.apiKey, signal: opts.signal },
+    { apiKey: opts.apiKey, signal: opts.signal, onCostUsd: opts.onCostUsd },
   );
   return {
     title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
     goal: clip(asStr(raw.goal).replace(/\s+/g, " "), 400),
-    draftDelta: asStr(raw.draftDelta),
+    // raw.draftDelta is the pre-replace-semantics key — accepted as a legacy alias for one
+    // release in case the meta model echoes it from few-shot memory.
+    plan: asStr(raw.plan) || asStr(raw.draftDelta),
     decisions: sanitizeDecisions(raw.decisions),
     findings: sanitizeFindings(raw.findings, "researcher"),
     questions: sanitizeQuestions(raw.questions),
@@ -469,7 +497,12 @@ export interface ResolvedQuestion {
  */
 export async function answerOpenQuestions(
   session: PlanSession,
-  opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
+  opts: {
+    metaModel: Model;
+    apiKey?: string;
+    signal?: AbortSignal | null;
+    onCostUsd?: (usd: number) => void;
+  },
 ): Promise<ResolvedQuestion[]> {
   const open = session.openQuestions.filter((q) => q.status === "open");
   if (open.length === 0) return [];
@@ -505,6 +538,7 @@ export async function answerOpenQuestions(
     const raw = await completeJson<unknown>(opts.metaModel, RESOLVE_SYSTEM, context, [], {
       apiKey: opts.apiKey,
       signal: opts.signal,
+      onCostUsd: opts.onCostUsd,
     });
     const answers = asRecords(raw).map((r) => ({
       answer: asStr(r.answer) || asStr(r.decision),
@@ -544,7 +578,12 @@ Fill every field as richly as the conversation supports; only leave a field empt
 export async function synthesizeGroundTruth(
   session: PlanSession,
   transcript: string,
-  opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
+  opts: {
+    metaModel: Model;
+    apiKey?: string;
+    signal?: AbortSignal | null;
+    onCostUsd?: (usd: number) => void;
+  },
 ): Promise<GroundTruthSynthesis | null> {
   const stateDigest = [
     session.decisions.length
@@ -577,7 +616,7 @@ export async function synthesizeGroundTruth(
     GROUND_TRUTH_SYSTEM,
     user,
     {},
-    { apiKey: opts.apiKey, signal: opts.signal, timeout: 60 },
+    { apiKey: opts.apiKey, signal: opts.signal, timeout: 60, onCostUsd: opts.onCostUsd },
   );
   const synth: GroundTruthSynthesis = {
     title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
@@ -722,8 +761,19 @@ export async function runCouncilRound(
   };
   const aborted = (): boolean => Boolean(opts.signal?.aborted);
 
+  // Fold every meta call's realized spend into the round total (researchers alone
+  // under-reported costUsd); the caller's onCostUsd hook still sees each call.
+  let metaSpendUsd = 0;
+  const mopts: CouncilOptions = {
+    ...opts,
+    onCostUsd: (usd) => {
+      if (Number.isFinite(usd) && usd > 0) metaSpendUsd += usd;
+      opts.onCostUsd?.(usd);
+    },
+  };
+
   const result: CouncilRoundResult = {
-    draftDelta: "",
+    draft: "",
     decisions: [],
     findings: [],
     faults: [],
@@ -733,24 +783,27 @@ export async function runCouncilRound(
     costUsd: 0,
     aborted: false,
   };
+  const totalCost = (): number => result.costUsd + metaSpendUsd;
 
   try {
     emit("scope", "deriving research scopes");
-    const scopes = await deriveScopes(session, userTurn, opts);
-    if (aborted()) return { ...result, aborted: true };
+    const scopes = await deriveScopes(session, userTurn, mopts);
+    if (aborted()) return { ...result, costUsd: totalCost(), aborted: true };
 
     emit("research", `dispatching ${scopes.length} researcher(s)`);
-    const { costUsd, digest } = await research(scopes, opts);
+    const { costUsd, digest } = await research(scopes, mopts);
     result.costUsd = costUsd;
-    if (aborted()) return { ...result, aborted: true };
+    if (aborted()) return { ...result, costUsd: totalCost(), aborted: true };
 
     emit("keeper", "checking findings against scope");
-    const keeperFindings = await keeperPostCheck(scopes, digest, opts);
-    if (aborted()) return { ...result, findings: keeperFindings, aborted: true };
+    const keeperFindings = await keeperPostCheck(scopes, digest, mopts);
+    if (aborted()) {
+      return { ...result, costUsd: totalCost(), findings: keeperFindings, aborted: true };
+    }
 
     emit("critic", "drafting and stress-testing the plan");
-    let draft = await draftPlan(session, userTurn, digest, keeperFindings, opts);
-    const critic = new Critic(opts.metaModel, { apiKey: opts.apiKey });
+    let draft = await draftPlan(session, userTurn, digest, keeperFindings, mopts);
+    const critic = new Critic(opts.metaModel, { apiKey: opts.apiKey, onCostUsd: mopts.onCostUsd });
     const maxPasses = Math.max(0, opts.maxCriticPasses ?? 3);
     const allFaults: Fault[] = [];
     for (let pass = 0; pass < maxPasses; pass++) {
@@ -759,36 +812,38 @@ export async function runCouncilRound(
       if (faults.length === 0) break;
       for (const f of faults) allFaults.push(f);
       if (aborted()) break;
-      draft = await reviseDraft(session.goal, draft, faults, digest, opts);
+      draft = await reviseDraft(session.goal, draft, faults, digest, mopts);
     }
     const faults = dedupFaults(allFaults);
     if (aborted()) {
       return {
         ...result,
+        costUsd: totalCost(),
         faults,
         findings: keeperFindings,
-        draftDelta: draft.trim(),
+        draft: draft.trim(),
         aborted: true,
       };
     }
 
     emit("synth", "synthesizing decisions and questions");
-    const synth = await synthesize(session, userTurn, draft, digest, keeperFindings, faults, opts);
+    const synth = await synthesize(session, userTurn, draft, digest, keeperFindings, faults, mopts);
 
     result.title = synth.title;
     result.refinedGoal = synth.goal;
-    result.draftDelta = synth.draftDelta || draft.trim();
+    result.draft = synth.plan || draft.trim();
     result.decisions = synth.decisions;
     result.findings = [...synth.findings, ...keeperFindings];
     result.faults = faults;
     result.questions = synth.questions.slice(0, 2);
     result.facts = synth.facts;
     result.constraints = synth.constraints;
+    result.costUsd = totalCost();
     result.aborted = aborted();
     emit("done", "council round complete");
     return result;
   } catch {
     // The whole round is best-effort: never break the /plan conversation loop.
-    return { ...result, aborted: aborted() };
+    return { ...result, costUsd: totalCost(), aborted: aborted() };
   }
 }

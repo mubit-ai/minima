@@ -49,3 +49,5 @@ export {
   shouldConveneCouncil,
 } from "./plan_council.ts";
 export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_council.ts";
+export { runPlanTurn } from "./plan_turn.ts";
+export type { PlanTurnDeps } from "./plan_turn.ts";

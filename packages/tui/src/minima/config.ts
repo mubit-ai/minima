@@ -45,6 +45,9 @@ export interface HarnessConfig {
   /** Ground-Truth ledger (staged, default OFF): persist/project the plan, attribute file
    * changes, and record verification gates. Gated by MINIMA_TUI_GROUND_TRUTH=1. */
   groundTruth: boolean;
+  /** Soft USD cap per plan-mode council round (MINIMA_PLAN_ROUND_BUDGET_USD). Read only by
+   * the groundTruth /plan workflow — inert on the default path. */
+  planRoundBudgetUsd: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -64,6 +67,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     cacheEnabled: false,
     cacheThreshold: 0.95,
     groundTruth: false,
+    planRoundBudgetUsd: 0.25,
     ...overrides,
   };
 }
@@ -78,6 +82,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(t)) cfg.timeout = t;
   }
   cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH === "1";
+  const roundBudgetEnv = process.env.MINIMA_PLAN_ROUND_BUDGET_USD;
+  if (roundBudgetEnv) {
+    const b = Number(roundBudgetEnv);
+    if (Number.isFinite(b) && b > 0) cfg.planRoundBudgetUsd = b;
+  }
   return { ...cfg, ...overrides };
 }
 
