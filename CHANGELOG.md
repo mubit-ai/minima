@@ -4,6 +4,40 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-07-12
+
+### Fixed
+- **Ground-truth spine hardened end-to-end** (still opt-in via `MINIMA_TUI_GROUND_TRUTH=1`):
+  - Gate verdicts now carry the `rec_id` of the turn that minted them, so grounded
+    feedback can never be poisoned by a stale gate from an earlier prompt, and a
+    blocked step's red verdict is superseded by its retry (content-first flip
+    identity). Plans close when their last flip is verified, instead of haunting
+    every later turn.
+  - Step identity survives rewording (token-set matching), a step's baseline resets
+    when its `verify` command changes (no fabricated red→green), and resuming a run
+    re-adopts its active plan.
+  - Bash writes and sub-agent writes are attributed to the run; unattributed
+    ("blind") writes cap confidence at 🟡 instead of silently passing.
+  - Check runner: verify commands run in their own process group and are killed as a
+    group on timeout/abort (no orphaned children), run under a minimal env allowlist,
+    and honor `MINIMA_TUI_CHECK_TIMEOUT`.
+  - `/plan` council: injected findings are fenced as untrusted data, the whole plan
+    turn aborts cleanly on Esc (partial research kept), and each council round is
+    budget-metered ($0.25/round soft cap).
+- **Default path** (no flag required): the SQLite migration runner is race-safe across
+  concurrent sessions and self-heals a previously wedged DB; a bash tool timeout/abort
+  kills the whole process group; a throwing after-hook no longer wedges the agent loop;
+  the `task` tool is blocked in plan mode.
+- Gate-focus modal: keyboard verdict overrides (approve / reject / steer with a note)
+  reach the correct gate, and the TUI footer/overlay no longer overflow on narrow
+  terminals.
+
+### Added
+- With `MINIMA_LLM_JUDGE=1`, judge grading spend is now booked to the session wallet —
+  visible in `/cost` (as `judge overhead`), the footer, and enforced by `--budget` —
+  while staying out of feedback's `actual_cost_usd` so the cost model Minima learns
+  from stays clean.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added
