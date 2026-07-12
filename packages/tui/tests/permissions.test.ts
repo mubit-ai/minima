@@ -292,8 +292,10 @@ describe("formatActionLabel", () => {
 });
 
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
-  test("GT off: deep-equal to the exact historical array — the default path must not change", () => {
-    expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch"]);
+  test("GT off: the historical array plus task (the approved default-path bypass fix)", () => {
+    // Deliberate default-path change: a spawned child gets its own unrestricted toolset with
+    // no permission hooks, so plan mode's read-only promise was bypassable by delegating.
+    expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch", "task"]);
   });
 
   test("GT on: keeps the historical set and additionally blocks todowrite and task", () => {
@@ -303,11 +305,12 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     expect(blocked).toContain("task");
   });
 
-  test("GT-off block reason is the historical copy, byte-identical", () => {
+  test("GT-off block reasons: historical copy for the classic four, a task-specific one", () => {
     expect(planModeBlockReason("write", false)).toBe(
       "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
     );
-    expect(planModeBlockReason("task", false)).toBe(planModeBlockReason("bash", false));
+    expect(planModeBlockReason("task", false)).toContain("task is blocked");
+    expect(planModeBlockReason("task", false)).toContain("unrestricted toolset");
   });
 
   test("GT-on task reason explains hook-free children + council read-only delegation", () => {

@@ -37,15 +37,20 @@ export type PermissionDecision = "allow" | "always" | "deny";
  * tool, so read-only research delegation stays available).
  */
 export function planModeBlockedTools(groundTruth: boolean): string[] {
+  // `task` is blocked in BOTH modes: a delegated child gets its own unrestricted toolset
+  // (write/edit/bash) with no permission hooks, so plan mode's read-only promise was
+  // trivially bypassable by delegating the write.
   return groundTruth
     ? ["write", "edit", "bash", "apply_patch", "todowrite", "task"]
-    : ["write", "edit", "bash", "apply_patch"];
+    : ["write", "edit", "bash", "apply_patch", "task"];
 }
 
 /** The block reason handed back to the model for a plan-mode-blocked tool call. */
 export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
   if (!groundTruth) {
-    return "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
+    return toolName === "task"
+      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). Use /plan to exit."
+      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
   }
   if (toolName === "task") {
     return (

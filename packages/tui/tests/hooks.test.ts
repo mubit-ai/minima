@@ -128,6 +128,28 @@ describe("Agent hook stacks", () => {
     reg.unregister();
   });
 
+  test("a throwing after-hook neither unwinds the batch nor leaks pendingToolCalls", async () => {
+    resetAll();
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([toolUseTurn("c1"), new AssistantMessage({ content: [text("ok")] })]);
+
+    const agent = new Agent({ model: reg.getModel(), tools: [echoTool()] });
+    agent.addAfterToolCall(async () => {
+      throw new Error("boom");
+    });
+
+    const events = collect(agent);
+    await agent.prompt("go");
+
+    // The turn completed with the raw tool result, and the batch cleanup ran: a leaked id
+    // here used to poison every later batch-keyed guard for the rest of the session.
+    const toolEnd = findToolEnd(events);
+    expect(toolEnd.isError).toBe(false);
+    expect(toolEnd.result?.content[0]).toMatchObject({ type: "text", text: "echo: ping" });
+    expect(agent.state.pendingToolCalls.size).toBe(0);
+    reg.unregister();
+  });
+
   test("after-hooks fold: later hooks see earlier modifications; returns accumulate", async () => {
     resetAll();
     const reg = registerFauxProvider([FAUX_MODEL]);

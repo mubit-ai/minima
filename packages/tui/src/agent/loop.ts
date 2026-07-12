@@ -374,16 +374,25 @@ async function runOneTool(
   }
 
   if (config.afterToolCall) {
-    const ar = await config.afterToolCall({
-      toolCall: p.tc,
-      result,
-      isError,
-      context: state,
-    } satisfies AfterToolCallContext);
-    if (ar) {
-      if (ar.terminate) result = { ...result, terminate: true };
-      if (ar.details) result = { ...result, details: { ...(result.details ?? {}), ...ar.details } };
-      if (ar.content) result = { ...result, content: ar.content };
+    // A throwing after-hook must not unwind the batch: with Promise.all a single throw
+    // rejected the whole executeToolCalls pass BEFORE any completion entry ran its
+    // pendingToolCalls.delete, leaking the ids for the rest of the session (hooks are
+    // bookkeeping; enforcement lives in beforeToolCall).
+    try {
+      const ar = await config.afterToolCall({
+        toolCall: p.tc,
+        result,
+        isError,
+        context: state,
+      } satisfies AfterToolCallContext);
+      if (ar) {
+        if (ar.terminate) result = { ...result, terminate: true };
+        if (ar.details)
+          result = { ...result, details: { ...(result.details ?? {}), ...ar.details } };
+        if (ar.content) result = { ...result, content: ar.content };
+      }
+    } catch {
+      // degrade to the raw tool result
     }
   }
 
