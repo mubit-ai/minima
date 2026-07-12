@@ -195,6 +195,40 @@ describe("ledgerBehavior", () => {
     expect(ledgerBehavior(d, "run1").block).toBeNull();
   });
 
+  test("one answer records exactly one user_signal against the focused gate", () => {
+    const d = db();
+    const { planId, stepIds } = seedPlan(d, "run1", [RED]);
+    const red = d.getGates(planId).find((g) => g.step_id === stepIds[0]);
+    d.recordUserSignal(red!.id, "accept");
+    expect(d.getUserSignals(red!.id)).toHaveLength(1);
+    expect(d.getUserSignals(red!.id)[0]!.action).toBe("accept");
+  });
+
+  // The modal's steer path (`answerGate(gateId, "steer", note)`) lands the note in
+  // user_signals.note; the skipped-note path records the same steer with a null note.
+  test("a steer answer carries its note into user_signals.note and resolves the block", () => {
+    const d = db();
+    const { planId, stepIds } = seedPlan(d, "run1", [RED]);
+    const red = d.getGates(planId).find((g) => g.step_id === stepIds[0]);
+    d.recordUserSignal(red!.id, "steer", "try the fixture path first");
+    const signals = d.getUserSignals(red!.id);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.action).toBe("steer");
+    expect(signals[0]!.note).toBe("try the fixture path first");
+    expect(ledgerBehavior(d, "run1").block).toBeNull();
+  });
+
+  test("a steer with a skipped note records a null note (still exactly one signal)", () => {
+    const d = db();
+    const { planId, stepIds } = seedPlan(d, "run1", [RED]);
+    const red = d.getGates(planId).find((g) => g.step_id === stepIds[0]);
+    d.recordUserSignal(red!.id, "steer", null);
+    const signals = d.getUserSignals(red!.id);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.note).toBeNull();
+    expect(ledgerBehavior(d, "run1").block).toBeNull();
+  });
+
   test("the newest gate per step supersedes an earlier one (a retry clears a red)", () => {
     const d = db();
     const { planId, stepIds } = seedPlan(d, "run1", [null]);
@@ -283,8 +317,9 @@ describe("tui/app.tsx wires tier→behavior", () => {
   test("the note is yellow and the block prompt is red — one truncated row each", () => {
     expect(src).toContain('<Text color="yellow" wrap="truncate-end">');
     expect(src).toContain('<Text color="red" bold wrap="truncate-end">');
-    // Both rows are budgeted into footerHeight so the chat window shrinks instead of clipping.
-    expect(src).toContain("const gtRows = (gtFooterNote ? 1 : 0) + (gtBlock ? 1 : 0)");
+    // Both rows are budgeted into footerHeight (via the gtFooterFit grant) so the chat window
+    // shrinks instead of clipping.
+    expect(src).toContain("const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0)");
     expect(src).toContain("+ gtRows");
   });
 
@@ -301,12 +336,56 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("confidence: gateConfidence(red)");
   });
 
-  // M6.3: the 🔴 block captures the override into user_signals, only at an empty prompt so bare
-  // letters still type normally; v shows the /why detail without recording a signal.
-  test("M6.3: the 🔴 block captures a/r/s into user_signals at an empty prompt", () => {
-    expect(src).toContain("gtDb.recordUserSignal(gtBlock.gateId, action)");
-    expect(src).toContain('typedText.trim() === ""');
-    expect(src).toContain('input === "a" ? "accept"');
+  // M6.3: the 🔴 block captures the override through the gate-focus modal. While armed, the
+  // TextInput renders disabled, so a/r/s/v/Esc reach only the gate handler — the empty-prompt
+  // heuristic (and its double-type hole: Ink dispatches every key to ALL useInput hooks) is gone.
+  test("M6.3: the gate-focus modal captures a/r/s into user_signals — no empty-prompt guard", () => {
+    expect(src).toContain('answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null)');
+    expect(src).toContain("agent.db?.recordUserSignal(gateId, action, note)");
+    expect(src).not.toContain('typedText.trim() === ""');
+  });
+
+  test("gateFocus can only arm when gtBehavior.block exists (default path inert)", () => {
+    const armIdx = src.indexOf("const gtBlockId = gtBehavior?.block?.gateId ?? null");
+    expect(armIdx).toBeGreaterThan(-1);
+    const effect = src.slice(armIdx, armIdx + 500);
+    // A null block always DISARMS; arming requires the non-null gateId (and an idle prompt).
+    expect(effect).toContain("if (gtBlockId === null) {");
+    expect(effect).toContain("setGateFocus(null)");
+    expect(effect).toContain("if (busy || gtBlockId === dismissedGateRef.current) return;");
+    // The ctrl+g re-arm is likewise gated on a live block.
+    expect(src).toContain('if (key.ctrl && input === "g" && gtBehavior?.block) {');
+  });
+
+  test("while armed the prompt input is disabled and shows the answer-key hint", () => {
+    expect(src).toContain("disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}");
+    expect(src).toContain("[a]ccept · [r]eject · [s]teer · [v]iew · esc to type");
+  });
+
+  test("Esc while armed dismisses without recording; steer switches to note entry", () => {
+    const gateIdx = src.indexOf("if (gateFocus && gtDb && !key.ctrl && !key.meta) {");
+    expect(gateIdx).toBeGreaterThan(-1);
+    const branch = src.slice(gateIdx, src.indexOf("if (key.ctrl && input ===", gateIdx));
+    // Esc: remember the dismissal and clear focus — no signal write in that path.
+    const escIdx = branch.indexOf("if (key.escape) {");
+    expect(escIdx).toBeGreaterThan(-1);
+    const escBranch = branch.slice(escIdx, branch.indexOf("}", escIdx + 20));
+    expect(escBranch).toContain("dismissedGateRef.current = gateFocus.gateId");
+    expect(escBranch).not.toContain("answerGate");
+    expect(escBranch).not.toContain("recordUserSignal");
+    // Steer: flip to the note-entry sub-state; the note lands via answerGate(…, "steer", …).
+    expect(branch).toContain("setGateFocus({ gateId: gateFocus.gateId, noteEntry: true })");
+    expect(src).toContain('answerGate(gateFocus.gateId, "steer", text.trim() || null)');
+    expect(src).toContain('answerGate(gateFocus.gateId, "steer", null)');
+  });
+
+  test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
+    const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
+    expect(input).toContain("if (disabled) return;");
+    expect(input).toContain("if (key.ctrl || key.meta) return;");
+    // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
+    expect(input).toContain('disabledLabel ?? "(busy…)"');
+    expect(input).toContain('<Text wrap="truncate">');
   });
 
   // M7.1: /gt-seed gives the run a routing decision then stamps the grounded outcome onto it, so

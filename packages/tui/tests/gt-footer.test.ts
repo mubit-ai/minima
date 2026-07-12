@@ -25,9 +25,33 @@ describe("tui/app.tsx wires the GT footer strip", () => {
     expect(src).toContain('<Text color="yellow">{planStripDrift(planStrip.drift)}</Text>');
   });
 
-  test("the strip is one truncated line so it costs exactly one footer row", () => {
+  test("the strip is one truncated line, granted by gtFooterFit in lockstep with footerHeight", () => {
     expect(src).toContain('wrap="truncate-end"');
-    expect(src).toContain("+ (planStrip ? 1 : 0)");
+    // Reservation and render both derive from the SAME fit result so they can never drift:
+    // footerHeight counts the strip via gtFit.strip, and the render is gated on the same flag.
+    expect(src).toContain("(gtFit.strip ? 1 : 0)");
+    expect(src).toContain("{planStrip && gtFit.strip && (");
+  });
+
+  test("all three GT rows render only when gtFooterFit grants them (reservation/render lockstep)", () => {
+    expect(src).toContain("const gtFit = gtFooterFit(gtBudget, {");
+    expect(src).toContain("{gtFooterNote && gtFit.note && (");
+    expect(src).toContain("{gtBlock && gtFit.block && (");
+    expect(src).toContain("const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0)");
+  });
+
+  test("the too-small guard is unchanged (default-path pin)", () => {
+    expect(src).toContain("if (rows < 10 || cols < 40) {");
+  });
+
+  test("gtBudget subtracts the scrollback safety margin and the input-box floor", () => {
+    const idx = src.indexOf("const gtBudget =");
+    expect(idx).toBeGreaterThan(-1);
+    const expr = src.slice(idx, idx + 200);
+    // The two constants that keep inline mode from tripping Ink's scrollback-wiping
+    // clearTerminal: the safety margin and the (plan-mode-aware) input-box floor.
+    expect(expr).toContain("SCROLLBACK_SAFETY_ROWS");
+    expect(expr).toContain("planMode ? 7 : 4");
   });
 
   test("refresh + seed are gated on groundTruth === true", () => {
