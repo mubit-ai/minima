@@ -114,7 +114,8 @@ describe("MinimaDb schema + lifecycle", () => {
   test("migrates to the latest schema with all core tables", () => {
     const db = new MinimaDb(":memory:");
     // v1 spine + v2 budgets/provenance + v3 plans + v4 file_changes + v5 verification
-    expect(db.schemaVersion).toBe(5);
+    // + v6 gate identity (rec_id/session_id/agent_id + closed_at/verify_cwd/note)
+    expect(db.schemaVersion).toBe(6);
     for (const t of [
       "projects",
       "runs",

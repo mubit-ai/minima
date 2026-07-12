@@ -205,6 +205,22 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN gt_verified_by TEXT",
     "ALTER TABLE routing_decisions ADD COLUMN gt_confidence TEXT",
   ],
+  // v6 — gate identity: rec_id scopes every gate row to the routed rung that minted it
+  // (NULL = pre-identity/manual, invisible to the feedback join by construction);
+  // session_id/agent_id are reporting/provenance only, never feedback inputs. plans.closed_at
+  // records closure; plan_steps.verify_cwd is a seam for per-check cwd policy (no writer yet);
+  // user_signals.note carries the steer key's free text.
+  [
+    "ALTER TABLE gates ADD COLUMN rec_id TEXT",
+    "ALTER TABLE gates ADD COLUMN session_id TEXT",
+    "ALTER TABLE gates ADD COLUMN agent_id TEXT",
+    "ALTER TABLE file_changes ADD COLUMN agent_id TEXT",
+    "ALTER TABLE plans ADD COLUMN closed_at REAL",
+    "ALTER TABLE plan_steps ADD COLUMN verify_cwd TEXT",
+    "ALTER TABLE user_signals ADD COLUMN note TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_gates_rec ON gates(rec_id)",
+    "CREATE INDEX IF NOT EXISTS ix_gates_session ON gates(session_id, created_at)",
+  ],
 ];
 
 export interface RunRow {
@@ -268,6 +284,7 @@ export interface PlanRow {
   title: string | null;
   status: string | null;
   created_at: string | null;
+  closed_at: number | null;
 }
 
 export interface PlanStepRow {
@@ -279,6 +296,7 @@ export interface PlanStepRow {
   verify: string | null;
   baseline: Baseline | null;
   created_at: string | null;
+  verify_cwd: string | null;
 }
 
 export interface FileChangeRow {
@@ -289,6 +307,7 @@ export interface FileChangeRow {
   kind: string | null;
   origin: string | null;
   created_at: string | null;
+  agent_id: string | null;
 }
 
 export interface GateRow {
@@ -301,6 +320,9 @@ export interface GateRow {
   verified_by: VerifiedBy | null;
   factors_json: string | null;
   created_at: string | null;
+  rec_id: string | null;
+  session_id: string | null;
+  agent_id: string | null;
 }
 
 export interface UserSignalRow {
@@ -308,6 +330,7 @@ export interface UserSignalRow {
   gate_id: string | null;
   action: UserAction | null;
   at: string | null;
+  note: string | null;
 }
 
 /** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
@@ -681,7 +704,10 @@ export class MinimaDb {
   }
 
   setPlanStatus(planId: string, status: string): void {
-    this.db.run("UPDATE plans SET status = ? WHERE id = ?", [status, planId]);
+    this.db.run(
+      "UPDATE plans SET status = ?, closed_at = CASE WHEN ? = 'active' THEN NULL ELSE COALESCE(closed_at, ?) END WHERE id = ?",
+      [status, status, Date.now() / 1000, planId],
+    );
   }
 
   /** M0.3: insert one step. Returns its id. */
@@ -767,7 +793,7 @@ export class MinimaDb {
    * enforces one todowrite per assistant message (ground_truth.ts same-batch guard).
    */
   completionsForTodos(sessionId: string, tasks: TodoInput[]): CompletionFlip[] {
-    const plan = this.getActivePlan(sessionId);
+    const plan = this.planForTodos(sessionId, tasks);
     const nextMatch = this.stepMatcher(plan ? this.getPlanSteps(plan.id) : []);
     const flips: CompletionFlip[] = [];
     for (const t of tasks) {
@@ -799,12 +825,33 @@ export class MinimaDb {
    * once-only). Each entry carries the post-COALESCE effective `verify` (may be null —
    * filtering verify-less steps is the caller's job).
    */
+  /**
+   * The plan a todowrite would apply to — the active plan, else (reopen over resurrect) the
+   * session's latest DONE plan when the incoming contents overlap it, so sticky verify/baseline
+   * survive a reopen-after-completion cycle while a disjoint list starts fresh. SHARED by
+   * completionsForTodos and upsertPlanFromTodos: the done-gate's preview must resolve the same
+   * plan the upsert will, or resends of a completed list would preview as brand-new flips.
+   */
+  private planForTodos(sessionId: string, tasks: TodoInput[]): PlanRow | null {
+    const active = this.getActivePlan(sessionId);
+    if (active) return active;
+    const latest = this.getLatestPlan(sessionId);
+    if (latest && latest.status === "done") {
+      const contents = new Set(this.getPlanSteps(latest.id).map((s) => (s.content ?? "").trim()));
+      if (tasks.some((t) => contents.has(t.content.trim()))) return latest;
+    }
+    return null;
+  }
+
   upsertPlanFromTodos(
     sessionId: string,
     tasks: TodoInput[],
     title?: string | null,
   ): { planId: string; stepIds: string[]; started: { id: string; verify: string | null }[] } {
-    const existingPlan = this.getActivePlan(sessionId);
+    const existingPlan = this.planForTodos(sessionId, tasks);
+    if (existingPlan && existingPlan.status === "done") {
+      this.setPlanStatus(existingPlan.id, "active");
+    }
     const planId =
       existingPlan?.id ??
       this.insertPlan({ sessionId, title: title ?? tasks[0]?.content ?? null, status: "active" });
@@ -902,10 +949,13 @@ export class MinimaDb {
     confidence?: ConfidenceTier | null;
     verifiedBy?: VerifiedBy | null;
     factors?: unknown;
+    recId?: string | null;
+    sessionId?: string | null;
+    agentId?: string | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO gates (id, plan_id, step_id, kind, outcome, confidence, verified_by, factors_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO gates (id, plan_id, step_id, kind, outcome, confidence, verified_by, factors_json, created_at, rec_id, session_id, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId ?? null,
@@ -916,6 +966,9 @@ export class MinimaDb {
         opts.verifiedBy ?? null,
         opts.factors === undefined ? null : JSON.stringify(opts.factors),
         new Date().toISOString(),
+        opts.recId ?? null,
+        opts.sessionId ?? null,
+        opts.agentId ?? null,
       ],
     );
     return id;
@@ -927,14 +980,22 @@ export class MinimaDb {
       .all(planId) as GateRow[];
   }
 
+  /** Every gate minted under one routed rung (rec_id), oldest first — the feedback join. */
+  getGatesForRec(recId: string): GateRow[] {
+    return this.db
+      .query("SELECT * FROM gates WHERE rec_id = ? ORDER BY created_at, rowid")
+      .all(recId) as GateRow[];
+  }
+
   /** M6.3: record a user override against a gate (accept|reject|steer). */
-  recordUserSignal(gateId: string, action: UserAction): string {
+  recordUserSignal(gateId: string, action: UserAction, note?: string | null): string {
     const id = newId();
-    this.db.run("INSERT INTO user_signals (id, gate_id, action, at) VALUES (?, ?, ?, ?)", [
+    this.db.run("INSERT INTO user_signals (id, gate_id, action, at, note) VALUES (?, ?, ?, ?, ?)", [
       id,
       gateId,
       action,
       new Date().toISOString(),
+      note ?? null,
     ]);
     return id;
   }

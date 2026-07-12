@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AfterToolCallContext, BeforeToolCallContext } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
   type Model,
@@ -12,6 +11,7 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
@@ -37,32 +37,14 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
+import { todowriteTool } from "../src/tools/todowrite.ts";
 
 // M8.2 — the ground-truth spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
 // /gt-seed / seedPlan pattern) to pin the full footer snapshot — tiers, drift, and the M7.1 stamp —
-// in one glance. Test 2 is the live-gate join: the plan, the red baseline, and every gate row are
-// written by the real todowrite hooks (before-gate + after-sink) running a real check, while the
-// M7.2/M7.3 route→run→feedback→escalation loop runs against an in-memory MinimaDb + faux provider.
-
-// Hook-context builders — the gate reads only toolCall + args / isError (same shape gate.test.ts uses).
-function bctx(todos: unknown[], id: string): BeforeToolCallContext {
-  const args = { tasks: JSON.stringify(todos) };
-  return {
-    toolCall: { type: "toolCall", id, name: "todowrite", arguments: args },
-    args,
-  } as unknown as BeforeToolCallContext;
-}
-function actx(todos: unknown[], id: string): AfterToolCallContext {
-  return {
-    toolCall: {
-      type: "toolCall",
-      id,
-      name: "todowrite",
-      arguments: { tasks: JSON.stringify(todos) },
-    },
-    isError: false,
-  } as unknown as AfterToolCallContext;
-}
+// in one glance. Test 2 is the live-gate join: the hooks are REGISTERED on the agent and every gate
+// row is minted during real tool dispatch inside a routed rung, so it carries that rung's rec_id
+// (the v6 identity join), while the M7.2/M7.3 route→run→feedback→escalation loop runs against an
+// in-memory MinimaDb + faux provider.
 
 const GREEN: Factors = {
   pass: true,
@@ -98,6 +80,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       confidence: gateConfidence(GREEN),
       verifiedBy: "deterministic",
       factors: GREEN,
+      recId: "seed-rec",
+      sessionId: runId,
     });
     db.insertGate({
       planId,
@@ -106,6 +90,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       confidence: gateConfidence(YELLOW),
       verifiedBy: "deterministic",
       factors: YELLOW,
+      recId: "seed-rec",
+      sessionId: runId,
     });
     db.insertGate({
       planId,
@@ -114,6 +100,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       confidence: gateConfidence(RED),
       verifiedBy: "deterministic",
       factors: RED,
+      recId: "seed-rec",
+      sessionId: runId,
     });
     // An off-plan edit → drift.
     db.insertFileChange({
@@ -159,9 +147,9 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       turns: 1,
       latencyMs: 1,
     });
-    stampGroundedOutcome(db, runId, "seed-rec");
+    stampGroundedOutcome(db, "seed-rec");
     const dec = db.getRunDecisions(runId).find((r) => r.rec_id === "seed-rec")!;
-    expect(dec.gt_outcome).toBe("failed"); // the most-recent gate (red) is the grounded verdict
+    expect(dec.gt_outcome).toBe("failed"); // identity join over the rec's gates — the red wins
     expect(dec.gt_verified_by).toBe("deterministic");
     expect(dec.gt_confidence).toBe("red");
     db.close();
@@ -246,10 +234,6 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     registerModel(CHEAP);
     registerModel(BIG);
     const reg = registerFauxProvider([CHEAP, BIG]);
-    reg.setResponses([
-      new AssistantMessage({ content: [text("attempt on cheap")] }),
-      new AssistantMessage({ content: [text("fixed on big")] }),
-    ]);
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
     const config = harnessConfig({
       candidates: ["cheap-model", "big-model"],
@@ -263,7 +247,7 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       router,
       judge: new ConstJudge(0.9),
       meter: new CostMeter(),
-      tools: [],
+      tools: [todowriteTool([], { groundTruth: true })],
     });
     agent.db = db;
     agent.runId = db.startRun({ projectKey: "p" });
@@ -274,33 +258,44 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     const dir = mkdtempSync(join(tmpdir(), "gt-e2e-"));
     const flag = join(dir, "done.flag");
     const { before: beforeGate, after: afterGate } = groundTruthHooks(agent);
+    agent.addBeforeToolCall(beforeGate);
+    agent.addAfterToolCall(afterGate);
     const start = [
       { content: "wire the endpoint", status: "in_progress", verify: `test -f ${flag}` },
     ];
     const done = [{ content: "wire the endpoint", status: "completed", verify: `test -f ${flag}` }];
 
-    // Turn 1: the plan lands through the sink, which captures the pre-work baseline (flag absent → red).
-    expect(await beforeGate(bctx(start, "tc-plan"))).toBeNull();
-    await afterGate(actx(start, "tc-plan"));
-    const plan = db.getActivePlan(agent.runId)!;
-    const step = db.getPlanSteps(plan.id)[0]!;
-    expect(step.baseline).toBe("red");
-
-    // Turn 2: the cheap rung claims completion while the check is still red — the done-gate
-    // blocks the todowrite and records the failed attempt (M4.1): the grounded 🔴 the ladder sees.
-    const blocked = await beforeGate(bctx(done, "tc-red"));
-    expect(blocked?.block).toBe(true);
-    expect(blocked?.reason).toContain("Step not verified");
-
-    // The escalation rung "does the work": the check goes green and the retried todowrite passes
-    // the gate — the verdict parks in the before-hook and lands as a verified row in the after-hook.
+    // Rung 1 (cheap, rec-1): the plan lands through the sink (pre-work baseline: flag absent →
+    // red), then the rung claims completion while the check is still red — the done-gate blocks
+    // the todowrite mid-dispatch and records the failed attempt under rec-1 (M4.1): the grounded
+    // 🔴 the ladder sees. Rung 2 (big, rec-2): the escalation "does the work" (flag created
+    // below) and the retried todowrite passes the gate — the verified row lands under rec-2.
     onEscalationRung = async () => {
       writeFileSync(flag, "ok\n");
-      expect(await beforeGate(bctx(done, "tc-green"))).toBeNull();
-      await afterGate(actx(done, "tc-green"));
     };
+    reg.setResponses([
+      new AssistantMessage({
+        content: [toolCall("tc-plan", "todowrite", { tasks: JSON.stringify(start) })],
+        stop_reason: "toolUse",
+      }),
+      new AssistantMessage({
+        content: [toolCall("tc-red", "todowrite", { tasks: JSON.stringify(done) })],
+        stop_reason: "toolUse",
+      }),
+      new AssistantMessage({ content: [text("blocked on cheap")] }),
+      new AssistantMessage({
+        content: [toolCall("tc-green", "todowrite", { tasks: JSON.stringify(done) })],
+        stop_reason: "toolUse",
+      }),
+      new AssistantMessage({ content: [text("fixed on big")] }),
+    ]);
 
     const routing = await agent.promptRouted("do the thing");
+
+    const plan = db.getLatestPlan(agent.runId)!;
+    const step = db.getPlanSteps(plan.id)[0]!;
+    expect(step.baseline).toBe("red"); // captured before the flag existed
+    expect(plan.status).toBe("done"); // 99B: the completing after-hook closed the plan
 
     // Escalated exactly once, recovered on the bigger model.
     expect(routing?.chosenModelId).toBe("big-model");
@@ -312,6 +307,7 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     const gateRows = db.getGates(plan.id);
     expect(gateRows.map((g) => g.outcome)).toEqual(["failed", "verified"]);
     expect(gateRows.map((g) => g.step_id)).toEqual([step.id, step.id]);
+    expect(gateRows.map((g) => g.rec_id)).toEqual(["rec-1", "rec-2"]); // minted inside their rungs
     const passFactors = JSON.parse(gateRows[1]!.factors_json!) as Record<string, unknown>;
     expect(passFactors.redToGreen).toBe(true); // measured against the captured baseline
     expect(db.getPlanSteps(plan.id)[0]!.status).toBe("completed");

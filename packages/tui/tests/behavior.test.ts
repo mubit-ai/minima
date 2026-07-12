@@ -313,6 +313,8 @@ describe("tui/app.tsx wires tier→behavior", () => {
   // the DB query in the issue's "see it work" shows gt_* attached to the model.
   test("M7.1: /gt-seed writes a routing decision and stamps the grounded outcome", () => {
     expect(src).toContain("agent.db.writeDecision({");
-    expect(src).toContain("stampGroundedOutcome(agent.db, agent.runId, seedRecId)");
+    expect(src).toContain("stampGroundedOutcome(agent.db, seedRecId)");
+    // Identity join: seeded gate rows must carry the rec they stamp (v6 gates.rec_id).
+    expect(src).toContain("recId: seedRecId");
   });
 });
