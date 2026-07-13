@@ -186,15 +186,22 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 **Exit gate:** tests + 2 shots committed. ✅
 
-### B2 — Plan↔Build primary agents on Tab *(borrow #5 · M)* — *new Linear issue*
+### B2 — Plan↔Build primary agents on Shift+Tab *(borrow #5 · M)* — MUB-135
+
+> **Amended (2026-07-13):** cycle key is **Shift+Tab** (Tab stays composer autocomplete); the
+> thinking-level cycle that lived on Shift+Tab moved to **Ctrl+E**. The badge shows **PLAN
+> only** — build leaves the shared Phase-0 slot free for Track A guard flags (the old row-1
+> `[PLAN]` StatusBar segment was removed; the badge replaces it). Plan-mode "ask"
+> **outranks** an `allowAlways` grant by design (the prompt is prefixed
+> "plan mode — asks every time:" so the recurring ask is self-explaining).
 
 | # | Step | Verify |
 |---|---|---|
-| B2.1 | Two primary agents as **PolicyBundles**: Plan = `{edit, write, apply_patch, bash: ask}` + read/grep/glob/ls allowed; Build = current defaults. **Tab** cycles; mode is read by `beforeToolCall` via Phase-0 grammar | policy resolution tests |
-| B2.2 | Footer **mode badge** (PLAN/BUILD) in the Phase-0 slot | PTY shots of Tab toggle, both renderers |
-| B2.3 | Escape-hatch hint in system prompt: "if you could describe the diff in one sentence, skip the plan" (advisory, not a hard rule) | prompt snapshot test |
+| B2.1 | Two primary agents as **PolicyBundles** (`src/agent/modes.ts`): Plan = write/edit/apply_patch/bash → **ask** (was hard deny — decided change), catch-all allow first (last-match-wins); Build = catch-all allow → normal permission flow. Mode = external store (badge_slot pattern); `beforeToolCall` = `makeModeGatedBeforeToolCall` in `src/tui/permissions.ts` (deny → block w/ policy reason · ask → `GuardEvent(mode-ask)` + forced prompt · allow → `checkPermission`) | policy resolution + forcePrompt + factory tests |
+| B2.2 | Footer badge `[PLAN]` in the Phase-0 slot (build = empty); Shift+Tab cycles; `/plan` = same toggle | PTY shots of the toggle, both renderers |
+| B2.3 | Escape-hatch hint appended per-turn in `promptRouted` (mode-conditional, restored in `finally`; "" in build → headless unchanged) | prompt snapshot test (`PLAN_ESCAPE_HATCH` verbatim) |
 
-**Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed.
+**Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed. ✅
 
 ### B3 — Git-shadow checkpoints *(decided design · L)* — *new Linear issue*
 
@@ -353,7 +360,7 @@ U1 → U2/U3.
 | A6 allowlist + task perms + poka-yoke | A | M | ⬜ |
 | A7 learning loop | A | M | ⬜ |
 | B1 named sessions + status line | B | S | ✅ |
-| B2 Plan↔Build on Tab | B | M | ⬜ |
+| B2 Plan↔Build on Shift+Tab | B | M | ✅ |
 | B3 git-shadow checkpoints | B | L | ⬜ |
 | B4 /undo | B | M | ⬜ |
 | B5 /rewind | B | M | ⬜ |

@@ -75,13 +75,8 @@ export function StatusBar({
       <Box>
         <Box flexGrow={1}>
           <Text wrap="truncate">
-            {planMode && (
-              <Text color="yellow" bold>
-                {" "}
-                [PLAN]{" "}
-              </Text>
-            )}
-
+            {/* B2: the [PLAN] indicator moved to the right-anchored badge slot (same row) —
+                app.tsx sets it via setFooterBadge, so no duplicate segment here. */}
             <Text color="gray"> model: </Text>
             <Text color={modelStyle}>
               {model} ▸ {basis}
@@ -148,7 +143,7 @@ export function StatusBar({
         ) : (
           <Text color="gray"> · w/e/b: ask</Text>
         )}
-        {planMode && <Text color="magenta"> · PLAN (ro)</Text>}
+        {planMode && <Text color="magenta"> · PLAN (ask)</Text>}
       </Text>
     </Box>
   );

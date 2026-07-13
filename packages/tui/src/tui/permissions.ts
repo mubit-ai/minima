@@ -15,6 +15,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
+import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
 
 // Read-only tools: gated by a first-use, directory-scoped prompt (see checkPermission). glob/grep
@@ -100,20 +102,35 @@ export function formatActionLabel(toolName: string, args: unknown): string {
 
 export type PromptFn = (prompt: PermissionPrompt) => void;
 
+export interface CheckPermissionOpts {
+  /**
+   * Plan-mode "ask" (B2): skip the no-prompt / allowAlways / allowed-dir short-circuits and
+   * go straight to the interactive prompt. An "always" answer still records the grant (it
+   * pays off in build mode), but the mode rule keeps outranking it — the next forced call
+   * prompts again.
+   */
+  forcePrompt?: boolean;
+  /** Prefix for the overlay's prompt text, e.g. "plan mode — asks every time: ". */
+  promptTextPrefix?: string;
+}
+
 export function checkPermission(
   toolName: string,
   args: Record<string, unknown>,
   state: PermissionState,
   promptFn: PromptFn,
+  opts: CheckPermissionOpts = {},
 ): Promise<{ block: boolean; reason: string } | null> {
-  // Zero-side-effect UI tools (e.g. question): never prompt.
-  if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
+  if (!opts.forcePrompt) {
+    // Zero-side-effect UI tools (e.g. question): never prompt.
+    if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
 
-  // Tool globally allowed (write/edit/bash with "always")
-  if (state.allowAlways.has(toolName)) return Promise.resolve(null);
+    // Tool globally allowed (write/edit/bash with "always")
+    if (state.allowAlways.has(toolName)) return Promise.resolve(null);
+  }
 
   // For read-only tools (read/ls/glob/grep): check directory-level access
-  if (READ_TOOLS.has(toolName)) {
+  if (!opts.forcePrompt && READ_TOOLS.has(toolName)) {
     const rawPath = extractPath(args);
     if (!rawPath) return Promise.resolve(null);
 
@@ -146,13 +163,13 @@ export function checkPermission(
     });
   }
 
-  // Sensitive tools (write/edit/bash): always prompt
+  // Sensitive tools (write/edit/bash) — or any forced prompt (plan-mode "ask"): always prompt
   const diffPreview = buildDiffPreview(toolName, args, state.cwd);
   return new Promise((resolve) => {
     promptFn({
       toolName,
       argsSummary: formatToolArgs(toolName, args),
-      promptText: `run ${toolName}`,
+      promptText: `${opts.promptTextPrefix ?? ""}run ${toolName}`,
       diffPreview,
       resolve: (decision) => {
         if (decision === "always") state.allowAlways.add(toolName);
@@ -164,6 +181,46 @@ export function checkPermission(
       },
     });
   });
+}
+
+/**
+ * The app's one beforeToolCall hook (B2): resolve the active mode's PolicyBundle first,
+ * then fall through to the normal permission flow.
+ *   deny  → block with a policy reason (fed back to the model)
+ *   ask   → GuardEvent(mode-ask) + forced prompt (outranks "always" grants)
+ *   allow → normal checkPermission flow (unchanged build-mode behavior)
+ * `getBundle` is injected so tests can pin a bundle and the app can read the live mode.
+ */
+export function makeModeGatedBeforeToolCall(deps: {
+  state: PermissionState;
+  promptFn: PromptFn;
+  getBundle: () => PolicyBundle;
+}): (ctx: BeforeToolCallContext) => Promise<BeforeToolCallResult | null> {
+  return async (ctx) => {
+    const toolName = ctx.toolCall.name;
+    const bundle = deps.getBundle();
+    const action = resolvePolicy(bundle, {
+      tool: toolName,
+      subject: formatToolArgs(toolName, ctx.args),
+    });
+    if (action === "deny") {
+      return {
+        block: true,
+        reason:
+          `The ${toolName} call is denied by the ${bundle.name} mode policy — a user ` +
+          "setting, not an environment restriction. Continue without it or ask the user " +
+          "to switch modes.",
+      };
+    }
+    if (action === "ask") {
+      emitGuardEvent({ kind: "mode-ask", detail: formatActionLabel(toolName, ctx.args) });
+      return checkPermission(toolName, ctx.args, deps.state, deps.promptFn, {
+        forcePrompt: true,
+        promptTextPrefix: `${bundle.name} mode — asks every time: `,
+      });
+    }
+    return checkPermission(toolName, ctx.args, deps.state, deps.promptFn);
+  };
 }
 
 function buildDiffPreview(

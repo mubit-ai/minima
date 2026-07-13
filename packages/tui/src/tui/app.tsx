@@ -10,6 +10,7 @@
 import { Box, Static, Text, useApp, useInput } from "ink";
 import React, { useEffect, useState, useRef, useCallback, useSyncExternalStore } from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import { bundleForMode, cycleMode, getMode, subscribeMode } from "../agent/modes.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -25,7 +26,7 @@ import { SessionManager, SessionStore, type SessionSummary, formatAge } from "..
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
-import { getFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
+import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
@@ -45,8 +46,8 @@ import { setMouseScrollCallback } from "./mouse-scroll.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
-  checkPermission,
   createPermissionState,
+  makeModeGatedBeforeToolCall,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
@@ -159,7 +160,7 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
-  { name: "plan", desc: "Toggle plan mode (read-only)" },
+  { name: "plan", desc: "Toggle plan mode (mutations ask first; Shift+Tab)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
@@ -705,16 +706,28 @@ export function HarnessApp({
     };
   }, [askUserRef]);
 
-  // Plan mode: read-only (blocks write/edit/bash)
-  const [planMode, setPlanMode] = useState(false);
+  // B2 (MUB-135): Plan/Build mode lives in an external store (src/agent/modes.ts) so the
+  // beforeToolCall hook, /plan, and Shift+Tab all share it. planMode stays derived — every
+  // downstream reader (input-box height, banner, StatusBar) is unchanged.
+  const mode = useSyncExternalStore(subscribeMode, getMode);
+  const planMode = mode === "plan";
   // Phase-0 footer badge slot (MUB-129): external store so guards/modes outside React set it.
   const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
-  const planModeRef = useRef(false);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
+  // Mode badge: [PLAN] in the shared slot while plan mode is on; build shows nothing (the
+  // slot stays free for Track A guard flags). Never clears a badge it didn't write
+  // (MINIMA_TUI_BADGE seeds survive until the first mode toggle).
+  const badgeOwnedRef = useRef(false);
   useEffect(() => {
-    planModeRef.current = planMode;
-  }, [planMode]);
+    if (mode === "plan") {
+      setFooterBadge({ text: "PLAN", color: "magenta" });
+      badgeOwnedRef.current = true;
+    } else if (badgeOwnedRef.current) {
+      setFooterBadge(null);
+      badgeOwnedRef.current = false;
+    }
+  }, [mode]);
 
   // Terminal sizing (rows/cols).
   const [rows, setRows] = useState(process.stdout.rows || 24);
@@ -776,27 +789,17 @@ export function HarnessApp({
     if (fullscreen && atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
-  // Wire the beforeToolCall permission hook.
-  // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
+  // Wire the beforeToolCall permission hook (B2): the active mode's PolicyBundle resolves
+  // first (plan → write/edit/bash/apply_patch ask, outranking "always" grants), then the
+  // normal permission flow. Deps stay [agent] — refs and module fns are stable.
   useEffect(() => {
-    agent.setBeforeToolCall(async (ctx) => {
-      if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash", "apply_patch"];
-        if (blocked.includes(ctx.toolCall.name)) {
-          return {
-            block: true,
-            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
-          };
-        }
-      }
-      const result = await checkPermission(
-        ctx.toolCall.name,
-        ctx.args,
-        permStateRef.current,
-        (prompt) => setPermPrompt(prompt),
-      );
-      return result;
-    });
+    agent.setBeforeToolCall(
+      makeModeGatedBeforeToolCall({
+        state: permStateRef.current,
+        promptFn: (prompt) => setPermPrompt(prompt),
+        getBundle: () => bundleForMode(getMode()),
+      }),
+    );
   }, [agent]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
@@ -1015,6 +1018,11 @@ export function HarnessApp({
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
     }
+    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build).
+    if (key.ctrl && input === "e") {
+      cycleThinkingLevel();
+      return;
+    }
     if (key.ctrl && input === "c") {
       if (quitArmed) exit();
       else {
@@ -1187,7 +1195,7 @@ export function HarnessApp({
           lines.push(`    ${perm}  ${t.padEnd(8)} ${status}`);
         }
         lines.push("");
-        lines.push(`  Plan mode: ${planMode ? "ON (read-only)" : "off"}`);
+        lines.push(`  Plan mode: ${planMode ? "ON (write/edit/bash ask first)" : "off"}`);
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name}` },
@@ -1399,8 +1407,7 @@ export function HarnessApp({
         break;
       }
       case "plan": {
-        const next = !planMode;
-        setPlanMode(next);
+        const next = cycleMode();
         setMessages((m) => [
           ...m,
           {
@@ -1409,9 +1416,10 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: next
-              ? "Plan mode ON — read-only (write/edit/bash blocked). Use /plan again to exit."
-              : "Plan mode OFF — full write access restored.",
+            text:
+              next === "plan"
+                ? "Plan mode ON — write/edit/bash/apply_patch ask first. Shift+Tab or /plan to exit."
+                : "Build mode — standard permissions.",
             toolName: "plan",
           },
         ]);
@@ -2276,7 +2284,7 @@ export function HarnessApp({
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold>
-                {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
               </Text>
             </Box>
           )}
@@ -2296,7 +2304,7 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={cycleThinkingLevel}
+              onShiftTab={() => cycleMode()}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy}
@@ -2365,6 +2373,10 @@ export function HarnessApp({
             <Text color="gray">Model </Text>
             <Text color="yellow">ctrl+r </Text>
             <Text color="gray">Route </Text>
+            <Text color="yellow">⇧tab </Text>
+            <Text color="gray">Mode </Text>
+            <Text color="yellow">ctrl+e </Text>
+            <Text color="gray">Reason </Text>
             <Text color="yellow">esc </Text>
             <Text color="gray">Abort</Text>
           </Box>
