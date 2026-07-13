@@ -40,13 +40,14 @@ export const VERIFIED_BY = ["deterministic", "judge", "user"] as const;
 export type VerifiedBy = (typeof VERIFIED_BY)[number];
 
 /**
- * Kind of gate — `gates.kind`. `stop` (A2): a plan-level row written when the run-level stop-gate
+ * Kind of gate — `gates.kind`. `stop` (A2/A3): a plan-level row written when the run-level stop-gate
  * denies the agent's attempt to END the run with unfinished/failing steps and, after N strikes,
- * lets it stop anyway. Audit-only — written with `recId: null` so it is invisible to the feedback
- * join by construction (never inflates or fails a routed rung); the real per-step evidence lives in
- * the `step_check` rows it summarises.
+ * lets it stop anyway (also A3's doom-loop / step-cap stops). `recovery` (A4): a row recording a
+ * failure-kind recovery decision (backoff / replan) taken between ladder rungs. Both are audit-only
+ * — written with `recId: null` so they are invisible to the feedback join by construction (never
+ * inflate or fail a routed rung); the real per-step evidence lives in the `step_check` rows.
  */
-export const GATE_KINDS = ["step_check", "milestone", "stop"] as const;
+export const GATE_KINDS = ["step_check", "milestone", "stop", "recovery"] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
 /** Pre-work baseline captured when a step starts — `plan_steps.baseline` (M3.3). */

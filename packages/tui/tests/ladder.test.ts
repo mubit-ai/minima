@@ -355,7 +355,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     db.close();
   });
 
-  test("a persistent RED check walks every rung", async () => {
+  test("a persistent RED check walks every rung — escalate once, then replan (A4)", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
@@ -380,10 +380,27 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
       new AssistantMessage({ content: [text("3")] }),
     ]);
     await agent.promptRouted("hard");
-    // 1 + 2 retries, like a judge that fails every rung — the red gate never clears.
+    // Still walks every rung (1 + 2 retries). A4: the FIRST red escalates (a stronger model might
+    // fix it); once the red persists across rungs the approach — not the model — is at fault, so
+    // the ladder REPLANS the remaining rungs (keep the model, inject a plan-revision steer) instead
+    // of burning more model swaps.
+    // 3 rungs = attempts 0,1,2. Only 0 and 1 recover (the last has no rung left): attempt 0's
+    // first red escalates, attempt 1's persistent red replans; attempt 2 just ends.
     expect(svc.recommendCalls).toHaveLength(3);
-    expect(agent.ladderEscalations).toBe(2);
+    expect(agent.ladderEscalations).toBe(1);
+    expect(agent.ladderReplans).toBe(1);
+    // All 3 rungs still send failure feedback (replan/escalate never suppress a real check-fail);
+    // the length pin guards against a regression silently dropping a rung via transient-suppression.
+    expect(svc.feedbackCalls).toHaveLength(3);
     expect(svc.feedbackCalls.every((f) => (f as any).outcome === "failure")).toBe(true);
+    // The replan left one audit-only `recovery` gate (rec_id NULL → invisible to the feedback join).
+    const recoveries = db.getGates(planId).filter((g) => g.kind === "recovery");
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]!.rec_id).toBeNull();
+    expect(recoveries[0]!.confidence).toBe("red");
+    expect(JSON.parse(recoveries[0]!.factors_json ?? "{}")).toMatchObject({
+      intervention: "replan",
+    });
     reg.unregister();
     db.close();
   });

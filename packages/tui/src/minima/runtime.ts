@@ -22,8 +22,23 @@ import { AssistantMessage } from "../ai/types.ts";
 import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
+import {
+  type AntiSpiralGate,
+  DoomLoopRing,
+  makeAntiSpiral,
+  ringCapacityForRepeats,
+  toolCallFailed,
+} from "./anti_spiral.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
+import {
+  type FailureDecision,
+  type Intervention,
+  isTransientError,
+  makeFailureMatcher,
+  replanPreamble,
+  writeRecoveryGate,
+} from "./failure_kind.ts";
 import {
   GROUND_TRUTH_SYSTEM_GUIDANCE,
   type GroundedOutcome,
@@ -104,8 +119,12 @@ export class MinimaAgent extends Agent {
   budget: BudgetLedger | null = null;
   /** Recovery-ladder retries per prompt (total attempts = 1 + rungs; 0 disables). */
   recoveryRungs = 2;
-  /** How many ladder escalations happened this session (diagnostics). */
+  /** How many ladder escalations (exclude + re-route to a stronger model) happened this session. */
   ladderEscalations = 0;
+  /** A4: how many transient-error backoffs (retry the SAME model) happened this session. */
+  ladderBackoffs = 0;
+  /** A4: how many structural replans (plan-revision steer, same model) happened this session. */
+  ladderReplans = 0;
   /** Effort routing Phase A (staged, default OFF): map the server's classified difficulty
    * to a per-prompt thinking level — route (model, effort), not just model. */
   autoEffort = false;
@@ -228,6 +247,13 @@ export class MinimaAgent extends Agent {
       let firstRecId: string | null = null;
       let lastError: unknown = null;
       let lastRouting: RoutingResult | null = null;
+      // A4: one failure-kind matcher per prompt (its gate-fail streak spans rungs), consulted after
+      // each rung to pick backoff / escalate / replan. Null (inert) unless groundTruth +
+      // failureMatcher — the default path then keeps the classic always-escalate ladder.
+      const failureMatcher = this.failureMatcherActive() ? makeFailureMatcher() : null;
+      // A pending `replan` steer to prepend to the NEXT rung's prompt (null = none). Steering drains
+      // post-turn, so prepending to the prompt is the only way a replan lands on the model turn-1.
+      let replanPrefix: string | null = null;
 
       for (let attempt = 0; attempt <= this.recoveryRungs; attempt++) {
         // Budget gate (enforce mode only): refuse BEFORE any provider spend.
@@ -295,6 +321,7 @@ export class MinimaAgent extends Agent {
         // CURRENT turn on cross, stop gracefully — no partial-tool corruption); the stop-gate then
         // decides whether an END-of-run with unfinished/failing steps is allowed (A2). Rebuilt per
         // rung so the stop-gate's strike counter resets on each recovery attempt.
+        let disposeSpiralFeed: (() => void) | null = null;
         let budgetStop: ((a: AssistantMessage) => boolean) | null = null;
         if (this.budget) {
           let runSpend = 0;
@@ -315,13 +342,42 @@ export class MinimaAgent extends Agent {
                 askUser: this.askUser,
               })
             : null;
-        // Install ONLY when we have something to install. If neither applies, leave the slot
+        // Anti-spiral (A3): a doom-loop ring buffer fed by an afterToolCall hook, plus a soft turn
+        // cap, both resolved here. Runs BEFORE the A2 stop-gate so a "stop the spiral" verdict wins
+        // over A2's "the plan isn't done, keep going" — looping forever is worse than stopping with
+        // unfinished work. Fresh ring + counters per rung (like the other stop closures).
+        let antiSpiral: AntiSpiralGate | null = null;
+        if (this.config.groundTruth && (this.config.spiralRepeats > 0 || this.config.stepCap > 0)) {
+          const ring = new DoomLoopRing(ringCapacityForRepeats(this.config.spiralRepeats));
+          disposeSpiralFeed = this.addAfterToolCall(async (ctx) => {
+            ring.push(
+              ctx.toolCall.name,
+              ctx.toolCall.arguments,
+              toolCallFailed(ctx.result, ctx.isError),
+            );
+            return null;
+          });
+          antiSpiral = makeAntiSpiral({
+            ring,
+            repeats: this.config.spiralRepeats,
+            stepCap: this.config.stepCap,
+            db: this.db,
+            sessionId: this.runId,
+            agentId: this.agentId,
+          });
+        }
+        // Install ONLY when we have something to install. If nothing applies, leave the slot
         // untouched — a sub-agent's per-node budget cutoff arrives as a CONSTRUCTOR-provided
         // shouldStopAfterTurn (spawn.ts), and clobbering it here would silently disable it.
-        const installedStop = Boolean(budgetStop || gtStop);
+        const installedStop = Boolean(budgetStop || gtStop || antiSpiral);
         if (installedStop) {
           this.setShouldStopAfterTurn(async (assistant, results, state, messages) => {
             if (budgetStop?.(assistant)) return true;
+            if (antiSpiral) {
+              const v = await antiSpiral(assistant, results, state);
+              if (v === "stop") return true;
+              if (v === "handled") return false; // injected a steer; skip A2 this turn
+            }
             return gtStop ? gtStop(assistant, results, state, messages) : false;
           });
         }
@@ -333,8 +389,12 @@ export class MinimaAgent extends Agent {
         const start = Date.now();
         let runError: unknown = null;
         this.currentRecId = rungRecId;
+        // A4 replan: if the prior rung classified a structural failure, prepend its plan-revision
+        // steer to THIS rung's prompt (consumed once). The task itself is unchanged.
+        const runContent = replanPrefix ? `${replanPrefix}\n\n${content}` : content;
+        replanPrefix = null;
         try {
-          await super.prompt(content);
+          await super.prompt(runContent);
         } catch (exc) {
           runError = exc;
         } finally {
@@ -342,11 +402,30 @@ export class MinimaAgent extends Agent {
           // Clear ONLY a seam we installed above; never null out a constructor-provided hook
           // (sub-agent budget cutoff) that we deliberately left in place.
           if (installedStop) this.setShouldStopAfterTurn(null);
+          disposeSpiralFeed?.(); // unregister the ring-feed afterToolCall hook for this rung
         }
         const latencyMs = Date.now() - start;
         const turnsTaken = this.agentState.turnsTaken;
         const last = this.lastAssistant();
         const failed = runError !== null || (last !== null && last.stop_reason === "error");
+        // A4: a hard failure's error text. Provider failures don't throw — they surface as an
+        // assistant with stop_reason==='error' + a free-text error_message; a thrown runError is the
+        // rarer path. Feeds the transient/infra classifier.
+        const errorText = !failed
+          ? null
+          : runError !== null
+            ? errText(runError)
+            : (last?.error_message ?? null);
+        // A4: the grounded (deterministic) verdict THIS rung minted — read up front so a real
+        // check-fail can never be masked by a coincidental transient error. M7.2/M7.3 identity join:
+        // only gates under this rung's rec_id count. Passed into feedbackSafely (single read).
+        const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, rungRecId) : null;
+        const gateFailed = grounded !== null && grounded.outcome === "failed";
+        // A transient/infra blip (429 / timeout / 5xx / network) is not the model's fault: suppress
+        // the failure feedback so it never teaches Minima this model is low-quality. But a real
+        // deterministic check-fail OUTRANKS an incidental blip — never suppress on `gateFailed`.
+        const transient =
+          failureMatcher !== null && failed && !gateFailed && isTransientError(errorText);
         // Rung-TOTAL usage: a multi-turn run has one assistant message per turn — summing
         // is what makes the reported cost truthful (last-turn-only under-reports and
         // corrupts the server's observed-cost basis).
@@ -358,16 +437,16 @@ export class MinimaAgent extends Agent {
 
         // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
         // the signal that sharpens the next recommendation.
-        const { quality, outcome, reinforcedEntryIds, lessonPromoted, grounded } =
-          await this.feedbackSafely(
-            content,
-            routing,
-            runUsage,
-            latencyMs,
-            failed,
-            turnsTaken,
-            rungRecId,
-          );
+        const { quality, outcome, reinforcedEntryIds, lessonPromoted } = await this.feedbackSafely(
+          content,
+          routing,
+          runUsage,
+          latencyMs,
+          failed,
+          turnsTaken,
+          transient,
+          grounded,
+        );
 
         if (this.meter) {
           this.meter.record({
@@ -396,30 +475,51 @@ export class MinimaAgent extends Agent {
           lessonPromoted,
         });
 
-        // Escalate? Only with a rung left, a routed (non-pinned) decision to learn from,
-        // and a REAL trigger: provider failure, a non-null judge grade below τ, or a grounded
-        // check that FAILED this rung. M7.3: a red gate outranks the judge as a trigger — but
-        // only `failed` (the check ran and said no); `unrunnable` is an environment error and
-        // must not roll back work, exclude an innocent model, or burn paid rungs.
+        // Recover? Only with a rung left, a routed (non-pinned) decision to learn from, and a REAL
+        // trigger: provider failure, a non-null judge grade below τ, or a grounded check that FAILED
+        // this rung. M7.3: a red gate outranks the judge as a trigger — but only `failed` (the check
+        // ran and said no); `unrunnable` is an environment error and must not roll back work, exclude
+        // an innocent model, or burn paid rungs. A4 then classifies WHICH recovery move to make.
         const judgeFailed =
           !failed && quality !== null && routing !== null && quality < routing.thresholdUsed;
-        const gateFailed = grounded !== null && grounded.outcome === "failed";
+        // `gateFailed` was computed before feedback (so `transient` couldn't mask a real check-fail).
         const failedModel =
           routing !== null && routing.recommendationId !== null ? routing.chosenModelId : null;
-        const canEscalate =
+        const canRecover =
           attempt < this.recoveryRungs &&
           failedModel !== null &&
           (failed || judgeFailed || gateFailed);
-        if (!canEscalate) {
+        if (!canRecover) {
           if (runError !== null) throw runError;
           return routing;
         }
-        // Roll back this rung's messages so the retry starts from the same context the
-        // failed rung saw (no confusing half-answers in the next rung's prompt).
+        // A4: pick the recovery move by failure kind. With the matcher off (default path) the
+        // intervention stays `escalate`, so behavior is identical to the classic ladder.
+        let intervention: Intervention = "escalate";
+        let decision: FailureDecision | null = null;
+        if (failureMatcher) {
+          decision = failureMatcher({ hardError: failed, errorText, judgeFailed, gateFailed });
+          if (decision) intervention = decision.intervention;
+        }
+        // Roll back this rung's messages so the retry starts from the same context the failed rung
+        // saw (no confusing half-answers in the next rung's prompt).
         this.agentState.messages.length = preRunIdx;
-        excluded.push(failedModel);
+        if (intervention === "escalate") {
+          // Exclude the failed model → the next recommend re-routes to a stronger/different rung.
+          excluded.push(failedModel);
+          this.ladderEscalations += 1;
+        } else if (intervention === "replan") {
+          // Keep the model; prepend a plan-revision steer to the next rung. Audit-only gate.
+          replanPrefix = replanPreamble(decision?.reason ?? "verification keeps failing");
+          if (decision) writeRecoveryGate(this.recoveryGateDeps(), decision);
+          this.ladderReplans += 1;
+        } else {
+          // backoff: keep the model (a transient/infra blip), optionally pace the retry. Audit-only.
+          if (decision) writeRecoveryGate(this.recoveryGateDeps(), decision);
+          this.ladderBackoffs += 1;
+          if (this.config.backoffMs > 0) await sleep(this.config.backoffMs);
+        }
         lastError = runError;
-        this.ladderEscalations += 1;
       }
       if (lastError !== null) throw lastError;
       return lastRouting;
@@ -634,22 +734,23 @@ export class MinimaAgent extends Agent {
     latencyMs: number,
     failed: boolean,
     turnsTaken: number,
-    recId: string | null,
+    /** A4: this rung failed on a transient/infra error — record locally but send NO feedback (a
+     * 429/timeout is not evidence the model is low-quality). */
+    transient = false,
+    /** M7.2/M7.3: the grounded (deterministic) verdict THIS rung minted, read once by the caller
+     * (A4 reads it before feedback so a transient error can't mask a real check-fail). */
+    grounded: GroundedOutcome | null = null,
   ): Promise<{
     quality: number | null;
     outcome: "success" | "partial" | "failure";
     reinforcedEntryIds: string[] | null;
     lessonPromoted: boolean | null;
-    /** M7.2/M7.3: the grounded verdict of the step verified under this prompt (null = none). */
-    grounded: GroundedOutcome | null;
   }> {
     // M7.2: a real check (deterministic gate) outranks the judge. Identity join: only gates
     // THIS rung minted (rec_id) count — stale verdicts from earlier prompts are invisible.
-    // The escalation block reuses the verdict (M7.3) so the ledger is read once.
     // `unrunnable` is an environmental error (spawn failure, timeout), not evidence about the
     // model: it never outranks the judge and never sends failure feedback — the judge path
     // proceeds and the red stays visible in the UI only.
-    const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, recId) : null;
     const deterministic =
       grounded?.verifiedBy === "deterministic" && grounded.outcome !== "unrunnable"
         ? grounded
@@ -660,7 +761,6 @@ export class MinimaAgent extends Agent {
         outcome: "success",
         reinforcedEntryIds: null,
         lessonPromoted: null,
-        grounded,
       };
     }
     let quality: number | null = null;
@@ -691,6 +791,12 @@ export class MinimaAgent extends Agent {
           quality = clamp01(graded);
           outcome = gradeOutcome(quality);
         }
+      }
+      // A4: a transient/infra failure (429/timeout/5xx/network) is not the model's fault — keep the
+      // local failure label for honesty but send NO feedback, so a blip never penalizes the model
+      // in Minima's learning loop. The backoff retry re-runs the SAME model.
+      if (transient) {
+        return { quality, outcome, reinforcedEntryIds, lessonPromoted };
       }
       // Feedback truth (the learning loop is only as good as this call):
       //  - usage is the RUN TOTAL (all turns), not the last assistant message;
@@ -747,13 +853,28 @@ export class MinimaAgent extends Agent {
       // the reason for diagnostics (/reconnect, tests, debugging the learning loop).
       this.lastFeedbackError = errText(exc);
     }
-    return { quality, outcome, reinforcedEntryIds, lessonPromoted, grounded };
+    return { quality, outcome, reinforcedEntryIds, lessonPromoted };
   }
 
   // ----------------------------------------------------------------- helpers
   private shouldJudge(): boolean {
     const every = this.config.judgeEvery;
     return every > 0 && this.promptsRun % every === 0;
+  }
+
+  /** A4: is the failure-kind matcher live? Gated by groundTruth + the failureMatcher flag, so the
+   * default path keeps the classic escalate-only ladder. */
+  private failureMatcherActive(): boolean {
+    return this.config.groundTruth && this.config.failureMatcher;
+  }
+
+  /** A4: provenance for a recovery (backoff/replan) audit gate. */
+  private recoveryGateDeps(): {
+    db: MinimaDb | null;
+    sessionId: string | null;
+    agentId: string | null;
+  } {
+    return { db: this.db, sessionId: this.runId, agentId: this.agentId };
   }
 
   /** Rough input-token estimate for THIS turn: live context + system prompt + the new task
@@ -808,4 +929,9 @@ function pinnedResult(model: Model): RoutingResult {
 function shortLabel(text: string): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > 40 ? `${clean.slice(0, 40)}…` : clean;
+}
+
+/** A4: bounded pause before a transient-error backoff retry (config.backoffMs; 0 → never called). */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
