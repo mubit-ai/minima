@@ -1,0 +1,27 @@
+diff --git a/src/store.ts b/src/store.ts
+index 619d162..2f94e64 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -81,17 +81,13 @@ export class Store {
+    * collision). Throws {@link ConflictError} when a requested slug is taken.
+    */
+   createLink(input: { url: string; slug?: string }): LinkRecord {
+-    let slug: string;
+-    if (input.slug !== undefined) {
+-      if (this.slugIndex.has(input.slug)) {
+-        throw new ConflictError(`slug already in use: ${input.slug}`);
++    const requested = input.slug;
++    let slug = requested ?? this.generateSlug();
++    while (this.links.has(slug)) {
++      if (requested !== undefined) {
++        throw new ConflictError(`slug already in use: ${requested}`);
+       }
+-      slug = input.slug;
+-    } else {
+       slug = this.generateSlug();
+-      while (this.slugIndex.has(slug)) {
+-        slug = this.generateSlug();
+-      }
+     }
+     const id = `lnk_${this.counters.link++}`;
+     const record: LinkRecord = {

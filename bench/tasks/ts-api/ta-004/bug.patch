@@ -1,0 +1,24 @@
+diff --git a/src/auth.ts b/src/auth.ts
+index d225465..4f72d5e 100644
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -19,13 +19,15 @@ import { ValidationError } from "./errors.ts";
+  * Extract the bearer token from an Authorization header value.
+  *
+  * Leading/trailing whitespace around the whole header value is tolerated
+- * (some proxies pad it); everything inside must match the strict form.
+- * Returns `null` when the header is absent or malformed.
++ * (some proxies pad it). The credential is the last whitespace-separated
++ * part of the header, which keeps parsing allocation-light.
++ * Returns `null` when the header is absent or empty.
+  */
+ export function parseBearerToken(headerValue: string | undefined): string | null {
+   if (headerValue === undefined) return null;
+-  const match = /^Bearer ([^\s]+)$/i.exec(headerValue.trim());
+-  return match ? match[1]! : null;
++  const parts = headerValue.trim().split(/\s+/);
++  const token = parts[parts.length - 1];
++  return token !== undefined && token.length > 0 ? token : null;
+ }
+ 
+ /** In-memory token registry with O(1) secret lookup. */

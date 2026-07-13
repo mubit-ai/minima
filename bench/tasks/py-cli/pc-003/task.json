@@ -1,0 +1,13 @@
+{
+  "id": "pc-003",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "Free-text search only works when I type the query in exactly the right letter case. Running list with `--search plumber` finds the task titled 'Call plumber about sink', but `--search Plumber` or `--search PLUMBER` come back with an empty table even though the task is clearly there. Searching by tag text has the same problem the moment the query contains an uppercase letter. Search has always been forgiving about case in this tool, and nothing in the help output suggests it should be case-sensitive; please make text matching ignore case again for both titles and tags.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 120,
+  "notes": "Search needle no longer lower-cased before matching (dropped .lower())."
+}

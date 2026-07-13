@@ -363,10 +363,10 @@ U1 → U2/U3.
 | Phase | Owner | Size | Status |
 |---|---|---|---|
 | P0 interface contract | both | S | ✅ a810739 |
-| A1 verify primitive | A | M | ⬜ |
-| A2 stop hook + block-done | A | M | ⬜ |
-| A3 doom_loop + steps cap | A | M | ⬜ |
-| A4 confidence tiers + failure kinds | A | M | ⬜ |
+| A1 verify primitive | A | M | ✅ |
+| A2 stop hook + block-done | A | M | ✅ |
+| A3 doom_loop + steps cap | A | M | ✅ |
+| A4 confidence tiers + failure kinds | A | M | ✅ |
 | A5 trust the check | A | M | ⬜ |
 | A6 allowlist + task perms + poka-yoke | A | M | ⬜ |
 | A7 learning loop | A | M | ⬜ |
@@ -380,3 +380,13 @@ U1 → U2/U3.
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
 | J1 /why + subagent + E2E demo | both | L | ⬜ |
+
+**▲sync A4/U3,B4 (tiers↔UX) checkpoint — LANDED**: `feature/UX_improvements_track_A` (A1–A4 on
+the GT lineage) and `feat/BP-UX-TrackB` (U1/B1/B2/U2 on P0) merged into `feat/BP-UX`.
+Reconciliations: plan mode = B2 PolicyBundle ask-first for write/edit/bash/apply_patch, with
+Track A's hard blocks kept for the tools an ask cannot make safe (`task` always — hook-free
+children are a write bypass; `todowrite` under GT — approving one runs `verify` as shell);
+`/plan` keeps the GT council subcommands (start·status·finalize·cancel) behind
+MINIMA_TUI_GROUND_TRUTH with the mode itself in the B2 store (Shift+Tab exit tears the council
+session down like `/plan off`); permission hooks compose via `addBeforeToolCall` — mode gate
+first, GT done-gate second (first block wins).

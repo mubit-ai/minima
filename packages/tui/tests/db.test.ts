@@ -115,7 +115,10 @@ function agentWith(db: MinimaDb, runId: string): MinimaAgent {
 describe("MinimaDb schema + lifecycle", () => {
   test("migrates to the latest schema with all core tables", () => {
     const db = new MinimaDb(":memory:");
-    expect(db.schemaVersion).toBe(2); // v1 spine + v2 budgets/provenance
+    // v1 spine + v2 budgets/provenance + v3 plans + v4 file_changes + v5 verification
+    // + v6 gate identity (rec_id/session_id/agent_id + closed_at/verify_cwd/note)
+    // + v7 plan_steps.check_origin
+    expect(db.schemaVersion).toBe(7);
     for (const t of [
       "projects",
       "runs",
@@ -124,6 +127,11 @@ describe("MinimaDb schema + lifecycle", () => {
       "tool_calls",
       "budgets",
       "budget_events",
+      "plans",
+      "plan_steps",
+      "file_changes",
+      "gates",
+      "user_signals",
     ]) {
       expect(db.db.query(`SELECT count(*) AS n FROM ${t}`).get()).toEqual({ n: 0 });
     }

@@ -1,0 +1,21 @@
+diff --git a/py/intervals.py b/py/intervals.py
+index e432bc7..03808ac 100644
+--- a/py/intervals.py
++++ b/py/intervals.py
+@@ -21,4 +21,15 @@ def merge_intervals(intervals, merge_touching=True):
+     Raise ``ValueError`` if any interval has ``start > end``. The input
+     list must not be modified. Empty input returns ``[]``.
+     """
+-    raise NotImplementedError("kata: implement merge_intervals")
++    for start, end in intervals:
++        if start > end:
++            raise ValueError(f"invalid interval: ({start}, {end})")
++    merged = []
++    for start, end in sorted(intervals):
++        if merged:
++            prev_start, prev_end = merged[-1]
++            if start < prev_end or (merge_touching and start == prev_end):
++                merged[-1] = (prev_start, max(prev_end, end))
++                continue
++        merged.append((start, end))
++    return merged

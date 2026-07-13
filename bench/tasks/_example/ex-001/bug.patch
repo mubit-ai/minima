@@ -1,0 +1,10 @@
+diff --git a/mathx.py b/mathx.py
+index 8188b1c..0bbe6df 100644
+--- a/mathx.py
++++ b/mathx.py
+@@ -8,4 +8,4 @@ def add(a: float, b: float) -> float:
+ def mean(values: list[float]) -> float:
+     if not values:
+         raise ValueError("mean of empty list")
+-    return sum(values) / len(values)
++    return sum(values) / (len(values) + 1)

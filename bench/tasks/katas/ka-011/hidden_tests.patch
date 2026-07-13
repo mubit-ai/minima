@@ -1,0 +1,46 @@
+diff --git a/tests/js/duration/hidden.test.js b/tests/js/duration/hidden.test.js
+new file mode 100644
+index 0000000..30c69c1
+--- /dev/null
++++ b/tests/js/duration/hidden.test.js
+@@ -0,0 +1,40 @@
++import { expect, test } from "bun:test";
++import { parseDuration } from "../../../js/duration.js";
++
++test("full spec", () => {
++  expect(parseDuration("1h30m15s")).toBe(5415);
++});
++
++test("single components", () => {
++  expect(parseDuration("2h")).toBe(7200);
++  expect(parseDuration("90m")).toBe(5400);
++  expect(parseDuration("45s")).toBe(45);
++});
++
++test("skipped middle unit", () => {
++  expect(parseDuration("1h5s")).toBe(3605);
++});
++
++test("zero values and leading zeros", () => {
++  expect(parseDuration("0s")).toBe(0);
++  expect(parseDuration("007m")).toBe(420);
++});
++
++test("empty spec throws", () => {
++  expect(() => parseDuration("")).toThrow(Error);
++});
++
++test("wrong unit order throws", () => {
++  expect(() => parseDuration("5m1h")).toThrow(Error);
++});
++
++test("unknown unit and bare pieces throw", () => {
++  expect(() => parseDuration("1x")).toThrow(Error);
++  expect(() => parseDuration("h")).toThrow(Error);
++  expect(() => parseDuration("15")).toThrow(Error);
++});
++
++test("whitespace and repeats throw", () => {
++  expect(() => parseDuration("1h 30m")).toThrow(Error);
++  expect(() => parseDuration("1h2h")).toThrow(Error);
++});

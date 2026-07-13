@@ -1,0 +1,24 @@
+diff --git a/taskman/report.py b/taskman/report.py
+index 8623e09..a5c7fe4 100644
+--- a/taskman/report.py
++++ b/taskman/report.py
+@@ -138,12 +138,16 @@ def group_by_priority(tasks: Iterable[Task]) -> list[dict[str, object]]:
+     inputs.
+     """
+     items = list(tasks)
+-    total = len(items)
++    active = [t for t in items if t.status == STATUS_OPEN]
++    denominator = len(active)
+     rows: list[dict[str, object]] = []
+     for priority, label in sorted(PRIORITY_LABELS.items()):
+         count = sum(1 for t in items if t.priority == priority)
+-        percent = round(100.0 * count / total, 1) if total else 0.0
+-        rows.append({"label": label, "count": count, "percent": percent})
++        if denominator:
++            share = 100.0 * count / denominator
++        else:
++            share = 0.0
++        rows.append({"label": label, "count": count, "percent": round(share, 1)})
+     return rows
+ 
+ 

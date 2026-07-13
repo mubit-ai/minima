@@ -1,0 +1,16 @@
+diff --git a/js/duration.js b/js/duration.js
+index 66b4760..0de0745 100644
+--- a/js/duration.js
++++ b/js/duration.js
+@@ -23,5 +23,10 @@
+  * Example: parseDuration("1h30m15s") -> 5415.
+  */
+ export function parseDuration(spec) {
+-  throw new Error("kata: implement parseDuration");
++  const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(spec);
++  if (!match || (match[1] === undefined && match[2] === undefined && match[3] === undefined)) {
++    throw new Error(`malformed duration: ${JSON.stringify(spec)}`);
++  }
++  const [, h, m, s] = match;
++  return (h ? Number(h) * 3600 : 0) + (m ? Number(m) * 60 : 0) + (s ? Number(s) : 0);
+ }

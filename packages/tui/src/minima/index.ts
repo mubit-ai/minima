@@ -29,3 +29,25 @@ export {
 export type { QualityJudge } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
 export { MinimaAgent, gradeOutcome, type BeforeRoute, type MinimaAgentOptions } from "./runtime.ts";
+export { PlanSessionStore, buildPlannerSystemPrompt } from "./plan_session.ts";
+export type {
+  PlanDecision,
+  OpenQuestion,
+  CouncilFinding,
+  PlanConstraint,
+  PlanFact,
+  SurfacedQuestion,
+  CouncilRoundResult,
+  GroundTruthSynthesis,
+  PlanSession,
+} from "./plan_session.ts";
+export {
+  runCouncilRound,
+  answerOpenQuestions,
+  synthesizeGroundTruth,
+  Critic,
+  shouldConveneCouncil,
+} from "./plan_council.ts";
+export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_council.ts";
+export { runPlanTurn } from "./plan_turn.ts";
+export type { PlanTurnDeps } from "./plan_turn.ts";

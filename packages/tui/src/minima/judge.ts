@@ -90,8 +90,23 @@ export class LLMJudge implements QualityJudge {
 
   constructor(
     private readonly model: Model,
-    private readonly opts: { apiKey?: string; timeout?: number; retries?: number } = {},
+    private readonly opts: {
+      apiKey?: string;
+      timeout?: number;
+      retries?: number;
+      /** Realized spend of each judge complete() (0 on throw) — the caller books it;
+       * the judge itself stays off the routing/feedback loop. */
+      onCostUsd?: (usd: number) => void;
+    } = {},
   ) {}
+
+  private bookCost(usd: number): void {
+    try {
+      this.opts.onCostUsd?.(Number.isFinite(usd) ? usd : 0);
+    } catch {
+      // spend hook must never break grading
+    }
+  }
 
   async grade(
     task: string,
@@ -128,6 +143,7 @@ export class LLMJudge implements QualityJudge {
           },
           { options },
         );
+        this.bookCost(resp.usage.cost.total);
         if (resp.stop_reason === "error") {
           this.lastAbstainReason = resp.error_message || "judge provider error";
           continue; // transient-shaped: retry
@@ -140,6 +156,7 @@ export class LLMJudge implements QualityJudge {
         this.lastAbstainReason = null;
         return clamp01(score / 10);
       } catch (exc) {
+        this.bookCost(0);
         this.lastAbstainReason = exc instanceof Error ? exc.message : String(exc);
         // thrown = transport/timeout — retry
       }

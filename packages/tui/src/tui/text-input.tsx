@@ -22,6 +22,8 @@ export interface TextInputProps {
    * lose it; `disabled` alone changes the rendered text to "(busy…)".
    */
   suspended?: boolean;
+  /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
+  disabledLabel?: string;
   showPrefix?: boolean;
 }
 
@@ -35,6 +37,7 @@ export function TextInput({
   placeholder,
   disabled,
   suspended,
+  disabledLabel,
   showPrefix = true,
 }: TextInputProps) {
   const [value, setValue] = useState("");
@@ -106,12 +109,18 @@ export function TextInput({
     }
   });
 
-  const shown = disabled ? "(busy…)" : value;
+  if (disabled) {
+    return (
+      <Text wrap="truncate">
+        {showPrefix && <Text color="cyan">{"›"}</Text>} {disabledLabel ?? "(busy…)"}
+      </Text>
+    );
+  }
   return (
     <Text>
-      {showPrefix && <Text color="cyan">{"›"}</Text>} {shown}
-      {!disabled && <Text color="gray">{"▋"}</Text>}
-      {!value && !disabled && placeholder ? <Text color="gray"> {placeholder}</Text> : null}
+      {showPrefix && <Text color="cyan">{"›"}</Text>} {value}
+      <Text color="gray">{"▋"}</Text>
+      {!value && placeholder ? <Text color="gray"> {placeholder}</Text> : null}
     </Text>
   );
 }

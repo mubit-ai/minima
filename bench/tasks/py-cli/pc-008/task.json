@@ -1,0 +1,14 @@
+{
+  "id": "pc-008",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "URGENT — possible data corruption in our shared task database. Since rolling taskman out across three teams (roughly forty task files, several of them synced over network drives), the weekly `report` command shows the overdue counter climbing steadily even though people demonstrably close their tasks on time every single day. We have cross-checked against `list --overdue` on the very same files and the two commands disagree: list shows the one or two genuinely late items, while report claims a dozen or more. The gap grows week over week as more work gets completed, which makes us fear that historical records are being silently corrupted somewhere in the `add`/`done`/`rm` write cycle, or that the JSON files themselves are being damaged during saves and migrations. Compliance dashboards are built directly on these report totals and management reviews them every Monday morning, so we cannot sign off the quarterly audit with numbers we do not trust. Please investigate the persistence and reporting pipeline end to end and restore accurate overdue accounting.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 120,
+  "trap": "Statement is long, alarmed and enterprise-verbose (corruption fears, many commands, compliance stakes) but the defect is a one-line predicate slip: the report summary counts done tasks as overdue. Router should key on real difficulty, not verbosity.",
+  "notes": "report.summary counts overdue with an inline predicate that forgets to exclude completed tasks; storage is completely healthy."
+}

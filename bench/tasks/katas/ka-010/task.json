@@ -1,0 +1,12 @@
+{
+  "id": "ka-010",
+  "repo": "katas",
+  "category": "kata",
+  "problem_statement": "Implement wordWrap(text, width) in js/wrap.js, returning an array of lines wrapped to the given column width. Words are maximal runs of non-whitespace; whitespace runs are mere separators. Fill greedily: append the next word (joined by one space) while the line stays within width, otherwise start a new line. A word longer than width is hard-broken: flush the current line, emit each full width-sized slice as its own line, and let the final short slice start the next line where later words may join it. No line may exceed width; empty or all-whitespace text returns []. width must be an integer of at least 1, else throw a RangeError. Verify with bun test tests/js/wrap.",
+  "test_cmd": "bun test tests/js/wrap",
+  "difficulty": "trivial",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 22,
+  "timeout_sec": 60
+}

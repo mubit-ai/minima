@@ -169,6 +169,18 @@ describe("builtinTools", () => {
       "write",
     ]);
   });
+
+  test("todowrite runs sequentially so baseline checks see the pre-work repo (M3.3, GT on)", () => {
+    const todo = builtinTools({ groundTruth: true }).find((t) => t.name === "todowrite")!;
+    expect(todo.executionMode).toBe("sequential");
+    expect(todo.description).toContain("verify");
+  });
+
+  test("todowrite stays plain with ground truth off: no verify promise, no sequential mode", () => {
+    const todo = builtinTools().find((t) => t.name === "todowrite")!;
+    expect(todo.executionMode).toBeUndefined();
+    expect(todo.description).not.toContain("verify");
+  });
 });
 
 // --- Exa-backed web tools ---------------------------------------------------
@@ -184,6 +196,40 @@ function mockFetch(status: number, body: unknown): void {
     })) as typeof fetch;
 }
 
+/**
+ * Route mocked responses by request URL — needed for fallback tests where one call hits
+ * Exa (`api.exa.ai`) and a second hits DuckDuckGo/the target site.
+ */
+function mockFetchRouted(
+  handler: (url: string) => { status: number; body: unknown; contentType?: string },
+): void {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input as Request).url;
+    const { status, body, contentType = "application/json" } = handler(url);
+    return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+      status,
+      headers: { "content-type": contentType },
+    });
+  }) as typeof fetch;
+}
+
+/** A minimal lite.duckduckgo.com results page: one uddg-wrapped link, one direct link. */
+const DDG_LITE_HTML = `<html><body><table>
+  <tr><td>
+    <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fone&rut=x"
+       class="result-link">First &amp; Best</a>
+  </td></tr>
+  <tr><td>
+    <a href="https://second.example/two" class='result-link'>Second Result</a>
+  </td></tr>
+  <tr><td><a href="https://ads.example/skip" class="ad-link">Ad</a></td></tr>
+</table></body></html>`;
+
 afterEach(() => {
   globalThis.fetch = realFetch;
   if (savedExaKey === undefined) {
@@ -194,10 +240,48 @@ afterEach(() => {
 });
 
 describe("web_search tool", () => {
-  test("errors clearly when EXA_API_KEY is unset", async () => {
+  test("falls back to DuckDuckGo when EXA_API_KEY is unset", async () => {
     delete process.env.EXA_API_KEY;
+    mockFetch(200, DDG_LITE_HTML); // body is a string → served as-is (HTML)
     const res = await run(webSearchTool(), { query: "typescript" });
-    expect((res.content[0] as { text: string }).text).toMatch(/EXA_API_KEY is not set/);
+    const out = (res.content[0] as { text: string }).text;
+    // uddg redirect is decoded to the real URL; the direct link is kept; the ad is dropped.
+    expect(out).toContain("[1] First & Best");
+    expect(out).toContain("https://example.com/one");
+    expect(out).toContain("[2] Second Result");
+    expect(out).toContain("https://second.example/two");
+    expect(out).not.toContain("ads.example");
+    expect(res.details?.provider).toBe("duckduckgo");
+    expect(res.details?.count).toBe(2);
+  });
+
+  test("falls back to DuckDuckGo when the Exa call fails", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetchRouted((url) =>
+      url.includes("api.exa.ai")
+        ? { status: 500, body: { error: "boom" } } // Exa transient failure (retried, then gives up)
+        : { status: 200, body: DDG_LITE_HTML, contentType: "text/html" },
+    );
+    const res = await run(webSearchTool(), { query: "x" });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("[1] First & Best");
+    expect(res.details?.provider).toBe("duckduckgo");
+  });
+
+  test("reports no results from DuckDuckGo", async () => {
+    delete process.env.EXA_API_KEY;
+    mockFetch(200, "<html><body>no results here</body></html>");
+    const res = await run(webSearchTool(), { query: "nothing" });
+    expect((res.content[0] as { text: string }).text).toBe("No results found.");
+    expect(res.details?.provider).toBe("duckduckgo");
+    expect(res.details?.count).toBe(0);
+  });
+
+  test("surfaces a clean error when both providers fail", async () => {
+    delete process.env.EXA_API_KEY;
+    mockFetch(400, "bad request");
+    const res = await run(webSearchTool(), { query: "x" });
+    expect((res.content[0] as { text: string }).text).toMatch(/web_search failed:/);
   });
 
   test("formats a numbered list of results", async () => {
@@ -247,11 +331,43 @@ describe("web_fetch tool (Exa)", () => {
     expect(res.details?.truncated).toBe(true);
   });
 
-  test("surfaces auth failure", async () => {
+  test("surfaces a clean error when both providers fail", async () => {
     process.env.EXA_API_KEY = "bad";
+    // Exa 401 (auth) is not retried → fall back to DDG, which also 401s on the target.
     mockFetch(401, { error: "nope" });
     const res = await run(webFetchTool(), { url: "https://a.example" });
-    expect((res.content[0] as { text: string }).text).toMatch(/web_fetch failed:.*authentication/);
+    expect((res.content[0] as { text: string }).text).toMatch(/web_fetch failed:/);
+  });
+});
+
+describe("web_fetch tool (DuckDuckGo fallback)", () => {
+  const PAGE_HTML = `<html><head><title>Doc &amp; Co</title><style>x{}</style></head>
+    <body><script>ignore()</script><h1>Heading</h1><p>Hello <b>world</b>.</p></body></html>`;
+
+  test("raw-fetches and strips HTML to text when no Exa key", async () => {
+    delete process.env.EXA_API_KEY;
+    mockFetchRouted(() => ({ status: 200, body: PAGE_HTML, contentType: "text/html" }));
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("# Doc & Co"); // decoded title header
+    expect(out).toContain("Heading");
+    expect(out).toContain("Hello world"); // tags stripped (inline tags become whitespace), entities decoded
+    expect(out).not.toContain("ignore()"); // <script> removed
+    expect(out).not.toContain("<p>");
+    expect(res.details?.truncated).toBe(false);
+  });
+
+  test("falls back to DuckDuckGo when the Exa contents call fails", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetchRouted((url) =>
+      url.includes("api.exa.ai")
+        ? { status: 401, body: { error: "nope" } } // Exa auth failure
+        : { status: 200, body: PAGE_HTML, contentType: "text/html" },
+    );
+    const res = await run(webFetchTool(), { url: "https://a.example" });
+    const out = (res.content[0] as { text: string }).text;
+    expect(out).toContain("Hello world");
+    expect(res.details?.url).toBe("https://a.example");
   });
 });
 

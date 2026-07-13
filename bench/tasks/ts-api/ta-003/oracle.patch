@@ -1,0 +1,105 @@
+diff --git a/src/handlers/notes.ts b/src/handlers/notes.ts
+index 80c6f9b..4b7fa7c 100644
+--- a/src/handlers/notes.ts
++++ b/src/handlers/notes.ts
+@@ -24,10 +24,10 @@ export function noteRoutes({ store }: NoteDeps): RouteDef[] {
+       method: "POST",
+       pattern: "/api/notes",
+       scope: "write",
+-      handler: (req) => {
++      handler: (req, ctx) => {
+         const parsed = validateNoteCreate(req.body);
+         if (!parsed.ok) return json(400, { error: "invalid_note", details: parsed.errors });
+-        const record = store.createNote(parsed.value);
++        const record = store.createNote({ ...parsed.value, owner: ctx.auth!.tokenId });
+         return json(201, record);
+       },
+     },
+@@ -35,12 +35,12 @@ export function noteRoutes({ store }: NoteDeps): RouteDef[] {
+       method: "GET",
+       pattern: "/api/notes",
+       scope: "read",
+-      handler: (req) => {
++      handler: (req, ctx) => {
+         const tag = req.query.tag;
+         if (tag !== undefined && !isValidTag(tag)) {
+           return json(400, { error: "invalid_tag" });
+         }
+-        const items = store.listNotes({ tag });
++        const items = store.listNotes({ tag, owner: ctx.auth!.tokenId });
+         return json(200, { items, total: items.length });
+       },
+     },
+@@ -50,7 +50,9 @@ export function noteRoutes({ store }: NoteDeps): RouteDef[] {
+       scope: "read",
+       handler: (_req, ctx) => {
+         const record = store.getNote(ctx.params.id!);
+-        if (record === undefined) return json(404, { error: "not_found" });
++        if (record === undefined || record.owner !== ctx.auth!.tokenId) {
++          return json(404, { error: "not_found" });
++        }
+         return json(200, record);
+       },
+     },
+@@ -59,7 +61,11 @@ export function noteRoutes({ store }: NoteDeps): RouteDef[] {
+       pattern: "/api/notes/:id",
+       scope: "write",
+       handler: (_req, ctx) => {
+-        if (!store.deleteNote(ctx.params.id!)) return json(404, { error: "not_found" });
++        const record = store.getNote(ctx.params.id!);
++        if (record === undefined || record.owner !== ctx.auth!.tokenId) {
++          return json(404, { error: "not_found" });
++        }
++        store.deleteNote(record.id);
+         return noContent();
+       },
+     },
+diff --git a/src/store.ts b/src/store.ts
+index 619d162..1f5b62c 100644
+--- a/src/store.ts
++++ b/src/store.ts
+@@ -206,10 +206,11 @@ export class Store {
+   // ── notes ────────────────────────────────────────────────────────────────
+ 
+   /** Create a note. Input is assumed validated by the handler layer. */
+-  createNote(input: { title: string; body: string; tags: string[] }): NoteRecord {
++  createNote(input: { title: string; body: string; tags: string[]; owner: string }): NoteRecord {
+     const id = `note_${this.counters.note++}`;
+     const record: NoteRecord = {
+       id,
++      owner: input.owner,
+       title: input.title,
+       body: input.body,
+       tags: [...input.tags],
+@@ -224,11 +225,12 @@ export class Store {
+     return this.notes.get(id);
+   }
+ 
+-  /** List notes in creation order, optionally filtered by tag. */
+-  listNotes(opts: { tag?: string } = {}): NoteRecord[] {
++  /** List notes in creation order, optionally filtered by tag and/or owner. */
++  listNotes(opts: { tag?: string; owner?: string } = {}): NoteRecord[] {
+     const items: NoteRecord[] = [];
+     for (const record of this.notes.values()) {
+       if (opts.tag !== undefined && !record.tags.includes(opts.tag)) continue;
++      if (opts.owner !== undefined && record.owner !== opts.owner) continue;
+       items.push(record);
+     }
+     return items;
+diff --git a/src/types.ts b/src/types.ts
+index 945ab7c..b85d0b8 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -85,9 +85,11 @@ export interface LinkRecord {
+   createdAt: string;
+ }
+ 
+-/** A stored note. */
++/** A stored note, private to the token that created it. */
+ export interface NoteRecord {
+   id: string;
++  /** Token id of the creator; note endpoints only serve the owner. */
++  owner: string;
+   title: string;
+   body: string;
+   tags: string[];

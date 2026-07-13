@@ -1,0 +1,55 @@
+diff --git a/tests/hidden_jl003.test.ts b/tests/hidden_jl003.test.ts
+new file mode 100644
+index 0000000..b36c7c6
+--- /dev/null
++++ b/tests/hidden_jl003.test.ts
+@@ -0,0 +1,49 @@
++import { describe, expect, test } from "bun:test";
++import { groupBy, pivot, rollup } from "../src/transform.ts";
++
++describe("grouping with hostile keys", () => {
++  test("groups records whose keys collide with Object.prototype members", () => {
++    const records = [
++      { k: "constructor", v: 1 },
++      { k: "__proto__", v: 2 },
++      { k: "hasOwnProperty", v: 3 },
++      { k: "constructor", v: 4 },
++    ];
++    const groups = groupBy(records, (r) => r.k);
++    expect([...groups.keys()]).toEqual(["constructor", "__proto__", "hasOwnProperty"]);
++    expect(groups.get("constructor")!.map((r) => r.v)).toEqual([1, 4]);
++    expect(groups.get("__proto__")!.map((r) => r.v)).toEqual([2]);
++  });
++
++  test("keeps first-seen order for numeric-looking keys", () => {
++    const groups = groupBy([{ k: "10" }, { k: "2" }, { k: "10" }], (r) => r.k);
++    expect([...groups.keys()]).toEqual(["10", "2"]);
++  });
++
++  test("rollup aggregates prototype-named groups", () => {
++    const table = rollup(
++      [
++        { k: "toString", n: 2 },
++        { k: "toString", n: 3 },
++      ],
++      (r) => r.k,
++      { total: (g) => g.reduce((acc, r) => acc + r.n, 0) },
++    );
++    expect(table.get("toString")).toEqual({ total: 5 });
++  });
++
++  test("pivot keeps prototype-named columns", () => {
++    const table = pivot(
++      [
++        { r: "row", c: "__proto__" },
++        { r: "row", c: "regular" },
++      ],
++      (rec) => rec.r,
++      (rec) => rec.c,
++      (g) => g.length,
++      0,
++    );
++    expect(table.columns).toEqual(["__proto__", "regular"]);
++    expect(table.rows).toEqual([{ key: "row", cells: [1, 1] }]);
++  });
++});

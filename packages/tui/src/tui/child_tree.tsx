@@ -18,6 +18,12 @@ export interface ChildRow {
 
 export interface ChildTreeProps {
   nodes: Map<string, ChildRow>;
+  /**
+   * Cap on rendered child rows; overflow collapses to a "+k more" line. Must match the
+   * childTreeHeight() reservation in app.tsx — an uncapped wide DAG would grow the panel
+   * past the reserved rows and overflow the fixed-height frame.
+   */
+  maxRows?: number;
 }
 
 const STATUS_COLOR: Record<ChildRow["status"], string> = {
@@ -34,10 +40,13 @@ const STATUS_GLYPH: Record<ChildRow["status"], string> = {
   failure: "✗",
 };
 
-export function ChildTree({ nodes }: ChildTreeProps) {
+export function ChildTree({ nodes, maxRows }: ChildTreeProps) {
   if (nodes.size === 0) return null;
 
-  const rows = [...nodes.values()].sort((a, b) => a.stepId.localeCompare(b.stepId));
+  const all = [...nodes.values()].sort((a, b) => a.stepId.localeCompare(b.stepId));
+  const cap = Math.max(1, maxRows ?? all.length);
+  const rows = all.slice(0, cap);
+  const hidden = all.length - rows.length;
 
   return (
     <Box
@@ -54,15 +63,19 @@ export function ChildTree({ nodes }: ChildTreeProps) {
         const indent = "  ".repeat(row.depth);
         const color = STATUS_COLOR[row.status];
         const glyph = STATUS_GLYPH[row.status];
+        // One <Text wrap="truncate"> per row: a fixed-width row (indent + 36 cols)
+        // would word-wrap to 2 rows on narrow terminals, breaking childTreeHeight()'s
+        // one-row-per-child reservation — truncation makes the math width-independent.
         return (
-          <Box key={row.stepId}>
+          <Text key={row.stepId} wrap="truncate">
             <Text color="gray">{indent}▸ </Text>
             <Text color={color}>{glyph} </Text>
             <Text>{row.stepId.slice(0, 24).padEnd(24)}</Text>
             <Text color="gray"> ${row.costUsd.toFixed(4)}</Text>
-          </Box>
+          </Text>
         );
       })}
+      {hidden > 0 && <Text color="gray"> …+{hidden} more</Text>}
     </Box>
   );
 }

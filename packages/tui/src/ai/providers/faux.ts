@@ -49,10 +49,20 @@ function estimateUsage(msg: AssistantMessage): void {
   msg.usage.output = Math.max(1, Math.floor(charLen / CHARS_PER_TOKEN));
 }
 
+/** One captured request — lets tests assert on the exact prompt content a model would see. */
+export interface FauxRequest {
+  model: string;
+  systemPrompt: string | null;
+  messageCount: number;
+  /** Concatenated text of the LAST user message — the prompt under test. */
+  user: string;
+}
+
 /** Observable per-registration state. */
 export class FauxProviderState {
   callCount = 0;
   responses: AssistantMessage[] = [];
+  requests: FauxRequest[] = [];
   get pendingResponseCount(): number {
     return this.responses.length;
   }
@@ -115,10 +125,20 @@ class FauxProvider implements Provider {
 
   async *stream(
     model: Model,
-    _context: Context,
-    _opts?: { options?: Record<string, unknown>; signal?: AbortSignal },
+    context: Context,
+    opts?: { options?: Record<string, unknown>; signal?: AbortSignal },
   ): AsyncIterable<StreamEvent> {
+    // Honor a pre-aborted signal like the real providers, so abort behaviour is
+    // exercisable in hermetic tests.
+    if (opts?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     this.state.callCount += 1;
+    const lastUser = [...context.messages].reverse().find((m) => m.role === "user");
+    this.state.requests.push({
+      model: model.id,
+      systemPrompt: context.system_prompt ?? null,
+      messageCount: context.messages.length,
+      user: lastUser?.textContent ?? "",
+    });
     const queued = this.state.responses.shift();
     if (!queued) {
       const err = new AssistantMessage({

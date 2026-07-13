@@ -31,6 +31,8 @@ describe("routingInfoWarnings", () => {
       "exploration_pick",
       "prices_stale",
       "collapse_guard_applied",
+      "escalation_suggested:thin_evidence",
+      "escalation_suggested:wide_interval",
     ]) {
       expect(routingInfoWarnings([w])).toEqual([]);
     }
