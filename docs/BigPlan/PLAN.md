@@ -287,17 +287,30 @@ migration: roll-up on read.
 
 **Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green. ✅
 
-### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — *new Linear issue*
+### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — MUB-141
 
 Same chassis as U2, different content + shortcut; gated by `MINIMA_TUI_GROUND_TRUTH`.
 
+> **Landed (2026-07-13):** `Ctrl+G` is SHARED with Track A's gate-answer modal — an
+> unanswered 🔴 block (and not busy) wins the chord; any other time it opens the overview
+> (answering/dismissing the gate hands the chord back). U3.2's premise was corrected: nothing
+> attributed **cost** to steps (file_changes attributes writes; `routing_decisions` had no
+> step_id) — attribution is created by **migration v8** `routing_decisions.step_id`, stamped
+> at decision-write time from `getInProgressStep` (`runtime.ts` — Track A shared surface,
+> flagged for SWE-A review; feedback upserts COALESCE so they never clear the stamp). Steps
+> with no stamped rung render `—`, never $0. Panel rows clip/pad by **display width**
+> (`string-width`) — code-point math under-counts the double-emoji row leads (⬜🟦✅ + tier).
+> Known cosmetic: the pyte shot emulator misdraws a stale border cell on some emoji rows
+> (same class as U2's ⚙ note); Ink's emitted rows are width-exact (raw-PTY verified).
+> `stepCardLines` (gt_overview.ts) is the shared per-step card J1's `/why` view builds on.
+
 | # | Step | Verify |
 |---|---|---|
-| U3.1 | Content from the ledger: plan title · `step X/N` · per-step status (⬜/🟦/✅, plus 🟢/🟡/🔴 tier once A4 lands) · `verify` cmd · DRIFT flag · gates | render test on seeded GT fixture (`/gt-seed`) |
-| U3.2 | **Per-step cost**: GT already attributes tool calls to steps — join U1 usage by step id; plan-total cost in the footer | aggregation test |
-| U3.3 | Cursor + Enter opens the step's detail card — built as the shared component that becomes J1's `/why` per-step view | scripted test + PTY shot, fullscreen |
+| U3.1 | Content from the ledger: plan title · `step X/N` · per-step status (⬜/🟦/✅ + 🟢/🟡/🔴 tier via `gateVerdictFor`, same reduction as /why) · `verify` cmd · DRIFT flag · gates | `gt_overview.test.ts` render tests on a seeded ledger ✅ |
+| U3.2 | **Per-step cost**: v8 `routing_decisions.step_id` stamp at decision time; `stepCosts` aggregates realized $ per step + plan total (footer) | aggregation tests incl. legacy-null → `—` + upsert-preserves-stamp ✅ |
+| U3.3 | Cursor + Enter opens the step's detail card (`stepCardLines` — becomes J1's `/why` per-step view); Esc back; inline/narrow → one-shot text block | card tests + PTY shots (panel + card) ✅ |
 
-**Exit gate:** seeded-plan shot with statuses + prices; flag-off test (`Ctrl+G` no-ops with a notice).
+**Exit gate:** seeded-plan shot with statuses + prices; flag-off notice (`Ctrl+G` → "Ground-Truth is OFF"). ✅
 
 ---
 
@@ -377,7 +390,7 @@ U1 → U2/U3.
 | B5 /rewind | B | M | ⬜ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
-| U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
+| U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ✅ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
 | J1 /why + subagent + E2E demo | both | L | ⬜ |
 

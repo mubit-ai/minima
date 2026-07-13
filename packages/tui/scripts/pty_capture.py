@@ -23,7 +23,7 @@ Spec (JSON):
     }
 
 Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <BS>
-             <CTRLC> <CTRLL> <CTRLP> <CTRLR> <SPACE>
+             <CTRLC> <CTRLL> <CTRLP> <CTRLR> <CTRLT> <CTRLE> <CTRLG> <SPACE>
 
 Notes:
   - A present CI env var (even empty) flips Ink into non-interactive mode, so it is stripped.
@@ -50,7 +50,7 @@ TOKENS = {
     "<UP>": "\x1b[A", "<DOWN>": "\x1b[B", "<LEFT>": "\x1b[D", "<RIGHT>": "\x1b[C",
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
-    "<CTRLT>": "\x14", "<CTRLE>": "\x05",
+    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07",
     "<SPACE>": " ",
 }
 

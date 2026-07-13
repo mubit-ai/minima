@@ -247,6 +247,13 @@ const MIGRATIONS: string[][] = [
   [
     "ALTER TABLE plan_steps ADD COLUMN check_origin TEXT", // pre_existing|agent_new|user (NULL=compute)
   ],
+  // v8 — per-step cost attribution (U3): the in-progress plan step at routing time, stamped by
+  // the DecisionRecord writer when ground truth is on. This is provenance for reporting (U3
+  // sidebar / J1 /why), never a feedback input. NULL = pre-v8 row or no step in progress.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
+    "CREATE INDEX IF NOT EXISTS ix_decisions_step ON routing_decisions(step_id)",
+  ],
 ];
 
 export interface RunRow {
@@ -301,6 +308,8 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
+  /** In-progress GT plan step at routing time (v8) — reporting provenance, not feedback. */
+  stepId?: string | null;
 }
 
 // ---------------------------------------------------------------- ground-truth rows
@@ -678,12 +687,13 @@ export class MinimaDb {
          chosen_model, decision_basis, selection_policy, confidence, threshold_used, ranked,
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
-         turns, latency_ms, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
          turns = excluded.turns, latency_ms = excluded.latency_ms,
+         step_id = COALESCE(routing_decisions.step_id, excluded.step_id),
          reinforced_entry_ids = excluded.reinforced_entry_ids,
          lesson_promoted = excluded.lesson_promoted`,
       [
@@ -713,6 +723,7 @@ export class MinimaDb {
         d.routed ?? "server",
         d.turns,
         d.latencyMs,
+        d.stepId ?? null,
         d.reinforcedEntryIds?.length ? JSON.stringify(d.reinforcedEntryIds) : null,
         d.lessonPromoted === null || d.lessonPromoted === undefined
           ? null
@@ -728,6 +739,29 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM routing_decisions WHERE run_id = ? ORDER BY ts")
       .all(runId) as Record<string, unknown>[];
+  }
+
+  /**
+   * U3: realized $ per plan step, from the v8 step_id stamp. Realized cost only
+   * (actual_cost_usd) — estimates never masquerade as spend. Steps with no stamped
+   * decisions are absent from the map (the UI renders them as "—", not $0.00).
+   */
+  stepCosts(planId: string): { perStep: Map<string, number>; totalUsd: number } {
+    const rows = this.db
+      .query(
+        `SELECT step_id, SUM(COALESCE(actual_cost_usd, 0)) AS cost
+         FROM routing_decisions
+         WHERE step_id IN (SELECT id FROM plan_steps WHERE plan_id = ?)
+         GROUP BY step_id`,
+      )
+      .all(planId) as { step_id: string; cost: number }[];
+    const perStep = new Map<string, number>();
+    let totalUsd = 0;
+    for (const r of rows) {
+      perStep.set(r.step_id, r.cost);
+      totalUsd += r.cost;
+    }
+    return { perStep, totalUsd };
   }
 
   // ================================================================ ground-truth ledger

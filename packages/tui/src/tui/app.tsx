@@ -68,6 +68,8 @@ import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
+import { GtPanel } from "./gt-panel.tsx";
+import { buildGtOverview, renderGtOverviewText } from "./gt_overview.ts";
 import {
   type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
@@ -944,6 +946,8 @@ export function HarnessApp({
   // height math) and mirrored into a ref so the key handler can gate on it.
   const [tocOpen, setTocOpen] = useState(false);
   const tocGeomRef = useRef<PanelGeometry | null>(null);
+  // U3 (MUB-141): GT Plan Overview sidebar — same chassis/geometry as the ToC panel.
+  const [gtPanelOpen, setGtPanelOpen] = useState(false);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1272,7 +1276,8 @@ export function HarnessApp({
       permPrompt ||
       questionPrompt ||
       configOverlayOpen ||
-      tocOpen // U2: the ToC panel owns ↑/↓/⏎/Esc while open
+      tocOpen || // U2: the ToC panel owns ↑/↓/⏎/Esc while open
+      gtPanelOpen // U3: same contract for the GT Plan Overview panel
     )
       return;
 
@@ -1320,6 +1325,7 @@ export function HarnessApp({
     // Fullscreen with room → overlay panel; inline or too-narrow → one-shot text block.
     if (key.ctrl && input === "t") {
       if (fullscreen && tocGeomRef.current) {
+        setGtPanelOpen(false);
         setTocOpen(true);
       } else {
         setMessages((m) => [
@@ -1329,6 +1335,35 @@ export function HarnessApp({
             text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
             toolName: "toc",
           },
+        ]);
+      }
+      return;
+    }
+
+    // U3 (MUB-141): GT Plan Overview on Ctrl+G — mid-run allowed (read-only, like the ToC).
+    // Shared chord, gate wins: with a 🔴 block armed and not busy this falls through to the
+    // gate-answer arm below (its modal takes Ctrl+G first); any other time Ctrl+G is the
+    // overview. GT off → one-line notice (the flag-off contract).
+    if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
+      if (agent.config.groundTruth !== true) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to see the plan overview.",
+            toolName: "gt",
+          },
+        ]);
+        return;
+      }
+      if (fullscreen && tocGeomRef.current) {
+        setTocOpen(false);
+        setGtPanelOpen(true);
+      } else {
+        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
         ]);
       }
       return;
@@ -2950,12 +2985,33 @@ export function HarnessApp({
     () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
     [tocOpen, messages],
   );
+  // U3: overview snapshot read from the ledger at open time (a slash command or gate can
+  // change it, but both close paths re-open cheaply; live-tracking would re-query per render).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; gtPanelOpen is the real recompute trigger
+  const gtOverview = useMemo(
+    () => (gtPanelOpen && agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null),
+    [gtPanelOpen],
+  );
   // Resize below the minimum while open → close (otherwise input stays captured by a
   // panel that no longer renders). Boolean dep — tocGeom is a fresh object every render.
   const tocGeomOk = tocGeom !== null;
   useEffect(() => {
     if (tocOpen && !tocGeomOk) setTocOpen(false);
   }, [tocOpen, tocGeomOk]);
+  useEffect(() => {
+    if (gtPanelOpen && !tocGeomOk) setGtPanelOpen(false);
+  }, [gtPanelOpen, tocGeomOk]);
+  // No plan in the ledger → nothing to render; close (else the guard list eats input for
+  // an empty overlay) and say why instead.
+  const gtOverviewMissing = gtPanelOpen && gtOverview === null;
+  useEffect(() => {
+    if (!gtOverviewMissing) return;
+    setGtPanelOpen(false);
+    setMessages((m) => [
+      ...m,
+      { role: "tool", text: "No Ground-Truth plan recorded for this run.", toolName: "gt" },
+    ]);
+  }, [gtOverviewMissing]);
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -3046,6 +3102,14 @@ export function HarnessApp({
               geometry={tocGeom}
               onJump={(k) => setScrollOffset(offsetForMessage(messages, k, messagesBudget, cols))}
               onClose={() => setTocOpen(false)}
+            />
+          ) : null}
+          {/* U3: GT Plan Overview — same overpaint contract as the ToC panel above. */}
+          {gtPanelOpen && tocGeom && gtOverview ? (
+            <GtPanel
+              overview={gtOverview}
+              geometry={tocGeom}
+              onClose={() => setGtPanelOpen(false)}
             />
           ) : null}
         </Box>
@@ -3282,6 +3346,12 @@ export function HarnessApp({
             <Text color="gray">Mode </Text>
             <Text color="yellow">ctrl+e </Text>
             <Text color="gray">Reason </Text>
+            {agent.config.groundTruth === true ? (
+              <>
+                <Text color="yellow">ctrl+g </Text>
+                <Text color="gray">Plan </Text>
+              </>
+            ) : null}
             <Text color="yellow">esc </Text>
             <Text color="gray">Abort</Text>
           </Box>
