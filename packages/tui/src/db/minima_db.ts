@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
   Baseline,
+  CheckOrigin,
   ConfidenceTier,
   GateKind,
   GateOutcome,
@@ -224,8 +225,9 @@ const MIGRATIONS: string[][] = [
   // v6 — gate identity: rec_id scopes every gate row to the routed rung that minted it
   // (NULL = pre-identity/manual, invisible to the feedback join by construction);
   // session_id/agent_id are reporting/provenance only, never feedback inputs. plans.closed_at
-  // records closure; plan_steps.verify_cwd is a seam for per-check cwd policy (no writer yet);
-  // user_signals.note carries the steer key's free text.
+  // records closure; plan_steps.verify_cwd carries a per-check working dir (writer added in v7
+  // era — sticky through upsertPlanFromTodos, passed to runCheck); user_signals.note carries the
+  // steer key's free text.
   [
     "ALTER TABLE gates ADD COLUMN rec_id TEXT",
     "ALTER TABLE gates ADD COLUMN session_id TEXT",
@@ -236,6 +238,14 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE user_signals ADD COLUMN note TEXT",
     "CREATE INDEX IF NOT EXISTS ix_gates_rec ON gates(rec_id)",
     "CREATE INDEX IF NOT EXISTS ix_gates_session ON gates(session_id, created_at)",
+  ],
+  // v7 — check provenance: plan_steps.check_origin records who authored a step's check when it
+  // is known up-front (currently 'user' — a check the user accepted at /plan finalize, i.e. NOT
+  // agent-graded homework). NULL means "compute at gate time from the verify + file changes"
+  // (classifyCheckOrigin); a non-NULL value overrides that computation. Provenance is a fact
+  // about who wrote the check, so it persists across content edits (unlike verify/baseline).
+  [
+    "ALTER TABLE plan_steps ADD COLUMN check_origin TEXT", // pre_existing|agent_new|user (NULL=compute)
   ],
 ];
 
@@ -313,6 +323,7 @@ export interface PlanStepRow {
   baseline: Baseline | null;
   created_at: string | null;
   verify_cwd: string | null;
+  check_origin: CheckOrigin | null;
 }
 
 export interface FileChangeRow {
@@ -354,6 +365,7 @@ export interface TodoInput {
   content: string;
   status: string;
   verify?: string | null;
+  verify_cwd?: string | null;
 }
 
 /** M4.1: one step a todowrite would flip to completed — the done-gate's unit of work. */
@@ -365,6 +377,10 @@ export interface CompletionFlip {
   verify: string | null;
   /** The matched step's pre-work baseline (null for new steps or when never captured). */
   baseline: Baseline | null;
+  /** Post-COALESCE working dir for the check (null → runCheck defaults to process.cwd()). */
+  verify_cwd: string | null;
+  /** Stored check provenance, when known up-front (else null → compute at gate time). */
+  check_origin: CheckOrigin | null;
 }
 
 export class MinimaDb {
@@ -694,6 +710,41 @@ export class MinimaDb {
     return id;
   }
 
+  /**
+   * Seed a fresh active plan + its steps from an APPROVED ground-truth plan (the planner→ledger
+   * bridge). Each step is inserted `pending` with its verify; a step that carries a check is
+   * stamped `check_origin='user'` — the user accepted this plan at /plan finalize, so its checks
+   * are user-trusted, not agent-graded homework. Once seeded this becomes the session's active
+   * plan, so formatPlanProjection carries the verifiable steps into the first execution turn and
+   * the agent's first todowrite reuses them (content-match preserves verify + check_origin).
+   */
+  seedPlanFromSteps(
+    sessionId: string,
+    title: string | null,
+    steps: { content: string; verify?: string | null; verifyCwd?: string | null }[],
+  ): { planId: string; stepIds: string[] } {
+    const planId = this.insertPlan({ sessionId, title, status: "active" });
+    const stepIds: string[] = [];
+    const tx = this.db.transaction(() => {
+      steps.forEach((st, i) => {
+        const verify = st.verify?.trim() ? st.verify.trim() : null;
+        stepIds.push(
+          this.insertStep({
+            planId,
+            idx: i,
+            content: st.content,
+            status: "pending",
+            verify,
+            verifyCwd: st.verifyCwd?.trim() ? st.verifyCwd.trim() : null,
+            checkOrigin: verify ? "user" : null,
+          }),
+        );
+      });
+    });
+    tx();
+    return { planId, stepIds };
+  }
+
   /** The newest still-active plan for a session (run), or null. */
   getActivePlan(sessionId: string): PlanRow | null {
     return (
@@ -750,10 +801,12 @@ export class MinimaDb {
     status?: string;
     verify?: string | null;
     baseline?: Baseline | null;
+    verifyCwd?: string | null;
+    checkOrigin?: CheckOrigin | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -763,6 +816,8 @@ export class MinimaDb {
         opts.verify ?? null,
         opts.baseline ?? null,
         new Date().toISOString(),
+        opts.verifyCwd ?? null,
+        opts.checkOrigin ?? null,
       ],
     );
     return id;
@@ -874,6 +929,8 @@ export class MinimaDb {
         stepId: prev?.id ?? null,
         verify: t.verify ?? prev?.verify ?? null,
         baseline: verifyChanged ? null : (prev?.baseline ?? null),
+        verify_cwd: t.verify_cwd ?? prev?.verify_cwd ?? null,
+        check_origin: prev?.check_origin ?? null,
       });
     }
     return flips;
@@ -917,7 +974,11 @@ export class MinimaDb {
     sessionId: string,
     tasks: TodoInput[],
     title?: string | null,
-  ): { planId: string; stepIds: string[]; started: { id: string; verify: string | null }[] } {
+  ): {
+    planId: string;
+    stepIds: string[];
+    started: { id: string; verify: string | null; verify_cwd: string | null }[];
+  } {
     const existingPlan = this.planForTodos(sessionId, tasks);
     if (existingPlan && existingPlan.status === "done") {
       this.setPlanStatus(existingPlan.id, "active");
@@ -928,7 +989,7 @@ export class MinimaDb {
     const existing = this.getPlanSteps(planId);
     const matchedSteps = this.matchStepsToTodos(existing, tasks);
     const stepIds: string[] = [];
-    const started: { id: string; verify: string | null }[] = [];
+    const started: { id: string; verify: string | null; verify_cwd: string | null }[] = [];
     const tx = this.db.transaction(() => {
       const matched = new Set<string>();
       for (let i = 0; i < tasks.length; i++) {
@@ -940,8 +1001,17 @@ export class MinimaDb {
           // always be scoped to the check that produced the red (a swapped-in check crediting
           // the old check's red would fabricate verified_in_production).
           this.db.run(
-            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify) WHERE id = ?",
-            [i, t.content, t.status, t.verify ?? null, t.verify ?? null, t.verify ?? null, prev.id],
+            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify), verify_cwd = COALESCE(?, verify_cwd) WHERE id = ?",
+            [
+              i,
+              t.content,
+              t.status,
+              t.verify ?? null,
+              t.verify ?? null,
+              t.verify ?? null,
+              t.verify_cwd ?? null,
+              prev.id,
+            ],
           );
           stepIds.push(prev.id);
           const entered = t.status === "in_progress" && prev.status !== "in_progress";
@@ -953,7 +1023,11 @@ export class MinimaDb {
             prev.verify !== null &&
             t.verify !== prev.verify;
           if (changedVerify || ((entered || gainedVerify) && prev.baseline === null)) {
-            started.push({ id: prev.id, verify: t.verify ?? prev.verify ?? null });
+            started.push({
+              id: prev.id,
+              verify: t.verify ?? prev.verify ?? null,
+              verify_cwd: t.verify_cwd ?? prev.verify_cwd ?? null,
+            });
           }
         } else {
           const id = this.insertStep({
@@ -962,9 +1036,11 @@ export class MinimaDb {
             content: t.content,
             status: t.status,
             verify: t.verify ?? null,
+            verifyCwd: t.verify_cwd ?? null,
           });
           stepIds.push(id);
-          if (t.status === "in_progress") started.push({ id, verify: t.verify ?? null });
+          if (t.status === "in_progress")
+            started.push({ id, verify: t.verify ?? null, verify_cwd: t.verify_cwd ?? null });
         }
       }
       for (const s of existing) {

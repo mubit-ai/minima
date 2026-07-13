@@ -1808,14 +1808,39 @@ export function HarnessApp({
             pushPlan(`Failed to write ${outPath}: ${errText(exc)}`, true);
             break;
           }
+          // Bridge the approved plan into the check-engine ledger: seed each implementation step
+          // (with its verify) as a pending, user-origin plan step so execution inherits the
+          // deliberated verifiable steps instead of re-inventing them. Fail-open: seeding is
+          // bookkeeping and must never block finalize.
+          let seededCount = 0;
+          if (agent.db && agent.runId && synth && synth.approach.length > 0) {
+            try {
+              const seedSteps = synth.approach
+                .map((st) => ({ content: st.action.trim(), verify: st.verify }))
+                .filter((st) => st.content.length > 0);
+              if (seedSteps.length > 0) {
+                seededCount = agent.db.seedPlanFromSteps(
+                  agent.runId,
+                  synth.title || null,
+                  seedSteps,
+                ).stepIds.length;
+              }
+            } catch {
+              // fail-open
+            }
+          }
           exitPlanMode();
+          const seededNote =
+            seededCount > 0
+              ? ` ${seededCount} verifiable step${seededCount === 1 ? "" : "s"} seeded to the plan ledger.`
+              : "";
           setMessages((m) => [
             ...m,
             { role: "user", text: `/${name} ${args}`.trim() },
             { role: "tool", text: md, toolName: "plan" },
             {
               role: "tool",
-              text: `Ground truth written: ${outPath}. Plan mode OFF — write access restored.`,
+              text: `Ground truth written: ${outPath}.${seededNote} Plan mode OFF — write access restored.`,
               toolName: "plan",
             },
           ]);

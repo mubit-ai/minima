@@ -351,6 +351,8 @@ export const GROUND_TRUTH_SYSTEM_GUIDANCE = [
   "`bun test tests/foo.test.ts`). Do not wait until the step is done to add it.",
   "Marking a step completed runs its `verify` first; the completion is REFUSED unless the check",
   "passes, so a step whose check you cannot yet make pass is simply not done.",
+  "If you cannot name a `verify` for a step, that step is too vague — decompose it into smaller",
+  "steps each of which CAN be checked, rather than leaving it unverified.",
   "A pure-scaffolding step with no runnable check may omit `verify` — it will be flagged for review,",
   "not verified. Never write a throwaway test just to have a green check.",
 ].join("\n");
@@ -366,7 +368,14 @@ export function formatPlanProjection(plan: PlanRow, steps: PlanStepRow[]): strin
   const pos = activeStepPos(steps);
   const lines = steps.map((s, i) => {
     const mark = s.status === "completed" ? "x" : s.status === "in_progress" ? ">" : " ";
-    const verify = s.verify ? ` — verify: \`${s.verify}\`` : "";
+    // State-backed nudge (survives compaction): a not-yet-done step with no check is flagged so
+    // the model is reminded, every turn, to add a verify or decompose it. Nudge only — never a
+    // block. Completed steps are past the point of nudging.
+    const verify = s.verify
+      ? ` — verify: \`${s.verify}\``
+      : s.status === "completed"
+        ? ""
+        : " — ⚠ no verify (decompose or add a check)";
     return `${i + 1}. [${mark}] ${s.content ?? ""}${verify}`;
   });
   const header = `# Current plan (step ${pos}/${steps.length}${plan.title ? ` — ${plan.title}` : ""})`;
@@ -591,6 +600,7 @@ export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
               const result = await runCheck(s.verify, {
                 timeoutMs: Math.min(remaining, resolveCheckTimeoutMs()),
                 signal: ref.runSignal ?? undefined,
+                cwd: s.verify_cwd ?? undefined,
               });
               // A user abort is NO EVIDENCE: leave the baseline NULL (signal lost, never
               // fabricated) and stop — the whole run is being torn down anyway.
@@ -692,6 +702,51 @@ const MUTATING_SIBLINGS = new Set(["write", "edit", "apply_patch", "bash", "task
 
 function soloCompletionReason(names: string[]): string {
   return `This todowrite marks steps completed, but the same message also calls ${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
+}
+
+/**
+ * M4.3 milestone gate — one plan-level rollup written exactly once, when the plan closes (every
+ * step completed). It aggregates the TERMINAL verdict per step (the latest gate row per step_id,
+ * since getGates is oldest-first): outcome is `verified` only when every step's terminal gate is
+ * verified, else `unchecked`; confidence is the WORST tier across steps (red wins); verified_by is
+ * `deterministic` only when every terminal step gate was deterministic. Because closure can only
+ * fire once all steps completed — and completion already refuses any failed/unrunnable check — the
+ * rollup is derived purely from real step verdicts (no fabricated quality). Rec-scoped like step
+ * gates so groundedOutcomeFor can factor it; conservative by construction, so it can never make a
+ * run look more verified than its steps already are. Fail-open: any error skips the milestone.
+ */
+function writeMilestoneGate(db: MinimaDb, planId: string, ref: GtAgentRef, session: string): void {
+  const stepGates = db.getGates(planId).filter((g) => g.kind === "step_check");
+  const latestByStep = new Map<string, GateRow>();
+  for (const g of stepGates) if (g.step_id) latestByStep.set(g.step_id, g); // oldest-first → last wins
+  const finals = [...latestByStep.values()];
+  if (finals.length === 0) return; // nothing verified to roll up (all steps were verify-less)
+
+  let worst: ConfidenceTier = "green";
+  let allVerified = true;
+  let allDeterministic = true;
+  for (const g of finals) {
+    const tier = gateVerdictFor(g).tier ?? "yellow";
+    if (TIER_BADNESS[tier] > TIER_BADNESS[worst]) worst = tier;
+    if (g.outcome !== "verified") allVerified = false;
+    if (g.verified_by !== "deterministic") allDeterministic = false;
+  }
+  db.insertGate({
+    planId,
+    stepId: null,
+    kind: "milestone",
+    outcome: allVerified ? "verified" : "unchecked",
+    confidence: worst,
+    verifiedBy: allVerified && allDeterministic ? "deterministic" : null,
+    factors: {
+      milestone: true,
+      steps: finals.length,
+      verified: finals.filter((g) => g.outcome === "verified").length,
+    },
+    recId: ref.currentRecId ?? null,
+    sessionId: session,
+    agentId: ref.agentId ?? null,
+  });
 }
 
 /**
@@ -854,13 +909,17 @@ export function groundTruthHooks(
         const result = await runCheck(flip.verify, {
           timeoutMs: capMs,
           signal: ref.runSignal ?? undefined,
+          cwd: flip.verify_cwd ?? undefined,
         });
         const factors: GateFactors = {
           pass: result.pass,
           redToGreen: flip.baseline === "red" && result.pass,
           hasCheck: true,
           // M5.1 provenance / M5.2 coverage / M5.3 tamper — computed from this run's file_changes.
-          checkOrigin: classifyCheckOrigin(flip.verify, fileChanges),
+          // A stored check_origin (e.g. 'user' on a step seeded from an approved plan) is
+          // authoritative and overrides the gate-time classification — a user-accepted check is
+          // not agent-graded homework.
+          checkOrigin: flip.check_origin ?? classifyCheckOrigin(flip.verify, fileChanges),
           coverageHit: computeCoverageHit(flip.verify, fileChanges, fs),
           tamper,
           blind,
@@ -992,6 +1051,7 @@ export function groundTruthHooks(
       try {
         const steps = db.getPlanSteps(plan.id);
         if (steps.length > 0 && steps.every((s) => s.status === "completed")) {
+          writeMilestoneGate(db, plan.id, ref, session);
           db.setPlanStatus(plan.id, "done");
         }
       } catch {

@@ -304,13 +304,24 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
 
     // Gate rows written by the hooks, not seeded — the blocked attempt then the recovered pass,
     // both attributed to the same step, with measured factors (the red→green flip is real).
-    const gateRows = db.getGates(plan.id);
-    expect(gateRows.map((g) => g.outcome)).toEqual(["failed", "verified"]);
-    expect(gateRows.map((g) => g.step_id)).toEqual([step.id, step.id]);
-    expect(gateRows.map((g) => g.rec_id)).toEqual(["rec-1", "rec-2"]); // minted inside their rungs
-    const passFactors = JSON.parse(gateRows[1]!.factors_json!) as Record<string, unknown>;
+    const stepGates = db.getGates(plan.id).filter((g) => g.kind === "step_check");
+    expect(stepGates.map((g) => g.outcome)).toEqual(["failed", "verified"]);
+    expect(stepGates.map((g) => g.step_id)).toEqual([step.id, step.id]);
+    expect(stepGates.map((g) => g.rec_id)).toEqual(["rec-1", "rec-2"]); // minted inside their rungs
+    const passFactors = JSON.parse(stepGates[1]!.factors_json!) as Record<string, unknown>;
     expect(passFactors.redToGreen).toBe(true); // measured against the captured baseline
     expect(db.getPlanSteps(plan.id)[0]!.status).toBe("completed");
+
+    // Plan closure wrote exactly one milestone gate rolling up the terminal step verdict: the
+    // step verified (yellow, no coverage), so the milestone is verified/yellow, minted under the
+    // rung that closed the plan (rec-2), attributed to no single step.
+    const milestones = db.getGates(plan.id).filter((g) => g.kind === "milestone");
+    expect(milestones).toHaveLength(1);
+    expect(milestones[0]!.outcome).toBe("verified");
+    expect(milestones[0]!.confidence).toBe("yellow");
+    expect(milestones[0]!.verified_by).toBe("deterministic");
+    expect(milestones[0]!.step_id).toBeNull();
+    expect(milestones[0]!.rec_id).toBe("rec-2");
 
     // DB dump: two routing rows, per model, each with a grounded outcome stamped (M7.1) and the
     // grounded loss/win recorded (M7.3), chained by parent_rec_id. Live tiers are honest: the

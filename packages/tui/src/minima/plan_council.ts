@@ -26,6 +26,7 @@ import {
   type OpenQuestion,
   type PlanSession,
   type SurfacedQuestion,
+  type SynthPlanStep,
   fenceUntrusted,
 } from "./plan_session.ts";
 import type { MinimaAgent } from "./runtime.ts";
@@ -612,11 +613,11 @@ const GROUND_TRUTH_SYSTEM = `You are the RECORDER of a planning council writing 
  "requirements": ["specific functional/behavioral requirement", "..."],
  "constraints": ["hard constraint: language, runtime, no-deps, style, etc.", "..."],
  "decisions": [{"topic": "short label", "decision": "what was decided", "rationale": "why"}],
- "approach": ["ordered, detailed implementation step", "..."],
+ "approach": [{"action": "ordered, detailed implementation step", "verify": "shell command or observable check that proves THIS step landed — red before, green after (e.g. a test, a build, an exit code). If you cannot name one, the step is too vague — split it into steps you can."}],
  "risks": ["risk, edge case, or gotcha to handle", "..."],
- "successCriteria": ["how to verify it is done / tests to pass", "..."],
+ "successCriteria": ["end-to-end acceptance check for the whole plan / tests to pass", "..."],
  "openItems": ["anything genuinely deferred — should be rare", "..."]}
-Fill every field as richly as the conversation supports; only leave a field empty when there is truly nothing to say. ${UNTRUSTED}`;
+Every implementation step in "approach" MUST carry a concrete "verify"; a step whose completion cannot be checked is too coarse — decompose it until each piece has a check. Fill every field as richly as the conversation supports; only leave a field empty when there is truly nothing to say. ${UNTRUSTED}`;
 
 /**
  * Distil the whole planning conversation + accumulated council state into a detailed, structured
@@ -674,7 +675,7 @@ export async function synthesizeGroundTruth(
     requirements: asStrList(raw.requirements),
     constraints: asStrList(raw.constraints),
     decisions: sanitizeDecisions(raw.decisions),
-    approach: asStrList(raw.approach),
+    approach: sanitizeApproach(raw.approach),
     risks: asStrList(raw.risks),
     successCriteria: asStrList(raw.successCriteria),
     openItems: asStrList(raw.openItems),
@@ -702,6 +703,28 @@ function sanitizeFindings(raw: unknown, defaultSource: Finding["source"]): Findi
       }),
     )
     .filter((f) => f.summary.length > 0);
+}
+
+/**
+ * Normalize the "approach" field into structured {action, verify} steps. Tolerant of the legacy
+ * shape (a bare string → {action, verify:""}) and of a partial object missing "verify", so a
+ * cached/older model response never throws and always renders (verify-less steps become a
+ * decompose nudge downstream). Steps with an empty action are dropped.
+ */
+function sanitizeApproach(raw: unknown): SynthPlanStep[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SynthPlanStep[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      const action = item.trim();
+      if (action) out.push({ action, verify: "" });
+    } else if (item && typeof item === "object") {
+      const r = item as Record<string, unknown>;
+      const action = asStr(r.action) || asStr(r.step) || asStr(r.task);
+      if (action) out.push({ action, verify: asStr(r.verify) });
+    }
+  }
+  return out;
 }
 
 function sanitizeDecisions(raw: unknown): SynthOutput["decisions"] {

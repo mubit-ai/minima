@@ -40,7 +40,14 @@ describe("MinimaDb.adoptActivePlans (resume)", () => {
       { content: "B", status: "pending" },
     ]);
     expect(flips).toEqual([
-      { content: "A", stepId: stepIds[0]!, verify: "exit 1", baseline: "red" },
+      {
+        content: "A",
+        stepId: stepIds[0]!,
+        verify: "exit 1",
+        baseline: "red",
+        verify_cwd: null,
+        check_origin: null,
+      },
     ]);
     // The projection points at the adopted plan.
     expect(planStripInfo(d, "new-run")?.stepTotal).toBe(2);

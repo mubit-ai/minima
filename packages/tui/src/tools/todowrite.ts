@@ -49,8 +49,9 @@ export function todowriteTool(
         "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
         "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
         "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
-        "feature, a fix, a test) — a real test/build command that proves it. A pure-scaffolding task " +
-        "with no runnable check may omit it. " +
+        "feature, a fix, a test) — a real test/build command that proves it. If you cannot name a " +
+        "verify for a task, it is too vague — split it into tasks you can check. A pure-scaffolding " +
+        "task with no runnable check may omit it. " +
         "Marking a task completed runs its verify first — the completion is refused unless the check passes."
       : "Track a task list for multi-step coding work. Pass a JSON array: " +
         '[{"content":"add tests","status":"pending","priority":"high"}]. ' +

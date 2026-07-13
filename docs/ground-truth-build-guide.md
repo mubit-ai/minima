@@ -112,7 +112,20 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 | 8     | M8.1 `/why`                     | ✅    | ledger-backed command + seeded PTY proof; ready for live gate rows           |
 | 8     | M8.2 E2E demo                   | ✅    | `tests/gt-e2e.test.ts` — test 1: seeded 🟢🟡🔴+drift footer snapshot + DB dump; test 2: the **live-gate join** — the route→run→feedback→escalation loop drives the real todowrite hooks (plan, red baseline, blocked attempt, red→green verified row; no seeded gates) and stamps grounded outcomes |
 
-> **The whole DB layer is already built (schema v5).** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). **No further migrations are required.** The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit migrations v1–v5; if a genuinely new column is ever needed, append a **v6**.
+> **The whole DB layer is already built.** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit shipped migration batch strings; if a genuinely new column is needed, append the next version (schema is now at **v7** — `plan_steps.check_origin`).
+
+### Stage 9 — verifiable-steps planner bridge (shipped)
+
+Connects the `/plan` design council to the check engine and fills the reserved contract seams, so the deliberated plan flows into the checkable-step machinery instead of being re-invented ad hoc. **Nudge/advise enforcement** — a step with no `verify` still proceeds as 🟡 `unchecked`; nothing new hard-blocks.
+
+| MP     | State | Note                                                                                                     |
+| ------ | ----- | ------------------------------------------------------------------------------------------------------- |
+| S9.1 planner authors `verify:` per step | ✅ | `GroundTruthSynthesis.approach` is now `SynthPlanStep[]` (`{action, verify}`); `GROUND_TRUTH.md` renders a `verify:` sub-line per Implementation-Plan step and a decompose nudge when absent; `sanitizeApproach` tolerates the legacy string shape |
+| S9.2 planner → ledger bridge            | ✅ | `MinimaDb.seedPlanFromSteps` seeds an active plan from the approved steps at `/plan finalize`; `formatPlanProjection` carries them (with verify) into the first execution turn |
+| S9.3 `check_origin='user'` producer     | ✅ | migration v7 `plan_steps.check_origin`; seeded steps that carry a check are stamped `user`; the done-gate prefers a stored origin over `classifyCheckOrigin`, so a user-approved check is not "agent-graded homework" |
+| S9.4 `verify_cwd` writer                | ✅ | the v6 seam gets a writer: sticky through `upsertPlanFromTodos`, surfaced on `CompletionFlip`/`started`, passed to `runCheck({cwd})` at both baseline capture and the done-gate |
+| S9.5 milestone gate                     | ✅ | on plan closure `writeMilestoneGate` emits exactly one `kind='milestone'` rollup of the terminal per-step verdicts (worst tier wins, `verified` only when every step verified, `deterministic` only when all step gates were); rec-scoped and conservative, so it can never inflate a run |
+| S9.6 execution nudge                    | ✅ | strengthened `GROUND_TRUTH_SYSTEM_GUIDANCE` + todowrite description with the decompose-if-unverifiable rule; state-backed projection annotation flags any not-yet-done verify-less step every turn |
 
 **Next steps — the critical path ("make it trustworthy").** Stages 0–4 shipped: the system is _watchable_ and _verifiable_ (a step cannot reach done unless its `verify` passes; every completion leaves a durable gate row). The payoff now is making those verdicts _trustworthy_ and feeding them back. Do these in order:
 

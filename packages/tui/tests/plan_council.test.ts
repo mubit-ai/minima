@@ -689,21 +689,50 @@ describe("synthesizeGroundTruth", () => {
     expect(result).not.toBeNull();
     expect(result!.title).toBe("Binary search in Python");
     expect(result!.constraints).toContain("Python 3");
-    expect(result!.approach).toEqual(["Write binary_search.py", "Add pytest cases"]);
+    // Legacy string form is tolerated: each string becomes a step with an empty (nudge) verify.
+    expect(result!.approach).toEqual([
+      { action: "Write binary_search.py", verify: "" },
+      { action: "Add pytest cases", verify: "" },
+    ]);
     expect(reg.state.callCount).toBe(1);
+  });
+
+  test("parses structured {action, verify} steps from the model", async () => {
+    reg.setResponses([
+      json({
+        title: "T",
+        goal: "g",
+        approach: [
+          { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py" },
+          { action: "Wire it up" }, // missing verify → tolerated as empty
+        ],
+      }),
+    ]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: go", {
+      metaModel: META_MODEL,
+    });
+    expect(result!.approach).toEqual([
+      { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py" },
+      { action: "Wire it up", verify: "" },
+    ]);
   });
 
   test("returns null on an essentially-empty model reply so finalize falls back", async () => {
     reg.setResponses([json({})]);
     const store = new PlanSessionStore("g");
-    const result = await synthesizeGroundTruth(store.session, "User: hi", { metaModel: META_MODEL });
+    const result = await synthesizeGroundTruth(store.session, "User: hi", {
+      metaModel: META_MODEL,
+    });
     expect(result).toBeNull();
   });
 
   test("returns null (never throws) when the model errors", async () => {
     reg.setResponses([msg("not json at all — total garbage")]);
     const store = new PlanSessionStore("g");
-    const result = await synthesizeGroundTruth(store.session, "User: hi", { metaModel: META_MODEL });
+    const result = await synthesizeGroundTruth(store.session, "User: hi", {
+      metaModel: META_MODEL,
+    });
     expect(result).toBeNull();
   });
 });

@@ -146,8 +146,10 @@ function changedThisRun(changes: readonly FileChangeRow[]): FileChangeRow[] {
  *   - Otherwise → `pre_existing`. This includes a `verify` that names no test file at all
  *     (a project-level gate like `bun run check`), which the agent did not author this run.
  *
- * `user` (a check attached at approval) is reserved in the contract but not produced here —
- * no approval-time verify seam exists yet.
+ * `user` (a check attached at approval) is never produced HERE — this function only distinguishes
+ * agent_new from pre_existing. A user-origin check is recorded out-of-band as `plan_steps.check_origin`
+ * (steps seeded from an approved /plan via `seedPlanFromSteps`); the done-gate prefers that stored
+ * origin over this classification, so a user-accepted check is not graded as agent homework.
  */
 export function classifyCheckOrigin(
   verify: string | null | undefined,
