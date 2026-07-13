@@ -31,6 +31,11 @@ The deep version: **[`characteristics-of-successful-plans.md`](./characteristics
 
 The actionable checklist: **[`playbook.md`](./playbook.md)**
 
+How production harnesses (Claude Code / Codex / OpenCode) satisfy the 7 properties:
+**[`harness-research.md`](./harness-research.md)**
+
+How to apply those practices in Minima's TUI harness: **[`minima-harness-application-guide.md`](./minima-harness-application-guide.md)**
+
 Where each claim came from: **[`sources.md`](./sources.md)**
 
 ---
@@ -42,6 +47,9 @@ Where each claim came from: **[`sources.md`](./sources.md)**
 | `README.md` (this) | Entry point, TL;DR, navigation | you want the 60-second answer |
 | `characteristics-of-successful-plans.md` | The 7 properties, why each works, failure modes, evidence | you want to understand the theory |
 | `playbook.md` | Step-by-step checklist + a plan template + scoring rubric | you're about to write a plan and want it to be good |
+| `harness-research.md` | How Claude Code / Codex / OpenCode actually satisfy the 7 properties | you want to learn from production harnesses |
+| `minima-harness-application-guide.md` | Gap analysis + prioritized roadmap for Minima's TUI harness | you're editing `packages/tui/` or the GT contract |
+| `workflow-diagrams.md` | Visual reference for the Minima GT loop (ledger, gates, confidence tiers) | you want to see the in-production flow |
 | `sources.md` | Annotated bibliography with the key takeaway per source | you want to verify a claim or go deeper |
 
 ---
