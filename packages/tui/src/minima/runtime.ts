@@ -21,6 +21,7 @@ import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
+import type { AskUserRef } from "../tools/question.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import {
@@ -35,6 +36,7 @@ import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
+import { makeStopGate } from "./stop_gate.ts";
 
 /** Inspect/override a recommendation before the model runs. Return a result to override;
  * null to accept as-is; a result with recommendationId=null to veto (no feedback attribution). */
@@ -93,6 +95,10 @@ export class MinimaAgent extends Agent {
   runId: string | null = null;
   /** Set for sub-agents so their rows demux from the lead's. */
   agentId: string | null = null;
+  /** Late-bound ask channel (A2 stop-gate). The TUI populates `.current` on mount; null in
+   * headless. Read at run-stop so the stop-gate can raise the "keep going / accept / steer"
+   * overlay once its strikes are spent. */
+  askUser: AskUserRef | null = null;
   /** Budget following (optional): reserve-after-route / reconcile-after-run, graduated
    * warnings, and (enforce mode) refusal once exhausted. */
   budget: BudgetLedger | null = null;
@@ -284,15 +290,39 @@ export class MinimaAgent extends Agent {
             throw new Error(r.reason);
           }
         }
-        // Mid-run stop: once realized spend crosses the limit, finish the CURRENT turn
-        // (the model gets its wrap-up) and stop gracefully — no partial-tool corruption.
+        // Per-turn stop seam (single slot): compose the budget cutoff and the ground-truth
+        // stop-gate into one function so neither clobbers the other. Budget wins first (finish the
+        // CURRENT turn on cross, stop gracefully — no partial-tool corruption); the stop-gate then
+        // decides whether an END-of-run with unfinished/failing steps is allowed (A2). Rebuilt per
+        // rung so the stop-gate's strike counter resets on each recovery attempt.
+        let budgetStop: ((a: AssistantMessage) => boolean) | null = null;
         if (this.budget) {
           let runSpend = 0;
           const limitLeft = this.budget.status().remainingUsd;
           const enforce = this.budget.mode === "enforce";
-          this.setShouldStopAfterTurn(async (assistant) => {
+          budgetStop = (assistant) => {
             runSpend += assistant.usage.cost.total;
             return enforce && runSpend >= limitLeft;
+          };
+        }
+        const gtStop =
+          this.config.groundTruth && this.config.stopStrikes > 0
+            ? makeStopGate({
+                db: this.db,
+                sessionId: this.runId,
+                agentId: this.agentId,
+                maxStrikes: this.config.stopStrikes,
+                askUser: this.askUser,
+              })
+            : null;
+        // Install ONLY when we have something to install. If neither applies, leave the slot
+        // untouched — a sub-agent's per-node budget cutoff arrives as a CONSTRUCTOR-provided
+        // shouldStopAfterTurn (spawn.ts), and clobbering it here would silently disable it.
+        const installedStop = Boolean(budgetStop || gtStop);
+        if (installedStop) {
+          this.setShouldStopAfterTurn(async (assistant, results, state, messages) => {
+            if (budgetStop?.(assistant)) return true;
+            return gtStop ? gtStop(assistant, results, state, messages) : false;
           });
         }
         // Everything appended from here belongs to THIS rung (for rung-total usage). The
@@ -309,7 +339,9 @@ export class MinimaAgent extends Agent {
           runError = exc;
         } finally {
           this.currentRecId = null;
-          if (this.budget) this.setShouldStopAfterTurn(null);
+          // Clear ONLY a seam we installed above; never null out a constructor-provided hook
+          // (sub-agent budget cutoff) that we deliberately left in place.
+          if (installedStop) this.setShouldStopAfterTurn(null);
         }
         const latencyMs = Date.now() - start;
         const turnsTaken = this.agentState.turnsTaken;

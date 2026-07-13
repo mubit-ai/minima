@@ -113,6 +113,9 @@ function setup(
     allowOffline: false,
     minimaApiKey: "k",
     groundTruth: opts.groundTruth ?? false,
+    // The ladder tests script the model-routing recovery loop, not the A2 stop-gate; disable the
+    // stop-gate so its force-continue can't exhaust the mock and spuriously trip escalation.
+    stopStrikes: 0,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const agent = new MinimaAgent({ config, router, judge, meter: new CostMeter(), tools: [] });

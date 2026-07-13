@@ -109,6 +109,9 @@ function setup(judge: ReturnType<typeof countingJudge>) {
     allowOffline: false,
     minimaApiKey: "k",
     groundTruth: true,
+    // These tests seed an in_progress step purely as a feedback-path fixture; they are not about
+    // the A2 stop-gate, so disable it (its default would force-continue the single-response mock).
+    stopStrikes: 0,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const db = new MinimaDb(":memory:");

@@ -45,6 +45,11 @@ export interface HarnessConfig {
   /** Ground-Truth ledger (staged, default OFF): persist/project the plan, attribute file
    * changes, and record verification gates. Gated by MINIMA_TUI_GROUND_TRUTH=1. */
   groundTruth: boolean;
+  /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
+   * END the run while the plan has incomplete/failing steps before it stops denying and asks the
+   * user. `MINIMA_TUI_STOP_STRIKES`, default 3; 0 disables the stop-gate entirely (pure-nudge
+   * behavior). Only consulted when `groundTruth` is on — inert on the default path. */
+  stopStrikes: number;
   /** Soft USD cap per plan-mode council round (MINIMA_PLAN_ROUND_BUDGET_USD). Read only by
    * the groundTruth /plan workflow — inert on the default path. */
   planRoundBudgetUsd: number;
@@ -67,6 +72,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     cacheEnabled: false,
     cacheThreshold: 0.95,
     groundTruth: false,
+    stopStrikes: 3,
     planRoundBudgetUsd: 0.25,
     ...overrides,
   };
@@ -82,6 +88,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(t)) cfg.timeout = t;
   }
   cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH === "1";
+  const strikesEnv = process.env.MINIMA_TUI_STOP_STRIKES;
+  if (strikesEnv !== undefined) {
+    const n = Number(strikesEnv);
+    if (Number.isInteger(n) && n >= 0) cfg.stopStrikes = n;
+  }
   const roundBudgetEnv = process.env.MINIMA_PLAN_ROUND_BUDGET_USD;
   if (roundBudgetEnv) {
     const b = Number(roundBudgetEnv);

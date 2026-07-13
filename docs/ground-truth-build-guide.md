@@ -127,6 +127,15 @@ Connects the `/plan` design council to the check engine and fills the reserved c
 | S9.5 milestone gate                     | ✅ | on plan closure `writeMilestoneGate` emits exactly one `kind='milestone'` rollup of the terminal per-step verdicts (worst tier wins, `verified` only when every step verified, `deterministic` only when all step gates were); rec-scoped and conservative, so it can never inflate a run |
 | S9.6 execution nudge                    | ✅ | strengthened `GROUND_TRUTH_SYSTEM_GUIDANCE` + todowrite description with the decompose-if-unverifiable rule; state-backed projection annotation flags any not-yet-done verify-less step every turn |
 
+### Track A — UX primitives (shipped)
+
+Small, independently-shippable UX primitives layered on the verifiable core. Each stays behind `MINIMA_TUI_GROUND_TRUTH` and keeps `bun test`/`tsc` green.
+
+| MP  | State | Note                                                                                                                              |
+| --- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A1 Verify primitive       | ✅ | the planner authors a `verify:` per step (red→green check command); seeded into the ledger and carried into execution            |
+| A2 Stop-gate + block-done | ✅ | run-level complement to the per-step done-gate: `src/minima/stop_gate.ts` hangs off the loop's `shouldStopAfterTurn` seam and **denies the agent ENDING the run** while the active plan has an incomplete step or a completed step whose latest gate `outcome='failed'` (`unrunnable` is never a block). Each denial pushes a firm continuation into `state.followUp` (the loop re-drives the model) and spends a strike; after N strikes (`MINIMA_TUI_STOP_STRIKES`, default **3**, `0`=off) it stops fighting and **asks** — interactive raises the question overlay (keep going / accept as done / freetext steer), headless just ends. Either terminus writes one audit-only `kind='stop'` gate (`outcome='unchecked'`, `confidence='red'`, **`rec_id=NULL`** so it is invisible to the feedback join by construction — never inflates/fails a rung). Composed with the budget stop in `promptRouted`; fresh strike counter per recovery rung. Tests: `tests/stop-gate.test.ts` (unit) + `tests/stop-gate-runtime.test.ts` (live loop). New gate kind `stop` added to `gt_contract.ts`. |
+
 **Next steps — the critical path ("make it trustworthy").** Stages 0–4 shipped: the system is _watchable_ and _verifiable_ (a step cannot reach done unless its `verify` passes; every completion leaves a durable gate row). The payoff now is making those verdicts _trustworthy_ and feeding them back. Do these in order:
 
 1. **M5.1 provenance** — replace the gate's hardcoded `checkOrigin: "agent_new"` with real classification (pre-existing test vs agent-authored this run vs user-supplied at approval) recorded into `factors_json`.

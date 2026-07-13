@@ -24,7 +24,7 @@ describe("gt_contract frozen value sets", () => {
     expect(GATE_OUTCOMES).toEqual(["verified", "failed", "unrunnable", "unchecked"]);
     expect(CONFIDENCE_TIERS).toEqual(["green", "yellow", "red"]);
     expect(VERIFIED_BY).toEqual(["deterministic", "judge", "user"]);
-    expect(GATE_KINDS).toEqual(["step_check", "milestone"]);
+    expect(GATE_KINDS).toEqual(["step_check", "milestone", "stop"]);
     expect(BASELINES).toEqual(["red", "green", "unrunnable"]);
     expect(USER_ACTIONS).toEqual(["accept", "reject", "steer"]);
     expect(CHECK_ORIGINS).toEqual(["pre_existing", "agent_new", "user"]);

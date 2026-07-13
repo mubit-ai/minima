@@ -240,6 +240,9 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       allowOffline: false,
       minimaApiKey: "k",
       groundTruth: true,
+      // This live-loop test scripts the done-gate + escalation ladder, not the A2 run-level
+      // stop-gate; disable the latter so it can't force-continue past the scripted responses.
+      stopStrikes: 0,
     });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
     const agent = new MinimaAgent({

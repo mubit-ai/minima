@@ -488,6 +488,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
   const askUserRef: AskUserRef = { current: null };
   agent.agentState.tools.push(questionTool(askUserRef));
+  // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
+  // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
+  agent.askUser = askUserRef;
 
   // Budget following: --budget creates a session-scoped ledger (warn mode unless
   // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
