@@ -52,10 +52,18 @@ import {
   tocPanelGeometry,
   wrappedLineCount,
 } from "./layout.ts";
+import { linesFor, liveReplyLines, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
 import { perfEnabled, perfSample } from "./perf.ts";
+import {
+  type ScrollState,
+  buildLineIndex,
+  maxTop,
+  scrollLinesBy,
+  windowLines,
+} from "./viewport.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -70,6 +78,15 @@ import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { TocPanel } from "./toc-panel.tsx";
 import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
+
+/**
+ * Fullscreen line viewport (Stage 3): windows the transcript by LINE (lines.ts +
+ * viewport.ts) so sections can be partially visible and scrolling is smooth. Default ON;
+ * MINIMA_TUI_VIEWPORT=0 restores the whole-section clip path (escape hatch for one
+ * release, then the old path is deleted). Module const — never changes mid-session, so
+ * hooks may branch on it.
+ */
+const VIEWPORT_ON = process.env.MINIMA_TUI_VIEWPORT !== "0";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -756,6 +773,10 @@ export function HarnessApp({
   // Max meaningful offset (total content rows - viewport rows), written each render so the
   // wheel/PgUp handlers can clamp the STORED offset at mutation time (see applyScrollDelta).
   const maxScrollRef = useRef(0);
+  // Line-viewport scroll state (VIEWPORT_ON path): null = pinned/follow, {topLine} = anchored.
+  // The ref mirrors the current virtual-line totals so input handlers can clamp at mutation time.
+  const [scroll, setScroll] = useState<ScrollState>(null);
+  const viewportRef = useRef({ total: 0, rows: 1 });
   // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
   const renderCountRef = useRef(0);
   renderCountRef.current++;
@@ -792,10 +813,18 @@ export function HarnessApp({
 
     if (fullscreen) {
       // Coalesced wheel notches (decoded + batched by installMouseScrollFilter in main.ts;
-      // positive = up) adjust the scroll offset, clamped so over-scroll never banks dead offset.
-      setMouseScrollCallback((notches) =>
-        setScrollOffset((p) => applyScrollDelta(p, notches * 3, maxScrollRef.current)),
-      );
+      // positive = up) adjust the scroll state, clamped so over-scroll never banks dead offset.
+      if (VIEWPORT_ON) {
+        setMouseScrollCallback((notches) =>
+          setScroll((cur) =>
+            scrollLinesBy(cur, -notches * 3, viewportRef.current.total, viewportRef.current.rows),
+          ),
+        );
+      } else {
+        setMouseScrollCallback((notches) =>
+          setScrollOffset((p) => applyScrollDelta(p, notches * 3, maxScrollRef.current)),
+        );
+      }
     } else {
       // Inline: mouse tracking stays OFF so native scroll/select/copy work with <Static>.
       process.stdout.write("\u001b[?1000l");
@@ -823,11 +852,13 @@ export function HarnessApp({
     }
   }, [fullscreen, mouseEnabled]);
 
-  // Follow the newest content only when already pinned at the bottom (fullscreen). The message/
-  // stream deps are intentional triggers (re-run when new content arrives), not values read here.
+  // Follow the newest content only when already pinned at the bottom (fullscreen, OLD path).
+  // The line viewport doesn't need this: pinned is the intrinsic `scroll === null` state — the
+  // window ends at the virtual total, so new content slides into view without an effect.
+  // The message/stream deps are intentional triggers (re-run when new content arrives).
   // biome-ignore lint/correctness/useExhaustiveDependencies: deps are the follow-on-new-content triggers
   useEffect(() => {
-    if (fullscreen && atBottomRef.current) setScrollOffset(0);
+    if (fullscreen && !VIEWPORT_ON && atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
   // Wire the beforeToolCall permission hook (B2): the active mode's PolicyBundle resolves
@@ -1036,11 +1067,19 @@ export function HarnessApp({
     if (fullscreen) {
       const page = Math.max(1, maxChatHeightRef.current - 2);
       if (key.pageUp) {
-        setScrollOffset((p) => applyScrollDelta(p, page, maxScrollRef.current));
+        if (VIEWPORT_ON)
+          setScroll((cur) =>
+            scrollLinesBy(cur, -page, viewportRef.current.total, viewportRef.current.rows),
+          );
+        else setScrollOffset((p) => applyScrollDelta(p, page, maxScrollRef.current));
         return;
       }
       if (key.pageDown) {
-        setScrollOffset((p) => applyScrollDelta(p, -page, maxScrollRef.current));
+        if (VIEWPORT_ON)
+          setScroll((cur) =>
+            scrollLinesBy(cur, page, viewportRef.current.total, viewportRef.current.rows),
+          );
+        else setScrollOffset((p) => applyScrollDelta(p, -page, maxScrollRef.current));
         return;
       }
     }
@@ -1211,6 +1250,7 @@ export function HarnessApp({
 
     setTranscriptGen((g) => g + 1);
     setMessages(list);
+    setScroll(null); // fresh transcript — re-pin the line viewport
     agent.agentState.messages = agentMsgs;
 
     const label = store.displayName || "latest";
@@ -1980,6 +2020,7 @@ export function HarnessApp({
   async function onSubmit(text: string) {
     setTypedText("");
     setScrollOffset(0); // jump back to the newest content when the user sends (fullscreen viewport)
+    setScroll(null); // line viewport: re-pin to follow
     setHistory((h) => {
       const trimmed = text.trim();
       if (trimmed && (h.length === 0 || h[h.length - 1] !== trimmed)) {
@@ -2143,12 +2184,14 @@ export function HarnessApp({
       permPromptHeight -
       busyIndicatorHeight,
   );
-  const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
+  const pinned = scrollOffset <= 0; // OLD path: pinned to the newest — the live stream lives here
   const fsThoughtsRows =
-    fullscreen && pinned && busy && streamingThoughts && showThinkingRef.current ? 5 : 0;
-  const fsHintRows = fullscreen && !pinned ? 1 : 0;
+    fullscreen && !VIEWPORT_ON && pinned && busy && streamingThoughts && showThinkingRef.current
+      ? 5
+      : 0;
+  const fsHintRows = fullscreen && !VIEWPORT_ON && !pinned ? 1 : 0;
   const fsStreamTail =
-    fullscreen && pinned && busy && streaming
+    fullscreen && !VIEWPORT_ON && pinned && busy && streaming
       ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
         tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
       : "";
@@ -2158,7 +2201,7 @@ export function HarnessApp({
   // and the memo skips it entirely for renders that change none of its inputs (typing, spinner,
   // overlay state, ...), which is what kept long sessions from lagging on every keystroke.
   const scrollWin = useMemo(() => {
-    if (!fullscreen) return null;
+    if (!fullscreen || VIEWPORT_ON) return null;
     const t0 = perfEnabled ? performance.now() : 0;
     const win = getScrollableMessages(messages, messagesBudget, scrollOffset, cols);
     if (perfEnabled)
@@ -2177,10 +2220,50 @@ export function HarnessApp({
     maxScrollRef.current = Math.max(0, scrollWin.totalHeight - messagesBudget);
   }
 
+  // Line viewport (VIEWPORT_ON): the transcript as a virtual line array (cached per message
+  // in lines.ts) + the live region (reasoning peek / streaming reply) as ordinary lines at
+  // the tail. One row of the chat region is a PERMANENT status line, present in both pinned
+  // and scrolled states — so crossing pinned↔scrolled changes zero heights outside the
+  // viewport and the prompt box cannot move on scroll.
+  const viewportRows = Math.max(1, chatRegionHeight - 1);
+  const lineIndex = useMemo(
+    () =>
+      fullscreen && VIEWPORT_ON
+        ? buildLineIndex(messages.map((m) => linesFor(m, cols).length))
+        : null,
+    [fullscreen, messages, cols],
+  );
+  const liveLines = useMemo(() => {
+    if (!fullscreen || !VIEWPORT_ON || !busy) return [];
+    const out: string[] = [];
+    if (streamingThoughts && showThinkingRef.current)
+      out.push(...thoughtsPeekLines(streamingThoughts, cols));
+    if (streaming) out.push(...liveReplyLines(streaming, cols));
+    return out;
+  }, [fullscreen, busy, streaming, streamingThoughts, cols]);
+  let view = null;
+  if (lineIndex) {
+    const t0 = perfEnabled ? performance.now() : 0;
+    view = windowLines(lineIndex, (i) => linesFor(messages[i]!, cols), liveLines, scroll, viewportRows);
+    if (perfEnabled)
+      perfSample({
+        kind: "window",
+        ms: performance.now() - t0,
+        msgs: messages.length,
+        renders: renderCountRef.current,
+        stdinListeners: process.stdin.listenerCount("readable"),
+      });
+    viewportRef.current = { total: view.total, rows: viewportRows };
+    maxChatHeightRef.current = viewportRows; // page size for PgUp/PgDn
+  }
+
   // U2: panel geometry rides the same height math; null (too narrow/short) downgrades
   // Ctrl+T to the one-shot text block. NOT an input to getScrollableMessages — the panel
-  // is out-of-flow, so the transcript's cols/height are untouched (no reflow).
-  const tocGeom = fullscreen ? tocPanelGeometry(cols, chatRegionHeight) : null;
+  // is out-of-flow, so the transcript's cols/height are untouched (no reflow). The line
+  // viewport gives one region row to the status line, so the panel shrinks with it.
+  const tocGeom = fullscreen
+    ? tocPanelGeometry(cols, VIEWPORT_ON ? viewportRows : chatRegionHeight)
+    : null;
   tocGeomRef.current = tocGeom;
   const tocSections = useMemo(
     () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
@@ -2254,7 +2337,52 @@ export function HarnessApp({
       height={fullscreen ? rows : undefined}
       overflow={fullscreen ? "hidden" : "visible"}
     >
-      {fullscreen ? (
+      {fullscreen && VIEWPORT_ON ? (
+        <>
+          <Box
+            flexGrow={1}
+            minHeight={0}
+            overflow="hidden"
+            flexDirection="column"
+            justifyContent="flex-end"
+          >
+            {bannerBlock}
+            {(view?.lines ?? []).map((line, i) => (
+              // Exactly one row per line: a newline-free string under wrap="truncate" can
+              // never render taller than 1 row, so Σ(rows) ≤ viewportRows by construction.
+              // biome-ignore lint/suspicious/noArrayIndexKey: windowed lines, positional key is fine
+              <Text key={i} wrap="truncate">
+                {line || " "}
+              </Text>
+            ))}
+            {/* U2: ToC sidebar — LAST child so it paints over the transcript (absolute,
+                out-of-flow: none of the height/cols math above knows it exists). */}
+            {tocOpen && tocGeom ? (
+              <TocPanel
+                sections={tocSections}
+                geometry={tocGeom}
+                onJump={(k) => {
+                  if (!lineIndex) return;
+                  const target = lineIndex.prefix[k] ?? 0;
+                  setScroll(
+                    target >= maxTop(lineIndex.total + liveLines.length, viewportRows)
+                      ? null
+                      : { topLine: target },
+                  );
+                }}
+                onClose={() => setTocOpen(false)}
+              />
+            ) : null}
+          </Box>
+          {/* Permanent status row (both scroll states) — scroll alone never reflows the
+              region below, so the prompt box cannot jump during scrolling. */}
+          <Text color="gray" wrap="truncate">
+            {view && !view.pinned
+              ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
+              : " "}
+          </Text>
+        </>
+      ) : fullscreen ? (
         <Box
           flexGrow={1}
           minHeight={0}
