@@ -18,7 +18,8 @@
 ```
 done:     every phase gate green (A1–A7, B1–B5, U1–U3, J1) · E2E demo (MUB-127) passes in
           bun test · PTY-shot suite committed under docs/BigPlan/shots/
-cap:      one phase = one PR; a phase gate may fail at most 2 review rounds before replanning
+cap:      one phase = one gated commit (one PR per track slice); a phase gate may fail at
+          most 2 review rounds before replanning
 escalate: gate fails twice → joint session, re-scope the phase IN THIS FILE before more code;
           any change to a Phase-0 shared surface → the other SWE reviews before merge
 effort:   2 SWE × ~6 weeks · sizes: S ≤2d, M 3–4d, L 5d+ — calibrated against GT stages 0–2
@@ -238,15 +239,18 @@ model, Reviewer on a stronger model in fresh context.
 > the same key closes. Sequenced right after B2 — the section/anchor model built in U2 is
 > reused by B5's turn picker, so this ordering *saves* work, not just reprioritizes it.
 
-### U1 — Session usage ledger *(S)* — *new Linear issue*
+### U1 — Session usage ledger *(S)* — MUB-138
 
-Per-call usage already exists in `src/ai/usage.ts` and cost lands in `src/db/` (`sink.ts`,
-`metrics.ts`) — but session JSONL entries carry no usage today. Attach it.
+**RESCOPED (2026-07-13):** per-turn usage is **already persisted** — `DbSink` writes
+`{model, stop_reason, usage:{input, output, cache_read, cache_write, cost_total}}` into
+`events.payload` on every assistant `message_end` (SQLite spine). The session JSONL layer is
+legacy/read-only at runtime (zero `append` callers) and receives **no changes**. No schema
+migration: roll-up on read.
 
 | # | Step | Verify |
 |---|---|---|
-| U1.1 | Emit `{model, inputTokens, outputTokens, costUSD}` per assistant turn from agent events into the session-store entry | round-trip test: JSONL entry carries usage |
-| U1.2 | Section model: a **section** = user prompt → everything until the next user prompt (entry-id range); `sectionUsage() → {tokens, costUSD}` roll-up + cumulative totals | aggregation tests on a fixture session, incl. price-catalog math |
+| U1.1 | Preserve + restore: `rehydrateRun` reads `payload.usage`/`stop_reason` back into `AssistantMessage` so a resumed session carries the same in-memory usage as a live one (cost: `total` only — components aren't persisted; legacy rows rehydrate zeroed, never NaN) | round-trip test: DbSink write → rehydrate → usage equality |
+| U1.2 | Section model as pure `src/session/sections.ts` over the agent's `Message[]` (message-index ranges): `computeSections() → {sections: [{index, title, startMsgIdx, endMsgIdx, usage, cumulative}], totals}` — the U2 ToC contract (per-section $ + cumulative $ + total tokens). **Child-agent usage excluded in v1** (children's messages never enter the lead conversation; their spend stays on `routing_decisions.agent_id` + the run meter). Known pre-existing wart: rehydrated meter totals include child rows, the live meter doesn't — reconcile decision deferred to U2 | aggregation tests on a fixture message list, incl. price-catalog math |
 
 **Exit gate:** fixture session yields correct per-section and cumulative `{tokens, $}`.
 
@@ -336,7 +340,7 @@ U1 → U2/U3.
 
 | Phase | Owner | Size | Status |
 |---|---|---|---|
-| P0 interface contract | both | S | ⬜ |
+| P0 interface contract | both | S | ✅ a810739 |
 | A1 verify primitive | A | M | ⬜ |
 | A2 stop hook + block-done | A | M | ⬜ |
 | A3 doom_loop + steps cap | A | M | ⬜ |
@@ -349,7 +353,7 @@ U1 → U2/U3.
 | B3 git-shadow checkpoints | B | L | ⬜ |
 | B4 /undo | B | M | ⬜ |
 | B5 /rewind | B | M | ⬜ |
-| U1 session usage ledger *(Minima-unique)* | B | S | ⬜ |
+| U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ⬜ |
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   AssistantMessage,
   type Model,
+  Usage,
+  isAssistant,
   registerFauxProvider,
   registerModel,
   resetModelRegistry,
@@ -301,6 +303,86 @@ describe("rehydration (P1c)", () => {
     expect(agent2.meter!.totals().actualCostUsd).toBeGreaterThan(0);
     expect(r.promptsRun).toBe(2);
     reg.unregister();
+    db.close();
+  });
+
+  test("round-trip: rehydrated assistant usage + stop_reason equal live values (U1.1)", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("first answer")],
+        usage: new Usage({ input: 1200, output: 300, cache_read: 50 }),
+      }),
+      new AssistantMessage({
+        content: [text("second answer")],
+        stop_reason: "length",
+        usage: new Usage({ input: 2400, output: 150 }),
+      }),
+    ]);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    const agent = agentWith(db, runId);
+    const sink = attachDbSink(agent, db, { runId });
+    await agent.promptRouted("task one");
+    await agent.promptRouted("task two");
+    sink.detach();
+
+    const live = agent.agentState.messages.filter(isAssistant);
+    const restored = rehydrateRun(db, runId).messages.filter(isAssistant);
+    expect(restored).toHaveLength(live.length);
+    for (let i = 0; i < live.length; i++) {
+      expect(restored[i]!.usage.input).toBe(live[i]!.usage.input);
+      expect(restored[i]!.usage.output).toBe(live[i]!.usage.output);
+      expect(restored[i]!.usage.cache_read).toBe(live[i]!.usage.cache_read);
+      expect(restored[i]!.usage.cache_write).toBe(live[i]!.usage.cache_write);
+      expect(restored[i]!.usage.cost.total).toBeCloseTo(live[i]!.usage.cost.total, 12);
+      expect(restored[i]!.model).toBe(live[i]!.model);
+      expect(restored[i]!.stop_reason).toBe(live[i]!.stop_reason);
+    }
+    // Sanity: real values survived, not zero-equals-zero.
+    expect(restored[0]!.usage.input).toBe(1200);
+    expect(restored[0]!.usage.cost.total).toBeGreaterThan(0);
+    expect(restored[1]!.stop_reason).toBe("length");
+    reg.unregister();
+    db.close();
+  });
+
+  test("rehydrate: legacy/garbled payloads → zeroed usage and 'stop', never NaN (U1.1)", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "hi" } });
+    // Pre-U1 event shape: no usage/stop_reason at all.
+    db.appendEvent({ runId, type: "assistant", payload: { role: "assistant", text: "legacy" } });
+    // Garbled row: junk stop_reason, string tokens, non-numeric cost.
+    db.appendEvent({
+      runId,
+      type: "assistant",
+      payload: {
+        role: "assistant",
+        text: "odd",
+        stop_reason: "weird",
+        usage: { input: "3", cost_total: "nope" },
+      },
+    });
+    const [legacy, odd] = rehydrateRun(db, runId).messages.filter(isAssistant);
+    for (const v of [
+      legacy!.usage.input,
+      legacy!.usage.output,
+      legacy!.usage.cache_read,
+      legacy!.usage.cache_write,
+      legacy!.usage.cost.total,
+      odd!.usage.cost.total,
+    ]) {
+      expect(v).toBe(0);
+    }
+    expect(legacy!.stop_reason).toBe("stop");
+    expect(odd!.usage.input).toBe(3); // numeric strings coerce
+    expect(odd!.stop_reason).toBe("stop"); // unknown value falls back
     db.close();
   });
 
