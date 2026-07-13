@@ -15,7 +15,7 @@ import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
-import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
+import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
@@ -31,6 +31,7 @@ import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import { footerStatsFromMessages } from "./footer.ts";
 import {
   getScrollableMessages,
   markdownBodyHeight,
@@ -48,6 +49,7 @@ import {
   createPermissionState,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
+import { chatFromMessages, resumeNotice } from "./resume.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
@@ -66,6 +68,12 @@ export interface AppProps {
    * used (main buffer + <Static> + native OS scroll). Set by main.ts from the CLI flag/env.
    */
   fullscreen?: boolean;
+  /**
+   * Rehydrated run from the `--resume` CLI flag (B1): main.ts resolves + applies it to the
+   * agent BEFORE first render; the app seeds its transcript and footer stats from it so
+   * frame 1 already shows the restored session.
+   */
+  initialResume?: RehydratedRun | null;
 }
 
 /** True when at least one key-requiring model provider has its key set. */
@@ -139,6 +147,7 @@ const COMMANDS = [
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
+  { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "mouse", desc: "Toggle mouse-wheel scroll (fullscreen; disables text select)" },
@@ -555,9 +564,24 @@ export function HarnessApp({
   askUserRef,
   childEventRef,
   fullscreen = true,
+  initialResume = null,
 }: AppProps) {
   const { exit } = useApp();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
+  // lazy initializers below put the restored transcript + footer stats in the first frame.
+  const [initialStats] = useState(() =>
+    initialResume
+      ? footerStatsFromMessages(initialResume.messages, agent.agentState.model?.context_window)
+      : null,
+  );
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    initialResume
+      ? [
+          ...chatFromMessages(initialResume.messages),
+          resumeNotice(initialResume, agent.meter?.totals().actualCostUsd ?? 0),
+        ]
+      : [],
+  );
   // Bumped whenever `messages` is REPLACED wholesale (clear / new / resume / load-session) rather
   // than appended to. It keys the <Static> transcript so it remounts and reprints from scratch
   // instead of trying to append onto a now-different list (Static is otherwise append-only).
@@ -573,7 +597,9 @@ export function HarnessApp({
   // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
   // "current action" line in the footer; cleared per-tool on tool_execution_end.
   const [activeActions, setActiveActions] = useState<ActiveAction[]>([]);
-  const [actualCost, setActualCost] = useState<number>();
+  const [actualCost, setActualCost] = useState<number | undefined>(() =>
+    initialResume ? agent.meter?.totals().actualCostUsd : undefined,
+  );
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -780,9 +806,9 @@ export function HarnessApp({
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
-  const [ctxPct, setCtxPct] = useState(0);
-  const [inputTokens, setInputTokens] = useState(0);
-  const [outputTokens, setOutputTokens] = useState(0);
+  const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
+  const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
+  const [outputTokens, setOutputTokens] = useState(initialStats?.outputTokens ?? 0);
 
   // Input history states
   const [history, setHistory] = useState<string[]>([]);
@@ -1074,30 +1100,15 @@ export function HarnessApp({
         // lineage is best-effort
       }
     }
-    const chat: ChatMessage[] = [];
-    for (const m of r.messages) {
-      if (m.role === "user") chat.push({ role: "user", text: m.textContent });
-      else if (m.role === "assistant") chat.push({ role: "assistant", text: m.textContent });
-      else if (m.role === "toolResult")
-        chat.push({
-          role: "tool",
-          text: m.textContent,
-          toolName: (m as AgentMessage & { tool_name?: string }).tool_name ?? "tool",
-          isError: (m as AgentMessage & { is_error?: boolean }).is_error ?? false,
-        });
-    }
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd);
-    const label = r.run.display_name || runId.slice(0, 12);
+    // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
+    const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
+    setInputTokens(stats.inputTokens);
+    setOutputTokens(stats.outputTokens);
+    setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
-    setMessages([
-      ...chat,
-      {
-        role: "tool",
-        text: `Resumed run ${label} (${r.messages.length} msg(s), ${r.meterRows.length} routed prompt(s), $${(totals?.actualCostUsd ?? 0).toFixed(4)} recorded)`,
-        toolName: "resume",
-      },
-    ]);
+    setMessages([...chatFromMessages(r.messages), resumeNotice(r, totals?.actualCostUsd ?? 0)]);
   }
 
   async function loadSession(store: SessionStore) {
@@ -1581,7 +1592,25 @@ export function HarnessApp({
           },
         ]);
         break;
+      case "rename": // alias of /name (B1) — same persistence, same echo
       case "name": {
+        // Empty-arg: show the current name instead of persisting "".
+        if (!args.trim()) {
+          const current =
+            agent.db && agent.runId ? agent.db.getRun(agent.runId)?.display_name : null;
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name}` },
+            {
+              role: "tool",
+              text: current
+                ? `Session name: "${current}" — /${name} <new name> to change it`
+                : `Session is unnamed — /${name} <name> to set one (resumable via --resume <name>)`,
+              toolName: "name",
+            },
+          ]);
+          break;
+        }
         // Persist to the run row so the name survives reload (was cosmetic-only).
         let persisted = false;
         if (agent.db && agent.runId && args.trim()) {
@@ -1960,14 +1989,14 @@ export function HarnessApp({
 
       const last = getLastAssistant(agent);
       if (last?.usage) {
-        setInputTokens(last.usage.input || 0);
-        setOutputTokens(last.usage.output || 0);
-        const model = agent.agentState.model;
-        if (model?.context_window) {
-          setCtxPct((100 * last.usage.input) / model.context_window);
-        } else {
-          setCtxPct(0);
-        }
+        // Same helper as the resume paths — one source of truth for the footer numbers.
+        const stats = footerStatsFromMessages(
+          agent.agentState.messages,
+          agent.agentState.model?.context_window,
+        );
+        setInputTokens(stats.inputTokens);
+        setOutputTokens(stats.outputTokens);
+        setCtxPct(stats.ctxPct);
       }
 
       if (maybeAutoCompact(agent)) {

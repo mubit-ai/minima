@@ -173,14 +173,18 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 ## 5. Track B — session & UX (SWE-B)
 
-### B1 — Named sessions + context status line *(borrow #8 · S)* — *new Linear issue*
+### B1 — Named sessions + context status line *(borrow #8 · S)* — MUB-134
+
+> **Seam correction (2026-07-13):** names live on **`runs.display_name` in MinimaDb**
+> (`setRunName`), *not* the legacy JSONL `SessionManager` (read-only at runtime). And the
+> footer's `ctx N%` already existed and was real — B1.2's work was restoring it on resume.
 
 | # | Step | Verify |
 |---|---|---|
-| B1.1 | Named sessions on `SessionManager` (`src/session/store.ts:186`): `--resume <name>`, `/rename` | rename/resume round-trip tests |
-| B1.2 | Status line: context-fill % (tokens used / model window) in the footer — §3's premise is "context degrades as it fills"; the user must *see* it filling | `layout.test.ts` + PTY shots **both renderers** |
+| B1.1 | `--resume <name-or-id>`: `MinimaDb.findRunByName` (exact name → case-insensitive → run-id → id-prefix ≥4 chars; most-recent wins; name outranks id-prefix) resolved **before** `startRun` (typo → no stray run row); rehydrated in `main()` before first render (`initialResume` prop), lineage via `setRunParent`; unknown target lists near matches (`searchRuns`) and exits 2 — never silently starts fresh. `/rename` = alias of `/name` (persists via `setRunName`); empty-arg shows the current name | rename/resume round-trip tests at the DB layer + parseArgs tests |
+| B1.2 | Footer stats survive resume: shared pure `footerStatsFromMessages` (`src/tui/footer.ts`) feeds `↑ ↓ · ctx%` from the post-turn path AND both resume paths (`/resume` + `--resume`) — real values because U1.1 made rehydrate carry usage. `chatFromMessages`/`resumeNotice` (`src/tui/resume.ts`) shared by both restore paths | footer.test.ts + PTY shots **both renderers** with non-zero restored values |
 
-**Exit gate:** tests + 2 shots committed.
+**Exit gate:** tests + 2 shots committed. ✅
 
 ### B2 — Plan↔Build primary agents on Tab *(borrow #5 · M)* — *new Linear issue*
 
@@ -348,7 +352,7 @@ U1 → U2/U3.
 | A5 trust the check | A | M | ⬜ |
 | A6 allowlist + task perms + poka-yoke | A | M | ⬜ |
 | A7 learning loop | A | M | ⬜ |
-| B1 named sessions + status line | B | S | ⬜ |
+| B1 named sessions + status line | B | S | ✅ |
 | B2 Plan↔Build on Tab | B | M | ⬜ |
 | B3 git-shadow checkpoints | B | L | ⬜ |
 | B4 /undo | B | M | ⬜ |
