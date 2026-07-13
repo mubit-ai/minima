@@ -340,7 +340,9 @@ describe("tui/app.tsx wires tier→behavior", () => {
   // TextInput renders disabled, so a/r/s/v/Esc reach only the gate handler — the empty-prompt
   // heuristic (and its double-type hole: Ink dispatches every key to ALL useInput hooks) is gone.
   test("M6.3: the gate-focus modal captures a/r/s into user_signals — no empty-prompt guard", () => {
-    expect(src).toContain('answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null)');
+    expect(src).toContain(
+      'answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null)',
+    );
     expect(src).toContain("agent.db?.recordUserSignal(gateId, action, note)");
     expect(src).not.toContain('typedText.trim() === ""');
   });
@@ -381,7 +383,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
 
   test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
     const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
-    expect(input).toContain("if (disabled) return;");
+    expect(input).toContain("if (disabled || suspended) return;");
     expect(input).toContain("if (key.ctrl || key.meta) return;");
     // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
     expect(input).toContain('disabledLabel ?? "(busy…)"');

@@ -14,6 +14,7 @@
  */
 
 import { Agent, type AgentOptions } from "../agent/agent.ts";
+import { getMode, modeSystemAppend } from "../agent/modes.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
@@ -218,6 +219,13 @@ export class MinimaAgent extends Agent {
     if (recalled.length > 0) {
       const block = formatRecallBlock(recalled);
       this.agentState.systemPrompt = origSystem ? `${origSystem}\n\n${block}` : block;
+    }
+    // B2 (MUB-135): mode-conditional plan-mode hint, read at prompt time (never stale after
+    // a toggle) and restored by the same `finally` as the recall block. "" in build mode,
+    // so headless/-p runs are unchanged.
+    const modeBlock = modeSystemAppend(getMode());
+    if (modeBlock) {
+      this.agentState.systemPrompt = (this.agentState.systemPrompt ?? "") + modeBlock;
     }
     // Ground-Truth: inject the verify contract + the plan of record into THIS turn's system
     // prompt (appended after recall, reverted together in `finally`). Off unless groundTruth is set.

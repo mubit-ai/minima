@@ -16,7 +16,8 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { MinimaDb } from "../db/minima_db.ts";
+import { MinimaDb, type RunRow } from "../db/minima_db.ts";
+import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
@@ -158,7 +159,7 @@ function seedDefaultModels(): void {
 }
 
 // --- arg parsing --------------------------------------------------------------------
-interface CliArgs {
+export interface CliArgs {
   prompt: string[];
   model?: string;
   provider?: string;
@@ -180,9 +181,11 @@ interface CliArgs {
    * with `--no-fullscreen` or `MINIMA_TUI_INLINE=1` to fall back to the inline/native-scroll mode.
    */
   fullscreen: boolean;
+  /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
+  resume?: string;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const opts: CliArgs = {
     prompt: [],
     thinking: "off",
@@ -249,6 +252,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--budget-enforce":
         opts.budgetEnforce = true;
         break;
+      case "--resume":
+        opts.resume = take(i++);
+        break;
       case "--slider": {
         const v = Number(take(i++));
         if (!Number.isFinite(v) || v < 0 || v > 10)
@@ -285,6 +291,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
+      --resume NAME|ID     resume a previous session by name or run-id prefix (see /name, /rename)
   -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
@@ -417,14 +424,35 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   agent.memory = await createMubitMemory(memorySession);
 
   // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
-  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
+  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run — EXCEPT
+  // --resume, where continuing without the store would silently start a fresh session.
   let db: MinimaDb | null = null;
   let sink: DbSinkHandle | null = null;
+  let initialResume: RehydratedRun | null = null;
   let gtGateBefore: BeforeToolCall | null = null;
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
     db.ensureProject(projectKey, config.namespace ?? null);
+    // Resolve --resume BEFORE startRun so a typo never leaves a stray 'active' run row.
+    let resumeFrom: RunRow | null = null;
+    if (args.resume) {
+      resumeFrom = db.findRunByName(projectKey, args.resume);
+      if (!resumeFrom) {
+        const near = db.searchRuns(projectKey, args.resume);
+        process.stderr.write(
+          `minima: no session matching "${args.resume}"\n${
+            near.length
+              ? `${near
+                  .map((r) => `  ${r.run_id.slice(0, 12)}  ${r.display_name ?? "(unnamed)"}`)
+                  .join("\n")}\n`
+              : "  (no near matches — run /resume inside minima to browse sessions)\n"
+          }`,
+        );
+        db.close();
+        return 2;
+      }
+    }
     const runId = db.startRun({
       projectKey,
       providerSessionId: agent.sessionId,
@@ -433,6 +461,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     sink = attachDbSink(agent, db, { runId });
+    if (resumeFrom) {
+      // Same shape as the interactive /resume path: context + meter + judge cadence,
+      // with lineage recorded on the new run. Rehydrated BEFORE first render.
+      initialResume = rehydrateRun(db, resumeFrom.run_id);
+      applyRehydratedRun(agent, initialResume);
+      db.setRunParent(runId, resumeFrom.run_id);
+    }
     // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
     // sink keeps the SQLite plan of record in step with what the agent actually did (plan
     // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
@@ -449,6 +484,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       gtGateBefore = before;
     }
   } catch (exc) {
+    if (args.resume) {
+      process.stderr.write(`minima: cannot --resume: persistence unavailable: ${errText(exc)}\n`);
+      return 2;
+    }
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;
   }
@@ -569,6 +608,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       askUserRef,
       childEventRef,
       fullscreen: args.fullscreen,
+      initialResume,
       planSpawn: spawnFactory,
       planMetaModel,
       gtGateBefore,

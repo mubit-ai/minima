@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   AssistantMessage,
   type Model,
+  Usage,
+  isAssistant,
   registerFauxProvider,
   registerModel,
   resetModelRegistry,
@@ -313,6 +315,86 @@ describe("rehydration (P1c)", () => {
     db.close();
   });
 
+  test("round-trip: rehydrated assistant usage + stop_reason equal live values (U1.1)", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("first answer")],
+        usage: new Usage({ input: 1200, output: 300, cache_read: 50 }),
+      }),
+      new AssistantMessage({
+        content: [text("second answer")],
+        stop_reason: "length",
+        usage: new Usage({ input: 2400, output: 150 }),
+      }),
+    ]);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    const agent = agentWith(db, runId);
+    const sink = attachDbSink(agent, db, { runId });
+    await agent.promptRouted("task one");
+    await agent.promptRouted("task two");
+    sink.detach();
+
+    const live = agent.agentState.messages.filter(isAssistant);
+    const restored = rehydrateRun(db, runId).messages.filter(isAssistant);
+    expect(restored).toHaveLength(live.length);
+    for (let i = 0; i < live.length; i++) {
+      expect(restored[i]!.usage.input).toBe(live[i]!.usage.input);
+      expect(restored[i]!.usage.output).toBe(live[i]!.usage.output);
+      expect(restored[i]!.usage.cache_read).toBe(live[i]!.usage.cache_read);
+      expect(restored[i]!.usage.cache_write).toBe(live[i]!.usage.cache_write);
+      expect(restored[i]!.usage.cost.total).toBeCloseTo(live[i]!.usage.cost.total, 12);
+      expect(restored[i]!.model).toBe(live[i]!.model);
+      expect(restored[i]!.stop_reason).toBe(live[i]!.stop_reason);
+    }
+    // Sanity: real values survived, not zero-equals-zero.
+    expect(restored[0]!.usage.input).toBe(1200);
+    expect(restored[0]!.usage.cost.total).toBeGreaterThan(0);
+    expect(restored[1]!.stop_reason).toBe("length");
+    reg.unregister();
+    db.close();
+  });
+
+  test("rehydrate: legacy/garbled payloads → zeroed usage and 'stop', never NaN (U1.1)", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "hi" } });
+    // Pre-U1 event shape: no usage/stop_reason at all.
+    db.appendEvent({ runId, type: "assistant", payload: { role: "assistant", text: "legacy" } });
+    // Garbled row: junk stop_reason, string tokens, non-numeric cost.
+    db.appendEvent({
+      runId,
+      type: "assistant",
+      payload: {
+        role: "assistant",
+        text: "odd",
+        stop_reason: "weird",
+        usage: { input: "3", cost_total: "nope" },
+      },
+    });
+    const [legacy, odd] = rehydrateRun(db, runId).messages.filter(isAssistant);
+    for (const v of [
+      legacy!.usage.input,
+      legacy!.usage.output,
+      legacy!.usage.cache_read,
+      legacy!.usage.cache_write,
+      legacy!.usage.cost.total,
+      odd!.usage.cost.total,
+    ]) {
+      expect(v).toBe(0);
+    }
+    expect(legacy!.stop_reason).toBe("stop");
+    expect(odd!.usage.input).toBe(3); // numeric strings coerce
+    expect(odd!.stop_reason).toBe("stop"); // unknown value falls back
+    db.close();
+  });
+
   test("sub-agent rows stay out of the lead conversation", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
@@ -359,6 +441,121 @@ describe("rehydration (P1c)", () => {
     db.writeDecision({ ...base, runId: b });
     expect(db.getRunDecisions(a)).toHaveLength(1);
     expect(db.getRunDecisions(b)).toHaveLength(0); // conflict-update keeps the original run
+    db.close();
+  });
+});
+
+describe("named runs (B1)", () => {
+  const touch = (db: MinimaDb, runId: string, updated: number) =>
+    db.db.run("UPDATE runs SET updated = ? WHERE run_id = ?", [updated, runId]);
+
+  test("exact display_name beats a run-id prefix match", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const idOwner = db.startRun({ projectKey: "p" });
+    const named = db.startRun({ projectKey: "p" });
+    // Name one run EXACTLY like the other run's id prefix — the name must win.
+    const collidingName = idOwner.slice(0, 8);
+    db.setRunName(named, collidingName);
+    expect(db.findRunByName("p", collidingName)?.run_id).toBe(named);
+    db.close();
+  });
+
+  test("duplicate names: most-recent updated wins", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const a = db.startRun({ projectKey: "p" });
+    const b = db.startRun({ projectKey: "p" });
+    db.setRunName(a, "demo");
+    db.setRunName(b, "demo");
+    touch(db, a, 1000);
+    touch(db, b, 2000);
+    expect(db.findRunByName("p", "demo")?.run_id).toBe(b);
+    touch(db, a, 3000);
+    expect(db.findRunByName("p", "demo")?.run_id).toBe(a);
+    db.close();
+  });
+
+  test("case-insensitive name fallback (exact case still wins first)", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const lower = db.startRun({ projectKey: "p" });
+    const exact = db.startRun({ projectKey: "p" });
+    db.setRunName(lower, "demo run");
+    db.setRunName(exact, "Demo Run");
+    touch(db, lower, 5000); // more recent — but exact-case match outranks recency across stages
+    touch(db, exact, 1000);
+    expect(db.findRunByName("p", "Demo Run")?.run_id).toBe(exact);
+    expect(db.findRunByName("p", "DEMO RUN")?.run_id).toBe(lower); // ci stage: recency wins
+    db.close();
+  });
+
+  test("exact run_id and ≥4-char prefix resolve; short prefixes don't", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    expect(db.findRunByName("p", runId)?.run_id).toBe(runId);
+    expect(db.findRunByName("p", runId.slice(0, 8))?.run_id).toBe(runId);
+    expect(db.findRunByName("p", runId.slice(0, 3))).toBeNull(); // < 4 chars: too ambiguous
+    db.close();
+  });
+
+  test("scoped to project_key", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p1");
+    db.ensureProject("p2");
+    const runId = db.startRun({ projectKey: "p1" });
+    db.setRunName(runId, "demo");
+    expect(db.findRunByName("p2", "demo")).toBeNull();
+    expect(db.findRunByName("p1", "demo")?.run_id).toBe(runId);
+    db.close();
+  });
+
+  test("no match → null; searchRuns lists recency-ordered near matches", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const a = db.startRun({ projectKey: "p" });
+    const b = db.startRun({ projectKey: "p" });
+    db.setRunName(a, "fix the parser");
+    db.setRunName(b, "parser cleanup");
+    touch(db, a, 1000);
+    touch(db, b, 2000);
+    expect(db.findRunByName("p", "nonexistent")).toBeNull();
+    const near = db.searchRuns("p", "parser");
+    expect(near.map((r) => r.run_id)).toEqual([b, a]);
+    // LIKE metacharacters in the query are literal, not wildcards.
+    expect(db.searchRuns("p", "%")).toHaveLength(0);
+    db.close();
+  });
+
+  test("rename → resume round-trip: findRunByName + rehydrate + lineage", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const original = db.startRun({ projectKey: "p" });
+    const agent = agentWith(db, original);
+    const sink = attachDbSink(agent, db, { runId: original });
+    await agent.promptRouted("do the thing");
+    sink.detach();
+    db.setRunName(original, "was: first-name");
+    db.setRunName(original, "demo"); // /rename overwrites
+    expect(db.getRun(original)?.display_name).toBe("demo");
+
+    // Fresh process: --resume demo → resolve, rehydrate, record lineage.
+    const found = db.findRunByName("p", "demo");
+    expect(found?.run_id).toBe(original);
+    const newRun = db.startRun({ projectKey: "p" });
+    const agent2 = agentWith(db, newRun);
+    const r = rehydrateRun(db, found!.run_id);
+    applyRehydratedRun(agent2, r);
+    db.setRunParent(newRun, found!.run_id);
+    expect(agent2.agentState.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(db.getRun(newRun)?.parent_run_id).toBe(original);
+    reg.unregister();
     db.close();
   });
 });

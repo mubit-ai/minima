@@ -3,6 +3,8 @@
  */
 
 export * from "./events.ts";
+export * from "./modes.ts";
+export * from "./policy.ts";
 export * from "./tools.ts";
 export * from "./state.ts";
 export { agentLoop, agentLoopContinue } from "./loop.ts";

@@ -577,6 +577,51 @@ export class MinimaDb {
       .all(projectKey, limit) as RunRow[];
   }
 
+  /**
+   * Resolve a resume target (B1): exact display_name → case-insensitive name → exact run_id
+   * → run_id prefix (only for queries ≥ 4 chars, so short strings don't match everything).
+   * Names outrank id prefixes — they are the user-facing handle. Most-recent `updated` wins
+   * at every stage. Scoped to projectKey.
+   */
+  findRunByName(projectKey: string, query: string): RunRow | null {
+    const one = (sql: string, ...params: (string | number)[]) =>
+      (this.db.query(sql).get(...params) as RunRow) ?? null;
+    return (
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND display_name = ? ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND lower(display_name) = lower(?) ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND run_id = ? ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      (query.length >= 4
+        ? one(
+            "SELECT * FROM runs WHERE project_key = ? AND run_id LIKE ? ESCAPE '\\' ORDER BY updated DESC LIMIT 1",
+            projectKey,
+            `${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`,
+          )
+        : null)
+    );
+  }
+
+  /** Near-matches for a failed resolution (name substring OR id prefix), recency-ordered. */
+  searchRuns(projectKey: string, query: string, limit = 5): RunRow[] {
+    const escaped = query.replace(/[\\%_]/g, (c) => `\\${c}`);
+    return this.db
+      .query(
+        "SELECT * FROM runs WHERE project_key = ? AND (display_name LIKE ? ESCAPE '\\' OR run_id LIKE ? ESCAPE '\\') ORDER BY updated DESC LIMIT ?",
+      )
+      .all(projectKey, `%${escaped}%`, `${escaped}%`, limit) as RunRow[];
+  }
+
   // ---------------------------------------------------------------- events / tools
   appendEvent(opts: {
     id?: string;
