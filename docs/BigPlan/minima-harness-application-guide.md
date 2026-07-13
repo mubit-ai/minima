@@ -6,6 +6,11 @@
 >
 > Audience: someone editing `packages/tui/` or extending the GT contract in
 > `docs/PLAN/ground-truth-plan.md`. Read this *before* opening a Linear ticket.
+>
+> **Execution status:** the recommendations below have been decided and scheduled — the
+> master execution plan is [`PLAN.md`](PLAN.md) (Track A deterministic guards · Track B
+> session & UX · phase gates = `bun test` + PTY shots). Where this guide and `PLAN.md`
+> disagree, **`PLAN.md` wins**. This guide remains the *why*; the plan is the *what/when/who*.
 
 ---
 
@@ -22,7 +27,7 @@ Minima's TUI harness (`packages/tui/README.md`) already has the load-bearing bon
 | SQLite ledger (plans · plan_steps · file_changes · gates · user_signals) | ✅ | `src/db/minima_db.ts` (schema v5) |
 | **Frozen verification contract** (red→green check) | ✅ (contract) | `src/minima/gt_contract.ts` |
 | Append-only JSONL session tree | ✅ | `src/session/` |
-| Tools: read/write/edit/bash/ls | ✅ | `src/tools/` |
+| Tools: read/write/edit/apply_patch/bash/ls/glob/grep/todowrite/task/question/web_fetch/web_search | ✅ | `src/tools/` |
 | 3 providers (openai-compat, anthropic, google) + faux | ✅ | `src/ai/` |
 
 What's **not** there yet — from `docs/PLAN/ground-truth-plan.md` status table:
@@ -97,6 +102,10 @@ This is cheap because Minima's agent already has beforeToolCall hooks; the mode 
 policy bundle those hooks read. **The payoff is high** because today the harness can't tell
 "the user wants exploration, not changes" from the prompt alone — it has to guess.
 
+**Decided (PLAN.md B2):** the mode is a `PolicyBundle` from the Phase-0 grammar
+(`src/agent/policy.ts`), and the PLAN/BUILD footer badge lives in the shared slot API — it
+must render in **both** renderers (fullscreen glued-prompt and `MINIMA_TUI_INLINE`).
+
 The Claude Code escape hatch travels with this: **"if you could describe the diff in one
 sentence, skip the plan"**. Encode it as a hint in the system prompt, not a hard rule.
 
@@ -141,6 +150,13 @@ every assistant turn is an append. Add a **`/rewind <turn-id>`** command that:
 2. Optionally restores the file tree (snapshot on each `write`/`edit` — GT already attributes
    file writes to steps, so the snapshot key is the step id).
 
+**Decided (PLAN.md B3): checkpoints are git-shadow snapshots.** `git add -A` under a
+temporary `GIT_INDEX_FILE` → `write-tree` → `commit-tree` → `refs/minima/ckpt/<session>/<entry>`;
+the user's index/worktree are never touched; non-git dirs degrade to "checkpoints off" with a
+one-line notice. And the JSONL tree **already supports branching** (`src/session/store.ts` —
+"continue the next append from `entryId`"), so conversation rewind is a *branch*, not a
+destructive drop.
+
 The **named sessions** piece is the cheapest win: `minima --resume <name>` instead of just
 `--continue`. Pair with the existing `SessionManager`.
 
@@ -161,6 +177,9 @@ needs to *see* it filling.
 in one action: reverts changes **and re-shows your original message** so you can edit it and
 retry. This is meaningfully better than "Esc + manually revert + retype".
 
+**Decided (PLAN.md B4):** `/undo` = checkpoint restore + session-tree branch + composer
+prefilled with the original message; stacked `/undo` walks back through checkpoint refs.
+
 The deeper borrow — **Claude Code's Writer/Reviewer two-session pattern** — is the right
 shape for Minima's routed-model world: Writer on the cheapest model that can do the work,
 Reviewer on a stronger model in a fresh context. The Minima router already picks models per
@@ -170,7 +189,7 @@ task; formalize the **two-session review** as a documented workflow (Stage 8 can
 
 | | |
 |---|---|
-| Done | Five tools (read/write/edit/bash/ls); per-step tool attribution via GT. |
+| Done | Thirteen tools (read/write/edit/apply_patch/bash/ls/glob/grep/todowrite/task/question/web_fetch/web_search); per-step tool attribution via GT. |
 | Gap | No permission grammar; no per-step tool allowlist; no task delegation control. |
 | **Borrow** | **OpenCode's glob permission grammar + `task` permissions.** ([harness-research §6]) |
 | Plug into | `src/tools/` permission wrapper + step schema. |
@@ -193,9 +212,9 @@ if (step.tools && !matchesAnyPattern(currentCall, step.tools)) {
 ```
 
 The **`task` permissions** idea (a primary agent can only invoke certain subagents) is the
-multi-agent version of the same primitive. Even if Minima doesn't have first-class
-subagents today, defining the grammar now means adding them later doesn't redesign the
-permission model.
+multi-agent version of the same primitive. Minima **already has** a `task` tool
+(`src/tools/task.ts`) riding the subagent infra in `src/agent/` — so `task` permissions are
+wireable now with the same grammar (PLAN.md A6), not a future redesign.
 
 The Anthropic SWE-bench poka-yoke finding ([anthropic-agents] Appendix 2) applies directly
 to Minima's tools: review the **read/write/edit/bash/ls** tool descriptions and argument
@@ -218,6 +237,8 @@ it absolute — same fix Claude Code made.)
    common spiral — agent convinced that running the same failing command again will help.
    OpenCode's default is `"ask"`; for Minima route it through the confidence tier: 🟡 on
    first detection, 🔴 on second.
+   **Sequencing note (PLAN.md A3→A4):** M6.2 tiers aren't wired yet, so doom_loop ships
+   first with an interim "stop turn + ask" escalation, then upgrades to 🟡/🔴 tier routing.
 
 2. **Stop hook with N-strike override** (cross-references §1). The verify-check blocks
    step-done until red→green; cap blocks at N (default 3 for GT, configurable per step); on
@@ -234,6 +255,10 @@ it absolute — same fix Claude Code made.)
 
 Borrowings, ranked by leverage (effected improvement ÷ implementation cost), with the Linear
 issue where one exists.
+
+> **Sequencing superseded:** this table decided *what* to borrow; [`PLAN.md`](PLAN.md) now
+> fixes *when and who* — Track A (deterministic guards) / Track B (session & UX), with phase
+> gates (`bun test` + PTY shots in both renderers). Kept here for the leverage rationale.
 
 | # | Borrow | Property | Cost | Leverage | Wire into |
 |---|---|---|---|---|---|
@@ -317,7 +342,43 @@ For symmetry — these came up but don't fit Minima:
 
 ---
 
-## Part 5 — One-screen summary
+## Part 5 — Minima UX integration spec (decided)
+
+The harness-specific shape of the borrowed mechanisms — what PLAN.md's Track B (and A4's
+escalation surface) actually build. All footer work uses the Phase-0 slot API and must render
+in **both renderers** (fullscreen glued-prompt + `MINIMA_TUI_INLINE`); every UX phase gates on
+a committed `make tui-shot` artifact in `docs/BigPlan/shots/`.
+
+- **Footer strip** (one line, right side): `ctx 34% · step 3/7 · BUILD` — context-fill %
+  (B1), plan `step X/N` (already live, M1.3), mode badge (B2). DRIFT and 🟡 flags reuse the
+  existing strip; no extra chrome rows (the render invariant caps visible height).
+- **Tab** cycles Plan↔Build. Plan mode: mutating tools (`edit`/`write`/`apply_patch`/`bash`)
+  → `ask`; read tools stay allowed. No new modal — the ask rides the existing `question` flow.
+- **Escalation UX**: 🟢 silent · 🟡 badge in the strip (non-blocking) · 🔴 stop-and-ask via
+  the `question` tool, carrying the guard's evidence (which check failed / which call looped).
+- **`/undo`**: one action — files restored from the shadow checkpoint, session tree branched
+  (nothing deleted), composer prefilled with your original message, editable before resubmit.
+- **`/rewind`**: turn picker over the JSONL tree; conversation-only (JSONL branch,
+  non-destructive) / code-only (checkpoint apply) / both.
+- **Named sessions**: `minima --resume <name>`; `/rename` in-session.
+
+**Minima-unique additions (PLAN.md U1–U3 — not borrows; only the panel visual nods to
+OpenCode's `Ctrl+X B`):**
+
+- **`Ctrl+T` — Table of Contents sidebar**: overlay panel — draws over transcript + prompt at
+  a fixed width, never reflows the characters-per-line underneath. One section per user
+  prompt (nested: assistant result, tool activity, plan created/finalized milestones);
+  per-section price under each title; footer = cumulative $ + total tokens. ↑/↓ + Enter jumps
+  the transcript to the section; Esc/`Ctrl+T` closes. Fullscreen renderer only in v1 — inline
+  prints a one-shot text block on the same shortcut.
+- **`Ctrl+G` — GT Plan Overview sidebar**: same chassis; live ledger view — `step X/N`,
+  per-step status + confidence tier, `verify` cmd, DRIFT, per-step cost, plan total. Enter
+  opens the step detail card (the shared component that becomes `/why`). Gated by
+  `MINIMA_TUI_GROUND_TRUTH`.
+
+---
+
+## Part 6 — One-screen summary
 
 ```
 Minima's harness today:  advisory layer ✓   deterministic layer ⬜ (in flight, GT stage 3-8)
@@ -341,4 +402,6 @@ That's the boundary Minima is crossing right now — these are what get it acros
 ```
 
 For the why behind each borrow, see `harness-research.md`. For the plan-shape that these
-mechanisms enforce, see `characteristics-of-successful-plans.md` and `playbook.md`.
+mechanisms enforce, see `characteristics-of-successful-plans.md` and `playbook.md`. For
+**execution** — phases, tracks, owners, and gates — see [`PLAN.md`](PLAN.md); it wins on
+conflict.
