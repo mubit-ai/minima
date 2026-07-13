@@ -1,0 +1,29 @@
+diff --git a/ts/brackets.ts b/ts/brackets.ts
+index 048b6f0..6370422 100644
+--- a/ts/brackets.ts
++++ b/ts/brackets.ts
+@@ -21,5 +21,23 @@
+  *   - The empty string is balanced.
+  */
+ export function isBalanced(source: string): boolean {
+-  throw new Error("kata: implement isBalanced");
++  const close: Record<string, string> = { ")": "(", "]": "[", "}": "{", ">": "<" };
++  const open = new Set(Object.values(close));
++  const stack: string[] = [];
++  let inString = false;
++  let escaped = false;
++  for (const ch of source) {
++    if (inString) {
++      if (escaped) escaped = false;
++      else if (ch === "\\") escaped = true;
++      else if (ch === '"') inString = false;
++      continue;
++    }
++    if (ch === '"') inString = true;
++    else if (open.has(ch)) stack.push(ch);
++    else if (ch in close) {
++      if (stack.pop() !== close[ch]) return false;
++    }
++  }
++  return !inString && stack.length === 0;
+ }

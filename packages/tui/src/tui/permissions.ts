@@ -29,6 +29,44 @@ const NO_PROMPT_TOOLS = new Set(["question"]);
 
 export type PermissionDecision = "allow" | "always" | "deny";
 
+/**
+ * Tools the plan-mode beforeToolCall hook blocks at the LEAD's dispatcher (enforcement in
+ * the dispatcher, never prompt text). groundTruth=false is the HISTORICAL list — the
+ * default path must not change. groundTruth=true additionally blocks todowrite (approving
+ * one authorizes running each task's `verify` as a shell command) and task (delegated
+ * children are built hook-free with their own unrestricted toolset, so a task call is a
+ * write-access bypass; the plan council's researchers delegate read-only WITHOUT the task
+ * tool, so read-only research delegation stays available).
+ */
+export function planModeBlockedTools(groundTruth: boolean): string[] {
+  // `task` is blocked in BOTH modes: a delegated child gets its own unrestricted toolset
+  // (write/edit/bash) with no permission hooks, so plan mode's read-only promise was
+  // trivially bypassable by delegating the write.
+  return groundTruth
+    ? ["write", "edit", "bash", "apply_patch", "todowrite", "task"]
+    : ["write", "edit", "bash", "apply_patch", "task"];
+}
+
+/** The block reason handed back to the model for a plan-mode-blocked tool call. */
+export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
+  if (!groundTruth) {
+    return toolName === "task"
+      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). Use /plan to exit."
+      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
+  }
+  if (toolName === "task") {
+    return (
+      "Plan mode is ON — task is blocked: delegated children get their own unrestricted " +
+      "toolset (write/edit/bash), while the plan council already provides read-only " +
+      "research delegation. Use /plan to exit."
+    );
+  }
+  return (
+    "Plan mode is ON — write/edit/bash/apply_patch/todowrite/task are blocked " +
+    "(todowrite can run `verify` shell checks). Use /plan to exit."
+  );
+}
+
 export interface PermissionPrompt {
   toolName: string;
   argsSummary: string;
@@ -41,13 +79,22 @@ export interface PermissionState {
   allowAlways: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
+  /** Ground-truth mode: todowrite `verify` commands are actually executed by the harness. */
+  groundTruth: boolean;
+  /** verify commands the user has already seen and approved (exact-string). */
+  approvedVerifies: Set<string>;
 }
 
-export function createPermissionState(cwd: string): PermissionState {
+export function createPermissionState(
+  cwd: string,
+  opts: { groundTruth?: boolean } = {},
+): PermissionState {
   return {
     allowAlways: new Set<string>(),
     allowedDirs: new Set<string>(), // NOT pre-approved — user must grant cwd access
     cwd,
+    groundTruth: opts.groundTruth === true,
+    approvedVerifies: new Set<string>(),
   };
 }
 
@@ -73,7 +120,33 @@ export function formatToolArgs(toolName: string, args: Record<string, unknown>):
   }
   if (toolName === "write") return String(args.path ?? args.file_path ?? "?");
   if (toolName === "edit") return String(args.filePath ?? args.path ?? "?");
+  if (toolName === "todowrite") {
+    const tasks = parseTodowriteTasks(args);
+    if (tasks) {
+      const withVerify = tasks.filter((t) => t.verify).length;
+      return `${tasks.length} task${tasks.length === 1 ? "" : "s"}${
+        withVerify > 0 ? ` (${withVerify} with a verify shell command)` : ""
+      }`;
+    }
+  }
   return JSON.stringify(args).slice(0, 120);
+}
+
+/** Best-effort parse of todowrite's `tasks` JSON-string arg (null when malformed). */
+function parseTodowriteTasks(
+  args: Record<string, unknown>,
+): { content: string; status: string; verify: string | null }[] | null {
+  try {
+    const parsed = JSON.parse(String(args.tasks));
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((t) => ({
+      content: String(t?.content ?? ""),
+      status: String(t?.status ?? "pending"),
+      verify: typeof t?.verify === "string" && t.verify.trim() ? t.verify.trim() : null,
+    }));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -125,8 +198,17 @@ export function checkPermission(
     // Zero-side-effect UI tools (e.g. question): never prompt.
     if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
 
-    // Tool globally allowed (write/edit/bash with "always")
-    if (state.allowAlways.has(toolName)) return Promise.resolve(null);
+    // Tool globally allowed (write/edit/bash with "always"). Exception: with ground truth on,
+    // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
+    // command (baseline capture + done-gate), so a stored "always" only covers verify commands
+    // the user has already seen — a call carrying a new or changed verify re-prompts.
+    if (state.allowAlways.has(toolName)) {
+      const newVerify =
+        toolName === "todowrite" &&
+        state.groundTruth &&
+        verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
+      if (!newVerify) return Promise.resolve(null);
+    }
   }
 
   // For read-only tools (read/ls/glob/grep): check directory-level access
@@ -164,7 +246,7 @@ export function checkPermission(
   }
 
   // Sensitive tools (write/edit/bash) — or any forced prompt (plan-mode "ask"): always prompt
-  const diffPreview = buildDiffPreview(toolName, args, state.cwd);
+  const diffPreview = buildDiffPreview(toolName, args, state);
   return new Promise((resolve) => {
     promptFn({
       toolName,
@@ -174,6 +256,11 @@ export function checkPermission(
       resolve: (decision) => {
         if (decision === "always") state.allowAlways.add(toolName);
         if (decision === "allow" || decision === "always") {
+          // The user has now seen these verify commands — an "always" grant covers them,
+          // but any future NEW verify still re-prompts (see the allowAlways exception above).
+          if (toolName === "todowrite") {
+            for (const v of verifyCommands(args)) state.approvedVerifies.add(v);
+          }
           resolve(null);
         } else {
           resolve({ block: true, reason: denialReason(`the ${toolName} call`) });
@@ -183,9 +270,16 @@ export function checkPermission(
   });
 }
 
+/** Every non-empty `verify` shell command in a todowrite call's tasks. */
+function verifyCommands(args: Record<string, unknown>): string[] {
+  const tasks = parseTodowriteTasks(args);
+  if (!tasks) return [];
+  return tasks.map((t) => t.verify).filter((v): v is string => typeof v === "string" && v !== "");
+}
+
 /**
- * The app's one beforeToolCall hook (B2): resolve the active mode's PolicyBundle first,
- * then fall through to the normal permission flow.
+ * The app's mode-gating beforeToolCall hook (B2): resolve the active mode's PolicyBundle
+ * first, then fall through to the normal permission flow.
  *   deny  → block with a policy reason (fed back to the model)
  *   ask   → GuardEvent(mode-ask) + forced prompt (outranks "always" grants)
  *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes)
@@ -207,9 +301,7 @@ export function makeModeGatedBeforeToolCall(deps: {
     if (action === "deny") {
       return {
         block: true,
-        reason:
-          `The ${toolName} call is denied by the ${bundle.name} mode policy — a user setting, ` +
-          "not an environment restriction. Continue without it or ask the user to switch modes.",
+        reason: `The ${toolName} call is denied by the ${bundle.name} mode policy — a user setting, not an environment restriction. Continue without it or ask the user to switch modes.`,
       };
     }
     if (action === "ask") {
@@ -232,8 +324,9 @@ export function makeModeGatedBeforeToolCall(deps: {
 function buildDiffPreview(
   toolName: string,
   args: Record<string, unknown>,
-  cwd: string,
+  state: PermissionState,
 ): string | null {
+  const cwd = state.cwd;
   try {
     if (toolName === "edit") {
       const filePath = expand(String(args.filePath ?? args.path ?? ""));
@@ -263,6 +356,22 @@ function buildDiffPreview(
       if (!existing) return `(new file: ${filePath}, ${content.split("\n").length} lines)`;
       const preview = content.split("\n").slice(0, 8).join("\n");
       return `--- ${filePath} (old)\n+++ ${filePath} (new, first 8 lines)\n${preview}`;
+    }
+    if (toolName === "todowrite") {
+      // With ground truth on, approving a todowrite authorizes running each task's `verify`
+      // as a shell command (done-gate + baseline capture) — the user must SEE those commands,
+      // not a truncated JSON blob, before granting that.
+      const tasks = parseTodowriteTasks(args);
+      if (!tasks || tasks.length === 0) return null;
+      const lines = tasks.map((t, i) => {
+        const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
+        const verifyLabel = state.groundTruth
+          ? "verify (runs as a shell command)"
+          : "verify (recorded only — runs only with MINIMA_TUI_GROUND_TRUTH=1)";
+        const verify = t.verify ? `\n     ${verifyLabel}: ${t.verify}` : "";
+        return `${i + 1}. [${mark}] ${t.content}${verify}`;
+      });
+      return lines.join("\n");
     }
   } catch {
     // diff preview is best-effort

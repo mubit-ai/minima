@@ -26,7 +26,8 @@ Spec (JSON):
     }
 
 Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <BS>
-             <CTRLC> <CTRLL> <CTRLP> <CTRLR> <SPACE> <WHEELUP> <WHEELDN>
+             <CTRLC> <CTRLL> <CTRLP> <CTRLR> <CTRLT> <CTRLE> <CTRLG> <SPACE>
+             <WHEELUP> <WHEELDN> <PASTE> <ENDPASTE> <SHIFTTAB>
 
 Steps may set "repeat" (send N times) and "gap" (seconds between repeats, default 0 = one
 burst). A nonzero gap spreads the repeats across separate stdin chunks — closer to a real
@@ -62,8 +63,8 @@ TOKENS = {
     "<UP>": "\x1b[A", "<DOWN>": "\x1b[B", "<LEFT>": "\x1b[D", "<RIGHT>": "\x1b[C",
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
-    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLA>": "\x01", "<CTRLK>": "\x0b",
-    "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
+    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07", "<CTRLA>": "\x01",
+    "<CTRLK>": "\x0b", "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
     "<SPACE>": " ",
     # Bracketed paste envelope (what the terminal sends around a paste when ?2004h is set).
     "<PASTE>": "\x1b[200~", "<ENDPASTE>": "\x1b[201~",

@@ -10,15 +10,14 @@
  */
 
 import { Box, Text } from "ink";
-import type React from "react";
-import { memo } from "react";
+import { type ReactNode, memo } from "react";
 import { type ChatMessage, clampToolText } from "./layout.ts";
 
 // Re-exported so app.tsx keeps a single import site.
 export type { ChatMessage };
 
-function renderInlineMarkdown(text: string): React.ReactNode {
-  const tokens: React.ReactNode[] = [];
+function renderInlineMarkdown(text: string): ReactNode {
+  const tokens: ReactNode[] = [];
   const currentText = text;
 
   const regex = /(\*\*|`)/g;
@@ -62,7 +61,7 @@ function renderInlineMarkdown(text: string): React.ReactNode {
   return <>{tokens}</>;
 }
 
-export function MarkdownRenderer({ text }: { text: string }) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string }) {
   const lines = text.split("\n");
 
   return (
@@ -118,13 +117,21 @@ export function MarkdownRenderer({ text }: { text: string }) {
       })}
     </Box>
   );
-}
+});
 
 /**
  * One finalized message, rendered inline (no per-turn box). Used as a <Static> item — printed once
  * into scrollback. A `marginTop` gives visual separation between messages.
+ *
+ * memo: in the fullscreen viewport the whole visible window is re-mapped on every HarnessApp render
+ * (e.g. each keystroke). Props are (msg, cols); getScrollableMessages preserves the object reference
+ * of un-clipped messages, so memo lets every row except the fold-straddling one bail out of re-render
+ * (and its markdown re-parse). Inline mode renders each row once via <Static>, where memo is a no-op.
  */
-function MessageRowImpl({ msg, cols }: { msg: ChatMessage; cols: number }) {
+export const MessageRow = memo(function MessageRow({
+  msg,
+  cols,
+}: { msg: ChatMessage; cols: number }) {
   if (msg.role === "user") {
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -156,6 +163,12 @@ function MessageRowImpl({ msg, cols }: { msg: ChatMessage; cols: number }) {
         paddingLeft={2}
         borderStyle="single"
         borderColor="gray"
+        // Hard guard against horizontal spill past the border: Ink only wraps when
+        // string-width judges a line too wide, and it under-counts glyphs like 🧠/wide
+        // emoji, so those lines skip wrapping and draw PAST the right border. Clip
+        // horizontally at the border; vertical growth (wrapping) is unaffected.
+        width="100%"
+        overflowX="hidden"
       >
         <Text color="gray" italic>
           {`🧠 reasoning (${msg.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s)`}
@@ -173,14 +186,7 @@ function MessageRowImpl({ msg, cols }: { msg: ChatMessage; cols: number }) {
       <MarkdownRenderer text={msg.text} />
     </Box>
   );
-}
-
-/**
- * Memoized: message objects are immutable (append/replace-only transcript), so identity equality
- * on `msg` + `cols` skips re-tokenizing markdown for every unchanged row on every render — the
- * fullscreen viewport re-renders its whole window on each commit otherwise.
- */
-export const MessageRow = memo(MessageRowImpl);
+});
 
 /** The live streaming assistant reply (dynamic region; finalizes into a MessageRow when done). */
 export function StreamingReply({ text }: { text: string }) {

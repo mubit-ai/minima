@@ -75,5 +75,8 @@ export function findAgentTool(tools: AgentTool[], name: string): AgentTool | und
 }
 
 export function errorResult(message: string): ToolResult {
-  return { content: [text(message)] };
+  // `details.error` is a uniform, additive failure marker: tools signal failure by RETURNING an
+  // errorResult (not by throwing), so afterToolCall's `isError` — which only reflects a thrown
+  // tool — misses them. The A3 anti-spiral reads this marker to spot repeated failing calls.
+  return { content: [text(message)], details: { error: true } };
 }

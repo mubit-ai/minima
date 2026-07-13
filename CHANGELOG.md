@@ -4,6 +4,86 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-07-12
+
+### Fixed
+- **Ground-truth spine hardened end-to-end** (still opt-in via `MINIMA_TUI_GROUND_TRUTH=1`):
+  - Gate verdicts now carry the `rec_id` of the turn that minted them, so grounded
+    feedback can never be poisoned by a stale gate from an earlier prompt, and a
+    blocked step's red verdict is superseded by its retry (content-first flip
+    identity). Plans close when their last flip is verified, instead of haunting
+    every later turn.
+  - Step identity survives rewording (token-set matching), a step's baseline resets
+    when its `verify` command changes (no fabricated red→green), and resuming a run
+    re-adopts its active plan.
+  - Bash writes and sub-agent writes are attributed to the run; unattributed
+    ("blind") writes cap confidence at 🟡 instead of silently passing.
+  - Check runner: verify commands run in their own process group and are killed as a
+    group on timeout/abort (no orphaned children), run under a minimal env allowlist,
+    and honor `MINIMA_TUI_CHECK_TIMEOUT`.
+  - `/plan` council: injected findings are fenced as untrusted data, the whole plan
+    turn aborts cleanly on Esc (partial research kept), and each council round is
+    budget-metered ($0.25/round soft cap).
+- **Default path** (no flag required): the SQLite migration runner is race-safe across
+  concurrent sessions and self-heals a previously wedged DB; a bash tool timeout/abort
+  kills the whole process group; a throwing after-hook no longer wedges the agent loop;
+  the `task` tool is blocked in plan mode.
+- Gate-focus modal: keyboard verdict overrides (approve / reject / steer with a note)
+  reach the correct gate, and the TUI footer/overlay no longer overflow on narrow
+  terminals.
+
+### Added
+- With `MINIMA_LLM_JUDGE=1`, judge grading spend is now booked to the session wallet —
+  visible in `/cost` (as `judge overhead`), the footer, and enforced by `--budget` —
+  while staying out of feedback's `actual_cost_usd` so the cost model Minima learns
+  from stays clean.
+
+## [0.9.0] - 2026-07-10
+
+### Added
+- **Ground-Truth verification spine (experimental, opt-in via `MINIMA_TUI_GROUND_TRUTH=1`)** —
+  the agent's plan steps can carry `verify` shell commands; the harness runs them
+  (pre-work baseline → done-gate red→green), records every verdict in the SQLite ledger,
+  and derives a confidence tier that drives the UI (🟢 glide / 🟡 flag / 🔴 stop) plus
+  grounded, deterministic-over-judge feedback to Minima. Includes `/why` (inspect why the
+  harness trusts/distrusts a step), a plan footer strip, and red-gate override capture.
+  Off by default — with the flag unset the CLI behaves exactly as 0.8.x.
+- **`/plan` planning workflow (part of the same experimental gate)** — a planner persona
+  plus a design council of sub-agents that researches, drafts, critiques, and synthesizes
+  a `GROUND_TRUTH.md` design document (`/plan start · status · finalize · cancel`).
+  Without the flag, `/plan` stays the read-only toggle it always was.
+- Permission hardening for verify commands: every LLM-authored `verify` is shown verbatim
+  in the approval overlay (with an explicit "… +N more lines" marker when truncated), and
+  a stored "always allow" on todowrite never covers a verify command the user hasn't seen.
+
+### Changed
+- Transcript rendering is memoized (windowing + `memo()` message rows, render-time ref
+  mutations moved to effects) — typing no longer re-renders the whole transcript per
+  keystroke.
+- Repo-root `CLAUDE.md` added (agent-facing repo guide).
+
+## [0.8.0] - 2026-07-07
+
+### Fixed
+- **Learning loop now takes effect** — the client sends a stable `user_id` on every
+  recommend, so Minima's memory recall actually surfaces your prior outcomes and routing
+  can move off the cold-start prior. Previously no `user_id` was sent, so server-side
+  recall was always empty and `decision_basis` never left `prior`.
+- **Esc reliably aborts** — pressing Esc now cancels during the routing/recommend phase
+  too (it was a no-op there, so the model still ran), and an aborted turn no longer leaves
+  a dangling message that made the next prompt re-answer the previous one.
+- **Web search/fetch work without an Exa key** — `web_search` and `web_fetch` fall back to
+  DuckDuckGo when `EXA_API_KEY` is unset (they previously failed at call time); with a key
+  set they still prefer Exa.
+- **Rendering** — long lines (routing warnings, reasoning, tool output) are clipped inside
+  their bordered cells instead of drawing past the border; the `escalation_suggested`
+  internal hint is no longer leaked into the info line; the question and `/tree` overlays
+  reserve their height so they can't corrupt terminal scrollback.
+
+### Changed
+- Learning-loop write failures are now surfaced — a muted `ℹ learning loop: …` line in the
+  TUI and a `feedback_error` event in `--mode json` — instead of being silently swallowed.
+
 ## [0.7.2] - 2026-07-06
 
 ### Added (TUI)

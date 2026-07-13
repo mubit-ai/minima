@@ -1,0 +1,10 @@
+{
+  "name": "datakit",
+  "version": "0.1.0",
+  "description": "Zero-dependency data utilities: CSV, record transforms, descriptive stats, deep object tools.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "bun test tests/"
+  }
+}

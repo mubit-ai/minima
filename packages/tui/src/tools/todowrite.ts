@@ -6,6 +6,7 @@ export interface TodoTask {
   content: string;
   status: "pending" | "in_progress" | "completed";
   priority: "high" | "medium" | "low";
+  verify?: string;
 }
 
 const parameters = objectSchema(
@@ -13,7 +14,11 @@ const parameters = objectSchema(
     tasks: {
       type: "string",
       description:
-        "JSON array of tasks. Each task: {content, status, priority}. Replaces the entire list.",
+        "JSON array of tasks. Each task: {content, status, priority, verify?}. " +
+        "verify = a shell command that proves the task is done " +
+        "(e.g. `bun test tests/foo.test.ts`). Replaces the entire list, except a task's " +
+        "recorded verify is sticky: omitting it keeps the previous command, and it can be " +
+        "overwritten with a new command but never cleared.",
     },
   },
   ["tasks"],
@@ -24,15 +29,35 @@ const parameters = objectSchema(
  * agents in one process never trample each other's todos. (This was a module-level
  * singleton — an isolation hazard for sub-agents.) Pass `state` to observe the list from
  * outside (e.g. a TUI panel).
+ *
+ * M3.3 (ground truth only): executionMode "sequential" — any batch containing todowrite runs
+ * in emission order, so the ground-truth sink's pre-work baseline check (afterToolCall)
+ * observes the repo before sibling edit/write/bash calls mutate it, and two todowrites in one
+ * batch cannot interleave. With ground truth OFF none of that machinery exists, so the tool
+ * keeps its historical parallel-friendly description and mode — the model must not be told of
+ * a verify gate that will never run.
  */
-export function todowriteTool(state: TodoTask[] = []): AgentTool {
+export function todowriteTool(
+  state: TodoTask[] = [],
+  opts: { groundTruth?: boolean } = {},
+): AgentTool {
   return {
     name: "todowrite",
-    description:
-      "Track a task list for multi-step coding work. Pass a JSON array: " +
-      '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
-      "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
+    description: opts.groundTruth
+      ? "Track a task list for multi-step coding work. Pass a JSON array: " +
+        '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
+        "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
+        "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
+        "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
+        "feature, a fix, a test) — a real test/build command that proves it. If you cannot name a " +
+        "verify for a task, it is too vague — split it into tasks you can check. A pure-scaffolding " +
+        "task with no runnable check may omit it. " +
+        "Marking a task completed runs its verify first — the completion is refused unless the check passes."
+      : "Track a task list for multi-step coding work. Pass a JSON array: " +
+        '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
+        "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
     parameters,
+    ...(opts.groundTruth ? { executionMode: "sequential" as const } : {}),
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
       try {
         const parsed = JSON.parse(String(params.tasks));
@@ -40,10 +65,13 @@ export function todowriteTool(state: TodoTask[] = []): AgentTool {
 
         state.length = 0;
         for (const t of parsed) {
+          const verify =
+            typeof t.verify === "string" && t.verify.trim() ? t.verify.trim() : undefined;
           state.push({
             content: String(t.content ?? ""),
             status: t.status ?? "pending",
             priority: t.priority ?? "medium",
+            ...(verify ? { verify } : {}),
           });
         }
 

@@ -1,0 +1,14 @@
+diff --git a/src/csv.ts b/src/csv.ts
+index b1ab6c1..1d8166f 100644
+--- a/src/csv.ts
++++ b/src/csv.ts
+@@ -119,8 +119,7 @@ function needsQuoting(field: string, delimiter: string): boolean {
+   return (
+     field.includes(delimiter) ||
+     field.includes('"') ||
+-    field.includes("\n") ||
+-    field.includes("\r")
++    field.includes("\n")
+   );
+ }
+ 

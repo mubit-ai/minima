@@ -1,0 +1,14 @@
+{
+  "id": "pc-004",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "Filtering by more than one tag has stopped narrowing results. When I run list with `--tag home --tag urgent` I expect only the tasks carrying BOTH tags, but I now get every task that has either one of them \u2014 adding more `--tag` flags actually makes the list grow instead of shrink. Filtering by a single tag still behaves correctly, which is probably why nobody noticed for a while. The CLI help for the flag explicitly says 'all given tags must match', and that intersection behaviour is what our saved workflows rely on; combined tag filters should require every requested tag on a task.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 8,
+  "timeout_sec": 120,
+  "notes": "filter_tags rewritten from all() (AND) to a first-match loop (OR semantics). | RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved.",
+  "authored_difficulty": "medium"
+}

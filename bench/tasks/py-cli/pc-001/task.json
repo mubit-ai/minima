@@ -1,0 +1,13 @@
+{
+  "id": "pc-001",
+  "repo": "py-cli",
+  "category": "bugfix",
+  "problem_statement": "When I ask taskman for everything coming up within a given number of days, items that land exactly on the last day of the window never show up. For example, with today pinned to 2026-03-15, a task due 2026-03-22 is missing from `list --due-within 7`, while tasks due earlier in that same week appear fine. Asking for `--due-within 0` also returns nothing even when something is due today. Everything else about the listing (statuses, other filters, sorting) looks right; the window just seems to stop one day short of where it should.",
+  "test_cmd": "python3 -m pytest -q",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 1,
+  "timeout_sec": 120,
+  "notes": "Off-by-one: due_within upper bound became exclusive (< horizon instead of <=)."
+}

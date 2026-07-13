@@ -27,7 +27,7 @@ export interface BudgetStatus {
 }
 
 export interface BudgetEvent {
-  kind: "reserve" | "reconcile" | "release" | "threshold" | "deny";
+  kind: "reserve" | "reconcile" | "release" | "threshold" | "deny" | "book";
   scopeKey: string;
   amountUsd?: number;
   note?: string;
@@ -164,6 +164,25 @@ export class BudgetLedger {
     });
     tx.immediate();
     this.emit("reconcile", actualUsd);
+    this.checkThresholds();
+  }
+
+  /**
+   * Book spend that never had a reservation — harness overhead like LLM-judge grading.
+   * Real money the wallet must see, but it belongs to no routed run, so it goes straight
+   * to spent_usd (thresholds still fire). Never blocks: the spend already happened.
+   */
+  bookSpend(amountUsd: number, note?: string): void {
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
+    const tx = this.db.db.transaction(() => {
+      this.db.db.run(
+        "UPDATE budgets SET spent_usd = spent_usd + ?, updated = ? WHERE scope_key = ?",
+        [amountUsd, Date.now() / 1000, this.scopeKey],
+      );
+      this.logEvent("book", amountUsd, note);
+    });
+    tx.immediate();
+    this.emit("book", amountUsd, note);
     this.checkThresholds();
   }
 

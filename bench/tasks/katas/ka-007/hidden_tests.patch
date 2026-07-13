@@ -1,0 +1,40 @@
+diff --git a/tests/ts/ordinal/hidden.test.ts b/tests/ts/ordinal/hidden.test.ts
+new file mode 100644
+index 0000000..34ac5b5
+--- /dev/null
++++ b/tests/ts/ordinal/hidden.test.ts
+@@ -0,0 +1,34 @@
++import { expect, test } from "bun:test";
++import { ordinal } from "../../../ts/ordinal.ts";
++
++test("basic suffixes", () => {
++  expect(ordinal(1)).toBe("1st");
++  expect(ordinal(2)).toBe("2nd");
++  expect(ordinal(3)).toBe("3rd");
++  expect(ordinal(4)).toBe("4th");
++});
++
++test("teens take th", () => {
++  expect(ordinal(11)).toBe("11th");
++  expect(ordinal(12)).toBe("12th");
++  expect(ordinal(13)).toBe("13th");
++  expect(ordinal(113)).toBe("113th");
++});
++
++test("higher numbers follow the last digit", () => {
++  expect(ordinal(21)).toBe("21st");
++  expect(ordinal(102)).toBe("102nd");
++  expect(ordinal(1013)).toBe("1013th");
++});
++
++test("zero is 0th", () => {
++  expect(ordinal(0)).toBe("0th");
++});
++
++test("negative throws RangeError", () => {
++  expect(() => ordinal(-1)).toThrow(RangeError);
++});
++
++test("fractional throws RangeError", () => {
++  expect(() => ordinal(2.5)).toThrow(RangeError);
++});

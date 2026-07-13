@@ -8,7 +8,7 @@
  */
 
 import { stream as defaultStream } from "../ai/stream.ts";
-import { AssistantMessage, Message } from "../ai/types.ts";
+import { AssistantMessage, Message, text } from "../ai/types.ts";
 import type { Context, Tool, ToolCall } from "../ai/types.ts";
 import {
   type AgentEvent,
@@ -66,6 +66,7 @@ export async function* agentLoop(
   const streamFn = config.streamFn ?? (defaultStream as NonNullable<AgentLoopConfig["streamFn"]>);
   let turns = 0;
   while (turns < config.maxTurns) {
+    if (config.signal?.aborted) break;
     turns += 1;
     yield turnStart();
 
@@ -80,8 +81,39 @@ export async function* agentLoop(
     const options = streamOptions(config);
     const s = streamFn(state.model, ctx, { options, signal: config.signal ?? undefined });
     yield messageStart(null);
-    for await (const streamEvent of s) {
-      yield messageUpdate(streamEvent as never);
+    let aborted = false;
+    let partialText = "";
+    try {
+      // Race each stream step against the abort signal so Esc stops the run
+      // instantly — without this, `for await` only checks between chunks and a
+      // mid-token or slow-first-token stream keeps going after abort.
+      for await (const streamEvent of raceAbort(s, config.signal ?? undefined)) {
+        if ((streamEvent as { type?: string }).type === "text_delta") {
+          partialText += (streamEvent as { delta?: string }).delta ?? "";
+        }
+        yield messageUpdate(streamEvent as never);
+      }
+    } catch (err) {
+      if (config.signal?.aborted) aborted = true;
+      else throw err;
+    }
+    if (aborted) {
+      // Commit a well-formed assistant turn so history stays user→assistant→user.
+      // Without this the aborted turn leaves a dangling user message; the NEXT
+      // prompt then appends a second user message, the provider merges the two,
+      // and the model answers both. Text-only (never partial tool calls, which
+      // would dangle without a tool_result and 400 the provider).
+      const marker = partialText ? `${partialText}\n\n[aborted by user]` : "[aborted by user]";
+      const stub = new AssistantMessage({
+        content: [text(marker)],
+        model: state.model.id,
+        stop_reason: "aborted",
+      });
+      state.messages.push(stub);
+      state.streamingMessage = null;
+      state.errorMessage = "aborted";
+      yield messageEnd(stub);
+      break;
     }
     const assistant = await s.result();
     state.streamingMessage = assistant;
@@ -176,6 +208,54 @@ export async function* agentLoopContinue(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const abortError = (): DOMException => new DOMException("Aborted", "AbortError");
+
+/**
+ * Yield from an async iterable, but reject the instant `signal` aborts — even if
+ * the underlying stream is blocked awaiting its next chunk. Each `.next()` races
+ * an abort promise, so Esc interrupts a mid-token or slow-first-token stream
+ * immediately instead of waiting for the next chunk to arrive.
+ */
+async function* raceAbort<T>(
+  iterable: AsyncIterable<T>,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<T> {
+  if (signal?.aborted) throw abortError();
+  const it = iterable[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      // Re-check every iteration: the signal may have aborted while we were
+      // suspended at a `yield` (e.g. a listener called abort() during dispatch),
+      // in which case addEventListener('abort') below would never fire again.
+      if (signal?.aborted) throw abortError();
+      let onAbort: (() => void) | undefined;
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (!signal) return;
+        onAbort = () => reject(abortError());
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      let res: IteratorResult<T>;
+      try {
+        res = await Promise.race([it.next(), abortPromise]);
+      } finally {
+        if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      }
+      if (res.done) return;
+      yield res.value;
+    }
+  } finally {
+    // Best-effort: close the source iterator so the provider generator's
+    // finally-block (and any open HTTP request) is torn down.
+    if (typeof it.return === "function") {
+      try {
+        await it.return();
+      } catch {
+        // ignore teardown errors
+      }
+    }
+  }
+}
 
 /** Never send a failed call's assistant to a provider (empty text blocks 400). */
 function dropFailedCalls(messages: Message[]): Message[] {
@@ -294,16 +374,25 @@ async function runOneTool(
   }
 
   if (config.afterToolCall) {
-    const ar = await config.afterToolCall({
-      toolCall: p.tc,
-      result,
-      isError,
-      context: state,
-    } satisfies AfterToolCallContext);
-    if (ar) {
-      if (ar.terminate) result = { ...result, terminate: true };
-      if (ar.details) result = { ...result, details: { ...(result.details ?? {}), ...ar.details } };
-      if (ar.content) result = { ...result, content: ar.content };
+    // A throwing after-hook must not unwind the batch: with Promise.all a single throw
+    // rejected the whole executeToolCalls pass BEFORE any completion entry ran its
+    // pendingToolCalls.delete, leaking the ids for the rest of the session (hooks are
+    // bookkeeping; enforcement lives in beforeToolCall).
+    try {
+      const ar = await config.afterToolCall({
+        toolCall: p.tc,
+        result,
+        isError,
+        context: state,
+      } satisfies AfterToolCallContext);
+      if (ar) {
+        if (ar.terminate) result = { ...result, terminate: true };
+        if (ar.details)
+          result = { ...result, details: { ...(result.details ?? {}), ...ar.details } };
+        if (ar.content) result = { ...result, content: ar.content };
+      }
+    } catch {
+      // degrade to the raw tool result
     }
   }
 

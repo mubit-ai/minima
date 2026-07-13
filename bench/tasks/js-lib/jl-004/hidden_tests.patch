@@ -1,0 +1,37 @@
+diff --git a/tests/hidden_jl004.test.ts b/tests/hidden_jl004.test.ts
+new file mode 100644
+index 0000000..041c354
+--- /dev/null
++++ b/tests/hidden_jl004.test.ts
+@@ -0,0 +1,31 @@
++import { describe, expect, test } from "bun:test";
++import { deepMerge } from "../src/object.ts";
++
++describe("array strategies at depth", () => {
++  test("concat applies to arrays nested below the top level", () => {
++    const merged = deepMerge(
++      { cfg: { tags: [1, 2] } },
++      { cfg: { tags: [3] } },
++      { arrays: "concat" },
++    );
++    expect(merged).toEqual({ cfg: { tags: [1, 2, 3] } });
++  });
++
++  test("union applies at any nesting depth", () => {
++    const merged = deepMerge(
++      { a: { b: { ids: [{ id: 1 }, { id: 3 }] } } },
++      { a: { b: { ids: [{ id: 1 }, { id: 2 }] } } },
++      { arrays: "union" },
++    );
++    expect(merged).toEqual({ a: { b: { ids: [{ id: 1 }, { id: 3 }, { id: 2 }] } } });
++  });
++
++  test("the strategy is consistent across sibling depths", () => {
++    const merged = deepMerge(
++      { top: [1], nest: { deep: [1] } },
++      { top: [2], nest: { deep: [2] } },
++      { arrays: "concat" },
++    );
++    expect(merged).toEqual({ top: [1, 2], nest: { deep: [1, 2] } });
++  });
++});

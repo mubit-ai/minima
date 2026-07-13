@@ -1,0 +1,14 @@
+{
+  "id": "jl-003",
+  "repo": "js-lib",
+  "category": "bugfix",
+  "problem_statement": "Grouping and pivoting break on real-world data whenever a grouping key happens to be a string like 'constructor', '__proto__', 'toString', or another name of a built-in object member. Depending on the exact key, processing either throws a TypeError partway through or silently drops entire groups and columns from the result. We also noticed that groups keyed by numeric-looking strings such as '10' come back reordered instead of in first-seen order, which the documentation explicitly promises. Ordinary alphabetic keys behave fine. Please make grouping robust so any string key works and ordering guarantees hold.",
+  "test_cmd": "bun test tests/",
+  "difficulty": "easy",
+  "expected_route": "cheap",
+  "est_files": 1,
+  "est_loc": 15,
+  "timeout_sec": 60,
+  "authored_difficulty": "medium",
+  "notes": "RE-LABELED 2026-07-06 from k=5 calibration (cheap=haiku 5/5, frontier=sonnet 5/5): no routing signal at authored difficulty \u2014 measured reality is cheap-solvable. authored_difficulty preserved."
+}

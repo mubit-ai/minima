@@ -1,0 +1,22 @@
+diff --git a/tests/hidden_jl001.test.ts b/tests/hidden_jl001.test.ts
+new file mode 100644
+index 0000000..86f7a00
+--- /dev/null
++++ b/tests/hidden_jl001.test.ts
+@@ -0,0 +1,16 @@
++import { describe, expect, test } from "bun:test";
++import { parseCsv, serializeCsv } from "../src/csv.ts";
++
++describe("carriage-return fields", () => {
++  test("quotes a field containing a bare carriage return", () => {
++    expect(serializeCsv([["a\rb"]])).toBe('"a\rb"');
++  });
++
++  test("round-trips fields containing bare carriage returns", () => {
++    const rows = [
++      ["x", "a\rb"],
++      ["y", "z"],
++    ];
++    expect(parseCsv(serializeCsv(rows))).toEqual(rows);
++  });
++});

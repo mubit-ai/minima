@@ -21,7 +21,9 @@ A faithful TypeScript port of the original Python harness (removed from the repo
   `google` (`@google/genai`) — plus a hermetic `faux` provider for tests.
 - **`src/agent/`** — the agent core: PI event taxonomy, `agentLoop` (parallel tool
   execution, before/afterToolCall hooks, max_turns, steering), and the `Agent` class.
-- **`src/tools/`** — `read`/`write`/`edit`/`bash`/`ls` + an `objectSchema` helper.
+- **`src/tools/`** — `read`/`write`/`edit`/`bash`/`ls`, `web_search`/`web_fetch` (Exa when
+  `EXA_API_KEY` is set, else a keyless **DuckDuckGo** fallback — also used if the Exa call
+  fails), + an `objectSchema` helper.
 - **`src/tui/`** — the Ink app (conversation + status bar + model picker) and the
   credential store (OS keychain via `keytar`, else a 0600 file).
 - **`src/session/`** — append-only JSONL session tree + `SessionManager`.
@@ -33,7 +35,7 @@ A faithful TypeScript port of the original Python harness (removed from the repo
 ```bash
 cd packages/tui
 bun install
-bun test          # 75 hermetic tests
+bun test          # 286 hermetic tests
 bun run check     # tsc --noEmit
 bun run lint      # biome
 bun run build     # -> dist/minima (a self-contained native binary)

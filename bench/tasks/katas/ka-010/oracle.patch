@@ -1,0 +1,34 @@
+diff --git a/js/wrap.js b/js/wrap.js
+index fb4fed5..96580fc 100644
+--- a/js/wrap.js
++++ b/js/wrap.js
+@@ -25,5 +25,28 @@
+  * Example: wordWrap("abcdefg hi", 5) -> ["abcde", "fg hi"].
+  */
+ export function wordWrap(text, width) {
+-  throw new Error("kata: implement wordWrap");
++  if (!Number.isInteger(width) || width < 1) {
++    throw new RangeError("width must be an integer >= 1");
++  }
++  const words = text.split(/\s+/).filter(Boolean);
++  const lines = [];
++  let current = "";
++  for (let word of words) {
++    while (word.length > width) {
++      if (current) {
++        lines.push(current);
++        current = "";
++      }
++      lines.push(word.slice(0, width));
++      word = word.slice(width);
++    }
++    if (!current) current = word;
++    else if (current.length + 1 + word.length <= width) current += " " + word;
++    else {
++      lines.push(current);
++      current = word;
++    }
++  }
++  if (current) lines.push(current);
++  return lines;
+ }

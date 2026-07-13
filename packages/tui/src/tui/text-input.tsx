@@ -34,6 +34,8 @@ export interface TextInputProps {
    * lose it; `disabled` alone changes the rendered text to "(busy…)".
    */
   suspended?: boolean;
+  /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
+  disabledLabel?: string;
   showPrefix?: boolean;
 }
 
@@ -60,6 +62,7 @@ export function TextInput({
   placeholder,
   disabled,
   suspended,
+  disabledLabel,
   showPrefix = true,
 }: TextInputProps) {
   // The REF is the source of truth; state only triggers re-render. Ink dispatches every
@@ -169,8 +172,8 @@ export function TextInput({
   const { value, cursor } = draftRef.current;
   if (disabled) {
     return (
-      <Text>
-        {showPrefix && <Text color="cyan">{"›"}</Text>} {"(busy…)"}
+      <Text wrap="truncate">
+        {showPrefix && <Text color="cyan">{"›"}</Text>} {disabledLabel ?? "(busy…)"}
       </Text>
     );
   }
