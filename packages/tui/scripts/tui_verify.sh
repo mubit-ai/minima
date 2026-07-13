@@ -36,6 +36,29 @@ tail -2 "$TMP/capture.txt"
 python3 "$TUI/scripts/tui_assert.py" "$TMP/frames.jsonl" --after 2.5 \
   --check prompt-stable --check single-prompt --check advancing --check final-nonblank
 
+echo "== tui-verify: scenario clipboard (bracketed paste + Ctrl+Y OSC 52) =="
+SPEC2=$(cat <<EOF
+{
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline", "--resume", "fixture-500"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 7,
+  "env": {"MINIMA_DB_PATH": "$TMP/fixture.db"},
+  "raw": "$TMP/raw.bin",
+  "steps": [
+    {"after": 2.5, "send": "<PASTE>pasted line one\nline two\n<ENDPASTE>"},
+    {"after": 4.0, "send": "<CTRLY>"}
+  ]
+}
+EOF
+)
+uv run --with pyte python "$TUI/scripts/pty_capture.py" "$SPEC2" > "$TMP/clip.txt"
+grep -q "pasted line one" "$TMP/clip.txt" || { echo "FAIL: paste not in prompt"; exit 1; }
+# The paste must NOT have submitted: no user-echo of the pasted text in the transcript.
+grep -q "▸ you.*pasted line one" "$TMP/clip.txt" && { echo "FAIL: paste auto-submitted"; exit 1; }
+grep -q "Copied last reply" "$TMP/clip.txt" || { echo "FAIL: Ctrl+Y feedback missing"; exit 1; }
+LC_ALL=C grep -qa "]52;" "$TMP/raw.bin" || { echo "FAIL: no OSC 52 in output stream"; exit 1; }
+echo "tui_assert: PASS clipboard (paste captured, no auto-submit, OSC 52 emitted)"
+
 echo "== tui-verify: perf budget (window compute bounded, listeners flat) =="
 python3 - "$TMP/perf.jsonl" <<'PY'
 import json, sys

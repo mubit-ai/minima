@@ -37,7 +37,7 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
-import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
+import { installInputFilter } from "../tui/input-filter.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -541,12 +541,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Two renderers (like Claude Code):
   //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
   //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
-  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
+  //    optional captured mouse wheel; installInputFilter strips wheel SGR + captures pastes before Ink sees them).
   //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
   //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
   //    reserve seats the prompt at the bottom on first paint.
+  installInputFilter(); // strip wheel SGR + capture bracketed pastes before Ink's key parser
+  process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
   if (args.fullscreen) {
-    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
     process.stdout.write("\u001b[?1049h"); // enter alternate screen
     process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
   } else {
@@ -571,8 +572,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   );
   await instance.waitUntilExit();
 
-  // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
+  // Shutdown: leave the alternate screen (fullscreen only), drop bracketed paste, restore cursor.
   if (args.fullscreen) process.stdout.write("\u001b[?1049l");
+  process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");

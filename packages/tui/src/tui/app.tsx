@@ -37,6 +37,7 @@ import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
+import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
@@ -55,7 +56,7 @@ import {
 import { linesFor, liveReplyLines, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
-import { setMouseScrollCallback } from "./mouse-scroll.ts";
+import { setMouseScrollCallback } from "./input-filter.ts";
 import { perfEnabled, perfSample } from "./perf.ts";
 import {
   type ScrollState,
@@ -184,6 +185,7 @@ const COMMANDS = [
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "mouse", desc: "Toggle mouse-wheel scroll (fullscreen; disables text select)" },
+  { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
@@ -804,6 +806,34 @@ export function HarnessApp({
   // click-drag text selection (which mouse capture disables).
   const [mouseEnabled, setMouseEnabled] = useState(true);
 
+  /** /copy and Ctrl+Y: last assistant reply → OSC 52 (+tmux passthrough) + pbcopy/xclip. */
+  function copyLastReply(echo?: string) {
+    const last = [...messages].reverse().find((msg) => msg.role === "assistant");
+    const echoMsgs: ChatMessage[] = echo ? [{ role: "user", text: echo }] : [];
+    if (!last) {
+      setMessages((m) => [
+        ...m,
+        ...echoMsgs,
+        { role: "tool", text: "Nothing to copy — no assistant reply yet.", toolName: "copy" },
+      ]);
+      return;
+    }
+    const res = copyToClipboard(last.text);
+    const via =
+      [res.osc52 ? "OSC 52" : null, res.cli ? "system clipboard" : null]
+        .filter(Boolean)
+        .join(" + ") || "no available channel (!)";
+    setMessages((m) => [
+      ...m,
+      ...echoMsgs,
+      {
+        role: "tool",
+        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: /mouse (frees the wheel for native selection) or Option/Shift-drag.`,
+        toolName: "copy",
+      },
+    ]);
+  }
+
   useEffect(() => {
     const handleResize = () => {
       setRows(process.stdout.rows || 24);
@@ -1102,6 +1132,12 @@ export function HarnessApp({
       return;
     }
 
+    // Ctrl+Y: copy the last assistant reply — read-only, allowed mid-run (like Ctrl+T).
+    if (key.ctrl && input === "y") {
+      copyLastReply();
+      return;
+    }
+
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
 
@@ -1329,6 +1365,10 @@ export function HarnessApp({
             toolName: "mouse",
           },
         ]);
+        break;
+      }
+      case "copy": {
+        copyLastReply(`/${name}`);
         break;
       }
       case "undo": {
@@ -2138,7 +2178,10 @@ export function HarnessApp({
   // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
   // inside the box, so grow the reserve by the extra wrapped lines.
   const inputHidden = overlayOpen || permPrompt || questionPrompt;
-  const inputExtraLines = inputHidden ? 0 : Math.max(1, wrappedLineCount(typedText, cols - 4)) - 1;
+  // The trailing "▋" accounts for the cursor cell: a draft line exactly at the interior
+  // width wraps the cursor onto a fresh row, which the reserve must include.
+  const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
+  const inputExtraLines = inputHidden ? 0 : inputRows - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   const permPromptHeight = permPrompt
     ? 3 + // round border (2) + prompt line (1)
@@ -2523,6 +2566,11 @@ export function HarnessApp({
             paddingX={1}
             flexDirection="column"
             width="100%"
+            // Explicit height + no shrink: with a multi-line draft (paste), Yoga must grow
+            // THIS box and shrink the transcript region — never the reverse. Letting the box
+            // negotiate (default flexShrink 1) fused the draft into the border/footer rows.
+            height={2 + inputRows}
+            flexShrink={0}
           >
             <Box position="absolute" marginTop={-1} marginLeft={2}>
               <Text color={planMode ? "magenta" : "yellow"}>

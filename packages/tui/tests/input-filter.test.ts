@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { processMouseChunk } from "../src/tui/mouse-scroll.ts";
+import { processMouseChunk } from "../src/tui/input-filter.ts";
 
 const ESC = String.fromCharCode(27);
 
@@ -56,7 +56,7 @@ describe("wheel coalescing", () => {
 
   test("leading edge fires immediately; the window nets into one trailing callback", async () => {
     const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
-      "../src/tui/mouse-scroll.ts"
+      "../src/tui/input-filter.ts"
     );
     const calls: number[] = [];
     setMouseScrollCallback((n) => calls.push(n));
@@ -76,7 +76,7 @@ describe("wheel coalescing", () => {
 
   test("all-cancelling notches inside the window produce no trailing callback", async () => {
     const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
-      "../src/tui/mouse-scroll.ts"
+      "../src/tui/input-filter.ts"
     );
     const calls: number[] = [];
     setMouseScrollCallback((n) => calls.push(n));
@@ -93,7 +93,7 @@ describe("wheel coalescing", () => {
 
   test("unsetting the callback clears the timer and pending notches (no leak, no late fire)", async () => {
     const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
-      "../src/tui/mouse-scroll.ts"
+      "../src/tui/input-filter.ts"
     );
     const calls: number[] = [];
     setMouseScrollCallback((n) => calls.push(n));
@@ -109,5 +109,58 @@ describe("wheel coalescing", () => {
     enqueueWheelNotch("down");
     expect(calls).toEqual([1, -1]);
     setMouseScrollCallback(null);
+  });
+});
+
+describe("processInputChunk (bracketed paste)", () => {
+  const start = `${ESC}[200~`;
+  const end = `${ESC}[201~`;
+  const fresh = () => ({ csiBuffer: "", paste: null });
+
+  test("a whole paste in one chunk is captured, not passed to Ink", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    const r = processInputChunk(fresh(), `${start}hello\nworld\n${end}`);
+    expect(r.pastes).toEqual(["hello\nworld\n"]);
+    expect(r.output).toBe("");
+    expect(r.state).toEqual(fresh());
+  });
+
+  test("a paste spanning chunks — split start marker, body, split end marker — assembles", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    let s = fresh();
+    let r = processInputChunk(s, `typed${ESC}[200`); // split start marker held
+    expect(r.output).toBe("typed");
+    r = processInputChunk(r.state, "~line one\nline ");
+    expect(r.output).toBe("");
+    expect(r.pastes).toEqual([]);
+    r = processInputChunk(r.state, `two${ESC}[201`); // split end marker held in the paste
+    expect(r.pastes).toEqual([]);
+    r = processInputChunk(r.state, "~after");
+    expect(r.pastes).toEqual(["line one\nline two"]);
+    expect(r.output).toBe("after");
+    expect(r.state.paste).toBeNull();
+  });
+
+  test("ESC and mouse sequences INSIDE a paste are data, not keys/scrolls", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    const body = `has ${ESC} escape and ${ESC}[<64;1;1M wheel bytes`;
+    const r = processInputChunk(fresh(), `${start}${body}${end}`);
+    expect(r.pastes).toEqual([body]);
+    expect(r.scrolls).toEqual([]);
+  });
+
+  test("wheel sequences outside a paste still scroll; lone ESC still passes (abort regression)", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    const r = processInputChunk(fresh(), `${ESC}[<64;1;1M${ESC}${start}x${end}${ESC}[<65;1;1M`);
+    expect(r.scrolls).toEqual(["up", "down"]);
+    expect(r.output).toBe(ESC);
+    expect(r.pastes).toEqual(["x"]);
+  });
+
+  test("two pastes in one chunk both deliver, with the text between them intact", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    const r = processInputChunk(fresh(), `${start}a${end}mid${start}b${end}tail`);
+    expect(r.pastes).toEqual(["a", "b"]);
+    expect(r.output).toBe("midtail");
   });
 });

@@ -62,8 +62,11 @@ TOKENS = {
     "<UP>": "\x1b[A", "<DOWN>": "\x1b[B", "<LEFT>": "\x1b[D", "<RIGHT>": "\x1b[C",
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
-    "<CTRLT>": "\x14", "<CTRLE>": "\x05",
+    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLA>": "\x01", "<CTRLK>": "\x0b",
+    "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
     "<SPACE>": " ",
+    # Bracketed paste envelope (what the terminal sends around a paste when ?2004h is set).
+    "<PASTE>": "\x1b[200~", "<ENDPASTE>": "\x1b[201~",
     # SGR mouse wheel reports (button 64 = up, 65 = down) at an arbitrary in-grid cell —
     # what a terminal sends per wheel notch when ?1000h/?1006h tracking is on.
     "<WHEELUP>": "\x1b[<64;10;10M", "<WHEELDN>": "\x1b[<65;10;10M",
@@ -154,6 +157,7 @@ def main() -> int:
     steps = spec.get("steps", [])
     show_history = spec.get("show_history", True)
     frames_path = spec.get("frames")
+    raw_path = spec.get("raw")  # optional: dump the raw output byte stream (OSC 52 asserts etc.)
 
     # Expand steps into a flat (time, bytes) schedule so "repeat"/"gap" storms interleave
     # with PTY reads instead of blocking the loop mid-burst.
@@ -223,6 +227,11 @@ def main() -> int:
     if frames_f:
         frames_f.close()
         print(f"=== wrote {len(chunks)} frames: {frames_path} ===")
+    if raw_path:
+        with open(raw_path, "wb") as f:
+            for _, data in chunks:
+                f.write(data)
+        print(f"=== wrote raw stream: {raw_path} ===")
 
     if show_history and screen.history.top:
         hist = list(screen.history.top)
