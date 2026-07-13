@@ -68,6 +68,12 @@ export interface HarnessConfig {
    * classic escalate-only ladder). Only consulted when `groundTruth` is on — inert on the default
    * path. */
   failureMatcher: boolean;
+  /** Per-step tool allowlist (A6): hard-block, at the dispatcher, any mutating tool a plan step did
+   * not list in its `tools` allowlist while that step is in progress. `MINIMA_TUI_TOOL_ALLOWLIST`,
+   * default on (`0` disables → no enforcement, steps' allowlists become advisory metadata only).
+   * Only consulted when `groundTruth` is on — inert on the default path; a step with no authored
+   * allowlist is unrestricted, so this never changes behavior for plans that don't use it. */
+  toolAllowlist: boolean;
   /** Failure-kind matchers (A4): bounded delay (ms) before a `backoff` retry of the SAME model on a
    * transient/infra error. `MINIMA_TUI_BACKOFF_MS`, default **0** (no delay — hermetic tests); set
    * a small value (e.g. 500) in prod to space out a rate-limited retry. */
@@ -96,6 +102,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     stepCap: 30,
     planRoundBudgetUsd: 0.25,
     failureMatcher: true,
+    toolAllowlist: true,
     backoffMs: 0,
     ...overrides,
   };
@@ -132,6 +139,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(b) && b > 0) cfg.planRoundBudgetUsd = b;
   }
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;
+  if (process.env.MINIMA_TUI_TOOL_ALLOWLIST === "0") cfg.toolAllowlist = false;
   const backoffEnv = process.env.MINIMA_TUI_BACKOFF_MS;
   if (backoffEnv !== undefined) {
     const n = Number(backoffEnv);

@@ -43,6 +43,7 @@ import {
   defaultFactorFs,
   detectTamper,
 } from "./gt_factors.ts";
+import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 
 /**
@@ -102,9 +103,23 @@ export function parseTodos(raw: unknown): TodoInput[] {
     const status = normalizeStatus(rec.status);
     const verify =
       typeof rec.verify === "string" && rec.verify.trim() ? rec.verify.trim() : undefined;
-    out.push(verify ? { content, status, verify } : { content, status });
+    // A6: a per-step tool allowlist. Like verify, the key is OMITTED (never null/[]) when
+    // absent/empty so the sticky COALESCE in upsertPlanFromTodos preserves an existing allowlist —
+    // the agent can set or overwrite a step's tools but never clear them.
+    const tools = normalizeToolList(rec.tools);
+    const todo: TodoInput = { content, status };
+    if (verify) todo.verify = verify;
+    if (tools) todo.tools = tools;
+    out.push(todo);
   }
   return out;
+}
+
+/** Parse a todowrite `tools` value into a trimmed non-empty string[], or undefined when absent/empty. */
+function normalizeToolList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const clean = raw.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean);
+  return clean.length > 0 ? clean : undefined;
 }
 
 function normalizeStatus(s: unknown): string {
@@ -806,12 +821,40 @@ export function batchToolCalls(state: unknown): { id: string; name: string }[] {
  *
  * `gateBudgetMs` is injectable for tests only; production uses GATE_BUDGET_MS.
  */
+/**
+ * A6 enforcement: does the in-progress step's tool allowlist permit this tool call? Reads the
+ * active plan's in-progress step (the same step file changes attribute to), parses its `tools`
+ * column, and returns a block decision for a mutating tool absent from a non-empty allowlist; null
+ * (allow) when there is no plan/step, the step is unrestricted, or the tool is always-allowed.
+ *
+ * Total + FAIL-OPEN: any ledger error allows the call — a broken read must never wedge a turn (the
+ * allowlist is a guardrail, not a security boundary; the done-gate remains the hard invariant).
+ */
+function enforceStepAllowlist(
+  db: MinimaDb,
+  session: string,
+  toolName: string,
+): { block: true; reason: string } | null {
+  try {
+    const plan = db.getActivePlan(session);
+    if (!plan) return null;
+    const step = db.getInProgressStep(plan.id);
+    if (!step) return null;
+    const allow = parseStepTools(step.tools);
+    const decision = stepAllowlistDecision(toolName, allow, step.content);
+    return decision.block ? { block: true, reason: decision.reason ?? "tool not permitted" } : null;
+  } catch {
+    return null; // fail-open: a broken allowlist read must never break a turn.
+  }
+}
+
 export function groundTruthHooks(
   ref: GtAgentRef,
-  opts?: { gateBudgetMs?: number; fs?: FactorFs },
+  opts?: { gateBudgetMs?: number; fs?: FactorFs; enforceAllowlist?: boolean },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
+  const enforceAllowlist = opts?.enforceAllowlist ?? false;
   const sink = groundTruthAfterToolCall(ref);
   const pending = new Map<string, GateVerdict[]>();
 
@@ -819,7 +862,15 @@ export function groundTruthHooks(
     try {
       const db = ref.db;
       const session = ref.runId;
-      if (!db || !session || ctx.toolCall.name !== "todowrite") return null;
+      if (!db || !session) return null;
+      // A6: per-step tool allowlist (task permissions). Any NON-todowrite call is checked against
+      // the in-progress step's allowlist; a mutating tool absent from a non-empty list is blocked
+      // at the dispatcher. todowrite itself is never blocked here (it is how the agent updates the
+      // plan / widens the allowlist / marks a step done) — it falls through to the done-gate below.
+      if (ctx.toolCall.name !== "todowrite") {
+        if (!enforceAllowlist) return null;
+        return enforceStepAllowlist(db, session, ctx.toolCall.name);
+      }
       // Stateless batch rules over the CURRENT assistant message (nothing survives across
       // batches, so an abandoned batch can never wedge the gate): (a) only the batch's FIRST
       // todowrite may run — a second would be previewed against pre-batch DB state; (b) a

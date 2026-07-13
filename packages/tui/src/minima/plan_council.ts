@@ -31,6 +31,7 @@ import {
 } from "./plan_session.ts";
 import type { MinimaAgent } from "./runtime.ts";
 import { type ChildEvent, createSpawn } from "./spawn.ts";
+import { KNOWN_TOOLS } from "./tool_permissions.ts";
 
 export interface CouncilEvent {
   phase: "scope" | "research" | "keeper" | "critic" | "synth" | "done";
@@ -613,7 +614,7 @@ const GROUND_TRUTH_SYSTEM = `You are the RECORDER of a planning council writing 
  "requirements": ["specific functional/behavioral requirement", "..."],
  "constraints": ["hard constraint: language, runtime, no-deps, style, etc.", "..."],
  "decisions": [{"topic": "short label", "decision": "what was decided", "rationale": "why"}],
- "approach": [{"action": "ordered, detailed implementation step", "verify": "shell command or observable check that proves THIS step landed — red before, green after (e.g. a test, a build, an exit code). If you cannot name one, the step is too vague — split it into steps you can."}],
+ "approach": [{"action": "ordered, detailed implementation step", "verify": "shell command or observable check that proves THIS step landed — red before, green after (e.g. a test, a build, an exit code). If you cannot name one, the step is too vague — split it into steps you can.", "tools": ["the MINIMAL set of tools this step needs to touch code — from: read, write, edit, apply_patch, bash, glob, grep, ls, web_search, web_fetch, task. Omit read-only tools (read/ls/glob/grep) — they are always allowed. List only the mutating/expensive tools the step legitimately needs, so the harness can block anything else."]}],
  "risks": ["risk, edge case, or gotcha to handle", "..."],
  "successCriteria": ["end-to-end acceptance check for the whole plan / tests to pass", "..."],
  "openItems": ["anything genuinely deferred — should be rare", "..."]}
@@ -717,11 +718,16 @@ function sanitizeApproach(raw: unknown): SynthPlanStep[] {
   for (const item of raw) {
     if (typeof item === "string") {
       const action = item.trim();
-      if (action) out.push({ action, verify: "" });
+      if (action) out.push({ action, verify: "", tools: [] });
     } else if (item && typeof item === "object") {
       const r = item as Record<string, unknown>;
       const action = asStr(r.action) || asStr(r.step) || asStr(r.task);
-      if (action) out.push({ action, verify: asStr(r.verify) });
+      // A6: keep only names that are real tools (a typo'd allowlist would block everything at
+      // runtime); the static plan lint separately flags an unknown name it was told to keep.
+      const tools = asStrList(r.tools)
+        .map((t) => t.toLowerCase())
+        .filter((t) => KNOWN_TOOLS.has(t));
+      if (action) out.push({ action, verify: asStr(r.verify), tools });
     }
   }
   return out;

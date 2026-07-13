@@ -16,9 +16,10 @@ const parameters = objectSchema(
       description:
         "JSON array of tasks. Each task: {content, status, priority, verify?}. " +
         "verify = a shell command that proves the task is done " +
-        "(e.g. `bun test tests/foo.test.ts`). Replaces the entire list, except a task's " +
-        "recorded verify is sticky: omitting it keeps the previous command, and it can be " +
-        "overwritten with a new command but never cleared.",
+        "(e.g. `bun test tests/foo.test.ts`). Optional `tools` = a JSON array naming the tools " +
+        'this task is allowed to use (e.g. ["read","edit","bash"]); while the task is in ' +
+        "progress the harness blocks any other mutating tool. Both verify and tools are sticky: " +
+        "omitting keeps the previous value, resending overwrites, neither can be cleared.",
     },
   },
   ["tasks"],
@@ -47,7 +48,8 @@ export function todowriteTool(
       ? "Track a task list for multi-step coding work. Pass a JSON array: " +
         '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
         "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
-        "(but a task's recorded verify is sticky: omit to keep it, resend to overwrite; it cannot be cleared). " +
+        "(but a task's recorded verify and tools allowlist are sticky: omit to keep, resend to overwrite; neither can be cleared). " +
+        'Optionally add `"tools":["read","edit","bash"]` to restrict a task to a minimal toolset — the harness blocks any other mutating tool while it is in progress. ' +
         "Attach a `verify` shell command WHEN YOU CREATE a task that produces something checkable (a " +
         "feature, a fix, a test) — a real test/build command that proves it. If you cannot name a " +
         "verify for a task, it is too vague — split it into tasks you can check. A pure-scaffolding " +

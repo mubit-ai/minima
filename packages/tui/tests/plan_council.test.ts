@@ -691,8 +691,8 @@ describe("synthesizeGroundTruth", () => {
     expect(result!.constraints).toContain("Python 3");
     // Legacy string form is tolerated: each string becomes a step with an empty (nudge) verify.
     expect(result!.approach).toEqual([
-      { action: "Write binary_search.py", verify: "" },
-      { action: "Add pytest cases", verify: "" },
+      { action: "Write binary_search.py", verify: "", tools: [] },
+      { action: "Add pytest cases", verify: "", tools: [] },
     ]);
     expect(reg.state.callCount).toBe(1);
   });
@@ -713,8 +713,32 @@ describe("synthesizeGroundTruth", () => {
       metaModel: META_MODEL,
     });
     expect(result!.approach).toEqual([
-      { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py" },
-      { action: "Wire it up", verify: "" },
+      { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py", tools: [] },
+      { action: "Wire it up", verify: "", tools: [] },
+    ]);
+  });
+
+  test("keeps a valid per-step tools allowlist and drops unknown tool names", async () => {
+    reg.setResponses([
+      json({
+        title: "T",
+        goal: "g",
+        approach: [
+          {
+            action: "Edit the router",
+            verify: "bun test tests/router.test.ts",
+            tools: ["Edit", "bash", "notatool"],
+          },
+        ],
+      }),
+    ]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: go", {
+      metaModel: META_MODEL,
+    });
+    // Names are lowercased and filtered to KNOWN_TOOLS ("notatool" dropped).
+    expect(result!.approach).toEqual([
+      { action: "Edit the router", verify: "bun test tests/router.test.ts", tools: ["edit", "bash"] },
     ]);
   });
 
