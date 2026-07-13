@@ -104,6 +104,13 @@ import {
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
+import { RewindPanel } from "./rewind-panel.tsx";
+import {
+  type RewindMode,
+  buildRewindTurns,
+  parseRewindArgs,
+  renderRewindText,
+} from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
@@ -236,6 +243,7 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
   { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
+  { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
   { name: "compact", desc: "Summarize old turns to free context" },
   {
     name: "plan",
@@ -959,6 +967,8 @@ export function HarnessApp({
   // in its key) with the undone prompt's text seeded as the draft.
   const undoCursorRef = useRef<number | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  // B5 (MUB-142): /rewind turn picker (fullscreen overlay on the U2 chassis).
+  const [rewindOpen, setRewindOpen] = useState(false);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1308,7 +1318,8 @@ export function HarnessApp({
       questionPrompt ||
       configOverlayOpen ||
       tocOpen || // U2: the ToC panel owns ↑/↓/⏎/Esc while open
-      gtPanelOpen // U3: same contract for the GT Plan Overview panel
+      gtPanelOpen || // U3: same contract for the GT Plan Overview panel
+      rewindOpen // B5: and for the /rewind turn picker
     )
       return;
 
@@ -1627,6 +1638,74 @@ export function HarnessApp({
     ]);
   }
 
+  /**
+   * B5: execute a rewind to replay-space keep_prompts. code → restore the checkpoint that
+   * captured the worktree as of that prompt's submission (smallest ordinal ≥ keepPrompts;
+   * none = files already match). convo → rewind marker + tail truncation + prefill (same
+   * spine as /undo). Appends one tool message summarizing what happened.
+   */
+  function performRewind(keepPrompts: number, mode: RewindMode) {
+    if (!agent.db || !agent.runId) return;
+    const db = agent.db;
+    const runId = agent.runId;
+    const notes: string[] = [];
+    if (mode !== "convo") {
+      const top = repoTopRef.current;
+      if (!top) {
+        notes.push("code: unavailable (not a git repository)");
+      } else {
+        const target = db.earliestCheckpointAtOrAfter(runId, keepPrompts);
+        if (!target) {
+          notes.push("code: files already match (no checkpointed changes since that prompt)");
+        } else {
+          const result = restore({ top, db, runId, targetTreeSha: target.tree_sha });
+          if (result) {
+            undoCursorRef.current = target.created;
+            notes.push(
+              `code: restored ${result.restored.length} file(s), removed ${result.deleted.length} (safety checkpoint saved)`,
+            );
+          } else {
+            notes.push("code: restore FAILED — worktree untouched beyond the safety snapshot");
+          }
+        }
+      }
+    }
+    let dropCount = 0;
+    let undonePrompt = "";
+    if (mode !== "code") {
+      const replayCount = db.countLeadUserEvents(runId);
+      dropCount = replayCount - keepPrompts;
+      if (dropCount > 0) {
+        db.appendEvent({ runId, type: "rewind", payload: { keep_prompts: keepPrompts } });
+        const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
+        undonePrompt = promptText(cut.droppedPrompt);
+        agent.agentState.messages = cut.messages;
+        const stats = footerStatsFromMessages(
+          agent.agentState.messages,
+          agent.agentState.model?.context_window,
+        );
+        setInputTokens(stats.inputTokens);
+        setOutputTokens(stats.outputTokens);
+        setCtxPct(stats.ctxPct);
+        notes.push(`conversation: rewound ${dropCount} turn(s)`);
+      } else {
+        notes.push("conversation: nothing to rewind");
+      }
+    }
+    if (undonePrompt) setPrefill({ text: undonePrompt, nonce: Date.now() });
+    setMessages((prev) => {
+      let kept = prev;
+      if (dropCount > 0) {
+        const idxs: number[] = [];
+        prev.forEach((m, i) => {
+          if (m.role === "user" && !m.text.trimStart().startsWith("/")) idxs.push(i);
+        });
+        if (idxs.length >= dropCount) kept = prev.slice(0, idxs[idxs.length - dropCount]!);
+      }
+      return [...kept, { role: "tool", toolName: "rewind", text: notes.join(" · ") }];
+    });
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
@@ -1836,6 +1915,66 @@ export function HarnessApp({
                 )
                 .join("\n");
         setMessages((m) => [...m, echo, { role: "tool", text, toolName: "ckpt" }]);
+        break;
+      }
+      case "rewind": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        if (!agent.db || !agent.runId) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: "rewind unavailable — no persistence for this session",
+              toolName: "rewind",
+            },
+          ]);
+          break;
+        }
+        const turns = buildRewindTurns(
+          messages,
+          agent.db.listCheckpoints(agent.runId).map((c) => c.prompt_ordinal),
+          agent.db.countLeadUserEvents(agent.runId),
+        );
+        const parsed = parseRewindArgs(args);
+        if (parsed) {
+          const turn = turns[parsed.n - 1];
+          if (!turn) {
+            setMessages((m) => [
+              ...m,
+              echo,
+              {
+                role: "tool",
+                text: `No prompt ${parsed.n} — this session has ${turns.length} prompt(s) (/rewind lists them).`,
+                toolName: "rewind",
+              },
+            ]);
+            break;
+          }
+          // No echo before executing: the conversation truncation would cut it anyway;
+          // the summary tool message is the durable record.
+          performRewind(turn.keepPrompts, parsed.mode);
+          break;
+        }
+        if (args.trim()) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            { role: "tool", text: "usage: /rewind [<n> [convo|code|both]]", toolName: "rewind" },
+          ]);
+          break;
+        }
+        if (fullscreen && tocGeomRef.current && turns.length > 0) {
+          setTocOpen(false);
+          setGtPanelOpen(false);
+          setRewindOpen(true);
+        } else {
+          setMessages((m) => [
+            ...m,
+            echo,
+            { role: "tool", text: renderRewindText(turns, cols - 6), toolName: "rewind" },
+          ]);
+        }
         break;
       }
       case "compact": {
@@ -3153,6 +3292,22 @@ export function HarnessApp({
   useEffect(() => {
     if (gtPanelOpen && !tocGeomOk) setGtPanelOpen(false);
   }, [gtPanelOpen, tocGeomOk]);
+  // B5: turn list read at open time (same open-snapshot contract as the GT overview).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; rewindOpen/messages are the real recompute triggers
+  const rewindTurns = useMemo(
+    () =>
+      rewindOpen && agent.db && agent.runId
+        ? buildRewindTurns(
+            messages,
+            agent.db.listCheckpoints(agent.runId).map((c) => c.prompt_ordinal),
+            agent.db.countLeadUserEvents(agent.runId),
+          )
+        : [],
+    [rewindOpen, messages],
+  );
+  useEffect(() => {
+    if (rewindOpen && !tocGeomOk) setRewindOpen(false);
+  }, [rewindOpen, tocGeomOk]);
   // No plan in the ledger → nothing to render; close (else the guard list eats input for
   // an empty overlay) and say why instead.
   const gtOverviewMissing = gtPanelOpen && gtOverview === null;
@@ -3262,6 +3417,15 @@ export function HarnessApp({
               overview={gtOverview}
               geometry={tocGeom}
               onClose={() => setGtPanelOpen(false)}
+            />
+          ) : null}
+          {/* B5: /rewind turn picker — same overpaint contract. */}
+          {rewindOpen && tocGeom ? (
+            <RewindPanel
+              turns={rewindTurns}
+              geometry={tocGeom}
+              onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
+              onClose={() => setRewindOpen(false)}
             />
           ) : null}
         </Box>

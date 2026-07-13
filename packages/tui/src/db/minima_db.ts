@@ -862,6 +862,22 @@ export class MinimaDb {
     return row ?? null;
   }
 
+  /**
+   * B5 code-rewind target: the checkpoint capturing the worktree AS OF prompt
+   * `promptOrdinal`+1's submission — i.e. the smallest prompt_ordinal >= promptOrdinal
+   * (snapshots are taken BEFORE a mutating prompt's changes, so the state after prompt k
+   * lives in the NEXT mutating prompt's snapshot). Null = no changes since that prompt.
+   */
+  earliestCheckpointAtOrAfter(runId: string, promptOrdinal: number): CheckpointRow | null {
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE run_id = ? AND prompt_ordinal >= ?
+         ORDER BY prompt_ordinal ASC, created ASC LIMIT 1`,
+      )
+      .get(runId, promptOrdinal) as CheckpointRow | null;
+    return row ?? null;
+  }
+
   /** Delete a run's checkpoint rows (GC companion — the caller deletes the git refs). */
   deleteCheckpoints(runId: string): void {
     this.db.run("DELETE FROM checkpoints WHERE run_id = ?", [runId]);

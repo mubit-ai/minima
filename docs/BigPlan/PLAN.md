@@ -262,14 +262,27 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 **Exit gate:** tests + PTY shot of the prefilled composer. ✅ (`b4-undo-prefill-fullscreen.png`)
 
-### B5 — `/rewind` *(borrow #7 · M)* — *new Linear issue*
+### B5 — `/rewind` *(borrow #7 · M)* — MUB-142
+
+> **Landed (2026-07-13):** "over the JSONL tree" corrected — turns are the transcript's
+> real user prompts (slash echoes excluded, U2's anchor rule) mapped to replay space by
+> distance-from-end (B4's compact-safe rule). Fullscreen: overlay picker on the U2 chassis
+> (j/k · **[c]onvo · [f]iles · [b]oth/⏎** · esc, ✓ marks code-restorable turns); inline or
+> narrow: `/rewind` prints the numbered list and `/rewind <n> [convo|code|both]` (default
+> both) executes directly. Conversation mode = B4's rewind marker + tail truncation +
+> prefill. **Code mode targets the checkpoint with the smallest `prompt_ordinal ≥ keep`**
+> (`earliestCheckpointAtOrAfter`) — snapshots capture the worktree BEFORE a mutating
+> prompt's changes, so "files as of prompt j's submission" lives in prompt j's own
+> snapshot (if it mutated) or the next mutating prompt's; no such checkpoint = files
+> already match (no-op notice). Restores go through B3's `restore()` (safety snapshot —
+> every rewind is undoable).
 
 | # | Step | Verify |
 |---|---|---|
-| B5.1 | Turn picker over the JSONL tree (reuses U2's section/anchor model) | picker renders in PTY shot |
-| B5.2 | Three restore modes: **conversation only** (branch from entryId — non-destructive), **code only** (checkpoint restore), **both** | one test per mode |
+| B5.1 | Turn picker over the live transcript's prompt anchors (U2 rule); overlay in fullscreen, numbered one-shot list inline | picker + list PTY shots, both renderers ✅ |
+| B5.2 | Three restore modes: **conversation only** (rewind marker — non-destructive, replay agrees with live truncation), **code only** (checkpoint restore, conversation intact), **both** | one seam test per mode (`rewind_picker.test.ts`) ✅ |
 
-**Exit gate:** 3 mode tests + picker shot, both renderers.
+**Exit gate:** 3 mode tests + picker shot, both renderers. ✅ (`b5-rewind-picker-fullscreen.png`, `b5-rewind-inline.png`)
 
 ### B6 — Writer/Reviewer two-session workflow *(stretch · S)* — *new Linear issue*
 
@@ -427,7 +440,7 @@ U1 → U2/U3.
 | B2 Plan↔Build on Shift+Tab | B | M | ✅ |
 | B3 git-shadow checkpoints | B | L | ✅ |
 | B4 /undo | B | M | ✅ |
-| B5 /rewind | B | M | ⬜ |
+| B5 /rewind | B | M | ✅ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ✅ |
