@@ -55,6 +55,7 @@ import {
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
+import { detectRepo, gcCheckpoints, makeCheckpointHook } from "../session/checkpoint.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
@@ -233,6 +234,7 @@ const COMMANDS = [
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
+  { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   {
     name: "plan",
@@ -948,6 +950,9 @@ export function HarnessApp({
   const tocGeomRef = useRef<PanelGeometry | null>(null);
   // U3 (MUB-141): GT Plan Overview sidebar — same chassis/geometry as the ToC panel.
   const [gtPanelOpen, setGtPanelOpen] = useState(false);
+  // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
+  const repoTopRef = useRef<string | null>(detectRepo(process.cwd()));
+  const checkpointArmRef = useRef<(() => void) | null>(null);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1046,9 +1051,29 @@ export function HarnessApp({
       }
       return modeGated(ctx);
     });
+    // B3: checkpoint snapshot rides between the permission gate (a denied call must not
+    // snapshot) and the GT done-gate (a gt-block after a snapshot is harmless — deduped by
+    // tree). Same effect as its neighbors: a separate effect with different deps would lose
+    // the relative order on re-registration.
+    const ckpt = makeCheckpointHook({
+      top: repoTopRef.current,
+      db: agent.db ?? null,
+      getRunId: () => agent.runId,
+      getStepId: () => {
+        if (agent.config.groundTruth !== true || !agent.db || !agent.runId) return null;
+        const plan = agent.db.getActivePlan(agent.runId);
+        return plan ? (agent.db.getInProgressStep(plan.id)?.id ?? null) : null;
+      },
+      notify: (message) =>
+        setMessages((m) => [...m, { role: "tool", text: message, toolName: "ckpt" }]),
+    });
+    checkpointArmRef.current = ckpt.arm;
+    const disposeCkpt = agent.addBeforeToolCall(ckpt.hook);
     const disposeGate = gtGateBefore ? agent.addBeforeToolCall(gtGateBefore) : null;
     return () => {
       disposeGate?.();
+      disposeCkpt();
+      checkpointArmRef.current = null;
       disposePermission();
     };
   }, [agent, gtGateBefore]);
@@ -1689,6 +1714,52 @@ export function HarnessApp({
             { role: "tool", text: `undo failed: ${errText(exc)}`, toolName: "undo", isError: true },
           ]);
         }
+        break;
+      }
+      case "ckpt": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const top = repoTopRef.current;
+        if (!top || !agent.db || !agent.runId) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: !top
+                ? "checkpoints off — not a git repository"
+                : "checkpoints off — no persistence for this session",
+              toolName: "ckpt",
+            },
+          ]);
+          break;
+        }
+        if (args.trim() === "gc") {
+          const pruned = gcCheckpoints({ top, db: agent.db, currentRunId: agent.runId });
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text:
+                pruned === 0
+                  ? "checkpoint GC: nothing to prune (current + 5 most recent runs are kept)"
+                  : `checkpoint GC: pruned ${pruned} old run(s)' refs`,
+              toolName: "ckpt",
+            },
+          ]);
+          break;
+        }
+        const rows = agent.db.listCheckpoints(agent.runId);
+        const text =
+          rows.length === 0
+            ? "No checkpoints yet — one is taken at the first mutating tool call of each prompt."
+            : rows
+                .map(
+                  (c) =>
+                    `${c.kind === "safety" ? "◦" : "•"} after prompt ${c.prompt_ordinal} · ${c.kind} · ${c.commit_sha.slice(0, 7)} · ${new Date(c.created * 1000).toLocaleTimeString()}`,
+                )
+                .join("\n");
+        setMessages((m) => [...m, echo, { role: "tool", text, toolName: "ckpt" }]);
         break;
       }
       case "compact": {
@@ -2772,6 +2843,8 @@ export function HarnessApp({
     setBusyState("reasoning");
     setStreaming("");
     setStreamingThoughts("");
+    // B3: this prompt's FIRST mutating tool call snapshots the worktree (once).
+    checkpointArmRef.current?.();
     try {
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
         await handlePlanTurn(text);

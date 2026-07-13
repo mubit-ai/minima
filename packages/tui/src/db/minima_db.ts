@@ -254,6 +254,26 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
     "CREATE INDEX IF NOT EXISTS ix_decisions_step ON routing_decisions(step_id)",
   ],
+  // v9 — git-shadow checkpoints (B3): one row per worktree snapshot, keyed to the run and
+  // the replay-space prompt ordinal (count of lead user events persisted BEFORE the prompt
+  // that triggered the snapshot — the sink flushes at turn_end, so mid-turn the current
+  // prompt is not yet counted). kind 'turn' = pre-mutation snapshot · 'safety' = auto
+  // snapshot taken just before a restore (so /undo is itself undoable). The git objects
+  // live under refs/minima/ckpt/<run_id>/<checkpoint_id>; this table is the mapping ledger.
+  [
+    `CREATE TABLE IF NOT EXISTS checkpoints (
+       id             TEXT PRIMARY KEY,
+       run_id         TEXT NOT NULL REFERENCES runs(run_id),
+       ref            TEXT NOT NULL,
+       commit_sha     TEXT NOT NULL,
+       tree_sha       TEXT NOT NULL,
+       prompt_ordinal INTEGER NOT NULL,
+       step_id        TEXT REFERENCES plan_steps(id),
+       kind           TEXT NOT NULL DEFAULT 'turn',  -- turn|safety
+       created        REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_checkpoints_run ON checkpoints(run_id, created DESC)",
+  ],
 ];
 
 export interface RunRow {
@@ -367,6 +387,20 @@ export interface UserSignalRow {
   action: UserAction | null;
   at: string | null;
   note: string | null;
+}
+
+/** One git-shadow worktree snapshot (B3, v9) — the ref ↔ run ↔ prompt ↔ step mapping. */
+export interface CheckpointRow {
+  id: string;
+  run_id: string;
+  ref: string;
+  commit_sha: string;
+  tree_sha: string;
+  /** Lead user events persisted before the triggering prompt (replay space). */
+  prompt_ordinal: number;
+  step_id: string | null;
+  kind: "turn" | "safety";
+  created: number;
 }
 
 /** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
@@ -762,6 +796,95 @@ export class MinimaDb {
       totalUsd += r.cost;
     }
     return { perStep, totalUsd };
+  }
+
+  // ================================================================ checkpoints (B3)
+
+  insertCheckpoint(opts: {
+    id?: string;
+    runId: string;
+    ref: string;
+    commitSha: string;
+    treeSha: string;
+    promptOrdinal: number;
+    stepId?: string | null;
+    kind?: "turn" | "safety";
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      `INSERT INTO checkpoints (id, run_id, ref, commit_sha, tree_sha, prompt_ordinal, step_id, kind, created)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        opts.runId,
+        opts.ref,
+        opts.commitSha,
+        opts.treeSha,
+        opts.promptOrdinal,
+        opts.stepId ?? null,
+        opts.kind ?? "turn",
+        Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** All of a run's checkpoints, oldest first. */
+  listCheckpoints(runId: string): CheckpointRow[] {
+    return this.db
+      .query("SELECT * FROM checkpoints WHERE run_id = ? ORDER BY created, id")
+      .all(runId) as CheckpointRow[];
+  }
+
+  /**
+   * Newest checkpoint of the run — optionally only rows strictly older than `beforeCreated`
+   * (the /undo walk-back cursor) and/or of one kind ('turn' skips safety snapshots).
+   */
+  latestCheckpoint(
+    runId: string,
+    opts?: { beforeCreated?: number; kind?: "turn" | "safety" },
+  ): CheckpointRow | null {
+    const conds = ["run_id = ?"];
+    const params: (string | number)[] = [runId];
+    if (opts?.beforeCreated !== undefined) {
+      conds.push("created < ?");
+      params.push(opts.beforeCreated);
+    }
+    if (opts?.kind) {
+      conds.push("kind = ?");
+      params.push(opts.kind);
+    }
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE ${conds.join(" AND ")} ORDER BY created DESC, id DESC LIMIT 1`,
+      )
+      .get(...params) as CheckpointRow | null;
+    return row ?? null;
+  }
+
+  /** Delete a run's checkpoint rows (GC companion — the caller deletes the git refs). */
+  deleteCheckpoints(runId: string): void {
+    this.db.run("DELETE FROM checkpoints WHERE run_id = ?", [runId]);
+  }
+
+  /** Distinct run_ids holding checkpoints, most recently snapshotted first (GC policy input). */
+  checkpointRuns(): string[] {
+    const rows = this.db
+      .query(
+        "SELECT run_id, MAX(created) AS latest FROM checkpoints GROUP BY run_id ORDER BY latest DESC",
+      )
+      .all() as { run_id: string }[];
+    return rows.map((r) => r.run_id);
+  }
+
+  /** Lead user events persisted for the run — the replay-space prompt ordinal (B3/B4). */
+  countLeadUserEvents(runId: string): number {
+    const row = this.db
+      .query(
+        "SELECT COUNT(*) AS n FROM events WHERE run_id = ? AND agent_id IS NULL AND type = 'user'",
+      )
+      .get(runId) as { n: number };
+    return row.n;
   }
 
   // ================================================================ ground-truth ledger

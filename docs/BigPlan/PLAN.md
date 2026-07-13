@@ -203,15 +203,36 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 **Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed. ✅
 
-### B3 — Git-shadow checkpoints *(decided design · L)* — *new Linear issue*
+### B3 — Git-shadow checkpoints *(decided design · L)* — MUB-136
+
+> **Landed (2026-07-13):** module `src/session/checkpoint.ts` + migration v9 `checkpoints`
+> table. The mapping ledger is keyed by **replay-space prompt ordinal** (count of persisted
+> lead user events — the sink flushes at turn_end, so mid-turn the triggering prompt isn't
+> counted: ordinal = "worktree before this prompt"), NOT JSONL entry ids (that store is
+> runtime-dead). Ref scheme `refs/minima/ckpt/<runId>/<seq>-<id>` (zero-padded seq → lexical
+> = chronological). The per-run GIT_INDEX_FILE is **reused** (warm stat cache → `add -A`
+> near-instant); snapshots dedupe on tree sha (read-only turns cost no refs); commit-tree
+> gets explicit minima@local identity (hosts without derivable email). **Restore is
+> full-tree byte-identical + a `safety` snapshot first** (decided: /undo is itself
+> undoable; parallel user edits land in the safety checkpoint). Restore = `diff-tree
+> --no-renames -z target now` → delete created-since paths (files/symlinks only — never
+> directories, protects gitlinks; empty parents pruned) → batch `read-tree` +
+> `checkout-index -f -z --stdin` for the rest (modes/symlinks preserved, gitlinks skipped,
+> tracked files not in the diff never re-mtimed). Caveat documented: user-created untracked
+> files between checkpoints die when restoring past their creation — inherent; the safety
+> snapshot holds them. Trigger = `makeCheckpointHook` armed per prompt dispatch, fires on
+> the first of write/edit/apply_patch/bash/**task** (children are hook-free — a task call
+> is a write path), registered permission-gate → checkpoint → GT done-gate. Headless `-p`
+> arms once. `/ckpt` lists · `/ckpt gc` prunes (keep current + 5 recent runs). Exit-gate
+> deviation: no PTY shot (no visible UX beyond /ckpt text) — the ledger-proof tests stand in.
 
 | # | Step | Verify |
 |---|---|---|
-| B3.1 | Snapshot on first mutating tool call per turn: `git add -A` under a **temporary `GIT_INDEX_FILE`** → `write-tree` → `commit-tree` → ref `refs/minima/ckpt/<sessionId>/<entryId>`. User's index/worktree **never touched**. Note: `.gitignore`d files are excluded by design — document it | temp-repo test: snapshot → mutate → restore is byte-identical, incl. untracked files |
-| B3.2 | Map ref ↔ JSONL entry id ↔ step id (GT already attributes writes to steps) | mapping test |
-| B3.3 | Non-git dir → checkpoints off with a one-line notice; GC command prunes old refs | graceful-degrade test |
+| B3.1 | Snapshot on first mutating tool call per prompt: reused per-run `GIT_INDEX_FILE` → `add -A` → `write-tree` (dedupe) → `commit-tree` → `refs/minima/ckpt/<runId>/<seq>-<id>`. User's index/worktree never touched; `.gitignore`d files excluded by design | `checkpoint.test.ts`: snapshot → mutate → restore byte-identical (modified/created/deleted/mode/ignored), porcelain unchanged, safety-undoes-the-undo round trip ✅ |
+| B3.2 | Map ref ↔ run ↔ prompt ordinal ↔ step id (v9 `checkpoints` row; step from `getInProgressStep` when GT on) | mapping + step-attribution tests ✅ |
+| B3.3 | Non-git dir → checkpoints off with a one-time one-line notice; `/ckpt gc` prunes old runs' refs (batched `update-ref --stdin -z`) + rows + warm indexes | graceful-degrade + GC tests ✅ |
 
-**Exit gate:** round-trip suite green in a scratch repo.
+**Exit gate:** round-trip suite green in a scratch repo. ✅
 
 ### B4 — `/undo`: revert + re-prompt *(borrow #6 · M)* — *new Linear issue*
 
@@ -385,7 +406,7 @@ U1 → U2/U3.
 | A7 learning loop | A | M | ⬜ |
 | B1 named sessions + status line | B | S | ✅ |
 | B2 Plan↔Build on Shift+Tab | B | M | ✅ |
-| B3 git-shadow checkpoints | B | L | ⬜ |
+| B3 git-shadow checkpoints | B | L | ✅ |
 | B4 /undo | B | M | ⬜ |
 | B5 /rewind | B | M | ⬜ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |

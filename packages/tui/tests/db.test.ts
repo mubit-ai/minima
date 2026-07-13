@@ -117,8 +117,8 @@ describe("MinimaDb schema + lifecycle", () => {
     const db = new MinimaDb(":memory:");
     // v1 spine + v2 budgets/provenance + v3 plans + v4 file_changes + v5 verification
     // + v6 gate identity (rec_id/session_id/agent_id + closed_at/verify_cwd/note)
-    // + v7 plan_steps.check_origin + v8 routing_decisions.step_id
-    expect(db.schemaVersion).toBe(8);
+    // + v7 plan_steps.check_origin + v8 routing_decisions.step_id + v9 checkpoints
+    expect(db.schemaVersion).toBe(9);
     for (const t of [
       "projects",
       "runs",
