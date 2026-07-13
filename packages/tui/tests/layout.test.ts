@@ -337,3 +337,37 @@ describe("clipPanelLines (U2 panel interior)", () => {
     expect(5).toBeLessThan(mid.top + 4);
   });
 });
+
+describe("cachedMsgHeight", () => {
+  test("matches computeMsgHeight for every role and re-derives on width change", async () => {
+    const { cachedMsgHeight } = await import("../src/tui/layout.ts");
+    const fixtures: ChatMessage[] = [
+      user("short"),
+      user("word ".repeat(80)),
+      asst("## Head\n\n- item one\n- item two\n\n" + "body ".repeat(60)),
+      tool("line\n".repeat(50)),
+      thinking("pondering ".repeat(30)),
+      asst("你好世界 ".repeat(40) + "🧠🚀"),
+    ];
+    for (const msg of fixtures) {
+      for (const cols of [40, 80, 100]) {
+        expect(cachedMsgHeight(msg, cols)).toBe(computeMsgHeight(msg, cols));
+        // Second call (cache hit) must agree with the first.
+        expect(cachedMsgHeight(msg, cols)).toBe(computeMsgHeight(msg, cols));
+      }
+    }
+  });
+});
+
+describe("applyScrollDelta", () => {
+  test("clamps to [0, maxOffset] at mutation time (no banked dead offset)", async () => {
+    const { applyScrollDelta } = await import("../src/tui/layout.ts");
+    expect(applyScrollDelta(0, 3, 100)).toBe(3);
+    expect(applyScrollDelta(98, 3, 100)).toBe(100); // over-scroll up stops at max
+    expect(applyScrollDelta(100, 3, 100)).toBe(100); // further up-notches bank nothing…
+    expect(applyScrollDelta(100, -3, 100)).toBe(97); // …so one down-notch responds immediately
+    expect(applyScrollDelta(2, -3, 100)).toBe(0); // floor at pinned
+    expect(applyScrollDelta(5, 3, 0)).toBe(0); // content shorter than viewport
+    expect(applyScrollDelta(5, 3, -7)).toBe(0); // negative max treated as 0
+  });
+});

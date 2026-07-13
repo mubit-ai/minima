@@ -11,6 +11,7 @@
 
 import { Box, Text } from "ink";
 import type React from "react";
+import { memo } from "react";
 import { type ChatMessage, clampToolText } from "./layout.ts";
 
 // Re-exported so app.tsx keeps a single import site.
@@ -123,7 +124,7 @@ export function MarkdownRenderer({ text }: { text: string }) {
  * One finalized message, rendered inline (no per-turn box). Used as a <Static> item — printed once
  * into scrollback. A `marginTop` gives visual separation between messages.
  */
-export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
+function MessageRowImpl({ msg, cols }: { msg: ChatMessage; cols: number }) {
   if (msg.role === "user") {
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -173,6 +174,13 @@ export function MessageRow({ msg, cols }: { msg: ChatMessage; cols: number }) {
     </Box>
   );
 }
+
+/**
+ * Memoized: message objects are immutable (append/replace-only transcript), so identity equality
+ * on `msg` + `cols` skips re-tokenizing markdown for every unchanged row on every render — the
+ * fullscreen viewport re-renders its whole window on each commit otherwise.
+ */
+export const MessageRow = memo(MessageRowImpl);
 
 /** The live streaming assistant reply (dynamic region; finalizes into a MessageRow when done). */
 export function StreamingReply({ text }: { text: string }) {

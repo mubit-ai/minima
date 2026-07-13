@@ -43,6 +43,7 @@ import { type ActiveAction, currentActionLine, reduceActiveActions } from "./cur
 import { footerStatsFromMessages } from "./footer.ts";
 import {
   type PanelGeometry,
+  applyScrollDelta,
   getScrollableMessages,
   markdownBodyHeight,
   offsetForMessage,
@@ -54,6 +55,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { setMouseScrollCallback } from "./mouse-scroll.ts";
+import { perfEnabled, perfSample } from "./perf.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -751,6 +753,12 @@ export function HarnessApp({
   const [scrollOffset, setScrollOffset] = useState(0);
   const atBottomRef = useRef(true);
   const maxChatHeightRef = useRef(1);
+  // Max meaningful offset (total content rows - viewport rows), written each render so the
+  // wheel/PgUp handlers can clamp the STORED offset at mutation time (see applyScrollDelta).
+  const maxScrollRef = useRef(0);
+  // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
+  const renderCountRef = useRef(0);
+  renderCountRef.current++;
   // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
   // height math) and mirrored into a ref so the key handler can gate on it.
   const [tocOpen, setTocOpen] = useState(false);
@@ -783,9 +791,10 @@ export function HarnessApp({
     process.stdout.on("resize", handleResize);
 
     if (fullscreen) {
-      // Wheel notches (decoded by installMouseScrollFilter in main.ts) adjust the scroll offset.
-      setMouseScrollCallback((dir) =>
-        setScrollOffset((p) => (dir === "up" ? p + 3 : Math.max(0, p - 3))),
+      // Coalesced wheel notches (decoded + batched by installMouseScrollFilter in main.ts;
+      // positive = up) adjust the scroll offset, clamped so over-scroll never banks dead offset.
+      setMouseScrollCallback((notches) =>
+        setScrollOffset((p) => applyScrollDelta(p, notches * 3, maxScrollRef.current)),
       );
     } else {
       // Inline: mouse tracking stays OFF so native scroll/select/copy work with <Static>.
@@ -1027,11 +1036,11 @@ export function HarnessApp({
     if (fullscreen) {
       const page = Math.max(1, maxChatHeightRef.current - 2);
       if (key.pageUp) {
-        setScrollOffset((p) => p + page);
+        setScrollOffset((p) => applyScrollDelta(p, page, maxScrollRef.current));
         return;
       }
       if (key.pageDown) {
-        setScrollOffset((p) => Math.max(0, p - page));
+        setScrollOffset((p) => applyScrollDelta(p, -page, maxScrollRef.current));
         return;
       }
     }
@@ -2145,12 +2154,27 @@ export function HarnessApp({
       : "";
   const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
   const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
-  const scrollWin = fullscreen
-    ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols)
-    : null;
+  // Memoized: with the cachedMsgHeight WeakMap this is O(lookups) even when it does recompute,
+  // and the memo skips it entirely for renders that change none of its inputs (typing, spinner,
+  // overlay state, ...), which is what kept long sessions from lagging on every keystroke.
+  const scrollWin = useMemo(() => {
+    if (!fullscreen) return null;
+    const t0 = perfEnabled ? performance.now() : 0;
+    const win = getScrollableMessages(messages, messagesBudget, scrollOffset, cols);
+    if (perfEnabled)
+      perfSample({
+        kind: "window",
+        ms: performance.now() - t0,
+        msgs: messages.length,
+        renders: renderCountRef.current,
+        stdinListeners: process.stdin.listenerCount("readable"),
+      });
+    return win;
+  }, [fullscreen, messages, messagesBudget, scrollOffset, cols]);
   if (scrollWin) {
     maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
     atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
+    maxScrollRef.current = Math.max(0, scrollWin.totalHeight - messagesBudget);
   }
 
   // U2: panel geometry rides the same height math; null (too narrow/short) downgrades

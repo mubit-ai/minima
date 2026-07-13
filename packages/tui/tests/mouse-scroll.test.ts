@@ -50,3 +50,64 @@ describe("processMouseChunk", () => {
     expect(r.output).toBe(`${ESC}a`);
   });
 });
+
+describe("wheel coalescing", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test("leading edge fires immediately; the window nets into one trailing callback", async () => {
+    const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
+      "../src/tui/mouse-scroll.ts"
+    );
+    const calls: number[] = [];
+    setMouseScrollCallback((n) => calls.push(n));
+
+    enqueueWheelNotch("up");
+    expect(calls).toEqual([1]); // first notch of a burst: zero added latency
+
+    enqueueWheelNotch("up");
+    enqueueWheelNotch("up");
+    enqueueWheelNotch("down");
+    expect(calls).toEqual([1]); // still inside the window — accumulated, not forwarded
+
+    await sleep(WHEEL_FLUSH_MS + 20);
+    expect(calls).toEqual([1, 1]); // trailing edge: net of up+up+down after the leading up
+    setMouseScrollCallback(null);
+  });
+
+  test("all-cancelling notches inside the window produce no trailing callback", async () => {
+    const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
+      "../src/tui/mouse-scroll.ts"
+    );
+    const calls: number[] = [];
+    setMouseScrollCallback((n) => calls.push(n));
+
+    enqueueWheelNotch("down"); // leading edge: -1
+    enqueueWheelNotch("up");
+    enqueueWheelNotch("down");
+    enqueueWheelNotch("up");
+    enqueueWheelNotch("down");
+    await sleep(WHEEL_FLUSH_MS + 20);
+    expect(calls).toEqual([-1]); // the four windowed notches net to 0 → trailing suppressed
+    setMouseScrollCallback(null);
+  });
+
+  test("unsetting the callback clears the timer and pending notches (no leak, no late fire)", async () => {
+    const { setMouseScrollCallback, enqueueWheelNotch, WHEEL_FLUSH_MS } = await import(
+      "../src/tui/mouse-scroll.ts"
+    );
+    const calls: number[] = [];
+    setMouseScrollCallback((n) => calls.push(n));
+
+    enqueueWheelNotch("up");
+    enqueueWheelNotch("up");
+    setMouseScrollCallback(null); // unmount mid-window
+    await sleep(WHEEL_FLUSH_MS + 20);
+    expect(calls).toEqual([1]); // only the leading edge; nothing fired after unset
+
+    // A fresh subscriber starts clean — no stale notches from before the unset.
+    setMouseScrollCallback((n) => calls.push(n));
+    enqueueWheelNotch("down");
+    expect(calls).toEqual([1, -1]);
+    setMouseScrollCallback(null);
+  });
+});

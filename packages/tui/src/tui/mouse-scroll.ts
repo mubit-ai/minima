@@ -8,14 +8,53 @@
  * Usage:
  *   import { installMouseScrollFilter, setMouseScrollCallback } from "./mouse-scroll.ts";
  *   installMouseScrollFilter();   // call once before render()
- *   setMouseScrollCallback((dir) => setScrollOffset(...));  // in component mount
+ *   setMouseScrollCallback((notches) => setScrollOffset(...));  // in component mount
+ *
+ * Notches are coalesced (see WHEEL_FLUSH_MS): the callback receives the net notch count of a
+ * ~33ms window (positive = up), so a wheel storm costs ~30 React updates/s instead of hundreds.
  */
 
-// The registered scroll handler; called on each wheel notch.
-let scrollCallback: ((direction: "up" | "down") => void) | null = null;
+// The registered scroll handler; receives the NET wheel notches (positive = up) of one
+// coalescing window rather than one call per notch.
+let scrollCallback: ((notches: number) => void) | null = null;
+let pendingNotches = 0;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function setMouseScrollCallback(fn: ((direction: "up" | "down") => void) | null): void {
+/**
+ * Wheel coalescing window (ms). A fast wheel/trackpad flick delivers dozens of notches spread
+ * across many stdin chunks within tens of ms; forwarding each notch as its own callback forces
+ * one full React commit per notch (the fullscreen renderer repaints the whole frame per commit).
+ * Leading edge fires immediately — the first notch of a burst has zero added latency — then
+ * everything inside the window nets into a single callback (~30 updates/s while scrolling).
+ */
+export const WHEEL_FLUSH_MS = 33;
+
+function flushNotches(): void {
+  const n = pendingNotches;
+  pendingNotches = 0;
+  if (n !== 0) scrollCallback?.(n);
+}
+
+/** Feed one decoded wheel notch into the coalescer. Production caller: the stdin read filter. */
+export function enqueueWheelNotch(direction: "up" | "down"): void {
+  pendingNotches += direction === "up" ? 1 : -1;
+  if (flushTimer === null) {
+    flushNotches(); // leading edge
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      flushNotches(); // trailing edge: whatever accumulated during the window
+    }, WHEEL_FLUSH_MS);
+  }
+}
+
+export function setMouseScrollCallback(fn: ((notches: number) => void) | null): void {
   scrollCallback = fn;
+  if (fn === null) {
+    // Unmount/replace: drop pending notches and the timer so nothing fires into the void.
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = null;
+    pendingNotches = 0;
+  }
 }
 
 // ESC (0x1b) built without a literal control char in source, so no regex/string control-char lint.
@@ -76,7 +115,7 @@ export function installMouseScrollFilter(): void {
       const str: string = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       const res = processMouseChunk(buffer, str);
       buffer = res.buffer;
-      for (const dir of res.scrolls) scrollCallback?.(dir);
+      for (const dir of res.scrolls) enqueueWheelNotch(dir);
 
       if (res.output.length > 0) {
         return typeof chunk === "string" ? res.output : Buffer.from(res.output, "utf8");
