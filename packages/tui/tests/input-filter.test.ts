@@ -164,3 +164,28 @@ describe("processInputChunk (bracketed paste)", () => {
     expect(r.output).toBe("midtail");
   });
 });
+
+describe("splitKeypressUnits (batched-arrows fix)", () => {
+  test("three arrows in one chunk become three units (Ink parses one keypress per read)", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits(`${ESC}[D${ESC}[D${ESC}[D`)).toEqual([
+      `${ESC}[D`,
+      `${ESC}[D`,
+      `${ESC}[D`,
+    ]);
+  });
+
+  test("text runs stay whole (ICRNL 'text\\n' submit path depends on it)", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits("hello\n")).toEqual(["hello\n"]);
+    expect(splitKeypressUnits(`ab${ESC}[C cd`)).toEqual(["ab", `${ESC}[C`, " cd"]);
+  });
+
+  test("CSI with parameters, SS3, meta+char, and a lone trailing ESC each split correctly", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits(`${ESC}[1;3D`)).toEqual([`${ESC}[1;3D`]); // Option-arrow CSI form
+    expect(splitKeypressUnits(`${ESC}OD${ESC}OC`)).toEqual([`${ESC}OD`, `${ESC}OC`]); // DECCKM app mode
+    expect(splitKeypressUnits(`${ESC}f`)).toEqual([`${ESC}f`]); // meta word-jump
+    expect(splitKeypressUnits(`x${ESC}`)).toEqual(["x", ESC]); // Esc key at chunk end
+  });
+});

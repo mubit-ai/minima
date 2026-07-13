@@ -193,15 +193,66 @@ export function processInputChunk(state: InputFilterState, chunk: string): Input
   return { output, state: { csiBuffer: csi, paste }, scrolls, pastes };
 }
 
+/**
+ * Split filtered stdin into keypress units: each escape sequence (CSI `ESC[...final`,
+ * SS3 `ESC O x`, meta `ESC x`, or a lone trailing ESC = the Esc key) is its own unit;
+ * runs of non-ESC text stay together (Ink handles multi-char printable input, and the
+ * TextInput ICRNL "text\n" submit path depends on the batching).
+ *
+ * WHY: Ink's parse-keypress consumes ONE keypress per useInput dispatch, and its stdin
+ * handler emits one dispatch per read() chunk — so a chunk carrying several escape
+ * sequences (arrow-key autorepeat, tmux input batching) registered only the FIRST arrow
+ * and dropped the rest ("cursor won't move"). Ink drains read() in a while-!==null loop
+ * (ink App.handleReadable), so handing it one unit per read() call dispatches them all.
+ */
+export function splitKeypressUnits(s: string): string[] {
+  const units: string[] = [];
+  const n = s.length;
+  let i = 0;
+  while (i < n) {
+    if (s[i] === ESC) {
+      if (i + 1 < n && s[i + 1] === "[") {
+        // CSI: parameters/intermediates until a final byte in @..~
+        let j = i + 2;
+        while (j < n && !(s[j]! >= "@" && s[j]! <= "~")) j++;
+        units.push(s.slice(i, Math.min(j + 1, n)));
+        i = Math.min(j + 1, n);
+      } else if (i + 2 < n && s[i + 1] === "O") {
+        units.push(s.slice(i, i + 3)); // SS3 (application cursor keys: ESC O A..D etc.)
+        i += 3;
+      } else if (i + 1 < n) {
+        units.push(s.slice(i, i + 2)); // meta+char (parse-keypress metaKeyCodeRe)
+        i += 2;
+      } else {
+        units.push(s.slice(i)); // lone trailing ESC — the Esc key
+        i = n;
+      }
+      continue;
+    }
+    let j = i;
+    while (j < n && s[j] !== ESC) j++;
+    units.push(s.slice(i, j));
+    i = j;
+  }
+  return units;
+}
+
 export function installInputFilter(): void {
   const stdin = process.stdin;
   const realRead = stdin.read.bind(stdin);
   let state: InputFilterState = { csiBuffer: "", paste: null };
+  // Keypress units pending delivery — one per read() call (see splitKeypressUnits).
+  let unitQueue: string[] = [];
+  let queueAsBuffer = false;
 
   // Ink calls stdin.setEncoding('utf8'), so read() returns strings.
   // We handle both string and Buffer for safety.
   (stdin as any).read = (size?: number): string | Buffer | null => {
     for (;;) {
+      if (unitQueue.length > 0) {
+        const unit = unitQueue.shift()!;
+        return queueAsBuffer ? Buffer.from(unit, "utf8") : unit;
+      }
       const chunk = realRead(size);
       if (chunk === null || chunk === undefined) return null;
 
@@ -216,9 +267,11 @@ export function installInputFilter(): void {
       }
 
       if (output.length > 0) {
-        return typeof chunk === "string" ? output : Buffer.from(output, "utf8");
+        unitQueue = splitKeypressUnits(output);
+        queueAsBuffer = typeof chunk !== "string";
       }
-      // All data was mouse / paste / held — loop and try read() again until stdin is drained.
+      // Queue filled → deliver its first unit on the next spin; otherwise everything was
+      // mouse / paste / held — keep reading until real stdin is drained.
     }
   };
 }
