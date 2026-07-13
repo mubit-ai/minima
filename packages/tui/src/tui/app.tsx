@@ -8,7 +8,7 @@
  */
 
 import { Box, Static, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useSyncExternalStore } from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
@@ -25,6 +25,7 @@ import { SessionManager, SessionStore, type SessionSummary, formatAge } from "..
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
+import { getFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
@@ -680,6 +681,8 @@ export function HarnessApp({
 
   // Plan mode: read-only (blocks write/edit/bash)
   const [planMode, setPlanMode] = useState(false);
+  // Phase-0 footer badge slot (MUB-129): external store so guards/modes outside React set it.
+  const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
   const planModeRef = useRef(false);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
@@ -2324,6 +2327,7 @@ export function HarnessApp({
           readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
           alwaysTools={[...permStateRef.current.allowAlways]}
           activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
+          badge={footerBadge}
         />
 
         <Box justifyContent="space-between" width="100%">

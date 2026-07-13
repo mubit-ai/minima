@@ -7,7 +7,9 @@
 > and the stage 0–2 record; the guide stays authoritative for the *why* behind each borrow.
 >
 > **Linear project:** [Minima – Big Plan](https://linear.app/mubit/project/minima-big-plan-af98e58f1f1a/overview)
-> **Branch:** `feat/plan-sqlite-merge` · **Harness:** `packages/tui` (TS/Ink on Bun) · **Flag:** `MINIMA_TUI_GROUND_TRUTH`
+> **Branch:** `feat/BP-UX` (off `main`) — `feat/plan-sqlite-merge` is **retired**; the GT
+> ledger work it carries (schema v3–v5, GT stages 0–2) must be re-landed on this lineage
+> before Track A's A1 · **Harness:** `packages/tui` (TS/Ink on Bun) · **Flag:** `MINIMA_TUI_GROUND_TRUTH`
 
 ---
 
@@ -41,13 +43,16 @@ replan:   after each phase gate — reorder/resize the remaining phases here, do
 
 1. `src/agent/policy.ts` (new) — `PolicyBundle` glob grammar + `GuardEvent` type
 2. Footer-strip **slot API** in `src/tui/` — one badge surface both renderers draw
-3. `src/db/minima_db.ts` **migration v6** — the only schema change in this plan (frozen after)
+3. `src/db/minima_db.ts` step columns (`verify_max_blocks`, `tools`) — **deferred**: this
+   lineage is at schema v2 (no `plan_steps` yet); the columns ride the migration that
+   re-lands the plan-ledger tables (prerequisite for A1)
 4. `src/tools/` type signatures
 5. Usage emission in the agent loop (U1): per-turn `{model, tokens, costUSD}` events consumed
    by the session store — Track B implements, Track A reviews (it lives beside the loop)
 
 **Sync points:** end of A2/B2 (first cross-consumption of `PolicyBundle`) and end of A4/B4
-(escalation tiers ↔ escalation UX). Integration branch stays `feat/plan-sqlite-merge`.
+(escalation tiers ↔ escalation UX). Integration branch: `feat/BP-UX` (off `main`);
+`feat/plan-sqlite-merge` is retired.
 
 ---
 
@@ -72,7 +77,7 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 |---|---|---|
 | 0.1 | `src/agent/policy.ts`: `PolicyRule {tool, pattern, action: allow\|ask\|deny}` + `PolicyBundle` with **last-match-wins** glob resolution (OpenCode semantics: `*` first, specifics after, per-agent override) | `tests/policy.test.ts` table tests incl. override + last-match-wins cases |
 | 0.2 | `GuardEvent` type: `{kind: verify-block\|doom-loop\|steps-cap\|allowlist-deny\|mode-ask, stepId?, tier?, detail}` — the one event both tracks emit and the footer + ledger consume | type-level test + stub emitter round-trip |
-| 0.3 | **Migration v6** (single append, frozen after): `plan_steps.verify_max_blocks INTEGER DEFAULT 3` + `plan_steps.tools TEXT` (JSON glob list) | `db.test.ts`: fresh-create and v5→v6 upgrade both pass |
+| 0.3 | ~~Migration~~ **Deferred to the GT re-land** (this lineage is schema v2, no `plan_steps`): `plan_steps.verify_max_blocks INTEGER DEFAULT 3` + `plan_steps.tools TEXT` ship inside the migration that brings the plan-ledger tables to this base | `db.test.ts`: fresh-create + upgrade tests land with that migration |
 | 0.4 | Footer **slot API**: register a right-side badge slot rendered by both renderers | `layout.test.ts` + PTY shot with a dummy badge, both renderers |
 
 **Exit gate:** merged; both SWEs sign the PR; tracks branch from it.
@@ -80,6 +85,12 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 ---
 
 ## 4. Track A — deterministic guards (SWE-A)
+
+> **Prerequisite (A0):** re-land the GT ledger from the retired `feat/plan-sqlite-merge`
+> branch onto this lineage — schema v3–v5 batches (plans/plan_steps/file_changes/gates/
+> user_signals, + the deferred 0.3 step columns) and the stage 0–2 code (todowrite
+> persistence, plan projection, DRIFT footer). Cherry-pick or fresh PR; append-only
+> migration rules apply.
 
 ### A1 — Verify primitive *(GT stage 3 · M)* — MUB-111, MUB-112, MUB-113
 
