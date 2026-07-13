@@ -66,10 +66,5 @@ export const PLAN_ESCAPE_HATCH =
 /** Mode-conditional system-prompt append. "" for build — headless runs stay unchanged. */
 export function modeSystemAppend(mode: AgentMode): string {
   if (mode !== "plan") return "";
-  return (
-    "\n\n# Plan mode\n" +
-    "You are in plan mode: prefer reading and designing before mutating — write/edit/bash " +
-    "will ask the user first. Draft a short plan before making changes. This is advisory, " +
-    `not a hard rule: ${PLAN_ESCAPE_HATCH}.`
-  );
+  return `\n\n# Plan mode\nYou are in plan mode: prefer reading and designing before mutating — write/edit/bash will ask the user first. Draft a short plan before making changes. This is advisory, not a hard rule: ${PLAN_ESCAPE_HATCH}.`;
 }
