@@ -55,7 +55,8 @@ import {
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
-import { detectRepo, gcCheckpoints, makeCheckpointHook } from "../session/checkpoint.ts";
+import { detectRepo, gcCheckpoints, makeCheckpointHook, restore } from "../session/checkpoint.ts";
+import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
@@ -233,7 +234,7 @@ const COMMANDS = [
   { name: "judge", desc: "Toggle LLM judging on/off" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "perms", desc: "Show current tool permission grants" },
-  { name: "undo", desc: "Undo last AI change (git checkout)" },
+  { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
   { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   {
@@ -953,6 +954,11 @@ export function HarnessApp({
   // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
   const repoTopRef = useRef<string | null>(detectRepo(process.cwd()));
   const checkpointArmRef = useRef<(() => void) | null>(null);
+  // B4 (MUB-139): /undo. Cursor = created-time of the last restored checkpoint, so stacked
+  // /undo walks backwards; reset on the next real prompt. Prefill remounts TextInput (nonce
+  // in its key) with the undone prompt's text seeded as the draft.
+  const undoCursorRef = useRef<number | null>(null);
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1689,31 +1695,101 @@ export function HarnessApp({
         break;
       }
       case "undo": {
-        try {
-          const diff = Bun.spawnSync(["git", "diff", "--name-only", "HEAD"]);
-          const changed = diff.stdout.toString().trim();
-          if (!changed) {
-            setMessages((m) => [
-              ...m,
-              { role: "tool", text: "Nothing to undo (no uncommitted changes)", toolName: "undo" },
-            ]);
-          } else {
-            Bun.spawnSync(["git", "checkout", "--"]);
-            setMessages((m) => [
-              ...m,
-              {
-                role: "tool",
-                text: `Reverted changes to:\n${changed}`,
-                toolName: "undo",
-              },
-            ]);
-          }
-        } catch (exc) {
+        // B4: checkpoint restore (safety snapshot inside) + rewind marker on the events
+        // spine + in-memory truncation + composer prefilled with the undone prompt.
+        const echo: ChatMessage = { role: "user", text: "/undo" };
+        const top = repoTopRef.current;
+        if (!top || !agent.db || !agent.runId) {
           setMessages((m) => [
             ...m,
-            { role: "tool", text: `undo failed: ${errText(exc)}`, toolName: "undo", isError: true },
+            echo,
+            {
+              role: "tool",
+              text: !top
+                ? "undo unavailable — not a git repository"
+                : "undo unavailable — no persistence for this session",
+              toolName: "undo",
+            },
           ]);
+          break;
         }
+        const target = agent.db.latestCheckpoint(agent.runId, {
+          kind: "turn",
+          beforeCreated: undoCursorRef.current ?? undefined,
+        });
+        if (!target) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: "No checkpoint to undo to — one is taken at the first mutating tool call of each prompt.",
+              toolName: "undo",
+            },
+          ]);
+          break;
+        }
+        const result = restore({
+          top,
+          db: agent.db,
+          runId: agent.runId,
+          targetTreeSha: target.tree_sha,
+        });
+        if (!result) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: "undo failed: could not restore the checkpoint",
+              toolName: "undo",
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        undoCursorRef.current = target.created;
+
+        const replayCount = agent.db.countLeadUserEvents(agent.runId);
+        const dropCount = replayCount - target.prompt_ordinal;
+        let undonePrompt = "";
+        if (dropCount > 0) {
+          agent.db.appendEvent({
+            runId: agent.runId,
+            type: "rewind",
+            payload: { keep_prompts: target.prompt_ordinal },
+          });
+          const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
+          undonePrompt = promptText(cut.droppedPrompt);
+          agent.agentState.messages = cut.messages;
+          const stats = footerStatsFromMessages(
+            agent.agentState.messages,
+            agent.agentState.model?.context_window,
+          );
+          setInputTokens(stats.inputTokens);
+          setOutputTokens(stats.outputTokens);
+          setCtxPct(stats.ctxPct);
+        }
+        if (undonePrompt) setPrefill({ text: undonePrompt, nonce: Date.now() });
+
+        setMessages((prev) => {
+          const idxs: number[] = [];
+          prev.forEach((m, i) => {
+            if (m.role === "user" && !m.text.trimStart().startsWith("/")) idxs.push(i);
+          });
+          const kept =
+            dropCount > 0 && idxs.length >= dropCount
+              ? prev.slice(0, idxs[idxs.length - dropCount]!)
+              : prev;
+          return [
+            ...kept,
+            {
+              role: "tool",
+              toolName: "undo",
+              text: `Undid to before prompt ${target.prompt_ordinal + 1}: restored ${result.restored.length} file(s), removed ${result.deleted.length}. A safety checkpoint holds the pre-undo state (see /ckpt).${undonePrompt ? " Composer prefilled with the undone prompt — edit and resend." : ""}`,
+            },
+          ];
+        });
         break;
       }
       case "ckpt": {
@@ -2845,6 +2921,9 @@ export function HarnessApp({
     setStreamingThoughts("");
     // B3: this prompt's FIRST mutating tool call snapshots the worktree (once).
     checkpointArmRef.current?.();
+    // B4: a new prompt starts a new timeline — the /undo walk-back and prefill reset.
+    undoCursorRef.current = null;
+    setPrefill(null);
     try {
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
         await handlePlanTurn(text);
@@ -3331,7 +3410,8 @@ export function HarnessApp({
               </Text>
             </Box>
             <TextInput
-              key={gateFocus?.noteEntry ? "gate-note" : "prompt"}
+              key={gateFocus?.noteEntry ? "gate-note" : `prompt-${prefill?.nonce ?? 0}`}
+              initialValue={gateFocus?.noteEntry ? undefined : prefill?.text}
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}

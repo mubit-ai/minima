@@ -24,6 +24,11 @@ export interface TextInputProps {
   suspended?: boolean;
   /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
   disabledLabel?: string;
+  /**
+   * B4: seed the draft (e.g. /undo prefills the undone prompt for editing). Read once at
+   * mount — the value is internal state, so remount via `key` to apply a new prefill.
+   */
+  initialValue?: string;
   showPrefix?: boolean;
 }
 
@@ -38,9 +43,10 @@ export function TextInput({
   disabled,
   suspended,
   disabledLabel,
+  initialValue,
   showPrefix = true,
 }: TextInputProps) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue ?? "");
 
   const updateValue = (newValue: string) => {
     setValue(newValue);

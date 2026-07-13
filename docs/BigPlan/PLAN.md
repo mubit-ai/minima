@@ -234,14 +234,33 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 **Exit gate:** round-trip suite green in a scratch repo. ✅
 
-### B4 — `/undo`: revert + re-prompt *(borrow #6 · M)* — *new Linear issue*
+### B4 — `/undo`: revert + re-prompt *(borrow #6 · M)* — MUB-139
+
+> **Landed (2026-07-13):** the `store.ts:102` reference was stale (JSONL store is
+> runtime-dead) — the branch model is **rewind markers on the SQLite events spine, same
+> run**: `/undo` appends a `rewind` event (`{keep_prompts}` in replay space) and
+> `rehydrateRun` learned replay-with-truncation, so /resume replays the rewound timeline
+> while the abandoned turns stay in the log (append-only; still rewindable-to). Meter rows
+> and promptsRun stay full — the spend happened (feedback truth). Live in-memory truncation
+> maps by **distance-from-end** (`truncateLastPrompts`) — /compact can rewrite old turns,
+> but live and replay space share their tail. Files restore through B3's `restore()`
+> (safety snapshot inside — /undo is undoable). Composer prefill = new TextInput
+> `initialValue` + key-nonce remount. Stacking = an in-memory cursor
+> (`beforeCreated` on `latestCheckpoint`, kind='turn' — safety rows are never undo
+> targets), reset on the next prompt. The old `/undo` stub (`git checkout --` with no
+> pathspec — a git usage error that reverted nothing while claiming success) is replaced.
+> v1 scope: /undo reaches only the CURRENT session's checkpoints — after `--resume` the
+> ordinal spaces of the old run's checkpoints and the new run's events differ; lineage
+> walk-back is deferred. Shot infra: `--provider-url` CLI flag (OpenAI-compatible base URL
+> for a custom `--provider` — ollama/vLLM/local mocks) landed to drive a real mutating
+> turn against a local mock server with zero spend.
 
 | # | Step | Verify |
 |---|---|---|
-| B4.1 | `/undo` = restore files from last checkpoint **+ branch the session tree** (`store.ts:102` already supports branching — undo is a branch, not a destructive drop) **+ prefill composer with the original user message** for editing | scripted: edit → `/undo` → files restored, prompt prefilled |
-| B4.2 | Stacking: repeated `/undo` walks back through checkpoint refs | stacked ×2 test |
+| B4.1 | `/undo` = B3 checkpoint restore (safety snapshot inside) + rewind marker on the events spine + in-memory truncation + composer prefilled with the undone prompt | rewind.test.ts (marker round-trip, stacked markers, meter-stays-full) + PTY shot: real mock-driven edit turn → `/undo` → file restored on disk, prompt prefilled ✅ |
+| B4.2 | Stacking: repeated `/undo` walks back through turn checkpoints | walk-back ×2 seam test (`latestCheckpoint` beforeCreated) ✅ |
 
-**Exit gate:** tests + PTY shot of the prefilled composer.
+**Exit gate:** tests + PTY shot of the prefilled composer. ✅ (`b4-undo-prefill-fullscreen.png`)
 
 ### B5 — `/rewind` *(borrow #7 · M)* — *new Linear issue*
 
@@ -407,7 +426,7 @@ U1 → U2/U3.
 | B1 named sessions + status line | B | S | ✅ |
 | B2 Plan↔Build on Shift+Tab | B | M | ✅ |
 | B3 git-shadow checkpoints | B | L | ✅ |
-| B4 /undo | B | M | ⬜ |
+| B4 /undo | B | M | ✅ |
 | B5 /rewind | B | M | ⬜ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
