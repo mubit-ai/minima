@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import { enableBypass, setMode } from "../agent/modes.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
@@ -38,6 +39,7 @@ import {
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
+import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -181,6 +183,8 @@ export interface CliArgs {
   fullscreen: boolean;
   /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
   resume?: string;
+  /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
+  bypassPermissions?: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -226,6 +230,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--fullscreen":
         opts.fullscreen = true;
+        break;
+      case "--dangerously-bypass-permissions":
+        opts.bypassPermissions = true;
         break;
       case "-t":
       case "--tools":
@@ -286,6 +293,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
       --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
+      --dangerously-bypass-permissions
+                           start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -536,6 +545,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       closeDb(rc === 0 ? "done" : "aborted");
     }
     return rc;
+  }
+
+  // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
+  // this project's last persisted mode (build when none). Bypass is never persisted — it
+  // must be re-consented each session via the flag or /mode bypass.
+  if (args.bypassPermissions) {
+    enableBypass();
+    setMode("bypass");
+  } else {
+    const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
+    if (savedMode) setMode(savedMode);
   }
 
   // Two renderers (like Claude Code):

@@ -19,7 +19,7 @@ SPEC=$(cat <<EOF
   "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline", "--resume", "fixture-500"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 9,
-  "env": {"MINIMA_DB_PATH": "$TMP/fixture.db", "MINIMA_TUI_PERF": "$TMP/perf.jsonl"},
+  "env": {"MINIMA_DB_PATH": "$TMP/fixture.db", "MINIMA_TUI_PERF": "$TMP/perf.jsonl", "MINIMA_HARNESS_DIR": "$TMP"},
   "frames": "$TMP/frames.jsonl",
   "steps": [
     {"after": 3.0, "send": "<WHEELUP>", "repeat": 100, "gap": 0.005},
@@ -42,7 +42,7 @@ SPEC2=$(cat <<EOF
   "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline", "--resume", "fixture-500"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 7,
-  "env": {"MINIMA_DB_PATH": "$TMP/fixture.db"},
+  "env": {"MINIMA_DB_PATH": "$TMP/fixture.db", "MINIMA_HARNESS_DIR": "$TMP"},
   "raw": "$TMP/raw.bin",
   "steps": [
     {"after": 2.5, "send": "<PASTE>pasted line one\nline two\n<ENDPASTE>"},
@@ -58,6 +58,32 @@ grep -q "▸ you.*pasted line one" "$TMP/clip.txt" && { echo "FAIL: paste auto-s
 grep -q "Copied last reply" "$TMP/clip.txt" || { echo "FAIL: Ctrl+Y feedback missing"; exit 1; }
 LC_ALL=C grep -qa "]52;" "$TMP/raw.bin" || { echo "FAIL: no OSC 52 in output stream"; exit 1; }
 echo "tui_assert: PASS clipboard (paste captured, no auto-submit, OSC 52 emitted)"
+
+echo "== tui-verify: scenario modes (Shift+Tab badge ring) =="
+SPEC3=$(cat <<EOF
+{
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 7,
+  "env": {"MINIMA_HARNESS_DIR": "$TMP"},
+  "frames": "$TMP/mode-frames.jsonl",
+  "steps": [
+    {"after": 2.5, "send": "<SHIFTTAB>"},
+    {"after": 4.0, "send": "<SHIFTTAB>"}
+  ]
+}
+EOF
+)
+uv run --with pyte python "$TUI/scripts/pty_capture.py" "$SPEC3" > "$TMP/modes.txt"
+python3 - "$TMP/mode-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def seen(needle, t0, t1):
+    return any(needle in row for f in frames if t0 <= f["t"] <= t1 for row in f["screen"])
+assert seen("ACCEPT EDITS", 2.5, 4.0), "no ACCEPT EDITS badge after first Shift+Tab"
+assert seen("PLAN", 4.0, 99), "no PLAN badge after second Shift+Tab"
+print("tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)")
+PY
 
 echo "== tui-verify: perf budget (window compute bounded, listeners flat) =="
 python3 - "$TMP/perf.jsonl" <<'PY'

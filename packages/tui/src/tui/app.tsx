@@ -17,7 +17,16 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import type { AgentEvent } from "../agent/events.ts";
-import { bundleForMode, cycleMode, getMode, subscribeMode } from "../agent/modes.ts";
+import {
+  type AgentMode,
+  MODE_BADGES,
+  bundleForMode,
+  cycleMode,
+  enableBypass,
+  getMode,
+  setMode,
+  subscribeMode,
+} from "../agent/modes.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -42,6 +51,7 @@ import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
+import { setMouseScrollCallback } from "./input-filter.ts";
 import {
   type PanelGeometry,
   applyScrollDelta,
@@ -55,16 +65,9 @@ import {
 } from "./layout.ts";
 import { linesFor, liveReplyLines, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
+import { persistMode } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
-import { setMouseScrollCallback } from "./input-filter.ts";
 import { perfEnabled, perfSample } from "./perf.ts";
-import {
-  type ScrollState,
-  buildLineIndex,
-  maxTop,
-  scrollLinesBy,
-  windowLines,
-} from "./viewport.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -79,6 +82,13 @@ import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { TocPanel } from "./toc-panel.tsx";
 import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
+import {
+  type ScrollState,
+  buildLineIndex,
+  maxTop,
+  scrollLinesBy,
+  windowLines,
+} from "./viewport.ts";
 
 /**
  * Fullscreen line viewport (Stage 3): windows the transcript by LINE (lines.ts +
@@ -195,6 +205,7 @@ const COMMANDS = [
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
   { name: "plan", desc: "Toggle plan mode (mutations ask first; Shift+Tab)" },
+  { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
@@ -749,18 +760,27 @@ export function HarnessApp({
   const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
-  // Mode badge: [PLAN] in the shared slot while plan mode is on; build shows nothing (the
-  // slot stays free for Track A guard flags). Never clears a badge it didn't write
-  // (MINIMA_TUI_BADGE seeds survive until the first mode toggle).
+  // Mode badge in the shared slot (PLAN magenta / ⏵⏵ ACCEPT EDITS green / ⚠ BYPASS red);
+  // build shows nothing (the slot stays free for Track A guard flags). Never clears a badge
+  // it didn't write (MINIMA_TUI_BADGE seeds survive until the first mode toggle).
   const badgeOwnedRef = useRef(false);
   useEffect(() => {
-    if (mode === "plan") {
-      setFooterBadge({ text: "PLAN", color: "magenta" });
+    const badge = MODE_BADGES[mode];
+    if (badge) {
+      setFooterBadge(badge);
       badgeOwnedRef.current = true;
     } else if (badgeOwnedRef.current) {
       setFooterBadge(null);
       badgeOwnedRef.current = false;
     }
+  }, [mode]);
+
+  // Persist the mode per project (bypass excluded inside persistMode) so the next session
+  // starts where this one left off — Claude Code behavior.
+  const projectKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
+    persistMode(projectKeyRef.current, mode);
   }, [mode]);
 
   // Terminal sizing (rows/cols).
@@ -1547,7 +1567,9 @@ export function HarnessApp({
         break;
       }
       case "plan": {
-        const next = cycleMode();
+        // Direct toggle (not the 3/4-mode Shift+Tab ring): /plan means plan, now.
+        setMode(getMode() === "plan" ? "build" : "plan");
+        const next = getMode();
         setMessages((m) => [
           ...m,
           {
@@ -1561,6 +1583,48 @@ export function HarnessApp({
                 ? "Plan mode ON — write/edit/bash/apply_patch ask first. Shift+Tab or /plan to exit."
                 : "Build mode — standard permissions.",
             toolName: "plan",
+          },
+        ]);
+        break;
+      }
+      case "mode": {
+        const MODE_ARGS: Record<string, AgentMode> = {
+          build: "build",
+          accept: "acceptEdits",
+          acceptedits: "acceptEdits",
+          plan: "plan",
+          bypass: "bypass",
+        };
+        const want = MODE_ARGS[args.trim().toLowerCase()];
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        if (!want) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: `Mode: ${getMode()} — /mode build | accept | plan | bypass (Shift+Tab cycles).`,
+              toolName: "mode",
+            },
+          ]);
+          break;
+        }
+        if (want === "bypass") enableBypass(); // explicit consent: joins the ring for this session
+        setMode(want);
+        setMessages((m) => [
+          ...m,
+          echo,
+          {
+            role: "tool",
+            text:
+              want === "bypass"
+                ? "⚠ BYPASS mode — every tool call runs without prompting for the rest of this session's bypass mode. Shift+Tab now includes it in the cycle; it is never persisted."
+                : want === "acceptEdits"
+                  ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
+                  : want === "plan"
+                    ? "Plan mode ON — write/edit/bash/apply_patch ask first."
+                    : "Build mode — standard permissions.",
+            toolName: "mode",
           },
         ]);
         break;
@@ -2287,7 +2351,13 @@ export function HarnessApp({
   let view = null;
   if (lineIndex) {
     const t0 = perfEnabled ? performance.now() : 0;
-    view = windowLines(lineIndex, (i) => linesFor(messages[i]!, cols), liveLines, scroll, viewportRows);
+    view = windowLines(
+      lineIndex,
+      (i) => linesFor(messages[i]!, cols),
+      liveLines,
+      scroll,
+      viewportRows,
+    );
     if (perfEnabled)
       perfSample({
         kind: "window",

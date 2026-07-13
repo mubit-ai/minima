@@ -58,7 +58,7 @@ import time
 import pyte
 
 TOKENS = {
-    "<ESC>": "\x1b", "<CR>": "\r", "<ENTER>": "\r", "<TAB>": "\t",
+    "<ESC>": "\x1b", "<CR>": "\r", "<ENTER>": "\r", "<TAB>": "\t", "<SHIFTTAB>": "\x1b[Z",
     "<UP>": "\x1b[A", "<DOWN>": "\x1b[B", "<LEFT>": "\x1b[D", "<RIGHT>": "\x1b[C",
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
