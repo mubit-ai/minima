@@ -8,34 +8,47 @@
  */
 
 import { Box, Static, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef, useCallback, useSyncExternalStore } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+  useSyncExternalStore,
+} from "react";
 import type { AgentEvent } from "../agent/events.ts";
+import { bundleForMode, cycleMode, getMode, subscribeMode } from "../agent/modes.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
-import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
+import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
-import { getFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
+import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import { footerStatsFromMessages } from "./footer.ts";
 import {
+  type PanelGeometry,
   getScrollableMessages,
   markdownBodyHeight,
+  offsetForMessage,
   streamTailBudget,
   tailToFit,
+  tocPanelGeometry,
   wrappedLineCount,
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
@@ -44,14 +57,17 @@ import { setMouseScrollCallback } from "./mouse-scroll.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
-  checkPermission,
   createPermissionState,
+  makeModeGatedBeforeToolCall,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
+import { chatFromMessages, resumeNotice } from "./resume.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
+import { TocPanel } from "./toc-panel.tsx";
+import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -66,6 +82,12 @@ export interface AppProps {
    * used (main buffer + <Static> + native OS scroll). Set by main.ts from the CLI flag/env.
    */
   fullscreen?: boolean;
+  /**
+   * Rehydrated run from the `--resume` CLI flag (B1): main.ts resolves + applies it to the
+   * agent BEFORE first render; the app seeds its transcript and footer stats from it so
+   * frame 1 already shows the restored session.
+   */
+  initialResume?: RehydratedRun | null;
 }
 
 /** True when at least one key-requiring model provider has its key set. */
@@ -139,6 +161,7 @@ const COMMANDS = [
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
   { name: "name", desc: "Set the session display name" },
+  { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "mouse", desc: "Toggle mouse-wheel scroll (fullscreen; disables text select)" },
@@ -150,7 +173,7 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo last AI change (git checkout)" },
   { name: "compact", desc: "Summarize old turns to free context" },
-  { name: "plan", desc: "Toggle plan mode (read-only)" },
+  { name: "plan", desc: "Toggle plan mode (mutations ask first; Shift+Tab)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
 ];
 
@@ -555,9 +578,24 @@ export function HarnessApp({
   askUserRef,
   childEventRef,
   fullscreen = true,
+  initialResume = null,
 }: AppProps) {
   const { exit } = useApp();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
+  // lazy initializers below put the restored transcript + footer stats in the first frame.
+  const [initialStats] = useState(() =>
+    initialResume
+      ? footerStatsFromMessages(initialResume.messages, agent.agentState.model?.context_window)
+      : null,
+  );
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    initialResume
+      ? [
+          ...chatFromMessages(initialResume.messages),
+          resumeNotice(initialResume, agent.meter?.totals().actualCostUsd ?? 0),
+        ]
+      : [],
+  );
   // Bumped whenever `messages` is REPLACED wholesale (clear / new / resume / load-session) rather
   // than appended to. It keys the <Static> transcript so it remounts and reprints from scratch
   // instead of trying to append onto a now-different list (Static is otherwise append-only).
@@ -573,7 +611,9 @@ export function HarnessApp({
   // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
   // "current action" line in the footer; cleared per-tool on tool_execution_end.
   const [activeActions, setActiveActions] = useState<ActiveAction[]>([]);
-  const [actualCost, setActualCost] = useState<number>();
+  const [actualCost, setActualCost] = useState<number | undefined>(() =>
+    initialResume ? agent.meter?.totals().actualCostUsd : undefined,
+  );
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -679,16 +719,28 @@ export function HarnessApp({
     };
   }, [askUserRef]);
 
-  // Plan mode: read-only (blocks write/edit/bash)
-  const [planMode, setPlanMode] = useState(false);
+  // B2 (MUB-135): Plan/Build mode lives in an external store (src/agent/modes.ts) so the
+  // beforeToolCall hook, /plan, and Shift+Tab all share it. planMode stays derived — every
+  // downstream reader (input-box height, banner, StatusBar) is unchanged.
+  const mode = useSyncExternalStore(subscribeMode, getMode);
+  const planMode = mode === "plan";
   // Phase-0 footer badge slot (MUB-129): external store so guards/modes outside React set it.
   const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
-  const planModeRef = useRef(false);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
+  // Mode badge: [PLAN] in the shared slot while plan mode is on; build shows nothing (the
+  // slot stays free for Track A guard flags). Never clears a badge it didn't write
+  // (MINIMA_TUI_BADGE seeds survive until the first mode toggle).
+  const badgeOwnedRef = useRef(false);
   useEffect(() => {
-    planModeRef.current = planMode;
-  }, [planMode]);
+    if (mode === "plan") {
+      setFooterBadge({ text: "PLAN", color: "magenta" });
+      badgeOwnedRef.current = true;
+    } else if (badgeOwnedRef.current) {
+      setFooterBadge(null);
+      badgeOwnedRef.current = false;
+    }
+  }, [mode]);
 
   // Terminal sizing (rows/cols).
   const [rows, setRows] = useState(process.stdout.rows || 24);
@@ -699,6 +751,25 @@ export function HarnessApp({
   const [scrollOffset, setScrollOffset] = useState(0);
   const atBottomRef = useRef(true);
   const maxChatHeightRef = useRef(1);
+  // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
+  // height math) and mirrored into a ref so the key handler can gate on it.
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocGeomRef = useRef<PanelGeometry | null>(null);
+  /**
+   * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
+   * submission order — computeSections runs over the agent's Message[] and its
+   * synthetic "(session start)" section (role ≠ user) is dropped so prompt ordinals
+   * align with the ChatMessage-side sections (which skip slash-command echoes).
+   */
+  function buildUsageLedger(): TocUsage[] {
+    const agentMsgs = agent.agentState.messages;
+    return computeSections(agentMsgs)
+      .sections.filter((s) => agentMsgs[s.startMsgIdx]?.role === "user")
+      .map((s) => ({
+        tokens: s.usage.inputTokens + s.usage.outputTokens,
+        costUSD: s.usage.costUSD,
+      }));
+  }
   // Mouse-wheel scroll (fullscreen only), toggled by /mouse. ON by default so the wheel/trackpad
   // scrolls the in-app history like Claude Code; run /mouse to turn it OFF and restore native
   // click-drag text selection (which mouse capture disables).
@@ -750,27 +821,17 @@ export function HarnessApp({
     if (fullscreen && atBottomRef.current) setScrollOffset(0);
   }, [messages.length, streaming, streamingThoughts, fullscreen]);
 
-  // Wire the beforeToolCall permission hook.
-  // Sensitive tools (write/edit/bash) always prompt; read/ls auto-allow within cwd.
+  // Wire the beforeToolCall permission hook (B2): the active mode's PolicyBundle resolves
+  // first (plan → write/edit/bash/apply_patch ask, outranking "always" grants), then the
+  // normal permission flow. Deps stay [agent] — refs and module fns are stable.
   useEffect(() => {
-    agent.setBeforeToolCall(async (ctx) => {
-      if (planModeRef.current) {
-        const blocked = ["write", "edit", "bash", "apply_patch"];
-        if (blocked.includes(ctx.toolCall.name)) {
-          return {
-            block: true,
-            reason: "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
-          };
-        }
-      }
-      const result = await checkPermission(
-        ctx.toolCall.name,
-        ctx.args,
-        permStateRef.current,
-        (prompt) => setPermPrompt(prompt),
-      );
-      return result;
-    });
+    agent.setBeforeToolCall(
+      makeModeGatedBeforeToolCall({
+        state: permStateRef.current,
+        promptFn: (prompt) => setPermPrompt(prompt),
+        getBundle: () => bundleForMode(getMode()),
+      }),
+    );
   }, [agent]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
@@ -780,9 +841,9 @@ export function HarnessApp({
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
-  const [ctxPct, setCtxPct] = useState(0);
-  const [inputTokens, setInputTokens] = useState(0);
-  const [outputTokens, setOutputTokens] = useState(0);
+  const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
+  const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
+  const [outputTokens, setOutputTokens] = useState(initialStats?.outputTokens ?? 0);
 
   // Input history states
   const [history, setHistory] = useState<string[]>([]);
@@ -931,7 +992,8 @@ export function HarnessApp({
       sessionPickerOpen ||
       permPrompt ||
       questionPrompt ||
-      configOverlayOpen
+      configOverlayOpen ||
+      tocOpen // U2: the ToC panel owns ↑/↓/⏎/Esc while open
     )
       return;
 
@@ -974,6 +1036,24 @@ export function HarnessApp({
       }
     }
 
+    // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation, like PgUp).
+    // Fullscreen with room → overlay panel; inline or too-narrow → one-shot text block.
+    if (key.ctrl && input === "t") {
+      if (fullscreen && tocGeomRef.current) {
+        setTocOpen(true);
+      } else {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
+            toolName: "toc",
+          },
+        ]);
+      }
+      return;
+    }
+
     // Everything below opens an overlay / changes mode — not allowed mid-run.
     if (busy) return;
 
@@ -987,6 +1067,11 @@ export function HarnessApp({
     }
     if (key.ctrl && input === "r") {
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
+      return;
+    }
+    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build).
+    if (key.ctrl && input === "e") {
+      cycleThinkingLevel();
       return;
     }
     if (key.ctrl && input === "c") {
@@ -1074,30 +1159,15 @@ export function HarnessApp({
         // lineage is best-effort
       }
     }
-    const chat: ChatMessage[] = [];
-    for (const m of r.messages) {
-      if (m.role === "user") chat.push({ role: "user", text: m.textContent });
-      else if (m.role === "assistant") chat.push({ role: "assistant", text: m.textContent });
-      else if (m.role === "toolResult")
-        chat.push({
-          role: "tool",
-          text: m.textContent,
-          toolName: (m as AgentMessage & { tool_name?: string }).tool_name ?? "tool",
-          isError: (m as AgentMessage & { is_error?: boolean }).is_error ?? false,
-        });
-    }
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd);
-    const label = r.run.display_name || runId.slice(0, 12);
+    // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
+    const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
+    setInputTokens(stats.inputTokens);
+    setOutputTokens(stats.outputTokens);
+    setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
-    setMessages([
-      ...chat,
-      {
-        role: "tool",
-        text: `Resumed run ${label} (${r.messages.length} msg(s), ${r.meterRows.length} routed prompt(s), $${(totals?.actualCostUsd ?? 0).toFixed(4)} recorded)`,
-        toolName: "resume",
-      },
-    ]);
+    setMessages([...chatFromMessages(r.messages), resumeNotice(r, totals?.actualCostUsd ?? 0)]);
   }
 
   async function loadSession(store: SessionStore) {
@@ -1176,7 +1246,7 @@ export function HarnessApp({
           lines.push(`    ${perm}  ${t.padEnd(8)} ${status}`);
         }
         lines.push("");
-        lines.push(`  Plan mode: ${planMode ? "ON (read-only)" : "off"}`);
+        lines.push(`  Plan mode: ${planMode ? "ON (write/edit/bash ask first)" : "off"}`);
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name}` },
@@ -1388,8 +1458,7 @@ export function HarnessApp({
         break;
       }
       case "plan": {
-        const next = !planMode;
-        setPlanMode(next);
+        const next = cycleMode();
         setMessages((m) => [
           ...m,
           {
@@ -1398,9 +1467,10 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: next
-              ? "Plan mode ON — read-only (write/edit/bash blocked). Use /plan again to exit."
-              : "Plan mode OFF — full write access restored.",
+            text:
+              next === "plan"
+                ? "Plan mode ON — write/edit/bash/apply_patch ask first. Shift+Tab or /plan to exit."
+                : "Build mode — standard permissions.",
             toolName: "plan",
           },
         ]);
@@ -1581,7 +1651,25 @@ export function HarnessApp({
           },
         ]);
         break;
+      case "rename": // alias of /name (B1) — same persistence, same echo
       case "name": {
+        // Empty-arg: show the current name instead of persisting "".
+        if (!args.trim()) {
+          const current =
+            agent.db && agent.runId ? agent.db.getRun(agent.runId)?.display_name : null;
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name}` },
+            {
+              role: "tool",
+              text: current
+                ? `Session name: "${current}" — /${name} <new name> to change it`
+                : `Session is unnamed — /${name} <name> to set one (resumable via --resume <name>)`,
+              toolName: "name",
+            },
+          ]);
+          break;
+        }
         // Persist to the run row so the name survives reload (was cosmetic-only).
         let persisted = false;
         if (agent.db && agent.runId && args.trim()) {
@@ -1960,14 +2048,14 @@ export function HarnessApp({
 
       const last = getLastAssistant(agent);
       if (last?.usage) {
-        setInputTokens(last.usage.input || 0);
-        setOutputTokens(last.usage.output || 0);
-        const model = agent.agentState.model;
-        if (model?.context_window) {
-          setCtxPct((100 * last.usage.input) / model.context_window);
-        } else {
-          setCtxPct(0);
-        }
+        // Same helper as the resume paths — one source of truth for the footer numbers.
+        const stats = footerStatsFromMessages(
+          agent.agentState.messages,
+          agent.agentState.model?.context_window,
+        );
+        setInputTokens(stats.inputTokens);
+        setOutputTokens(stats.outputTokens);
+        setCtxPct(stats.ctxPct);
       }
 
       if (maybeAutoCompact(agent)) {
@@ -2065,6 +2153,22 @@ export function HarnessApp({
     atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
   }
 
+  // U2: panel geometry rides the same height math; null (too narrow/short) downgrades
+  // Ctrl+T to the one-shot text block. NOT an input to getScrollableMessages — the panel
+  // is out-of-flow, so the transcript's cols/height are untouched (no reflow).
+  const tocGeom = fullscreen ? tocPanelGeometry(cols, chatRegionHeight) : null;
+  tocGeomRef.current = tocGeom;
+  const tocSections = useMemo(
+    () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
+    [tocOpen, messages],
+  );
+  // Resize below the minimum while open → close (otherwise input stays captured by a
+  // panel that no longer renders). Boolean dep — tocGeom is a fresh object every render.
+  const tocGeomOk = tocGeom !== null;
+  useEffect(() => {
+    if (tocOpen && !tocGeomOk) setTocOpen(false);
+  }, [tocOpen, tocGeomOk]);
+
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
   if (rows < 10 || cols < 40) {
@@ -2145,6 +2249,16 @@ export function HarnessApp({
           {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
           {scrollWin && !pinned ? (
             <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
+          ) : null}
+          {/* U2: ToC sidebar — LAST child so it paints over the transcript (absolute,
+              out-of-flow: none of the height/cols math above knows it exists). */}
+          {tocOpen && tocGeom ? (
+            <TocPanel
+              sections={tocSections}
+              geometry={tocGeom}
+              onJump={(k) => setScrollOffset(offsetForMessage(messages, k, messagesBudget, cols))}
+              onClose={() => setTocOpen(false)}
+            />
           ) : null}
         </Box>
       ) : (
@@ -2247,7 +2361,7 @@ export function HarnessApp({
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold>
-                {" ⚠ PLAN MODE — read only (write/edit/bash blocked) · /plan to exit "}
+                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
               </Text>
             </Box>
           )}
@@ -2267,10 +2381,11 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={cycleThinkingLevel}
+              onShiftTab={() => cycleMode()}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy}
+              suspended={tocOpen}
               placeholder=""
               showPrefix={false}
             />
@@ -2336,6 +2451,10 @@ export function HarnessApp({
             <Text color="gray">Model </Text>
             <Text color="yellow">ctrl+r </Text>
             <Text color="gray">Route </Text>
+            <Text color="yellow">⇧tab </Text>
+            <Text color="gray">Mode </Text>
+            <Text color="yellow">ctrl+e </Text>
+            <Text color="gray">Reason </Text>
             <Text color="yellow">esc </Text>
             <Text color="gray">Abort</Text>
           </Box>

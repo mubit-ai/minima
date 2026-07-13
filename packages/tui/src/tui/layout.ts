@@ -324,3 +324,82 @@ function clipMessageToHeight(
   while (lo < hi && heightOf() > budget) lo++;
   return { ...msg, text: lines.slice(lo, hi).join("\n") };
 }
+
+// ---------------------------------------------------------------------------
+// U2 (MUB-140): ToC sidebar geometry + anchor jumps. Pure helpers — the panel is
+// OUT-OF-FLOW (absolute overpaint): none of these feed the transcript's height math or
+// the `cols` passed to getScrollableMessages, so opening the panel never reflows the
+// characters-per-line underneath (the decided design) and the render invariant is
+// untouched.
+// ---------------------------------------------------------------------------
+
+/** Below this terminal width the sidebar doesn't open; Ctrl+T falls back to a text block. */
+export const TOC_MIN_COLS = 60;
+
+export interface PanelGeometry {
+  /** Columns left of the panel (transcript stays fully visible there). */
+  left: number;
+  /** Total panel width incl. borders. */
+  width: number;
+  /** Total panel height incl. borders — always the FULL region height (top- and
+   * bottom-aligned coincide, which pins Yoga's absolute static-position ambiguity). */
+  height: number;
+  /** Text columns inside borders + 1-col padding each side. */
+  innerWidth: number;
+  /** Text rows inside the borders. */
+  innerHeight: number;
+}
+
+/**
+ * Right-anchored panel geometry, or null when the terminal is too narrow/short —
+ * callers then print the one-shot text ToC instead (same fallback as the inline
+ * renderer). Width caps at 40 and always leaves ≥30 transcript columns visible.
+ */
+export function tocPanelGeometry(cols: number, regionHeight: number): PanelGeometry | null {
+  if (cols < TOC_MIN_COLS || regionHeight < 5) return null;
+  const width = Math.min(40, cols - 30);
+  const height = regionHeight;
+  return { left: cols - width, width, height, innerWidth: width - 4, innerHeight: height - 2 };
+}
+
+/**
+ * Window `lines` to exactly `innerHeight` rows with `cursorLine` visible: scrolls down
+ * only as far as needed (cursor rides the bottom edge when moving down), clamps to the
+ * content end, and pads with "" so every panel row paints — an unpainted row would let
+ * the transcript underneath bleed through the overpaint.
+ */
+export function clipPanelLines(
+  lines: string[],
+  innerHeight: number,
+  cursorLine: number,
+): { lines: string[]; top: number } {
+  const maxTop = Math.max(0, lines.length - innerHeight);
+  let top = Math.max(0, Math.min(cursorLine - innerHeight + 1, maxTop));
+  if (cursorLine < top) top = Math.min(cursorLine, maxTop);
+  const windowed = lines.slice(top, top + innerHeight);
+  while (windowed.length < innerHeight) windowed.push("");
+  return { lines: windowed, top };
+}
+
+/**
+ * The scrollOffset that puts message `k`'s top row at the top of a `maxHeight`-row
+ * viewport (the U2 Enter-jump): offset = total − maxHeight − prefix(k), clamped to
+ * [0, total − maxHeight]. A `k` inside the last page clamps to 0 — pinned to newest,
+ * matching getScrollableMessages' offset semantics exactly.
+ */
+export function offsetForMessage(
+  messages: ChatMessage[],
+  k: number,
+  maxHeight: number,
+  cols: number,
+): number {
+  let prefix = 0;
+  let total = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const h = computeMsgHeight(messages[i]!, cols);
+    if (i < k) prefix += h;
+    total += h;
+  }
+  const maxOffset = Math.max(0, total - maxHeight);
+  return Math.max(0, Math.min(total - maxHeight - prefix, maxOffset));
+}

@@ -16,6 +16,12 @@ export interface TextInputProps {
   onDown?: (value: string) => string | undefined;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * U2: an overlay (ToC sidebar) owns the keyboard — stop consuming input but STAY
+   * MOUNTED, so the in-progress draft (internal state) survives. Unmounting would
+   * lose it; `disabled` alone changes the rendered text to "(busy…)".
+   */
+  suspended?: boolean;
   showPrefix?: boolean;
 }
 
@@ -28,6 +34,7 @@ export function TextInput({
   onDown,
   placeholder,
   disabled,
+  suspended,
   showPrefix = true,
 }: TextInputProps) {
   const [value, setValue] = useState("");
@@ -40,7 +47,7 @@ export function TextInput({
   };
 
   useInput((input, key) => {
-    if (disabled) return;
+    if (disabled || suspended) return;
     // key.return fires for '\r' (standard interactive path).
     // The ICRNL PTY path: '\r' is translated to '\n' on the slave, and may arrive
     // batched with preceding text (e.g. "hello\n"). Strip the trailing '\n' and

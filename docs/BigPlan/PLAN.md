@@ -18,7 +18,8 @@
 ```
 done:     every phase gate green (A1–A7, B1–B5, U1–U3, J1) · E2E demo (MUB-127) passes in
           bun test · PTY-shot suite committed under docs/BigPlan/shots/
-cap:      one phase = one PR; a phase gate may fail at most 2 review rounds before replanning
+cap:      one phase = one gated commit (one PR per track slice); a phase gate may fail at
+          most 2 review rounds before replanning
 escalate: gate fails twice → joint session, re-scope the phase IN THIS FILE before more code;
           any change to a Phase-0 shared surface → the other SWE reviews before merge
 effort:   2 SWE × ~6 weeks · sizes: S ≤2d, M 3–4d, L 5d+ — calibrated against GT stages 0–2
@@ -172,24 +173,35 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 ## 5. Track B — session & UX (SWE-B)
 
-### B1 — Named sessions + context status line *(borrow #8 · S)* — *new Linear issue*
+### B1 — Named sessions + context status line *(borrow #8 · S)* — MUB-134
+
+> **Seam correction (2026-07-13):** names live on **`runs.display_name` in MinimaDb**
+> (`setRunName`), *not* the legacy JSONL `SessionManager` (read-only at runtime). And the
+> footer's `ctx N%` already existed and was real — B1.2's work was restoring it on resume.
 
 | # | Step | Verify |
 |---|---|---|
-| B1.1 | Named sessions on `SessionManager` (`src/session/store.ts:186`): `--resume <name>`, `/rename` | rename/resume round-trip tests |
-| B1.2 | Status line: context-fill % (tokens used / model window) in the footer — §3's premise is "context degrades as it fills"; the user must *see* it filling | `layout.test.ts` + PTY shots **both renderers** |
+| B1.1 | `--resume <name-or-id>`: `MinimaDb.findRunByName` (exact name → case-insensitive → run-id → id-prefix ≥4 chars; most-recent wins; name outranks id-prefix) resolved **before** `startRun` (typo → no stray run row); rehydrated in `main()` before first render (`initialResume` prop), lineage via `setRunParent`; unknown target lists near matches (`searchRuns`) and exits 2 — never silently starts fresh. `/rename` = alias of `/name` (persists via `setRunName`); empty-arg shows the current name | rename/resume round-trip tests at the DB layer + parseArgs tests |
+| B1.2 | Footer stats survive resume: shared pure `footerStatsFromMessages` (`src/tui/footer.ts`) feeds `↑ ↓ · ctx%` from the post-turn path AND both resume paths (`/resume` + `--resume`) — real values because U1.1 made rehydrate carry usage. `chatFromMessages`/`resumeNotice` (`src/tui/resume.ts`) shared by both restore paths | footer.test.ts + PTY shots **both renderers** with non-zero restored values |
 
-**Exit gate:** tests + 2 shots committed.
+**Exit gate:** tests + 2 shots committed. ✅
 
-### B2 — Plan↔Build primary agents on Tab *(borrow #5 · M)* — *new Linear issue*
+### B2 — Plan↔Build primary agents on Shift+Tab *(borrow #5 · M)* — MUB-135
+
+> **Amended (2026-07-13):** cycle key is **Shift+Tab** (Tab stays composer autocomplete); the
+> thinking-level cycle that lived on Shift+Tab moved to **Ctrl+E**. The badge shows **PLAN
+> only** — build leaves the shared Phase-0 slot free for Track A guard flags (the old row-1
+> `[PLAN]` StatusBar segment was removed; the badge replaces it). Plan-mode "ask"
+> **outranks** an `allowAlways` grant by design (the prompt is prefixed
+> "plan mode — asks every time:" so the recurring ask is self-explaining).
 
 | # | Step | Verify |
 |---|---|---|
-| B2.1 | Two primary agents as **PolicyBundles**: Plan = `{edit, write, apply_patch, bash: ask}` + read/grep/glob/ls allowed; Build = current defaults. **Tab** cycles; mode is read by `beforeToolCall` via Phase-0 grammar | policy resolution tests |
-| B2.2 | Footer **mode badge** (PLAN/BUILD) in the Phase-0 slot | PTY shots of Tab toggle, both renderers |
-| B2.3 | Escape-hatch hint in system prompt: "if you could describe the diff in one sentence, skip the plan" (advisory, not a hard rule) | prompt snapshot test |
+| B2.1 | Two primary agents as **PolicyBundles** (`src/agent/modes.ts`): Plan = write/edit/apply_patch/bash → **ask** (was hard deny — decided change), catch-all allow first (last-match-wins); Build = catch-all allow → normal permission flow. Mode = external store (badge_slot pattern); `beforeToolCall` = `makeModeGatedBeforeToolCall` in `src/tui/permissions.ts` (deny → block w/ policy reason · ask → `GuardEvent(mode-ask)` + forced prompt · allow → `checkPermission`) | policy resolution + forcePrompt + factory tests |
+| B2.2 | Footer badge `[PLAN]` in the Phase-0 slot (build = empty); Shift+Tab cycles; `/plan` = same toggle | PTY shots of the toggle, both renderers |
+| B2.3 | Escape-hatch hint appended per-turn in `promptRouted` (mode-conditional, restored in `finally`; "" in build → headless unchanged) | prompt snapshot test (`PLAN_ESCAPE_HATCH` verbatim) |
 
-**Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed.
+**Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed. ✅
 
 ### B3 — Git-shadow checkpoints *(decided design · L)* — *new Linear issue*
 
@@ -238,28 +250,42 @@ model, Reviewer on a stronger model in fresh context.
 > the same key closes. Sequenced right after B2 — the section/anchor model built in U2 is
 > reused by B5's turn picker, so this ordering *saves* work, not just reprioritizes it.
 
-### U1 — Session usage ledger *(S)* — *new Linear issue*
+### U1 — Session usage ledger *(S)* — MUB-138
 
-Per-call usage already exists in `src/ai/usage.ts` and cost lands in `src/db/` (`sink.ts`,
-`metrics.ts`) — but session JSONL entries carry no usage today. Attach it.
+**RESCOPED (2026-07-13):** per-turn usage is **already persisted** — `DbSink` writes
+`{model, stop_reason, usage:{input, output, cache_read, cache_write, cost_total}}` into
+`events.payload` on every assistant `message_end` (SQLite spine). The session JSONL layer is
+legacy/read-only at runtime (zero `append` callers) and receives **no changes**. No schema
+migration: roll-up on read.
 
 | # | Step | Verify |
 |---|---|---|
-| U1.1 | Emit `{model, inputTokens, outputTokens, costUSD}` per assistant turn from agent events into the session-store entry | round-trip test: JSONL entry carries usage |
-| U1.2 | Section model: a **section** = user prompt → everything until the next user prompt (entry-id range); `sectionUsage() → {tokens, costUSD}` roll-up + cumulative totals | aggregation tests on a fixture session, incl. price-catalog math |
+| U1.1 | Preserve + restore: `rehydrateRun` reads `payload.usage`/`stop_reason` back into `AssistantMessage` so a resumed session carries the same in-memory usage as a live one (cost: `total` only — components aren't persisted; legacy rows rehydrate zeroed, never NaN) | round-trip test: DbSink write → rehydrate → usage equality |
+| U1.2 | Section model as pure `src/session/sections.ts` over the agent's `Message[]` (message-index ranges): `computeSections() → {sections: [{index, title, startMsgIdx, endMsgIdx, usage, cumulative}], totals}` — the U2 ToC contract (per-section $ + cumulative $ + total tokens). **Child-agent usage excluded in v1** (children's messages never enter the lead conversation; their spend stays on `routing_decisions.agent_id` + the run meter). Known pre-existing wart: rehydrated meter totals include child rows, the live meter doesn't — reconcile decision deferred to U2 | aggregation tests on a fixture message list, incl. price-catalog math |
 
 **Exit gate:** fixture session yields correct per-section and cumulative `{tokens, $}`.
 
-### U2 — Table of Contents sidebar, `Ctrl+T` *(L)* — *new Linear issue*
+### U2 — Table of Contents sidebar, `Ctrl+T` *(L)* — MUB-140
+
+> **Landed (2026-07-13):** the overpaint spike succeeded — Ink `position="absolute"` +
+> full-region height (pins Yoga's static-position ambiguity under `flex-end`) + every
+> interior row painting padded columns closed by the right border glyph (defeats Ink's
+> trailing-whitespace trim). No fallback needed. Anchors are **ChatMessage indices** (not
+> JSONL entry ids — the render list is the jump space); usage joins the U1 ledger **by
+> prompt ordinal** (slash echoes / synthetic sections exist on only one side, so raw
+> index joins would drift). Ctrl+T works mid-run (read-only, like PgUp); TextInput gets a
+> `suspended` prop (stays mounted → draft survives); below 60 cols the fullscreen path
+> degrades to the same one-shot text block as inline. Known cosmetic: ambiguous-width
+> glyphs (⚙) can trigger a truncation ellipsis inside a panel row.
 
 | # | Step | Verify |
 |---|---|---|
-| U2.1 | Overlay chassis in `src/tui/`: right-anchored fixed-width panel drawn **over** content (no reflow); respects the render invariant — Σ visible ≤ region, the overlay clips rather than grows the region | `layout.test.ts`: width, clip, transcript lines unchanged under overlay |
-| U2.2 | ToC content: one node per section (user-prompt excerpt as title), children = assistant result · tool activity · **plan created / plan finalized** milestones; per-section `$` below each title; footer = cumulative `$` + total tokens (OC-style context block) | render test on fixture session |
-| U2.3 | Navigation: ↑/↓ (or j/k) moves the cursor; **Enter jumps** the transcript to the section anchor (ToC entry ↔ JSONL entry id ↔ scrollback offset map); Esc/`Ctrl+T` closes | anchor-map unit test + scripted jump test |
-| U2.4 | Inline-renderer fallback: `Ctrl+T` prints the ToC (with prices) as a one-shot text block | PTY shot, inline renderer |
+| U2.1 | Overlay chassis: `tocPanelGeometry` (width `min(40, cols−30)`, full region height, null below 60 cols) + `clipPanelLines` + `TocPanel` absolute overpaint — out-of-flow, so no reflow and the invariant is untouched | `layout.test.ts`: geometry caps/null-gates, clip exactness, no-reflow invariant ✅ |
+| U2.2 | `src/tui/toc.ts`: sections per user prompt (slash echoes attach to the previous section), children = result · tools aggregate (`⚙ N tools (bash×2…)`, error flag) · plan created/updated/finalized (todowrite `(x/y done)` parse); per-section `$ · tok`; Σ footer labeled **lead agent** (child spend excluded, per U1) | `toc.test.ts` fixture render tests ✅ |
+| U2.3 | ↑/↓ (j/k) cursor over titles; **Enter jumps** via pure `offsetForMessage` (prefix-sum over `computeMsgHeight`, clamped; last page → pinned); Esc/`Ctrl+T` closes; global hook guards on `tocOpen` | `offsetForMessage` round-trip/clamp tests ✅ |
+| U2.4 | Inline fallback: `Ctrl+T` appends the ToC as a one-shot `toc:` tool message (same content) | PTY shot, inline renderer ✅ |
 
-**Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green.
+**Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green. ✅
 
 ### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — *new Linear issue*
 
@@ -336,7 +362,7 @@ U1 → U2/U3.
 
 | Phase | Owner | Size | Status |
 |---|---|---|---|
-| P0 interface contract | both | S | ⬜ |
+| P0 interface contract | both | S | ✅ a810739 |
 | A1 verify primitive | A | M | ⬜ |
 | A2 stop hook + block-done | A | M | ⬜ |
 | A3 doom_loop + steps cap | A | M | ⬜ |
@@ -344,13 +370,13 @@ U1 → U2/U3.
 | A5 trust the check | A | M | ⬜ |
 | A6 allowlist + task perms + poka-yoke | A | M | ⬜ |
 | A7 learning loop | A | M | ⬜ |
-| B1 named sessions + status line | B | S | ⬜ |
-| B2 Plan↔Build on Tab | B | M | ⬜ |
+| B1 named sessions + status line | B | S | ✅ |
+| B2 Plan↔Build on Shift+Tab | B | M | ✅ |
 | B3 git-shadow checkpoints | B | L | ⬜ |
 | B4 /undo | B | M | ⬜ |
 | B5 /rewind | B | M | ⬜ |
-| U1 session usage ledger *(Minima-unique)* | B | S | ⬜ |
-| U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ⬜ |
+| U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
+| U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
 | J1 /why + subagent + E2E demo | both | L | ⬜ |
