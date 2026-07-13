@@ -8,7 +8,14 @@
  */
 
 import { Box, Static, Text, useApp, useInput } from "ink";
-import React, { useEffect, useState, useRef, useCallback, useSyncExternalStore } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+  useSyncExternalStore,
+} from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import { bundleForMode, cycleMode, getMode, subscribeMode } from "../agent/modes.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -22,6 +29,7 @@ import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
@@ -34,10 +42,13 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
 import {
+  type PanelGeometry,
   getScrollableMessages,
   markdownBodyHeight,
+  offsetForMessage,
   streamTailBudget,
   tailToFit,
+  tocPanelGeometry,
   wrappedLineCount,
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
@@ -55,6 +66,8 @@ import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
+import { TocPanel } from "./toc-panel.tsx";
+import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -738,6 +751,25 @@ export function HarnessApp({
   const [scrollOffset, setScrollOffset] = useState(0);
   const atBottomRef = useRef(true);
   const maxChatHeightRef = useRef(1);
+  // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
+  // height math) and mirrored into a ref so the key handler can gate on it.
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocGeomRef = useRef<PanelGeometry | null>(null);
+  /**
+   * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
+   * submission order — computeSections runs over the agent's Message[] and its
+   * synthetic "(session start)" section (role ≠ user) is dropped so prompt ordinals
+   * align with the ChatMessage-side sections (which skip slash-command echoes).
+   */
+  function buildUsageLedger(): TocUsage[] {
+    const agentMsgs = agent.agentState.messages;
+    return computeSections(agentMsgs)
+      .sections.filter((s) => agentMsgs[s.startMsgIdx]?.role === "user")
+      .map((s) => ({
+        tokens: s.usage.inputTokens + s.usage.outputTokens,
+        costUSD: s.usage.costUSD,
+      }));
+  }
   // Mouse-wheel scroll (fullscreen only), toggled by /mouse. ON by default so the wheel/trackpad
   // scrolls the in-app history like Claude Code; run /mouse to turn it OFF and restore native
   // click-drag text selection (which mouse capture disables).
@@ -960,7 +992,8 @@ export function HarnessApp({
       sessionPickerOpen ||
       permPrompt ||
       questionPrompt ||
-      configOverlayOpen
+      configOverlayOpen ||
+      tocOpen // U2: the ToC panel owns ↑/↓/⏎/Esc while open
     )
       return;
 
@@ -1001,6 +1034,24 @@ export function HarnessApp({
         setScrollOffset((p) => Math.max(0, p - page));
         return;
       }
+    }
+
+    // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation, like PgUp).
+    // Fullscreen with room → overlay panel; inline or too-narrow → one-shot text block.
+    if (key.ctrl && input === "t") {
+      if (fullscreen && tocGeomRef.current) {
+        setTocOpen(true);
+      } else {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
+            toolName: "toc",
+          },
+        ]);
+      }
+      return;
     }
 
     // Everything below opens an overlay / changes mode — not allowed mid-run.
@@ -2102,6 +2153,22 @@ export function HarnessApp({
     atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
   }
 
+  // U2: panel geometry rides the same height math; null (too narrow/short) downgrades
+  // Ctrl+T to the one-shot text block. NOT an input to getScrollableMessages — the panel
+  // is out-of-flow, so the transcript's cols/height are untouched (no reflow).
+  const tocGeom = fullscreen ? tocPanelGeometry(cols, chatRegionHeight) : null;
+  tocGeomRef.current = tocGeom;
+  const tocSections = useMemo(
+    () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
+    [tocOpen, messages],
+  );
+  // Resize below the minimum while open → close (otherwise input stays captured by a
+  // panel that no longer renders). Boolean dep — tocGeom is a fresh object every render.
+  const tocGeomOk = tocGeom !== null;
+  useEffect(() => {
+    if (tocOpen && !tocGeomOk) setTocOpen(false);
+  }, [tocOpen, tocGeomOk]);
+
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
   if (rows < 10 || cols < 40) {
@@ -2182,6 +2249,16 @@ export function HarnessApp({
           {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
           {scrollWin && !pinned ? (
             <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
+          ) : null}
+          {/* U2: ToC sidebar — LAST child so it paints over the transcript (absolute,
+              out-of-flow: none of the height/cols math above knows it exists). */}
+          {tocOpen && tocGeom ? (
+            <TocPanel
+              sections={tocSections}
+              geometry={tocGeom}
+              onJump={(k) => setScrollOffset(offsetForMessage(messages, k, messagesBudget, cols))}
+              onClose={() => setTocOpen(false)}
+            />
           ) : null}
         </Box>
       ) : (
@@ -2308,6 +2385,7 @@ export function HarnessApp({
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy}
+              suspended={tocOpen}
               placeholder=""
               showPrefix={false}
             />

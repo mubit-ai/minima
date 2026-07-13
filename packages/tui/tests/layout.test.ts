@@ -246,3 +246,94 @@ describe("tailToFit budget enforcement", () => {
     expect(markdownBodyHeight(out, 50)).toBeLessThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------- U2 (MUB-140)
+
+import {
+  TOC_MIN_COLS,
+  clipPanelLines,
+  offsetForMessage,
+  tocPanelGeometry,
+} from "../src/tui/layout.ts";
+
+describe("offsetForMessage (U2 jump)", () => {
+  const many: ChatMessage[] = Array.from({ length: 12 }, (_, i) => ({
+    role: (i % 2 === 0 ? "user" : "assistant") as ChatMessage["role"],
+    text: `message ${i}\nline two\nline three`,
+  }));
+
+  test("round-trip: the window at the returned offset starts with message k, unclipped", () => {
+    const cols = 80;
+    const maxHeight = 10;
+    for (const k of [0, 3, 6]) {
+      const off = offsetForMessage(many, k, maxHeight, cols);
+      const win = getScrollableMessages(many, maxHeight, off, cols);
+      expect(win.visible[0]!.text).toBe(many[k]!.text); // whole message at the top — no clip
+    }
+  });
+
+  test("k inside the last page → 0 (pinned-to-newest semantics)", () => {
+    expect(offsetForMessage(many, many.length - 1, 10, 80)).toBe(0);
+  });
+
+  test("clamps: k=0 lands at maxOffset (top); short transcripts always 0", () => {
+    const cols = 80;
+    const maxHeight = 10;
+    const total = many.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
+    expect(offsetForMessage(many, 0, maxHeight, cols)).toBe(total - maxHeight);
+    expect(offsetForMessage(many.slice(0, 1), 0, 50, cols)).toBe(0);
+  });
+});
+
+describe("tocPanelGeometry (U2 chassis)", () => {
+  test("null below TOC_MIN_COLS or for regionHeight < 5 → callers use the text fallback", () => {
+    expect(tocPanelGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
+    expect(tocPanelGeometry(100, 4)).toBeNull();
+  });
+
+  test("width caps at 40, always leaves ≥30 transcript cols; panel spans the full region height", () => {
+    const g60 = tocPanelGeometry(60, 20)!;
+    expect(g60.width).toBe(30);
+    expect(g60.left).toBe(30);
+    const g100 = tocPanelGeometry(100, 24)!;
+    expect(g100.width).toBe(40);
+    expect(g100.left + g100.width).toBe(100);
+    expect(g100.height).toBe(24);
+    expect(g100.innerWidth).toBe(36);
+    expect(g100.innerHeight).toBe(22);
+  });
+
+  test("no-reflow invariant: the transcript window is byte-identical with or without a panel", () => {
+    const cols = 100;
+    const fixture: ChatMessage[] = [
+      { role: "user", text: "a question" },
+      { role: "assistant", text: "an answer\nwith a second line" },
+      { role: "tool", text: "tool output", toolName: "bash" },
+    ];
+    const before = getScrollableMessages(fixture, 12, 3, cols);
+    tocPanelGeometry(cols, 20); // panel geometry exists…
+    const after = getScrollableMessages(fixture, 12, 3, cols); // …and is not an input here
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+  });
+});
+
+describe("clipPanelLines (U2 panel interior)", () => {
+  const lines = Array.from({ length: 10 }, (_, i) => `row ${i}`);
+
+  test("always exactly innerHeight rows; short content padded with empty (painted) rows", () => {
+    const { lines: out, top } = clipPanelLines(lines.slice(0, 3), 6, 0);
+    expect(out).toHaveLength(6);
+    expect(out.slice(3)).toEqual(["", "", ""]);
+    expect(top).toBe(0);
+  });
+
+  test("cursor stays visible at both extremes and while walking down", () => {
+    expect(clipPanelLines(lines, 4, 0).top).toBe(0);
+    const bottom = clipPanelLines(lines, 4, 9);
+    expect(bottom.top).toBe(6);
+    expect(bottom.lines[3]).toBe("row 9");
+    const mid = clipPanelLines(lines, 4, 5);
+    expect(mid.top).toBeLessThanOrEqual(5);
+    expect(5).toBeLessThan(mid.top + 4);
+  });
+});

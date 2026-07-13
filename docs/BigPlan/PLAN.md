@@ -265,16 +265,27 @@ migration: roll-up on read.
 
 **Exit gate:** fixture session yields correct per-section and cumulative `{tokens, $}`.
 
-### U2 — Table of Contents sidebar, `Ctrl+T` *(L)* — *new Linear issue*
+### U2 — Table of Contents sidebar, `Ctrl+T` *(L)* — MUB-140
+
+> **Landed (2026-07-13):** the overpaint spike succeeded — Ink `position="absolute"` +
+> full-region height (pins Yoga's static-position ambiguity under `flex-end`) + every
+> interior row painting padded columns closed by the right border glyph (defeats Ink's
+> trailing-whitespace trim). No fallback needed. Anchors are **ChatMessage indices** (not
+> JSONL entry ids — the render list is the jump space); usage joins the U1 ledger **by
+> prompt ordinal** (slash echoes / synthetic sections exist on only one side, so raw
+> index joins would drift). Ctrl+T works mid-run (read-only, like PgUp); TextInput gets a
+> `suspended` prop (stays mounted → draft survives); below 60 cols the fullscreen path
+> degrades to the same one-shot text block as inline. Known cosmetic: ambiguous-width
+> glyphs (⚙) can trigger a truncation ellipsis inside a panel row.
 
 | # | Step | Verify |
 |---|---|---|
-| U2.1 | Overlay chassis in `src/tui/`: right-anchored fixed-width panel drawn **over** content (no reflow); respects the render invariant — Σ visible ≤ region, the overlay clips rather than grows the region | `layout.test.ts`: width, clip, transcript lines unchanged under overlay |
-| U2.2 | ToC content: one node per section (user-prompt excerpt as title), children = assistant result · tool activity · **plan created / plan finalized** milestones; per-section `$` below each title; footer = cumulative `$` + total tokens (OC-style context block) | render test on fixture session |
-| U2.3 | Navigation: ↑/↓ (or j/k) moves the cursor; **Enter jumps** the transcript to the section anchor (ToC entry ↔ JSONL entry id ↔ scrollback offset map); Esc/`Ctrl+T` closes | anchor-map unit test + scripted jump test |
-| U2.4 | Inline-renderer fallback: `Ctrl+T` prints the ToC (with prices) as a one-shot text block | PTY shot, inline renderer |
+| U2.1 | Overlay chassis: `tocPanelGeometry` (width `min(40, cols−30)`, full region height, null below 60 cols) + `clipPanelLines` + `TocPanel` absolute overpaint — out-of-flow, so no reflow and the invariant is untouched | `layout.test.ts`: geometry caps/null-gates, clip exactness, no-reflow invariant ✅ |
+| U2.2 | `src/tui/toc.ts`: sections per user prompt (slash echoes attach to the previous section), children = result · tools aggregate (`⚙ N tools (bash×2…)`, error flag) · plan created/updated/finalized (todowrite `(x/y done)` parse); per-section `$ · tok`; Σ footer labeled **lead agent** (child spend excluded, per U1) | `toc.test.ts` fixture render tests ✅ |
+| U2.3 | ↑/↓ (j/k) cursor over titles; **Enter jumps** via pure `offsetForMessage` (prefix-sum over `computeMsgHeight`, clamped; last page → pinned); Esc/`Ctrl+T` closes; global hook guards on `tocOpen` | `offsetForMessage` round-trip/clamp tests ✅ |
+| U2.4 | Inline fallback: `Ctrl+T` appends the ToC as a one-shot `toc:` tool message (same content) | PTY shot, inline renderer ✅ |
 
-**Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green.
+**Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green. ✅
 
 ### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — *new Linear issue*
 
@@ -365,7 +376,7 @@ U1 → U2/U3.
 | B4 /undo | B | M | ⬜ |
 | B5 /rewind | B | M | ⬜ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
-| U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ⬜ |
+| U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
 | J1 /why + subagent + E2E demo | both | L | ⬜ |
