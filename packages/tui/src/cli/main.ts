@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import { enableBypass, setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
@@ -40,7 +41,8 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
-import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
+import { installInputFilter } from "../tui/input-filter.ts";
+import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -186,6 +188,8 @@ export interface CliArgs {
   fullscreen: boolean;
   /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
   resume?: string;
+  /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
+  bypassPermissions?: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -234,6 +238,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--fullscreen":
         opts.fullscreen = true;
+        break;
+      case "--dangerously-bypass-permissions":
+        opts.bypassPermissions = true;
         break;
       case "-t":
       case "--tools":
@@ -295,6 +302,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
       --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
+      --dangerously-bypass-permissions
+                           start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -601,15 +610,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return rc;
   }
 
+  // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
+  // this project's last persisted mode (build when none). Bypass is never persisted — it
+  // must be re-consented each session via the flag or /mode bypass.
+  if (args.bypassPermissions) {
+    enableBypass();
+    setMode("bypass");
+  } else {
+    const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
+    if (savedMode) setMode(savedMode);
+  }
+
   // Two renderers (like Claude Code):
   //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
   //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
-  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
+  //    optional captured mouse wheel; installInputFilter strips wheel SGR + captures pastes before Ink sees them).
   //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
   //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
   //    reserve seats the prompt at the bottom on first paint.
+  installInputFilter(); // strip wheel SGR + capture bracketed pastes before Ink's key parser
+  process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
   if (args.fullscreen) {
-    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
     process.stdout.write("\u001b[?1049h"); // enter alternate screen
     process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
   } else {
@@ -637,8 +658,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   );
   await instance.waitUntilExit();
 
-  // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
+  // Shutdown: leave the alternate screen (fullscreen only), drop bracketed paste, restore cursor.
   if (args.fullscreen) process.stdout.write("\u001b[?1049l");
+  process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");

@@ -384,7 +384,11 @@ describe("tui/app.tsx wires tier→behavior", () => {
   test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
     const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
     expect(input).toContain("if (disabled || suspended) return;");
-    expect(input).toContain("if (key.ctrl || key.meta) return;");
+    // Ctrl combos are either readline edits handled locally or fall through to the app
+    // handlers — either way the branch returns before the draft-insert path, and meta
+    // combos never insert (the meta branch handles Alt+B/F word-jumps, then returns).
+    expect(input).toContain("if (key.ctrl) {");
+    expect(input).toContain("if (key.meta) {");
     // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
     expect(input).toContain('disabledLabel ?? "(busy…)"');
     expect(input).toContain('<Text wrap="truncate">');

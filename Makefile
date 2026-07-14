@@ -65,3 +65,9 @@ tui-dev:
 tui-shot:
 	@mkdir -p $(CURDIR)/playground
 	uv run --with pyte --with pillow python $(TUI)/scripts/pty_capture.py '$(SPEC)'
+
+# PTY invariants: drive a real 500-message session through wheel storms and assert the
+# prompt box never moves, no frame fusion, the app stays responsive, and window-compute
+# perf budgets hold (pty_capture.py frames + tui_assert.py + MINIMA_TUI_PERF probe).
+tui-verify:
+	bash $(TUI)/scripts/tui_verify.sh

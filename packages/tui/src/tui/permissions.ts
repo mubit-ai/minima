@@ -282,6 +282,7 @@ function verifyCommands(args: Record<string, unknown>): string[] {
  * first, then fall through to the normal permission flow.
  *   deny  → block with a policy reason (fed back to the model)
  *   ask   → GuardEvent(mode-ask) + forced prompt (outranks "always" grants)
+ *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes)
  *   allow → normal checkPermission flow (unchanged build-mode behavior)
  * `getBundle` is injected so tests can pin a bundle and the app can read the live mode.
  */
@@ -309,6 +310,12 @@ export function makeModeGatedBeforeToolCall(deps: {
         forcePrompt: true,
         promptTextPrefix: `${bundle.name} mode — asks every time: `,
       });
+    }
+    if (action === "auto") {
+      // Mode-pre-approved (accept-edits / bypass): run with no prompt; the guard event is
+      // the audit trail for what the mode waved through.
+      emitGuardEvent({ kind: "mode-auto", detail: formatActionLabel(toolName, ctx.args) });
+      return null;
     }
     return checkPermission(toolName, ctx.args, deps.state, deps.promptFn);
   };

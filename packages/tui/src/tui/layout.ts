@@ -373,6 +373,35 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
   return 2 + markdownBodyHeight(msg.text, cols);
 }
 
+/**
+ * computeMsgHeight memoized by message identity. Sound because the TUI never mutates a
+ * ChatMessage in place — transcript updates are appends or wholesale replaces with fresh
+ * objects — so a given object's text is fixed; `cols` is the only other input. WeakMap:
+ * entries die with the transcript that owns them (/resume, /clear rebuild from scratch),
+ * so there is no explicit invalidation and no growth bound to manage. This is what turns
+ * the fullscreen window from O(all messages × wrap) per render into O(map lookups).
+ */
+const heightCache = new WeakMap<ChatMessage, { cols: number; h: number }>();
+
+export function cachedMsgHeight(msg: ChatMessage, cols: number): number {
+  const hit = heightCache.get(msg);
+  if (hit && hit.cols === cols) return hit.h;
+  const h = computeMsgHeight(msg, cols);
+  heightCache.set(msg, { cols, h });
+  return h;
+}
+
+/**
+ * Next scroll offset after a wheel/page delta (positive = up), clamped to [0, maxOffset].
+ * The STORED offset must clamp at mutation time — clamping only the render-derived value
+ * (as getScrollableMessages does internally) lets over-scrolling bank unbounded "dead"
+ * offset that later notches must pay down before anything moves on screen, which reads
+ * as frozen/unresponsive scrolling.
+ */
+export function applyScrollDelta(prev: number, delta: number, maxOffset: number): number {
+  return Math.max(0, Math.min(prev + delta, Math.max(0, maxOffset)));
+}
+
 /** A windowed view of the transcript for the fullscreen renderer. */
 export interface ScrollWindow {
   /** Whole messages overlapping the visible window (the region clips the top fold). */
@@ -400,7 +429,7 @@ export function getScrollableMessages(
 ): ScrollWindow {
   if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
 
-  const heights = messages.map((m) => computeMsgHeight(m, cols));
+  const heights = messages.map((m) => cachedMsgHeight(m, cols));
   const totalHeight = heights.reduce((a, b) => a + b, 0);
 
   const maxOffset = Math.max(0, totalHeight - maxHeight);
@@ -437,14 +466,14 @@ export function getScrollableMessages(
   // drift between computeMsgHeight and MessageRow would otherwise re-introduce the overflow → Ink
   // decimation. Trim/drop from the top (oldest) until the sum fits. Because computeMsgHeight >= the
   // real render, `sum <= maxHeight` here implies the actual rendered stack is <= maxHeight too.
-  let sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
+  let sum = visible.reduce((n, m) => n + cachedMsgHeight(m, cols), 0);
   while (sum > maxHeight && visible.length > 0) {
     const first = visible[0]!;
-    const firstH = computeMsgHeight(first, cols);
+    const firstH = cachedMsgHeight(first, cols);
     const shrunk = clipMessageToHeight(first, firstH - (sum - maxHeight), cols, 1, 0);
-    if (shrunk && computeMsgHeight(shrunk, cols) < firstH) visible[0] = shrunk;
+    if (shrunk && cachedMsgHeight(shrunk, cols) < firstH) visible[0] = shrunk;
     else visible.shift();
-    sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
+    sum = visible.reduce((n, m) => n + cachedMsgHeight(m, cols), 0);
   }
 
   return {
@@ -567,7 +596,7 @@ export function offsetForMessage(
   let prefix = 0;
   let total = 0;
   for (let i = 0; i < messages.length; i++) {
-    const h = computeMsgHeight(messages[i]!, cols);
+    const h = cachedMsgHeight(messages[i]!, cols);
     if (i < k) prefix += h;
     total += h;
   }

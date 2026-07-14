@@ -41,8 +41,9 @@ describe("mode bundles (B2)", () => {
 });
 
 describe("mode store (B2)", () => {
-  test("defaults to build; cycleMode round-trips", () => {
+  test("defaults to build; cycleMode walks build → acceptEdits → plan → build", () => {
     expect(getMode()).toBe("build");
+    expect(cycleMode()).toBe("acceptEdits");
     expect(cycleMode()).toBe("plan");
     expect(cycleMode()).toBe("build");
   });
@@ -72,5 +73,79 @@ describe("plan-mode prompt hint (B2.3)", () => {
     expect(block).toStartWith("\n\n# Plan mode");
     expect(block).toContain(PLAN_ESCAPE_HATCH);
     expect(block).toContain("advisory, not a hard rule");
+  });
+});
+
+describe("mode bundles + ring (Claude Code-style modes)", () => {
+  test("acceptEdits: write/edit/apply_patch auto, bash falls through to allow", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    for (const tool of ["write", "edit", "apply_patch"]) {
+      expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool, subject: "src/x.ts" })).toBe("auto");
+    }
+    expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "bash", subject: "rm -rf /" })).toBe("allow");
+    expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "read", subject: "x" })).toBe("allow");
+  });
+
+  test("bypass: everything auto", async () => {
+    const { BYPASS_BUNDLE } = await import("../src/agent/modes.ts");
+    for (const tool of ["write", "edit", "bash", "read", "task"]) {
+      expect(resolvePolicy(BYPASS_BUNDLE, { tool, subject: "anything" })).toBe("auto");
+    }
+  });
+
+  test("bundleForMode maps the new modes", async () => {
+    const { ACCEPT_EDITS_BUNDLE, BYPASS_BUNDLE, bundleForMode: bfm } = await import(
+      "../src/agent/modes.ts"
+    );
+    expect(bfm("acceptEdits")).toBe(ACCEPT_EDITS_BUNDLE);
+    expect(bfm("bypass")).toBe(BYPASS_BUNDLE);
+  });
+
+  test("bypass joins the Shift+Tab ring only after enableBypass()", async () => {
+    const { enableBypass, isBypassEnabled } = await import("../src/agent/modes.ts");
+    // NOTE: enableBypass is one-way and module-global; this test runs it last-ish by
+    // asserting the pre-state first (beforeEach resets mode, not the bypass latch).
+    if (!isBypassEnabled()) {
+      setMode("plan");
+      expect(cycleMode()).toBe("build"); // plan wraps to build while bypass is off
+      enableBypass();
+    }
+    setMode("plan");
+    expect(cycleMode()).toBe("bypass"); // plan → bypass once enabled
+    expect(cycleMode()).toBe("build"); // bypass wraps to build
+  });
+
+  test("every mode has a badge slot entry (null allowed only for build)", async () => {
+    const { MODE_BADGES } = await import("../src/agent/modes.ts");
+    expect(MODE_BADGES.build).toBeNull();
+    expect(MODE_BADGES.acceptEdits?.color).toBe("green");
+    expect(MODE_BADGES.plan?.color).toBe("magenta");
+    expect(MODE_BADGES.bypass?.color).toBe("red");
+  });
+});
+
+describe("mode_prefs persistence", () => {
+  test("round-trips per project; never persists bypass; survives a corrupt file", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-mode-prefs-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const { loadPersistedMode, persistMode } = await import("../src/tui/mode_prefs.ts");
+      expect(loadPersistedMode("github.com/x/y")).toBeNull();
+      persistMode("github.com/x/y", "acceptEdits");
+      persistMode("github.com/other/repo", "plan");
+      expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
+      expect(loadPersistedMode("github.com/other/repo")).toBe("plan");
+      persistMode("github.com/x/y", "bypass"); // must be ignored
+      expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
+      writeFileSync(join(dir, "ui-modes.json"), "{corrupt", "utf8");
+      expect(loadPersistedMode("github.com/x/y")).toBeNull(); // fresh start, no throw
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
   });
 });
