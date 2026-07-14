@@ -78,9 +78,17 @@ export interface Factors {
   redToGreen: boolean;
   /** The step wrote code but carries no acceptance check at all → caps the tier at 🟡. (M6.1) */
   hasCheck: boolean;
-  /** Provenance: a pre-existing test (trust) vs one the agent wrote this run (scrutiny). (M5.1) */
+  /**
+   * Provenance: a pre-existing test (trust) vs one the agent wrote this run (scrutiny). (M5.1)
+   * `agent_new` alone caps at 🟡 ("self-written test"); combined with `coverageHit === false` it
+   * forces 🔴 ("unverified self-test") — the A5 fabrication floor.
+   */
   checkOrigin: CheckOrigin;
-  /** Does the check actually exercise the changed file? `"unknown"` when we can't tell. (M5.2) */
+  /**
+   * Does the check actually exercise the changed file? `"unknown"` when we can't tell. (M5.2)
+   * A proven miss (`false`) on an `agent_new` check forces 🔴 (A5 fabrication floor); `"unknown"`
+   * never does — it is not evidence of non-coverage, so it stays a 🟡 signal.
+   */
   coverageHit: boolean | "unknown";
   /** Tests were skipped/deleted/weakened this step — always forces 🔴. (M5.3) */
   tamper: boolean;

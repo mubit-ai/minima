@@ -127,6 +127,8 @@ export interface CouncilRoundResult {
 export interface SynthPlanStep {
   action: string;
   verify: string;
+  /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
+  tools: string[];
 }
 
 /**
@@ -478,13 +480,18 @@ export class PlanSessionStore {
     }
 
     const steps = synth.approach
-      .map((st) => ({ action: st.action.trim(), verify: st.verify.trim() }))
+      .map((st) => ({
+        action: st.action.trim(),
+        verify: st.verify.trim(),
+        tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
+      }))
       .filter((st) => st.action.length > 0);
     out.push("## Implementation Plan", "");
     if (steps.length === 0) out.push(s.draft.trim() || "_No plan drafted._", "");
     else {
       // Each step names its verify — the verifiable-steps contract. A step the model could not
       // give a check for is rendered with a decompose nudge (nudge/advise: it is not blocked).
+      // A6: a step also names its minimal tool allowlist (enforced at execution); absent = unrestricted.
       steps.forEach((st, i) => {
         out.push(`${i + 1}. ${st.action}`);
         out.push(
@@ -492,6 +499,7 @@ export class PlanSessionStore {
             ? `   - verify: \`${st.verify}\``
             : "   - verify: _none — decompose or add a check_",
         );
+        if (st.tools.length > 0) out.push(`   - tools: ${st.tools.join(", ")}`);
       });
       out.push("");
     }

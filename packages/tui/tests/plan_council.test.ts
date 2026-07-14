@@ -691,8 +691,8 @@ describe("synthesizeGroundTruth", () => {
     expect(result!.constraints).toContain("Python 3");
     // Legacy string form is tolerated: each string becomes a step with an empty (nudge) verify.
     expect(result!.approach).toEqual([
-      { action: "Write binary_search.py", verify: "" },
-      { action: "Add pytest cases", verify: "" },
+      { action: "Write binary_search.py", verify: "", tools: [] },
+      { action: "Add pytest cases", verify: "", tools: [] },
     ]);
     expect(reg.state.callCount).toBe(1);
   });
@@ -713,8 +713,38 @@ describe("synthesizeGroundTruth", () => {
       metaModel: META_MODEL,
     });
     expect(result!.approach).toEqual([
-      { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py" },
-      { action: "Wire it up", verify: "" },
+      { action: "Write binary_search.py", verify: "pytest -q tests/test_bs.py", tools: [] },
+      { action: "Wire it up", verify: "", tools: [] },
+    ]);
+  });
+
+  test("keeps a per-step tools allowlist, lowercasing and preserving unknown names for the lint", async () => {
+    reg.setResponses([
+      json({
+        title: "T",
+        goal: "g",
+        approach: [
+          {
+            action: "Edit the router",
+            verify: "bun test tests/router.test.ts",
+            tools: ["Edit", "bash", "notatool"],
+          },
+        ],
+      }),
+    ]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: go", {
+      metaModel: META_MODEL,
+    });
+    // A6: names are lowercased but unknown names are KEPT — "notatool" survives so the static plan
+    // lint's unknown-tool blocker (characteristic #6) can flag the typo at /plan finalize rather
+    // than silently dropping it and letting the step wedge at runtime.
+    expect(result!.approach).toEqual([
+      {
+        action: "Edit the router",
+        verify: "bun test tests/router.test.ts",
+        tools: ["edit", "bash", "notatool"],
+      },
     ]);
   });
 

@@ -613,7 +613,7 @@ const GROUND_TRUTH_SYSTEM = `You are the RECORDER of a planning council writing 
  "requirements": ["specific functional/behavioral requirement", "..."],
  "constraints": ["hard constraint: language, runtime, no-deps, style, etc.", "..."],
  "decisions": [{"topic": "short label", "decision": "what was decided", "rationale": "why"}],
- "approach": [{"action": "ordered, detailed implementation step", "verify": "shell command or observable check that proves THIS step landed — red before, green after (e.g. a test, a build, an exit code). If you cannot name one, the step is too vague — split it into steps you can."}],
+ "approach": [{"action": "ordered, detailed implementation step", "verify": "shell command or observable check that proves THIS step landed — red before, green after (e.g. a test, a build, an exit code). If you cannot name one, the step is too vague — split it into steps you can.", "tools": ["the MINIMAL set of tools this step needs to touch code — from: read, write, edit, apply_patch, bash, glob, grep, ls, web_search, web_fetch, task. Omit read-only tools (read/ls/glob/grep) — they are always allowed. List only the mutating/expensive tools the step legitimately needs, so the harness can block anything else."]}],
  "risks": ["risk, edge case, or gotcha to handle", "..."],
  "successCriteria": ["end-to-end acceptance check for the whole plan / tests to pass", "..."],
  "openItems": ["anything genuinely deferred — should be rare", "..."]}
@@ -717,11 +717,17 @@ function sanitizeApproach(raw: unknown): SynthPlanStep[] {
   for (const item of raw) {
     if (typeof item === "string") {
       const action = item.trim();
-      if (action) out.push({ action, verify: "" });
+      if (action) out.push({ action, verify: "", tools: [] });
     } else if (item && typeof item === "object") {
       const r = item as Record<string, unknown>;
       const action = asStr(r.action) || asStr(r.step) || asStr(r.task);
-      if (action) out.push({ action, verify: asStr(r.verify) });
+      // A6: normalize (lowercase) but KEEP unknown names — a typo'd allowlist must survive to the
+      // static plan lint's `unknown-tool` blocker (characteristic #6), which catches it at
+      // `/plan finalize`. Silently dropping it here would hide the typo and, for a sole-typo list,
+      // convert a scoped step into an unrestricted one. Enforcement ignores an unknown name safely
+      // (it never matches a real call), so keeping it costs nothing at runtime.
+      const tools = asStrList(r.tools).map((t) => t.toLowerCase());
+      if (action) out.push({ action, verify: asStr(r.verify), tools });
     }
   }
   return out;

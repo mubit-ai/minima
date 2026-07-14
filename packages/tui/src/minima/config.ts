@@ -68,10 +68,25 @@ export interface HarnessConfig {
    * classic escalate-only ladder). Only consulted when `groundTruth` is on — inert on the default
    * path. */
   failureMatcher: boolean;
+  /** Per-step tool allowlist (A6): hard-block, at the dispatcher, any mutating tool a plan step did
+   * not list in its `tools` allowlist while that step is in progress. `MINIMA_TUI_TOOL_ALLOWLIST`,
+   * default on (`0` disables → no enforcement, steps' allowlists become advisory metadata only).
+   * Only consulted when `groundTruth` is on — inert on the default path; a step with no authored
+   * allowlist is unrestricted, so this never changes behavior for plans that don't use it. */
+  toolAllowlist: boolean;
   /** Failure-kind matchers (A4): bounded delay (ms) before a `backoff` retry of the SAME model on a
    * transient/infra error. `MINIMA_TUI_BACKOFF_MS`, default **0** (no delay — hermetic tests); set
    * a small value (e.g. 500) in prod to space out a rate-limited retry. */
   backoffMs: number;
+  /** Graded grounded outcome (A7): grade the DETERMINISTIC feedback label by the gate's confidence
+   * tier instead of collapsing every verified pass to `success`. On: a 🟢 verified pass →
+   * `success`, a 🟡/🔴-tier-but-verified pass (self-written test, no red→green evidence, or an A5
+   * fabrication-floor red) → `partial`, a failed check → `failure` — so Minima learns weaker
+   * positive evidence distinctly from clean ground truth. `MINIMA_TUI_GRADED_OUTCOME`, default on
+   * (`0` disables → the M7.2 binary verified→success). Only consulted when `groundTruth` is on —
+   * inert on the default path (the deterministic branch never runs without a gate). Never affects
+   * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
+  gradedOutcome: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -96,7 +111,9 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     stepCap: 30,
     planRoundBudgetUsd: 0.25,
     failureMatcher: true,
+    toolAllowlist: true,
     backoffMs: 0,
+    gradedOutcome: true,
     ...overrides,
   };
 }
@@ -132,6 +149,8 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(b) && b > 0) cfg.planRoundBudgetUsd = b;
   }
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;
+  if (process.env.MINIMA_TUI_TOOL_ALLOWLIST === "0") cfg.toolAllowlist = false;
+  if (process.env.MINIMA_TUI_GRADED_OUTCOME === "0") cfg.gradedOutcome = false;
   const backoffEnv = process.env.MINIMA_TUI_BACKOFF_MS;
   if (backoffEnv !== undefined) {
     const n = Number(backoffEnv);

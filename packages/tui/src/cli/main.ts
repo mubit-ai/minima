@@ -477,7 +477,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // registered later — headless below, or by the TUI AFTER its permission hook so permission
     // always runs first (first block wins) and no check runs on a call the user would deny.
     if (config.groundTruth) {
-      const { before, after } = groundTruthHooks(agent);
+      const { before, after } = groundTruthHooks(agent, {
+        enforceAllowlist: config.toolAllowlist,
+      });
       agent.addAfterToolCall(after);
       gtGateBefore = before;
     }

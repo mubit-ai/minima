@@ -52,6 +52,13 @@ import {
   runPlanTurn,
   synthesizeGroundTruth,
 } from "../minima/index.ts";
+import {
+  formatFindings,
+  hasBlockers,
+  lintPlan,
+  stepsFromRows,
+  synthAuditFindings,
+} from "../minima/plan_lint.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
@@ -239,6 +246,7 @@ const COMMANDS = [
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
   { name: "why", desc: "Show per-step Ground-Truth verification" },
+  { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
 ];
 
 export interface CommandPickerProps {
@@ -1921,6 +1929,20 @@ export function HarnessApp({
               // fail-open
             }
           }
+          // A6 poka-yoke audit: statically lint the finalized plan against the characteristics of a
+          // good plan. Blocker-severity findings (a fabricated always-passing check, a typo'd tool
+          // allowlist, an empty plan) REFUSE finalize unless the user passes --force; warns/infos
+          // are advisory and appended to the success note below. An empty approach still lints (so
+          // the empty-plan blocker fires); only a null synth (synthesis failed) skips the audit.
+          const force = rest.split(/\s+/).includes("--force");
+          const auditFindings = synthAuditFindings(synth ? synth.approach : null);
+          if (hasBlockers(auditFindings) && !force) {
+            pushPlan(
+              `${formatFindings(auditFindings)}\n\nFinalize refused — fix the blocker(s) above, or re-run \`/plan finalize --force\` to override. The plan was not written and plan mode stays ON.`,
+              true,
+            );
+            break;
+          }
           const md = store.toGroundTruth(synth);
           // Ground truth always lands in the project root; write DIRECTLY (not via the agent tool
           // loop) so the read-only plan-mode block does not apply to the harness's own artifact.
@@ -1939,7 +1961,7 @@ export function HarnessApp({
           if (agent.db && agent.runId && synth && synth.approach.length > 0) {
             try {
               const seedSteps = synth.approach
-                .map((st) => ({ content: st.action.trim(), verify: st.verify }))
+                .map((st) => ({ content: st.action.trim(), verify: st.verify, tools: st.tools }))
                 .filter((st) => st.content.length > 0);
               if (seedSteps.length > 0) {
                 seededCount = agent.db.seedPlanFromSteps(
@@ -1957,13 +1979,15 @@ export function HarnessApp({
             seededCount > 0
               ? ` ${seededCount} verifiable step${seededCount === 1 ? "" : "s"} seeded to the plan ledger.`
               : "";
+          // Advisory audit note (warns/infos, or blockers the user chose to --force past).
+          const auditNote = auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "";
           setMessages((m) => [
             ...m,
             { role: "user", text: `/${name} ${args}`.trim() },
             { role: "tool", text: md, toolName: "plan" },
             {
               role: "tool",
-              text: `Ground truth written: ${outPath}.${seededNote} Plan mode OFF — write access restored.`,
+              text: `Ground truth written: ${outPath}.${seededNote} Plan mode OFF — write access restored.${auditNote}`,
               toolName: "plan",
             },
           ]);
@@ -2482,6 +2506,28 @@ export function HarnessApp({
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "why" },
+        ]);
+        break;
+      }
+      case "audit": {
+        // Poka-yoke: statically lint the active plan's steps (the same rules the /plan finalize
+        // gate uses) on demand — a read-only report, never a block.
+        let text: string;
+        if (agent.config.groundTruth !== true) {
+          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to audit plans.";
+        } else {
+          const plan = agent.db && agent.runId ? agent.db.getActivePlan(agent.runId) : null;
+          if (!plan || !agent.db) {
+            text =
+              "No active plan to audit. Seed one via /plan finalize, or let the agent plan with todowrite.";
+          } else {
+            text = formatFindings(lintPlan(stepsFromRows(agent.db.getPlanSteps(plan.id))));
+          }
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          { role: "tool", text, toolName: "audit" },
         ]);
         break;
       }

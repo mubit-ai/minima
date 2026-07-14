@@ -247,6 +247,14 @@ const MIGRATIONS: string[][] = [
   [
     "ALTER TABLE plan_steps ADD COLUMN check_origin TEXT", // pre_existing|agent_new|user (NULL=compute)
   ],
+  // v8 — A6 per-step tool allowlist: plan_steps.tools holds a JSON array of the tool names a step
+  // is permitted to call (e.g. ["read","edit","bash"]). NULL or an empty array means unrestricted
+  // (the historical behavior — no enforcement). Sticky through upsertPlanFromTodos like verify:
+  // omit to keep, resend to overwrite, never clear. The dispatcher (tool_permissions.ts) hard-
+  // blocks a mutating tool call absent from the in-progress step's allowlist when it is non-empty.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
+  ],
 ];
 
 export interface RunRow {
@@ -324,6 +332,8 @@ export interface PlanStepRow {
   created_at: string | null;
   verify_cwd: string | null;
   check_origin: CheckOrigin | null;
+  /** A6: JSON array of permitted tool names, or NULL/"[]" for unrestricted. See tool_permissions.ts. */
+  tools: string | null;
 }
 
 export interface FileChangeRow {
@@ -366,6 +376,8 @@ export interface TodoInput {
   status: string;
   verify?: string | null;
   verify_cwd?: string | null;
+  /** A6: per-step tool allowlist. Sticky like verify (omit to keep, resend to overwrite, never clear). */
+  tools?: string[] | null;
 }
 
 /** M4.1: one step a todowrite would flip to completed — the done-gate's unit of work. */
@@ -381,6 +393,17 @@ export interface CompletionFlip {
   verify_cwd: string | null;
   /** Stored check provenance, when known up-front (else null → compute at gate time). */
   check_origin: CheckOrigin | null;
+}
+
+/**
+ * A6: normalize a per-step tool allowlist to the DB representation. Trimmed non-empty strings only;
+ * an empty/absent list serializes to NULL (unrestricted), never "[]" — so a NULL bind through
+ * COALESCE in upsertPlanFromTodos preserves an existing allowlist (sticky, like verify). Total.
+ */
+function serializeToolList(tools: string[] | null | undefined): string | null {
+  if (!Array.isArray(tools)) return null;
+  const clean = tools.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean);
+  return clean.length > 0 ? JSON.stringify(clean) : null;
 }
 
 export class MinimaDb {
@@ -766,7 +789,12 @@ export class MinimaDb {
   seedPlanFromSteps(
     sessionId: string,
     title: string | null,
-    steps: { content: string; verify?: string | null; verifyCwd?: string | null }[],
+    steps: {
+      content: string;
+      verify?: string | null;
+      verifyCwd?: string | null;
+      tools?: string[] | null;
+    }[],
   ): { planId: string; stepIds: string[] } {
     const planId = this.insertPlan({ sessionId, title, status: "active" });
     const stepIds: string[] = [];
@@ -782,6 +810,7 @@ export class MinimaDb {
             verify,
             verifyCwd: st.verifyCwd?.trim() ? st.verifyCwd.trim() : null,
             checkOrigin: verify ? "user" : null,
+            tools: st.tools ?? null,
           }),
         );
       });
@@ -848,10 +877,11 @@ export class MinimaDb {
     baseline?: Baseline | null;
     verifyCwd?: string | null;
     checkOrigin?: CheckOrigin | null;
+    tools?: string[] | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -863,6 +893,7 @@ export class MinimaDb {
         new Date().toISOString(),
         opts.verifyCwd ?? null,
         opts.checkOrigin ?? null,
+        serializeToolList(opts.tools),
       ],
     );
     return id;
@@ -1046,7 +1077,7 @@ export class MinimaDb {
           // always be scoped to the check that produced the red (a swapped-in check crediting
           // the old check's red would fabricate verified_in_production).
           this.db.run(
-            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify), verify_cwd = COALESCE(?, verify_cwd) WHERE id = ?",
+            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify), verify_cwd = COALESCE(?, verify_cwd), tools = COALESCE(?, tools) WHERE id = ?",
             [
               i,
               t.content,
@@ -1055,6 +1086,7 @@ export class MinimaDb {
               t.verify ?? null,
               t.verify ?? null,
               t.verify_cwd ?? null,
+              serializeToolList(t.tools),
               prev.id,
             ],
           );
@@ -1082,6 +1114,7 @@ export class MinimaDb {
             status: t.status,
             verify: t.verify ?? null,
             verifyCwd: t.verify_cwd ?? null,
+            tools: t.tools ?? null,
           });
           stepIds.push(id);
           if (t.status === "in_progress")

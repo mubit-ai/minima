@@ -303,7 +303,9 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     // Escalated exactly once, recovered on the bigger model.
     expect(routing?.chosenModelId).toBe("big-model");
     expect(agent.ladderEscalations).toBe(1);
-    expect(feedbackCalls.map((f) => (f as any).outcome)).toEqual(["failure", "success"]);
+    // A7 graded outcome: the recovered rung passed only a YELLOW check (no coverage — see below),
+    // so it earns `partial`, not a clean `success`. The red rung is still `failure`.
+    expect(feedbackCalls.map((f) => (f as any).outcome)).toEqual(["failure", "partial"]);
 
     // Gate rows written by the hooks, not seeded — the blocked attempt then the recovered pass,
     // both attributed to the same step, with measured factors (the red→green flip is real).
@@ -338,8 +340,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(rows[0]!.gt_outcome).toBe("failed");
     expect(rows[0]!.gt_confidence).toBe("red");
     expect(rows[1]!.chosen_model).toBe("big-model");
-    expect(rows[1]!.outcome).toBe("success");
-    expect(rows[1]!.gt_outcome).toBe("verified");
+    expect(rows[1]!.outcome).toBe("partial"); // A7: yellow verified → partial (weaker than green)
+    expect(rows[1]!.gt_outcome).toBe("verified"); // the raw gate verdict stamp is unchanged
     expect(rows[1]!.gt_confidence).toBe("yellow");
     expect(rows[1]!.parent_rec_id).toBe(String(rows[0]!.rec_id));
     reg.unregister();
