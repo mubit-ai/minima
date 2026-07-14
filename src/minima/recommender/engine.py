@@ -135,14 +135,24 @@ class Recommender:
             raise NoCandidatesError("no models match the supplied constraints")
         candidate_ids = {c.model_id for c in candidates}
 
-        recall, fastpath_evidence = await self._recall_with_fastpath(
-            req=req, lane=lane, cluster=cluster, candidate_ids=candidate_ids
+        recall, fastpath_evidence, lookup_degraded = await self._recall_with_fastpath(
+            req=req,
+            lane=lane,
+            cluster=cluster,
+            candidate_ids=candidate_ids,
+            task_type=task_type,
+            difficulty=difficulty,
         )
         profile.mark("recall")
         if recall.timed_out:
             warnings.append("recall_timeout")
         elif recall.error:
             warnings.append("memory_unavailable")
+        if lookup_degraded:
+            # The deterministic per-(cluster, model) evidence channel is down (timeout,
+            # transport error, or hosted policy) — the decision rests on ANN recall
+            # alone. Surfaced so degraded evidence is never silent again.
+            warnings.append("keyed_lookup_degraded")
         evidence = recall.outcome_evidence + fastpath_evidence
 
         # Neighbor-vote refinement: if the heuristic couldn't place the task, let the
@@ -172,10 +182,12 @@ class Recommender:
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
 
-        # Remember durable-record ids surfaced by recall so the fast path can
-        # Dereference them next time (live records only — seeds are per-row inserts,
-        # not the durable (cluster, model) upsert). Bookkeeping only: a store failure
-        # must never break the recommendation.
+        # Remember durable-record ids surfaced by recall so the fast path (and the
+        # feedback read-modify-write) can Dereference them next time. Only records
+        # carrying accumulated counters qualify — they are unambiguously the durable
+        # (cluster, model) upsert; a legacy per-row outcome or seed sharing the same
+        # (cluster, model) must never clobber the ref feedback itself stored.
+        # Bookkeeping only: a store failure must never break the recommendation.
         if self._durable_refs is not None:
             try:
                 for ev in recall.outcome_evidence:
@@ -184,6 +196,7 @@ class Recommender:
                         rec is not None
                         and rec.task_cluster == cluster
                         and rec.source_dataset is None
+                        and rec.n_outcomes > 0
                         and (ev.reference_id or ev.referenceable)
                     ):
                         self._durable_refs.upsert(
@@ -464,19 +477,26 @@ class Recommender:
         lane: str,
         cluster: str,
         candidate_ids: set[str],
+        task_type: TaskType,
+        difficulty: Difficulty,
     ):
         """ANN recall joined by a deterministic keyed lookup for the current cluster.
 
         The lookup (POST /v2/core/lookup) fetches outcome records for all candidate
         models in this cluster straight from storage — no ANN, no flicker. Records
         already returned by ANN are deduped by entry_id so they are never double-counted.
+        Returns ``(recall, extra_evidence, lookup_degraded)``.
 
         The old dereference-based fastpath (MINIMA_DURABLE_FASTPATH=on/shadow) is
         retained for backward compatibility and runs concurrently when configured.
         """
         settings = self._settings
+        # Query with the SAME representation stored at write time (the classified
+        # "[type/difficulty] gist" built by build_content) — outcome records were
+        # embedded from that text, so querying with the raw prompt systematically
+        # depressed similarity (prefix tokens on one side, truncation on the other).
         recall_coro = self._memory.recall(
-            query=req.task.task,
+            query=build_content(task_type.value, difficulty.value, req.task.task),
             lane=lane,
             user_id=req.user_id,
             limit=settings.minima_memory_recall_limit,
@@ -503,8 +523,9 @@ class Recommender:
         if not refs:
             # Fast common path: recall + lookup, no dereferences.
             recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
+            lookup_degraded = lookup_evidence is None
             ann_ids = {ev.entry_id for ev in recall.evidence}
-            extra = [ev for ev in lookup_evidence if ev.entry_id not in ann_ids]
+            extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
             if extra:
                 log.info(
                     "keyed_lookup_delta",
@@ -512,7 +533,7 @@ class Recommender:
                     added=len(extra),
                     models=[ev.record.model_id for ev in extra if ev.record],
                 )
-            return recall, extra
+            return recall, extra, lookup_degraded
 
         # Old dereference fastpath active: run all three concurrently, share the
         # recall latency budget, then merge — lookup results deduped against both
@@ -552,7 +573,8 @@ class Recommender:
             )
         deref_extra = missed if mode == "on" else []
         seen_ids = ann_ids | {ev.entry_id for ev in deref_extra}
-        lookup_extra = [ev for ev in lookup_evidence if ev.entry_id not in seen_ids]
+        lookup_degraded = lookup_evidence is None
+        lookup_extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in seen_ids]
         if lookup_extra:
             log.info(
                 "keyed_lookup_delta",
@@ -560,7 +582,7 @@ class Recommender:
                 added=len(lookup_extra),
                 models=[ev.record.model_id for ev in lookup_extra if ev.record],
             )
-        return recall, lookup_extra + deref_extra
+        return recall, lookup_extra + deref_extra, lookup_degraded
 
     def _log_decision(
         self,

@@ -19,6 +19,11 @@ from minima.recommender.types import ModelAggregate
 KC_FLOOR = 0.3
 STALE_DECAY = 0.5
 
+# Cap on how much evidence mass a single durable record's accumulated history may
+# contribute. Bounds one (cluster, model) record's dominance and keeps the age decay
+# (which applies to the record as a whole) meaningful for long histories.
+COUNTER_N_CAP = 50
+
 _SECONDS_PER_DAY = 86_400.0
 
 
@@ -127,10 +132,19 @@ def aggregate_by_model(
             aggs[model_id] = agg
             kc_totals[model_id] = 0.0
 
-        y = clamp01(label_score(rec.outcome, rec.quality_score))
-        agg.weight_sum += weight
-        agg.weighted_success += weight * y
-        agg.n += 1
+        if rec.n_outcomes > 0:
+            # v4 accumulating record: its counters ARE the history for this
+            # (cluster, model) — one success no longer erases fifty prior ones.
+            eff_n = float(min(rec.n_outcomes, COUNTER_N_CAP))
+            mean_y = clamp01(rec.success_mass / rec.n_outcomes)
+            agg.weight_sum += weight * eff_n
+            agg.weighted_success += weight * eff_n * mean_y
+            agg.n += rec.n_outcomes
+        else:
+            y = clamp01(label_score(rec.outcome, rec.quality_score))
+            agg.weight_sum += weight
+            agg.weighted_success += weight * y
+            agg.n += 1
         agg.evidence.append(ev)
         kc_totals[model_id] += clamp01(ev.knowledge_confidence)
         # Observed cost is derived on demand from agg.evidence (robust median, similarity

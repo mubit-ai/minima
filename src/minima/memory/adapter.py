@@ -175,7 +175,7 @@ class Memory(Protocol):
         lane: str,
         match: list[dict],
         limit: int = 256,
-    ) -> list[RecalledEvidence]: ...
+    ) -> list[RecalledEvidence] | None: ...
 
     async def dereference(
         self, *, lane: str, reference_id: str
@@ -266,6 +266,10 @@ class MubitMemory:
             "include_working_memory": False,
             "prefer_current_run": True,
             "lane_filter": lane,
+            # Skip Mubit's per-query LLM answer synthesis: Minima parses only the
+            # evidence list and discards the synthesized answer (it was most of the
+            # ~600ms recall p95). Old servers ignore the unknown field.
+            "evidence_only": True,
         }
         if user_id:
             payload["user_id"] = user_id
@@ -319,25 +323,36 @@ class MubitMemory:
         lane: str,
         match: list[dict],
         limit: int = 256,
-    ) -> list[RecalledEvidence]:
+    ) -> list[RecalledEvidence] | None:
         """Deterministic keyed lookup via POST /v2/core/lookup.
 
         Returns all non-deleted outcome records for the given (lane, match) filters
         without touching ANN — results are stable across identical calls. Use for
         (cluster, model) keyed reads where recall flicker is unacceptable.
+
+        Returns ``None`` when the keyed path is DEGRADED (timeout, transport error,
+        or hosted policy rejection) so callers can tell "no records" from "channel
+        down" and surface a warning instead of silently routing on thinner evidence.
+        Shares the recall latency budget — the old unbudgeted path could stall a
+        recommend for the full 30s client timeout.
         """
+        budget_ms = self._settings.minima_memory_recall_timeout_ms
         try:
-            raw = await threadpool.run(
-                self._client.lookup,
-                session_id=lane,
-                match=match,
-                limit=limit,
-            )
+            with anyio.move_on_after(budget_ms / 1000.0) as scope:
+                raw = await threadpool.run_cancellable(
+                    self._client.lookup,
+                    session_id=lane,
+                    match=match,
+                    limit=limit,
+                )
+            if scope.cancelled_caught:
+                log.warning("lookup_timeout", lane=lane, budget_ms=budget_ms)
+                return None
         except Exception as exc:  # noqa: BLE001 — lookup is additive; must not block a recommend
             log.warning("lookup_error", lane=lane, error=str(exc))
-            return []
+            return None
         if not isinstance(raw, list):
-            return []
+            return None
         results: list[RecalledEvidence] = []
         for item in raw:
             if not isinstance(item, dict):

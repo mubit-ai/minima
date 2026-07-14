@@ -26,6 +26,7 @@ from minima.memory.records import (
     OutcomeRecord,
     clamp01,
     is_labeled,
+    merged_outcome,
     reconcile_quality,
     signal_from_outcome,
 )
@@ -61,6 +62,40 @@ def _supplied_quality(req: FeedbackRequest) -> tuple[float | None, str | None]:
     if req.quality_score is None:
         return None, None
     return reconcile_quality(req.outcome.value, clamp01(float(req.quality_score)))
+
+
+async def _previous_record(
+    tenant: TenantContext, lane: str, cluster: str, model_id: str
+) -> OutcomeRecord | None:
+    """Read the current durable (cluster, model) record so counters can accumulate.
+
+    The durable record is a last-write-wins upsert in Mubit; without this
+    read-modify-write, every feedback wiped the accumulated history and organic
+    evidence capped at n=1. Strictly fail-open: any miss/error just starts a
+    fresh history.
+    """
+    try:
+        if tenant.durable_refs is not None:
+            for ref in tenant.durable_refs.refs(lane, cluster, limit=64):
+                if ref.model_id != model_id:
+                    continue
+                ev = await tenant.memory.dereference(
+                    lane=lane, reference_id=ref.reference_id or ref.entry_id
+                )
+                if ev is not None and ev.record is not None:
+                    return ev.record
+                break
+        hits = await tenant.memory.lookup(
+            lane=lane,
+            match=[{"kind": "outcome", "task_cluster": cluster, "model_id": model_id}],
+            limit=4,
+        )
+        for ev in hits or []:
+            if ev.record is not None:
+                return ev.record
+    except Exception as exc:  # noqa: BLE001 — accumulation is additive; never fail feedback
+        log.warning("previous_record_read_failed", cluster=cluster, error=str(exc))
+    return None
 
 
 def _fire_reflect(memory: Memory, lane: str, user_id: str | None) -> None:
@@ -146,6 +181,16 @@ async def feedback(
         verified_in_production=verified,
         recorded_at=time.time(),
     )
+    # Accumulate: fold this outcome into the durable record's counters/rings so the
+    # upsert carries HISTORY, not just the latest outcome. A replayed rec_id returns
+    # the previous record unchanged — skip the write and reinforcement entirely.
+    prev = await _previous_record(
+        tenant, stored.lane, stored.task_cluster, req.chosen_model_id
+    )
+    record = merged_outcome(prev, record)
+    if record is prev:
+        warnings.append("duplicate_feedback_ignored")
+        return FeedbackResponse(accepted=True, warnings=warnings)
     upsert_key = outcome_upsert_key(stored.task_cluster, req.chosen_model_id)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
@@ -326,6 +371,11 @@ async def _late_feedback(
         verified_in_production=source == EVIDENCE_GATE,
         recorded_at=time.time(),
     )
+    prev = await _previous_record(tenant, decision.lane, decision.cluster, req.chosen_model_id)
+    record = merged_outcome(prev, record)
+    if record is prev:
+        warnings.append("duplicate_feedback_ignored")
+        return FeedbackResponse(accepted=True, warnings=warnings)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
