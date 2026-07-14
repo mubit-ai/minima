@@ -7,6 +7,7 @@
 import { AssistantMessage, Message, type StopReason, Usage } from "../ai/types.ts";
 import type { CostRow } from "../minima/meter.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import { parseRewindMarker, truncateBeforePrompt } from "../session/rewind.ts";
 import type { MinimaDb, RunRow } from "./minima_db.ts";
 
 const STOP_REASONS: readonly StopReason[] = ["stop", "length", "toolUse", "error", "aborted"];
@@ -47,7 +48,7 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
   const run = db.getRun(runId);
   if (!run) throw new Error(`no such run: ${runId}`);
 
-  const messages: Message[] = [];
+  let messages: Message[] = [];
   for (const ev of db.getRunEvents(runId)) {
     if (ev.agent_id) continue; // sub-agent context stays out of the lead conversation
     let payload: Record<string, unknown>;
@@ -55,6 +56,13 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
       payload = JSON.parse(ev.payload) as Record<string, unknown>;
     } catch {
       continue; // skip unparseable rows rather than corrupt the context
+    }
+    if (ev.type === "rewind") {
+      // B4: replay-with-truncation — the marker cuts everything from prompt keep+1 on.
+      // (Meter rows and promptsRun stay full below: the spend happened — feedback truth.)
+      const marker = parseRewindMarker(payload);
+      if (marker) messages = truncateBeforePrompt(messages, marker.keep_prompts);
+      continue;
     }
     const text = String(payload.text ?? "");
     if (ev.type === "user") {

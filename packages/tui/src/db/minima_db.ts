@@ -255,6 +255,42 @@ const MIGRATIONS: string[][] = [
   [
     "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
   ],
+  // v9 — per-step cost attribution (U3): the in-progress plan step at routing time, stamped by
+  // the DecisionRecord writer when ground truth is on. This is provenance for reporting (U3
+  // sidebar / J1 /why), never a feedback input. NULL = pre-v8 row or no step in progress.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
+    "CREATE INDEX IF NOT EXISTS ix_decisions_step ON routing_decisions(step_id)",
+  ],
+  // v10 — git-shadow checkpoints (B3): one row per worktree snapshot, keyed to the run and
+  // the replay-space prompt ordinal (count of lead user events persisted BEFORE the prompt
+  // that triggered the snapshot — the sink flushes at turn_end, so mid-turn the current
+  // prompt is not yet counted). kind 'turn' = pre-mutation snapshot · 'safety' = auto
+  // snapshot taken just before a restore (so /undo is itself undoable). The git objects
+  // live under refs/minima/ckpt/<run_id>/<checkpoint_id>; this table is the mapping ledger.
+  [
+    `CREATE TABLE IF NOT EXISTS checkpoints (
+       id             TEXT PRIMARY KEY,
+       run_id         TEXT NOT NULL REFERENCES runs(run_id),
+       ref            TEXT NOT NULL,
+       commit_sha     TEXT NOT NULL,
+       tree_sha       TEXT NOT NULL,
+       prompt_ordinal INTEGER NOT NULL,
+       step_id        TEXT REFERENCES plan_steps(id),
+       kind           TEXT NOT NULL DEFAULT 'turn',  -- turn|safety
+       created        REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_checkpoints_run ON checkpoints(run_id, created DESC)",
+  ],
+  // v11 — lineage convergence (TrackA/TrackB merge): both feature branches shipped a batch at
+  // index 7 (TrackA: plan_steps.tools · TrackB: routing_decisions.step_id), so a DB migrated on
+  // the TrackB lineage sits at version 9 having never seen the tools ALTER that now lives at
+  // index 7. Re-running it here converges every lineage; execStep's duplicate-column self-heal
+  // makes it a no-op for fresh and TrackA-lineage DBs. Append-only discipline holds — no shipped
+  // batch string was edited.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
+  ],
 ];
 
 export interface RunRow {
@@ -309,6 +345,8 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
+  /** In-progress GT plan step at routing time (v9) — reporting provenance, not feedback. */
+  stepId?: string | null;
 }
 
 // ---------------------------------------------------------------- ground-truth rows
@@ -368,6 +406,20 @@ export interface UserSignalRow {
   action: UserAction | null;
   at: string | null;
   note: string | null;
+}
+
+/** One git-shadow worktree snapshot (B3, v10) — the ref ↔ run ↔ prompt ↔ step mapping. */
+export interface CheckpointRow {
+  id: string;
+  run_id: string;
+  ref: string;
+  commit_sha: string;
+  tree_sha: string;
+  /** Lead user events persisted before the triggering prompt (replay space). */
+  prompt_ordinal: number;
+  step_id: string | null;
+  kind: "turn" | "safety";
+  created: number;
 }
 
 /** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
@@ -701,12 +753,13 @@ export class MinimaDb {
          chosen_model, decision_basis, selection_policy, confidence, threshold_used, ranked,
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
-         turns, latency_ms, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
          turns = excluded.turns, latency_ms = excluded.latency_ms,
+         step_id = COALESCE(routing_decisions.step_id, excluded.step_id),
          reinforced_entry_ids = excluded.reinforced_entry_ids,
          lesson_promoted = excluded.lesson_promoted`,
       [
@@ -736,6 +789,7 @@ export class MinimaDb {
         d.routed ?? "server",
         d.turns,
         d.latencyMs,
+        d.stepId ?? null,
         d.reinforcedEntryIds?.length ? JSON.stringify(d.reinforcedEntryIds) : null,
         d.lessonPromoted === null || d.lessonPromoted === undefined
           ? null
@@ -751,6 +805,134 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM routing_decisions WHERE run_id = ? ORDER BY ts")
       .all(runId) as Record<string, unknown>[];
+  }
+
+  /**
+   * U3: realized $ per plan step, from the v9 step_id stamp. Realized cost only
+   * (actual_cost_usd) — estimates never masquerade as spend. Steps with no stamped
+   * decisions are absent from the map (the UI renders them as "—", not $0.00).
+   */
+  stepCosts(planId: string): { perStep: Map<string, number>; totalUsd: number } {
+    const rows = this.db
+      .query(
+        `SELECT step_id, SUM(COALESCE(actual_cost_usd, 0)) AS cost
+         FROM routing_decisions
+         WHERE step_id IN (SELECT id FROM plan_steps WHERE plan_id = ?)
+         GROUP BY step_id`,
+      )
+      .all(planId) as { step_id: string; cost: number }[];
+    const perStep = new Map<string, number>();
+    let totalUsd = 0;
+    for (const r of rows) {
+      perStep.set(r.step_id, r.cost);
+      totalUsd += r.cost;
+    }
+    return { perStep, totalUsd };
+  }
+
+  // ================================================================ checkpoints (B3)
+
+  insertCheckpoint(opts: {
+    id?: string;
+    runId: string;
+    ref: string;
+    commitSha: string;
+    treeSha: string;
+    promptOrdinal: number;
+    stepId?: string | null;
+    kind?: "turn" | "safety";
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      `INSERT INTO checkpoints (id, run_id, ref, commit_sha, tree_sha, prompt_ordinal, step_id, kind, created)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        opts.runId,
+        opts.ref,
+        opts.commitSha,
+        opts.treeSha,
+        opts.promptOrdinal,
+        opts.stepId ?? null,
+        opts.kind ?? "turn",
+        Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** All of a run's checkpoints, oldest first. */
+  listCheckpoints(runId: string): CheckpointRow[] {
+    return this.db
+      .query("SELECT * FROM checkpoints WHERE run_id = ? ORDER BY created, id")
+      .all(runId) as CheckpointRow[];
+  }
+
+  /**
+   * Newest checkpoint of the run — optionally only rows strictly older than `beforeCreated`
+   * (the /undo walk-back cursor) and/or of one kind ('turn' skips safety snapshots).
+   */
+  latestCheckpoint(
+    runId: string,
+    opts?: { beforeCreated?: number; kind?: "turn" | "safety" },
+  ): CheckpointRow | null {
+    const conds = ["run_id = ?"];
+    const params: (string | number)[] = [runId];
+    if (opts?.beforeCreated !== undefined) {
+      conds.push("created < ?");
+      params.push(opts.beforeCreated);
+    }
+    if (opts?.kind) {
+      conds.push("kind = ?");
+      params.push(opts.kind);
+    }
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE ${conds.join(" AND ")} ORDER BY created DESC, id DESC LIMIT 1`,
+      )
+      .get(...params) as CheckpointRow | null;
+    return row ?? null;
+  }
+
+  /**
+   * B5 code-rewind target: the checkpoint capturing the worktree AS OF prompt
+   * `promptOrdinal`+1's submission — i.e. the smallest prompt_ordinal >= promptOrdinal
+   * (snapshots are taken BEFORE a mutating prompt's changes, so the state after prompt k
+   * lives in the NEXT mutating prompt's snapshot). Null = no changes since that prompt.
+   */
+  earliestCheckpointAtOrAfter(runId: string, promptOrdinal: number): CheckpointRow | null {
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE run_id = ? AND prompt_ordinal >= ?
+         ORDER BY prompt_ordinal ASC, created ASC LIMIT 1`,
+      )
+      .get(runId, promptOrdinal) as CheckpointRow | null;
+    return row ?? null;
+  }
+
+  /** Delete a run's checkpoint rows (GC companion — the caller deletes the git refs). */
+  deleteCheckpoints(runId: string): void {
+    this.db.run("DELETE FROM checkpoints WHERE run_id = ?", [runId]);
+  }
+
+  /** Distinct run_ids holding checkpoints, most recently snapshotted first (GC policy input). */
+  checkpointRuns(): string[] {
+    const rows = this.db
+      .query(
+        "SELECT run_id, MAX(created) AS latest FROM checkpoints GROUP BY run_id ORDER BY latest DESC",
+      )
+      .all() as { run_id: string }[];
+    return rows.map((r) => r.run_id);
+  }
+
+  /** Lead user events persisted for the run — the replay-space prompt ordinal (B3/B4). */
+  countLeadUserEvents(runId: string): number {
+    const row = this.db
+      .query(
+        "SELECT COUNT(*) AS n FROM events WHERE run_id = ? AND agent_id IS NULL AND type = 'user'",
+      )
+      .get(runId) as { n: number };
+    return row.n;
   }
 
   // ================================================================ ground-truth ledger

@@ -27,6 +27,7 @@ import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
+import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
@@ -163,6 +164,8 @@ export interface CliArgs {
   prompt: string[];
   model?: string;
   provider?: string;
+  /** OpenAI-compatible base URL for a custom --provider (ollama/vLLM/llama.cpp/mock). */
+  providerUrl?: string;
   thinking: string;
   offline: boolean;
   print: boolean;
@@ -216,6 +219,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--provider":
         opts.provider = take(i++);
+        break;
+      case "--provider-url":
+        opts.providerUrl = take(i++);
         break;
       case "--thinking":
         opts.thinking = take(i++);
@@ -285,6 +291,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --mode {interactive|print|json}
       --model ID           pin a model (bypasses routing)
       --provider NAME      provider for a pinned --model
+      --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
       --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
@@ -349,6 +356,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       cost: { input: 0, output: 0 },
       context_window: 128_000,
       max_tokens: 8_192,
+      base_url: args.providerUrl,
     });
   }
 
@@ -557,7 +565,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     });
   }
-  // Headless has no permission hook, so the done-gate registers directly (sole before-hook).
+  // Headless has no permission hook, so B3's checkpoint hook registers first (snapshot
+  // before the done-gate can block) and the done-gate second — same relative order as the
+  // TUI's stack. One-shot run = one prompt, so arm once here.
+  if (nonInteractive && agent.db) {
+    const headlessTop = detectRepo(process.cwd());
+    const ckpt = makeCheckpointHook({
+      top: headlessTop,
+      db: agent.db,
+      getRunId: () => agent.runId,
+      notify: (message) => process.stderr.write(`minima: ${message}\n`),
+    });
+    agent.addBeforeToolCall(ckpt.hook);
+    ckpt.arm();
+  }
+  // Headless has no permission hook, so the done-gate registers after the checkpoint hook.
   if (nonInteractive && gtGateBefore) agent.addBeforeToolCall(gtGateBefore);
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();

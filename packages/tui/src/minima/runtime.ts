@@ -601,6 +601,11 @@ export class MinimaAgent extends Agent {
       const routed: "server" | "offline" | "pinned" =
         routing === null ? "offline" : routing.recommendationId === null ? "pinned" : "server";
       const recId = o.recId;
+      let stepId: string | null = null;
+      if (this.config.groundTruth === true) {
+        const plan = this.db.getActivePlan(this.runId);
+        stepId = plan ? (this.db.getInProgressStep(plan.id)?.id ?? null) : null;
+      }
       const eventId = this.db.appendEvent({
         runId: this.runId,
         agentId: this.agentId,
@@ -641,6 +646,7 @@ export class MinimaAgent extends Agent {
         judged: o.judged,
         outcome: o.outcome,
         routed,
+        stepId,
         turns: o.turns,
         latencyMs: o.latencyMs,
         reinforcedEntryIds: o.reinforcedEntryIds ?? null,

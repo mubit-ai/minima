@@ -203,33 +203,86 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 
 **Exit gate:** scripted run: `edit` in Plan mode → ask; shots committed. ✅
 
-### B3 — Git-shadow checkpoints *(decided design · L)* — *new Linear issue*
+### B3 — Git-shadow checkpoints *(decided design · L)* — MUB-136
+
+> **Landed (2026-07-13):** module `src/session/checkpoint.ts` + migration v9 `checkpoints`
+> table. The mapping ledger is keyed by **replay-space prompt ordinal** (count of persisted
+> lead user events — the sink flushes at turn_end, so mid-turn the triggering prompt isn't
+> counted: ordinal = "worktree before this prompt"), NOT JSONL entry ids (that store is
+> runtime-dead). Ref scheme `refs/minima/ckpt/<runId>/<seq>-<id>` (zero-padded seq → lexical
+> = chronological). The per-run GIT_INDEX_FILE is **reused** (warm stat cache → `add -A`
+> near-instant); snapshots dedupe on tree sha (read-only turns cost no refs); commit-tree
+> gets explicit minima@local identity (hosts without derivable email). **Restore is
+> full-tree byte-identical + a `safety` snapshot first** (decided: /undo is itself
+> undoable; parallel user edits land in the safety checkpoint). Restore = `diff-tree
+> --no-renames -z target now` → delete created-since paths (files/symlinks only — never
+> directories, protects gitlinks; empty parents pruned) → batch `read-tree` +
+> `checkout-index -f -z --stdin` for the rest (modes/symlinks preserved, gitlinks skipped,
+> tracked files not in the diff never re-mtimed). Caveat documented: user-created untracked
+> files between checkpoints die when restoring past their creation — inherent; the safety
+> snapshot holds them. Trigger = `makeCheckpointHook` armed per prompt dispatch, fires on
+> the first of write/edit/apply_patch/bash/**task** (children are hook-free — a task call
+> is a write path), registered permission-gate → checkpoint → GT done-gate. Headless `-p`
+> arms once. `/ckpt` lists · `/ckpt gc` prunes (keep current + 5 recent runs). Exit-gate
+> deviation: no PTY shot (no visible UX beyond /ckpt text) — the ledger-proof tests stand in.
 
 | # | Step | Verify |
 |---|---|---|
-| B3.1 | Snapshot on first mutating tool call per turn: `git add -A` under a **temporary `GIT_INDEX_FILE`** → `write-tree` → `commit-tree` → ref `refs/minima/ckpt/<sessionId>/<entryId>`. User's index/worktree **never touched**. Note: `.gitignore`d files are excluded by design — document it | temp-repo test: snapshot → mutate → restore is byte-identical, incl. untracked files |
-| B3.2 | Map ref ↔ JSONL entry id ↔ step id (GT already attributes writes to steps) | mapping test |
-| B3.3 | Non-git dir → checkpoints off with a one-line notice; GC command prunes old refs | graceful-degrade test |
+| B3.1 | Snapshot on first mutating tool call per prompt: reused per-run `GIT_INDEX_FILE` → `add -A` → `write-tree` (dedupe) → `commit-tree` → `refs/minima/ckpt/<runId>/<seq>-<id>`. User's index/worktree never touched; `.gitignore`d files excluded by design | `checkpoint.test.ts`: snapshot → mutate → restore byte-identical (modified/created/deleted/mode/ignored), porcelain unchanged, safety-undoes-the-undo round trip ✅ |
+| B3.2 | Map ref ↔ run ↔ prompt ordinal ↔ step id (v9 `checkpoints` row; step from `getInProgressStep` when GT on) | mapping + step-attribution tests ✅ |
+| B3.3 | Non-git dir → checkpoints off with a one-time one-line notice; `/ckpt gc` prunes old runs' refs (batched `update-ref --stdin -z`) + rows + warm indexes | graceful-degrade + GC tests ✅ |
 
-**Exit gate:** round-trip suite green in a scratch repo.
+**Exit gate:** round-trip suite green in a scratch repo. ✅
 
-### B4 — `/undo`: revert + re-prompt *(borrow #6 · M)* — *new Linear issue*
+### B4 — `/undo`: revert + re-prompt *(borrow #6 · M)* — MUB-139
+
+> **Landed (2026-07-13):** the `store.ts:102` reference was stale (JSONL store is
+> runtime-dead) — the branch model is **rewind markers on the SQLite events spine, same
+> run**: `/undo` appends a `rewind` event (`{keep_prompts}` in replay space) and
+> `rehydrateRun` learned replay-with-truncation, so /resume replays the rewound timeline
+> while the abandoned turns stay in the log (append-only; still rewindable-to). Meter rows
+> and promptsRun stay full — the spend happened (feedback truth). Live in-memory truncation
+> maps by **distance-from-end** (`truncateLastPrompts`) — /compact can rewrite old turns,
+> but live and replay space share their tail. Files restore through B3's `restore()`
+> (safety snapshot inside — /undo is undoable). Composer prefill = new TextInput
+> `initialValue` + key-nonce remount. Stacking = an in-memory cursor
+> (`beforeCreated` on `latestCheckpoint`, kind='turn' — safety rows are never undo
+> targets), reset on the next prompt. The old `/undo` stub (`git checkout --` with no
+> pathspec — a git usage error that reverted nothing while claiming success) is replaced.
+> v1 scope: /undo reaches only the CURRENT session's checkpoints — after `--resume` the
+> ordinal spaces of the old run's checkpoints and the new run's events differ; lineage
+> walk-back is deferred. Shot infra: `--provider-url` CLI flag (OpenAI-compatible base URL
+> for a custom `--provider` — ollama/vLLM/local mocks) landed to drive a real mutating
+> turn against a local mock server with zero spend.
 
 | # | Step | Verify |
 |---|---|---|
-| B4.1 | `/undo` = restore files from last checkpoint **+ branch the session tree** (`store.ts:102` already supports branching — undo is a branch, not a destructive drop) **+ prefill composer with the original user message** for editing | scripted: edit → `/undo` → files restored, prompt prefilled |
-| B4.2 | Stacking: repeated `/undo` walks back through checkpoint refs | stacked ×2 test |
+| B4.1 | `/undo` = B3 checkpoint restore (safety snapshot inside) + rewind marker on the events spine + in-memory truncation + composer prefilled with the undone prompt | rewind.test.ts (marker round-trip, stacked markers, meter-stays-full) + PTY shot: real mock-driven edit turn → `/undo` → file restored on disk, prompt prefilled ✅ |
+| B4.2 | Stacking: repeated `/undo` walks back through turn checkpoints | walk-back ×2 seam test (`latestCheckpoint` beforeCreated) ✅ |
 
-**Exit gate:** tests + PTY shot of the prefilled composer.
+**Exit gate:** tests + PTY shot of the prefilled composer. ✅ (`b4-undo-prefill-fullscreen.png`)
 
-### B5 — `/rewind` *(borrow #7 · M)* — *new Linear issue*
+### B5 — `/rewind` *(borrow #7 · M)* — MUB-142
+
+> **Landed (2026-07-13):** "over the JSONL tree" corrected — turns are the transcript's
+> real user prompts (slash echoes excluded, U2's anchor rule) mapped to replay space by
+> distance-from-end (B4's compact-safe rule). Fullscreen: overlay picker on the U2 chassis
+> (j/k · **[c]onvo · [f]iles · [b]oth/⏎** · esc, ✓ marks code-restorable turns); inline or
+> narrow: `/rewind` prints the numbered list and `/rewind <n> [convo|code|both]` (default
+> both) executes directly. Conversation mode = B4's rewind marker + tail truncation +
+> prefill. **Code mode targets the checkpoint with the smallest `prompt_ordinal ≥ keep`**
+> (`earliestCheckpointAtOrAfter`) — snapshots capture the worktree BEFORE a mutating
+> prompt's changes, so "files as of prompt j's submission" lives in prompt j's own
+> snapshot (if it mutated) or the next mutating prompt's; no such checkpoint = files
+> already match (no-op notice). Restores go through B3's `restore()` (safety snapshot —
+> every rewind is undoable).
 
 | # | Step | Verify |
 |---|---|---|
-| B5.1 | Turn picker over the JSONL tree (reuses U2's section/anchor model) | picker renders in PTY shot |
-| B5.2 | Three restore modes: **conversation only** (branch from entryId — non-destructive), **code only** (checkpoint restore), **both** | one test per mode |
+| B5.1 | Turn picker over the live transcript's prompt anchors (U2 rule); overlay in fullscreen, numbered one-shot list inline | picker + list PTY shots, both renderers ✅ |
+| B5.2 | Three restore modes: **conversation only** (rewind marker — non-destructive, replay agrees with live truncation), **code only** (checkpoint restore, conversation intact), **both** | one seam test per mode (`rewind_picker.test.ts`) ✅ |
 
-**Exit gate:** 3 mode tests + picker shot, both renderers.
+**Exit gate:** 3 mode tests + picker shot, both renderers. ✅ (`b5-rewind-picker-fullscreen.png`, `b5-rewind-inline.png`)
 
 ### B6 — Writer/Reviewer two-session workflow *(stretch · S)* — *new Linear issue*
 
@@ -287,17 +340,30 @@ migration: roll-up on read.
 
 **Exit gate:** PTY shots — sidebar open in fullscreen, text block in inline; jump test green. ✅
 
-### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — *new Linear issue*
+### U3 — GT Plan Overview sidebar, `Ctrl+G` *(M)* — MUB-141
 
 Same chassis as U2, different content + shortcut; gated by `MINIMA_TUI_GROUND_TRUTH`.
 
+> **Landed (2026-07-13):** `Ctrl+G` is SHARED with Track A's gate-answer modal — an
+> unanswered 🔴 block (and not busy) wins the chord; any other time it opens the overview
+> (answering/dismissing the gate hands the chord back). U3.2's premise was corrected: nothing
+> attributed **cost** to steps (file_changes attributes writes; `routing_decisions` had no
+> step_id) — attribution is created by **migration v8** `routing_decisions.step_id`, stamped
+> at decision-write time from `getInProgressStep` (`runtime.ts` — Track A shared surface,
+> flagged for SWE-A review; feedback upserts COALESCE so they never clear the stamp). Steps
+> with no stamped rung render `—`, never $0. Panel rows clip/pad by **display width**
+> (`string-width`) — code-point math under-counts the double-emoji row leads (⬜🟦✅ + tier).
+> Known cosmetic: the pyte shot emulator misdraws a stale border cell on some emoji rows
+> (same class as U2's ⚙ note); Ink's emitted rows are width-exact (raw-PTY verified).
+> `stepCardLines` (gt_overview.ts) is the shared per-step card J1's `/why` view builds on.
+
 | # | Step | Verify |
 |---|---|---|
-| U3.1 | Content from the ledger: plan title · `step X/N` · per-step status (⬜/🟦/✅, plus 🟢/🟡/🔴 tier once A4 lands) · `verify` cmd · DRIFT flag · gates | render test on seeded GT fixture (`/gt-seed`) |
-| U3.2 | **Per-step cost**: GT already attributes tool calls to steps — join U1 usage by step id; plan-total cost in the footer | aggregation test |
-| U3.3 | Cursor + Enter opens the step's detail card — built as the shared component that becomes J1's `/why` per-step view | scripted test + PTY shot, fullscreen |
+| U3.1 | Content from the ledger: plan title · `step X/N` · per-step status (⬜/🟦/✅ + 🟢/🟡/🔴 tier via `gateVerdictFor`, same reduction as /why) · `verify` cmd · DRIFT flag · gates | `gt_overview.test.ts` render tests on a seeded ledger ✅ |
+| U3.2 | **Per-step cost**: v8 `routing_decisions.step_id` stamp at decision time; `stepCosts` aggregates realized $ per step + plan total (footer) | aggregation tests incl. legacy-null → `—` + upsert-preserves-stamp ✅ |
+| U3.3 | Cursor + Enter opens the step's detail card (`stepCardLines` — becomes J1's `/why` per-step view); Esc back; inline/narrow → one-shot text block | card tests + PTY shots (panel + card) ✅ |
 
-**Exit gate:** seeded-plan shot with statuses + prices; flag-off test (`Ctrl+G` no-ops with a notice).
+**Exit gate:** seeded-plan shot with statuses + prices; flag-off notice (`Ctrl+G` → "Ground-Truth is OFF"). ✅
 
 ---
 
@@ -368,16 +434,16 @@ U1 → U2/U3.
 | A3 doom_loop + steps cap | A | M | ✅ |
 | A4 confidence tiers + failure kinds | A | M | ✅ |
 | A5 trust the check | A | M | ⬜ |
-| A6 allowlist + task perms + poka-yoke | A | M | ⬜ |
-| A7 learning loop | A | M | ⬜ |
+| A6 allowlist + task perms + poka-yoke | A | M | ✅ |
+| A7 learning loop | A | M | ✅ |
 | B1 named sessions + status line | B | S | ✅ |
 | B2 Plan↔Build on Shift+Tab | B | M | ✅ |
-| B3 git-shadow checkpoints | B | L | ⬜ |
-| B4 /undo | B | M | ⬜ |
-| B5 /rewind | B | M | ⬜ |
+| B3 git-shadow checkpoints | B | L | ✅ |
+| B4 /undo | B | M | ✅ |
+| B5 /rewind | B | M | ✅ |
 | U1 session usage ledger *(Minima-unique)* | B | S | ✅ (rescoped: SQLite + in-memory) |
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
-| U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ⬜ |
+| U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ✅ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
 | J1 /why + subagent + E2E demo | both | L | ⬜ |
 
