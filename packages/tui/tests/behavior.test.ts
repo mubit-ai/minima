@@ -444,3 +444,57 @@ describe("tui/app.tsx wires exit_plan", () => {
     expect(wrapper).toContain("agent.agentState.systemPrompt = base");
   });
 });
+
+// Docked-sidebar input routing (2026-07-14): ONE derived `panelCapture` feeds both the
+// global-handler guard list and the composer's `suspended`, so the two can never drift —
+// the U3/B5 regression (GT/rewind panels captured the global handler but left the composer
+// live: arrows scrubbed history, letters grew the draft, Enter could submit a prompt).
+describe("tui/app.tsx docked-sidebar key routing", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("panelCapture derives from focus (sidebars) or mount (rewind modal)", () => {
+    expect(src).toContain("const sidebarOpen = tocOpen || gtPanelOpen;");
+    expect(src).toContain("const panelCapture = (sidebarOpen && sidebarFocused) || rewindOpen;");
+  });
+
+  test("the global guard list uses panelCapture — the per-panel lines are gone", () => {
+    expect(src).toContain("panelCapture // a FOCUSED docked sidebar or the modal rewind picker");
+    expect(src).not.toContain("tocOpen || // U2");
+    expect(src).not.toContain("gtPanelOpen || // U3");
+  });
+
+  test("the composer suspends on the SAME expression (the leak fix)", () => {
+    expect(src).toContain("suspended={panelCapture}");
+    expect(src).not.toContain("suspended={tocOpen}");
+  });
+
+  test("panels own keys only while focused (Ink isActive); Esc blurs docked, closes rewind", () => {
+    const toc = readFileSync(join(import.meta.dir, "../src/tui/toc-panel.tsx"), "utf8");
+    const gt = readFileSync(join(import.meta.dir, "../src/tui/gt-panel.tsx"), "utf8");
+    const rewind = readFileSync(join(import.meta.dir, "../src/tui/rewind-panel.tsx"), "utf8");
+    expect(toc).toContain("{ isActive: focused }");
+    expect(gt).toContain("{ isActive: focused }");
+    // Esc: docked panels hand the keyboard back (panel stays); the rewind modal closes.
+    expect(toc).toContain("onBlur();");
+    expect(gt).toContain("else onBlur();");
+    expect(rewind).toContain("onClose();");
+    expect(rewind).not.toContain("isActive");
+    // Width-aware padding everywhere — a raw padEnd under-counts wide glyphs (border bleed).
+    expect(toc).not.toContain(".padEnd(");
+  });
+
+  test("the transcript reflows beside a docked sidebar: contentCols threads the width math", () => {
+    expect(src).toContain(
+      "const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;",
+    );
+    expect(src).toContain(
+      "getScrollableMessages(messages, messagesBudget, scrollOffset, contentCols)",
+    );
+    expect(src).toContain("<MessageRow key={i} msg={msg} cols={contentCols} />");
+    expect(src).toContain("offsetForMessage(messages, k, messagesBudget, contentCols)");
+  });
+
+  test("the docked GT overview tracks the ledger (planStrip/gtBehavior are the change signals)", () => {
+    expect(src).toContain("[gtPanelOpen, planStrip, gtBehavior]");
+  });
+});

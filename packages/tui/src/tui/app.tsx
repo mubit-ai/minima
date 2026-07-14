@@ -76,8 +76,8 @@ import { footerStatsFromMessages } from "./footer.ts";
 import { GtPanel } from "./gt-panel.tsx";
 import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import {
-  type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
+  type SidebarGeometry,
   childTreeHeight,
   getScrollableMessages,
   gtFooterFit,
@@ -89,6 +89,7 @@ import {
   permToolLabel,
   questionDisplayText,
   questionOverlayHeight,
+  sidebarGeometry,
   streamTailBudget,
   tailToFit,
   tocPanelGeometry,
@@ -1044,9 +1045,13 @@ export function HarnessApp({
   // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
   // height math) and mirrored into a ref so the key handler can gate on it.
   const [tocOpen, setTocOpen] = useState(false);
-  const tocGeomRef = useRef<PanelGeometry | null>(null);
-  // U3 (MUB-141): GT Plan Overview sidebar — same chassis/geometry as the ToC panel.
+  const sidebarGeomRef = useRef<SidebarGeometry | null>(null);
+  // U3 (MUB-141): GT Plan Overview sidebar — same docked chassis as the ToC panel.
   const [gtPanelOpen, setGtPanelOpen] = useState(false);
+  // Docked-sidebar focus (2026-07-14): the sidebar persists unfocused while the user types.
+  // Focused → the panel's useInput is active and the composer suspends; unfocused → the
+  // panel is inert and every key behaves as if no sidebar were open (Ctrl+T/G refocus).
+  const [sidebarFocused, setSidebarFocused] = useState(false);
   // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
   const repoTopRef = useRef<string | null>(detectRepo(process.cwd()));
   const checkpointArmRef = useRef<(() => void) | null>(null);
@@ -1055,10 +1060,30 @@ export function HarnessApp({
   // in its key) with the undone prompt's text seeded as the draft.
   const undoCursorRef = useRef<number | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
-  // B5 (MUB-142): /rewind turn picker (fullscreen overlay on the U2 chassis).
+  // B5 (MUB-142): /rewind turn picker (fullscreen overlay on the legacy overpaint chassis).
   const [rewindOpen, setRewindOpen] = useState(false);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
+  // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
+  // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
+  // not the other let arrows scrub history and Enter submit while navigating the panel).
+  const sidebarOpen = tocOpen || gtPanelOpen;
+  const panelCapture = (sidebarOpen && sidebarFocused) || rewindOpen;
+  useEffect(() => {
+    if (!sidebarOpen && sidebarFocused) setSidebarFocused(false);
+  }, [sidebarOpen, sidebarFocused]);
+  // Sidebars are mutually exclusive and always open FOCUSED; the same helpers serve the
+  // global chords (open/refocus/replace) and the panels' onSwitch (Ctrl+T↔Ctrl+G swap).
+  const openTocSidebar = () => {
+    setGtPanelOpen(false);
+    setTocOpen(true);
+    setSidebarFocused(true);
+  };
+  const openGtSidebar = () => {
+    setTocOpen(false);
+    setGtPanelOpen(true);
+    setSidebarFocused(true);
+  };
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1398,6 +1423,47 @@ export function HarnessApp({
     }
   }
 
+  // Open (or refocus) the ToC sidebar; inline / too-narrow → one-shot text block. Shared by
+  // the global Ctrl+T arm and GtPanel's onSwitch.
+  const requestTocSidebar = () => {
+    if (fullscreen && sidebarGeomRef.current) {
+      openTocSidebar();
+    } else {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
+          toolName: "toc",
+        },
+      ]);
+    }
+  };
+  // Open (or refocus) the GT sidebar; GT off → one-line notice (the flag-off contract);
+  // inline / too-narrow → one-shot text block. Shared by Ctrl+G and TocPanel's onSwitch.
+  const requestGtSidebar = () => {
+    if (agent.config.groundTruth !== true) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to see the plan overview.",
+          toolName: "gt",
+        },
+      ]);
+      return;
+    }
+    if (fullscreen && sidebarGeomRef.current) {
+      openGtSidebar();
+    } else {
+      const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+      setMessages((m) => [
+        ...m,
+        { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
+      ]);
+    }
+  };
+
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
     if (
@@ -1407,9 +1473,7 @@ export function HarnessApp({
       permPrompt ||
       questionPrompt ||
       configOverlayOpen ||
-      tocOpen || // U2: the ToC panel owns ↑/↓/⏎/Esc while open
-      gtPanelOpen || // U3: same contract for the GT Plan Overview panel
-      rewindOpen // B5: and for the /rewind turn picker
+      panelCapture // a FOCUSED docked sidebar or the modal rewind picker owns the keys
     )
       return;
 
@@ -1455,50 +1519,19 @@ export function HarnessApp({
     }
 
     // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation, like PgUp).
-    // Fullscreen with room → overlay panel; inline or too-narrow → one-shot text block.
+    // Fullscreen with room → docked sidebar (open focused / refocus / replace GT); inline
+    // or too-narrow → one-shot text block.
     if (key.ctrl && input === "t") {
-      if (fullscreen && tocGeomRef.current) {
-        setGtPanelOpen(false);
-        setTocOpen(true);
-      } else {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
-            toolName: "toc",
-          },
-        ]);
-      }
+      requestTocSidebar();
       return;
     }
 
     // U3 (MUB-141): GT Plan Overview on Ctrl+G — mid-run allowed (read-only, like the ToC).
     // Shared chord, gate wins: with a 🔴 block armed and not busy this falls through to the
     // gate-answer arm below (its modal takes Ctrl+G first); any other time Ctrl+G is the
-    // overview. GT off → one-line notice (the flag-off contract).
+    // overview (open focused / refocus / replace ToC).
     if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
-      if (agent.config.groundTruth !== true) {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to see the plan overview.",
-            toolName: "gt",
-          },
-        ]);
-        return;
-      }
-      if (fullscreen && tocGeomRef.current) {
-        setTocOpen(false);
-        setGtPanelOpen(true);
-      } else {
-        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
-        ]);
-      }
+      requestGtSidebar();
       return;
     }
 
@@ -2055,9 +2088,10 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (fullscreen && tocGeomRef.current && turns.length > 0) {
+        if (fullscreen && sidebarGeomRef.current && turns.length > 0) {
           setTocOpen(false);
           setGtPanelOpen(false);
+          setSidebarFocused(false);
           setRewindOpen(true);
         } else {
           setMessages((m) => [
@@ -3379,6 +3413,14 @@ export function HarnessApp({
       treeHeight -
       busyIndicatorHeight,
   );
+  // Docked sidebar geometry rides the same height math; null (too narrow/short) downgrades
+  // Ctrl+T/Ctrl+G to the one-shot text block. While a sidebar is docked, the transcript and
+  // the live stream reflow to contentCols beside it — the 2026-07-14 revision of the U2
+  // "never reflows" design (the sidebar is in-flow now; only the rewind overlay overpaints).
+  const sidebarGeom = fullscreen ? sidebarGeometry(cols, chatRegionHeight) : null;
+  sidebarGeomRef.current = sidebarGeom;
+  const sidebarDocked = sidebarOpen && sidebarGeom !== null;
+  const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;
   const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
   const fsThoughtsRows =
     fullscreen && pinned && busy && streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -3386,9 +3428,9 @@ export function HarnessApp({
   const fsStreamTail =
     fullscreen && pinned && busy && streaming
       ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
-        tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
+        tailToFit(streaming, contentCols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
       : "";
-  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
+  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, contentCols) : 0;
   const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
   // Windowing the transcript is O(messages) (two full height passes over the whole history), so
   // memoize it on its real inputs. HarnessApp re-renders on every keystroke (typedText), and without
@@ -3396,8 +3438,11 @@ export function HarnessApp({
   // are exactly what getScrollableMessages reads; messagesBudget already folds in rows/reserved, and a
   // single-line prompt keeps it stable across keystrokes, so typing no longer re-windows the transcript.
   const scrollWin = useMemo(
-    () => (fullscreen ? getScrollableMessages(messages, messagesBudget, scrollOffset, cols) : null),
-    [fullscreen, messages, messagesBudget, scrollOffset, cols],
+    () =>
+      fullscreen
+        ? getScrollableMessages(messages, messagesBudget, scrollOffset, contentCols)
+        : null,
+    [fullscreen, messages, messagesBudget, scrollOffset, contentCols],
   );
   // Publish the fullscreen viewport metrics AFTER render — mutating refs during render breaks React
   // purity (order/StrictMode/concurrent-unsafe). PgUp/PgDn reads maxChatHeightRef at key-time and the
@@ -3410,33 +3455,32 @@ export function HarnessApp({
     }
   }, [scrollWin, messagesBudget]);
 
-  // U2: panel geometry rides the same height math; null (too narrow/short) downgrades
-  // Ctrl+T to the one-shot text block. NOT an input to getScrollableMessages — the panel
-  // is out-of-flow, so the transcript's cols/height are untouched (no reflow).
-  const tocGeom = fullscreen ? tocPanelGeometry(cols, chatRegionHeight) : null;
-  tocGeomRef.current = tocGeom;
+  // B5: the rewind picker keeps the legacy right-anchored OVERLAY geometry (it only renders
+  // with both sidebars closed, so the transcript column spans full cols underneath it).
+  const overlayGeom = fullscreen ? tocPanelGeometry(cols, chatRegionHeight) : null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: buildUsageLedger reads live agent state; tocOpen/messages are the real recompute triggers
   const tocSections = useMemo(
     () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
     [tocOpen, messages],
   );
-  // U3: overview snapshot read from the ledger at open time (a slash command or gate can
-  // change it, but both close paths re-open cheaply; live-tracking would re-query per render).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; gtPanelOpen is the real recompute trigger
+  // U3: the overview tracks the ledger while docked — planStrip/gtBehavior are re-read from
+  // the DB on every tool_execution_end, gate answer, and /gt-seed, so they are exactly the
+  // "ledger changed" signals; the re-query is one cheap SQLite read, bounded to panel-open.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; gtPanelOpen + the ledger-change signals are the real recompute triggers
   const gtOverview = useMemo(
     () => (gtPanelOpen && agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null),
-    [gtPanelOpen],
+    [gtPanelOpen, planStrip, gtBehavior],
   );
   // Resize below the minimum while open → close (otherwise input stays captured by a
-  // panel that no longer renders). Boolean dep — tocGeom is a fresh object every render.
-  const tocGeomOk = tocGeom !== null;
+  // panel that no longer renders). Boolean dep — sidebarGeom is a fresh object every render.
+  const sidebarGeomOk = sidebarGeom !== null;
   useEffect(() => {
-    if (tocOpen && !tocGeomOk) setTocOpen(false);
-  }, [tocOpen, tocGeomOk]);
+    if (tocOpen && !sidebarGeomOk) setTocOpen(false);
+  }, [tocOpen, sidebarGeomOk]);
   useEffect(() => {
-    if (gtPanelOpen && !tocGeomOk) setGtPanelOpen(false);
-  }, [gtPanelOpen, tocGeomOk]);
-  // B5: turn list read at open time (same open-snapshot contract as the GT overview).
+    if (gtPanelOpen && !sidebarGeomOk) setGtPanelOpen(false);
+  }, [gtPanelOpen, sidebarGeomOk]);
+  // B5: turn list read at open time (same open-snapshot contract as before).
   // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; rewindOpen/messages are the real recompute triggers
   const rewindTurns = useMemo(
     () =>
@@ -3450,8 +3494,8 @@ export function HarnessApp({
     [rewindOpen, messages],
   );
   useEffect(() => {
-    if (rewindOpen && !tocGeomOk) setRewindOpen(false);
-  }, [rewindOpen, tocGeomOk]);
+    if (rewindOpen && !sidebarGeomOk) setRewindOpen(false);
+  }, [rewindOpen, sidebarGeomOk]);
   // No plan in the ledger → nothing to render; close (else the guard list eats input for
   // an empty overlay) and say why instead.
   const gtOverviewMissing = gtPanelOpen && gtOverview === null;
@@ -3526,50 +3570,64 @@ export function HarnessApp({
       overflow={fullscreen ? "hidden" : "visible"}
     >
       {fullscreen ? (
-        <Box
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-          flexDirection="column"
-          justifyContent="flex-end"
-        >
-          {bannerBlock}
-          {(scrollWin?.visible ?? []).map((msg, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
-            <MessageRow key={i} msg={msg} cols={cols} />
-          ))}
-          {pinned && busy && streamingThoughts && showThinkingRef.current ? (
-            <StreamingThoughts text={streamingThoughts} />
-          ) : null}
-          {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
-          {scrollWin && !pinned ? (
-            <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
-          ) : null}
-          {/* U2: ToC sidebar — LAST child so it paints over the transcript (absolute,
-              out-of-flow: none of the height/cols math above knows it exists). */}
-          {tocOpen && tocGeom ? (
+        // Chat region: a row that partitions cols exactly — the transcript column at
+        // contentCols beside an (optional) in-flow docked sidebar. Explicit widths +
+        // flexShrink={0} on both sides, so no flex arithmetic decides the split.
+        <Box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
+          <Box
+            width={contentCols}
+            flexShrink={0}
+            minHeight={0}
+            overflow="hidden"
+            flexDirection="column"
+            justifyContent="flex-end"
+          >
+            {bannerBlock}
+            {(scrollWin?.visible ?? []).map((msg, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
+              <MessageRow key={i} msg={msg} cols={contentCols} />
+            ))}
+            {pinned && busy && streamingThoughts && showThinkingRef.current ? (
+              <StreamingThoughts text={streamingThoughts} />
+            ) : null}
+            {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
+            {scrollWin && !pinned ? (
+              <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
+            ) : null}
+            {/* B5: /rewind turn picker — the one remaining absolute overpaint. It only
+                renders with both sidebars closed, so this column spans full cols and the
+                overlay geometry (and its Yoga static-position pin) match the original. */}
+            {rewindOpen && overlayGeom ? (
+              <RewindPanel
+                turns={rewindTurns}
+                geometry={overlayGeom}
+                onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
+                onClose={() => setRewindOpen(false)}
+              />
+            ) : null}
+          </Box>
+          {/* U2/U3: docked sidebars — in-flow siblings of the transcript column. */}
+          {sidebarDocked && sidebarGeom && tocOpen ? (
             <TocPanel
               sections={tocSections}
-              geometry={tocGeom}
-              onJump={(k) => setScrollOffset(offsetForMessage(messages, k, messagesBudget, cols))}
+              geometry={sidebarGeom}
+              focused={sidebarFocused}
+              onJump={(k) =>
+                setScrollOffset(offsetForMessage(messages, k, messagesBudget, contentCols))
+              }
               onClose={() => setTocOpen(false)}
+              onBlur={() => setSidebarFocused(false)}
+              onSwitch={requestGtSidebar}
             />
           ) : null}
-          {/* U3: GT Plan Overview — same overpaint contract as the ToC panel above. */}
-          {gtPanelOpen && tocGeom && gtOverview ? (
+          {sidebarDocked && sidebarGeom && gtPanelOpen && gtOverview ? (
             <GtPanel
               overview={gtOverview}
-              geometry={tocGeom}
+              geometry={sidebarGeom}
+              focused={sidebarFocused}
               onClose={() => setGtPanelOpen(false)}
-            />
-          ) : null}
-          {/* B5: /rewind turn picker — same overpaint contract. */}
-          {rewindOpen && tocGeom ? (
-            <RewindPanel
-              turns={rewindTurns}
-              geometry={tocGeom}
-              onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
-              onClose={() => setRewindOpen(false)}
+              onBlur={() => setSidebarFocused(false)}
+              onSwitch={requestTocSidebar}
             />
           ) : null}
         </Box>
@@ -3727,7 +3785,7 @@ export function HarnessApp({
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
-              suspended={tocOpen}
+              suspended={panelCapture}
               disabledLabel={
                 gateFocus && !busy
                   ? "🔴 [a]ccept · [r]eject · [s]teer · [v]iew · esc to type"

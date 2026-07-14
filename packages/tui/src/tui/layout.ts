@@ -497,15 +497,46 @@ function clipMessageToHeight(
 }
 
 // ---------------------------------------------------------------------------
-// U2 (MUB-140): ToC sidebar geometry + anchor jumps. Pure helpers — the panel is
-// OUT-OF-FLOW (absolute overpaint): none of these feed the transcript's height math or
-// the `cols` passed to getScrollableMessages, so opening the panel never reflows the
-// characters-per-line underneath (the decided design) and the render invariant is
-// untouched.
+// U2 (MUB-140): sidebar geometry + anchor jumps. REVISED 2026-07-14: the ToC and GT
+// sidebars are DOCKED (in-flow) — sidebarGeometry.contentCols feeds the transcript's
+// width math, so opening one deliberately reflows the characters-per-line beside it.
+// The original absolute-overpaint contract (PanelGeometry + clipPanelLines padding,
+// never reflows) survives only for the transient B5 rewind picker.
 // ---------------------------------------------------------------------------
 
 /** Below this terminal width the sidebar doesn't open; Ctrl+T falls back to a text block. */
 export const TOC_MIN_COLS = 60;
+
+export interface SidebarGeometry {
+  /** Total docked sidebar width incl. border(2) + padding(2) columns. */
+  sidebarWidth: number;
+  /** Transcript columns beside it (cols − sidebarWidth) — feeds getScrollableMessages,
+   * computeMsgHeight, offsetForMessage, and every MessageRow while docked. */
+  contentCols: number;
+  /** Sidebar height — the full chat-region height. */
+  height: number;
+  /** Text columns inside borders + 1-col padding each side. */
+  innerWidth: number;
+  /** Text rows inside the borders. */
+  innerHeight: number;
+}
+
+/**
+ * Docked right-sidebar geometry, or null when the terminal is too narrow/short — callers
+ * then print the one-shot text block instead (same fallback as the inline renderer).
+ * Width caps at 40 and always leaves ≥30 transcript columns beside it.
+ */
+export function sidebarGeometry(cols: number, regionHeight: number): SidebarGeometry | null {
+  if (cols < TOC_MIN_COLS || regionHeight < 5) return null;
+  const sidebarWidth = Math.min(40, cols - 30);
+  return {
+    sidebarWidth,
+    contentCols: cols - sidebarWidth,
+    height: regionHeight,
+    innerWidth: sidebarWidth - 4,
+    innerHeight: regionHeight - 2,
+  };
+}
 
 export interface PanelGeometry {
   /** Columns left of the panel (transcript stays fully visible there). */
@@ -522,9 +553,10 @@ export interface PanelGeometry {
 }
 
 /**
- * Right-anchored panel geometry, or null when the terminal is too narrow/short —
- * callers then print the one-shot text ToC instead (same fallback as the inline
- * renderer). Width caps at 40 and always leaves ≥30 transcript columns visible.
+ * Right-anchored OVERLAY geometry, or null when the terminal is too narrow/short —
+ * callers then print the one-shot text block instead. Width caps at 40 and always
+ * leaves ≥30 transcript columns visible. Remaining consumer: the B5 rewind picker
+ * (the ToC/GT sidebars dock via sidebarGeometry above).
  */
 export function tocPanelGeometry(cols: number, regionHeight: number): PanelGeometry | null {
   if (cols < TOC_MIN_COLS || regionHeight < 5) return null;

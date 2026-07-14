@@ -262,6 +262,7 @@ import {
   TOC_MIN_COLS,
   clipPanelLines,
   offsetForMessage,
+  sidebarGeometry,
   tocPanelGeometry,
 } from "../src/tui/layout.ts";
 
@@ -294,7 +295,7 @@ describe("offsetForMessage (U2 jump)", () => {
   });
 });
 
-describe("tocPanelGeometry (U2 chassis)", () => {
+describe("tocPanelGeometry (legacy overlay chassis — remaining consumer: the B5 rewind picker)", () => {
   test("null below TOC_MIN_COLS or for regionHeight < 5 → callers use the text fallback", () => {
     expect(tocPanelGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
     expect(tocPanelGeometry(100, 4)).toBeNull();
@@ -311,18 +312,55 @@ describe("tocPanelGeometry (U2 chassis)", () => {
     expect(g100.innerWidth).toBe(36);
     expect(g100.innerHeight).toBe(22);
   });
+});
 
-  test("no-reflow invariant: the transcript window is byte-identical with or without a panel", () => {
+describe("sidebarGeometry (docked ToC/GT sidebar — the 2026-07-14 reflow revision)", () => {
+  test("null below TOC_MIN_COLS or for regionHeight < 5 → callers use the text fallback", () => {
+    expect(sidebarGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
+    expect(sidebarGeometry(100, 4)).toBeNull();
+  });
+
+  test("width caps at 40; sidebarWidth + contentCols partition cols exactly", () => {
+    const g100 = sidebarGeometry(100, 24)!;
+    expect(g100).toEqual({
+      sidebarWidth: 40,
+      contentCols: 60,
+      height: 24,
+      innerWidth: 36,
+      innerHeight: 22,
+    });
+    const g60 = sidebarGeometry(60, 20)!;
+    expect(g60.sidebarWidth).toBe(30);
+    expect(g60.contentCols).toBe(30);
+    for (const cols of [60, 75, 100, 200]) {
+      const g = sidebarGeometry(cols, 20)!;
+      expect(g.sidebarWidth + g.contentCols).toBe(cols);
+      expect(g.contentCols).toBeGreaterThanOrEqual(30);
+    }
+  });
+
+  test("closed = no reflow (contentCols === cols); docked = the window recomputes at contentCols with Σ ≤ budget", () => {
     const cols = 100;
     const fixture: ChatMessage[] = [
       { role: "user", text: "a question" },
-      { role: "assistant", text: "an answer\nwith a second line" },
+      { role: "assistant", text: `an answer ${"word ".repeat(40)}` },
       { role: "tool", text: "tool output", toolName: "bash" },
     ];
-    const before = getScrollableMessages(fixture, 12, 3, cols);
-    tocPanelGeometry(cols, 20); // panel geometry exists…
-    const after = getScrollableMessages(fixture, 12, 3, cols); // …and is not an input here
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    // Sidebar closed: app.tsx passes contentCols = cols — byte-identical to the original.
+    const closed = getScrollableMessages(fixture, 12, 0, cols);
+    expect(JSON.stringify(getScrollableMessages(fixture, 12, 0, cols))).toBe(
+      JSON.stringify(closed),
+    );
+    // Docked: the window is computed at the narrowed width and the Σ≤budget guarantee holds
+    // there by construction (conservative heights + the trim loop, now fed contentCols).
+    const { contentCols } = sidebarGeometry(cols, 20)!;
+    const docked = getScrollableMessages(fixture, 12, 0, contentCols);
+    const sum = docked.visible.reduce((n, m) => n + computeMsgHeight(m, contentCols), 0);
+    expect(sum).toBeLessThanOrEqual(12);
+    // The long assistant line wraps differently at 60 cols than at 100 — reflow is real.
+    expect(computeMsgHeight(fixture[1]!, contentCols)).toBeGreaterThan(
+      computeMsgHeight(fixture[1]!, cols),
+    );
   });
 });
 

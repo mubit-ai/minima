@@ -276,6 +276,11 @@ Boundary: types, grammar, one migration, one footer slot — **no feature behavi
 > snapshot (if it mutated) or the next mutating prompt's; no such checkpoint = files
 > already match (no-op notice). Restores go through B3's `restore()` (safety snapshot —
 > every rewind is undoable).
+>
+> **Note (2026-07-14):** the picker stays a transient OVERLAY (the original overpaint
+> chassis on `tocPanelGeometry`) while ToC/GT docked — pick-one-and-act modality fits an
+> overlay. It gained the `panelCapture` fix: the composer now suspends while it is open
+> (previously arrows/Enter also hit the prompt box — the U3/B5 key leak).
 
 | # | Step | Verify |
 |---|---|---|
@@ -295,13 +300,23 @@ model, Reviewer on a stronger model in fresh context.
 ## 5b. Minima-unique changes — U-phases *(SWE-B · these are not borrows)*
 
 > Unlike the A/B phases (mechanisms proven in other harnesses), these are **Minima-original
-> UX** — only the panel *visual* nods to OpenCode's `Ctrl+X B` sidebar. Decided design:
-> **overlay** panel — draws over the transcript and prompt at a fixed width, **never reflows
-> the characters-per-line underneath** · **fullscreen renderer only in v1** (inline
+> UX** — only the panel *visual* nods to OpenCode's `Ctrl+X B` sidebar. ~~Decided design:
+> **overlay** panel — never reflows the characters-per-line underneath~~ **REVISED
+> 2026-07-14 (manual-testing feedback): the ToC/GT panels are a DOCKED right sidebar** —
+> the chat region splits row-wise into a transcript column (`sidebarGeometry.contentCols`
+> feeds `getScrollableMessages`/`MessageRow`/`offsetForMessage`) beside an in-flow sidebar;
+> the composer/status/footer stay full-width. The sidebar is **persistent with a focus
+> toggle**: opens focused (bright border, ↑↓/⏎ navigate), Esc hands the keyboard back to the
+> composer with the panel still docked and live-updating (border dims), Ctrl+T/Ctrl+G
+> refocus/swap, the panel's own chord closes it while focused. One derived `panelCapture`
+> feeds BOTH the global-handler guard list and the composer's `suspended` — this kills the
+> key-leak class where a panel captured one but not the other (arrows scrubbed history,
+> Enter could submit mid-navigation). The **rewind picker stays a transient overlay** (the
+> original overpaint chassis). Still **fullscreen renderer only in v1** (inline
 > `MINIMA_TUI_INLINE` gets the same content as a one-shot text block on the same shortcut) ·
-> direct shortcuts **Ctrl+T** (Table of Contents) and **Ctrl+G** (GT Plan Overview); Esc or
-> the same key closes. Sequenced right after B2 — the section/anchor model built in U2 is
-> reused by B5's turn picker, so this ordering *saves* work, not just reprioritizes it.
+> direct shortcuts **Ctrl+T** (Table of Contents) and **Ctrl+G** (GT Plan Overview).
+> Sequenced right after B2 — the section/anchor model built in U2 is reused by B5's turn
+> picker, so this ordering *saves* work, not just reprioritizes it.
 
 ### U1 — Session usage ledger *(S)* — MUB-138
 
@@ -330,10 +345,19 @@ migration: roll-up on read.
 > `suspended` prop (stays mounted → draft survives); below 60 cols the fullscreen path
 > degrades to the same one-shot text block as inline. Known cosmetic: ambiguous-width
 > glyphs (⚙) can trigger a truncation ellipsis inside a panel row.
+>
+> **Revised (2026-07-14):** the ToC panel is now DOCKED (see the 5b preamble) — in-flow
+> beside the transcript, so the absolute-overpaint chassis and its Yoga static-position
+> pin remain only for the B5 rewind picker. The U2.1 no-reflow invariant is retired:
+> `sidebarGeometry` deliberately narrows the transcript to `contentCols` while docked
+> (closed → `contentCols === cols`, byte-identical). Rows pad by display width
+> (`padDisplay`) — the raw `padEnd` wide-glyph bleed is fixed. Focus model + `panelCapture`
+> input routing per the preamble; while unfocused the composer types normally and Esc/^C
+> abort work as if no sidebar were open (previously an open panel swallowed them).
 
 | # | Step | Verify |
 |---|---|---|
-| U2.1 | Overlay chassis: `tocPanelGeometry` (width `min(40, cols−30)`, full region height, null below 60 cols) + `clipPanelLines` + `TocPanel` absolute overpaint — out-of-flow, so no reflow and the invariant is untouched | `layout.test.ts`: geometry caps/null-gates, clip exactness, no-reflow invariant ✅ |
+| U2.1 | ~~Overlay chassis~~ **Docked chassis (2026-07-14)**: `sidebarGeometry` (width `min(40, cols−30)`, `contentCols = cols − sidebarWidth`, null below 60 cols) + `clipPanelLines` + `TocPanel` in-flow column with focus toggle; `tocPanelGeometry` survives for the B5 rewind overlay | `layout.test.ts`: geometry caps/null-gates, partition invariant (`sidebarWidth + contentCols === cols`), narrowed-window Σ≤budget (no-reflow invariant retired 2026-07-14) ✅ |
 | U2.2 | `src/tui/toc.ts`: sections per user prompt (slash echoes attach to the previous section), children = result · tools aggregate (`⚙ N tools (bash×2…)`, error flag) · plan created/updated/finalized (todowrite `(x/y done)` parse); per-section `$ · tok`; Σ footer labeled **lead agent** (child spend excluded, per U1) | `toc.test.ts` fixture render tests ✅ |
 | U2.3 | ↑/↓ (j/k) cursor over titles; **Enter jumps** via pure `offsetForMessage` (prefix-sum over `computeMsgHeight`, clamped; last page → pinned); Esc/`Ctrl+T` closes; global hook guards on `tocOpen` | `offsetForMessage` round-trip/clamp tests ✅ |
 | U2.4 | Inline fallback: `Ctrl+T` appends the ToC as a one-shot `toc:` tool message (same content) | PTY shot, inline renderer ✅ |
@@ -356,6 +380,14 @@ Same chassis as U2, different content + shortcut; gated by `MINIMA_TUI_GROUND_TR
 > Known cosmetic: the pyte shot emulator misdraws a stale border cell on some emoji rows
 > (same class as U2's ⚙ note); Ink's emitted rows are width-exact (raw-PTY verified).
 > `stepCardLines` (gt_overview.ts) is the shared per-step card J1's `/why` view builds on.
+>
+> **Revised (2026-07-14):** docked like the ToC (same `sidebarGeometry` chassis + focus
+> model; Ctrl+T↔Ctrl+G swap between the two while focused). This fixed the U3/B5 key leak:
+> the composer's `suspended` only covered `tocOpen`, so with the GT panel or rewind picker
+> open every key ALSO hit the composer (history scrub, draft growth, Enter could submit) —
+> now one `panelCapture` expression drives both the guard list and `suspended`. The docked
+> overview live-updates (memo keyed on the planStrip/gtBehavior ledger-refresh signals),
+> replacing the open-snapshot contract.
 
 | # | Step | Verify |
 |---|---|---|
