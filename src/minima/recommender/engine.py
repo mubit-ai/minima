@@ -10,11 +10,11 @@ from dataclasses import dataclass, field
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
-from minima.llm.base import CandidateView, Reasoner
 from minima.logging import get_logger
+from minima.memory import threadpool
 from minima.memory.adapter import Memory
-from minima.memory.keys import build_content, salient_signature, task_cluster, task_fingerprint
-from minima.memory.records import clamp01, label_score
+from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.records import label_score
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model
@@ -70,7 +70,6 @@ class Recommender:
         memory: Memory,
         catalog_store: CatalogStore,
         recstore: RecStore,
-        reasoner: Reasoner | None = None,
         decision_log: DecisionLog | None = None,
         org_id: str = "default",
         rng: random.Random | None = None,
@@ -80,7 +79,6 @@ class Recommender:
         self._memory = memory
         self._catalog_store = catalog_store
         self._recstore = recstore
-        self._reasoner = reasoner
         self._decision_log = decision_log
         self._org_id = org_id
         self._durable_refs = durable_refs
@@ -116,12 +114,7 @@ class Recommender:
         profile.mark("classify")
         class_profile.final_task_type = task_type
         class_profile.final_difficulty = difficulty
-        signature = (
-            salient_signature(req.task.task, settings.minima_cluster_signature_tokens)
-            if settings.minima_cluster_granularity.lower() == "fine"
-            else None
-        )
-        cluster = task_cluster(task_type, difficulty, signature)
+        cluster = task_cluster(task_type, difficulty)
         fingerprint = task_fingerprint(req.task.task)
         lane = settings.lane(req.namespace)
 
@@ -175,7 +168,7 @@ class Recommender:
                     task_type = neighbor_estimate.task_type
                     class_profile.task_type_source = "neighbor_vote"
                     class_profile.final_task_type = task_type
-                cluster = task_cluster(task_type, difficulty, signature)
+                cluster = task_cluster(task_type, difficulty)
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
 
@@ -203,6 +196,10 @@ class Recommender:
                 log.warning("durable_ref_upsert_failed", error=str(exc))
         profile.mark("durable_refs")
 
+        # Refresh the calibrator OFF the event loop before scoring needs it (the lazy
+        # refit scans the decision-log window — a sync DB read that must not stall the
+        # loop). _score_candidates then reads the warm cache synchronously.
+        await threadpool.run(self._get_calibrators)
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -273,47 +270,15 @@ class Recommender:
             recommended_confidence=recommended.confidence,
             ranked=ranked,
             aggregates=aggregates,
-            recommended_interval_width=score.posterior_interval_width(
-                aggregates.get(recommended.card.model_id),
-                score.capability_prior(recommended.card, task_type),
-                settings.minima_beta_pseudocount,
-            ),
-            recommended_predicted_success=recommended.predicted_success,
-            tau=tau,
-            classification_task_type=task_type,
-            classification_confidence=classification.confidence,
-            classification_easy_route=task_type
-            in {
-                TaskType.summarization,
-                TaskType.extraction,
-                TaskType.classification,
-                TaskType.translation,
-            },
         )
         profile.mark("escalation_eval")
+        # Escalation is DIAGNOSTIC only: thin/conflicting evidence is surfaced to the
+        # caller (and the decision log), whose harness owns the honest cascade — the
+        # recovery ladder re-decides after a VERIFIED failure. The old pre-decision
+        # LLM reasoner (guess-before-running) was deleted: cascade-on-evidence
+        # strictly dominates it and it shipped unreachable in the prod image anyway.
         if esc.should_escalate:
             warnings.extend(f"escalation_suggested:{reason}" for reason in esc.reasons)
-            if (
-                settings.minima_reasoner_fast_mode
-                and settings.minima_reasoner_fast_skip_low_value
-                and _is_low_value_escalation(esc.reasons)
-            ):
-                warnings.append("reasoner_skipped_low_value")
-            elif self._reasoner is not None and settings.reasoner_enabled:
-                consulted = await self._consult_reasoner(
-                    scored=scored, task_type=task_type, difficulty=difficulty, lane=lane, req=req
-                )
-                profile.mark("reasoner")
-                if consulted:
-                    recommended, fallback, ranked, opt_warnings = self._finalize(
-                        scored, tau, req.cost_quality_tradeoff
-                    )
-                    overall_basis = DecisionBasis.llm
-                    warnings.append("reasoner_consulted")
-                else:
-                    warnings.append("reasoner_failed")
-            else:
-                warnings.append("reasoner_disabled")
         warnings.extend(opt_warnings)
 
         if not evidence:
@@ -366,8 +331,7 @@ class Recommender:
         profile.mark("selection")
 
         recommendation_id = uuid.uuid4().hex
-        self._recstore.put(
-            StoredRecommendation(
+        stored_rec = StoredRecommendation(
                 recommendation_id=recommendation_id,
                 lane=lane,
                 user_id=req.user_id,
@@ -382,10 +346,13 @@ class Recommender:
                     mid: [(ev.entry_id, ev.reference_id) for ev in agg.evidence]
                     for mid, agg in aggregates.items()
                 },
-            )
         )
+        # Sync store I/O (sqlite/redis/postgres backends) runs off the event loop —
+        # with --workers 1 an inline network write stalls every concurrent request.
+        await threadpool.run(self._recstore.put, stored_rec)
         profile.mark("recstore")
-        self._log_decision(
+        await threadpool.run(
+            self._log_decision,
             recommendation_id=recommendation_id,
             req=req,
             lane=lane,
@@ -471,76 +438,18 @@ class Recommender:
             ],
         )
 
-        mode = settings.minima_durable_fastpath.lower()
-        refs = (
-            self._durable_refs.refs(lane, cluster, settings.minima_durable_fastpath_max_refs)
-            if mode in ("shadow", "on") and self._durable_refs is not None
-            else []
-        )
-
-        if not refs:
-            # Fast common path: recall + lookup, no dereferences.
-            recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
-            lookup_degraded = lookup_evidence is None
-            ann_ids = {ev.entry_id for ev in recall.evidence}
-            extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
-            if extra:
-                log.info(
-                    "keyed_lookup_delta",
-                    cluster=cluster,
-                    added=len(extra),
-                    models=[ev.record.model_id for ev in extra if ev.record],
-                )
-            return recall, extra, lookup_degraded
-
-        # Old dereference fastpath active: run all three concurrently, share the
-        # recall latency budget, then merge — lookup results deduped against both
-        # ANN and dereference results so no evidence is double-counted.
-        started = time.monotonic()
-        budget_s = settings.minima_memory_recall_timeout_ms / 1000.0
-        recall_task = asyncio.ensure_future(recall_coro)
-        lookup_task = asyncio.ensure_future(lookup_coro)
-        deref_tasks = [
-            asyncio.ensure_future(
-                self._memory.dereference(lane=lane, reference_id=r.reference_id or r.entry_id)
-            )
-            for r in refs
-        ]
-        recall = await recall_task
-        lookup_evidence = await lookup_task
-        remaining = max(0.05, budget_s - (time.monotonic() - started))
-        done, pending = await asyncio.wait(deref_tasks, timeout=remaining)
-        for task in pending:
-            task.cancel()
-        if pending:
-            log.warning("durable_fastpath_timeout", cluster=cluster, dropped=len(pending))
-        derefs = [
-            task.result() for task in done if not task.cancelled() and task.exception() is None
-        ]
-        fetched = [d for d in derefs if d is not None and d.record is not None]
-        ann_ids = {ev.entry_id for ev in recall.evidence}
-        missed = [d for d in fetched if d.entry_id not in ann_ids]
-        if missed:
-            log.info(
-                "durable_fastpath_delta",
-                mode=mode,
-                cluster=cluster,
-                fetched=len(fetched),
-                ann_missed=len(missed),
-                missed_models=[d.record.model_id for d in missed if d.record],
-            )
-        deref_extra = missed if mode == "on" else []
-        seen_ids = ann_ids | {ev.entry_id for ev in deref_extra}
+        recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
         lookup_degraded = lookup_evidence is None
-        lookup_extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in seen_ids]
-        if lookup_extra:
+        ann_ids = {ev.entry_id for ev in recall.evidence}
+        extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
+        if extra:
             log.info(
                 "keyed_lookup_delta",
                 cluster=cluster,
-                added=len(lookup_extra),
-                models=[ev.record.model_id for ev in lookup_extra if ev.record],
+                added=len(extra),
+                models=[ev.record.model_id for ev in extra if ev.record],
             )
-        return recall, lookup_extra + deref_extra, lookup_degraded
+        return recall, extra, lookup_degraded
 
     def _log_decision(
         self,
@@ -633,81 +542,6 @@ class Recommender:
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path
             log.warning("decision_log_write_failed", error=str(exc))
 
-    async def _consult_reasoner(
-        self,
-        *,
-        scored: list[CandidateScore],
-        task_type: TaskType,
-        difficulty: Difficulty,
-        lane: str,
-        req: RecommendRequest,
-    ) -> bool:
-        settings = self._settings
-        reasoner_candidates = _reasoner_candidate_subset(
-            scored,
-            settings.minima_reasoner_fast_candidate_limit
-            if settings.minima_reasoner_fast_mode
-            else len(scored),
-        )
-        memory_block = await self._memory.get_context(
-            query=req.task.task,
-            lane=lane,
-            user_id=req.user_id,
-            max_token_budget=(
-                settings.minima_reasoner_fast_memory_token_budget
-                if settings.minima_reasoner_fast_mode
-                else 1500
-            ),
-        )
-        views = [
-            CandidateView(
-                model_id=c.card.model_id,
-                provider=c.card.provider,
-                input_cost_per_mtok=c.card.input_cost_per_mtok,
-                output_cost_per_mtok=c.card.output_cost_per_mtok,
-                context_window=c.card.context_window,
-                capability_prior=score.capability_prior(c.card, task_type),
-                est_cost_usd=c.est_cost_usd,
-                predicted_success=c.predicted_success,
-                est_latency_ms=c.est_latency_ms,
-            )
-            for c in reasoner_candidates
-        ]
-        result = await self._reasoner.rank(  # type: ignore[union-attr]
-            task=req.task.task,
-            task_type=task_type.value,
-            difficulty=difficulty.value,
-            candidates=views,
-            memory_block=memory_block,
-            cost_quality_tradeoff=req.cost_quality_tradeoff,
-        )
-        if not result or not result.rankings:
-            return False
-        settings = self._settings
-        rankings = result.by_model()
-        changed = False
-        for c in scored:
-            ranking = rankings.get(c.card.model_id)
-            if ranking is None:
-                continue
-            if settings.minima_reasoner_blend_adaptive:
-                # Evidence-mass-adaptive: a candidate backed by heavy deterministic
-                # evidence (confidence -> 1) barely moves toward the LLM's estimate; a
-                # cold candidate (confidence -> 0) leans on it. Replaces the fixed blend
-                # that weighted a 50-outcome aggregate and a guess identically.
-                raw = settings.minima_reasoner_blend_max * (1.0 - c.confidence)
-                blend = min(0.9, max(0.1, raw))
-            else:
-                blend = settings.minima_reasoner_blend
-            c.predicted_success = clamp01(
-                blend * ranking.predicted_success + (1.0 - blend) * c.predicted_success
-            )
-            c.decision_basis = DecisionBasis.llm
-            if ranking.rationale:
-                c.rationale = ranking.rationale
-            changed = True
-        return changed
-
     def _finalize(
         self, scored: list[CandidateScore], tau: float, cost_quality_tradeoff: float
     ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
@@ -794,26 +628,18 @@ class Recommender:
             # optimism is Thompson's job at selection time, not a score-time bonus.
             predicted = self._calibrate(task_type.value, predicted)
             use_cache = req.constraints.require_prompt_caching and card.supports_prompt_caching
-            cache_fraction = (
-                settings.minima_cost_cache_input_fraction
-                if settings.minima_cost_lever_aware
-                and card.supports_prompt_caching
-                and not use_cache
-                else 0.0
-            )
             # The incumbent model keeps this session's prompt cache; a switch forfeits
             # it. Pricing part of the incumbent's input at the cache-read rate makes
             # stickiness fall out of honest cost accounting (estimate basis only —
             # observed/rescaled already reflect realized caching), keeping Thompson's
             # logged propensities valid instead of a post-hoc pick override.
-            if (
-                req.incumbent_model_id == card.model_id
+            cache_fraction = (
+                settings.minima_incumbent_cache_fraction
+                if req.incumbent_model_id == card.model_id
                 and card.supports_prompt_caching
                 and not use_cache
-            ):
-                cache_fraction = max(
-                    cache_fraction, settings.minima_incumbent_cache_fraction
-                )
+                else 0.0
+            )
             est_cost, breakdown = score.effective_cost(
                 card,
                 agg,
@@ -903,21 +729,6 @@ def _overall_confidence(basis: DecisionBasis, recommended_confidence: float) -> 
     if basis == DecisionBasis.llm:
         return max(recommended_confidence, 0.5)
     return min(recommended_confidence, 0.5)
-
-
-def _reasoner_candidate_subset(scored: list[CandidateScore], limit: int) -> list[CandidateScore]:
-    if limit <= 0 or limit >= len(scored):
-        return list(scored)
-    return sorted(
-        scored, key=lambda c: (-c.predicted_success, c.est_cost_usd, -c.confidence)
-    )[:limit]
-
-
-def _is_low_value_escalation(reasons: list[str]) -> bool:
-    if not reasons:
-        return False
-    low_value = {"near_threshold", "tie"}
-    return all(reason in low_value for reason in reasons)
 
 
 def _select_candidates(

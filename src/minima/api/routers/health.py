@@ -42,9 +42,5 @@ async def health(
             "stale": catalog.stale,
             "models": len(catalog.cards),
         },
-        "reasoner": {
-            "provider": settings.minima_reasoner_provider,
-            "configured": settings.reasoner_enabled,
-        },
         "version": __version__,
     }

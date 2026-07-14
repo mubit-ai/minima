@@ -54,12 +54,10 @@ server = [
   "psycopg2-binary>=2.9",
   "redis>=5.0",
 ]
-reasoner-anthropic = ["anthropic>=0.40"]
-reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
-# dev pulls every runtime extra so the full test suite (server API tests, reasoners) runs.
+# dev pulls every runtime extra so the full test suite (server API tests) runs.
 dev = [
-  "minima-cli[server,reasoner-anthropic,reasoner-gemini]",
+  "minima-cli[server]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",

@@ -90,62 +90,6 @@ def _uncertainty_settings() -> Settings:
     return Settings(mubit_api_key="t", minima_escalation_mode="uncertainty")
 
 
-def test_uncertainty_mode_wide_interval_triggers():
-    d = escalation.evaluate(
-        settings=_uncertainty_settings(),
-        allow=True,
-        total_weight=8.0,  # heavy by legacy standards — must NOT trigger thin_evidence
-        distinct_models_with_evidence=4,
-        recommended_confidence=0.9,
-        ranked=[_cand("a", score=0.9), _cand("b", score=0.5)],
-        aggregates={},
-        recommended_interval_width=0.4,
-    )
-    assert d.should_escalate
-    assert d.reasons == ["wide_interval"]
 
 
-def test_uncertainty_mode_narrow_interval_replaces_legacy_pair():
-    # Legacy would fire thin_evidence + low_confidence here; the interval gate says
-    # the recommended candidate is well-estimated, so neither fires.
-    d = escalation.evaluate(
-        settings=_uncertainty_settings(),
-        allow=True,
-        total_weight=0.0,
-        distinct_models_with_evidence=0,
-        recommended_confidence=0.1,
-        ranked=[_cand("a", score=0.9), _cand("b", score=0.5)],
-        aggregates={},
-        recommended_interval_width=0.1,
-    )
-    assert not d.should_escalate
 
-
-def test_uncertainty_mode_keeps_conflict_as_hard_override():
-    aggs = {"a": ModelAggregate(model_id="a", weight_sum=5.0, weighted_success=2.5, n=5)}
-    d = escalation.evaluate(
-        settings=_uncertainty_settings(),
-        allow=True,
-        total_weight=5.0,
-        distinct_models_with_evidence=5,
-        recommended_confidence=0.9,
-        ranked=[_cand("a", score=0.9), _cand("b", score=0.5)],
-        aggregates=aggs,
-        recommended_interval_width=0.1,
-    )
-    assert d.should_escalate
-    assert d.reasons == ["conflict"]
-
-
-def test_legacy_mode_ignores_interval_width():
-    d = escalation.evaluate(
-        settings=_settings(),  # legacy mode (default)
-        allow=True,
-        total_weight=8.0,
-        distinct_models_with_evidence=4,
-        recommended_confidence=0.9,
-        ranked=[_cand("a", score=0.9), _cand("b", score=0.5)],
-        aggregates={},
-        recommended_interval_width=0.99,
-    )
-    assert not d.should_escalate

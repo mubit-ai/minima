@@ -79,35 +79,6 @@ def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
     )
 
 
-def _log_explain(lane: str, raw: object) -> None:
-    """Diagnostic: per-evidence score components (server-side ExplainInfo)."""
-    if not isinstance(raw, Mapping):
-        return
-    components = []
-    for ev in raw.get("evidence") or []:
-        if not isinstance(ev, Mapping):
-            continue
-        info = ev.get("explain_info")
-        if isinstance(info, Mapping):
-            components.append(
-                {
-                    "id": str(ev.get("id", ""))[:12],
-                    "semantic": _f(info.get("semantic_score")),
-                    "lexical": _f(info.get("lexical_score")),
-                    "recency": _f(info.get("recency_score")),
-                    "decay": _f(info.get("temporal_decay_factor"), 1.0),
-                }
-            )
-    if components:
-        log.info(
-            "recall_explain",
-            lane=lane,
-            rank_by_mode=raw.get("rank_by_mode"),
-            n=len(components),
-            components=components,
-        )
-
-
 @runtime_checkable
 class Memory(Protocol):
     async def recall(
@@ -285,18 +256,13 @@ class MubitMemory:
             payload["min_timestamp"] = int(
                 time.time() - settings.minima_recall_max_age_days * 86_400
             )
-        if settings.minima_recall_explain:
-            payload["explain"] = True
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
                 raw = await threadpool.run_cancellable(self._client._control.query, payload)
             if scope.cancelled_caught:
                 log.warning("recall_timeout", lane=lane, budget_ms=budget_ms)
                 return RecallResult(evidence=[], degraded=True, timed_out=True)
-            result = self._parse_recall(raw)
-            if settings.minima_recall_explain:
-                _log_explain(lane, raw)
-            return result
+            return self._parse_recall(raw)
         except TransportError as exc:
             log.warning("recall_transport_error", lane=lane, code=exc.args[0] if exc.args else "")
             return RecallResult(evidence=[], degraded=True, error=str(exc))

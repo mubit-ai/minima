@@ -44,26 +44,6 @@ single-tenant mode). A complete annotated template ships as
 See [Cost-basis tiers](concepts.md#cost-basis-tiers-estimate--observed--rescaled) for what
 `MINIMA_USE_OBSERVED_COST` / `MIN_N` actually switch between.
 
-## Cheap-LLM reasoner (escalation only)
-
-Off by default. Requires the matching extra: `uv sync --extra reasoner-anthropic` and/or
-`--extra reasoner-gemini`.
-
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `MINIMA_REASONER_PROVIDER` | `none` | `none` \| `anthropic` \| `gemini`. |
-| `MINIMA_REASONER_MODEL` | — | Defaults per provider (Anthropic → `claude-haiku-4-5`). |
-| `MINIMA_REASONER_TIMEOUT_MS` | `15000` | Per-attempt; the reasoner is the explicit slow tier. A real ranking call takes ~6–8s. |
-| `MINIMA_REASONER_MAX_TOKENS` | `4096` | Output cap. Gemini 3.x reasons before emitting JSON; a small cap truncates it. |
-| `MINIMA_REASONER_FAST_MODE` | `false` | Trim the reasoner prompt and skip tie/near-threshold-only escalations. |
-| `MINIMA_REASONER_FAST_MEMORY_TOKEN_BUDGET` | `500` | Memory context token budget used in fast mode. |
-| `MINIMA_REASONER_FAST_CANDIDATE_LIMIT` | `6` | Max candidates sent to the reasoner in fast mode. |
-| `MINIMA_REASONER_FAST_SKIP_LOW_VALUE` | `true` | Whether fast mode can skip low-value escalations. |
-| `MINIMA_REASONER_SKIP_CONFIDENT_CLASSIFICATIONS` | `true` | Skip the reasoner when the classifier is confident on an easy task. |
-| `MINIMA_REASONER_CONFIDENCE_SKIP_THRESHOLD` | `0.72` | Minimum classifier confidence needed to skip the reasoner. |
-| `MINIMA_REASONER_BLEND` | `0.5` | Weight on the LLM estimate vs the deterministic one. |
-| `ANTHROPIC_API_KEY` | — | Required if provider is `anthropic`. |
-| `GEMINI_API_KEY` | — | Required if provider is `gemini`. |
 
 ## Selection-bias correction (inverse propensity weighting)
 
