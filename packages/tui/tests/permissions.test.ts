@@ -436,6 +436,11 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     );
     expect(planModeBlockReason("task", false)).toContain("task is blocked");
     expect(planModeBlockReason("task", false)).toContain("unrestricted toolset");
+    // The default path stays frozen: exit_plan exists only in GT plan sessions, so GT-off
+    // reasons must never point the model at a tool it does not have.
+    expect(planModeBlockReason("write", false)).toEndWith("Use /plan to exit.");
+    expect(planModeBlockReason("task", false)).toEndWith("Use /plan to exit.");
+    expect(planModeBlockReason("write", false)).not.toContain("exit_plan");
   });
 
   test("GT-on task reason explains hook-free children + council read-only delegation", () => {
@@ -445,5 +450,23 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     expect(reason).toContain("read-only");
     // Other GT-on tools keep the general plan-mode copy naming the verify hazard.
     expect(planModeBlockReason("todowrite", true)).toContain("`verify` shell checks");
+  });
+
+  test("GT-on reasons steer the model to exit_plan, never to user-only slash commands", () => {
+    for (const tool of ["write", "todowrite", "task"]) {
+      const reason = planModeBlockReason(tool, true);
+      expect(reason).toContain("call the exit_plan tool");
+      expect(reason).not.toContain("Use /plan to exit.");
+    }
+  });
+
+  test("exit_plan is never gated — its approval overlay IS the user interaction (no prompt)", async () => {
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const res = await checkPermission("exit_plan", {}, state, () => {
+      prompted = true;
+    });
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
   });
 });

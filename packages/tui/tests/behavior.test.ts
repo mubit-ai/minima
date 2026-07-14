@@ -399,3 +399,48 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("recId: seedRecId");
   });
 });
+
+// exit_plan (plan-mode exit): the tool is registered only while a GT plan session is live,
+// the persona steers the model to it (never to slash commands), and the promptPlanner wrapper
+// re-applies the build prompt after a mid-turn exit (promptRouted's finally would otherwise
+// restore the planner persona it captured at entry — permanently).
+describe("tui/app.tsx wires exit_plan", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("persona tells the planner to call exit_plan, not to name slash commands", () => {
+    const personaIdx = src.indexOf("const PLANNER_PERSONA");
+    expect(personaIdx).toBeGreaterThan(-1);
+    // The declaration ends at the closing `";` — a bare ";" appears inside the prose.
+    const persona = src.slice(personaIdx, src.indexOf('";', personaIdx));
+    expect(persona).toContain("call the exit_plan tool");
+    expect(persona).toContain("Never tell the user to run slash commands");
+    expect(persona).not.toContain("/plan finalize");
+  });
+
+  test("registered only for a live GT plan session; cleanup unregisters by identity", () => {
+    const effectIdx = src.indexOf('if (mode !== "plan" || planSessionRef.current == null) return;');
+    expect(effectIdx).toBeGreaterThan(-1);
+    const effect = src.slice(effectIdx, effectIdx + 700);
+    expect(effect).toContain("exitPlanTool({");
+    expect(effect).toContain("agent.agentState.tools.push(tool)");
+    expect(effect).toContain("agent.agentState.tools.splice(i, 1)");
+    expect(effect).toContain("isActive: () => planSessionRef.current != null");
+  });
+
+  test("/plan finalize and the tool share ONE core (runPlanFinalize → finalizePlan)", () => {
+    expect(src.split("await runPlanFinalize(").length - 1).toBe(2); // exit_plan + /plan finalize
+    expect(src).toContain("return finalizePlan(store, {");
+    // The command path no longer inlines the synthesis/audit/write sequence.
+    expect(src).not.toContain("synthesizeGroundTruth(store.session");
+    expect(src).not.toContain("await Bun.write(outPath, md)");
+  });
+
+  test("promptPlanner re-applies the build prompt after a mid-turn plan exit", () => {
+    const idx = src.indexOf("const base = plannerBaseSystemPromptRef.current;");
+    expect(idx).toBeGreaterThan(-1);
+    const wrapper = src.slice(idx, idx + 400);
+    expect(wrapper).toContain("await agent.promptRouted(turn)");
+    expect(wrapper).toContain('if (getMode() !== "plan" && base != null)');
+    expect(wrapper).toContain("agent.agentState.systemPrompt = base");
+  });
+});

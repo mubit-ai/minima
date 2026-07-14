@@ -24,8 +24,9 @@ import { expand } from "../tools/_io.ts";
 // already labels them "READ").
 const READ_TOOLS = new Set(["read", "ls", "glob", "grep"]);
 // Tools that never need approval: pure UI interaction with zero side effects. Asking the user a
-// question is not an action to gate — it *is* the user interaction.
-const NO_PROMPT_TOOLS = new Set(["question"]);
+// question is not an action to gate — it *is* the user interaction. exit_plan's approval overlay
+// is likewise the interaction itself.
+const NO_PROMPT_TOOLS = new Set(["question", "exit_plan"]);
 
 export type PermissionDecision = "allow" | "always" | "deny";
 
@@ -58,12 +59,15 @@ export function planModeBlockReason(toolName: string, groundTruth: boolean): str
     return (
       "Plan mode is ON — task is blocked: delegated children get their own unrestricted " +
       "toolset (write/edit/bash), while the plan council already provides read-only " +
-      "research delegation. Use /plan to exit."
+      "research delegation. When the user asks to proceed with the plan, call the exit_plan " +
+      "tool to request approval to finalize and exit plan mode; otherwise continue planning."
     );
   }
   return (
     "Plan mode is ON — write/edit/bash/apply_patch/todowrite/task are blocked " +
-    "(todowrite can run `verify` shell checks). Use /plan to exit."
+    "(todowrite can run `verify` shell checks). When the user asks to proceed with the plan, " +
+    "call the exit_plan tool to request approval to finalize and exit plan mode; otherwise " +
+    "continue planning."
   );
 }
 
