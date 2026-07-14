@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { DecisionWrite } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
+import type { Factors } from "../src/minima/gt_contract.ts";
 import {
   buildGtOverview,
   gtRows,
@@ -38,7 +38,9 @@ function seededDb(): { db: MinimaDb; runId: string; planId: string; stepIds: str
   return { db, runId, planId, stepIds };
 }
 
-function decision(overrides: Partial<DecisionWrite> & { recId: string; runId: string }): DecisionWrite {
+function decision(
+  overrides: Partial<DecisionWrite> & { recId: string; runId: string },
+): DecisionWrite {
   return {
     taskLabel: "t",
     chosenModel: "m",
@@ -215,6 +217,34 @@ describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
         expect(stringWidth(row.text)).toBeLessThanOrEqual(width);
       }
     }
+  });
+
+  test("J1.1: gate evidence lines — red→green vs honest pre-satisfied", () => {
+    const { db, runId, planId, stepIds } = seededDb();
+    db.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      confidence: gateConfidence(GREEN),
+      verifiedBy: "deterministic",
+      factors: GREEN,
+      sessionId: runId,
+    });
+    db.insertGate({
+      planId,
+      stepId: stepIds[1]!,
+      outcome: "verified",
+      confidence: gateConfidence({ ...GREEN, redToGreen: false }),
+      verifiedBy: "deterministic",
+      factors: { ...GREEN, redToGreen: false },
+      sessionId: runId,
+    });
+    const o = buildGtOverview(db, runId);
+    if (!o) throw new Error("expected overview");
+    const flipped = stepCardLines(o.steps[0]!, o.gatesByStep.get(o.steps[0]!.stepId) ?? []);
+    expect(flipped.some((l) => l.includes("red→green vs the captured baseline"))).toBe(true);
+    const preSat = stepCardLines(o.steps[1]!, o.gatesByStep.get(o.steps[1]!.stepId) ?? []);
+    expect(preSat.some((l) => l.includes("pre-satisfied"))).toBe(true);
   });
 
   test("one-shot text render carries steps, tiers and the Σ line", () => {

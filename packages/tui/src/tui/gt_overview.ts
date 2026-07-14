@@ -10,7 +10,7 @@ import stringWidth from "string-width";
 
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
 import type { ConfidenceTier } from "../minima/gt_contract.ts";
-import { gateVerdictFor } from "../minima/why.ts";
+import { gateVerdictFor, parseFactors } from "../minima/why.ts";
 
 const TIER_GLYPHS: Record<ConfidenceTier, string> = {
   green: "🟢",
@@ -212,10 +212,24 @@ export function stepCardLines(row: GtStepRow, gates: GateRow[]): string[] {
       const verdict = gateVerdictFor(gate);
       const tier = verdict.tier ? `${TIER_GLYPHS[verdict.tier]} ` : "";
       lines.push(`  ${tier}${gate.outcome ?? "?"} — ${verdict.reason}`);
+      const evidence = redGreenEvidence(gate);
+      if (evidence) lines.push(`    evidence: ${evidence}`);
     }
   }
   for (const path of row.driftPaths) lines.push(`⚠ drift: ${path}`);
   return lines;
+}
+
+/**
+ * J1.1: the red→green story a gate's factors tell — the strongest evidence a check can
+ * give. A pass with no captured red is honestly labeled pre-satisfied, never dressed up.
+ */
+function redGreenEvidence(gate: GateRow): string | null {
+  const factors = parseFactors(gate.factors_json);
+  if (!factors || !factors.pass) return null;
+  return factors.redToGreen
+    ? "red→green vs the captured baseline"
+    : "green from the start (pre-satisfied — not proof of this change)";
 }
 
 /** One-shot text overview — the inline renderer's (and too-narrow fullscreen's) Ctrl+G output. */

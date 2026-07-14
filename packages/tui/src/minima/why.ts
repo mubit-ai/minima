@@ -71,8 +71,37 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
     for (const path of driftByStep.get(step.id) ?? []) lines.push(`  ⚠ drift: ${path}`);
   }
   for (const path of unattributedDrift) lines.push(`⚠ drift: ${path} (unattributed)`);
+  // J1: plan-level gates (closure milestones, the refutation pass) were previously
+  // invisible here — they have no step_id, so the per-step map skips them.
+  const planGates = db.getGates(plan.id).filter((gate) => !gate.step_id);
+  if (planGates.length > 0) {
+    lines.push("plan gates:");
+    for (const gate of planGates) {
+      const display = gateVerdictFor(gate);
+      const icon =
+        display.outcome === "verified"
+          ? "✓"
+          : display.outcome === "failed" || display.outcome === "unrunnable"
+            ? "✗"
+            : "○";
+      const tier = display.tier ? `${TIER_GLYPHS[display.tier]} ` : "";
+      lines.push(`${icon} ${gate.kind ?? "milestone"} ${tier}${display.reason}`);
+      for (const reason of gateReasons(gate).slice(0, 5)) lines.push(`  - ${reason}`);
+    }
+  }
   lines.push(...orphanLines(db, sessionId));
   return lines.join("\n");
+}
+
+/** Free-form reason bullets some gate writers store in factors (e.g. the refutation pass). */
+function gateReasons(gate: GateRow): string[] {
+  if (!gate.factors_json) return [];
+  try {
+    const raw = JSON.parse(gate.factors_json) as Record<string, unknown>;
+    return Array.isArray(raw.reasons) ? raw.reasons.filter((r) => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

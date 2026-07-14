@@ -373,13 +373,29 @@ Same chassis as U2, different content + shortcut; gated by `MINIMA_TUI_GROUND_TR
 
 Requires: A4 (tiers), A7 (stamping), B1 (sessions), B3 (checkpoints).
 
+> **Landed (2026-07-14):** `/why <n>` opens step n's detail card — the SAME `stepCardLines`
+> component as the U3 panel (one card, two surfaces), now with per-gate **evidence lines**
+> (`red→green vs the captured baseline` · an honest `pre-satisfied` label when a check was
+> green from the start) and a **plan gates** section in the `/why` report (closure
+> milestones and the refutation verdict were previously invisible — no step_id). `/verify`
+> runs the **refutation subagent** (`src/minima/plan_refute.ts`) through the same spawn
+> seam as council research: the child gets the ledger's own story and READ-ONLY orders to
+> disprove it (re-run every check, hunt weak/deleted tests, contradicting drift). Verdict
+> parsing is FAIL-CLOSED (missing/garbled → refuted; aborted → nothing recorded); the gate
+> is a plan-level `milestone` with `verified_by:"judge"` — capped at 🟡 (an agent's opinion
+> never outranks a deterministic check), 🔴 when refuted — carrying the run's latest rec_id
+> so `stampGroundedOutcome` feeds `gt_outcome` (deterministic red still wins the identity
+> join). Demo correction: a BLOCKED call never reaches the doom-loop ring (the loop
+> short-circuits before afterToolCall — hammering the gate is A2 N-strike territory), so
+> the journey's spiral is an executed failing read, exactly what A3 watches.
+
 | # | Step | Verify |
 |---|---|---|
-| J1.1 | M8.1 `/why`: per-step verification view — gates rows, baseline, red→green evidence | view test + PTY shot |
-| J1.2 | **Verification subagent**: whole-plan refutation pass via the `task` tool on a stronger model; outcome feeds `gt_outcome` | scripted refutation run |
-| J1.3 | M8.2 E2E demo: scripted acceptance run — plan → blocked done → doom-loop 🟡 → fix → red→green → gate → `/why` | the demo **is** a bun test; shot series committed |
+| J1.1 | M8.1 `/why`: per-step verification view — `/why <n>` card (shared `stepCardLines`) with gates rows, baseline, red→green evidence; plan-level gates in the report | gt_overview evidence tests + `j1-why-card-fullscreen.png` ✅ |
+| J1.2 | **Verification subagent**: whole-plan refutation pass via the spawn seam (`/verify`); fail-closed verdict → judge-verified milestone gate feeding `gt_outcome` | `plan_refute.test.ts` (7 scripted runs incl. red-wins + abort/throw fail-closed) ✅ |
+| J1.3 | M8.2 E2E demo: scripted acceptance run — plan → blocked done → doom-loop (nudge → stop gate) → fix → red→green → gate → plan closes → `/why` → refutation → grounded stamps on both rungs | `j1-e2e.test.ts` — the demo IS a bun test ✅ |
 
-**Exit gate = plan `done`.**
+**Exit gate = plan `done`.** ✅ J1 complete — remaining open: A5 (Track A) and B6 (stretch, cut-first).
 
 ---
 
@@ -445,7 +461,7 @@ U1 → U2/U3.
 | U2 ToC sidebar `Ctrl+T` *(Minima-unique)* | B | L | ✅ |
 | U3 GT Plan Overview `Ctrl+G` *(Minima-unique)* | B | M | ✅ |
 | B6 Writer/Reviewer (stretch — first cut) | B | S | ⬜ |
-| J1 /why + subagent + E2E demo | both | L | ⬜ |
+| J1 /why + subagent + E2E demo | both | L | ✅ |
 
 **▲sync A4/U3,B4 (tiers↔UX) checkpoint — LANDED**: `feature/UX_improvements_track_A` (A1–A4 on
 the GT lineage) and `feat/BP-UX-TrackB` (U1/B1/B2/U2 on P0) merged into `feat/BP-UX`.

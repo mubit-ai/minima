@@ -59,6 +59,7 @@ import {
   stepsFromRows,
   synthAuditFindings,
 } from "../minima/plan_lint.ts";
+import { runPlanRefutation } from "../minima/plan_refute.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
@@ -78,7 +79,7 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
 import { GtPanel } from "./gt-panel.tsx";
-import { buildGtOverview, renderGtOverviewText } from "./gt_overview.ts";
+import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import {
   type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
@@ -258,7 +259,8 @@ const COMMANDS = [
   },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
-  { name: "why", desc: "Show per-step Ground-Truth verification" },
+  { name: "why", desc: "Show Ground-Truth verification (/why <n> opens the step card)" },
+  { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
 ];
 
@@ -977,6 +979,8 @@ export function HarnessApp({
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   // B5 (MUB-142): /rewind turn picker (fullscreen overlay on the U2 chassis).
   const [rewindOpen, setRewindOpen] = useState(false);
+  // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
+  const refutationControllerRef = useRef<AbortController | null>(null);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1353,6 +1357,7 @@ export function HarnessApp({
         ]);
       }
       if (getMode() === "plan") councilControllerRef.current?.abort();
+      refutationControllerRef.current?.abort();
       agent.abort();
       return;
     }
@@ -2819,15 +2824,104 @@ export function HarnessApp({
         break;
       }
       case "why": {
-        const text =
-          agent.config.groundTruth !== true
-            ? "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification."
-            : whyReportFor(agent.db, agent.runId);
+        // J1.1: `/why` = plan report · `/why <n>` = step n's detail card (the shared
+        // stepCardLines component the GT panel uses — gates, baseline, red→green evidence).
+        let text: string;
+        if (agent.config.groundTruth !== true) {
+          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification.";
+        } else if (/^\d+$/.test(args.trim())) {
+          const n = Number(args.trim());
+          const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+          const row = overview?.steps[n - 1];
+          text = !overview
+            ? "No Ground-Truth plan recorded for this run."
+            : !row
+              ? `No step ${n} — the plan has ${overview.steps.length} step(s).`
+              : stepCardLines(row, overview.gatesByStep.get(row.stepId) ?? []).join("\n");
+        } else {
+          text = whyReportFor(agent.db, agent.runId);
+        }
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "why" },
         ]);
+        break;
+      }
+      case "verify": {
+        // J1.2: whole-plan refutation pass — a read-only subagent tries to DISPROVE the
+        // plan's completion; its verdict lands as a judge-verified milestone gate (🟡 cap,
+        // 🔴 when refuted) and stamps the run's latest rec (gt_outcome feed).
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        if (agent.config.groundTruth !== true) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to verify a plan.",
+              toolName: "verify",
+            },
+          ]);
+          break;
+        }
+        if (!agent.db || !agent.runId || !planSpawn) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: !planSpawn
+                ? "verify unavailable — no subagent spawner in this session"
+                : "verify unavailable — no persistence for this session",
+              toolName: "verify",
+            },
+          ]);
+          break;
+        }
+        setMessages((m) => [
+          ...m,
+          echo,
+          {
+            role: "tool",
+            text: "Refutation pass started — a read-only subagent is re-running the plan's checks…",
+            toolName: "verify",
+          },
+        ]);
+        setBusy(true);
+        setBusyState("running");
+        const controller = new AbortController();
+        refutationControllerRef.current = controller;
+        try {
+          const outcome = await runPlanRefutation({
+            db: agent.db,
+            sessionId: agent.runId,
+            spawn: planSpawn,
+            signal: controller.signal,
+          });
+          const text = !outcome
+            ? "Nothing to verify — no Ground-Truth plan with steps (or the pass was aborted)."
+            : outcome.verdict.refuted
+              ? `🔴 REFUTED — the plan did not survive verification:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}\nRecorded as a red milestone gate; run /why for the full picture.`
+              : `🟡 not refuted — the subagent re-ran the checks and found no holes${outcome.verdict.reasons.length ? `:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}` : "."}\n(Judge-verified caps at 🟡 — only deterministic red→green checks earn 🟢.)`;
+          setMessages((m) => [...m, { role: "tool", text, toolName: "verify" }]);
+          setPlanStrip(planStripInfo(agent.db, agent.runId));
+          setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `verify failed: ${errText(exc)}`,
+              toolName: "verify",
+              isError: true,
+            },
+          ]);
+        } finally {
+          refutationControllerRef.current = null;
+          setBusy(false);
+          setBusyState("ready");
+        }
         break;
       }
       case "audit": {
