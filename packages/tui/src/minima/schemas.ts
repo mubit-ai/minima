@@ -142,8 +142,18 @@ export interface FeedbackRequest {
   actual_cost_usd?: number;
   latency_ms?: number;
   iterations?: number;
+  /**
+   * Provenance of the quality signal. gate = deterministic verification (the only
+   * origin that may claim verified-in-production); judge = LLM judge; human =
+   * caller-asserted; none = unjudged — cost/latency telemetry only, never a
+   * success/reinforcement/calibration signal.
+   */
+  evidence_source?: "gate" | "judge" | "human" | "none";
+  /** infra = provider/tooling fault (429/5xx/timeout) — telemetry only, never model quality. */
+  error_cause?: "infra" | "quality";
+  /** DEPRECATED: send evidence_source="gate" instead. */
   verified_in_production?: boolean;
-  /** False = cadence-skip/abstain — server stores NULL quality instead of fabricating 0.9. */
+  /** DEPRECATED: send evidence_source instead (true→judge, false→none). */
   judged?: boolean;
   notes?: string;
   idempotency_key?: string;

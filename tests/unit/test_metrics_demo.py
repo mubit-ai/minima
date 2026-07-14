@@ -45,6 +45,7 @@ def _decision(rid: str, raw: float, outcome: str) -> DecisionRecord:
     rec.realized_outcome = outcome
     rec.realized_quality = 1.0 if outcome == "success" else 0.0
     rec.feedback_ts = 2.0
+    rec.evidence_source = "judge"
     return rec
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
-from minima.memory.records import OutcomeRecord
+from minima.memory.records import EVIDENCE_DATASET, OutcomeRecord
 from minima.seeding.items import SeedItem
 
 _REPO_ID = "withmartian/routerbench"
@@ -121,6 +121,7 @@ def load_records(limit: int, aliases: dict[str, list[str]], split: str = "0shot"
                 cost_usd=_to_float(rowd.get(cost_col)) or 0.0,
                 quality_score=max(0.0, min(1.0, quality)),
                 outcome="success" if quality >= 0.5 else "failure",
+                evidence_source=EVIDENCE_DATASET,
                 source_dataset="routerbench",
             )
             out.append(

@@ -66,6 +66,7 @@ async def _write_outcome(
         task_fingerprint=task_fingerprint(TASK),
         task_cluster=cluster,
         quality_score=0.92,
+        evidence_source="judge",
         outcome="success",
         recorded_at=time.time(),
     )

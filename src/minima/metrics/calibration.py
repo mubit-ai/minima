@@ -14,7 +14,7 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass, field
 
-from minima.memory.records import clamp01
+from minima.memory.records import TRUSTED_LABEL_SOURCES, clamp01
 from minima.recommender.decisionlog import DecisionRecord
 
 
@@ -48,11 +48,21 @@ class CusumFlag:
     direction: str  # "over_predicting" | "under_predicting"
 
 
+def _trusted_label(r: DecisionRecord) -> bool:
+    """Only rows whose realized outcome has trusted provenance may act as labels.
+
+    Rows reconciled before provenance existed (evidence_source None) carry
+    potentially fabricated labels and are excluded from every probability-
+    calibration consumer.
+    """
+    return r.evidence_source in TRUSTED_LABEL_SOURCES
+
+
 def _pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, float]]:
-    """(predicted, realized_label, realized_quality) for reconciled rows."""
+    """(predicted, realized_label, realized_quality) for trusted reconciled rows."""
     out: list[tuple[float, float, float]] = []
     for r in rows:
-        if not r.reconciled:
+        if not r.reconciled or not _trusted_label(r):
             continue
         predicted = r.predicted_success_chosen
         if predicted is None:
@@ -156,7 +166,7 @@ def cusum_flags(
     """
     series: dict[tuple[str, str], list[tuple[float, float]]] = {}
     for r in rows:
-        if not r.reconciled:
+        if not r.reconciled or not _trusted_label(r):
             continue
         predicted = r.predicted_success_chosen
         if predicted is None or r.realized_model_id is None:
@@ -369,10 +379,15 @@ class CalibratorSet:
 
 
 def _raw_label_pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, str]]:
-    """(raw_predicted_chosen, realized_label, task_type) over reconciled rows."""
+    """(raw_predicted_chosen, realized_label, task_type) over TRUSTED reconciled rows.
+
+    The calibrator is applied on the hot path; fitting it on untrusted labels
+    (unjudged 'completed without error' successes) would remap predictions toward
+    'everything succeeds'. Only gate/judge/human-labeled rows may teach it.
+    """
     out: list[tuple[float, float, str]] = []
     for r in rows:
-        if not r.reconciled:
+        if not r.reconciled or not _trusted_label(r):
             continue
         raw = r.raw_predicted_success_chosen
         if raw is None:

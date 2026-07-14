@@ -5,7 +5,13 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable
 
-from minima.memory.records import OutcomeRecord, RecalledEvidence, clamp01
+from minima.memory.records import (
+    OutcomeRecord,
+    RecalledEvidence,
+    clamp01,
+    is_labeled,
+    label_score,
+)
 from minima.recommender.types import ModelAggregate
 
 # Floor on the confidence multiplier so freshly-seeded (un-reinforced) but
@@ -91,6 +97,11 @@ def aggregate_by_model(
         rec = ev.record
         if rec is None:
             continue
+        # Unlabeled records carry no quality signal (their outcome means "completed",
+        # not "succeeded") — they must never vote on predicted success. Includes
+        # legacy pre-v3 records whose persisted quality may have been fabricated.
+        if not is_labeled(rec.evidence_source):
+            continue
         if candidate_ids is not None and rec.model_id not in candidate_ids:
             continue
         items.append((ev, rec))
@@ -116,7 +127,7 @@ def aggregate_by_model(
             aggs[model_id] = agg
             kc_totals[model_id] = 0.0
 
-        y = clamp01(rec.quality_score)
+        y = clamp01(label_score(rec.outcome, rec.quality_score))
         agg.weight_sum += weight
         agg.weighted_success += weight * y
         agg.n += 1

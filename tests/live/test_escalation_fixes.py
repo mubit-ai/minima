@@ -104,6 +104,7 @@ async def _feedback(
         task_cluster=cluster,
         quality_score=quality,
         outcome="success" if quality >= 0.8 else ("partial" if quality > 0.0 else "failure"),
+        evidence_source="judge",
         cost_usd=rec_resp.recommended_model.est_cost_usd,
     )
     content = build_content("other", rec_resp.classified_difficulty.value, FLASH_FAIL_TASK)

@@ -75,9 +75,11 @@ def lesson_upsert_key(cluster: str, model_id: str) -> str:
     return f"minima:lesson:{cluster}:{model_id}"
 
 
-def build_lesson_content(cluster: str, model_id: str, quality: float) -> str:
+def build_lesson_content(cluster: str, model_id: str, quality: float | None) -> str:
     """A compact NL lesson gist, embedded so reflect()/surface_strategies can cluster it."""
-    return (
-        f"For {cluster} tasks, {model_id} is a reliable, cost-effective choice "
-        f"(verified in production at ~{quality:.0%} quality)."
+    verified = (
+        f"verified in production at ~{quality:.0%} quality"
+        if quality is not None
+        else "deterministically verified in production"
     )
+    return f"For {cluster} tasks, {model_id} is a reliable, cost-effective choice ({verified})."

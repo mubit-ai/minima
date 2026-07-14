@@ -9,7 +9,8 @@ from minima.catalog.store import CatalogStore, load_aliases, load_snapshot_cards
 from minima.config import Settings
 from minima.memory.records import (
     OutcomeRecord,
-    quality_from_outcome,
+    is_labeled,
+    label_score,
     signal_from_outcome,
 )
 
@@ -45,12 +46,48 @@ def test_from_metadata_rejects_non_outcome():
     assert OutcomeRecord.from_metadata(None) is None
 
 
-def test_quality_and_signal_mapping():
-    assert quality_from_outcome("success", None) == pytest.approx(0.9)
-    assert quality_from_outcome("failure", 0.3) == pytest.approx(0.3)
+def test_label_score_and_signal_mapping():
+    # Supplied quality wins; without one the outcome's Bernoulli label applies at
+    # READ time only — a default is never persisted (the old 0.9 fabrication).
+    assert label_score("success", None) == pytest.approx(1.0)
+    assert label_score("partial", None) == pytest.approx(0.5)
+    assert label_score("failure", None) == pytest.approx(0.0)
+    assert label_score("failure", 0.3) == pytest.approx(0.3)
     assert signal_from_outcome("success", 0.9) == pytest.approx(1.0)
     assert signal_from_outcome("failure", 0.0) == pytest.approx(-1.0)
+    assert signal_from_outcome("failure", None) == pytest.approx(-1.0)
     assert -1.0 <= signal_from_outcome("partial", 0.5) <= 1.0
+
+
+def test_evidence_source_labeling():
+    assert is_labeled("gate") and is_labeled("judge") and is_labeled("human")
+    assert is_labeled("dataset")
+    assert not is_labeled("none")
+
+
+def test_from_metadata_legacy_provenance_derivation():
+    base = {"kind": "outcome", "model_id": "m", "outcome": "success", "quality_score": 0.9}
+    # Legacy organic record (pre-v3, no evidence_source): quality may be fabricated —
+    # demoted to telemetry.
+    legacy = OutcomeRecord.from_metadata(json.dumps(base))
+    assert legacy is not None and legacy.evidence_source == "none"
+    # Legacy seeds are trustworthy by construction.
+    seed = OutcomeRecord.from_metadata(json.dumps({**base, "source_dataset": "routerbench"}))
+    assert seed is not None and seed.evidence_source == "dataset"
+    # Legacy gate-verified records were only ever written from green gates.
+    gated = OutcomeRecord.from_metadata(json.dumps({**base, "verified_in_production": True}))
+    assert gated is not None and gated.evidence_source == "gate"
+    # v3 records carry provenance explicitly and are not re-derived.
+    v3 = OutcomeRecord.from_metadata(json.dumps({**base, "evidence_source": "judge"}))
+    assert v3 is not None and v3.evidence_source == "judge"
+
+
+def test_from_metadata_quality_absent_stays_none():
+    meta = {"kind": "outcome", "model_id": "m", "outcome": "success", "evidence_source": "gate"}
+    rec = OutcomeRecord.from_metadata(json.dumps(meta))
+    assert rec is not None
+    assert rec.quality_score is None
+    assert label_score(rec.outcome, rec.quality_score) == pytest.approx(1.0)
 
 
 def test_snapshot_loads_and_is_stale():

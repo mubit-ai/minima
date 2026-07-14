@@ -86,6 +86,10 @@ class DecisionRecord:
     realized_latency_ms: int | None = None
     feedback_ts: float | None = None
     late_feedback: bool = False
+    # Provenance of the realized quality signal ("gate" | "judge" | "human" | "none").
+    # None on rows reconciled before provenance existed — treated as untrusted by every
+    # label consumer (calibration fit, ECE, CUSUM).
+    evidence_source: str | None = None
 
     @property
     def reconciled(self) -> bool:
@@ -119,14 +123,15 @@ class Reconciliation:
 
     model_id: str
     outcome: str
-    # None for UNJUDGED feedback (judged=False): never fabricate a quality for
-    # rows the harness didn't judge (M-J2). _apply stores it straight through to
+    # Strictly caller-supplied; None for unlabeled feedback. A label-based default is
+    # never fabricated here. _apply stores it straight through to
     # DecisionRecord.realized_quality, which is likewise `float | None` (NULL).
     quality: float | None
     cost_usd: float | None = None
     latency_ms: int | None = None
     ts: float = 0.0
     late: bool = False
+    evidence_source: str | None = None
 
 
 @runtime_checkable
@@ -165,6 +170,7 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> None:
     rec.realized_latency_ms = update.latency_ms
     rec.feedback_ts = update.ts or time.time()
     rec.late_feedback = update.late
+    rec.evidence_source = update.evidence_source
 
 
 # Retention purge runs at most this often (the log is written on EVERY recommendation;
