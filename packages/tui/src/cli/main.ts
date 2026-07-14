@@ -166,6 +166,8 @@ export interface CliArgs {
   prompt: string[];
   model?: string;
   provider?: string;
+  /** OpenAI-compatible base URL for a custom --provider (ollama/vLLM/llama.cpp/mock). */
+  providerUrl?: string;
   thinking: string;
   offline: boolean;
   print: boolean;
@@ -221,6 +223,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--provider":
         opts.provider = take(i++);
+        break;
+      case "--provider-url":
+        opts.providerUrl = take(i++);
         break;
       case "--thinking":
         opts.thinking = take(i++);
@@ -293,6 +298,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --mode {interactive|print|json}
       --model ID           pin a model (bypasses routing)
       --provider NAME      provider for a pinned --model
+      --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
       --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
@@ -359,6 +365,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       cost: { input: 0, output: 0 },
       context_window: 128_000,
       max_tokens: 8_192,
+      base_url: args.providerUrl,
     });
   }
 

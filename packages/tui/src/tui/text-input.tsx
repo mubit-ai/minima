@@ -36,6 +36,11 @@ export interface TextInputProps {
   suspended?: boolean;
   /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
   disabledLabel?: string;
+  /**
+   * B4: seed the draft (e.g. /undo prefills the undone prompt for editing). Read once at
+   * mount — the value is internal state, so remount via `key` to apply a new prefill.
+   */
+  initialValue?: string;
   showPrefix?: boolean;
 }
 
@@ -63,6 +68,7 @@ export function TextInput({
   disabled,
   suspended,
   disabledLabel,
+  initialValue,
   showPrefix = true,
 }: TextInputProps) {
   // The REF is the source of truth; state only triggers re-render. Ink dispatches every
@@ -70,7 +76,8 @@ export function TextInput({
   // reads draft from the render closure would apply N same-chunk keypresses to the SAME
   // stale snapshot — two ←← would move the cursor once. Mutations go through the ref
   // immediately; the state copy just mirrors it for the next paint.
-  const draftRef = useRef<Draft>({ value: "", cursor: 0 });
+  // B4 prefill: initialValue seeds the draft at mount (remount via `key` applies a new one).
+  const draftRef = useRef<Draft>({ value: initialValue ?? "", cursor: (initialValue ?? "").length });
   const [, setPaintGen] = useState(0);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
