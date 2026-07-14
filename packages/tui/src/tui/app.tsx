@@ -1687,7 +1687,7 @@ export function HarnessApp({
             );
           } else {
             pushPlan(
-              `/plan ${sub} is part of the ground-truth planning workflow (set MINIMA_TUI_GROUND_TRUTH=1). Without it, /plan is a read-only toggle.`,
+              `/plan ${sub} is part of the ground-truth planning workflow (on by default; currently disabled via MINIMA_TUI_GROUND_TRUTH=0). Without it, /plan is a read-only toggle.`,
               true,
             );
           }
@@ -2300,8 +2300,8 @@ export function HarnessApp({
           {
             role: "tool",
             text: on
-              ? `Ground-Truth: ON (MINIMA_TUI_GROUND_TRUTH=1) — run ${agent.runId ?? "?"}`
-              : "Ground-Truth: OFF — set MINIMA_TUI_GROUND_TRUTH=1 to enable",
+              ? `Ground-Truth: ON (default) — run ${agent.runId ?? "?"}`
+              : "Ground-Truth: OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset to re-enable",
             toolName: "gt",
           },
         ]);
@@ -2310,7 +2310,7 @@ export function HarnessApp({
       case "why": {
         const text =
           agent.config.groundTruth !== true
-            ? "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification."
+            ? "Ground-Truth is OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset to inspect verification."
             : whyReportFor(agent.db, agent.runId);
         setMessages((m) => [
           ...m,
@@ -2322,7 +2322,7 @@ export function HarnessApp({
       case "gt-seed": {
         let text: string;
         if (agent.config.groundTruth !== true) {
-          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 before seeding.";
+          text = "Ground-Truth is OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset before seeding.";
         } else if (!agent.db || !agent.runId) {
           text = "No DB / run available to seed.";
         } else {
