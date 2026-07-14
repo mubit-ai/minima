@@ -121,6 +121,7 @@ import {
 } from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
+import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { TocPanel } from "./toc-panel.tsx";
@@ -998,6 +999,13 @@ export function HarnessApp({
   // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
   const renderCountRef = useRef(0);
   renderCountRef.current++;
+  // Ctrl+Z resume: SIGCONT bumps this nonce; in fullscreen any commit repaints the whole
+  // frame, so the bump alone restores the screen the shell drew over.
+  const [, setResumeGen] = useState(0);
+  useEffect(() => {
+    setResumeCallback(() => setResumeGen((n) => n + 1));
+    return () => setResumeCallback(null);
+  }, []);
   // Whole-render wall time + subprocess count, sampled once per commit (the dep-less effect
   // is intentional). ms spans render body → post-commit, so any synchronous blocking inside
   // render (the per-render git fork bug) shows up here even when window compute stays fast.
@@ -1411,6 +1419,13 @@ export function HarnessApp({
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
+    // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
+    // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
+    if (key.ctrl && input === "z") {
+      suspendToShell({ fullscreen, mouse: fullscreen && mouseEnabled });
+      return;
+    }
+
     if (
       pickerOpen ||
       paletteOpen ||
@@ -1601,6 +1616,12 @@ export function HarnessApp({
         setQuitArmed(true);
         setTimeout(() => setQuitArmed(false), 1500);
       }
+      return;
+    }
+    // Ctrl+D: EOF-style quit on an EMPTY draft (shell parity). With text in the draft the
+    // TextInput handler deletes the char under the cursor instead; typedText mirrors it.
+    if (key.ctrl && input === "d" && !typedText) {
+      exit();
       return;
     }
   });
@@ -2481,7 +2502,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview · PgUp/PgDn or wheel scroll\n  Text selection while wheel capture is on: hold Option (iTerm2) / Shift, or /mouse off`,
             toolName: "help",
           },
         ]);

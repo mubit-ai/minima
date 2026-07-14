@@ -386,9 +386,9 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(input).toContain("if (disabled || suspended) return;");
     // Ctrl combos are either readline edits handled locally or fall through to the app
     // handlers — either way the branch returns before the draft-insert path, and meta
-    // combos never insert. (Was one combined guard before the readline keys landed.)
+    // combos never insert (the meta branch handles Alt+B/F word-jumps, then returns).
     expect(input).toContain("if (key.ctrl) {");
-    expect(input).toContain("if (key.meta) return;");
+    expect(input).toContain("if (key.meta) {");
     // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
     expect(input).toContain('disabledLabel ?? "(busy…)"');
     expect(input).toContain('<Text wrap="truncate">');

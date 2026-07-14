@@ -193,6 +193,33 @@ export function processInputChunk(state: InputFilterState, chunk: string): Input
   return { output, state: { csiBuffer: csi, paste }, scrolls, pastes };
 }
 
+// -- Home/End side-channel --------------------------------------------------------------------
+
+/**
+ * Ink 5 swallows home/end (parse-keypress names them, then useInput blanks `input` and sets
+ * no key flag — the handler can't tell them from nothing), so the filter delivers them as
+ * events, mirroring the paste callback. With no consumer registered the sequence passes
+ * through to Ink (which ignores it) rather than being dropped.
+ */
+export type NavKey = "home" | "end";
+let navCallback: ((k: NavKey) => void) | null = null;
+
+export function setNavCallback(fn: ((k: NavKey) => void) | null): void {
+  navCallback = fn;
+}
+
+// Normal (CSI H/F), application-cursor (SS3 H/F), and vt/rxvt (CSI 1~/4~/7~/8~) encodings.
+const NAV_UNITS: Record<string, NavKey> = {
+  [`${ESC}[H`]: "home",
+  [`${ESC}[F`]: "end",
+  [`${ESC}OH`]: "home",
+  [`${ESC}OF`]: "end",
+  [`${ESC}[1~`]: "home",
+  [`${ESC}[4~`]: "end",
+  [`${ESC}[7~`]: "home",
+  [`${ESC}[8~`]: "end",
+};
+
 /**
  * Split filtered stdin into keypress units: each escape sequence (CSI `ESC[...final`,
  * SS3 `ESC O x`, meta `ESC x`, or a lone trailing ESC = the Esc key) is its own unit;
@@ -237,6 +264,17 @@ export function splitKeypressUnits(s: string): string[] {
   return units;
 }
 
+/**
+ * True (and delivered) when the unit is a home/end sequence and a nav consumer is
+ * registered. Exported for tests; production caller is the read() override below.
+ */
+export function consumeNavUnit(unit: string): boolean {
+  const nav = NAV_UNITS[unit];
+  if (nav === undefined || navCallback === null) return false;
+  navCallback(nav);
+  return true;
+}
+
 export function installInputFilter(): void {
   const stdin = process.stdin;
   const realRead = stdin.read.bind(stdin);
@@ -267,7 +305,9 @@ export function installInputFilter(): void {
       }
 
       if (output.length > 0) {
-        unitQueue = splitKeypressUnits(output);
+        const units = splitKeypressUnits(output);
+        // Home/End divert to the nav side-channel (Ink swallows them); the rest queue for Ink.
+        unitQueue = navCallback ? units.filter((u) => !consumeNavUnit(u)) : units;
         queueAsBuffer = typeof chunk !== "string";
       }
       // Queue filled → deliver its first unit on the next spin; otherwise everything was

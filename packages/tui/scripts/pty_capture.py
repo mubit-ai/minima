@@ -27,7 +27,9 @@ Spec (JSON):
 
 Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <BS>
              <CTRLC> <CTRLL> <CTRLP> <CTRLR> <CTRLT> <CTRLE> <CTRLG> <SPACE>
-             <WHEELUP> <WHEELDN> <PASTE> <ENDPASTE> <SHIFTTAB>
+             <WHEELUP> <WHEELDN> <CLICK> <PASTE> <ENDPASTE> <SHIFTTAB> <CTRLZ> <CTRLD>
+             <HOME> <END> <ALTLEFT> <ALTRIGHT> <ALTB> <ALTF> <ALTBS>
+    A step may be {"after": s, "signal": "CONT"} to send SIGCONT instead of bytes.
 
 Steps may set "repeat" (send N times) and "gap" (seconds between repeats, default 0 = one
 burst). A nonzero gap spreads the repeats across separate stdin chunks — closer to a real
@@ -65,12 +67,18 @@ TOKENS = {
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
     "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07", "<CTRLA>": "\x01",
     "<CTRLK>": "\x0b", "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
+    "<CTRLZ>": "\x1a", "<CTRLD>": "\x04",
+    "<HOME>": "\x1b[H", "<END>": "\x1b[F",
+    "<ALTLEFT>": "\x1b[1;3D", "<ALTRIGHT>": "\x1b[1;3C", "<ALTB>": "\x1bb", "<ALTF>": "\x1bf",
+    "<ALTBS>": "\x1b\x7f",
     "<SPACE>": " ",
     # Bracketed paste envelope (what the terminal sends around a paste when ?2004h is set).
     "<PASTE>": "\x1b[200~", "<ENDPASTE>": "\x1b[201~",
     # SGR mouse wheel reports (button 64 = up, 65 = down) at an arbitrary in-grid cell —
     # what a terminal sends per wheel notch when ?1000h/?1006h tracking is on.
     "<WHEELUP>": "\x1b[<64;10;10M", "<WHEELDN>": "\x1b[<65;10;10M",
+    # A left-button press+release (the start of a click-drag selection attempt).
+    "<CLICK>": "\x1b[<0;10;10M\x1b[<0;10;10m",
 }
 
 
@@ -164,11 +172,16 @@ def main() -> int:
     # with PTY reads instead of blocking the loop mid-burst.
     events = []
     for s in steps:
+        # {"signal": "CONT"} sends SIGCONT to the child instead of writing bytes —
+        # pairs with <CTRLZ> to test suspend/resume (the shell's `fg`).
+        if "signal" in s:
+            events.append((float(s["after"]), ("signal", s["signal"])))
+            continue
         data = expand(s["send"])
         repeat = int(s.get("repeat", 1))
         gap = float(s.get("gap", 0.0))
         for i in range(repeat):
-            events.append((float(s["after"]) + i * gap, data))
+            events.append((float(s["after"]) + i * gap, ("send", data)))
     events.sort(key=lambda e: e[0])
 
     master, slave = os.openpty()
@@ -192,7 +205,11 @@ def main() -> int:
     while time.time() - start < duration:
         now = time.time() - start
         while next_event < len(events) and now >= events[next_event][0]:
-            os.write(master, events[next_event][1])
+            kind, payload = events[next_event][1]
+            if kind == "signal":
+                os.kill(p.pid, getattr(signal, f"SIG{payload}"))
+            else:
+                os.write(master, payload)
             next_event += 1
         # Wake for the next scheduled event (fine-grained during storms), else poll at 100ms.
         wait = 0.1

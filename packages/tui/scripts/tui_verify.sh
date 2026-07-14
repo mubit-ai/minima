@@ -85,6 +85,73 @@ assert seen("PLAN", 4.0, 99), "no PLAN badge after second Shift+Tab"
 print("tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)")
 PY
 
+echo "== tui-verify: scenario shortcuts (Home/End, Alt word-jump, Ctrl+Z suspend/resume) =="
+SPEC4=$(cat <<EOF
+{
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 10,
+  "env": {"MINIMA_HARNESS_DIR": "$TMP"},
+  "frames": "$TMP/keys-frames.jsonl",
+  "raw": "$TMP/keys-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "abc def"},
+    {"after": 3.6, "send": "<HOME>"},
+    {"after": 3.9, "send": "X"},
+    {"after": 4.2, "send": "<END>"},
+    {"after": 4.5, "send": "Y"},
+    {"after": 4.8, "send": "<ALTB>"},
+    {"after": 5.1, "send": "Z"},
+    {"after": 6.0, "send": "<CTRLZ>"},
+    {"after": 7.5, "signal": "CONT"}
+  ]
+}
+EOF
+)
+uv run --with pyte python "$TUI/scripts/pty_capture.py" "$SPEC4" > "$TMP/keys.txt"
+python3 - "$TMP/keys-frames.jsonl" "$TMP/keys-raw.bin" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+raw = open(sys.argv[2], "rb").read()
+# Home/End/Alt+B editing: "abc def" -> X at start -> Y at end -> Z before the last word.
+want = "Xabc ZdefY"
+assert any(want in row for f in frames if f["t"] >= 5.1 for row in f["screen"]), (
+    f"draft {want!r} never appeared - home/end or word-jump broken")
+# Ctrl+Z left the alt screen; SIGCONT re-entered it and repainted the prompt box.
+i_leave = raw.find(b"\x1b[?1049l")
+assert i_leave != -1, "no alt-screen leave on Ctrl+Z"
+i_return = raw.find(b"\x1b[?1049h", i_leave)
+assert i_return != -1, "no alt-screen re-enter after SIGCONT"
+post = [f for f in frames if f["t"] >= 7.5]  # SIGCONT lands at 7.5; the repaint is immediate
+assert any(want in row for f in post for row in f["screen"]), (
+    "draft not visible after resume - repaint after fg broken")
+print("tui_assert: PASS shortcuts (edit keys + suspend/resume repaint)")
+PY
+
+echo "== tui-verify: scenario ctrl-d (EOF quit on empty prompt) =="
+SPEC5=$(cat <<EOF
+{
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 6,
+  "env": {"MINIMA_HARNESS_DIR": "$TMP"},
+  "raw": "$TMP/eof-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+uv run --with pyte python "$TUI/scripts/pty_capture.py" "$SPEC5" > "$TMP/eof.txt"
+python3 - "$TMP/eof-raw.bin" <<'PY'
+import sys
+raw = open(sys.argv[1], "rb").read()
+# The clean-shutdown writes (leave alt screen, cursor back) prove exit() ran, not a crash.
+assert b"\x1b[?1049l" in raw, "Ctrl+D did not exit cleanly (no alt-screen leave)"
+assert b"\x1b[?25h" in raw, "Ctrl+D exit did not restore the cursor"
+print("tui_assert: PASS ctrl-d (EOF quit runs the clean shutdown path)")
+PY
+
 echo "== tui-verify: perf budget (window compute bounded, listeners flat, zero spawns) =="
 python3 - "$TMP/perf.jsonl" <<'PY'
 import json, sys

@@ -189,3 +189,43 @@ describe("splitKeypressUnits (batched-arrows fix)", () => {
     expect(splitKeypressUnits(`x${ESC}`)).toEqual(["x", ESC]); // Esc key at chunk end
   });
 });
+
+describe("home/end nav side-channel", () => {
+  test("every encoding splits to one unit and diverts to the nav consumer", async () => {
+    const { consumeNavUnit, setNavCallback, splitKeypressUnits } = await import(
+      "../src/tui/input-filter.ts"
+    );
+    const got: string[] = [];
+    setNavCallback((k) => got.push(k));
+    try {
+      for (const [seq, want] of [
+        [`${ESC}[H`, "home"],
+        [`${ESC}[F`, "end"],
+        [`${ESC}OH`, "home"],
+        [`${ESC}OF`, "end"],
+        [`${ESC}[1~`, "home"],
+        [`${ESC}[4~`, "end"],
+        [`${ESC}[7~`, "home"],
+        [`${ESC}[8~`, "end"],
+      ] as const) {
+        expect(splitKeypressUnits(seq)).toEqual([seq]); // one unit — divertable
+        expect(consumeNavUnit(seq)).toBe(true);
+        expect(got.pop()).toBe(want);
+      }
+    } finally {
+      setNavCallback(null);
+    }
+  });
+
+  test("without a consumer nothing is diverted; arrows are never nav", async () => {
+    const { consumeNavUnit, setNavCallback } = await import("../src/tui/input-filter.ts");
+    expect(consumeNavUnit(`${ESC}[H`)).toBe(false); // no consumer registered
+    setNavCallback(() => {});
+    try {
+      expect(consumeNavUnit(`${ESC}[D`)).toBe(false); // plain arrow passes to Ink
+      expect(consumeNavUnit("h")).toBe(false);
+    } finally {
+      setNavCallback(null);
+    }
+  });
+});

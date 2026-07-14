@@ -16,7 +16,7 @@
 import { Text, useInput } from "ink";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { readClipboard } from "./clipboard.ts";
-import { setPasteCallback } from "./input-filter.ts";
+import { setNavCallback, setPasteCallback } from "./input-filter.ts";
 
 export interface TextInputProps {
   /** Called when the user hits Enter with a non-empty line. */
@@ -54,6 +54,14 @@ function wordStartBefore(value: string, cursor: number): number {
   let i = cursor;
   while (i > 0 && value[i - 1] === " ") i--;
   while (i > 0 && value[i - 1] !== " ") i--;
+  return i;
+}
+
+/** End of the word at/after `cursor` (readline forward-word: skip spaces, then the word). */
+function wordEndAfter(value: string, cursor: number): number {
+  let i = cursor;
+  while (i < value.length && value[i] === " ") i++;
+  while (i < value.length && value[i] !== " ") i++;
   return i;
 }
 
@@ -109,6 +117,18 @@ export function TextInput({
     return () => setPasteCallback(null);
   }, [acceptPaste, insertAt]);
 
+  // Home/End arrive via the input-filter side-channel (Ink 5 swallows them — blank input,
+  // no key flag). Registered only while this input actively owns the keyboard.
+  const acceptNav = !disabled && !suspended;
+  useEffect(() => {
+    if (!acceptNav) return;
+    setNavCallback((k) => {
+      const d = draftRef.current;
+      update(d.value, k === "home" ? 0 : d.value.length);
+    });
+    return () => setNavCallback(null);
+  }, [acceptNav, update]);
+
   useInput((input, key) => {
     if (disabled || suspended) return;
     const { value, cursor } = draftRef.current;
@@ -138,11 +158,12 @@ export function TextInput({
       return;
     }
     if (key.leftArrow) {
-      update(value, cursor - 1);
+      // Option/Alt+← (ESC[1;3D — kitty, Ghostty, tmux) jumps a word back.
+      update(value, key.meta ? wordStartBefore(value, cursor) : cursor - 1);
       return;
     }
     if (key.rightArrow) {
-      update(value, cursor + 1);
+      update(value, key.meta ? wordEndAfter(value, cursor) : cursor + 1);
       return;
     }
     if (key.tab) {
@@ -155,7 +176,11 @@ export function TextInput({
       return;
     }
     if (key.backspace || key.delete) {
-      if (cursor > 0) update(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1);
+      if (cursor > 0) {
+        // Option/Alt+Backspace (ESC DEL) kills the word before the cursor, readline-style.
+        const start = key.meta ? wordStartBefore(value, cursor) : cursor - 1;
+        update(value.slice(0, start) + value.slice(cursor), start);
+      }
       return;
     }
     if (key.ctrl) {
@@ -167,13 +192,22 @@ export function TextInput({
       else if (input === "w") {
         const start = wordStartBefore(value, cursor);
         update(value.slice(0, start) + value.slice(cursor), start);
+      } else if (input === "d") {
+        // Delete-forward under the cursor; on an EMPTY draft Ctrl+D is the app-level
+        // EOF quit instead (shell parity) — see the global handler in app.tsx.
+        if (cursor < value.length) update(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
       } else if (input === "v") {
         const clip = readClipboard();
         if (clip) insertAt(clip.replace(/\r\n?/g, "\n"));
       }
       return;
     }
-    if (key.meta) return;
+    if (key.meta) {
+      // Option/Alt+b / Alt+f word jumps (iTerm2 sends ESC b / ESC f for Option-arrows).
+      if (input === "b") update(value, wordStartBefore(value, cursor));
+      else if (input === "f") update(value, wordEndAfter(value, cursor));
+      return;
+    }
     if (input && !key.escape) {
       insertAt(input);
     }
