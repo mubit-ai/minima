@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from minima.catalog.store import load_aliases
+from minima.catalog.store import load_aliases, load_snapshot_cards
 from minima.config import get_settings
 from minima.memory.adapter import MubitMemory
 from minima.seeding import routerbench, synthetic
@@ -15,7 +15,10 @@ from minima.seeding.items import SeedItem, build_item, chunked
 def _load(dataset: str, limit: int) -> list[SeedItem]:
     if dataset == "synthetic":
         return synthetic.generate(limit)
-    return routerbench.load_records(limit, load_aliases())
+    cards, _version = load_snapshot_cards()
+    return routerbench.load_records(
+        limit, load_aliases(), catalog_ids={c.model_id for c in cards}
+    )
 
 
 async def _seed(args: argparse.Namespace) -> None:
@@ -43,7 +46,10 @@ async def _seed(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed Minima cold-start memory into Mubit.")
-    parser.add_argument("--dataset", choices=["routerbench", "synthetic"], default="routerbench")
+    # synthetic is the honest default: it seeds from the CURRENT catalog priors.
+    # routerbench only emits records for models present verbatim in the catalog
+    # (fails loudly on zero overlap -- no cross-generation identity transfer).
+    parser.add_argument("--dataset", choices=["routerbench", "synthetic"], default="synthetic")
     parser.add_argument("--limit", type=int, default=2000)
     parser.add_argument("--lane", default=None, help="memory lane (default: MINIMA_SEED_LANE)")
     parser.add_argument("--chunk", type=int, default=200)

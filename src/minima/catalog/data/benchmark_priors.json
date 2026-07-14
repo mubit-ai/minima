@@ -1,0 +1,223 @@
+{
+  "version": "curated-2026-07",
+  "source": "curated (migrated verbatim from the hand-authored snapshot; the catalog-snapshot refresh replaces this with benchmark-derived per-task-type scores \u2014 SPROUT/HELM/Arena-category aggregates)",
+  "as_of": "2026-07-14",
+  "models": {
+    "claude-haiku-4-5": {
+      "by_task_type": {
+        "code": 0.7,
+        "summarization": 0.85,
+        "extraction": 0.88,
+        "qa": 0.8,
+        "reasoning": 0.6,
+        "classification": 0.9,
+        "translation": 0.85,
+        "creative": 0.75,
+        "rag": 0.82,
+        "tool_use": 0.75,
+        "other": 0.72
+      },
+      "priors": {
+        "intelligence_index": 0.5
+      }
+    },
+    "claude-opus-4-8": {
+      "by_task_type": {
+        "code": 0.96,
+        "summarization": 0.93,
+        "extraction": 0.94,
+        "qa": 0.95,
+        "reasoning": 0.97,
+        "classification": 0.95,
+        "translation": 0.93,
+        "creative": 0.94,
+        "rag": 0.94,
+        "tool_use": 0.95,
+        "other": 0.93
+      },
+      "priors": {
+        "intelligence_index": 0.95
+      }
+    },
+    "claude-sonnet-4-6": {
+      "by_task_type": {
+        "code": 0.88,
+        "summarization": 0.9,
+        "extraction": 0.92,
+        "qa": 0.9,
+        "reasoning": 0.85,
+        "classification": 0.93,
+        "translation": 0.9,
+        "creative": 0.88,
+        "rag": 0.9,
+        "tool_use": 0.9,
+        "other": 0.86
+      },
+      "priors": {
+        "intelligence_index": 0.72
+      }
+    },
+    "gemini-2.5-flash": {
+      "by_task_type": {
+        "code": 0.74,
+        "summarization": 0.88,
+        "extraction": 0.88,
+        "qa": 0.82,
+        "reasoning": 0.66,
+        "classification": 0.9,
+        "translation": 0.88,
+        "creative": 0.78,
+        "rag": 0.86,
+        "tool_use": 0.8,
+        "other": 0.76
+      },
+      "priors": {
+        "intelligence_index": 0.55
+      }
+    },
+    "gemini-2.5-flash-lite": {
+      "by_task_type": {
+        "code": 0.62,
+        "summarization": 0.8,
+        "extraction": 0.84,
+        "qa": 0.74,
+        "reasoning": 0.5,
+        "classification": 0.86,
+        "translation": 0.82,
+        "creative": 0.68,
+        "rag": 0.78,
+        "tool_use": 0.68,
+        "other": 0.64
+      },
+      "priors": {
+        "intelligence_index": 0.4
+      }
+    },
+    "gemini-2.5-pro": {
+      "by_task_type": {
+        "code": 0.9,
+        "summarization": 0.92,
+        "extraction": 0.92,
+        "qa": 0.91,
+        "reasoning": 0.88,
+        "classification": 0.93,
+        "translation": 0.92,
+        "creative": 0.89,
+        "rag": 0.91,
+        "tool_use": 0.9,
+        "other": 0.88
+      },
+      "priors": {
+        "intelligence_index": 0.8
+      }
+    },
+    "gemini-3-flash-preview": {
+      "by_task_type": {
+        "code": 0.8,
+        "summarization": 0.87,
+        "extraction": 0.88,
+        "qa": 0.83,
+        "reasoning": 0.7,
+        "classification": 0.9,
+        "translation": 0.87,
+        "creative": 0.8,
+        "rag": 0.85,
+        "tool_use": 0.84,
+        "other": 0.78
+      },
+      "priors": {
+        "intelligence_index": 0.62
+      }
+    },
+    "gemini-3.1-flash-lite": {
+      "by_task_type": {
+        "code": 0.68,
+        "summarization": 0.83,
+        "extraction": 0.86,
+        "qa": 0.78,
+        "reasoning": 0.58,
+        "classification": 0.88,
+        "translation": 0.84,
+        "creative": 0.72,
+        "rag": 0.8,
+        "tool_use": 0.72,
+        "other": 0.68
+      },
+      "priors": {
+        "intelligence_index": 0.48
+      }
+    },
+    "gemini-3.1-pro-preview": {
+      "by_task_type": {
+        "code": 0.93,
+        "summarization": 0.93,
+        "extraction": 0.93,
+        "qa": 0.93,
+        "reasoning": 0.95,
+        "classification": 0.94,
+        "translation": 0.93,
+        "creative": 0.91,
+        "rag": 0.93,
+        "tool_use": 0.92,
+        "other": 0.91
+      },
+      "priors": {
+        "intelligence_index": 0.9
+      }
+    },
+    "gemini-3.5-flash": {
+      "by_task_type": {
+        "code": 0.85,
+        "summarization": 0.88,
+        "extraction": 0.9,
+        "qa": 0.84,
+        "reasoning": 0.72,
+        "classification": 0.91,
+        "translation": 0.88,
+        "creative": 0.82,
+        "rag": 0.87,
+        "tool_use": 0.88,
+        "other": 0.8
+      },
+      "priors": {
+        "intelligence_index": 0.65
+      }
+    },
+    "gpt-4o": {
+      "by_task_type": {
+        "code": 0.85,
+        "summarization": 0.9,
+        "extraction": 0.9,
+        "qa": 0.89,
+        "reasoning": 0.82,
+        "classification": 0.92,
+        "translation": 0.9,
+        "creative": 0.87,
+        "rag": 0.89,
+        "tool_use": 0.89,
+        "other": 0.85
+      },
+      "priors": {
+        "intelligence_index": 0.7
+      }
+    },
+    "gpt-4o-mini": {
+      "by_task_type": {
+        "code": 0.68,
+        "summarization": 0.84,
+        "extraction": 0.86,
+        "qa": 0.78,
+        "reasoning": 0.55,
+        "classification": 0.9,
+        "translation": 0.83,
+        "creative": 0.72,
+        "rag": 0.8,
+        "tool_use": 0.72,
+        "other": 0.7
+      },
+      "priors": {
+        "intelligence_index": 0.45
+      }
+    }
+  }
+}

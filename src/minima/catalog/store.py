@@ -20,6 +20,50 @@ def load_aliases() -> dict[str, list[str]]:
     return raw.get("aliases", {})
 
 
+def load_benchmark_priors() -> tuple[dict[str, dict], str]:
+    """The versioned capability-prior overlay: model_id -> {by_task_type, priors}.
+
+    This is the ONE refreshable source of cold-start capability beliefs — the
+    catalog-snapshot refresh replaces its contents with benchmark-derived scores.
+    Returns ({} , "") when the file is absent (overlay is additive).
+    """
+    try:
+        raw = json.loads(_data_text("benchmark_priors.json"))
+    except FileNotFoundError:
+        return {}, ""
+    return raw.get("models", {}), str(raw.get("version", ""))
+
+
+def apply_benchmark_priors(cards: list[ModelCard]) -> list[ModelCard]:
+    """Overlay per-task-type priors onto the cards, stamping provenance.
+
+    Fails loudly (raises) when the overlay shares ZERO model ids with the catalog —
+    a silently-empty prior overlay is exactly the no-op cold-start failure the old
+    seeding path shipped for months. Unknown overlay ids are individually skipped.
+    """
+    overlay, version = load_benchmark_priors()
+    if not overlay:
+        return cards
+    by_id = {c.model_id: c for c in cards}
+    matched = 0
+    for model_id, entry in overlay.items():
+        card = by_id.get(model_id)
+        if card is None:
+            continue
+        matched += 1
+        if entry.get("by_task_type"):
+            card.capability_by_task_type = dict(entry["by_task_type"])
+        if entry.get("priors"):
+            card.capability_priors = dict(entry["priors"])
+        card.capability_source = f"benchmark-priors:{version}"
+    if matched == 0:
+        raise RuntimeError(
+            "benchmark_priors.json shares no model ids with the catalog — the prior "
+            "overlay would be a silent no-op; fix the overlay or the catalog snapshot"
+        )
+    return cards
+
+
 def load_snapshot_cards() -> tuple[list[ModelCard], str]:
     raw = json.loads(_data_text("capability_priors.json"))
     cards: list[ModelCard] = []
@@ -43,7 +87,7 @@ def load_snapshot_cards() -> tuple[list[ModelCard], str]:
                 capability_source="fallback-snapshot",
             )
         )
-    return cards, raw.get("version", "fallback-snapshot")
+    return apply_benchmark_priors(cards), raw.get("version", "fallback-snapshot")
 
 
 @dataclass(slots=True)
