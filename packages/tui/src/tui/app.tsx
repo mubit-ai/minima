@@ -208,6 +208,21 @@ const COMMANDS = [
   { name: "why", desc: "Show per-step Ground-Truth verification" },
 ];
 
+const SHORTCUTS = [
+  { keys: "ctrl+l", desc: "Open the model picker" },
+  { keys: "ctrl+r", desc: "Toggle route mode (auto ↔ confirm)" },
+  { keys: "ctrl+p", desc: "Open the command palette" },
+  { keys: "ctrl+c", desc: "Quit (press again to confirm)" },
+  { keys: "ctrl+v", desc: "Attach an image from the clipboard" },
+  { keys: "ctrl+g", desc: "Answer / re-arm an armed 🔴 gate" },
+  { keys: "esc", desc: "Abort the in-flight run" },
+  { keys: "tab", desc: "Complete a command or path" },
+  { keys: "shift+tab", desc: "Cycle the thinking level" },
+  { keys: "↑ / ↓", desc: "Recall previous prompts" },
+  { keys: "pageup / pagedn", desc: "Scroll history (fullscreen mode)" },
+  { keys: "enter", desc: "Send the prompt" },
+];
+
 export interface CommandPickerProps {
   commands: { name: string; desc: string }[];
   onPick: (commandName: string) => void;
@@ -1848,7 +1863,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard shortcuts:\n${SHORTCUTS.map((s) => `  ${s.keys.padEnd(15)} ${s.desc}`).join("\n")}`,
             toolName: "help",
           },
         ]);
