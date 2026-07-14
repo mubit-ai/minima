@@ -127,4 +127,32 @@ describe("groundTruthHooks allowlist enforcement", () => {
     const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: false });
     expect(await before(toolCtx("write"))).toBeNull();
   });
+
+  test("an active plan with no in-progress step (all pending) is allow (fail-open)", async () => {
+    const d = db();
+    // A restrictive allowlist that is NOT in progress must not bite — this exercises the
+    // getInProgressStep status filter (a broken filter would read the pending step's ["edit"] list
+    // and wrongly block write). The allowlist must be restrictive or the test passes trivially.
+    d.seedPlanFromSteps("run1", "T", [{ content: "Edit the router", verify: "bun test x", tools: ["edit"] }]);
+    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    expect(await before(toolCtx("write"))).toBeNull();
+  });
+
+  test("enforces the in-progress step's allowlist as the plan advances (idx > 0)", async () => {
+    const d = db();
+    const { stepIds } = d.seedPlanFromSteps("run1", "T", [
+      { content: "First step edits", verify: "bun test a", tools: ["edit"] },
+      { content: "Second step runs", verify: "bun test b", tools: ["bash"] },
+    ]);
+    d.setStepStatus(stepIds[0]!, "completed");
+    d.setStepStatus(stepIds[1]!, "in_progress");
+    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    // The allowlist read must follow the plan to step 1 (["bash"]), not linger on the completed
+    // step 0 (["edit"]): write is on neither list, bash is on step 1's.
+    const blocked = await before(toolCtx("write"));
+    expect(blocked?.block).toBe(true);
+    expect(await before(toolCtx("bash"))).toBeNull();
+    // And a tool that only step 0 allowed is now blocked (proves we are not reading step 0's list).
+    expect((await before(toolCtx("edit")))?.block).toBe(true);
+  });
 });

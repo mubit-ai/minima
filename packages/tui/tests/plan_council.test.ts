@@ -718,7 +718,7 @@ describe("synthesizeGroundTruth", () => {
     ]);
   });
 
-  test("keeps a valid per-step tools allowlist and drops unknown tool names", async () => {
+  test("keeps a per-step tools allowlist, lowercasing and preserving unknown names for the lint", async () => {
     reg.setResponses([
       json({
         title: "T",
@@ -736,9 +736,15 @@ describe("synthesizeGroundTruth", () => {
     const result = await synthesizeGroundTruth(store.session, "User: go", {
       metaModel: META_MODEL,
     });
-    // Names are lowercased and filtered to KNOWN_TOOLS ("notatool" dropped).
+    // A6: names are lowercased but unknown names are KEPT — "notatool" survives so the static plan
+    // lint's unknown-tool blocker (characteristic #6) can flag the typo at /plan finalize rather
+    // than silently dropping it and letting the step wedge at runtime.
     expect(result!.approach).toEqual([
-      { action: "Edit the router", verify: "bun test tests/router.test.ts", tools: ["edit", "bash"] },
+      {
+        action: "Edit the router",
+        verify: "bun test tests/router.test.ts",
+        tools: ["edit", "bash", "notatool"],
+      },
     ]);
   });
 

@@ -57,7 +57,7 @@ import {
   hasBlockers,
   lintPlan,
   stepsFromRows,
-  stepsFromSynth,
+  synthAuditFindings,
 } from "../minima/plan_lint.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
@@ -1932,10 +1932,10 @@ export function HarnessApp({
           // A6 poka-yoke audit: statically lint the finalized plan against the characteristics of a
           // good plan. Blocker-severity findings (a fabricated always-passing check, a typo'd tool
           // allowlist, an empty plan) REFUSE finalize unless the user passes --force; warns/infos
-          // are advisory and appended to the success note below.
+          // are advisory and appended to the success note below. An empty approach still lints (so
+          // the empty-plan blocker fires); only a null synth (synthesis failed) skips the audit.
           const force = rest.split(/\s+/).includes("--force");
-          const auditFindings =
-            synth && synth.approach.length > 0 ? lintPlan(stepsFromSynth(synth.approach)) : [];
+          const auditFindings = synthAuditFindings(synth ? synth.approach : null);
           if (hasBlockers(auditFindings) && !force) {
             pushPlan(
               `${formatFindings(auditFindings)}\n\nFinalize refused — fix the blocker(s) above, or re-run \`/plan finalize --force\` to override. The plan was not written and plan mode stays ON.`,

@@ -31,7 +31,6 @@ import {
 } from "./plan_session.ts";
 import type { MinimaAgent } from "./runtime.ts";
 import { type ChildEvent, createSpawn } from "./spawn.ts";
-import { KNOWN_TOOLS } from "./tool_permissions.ts";
 
 export interface CouncilEvent {
   phase: "scope" | "research" | "keeper" | "critic" | "synth" | "done";
@@ -722,11 +721,12 @@ function sanitizeApproach(raw: unknown): SynthPlanStep[] {
     } else if (item && typeof item === "object") {
       const r = item as Record<string, unknown>;
       const action = asStr(r.action) || asStr(r.step) || asStr(r.task);
-      // A6: keep only names that are real tools (a typo'd allowlist would block everything at
-      // runtime); the static plan lint separately flags an unknown name it was told to keep.
-      const tools = asStrList(r.tools)
-        .map((t) => t.toLowerCase())
-        .filter((t) => KNOWN_TOOLS.has(t));
+      // A6: normalize (lowercase) but KEEP unknown names — a typo'd allowlist must survive to the
+      // static plan lint's `unknown-tool` blocker (characteristic #6), which catches it at
+      // `/plan finalize`. Silently dropping it here would hide the typo and, for a sole-typo list,
+      // convert a scoped step into an unrestricted one. Enforcement ignores an unknown name safely
+      // (it never matches a real call), so keeping it costs nothing at runtime.
+      const tools = asStrList(r.tools).map((t) => t.toLowerCase());
       if (action) out.push({ action, verify: asStr(r.verify), tools });
     }
   }

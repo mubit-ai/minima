@@ -52,6 +52,19 @@ export function stepsFromSynth(approach: readonly SynthPlanStep[]): LintStep[] {
     .filter((st) => st.content.length > 0);
 }
 
+/**
+ * The `/plan finalize` gate audit over a synthesized plan's approach. A `null` approach means
+ * synthesis produced nothing (deterministic fallback) → no findings. An EMPTY approach still lints:
+ * that is how the `empty-plan` blocker reaches finalize — a non-null synth with no steps must refuse
+ * (characteristic #1). Kept here (not inline in the TUI) so the gate is unit-testable.
+ */
+export function synthAuditFindings(
+  approach: readonly SynthPlanStep[] | null | undefined,
+): PlanFinding[] {
+  if (!approach) return [];
+  return lintPlan(stepsFromSynth(approach));
+}
+
 /** Normalize persisted plan rows into lint steps (parsing the `tools` JSON column). */
 export function stepsFromRows(rows: readonly PlanStepRow[]): LintStep[] {
   return rows.map((r) => ({
@@ -66,6 +79,9 @@ export function stepsFromRows(rows: readonly PlanStepRow[]): LintStep[] {
  * EVERY chained segment is a no-op (so `echo building && bun test` is fine — the test gates it, but
  * `echo done` or `true` or `echo x && exit 0` is not). Conservative like the tamper markers: a
  * false blocker is annoying, a missed one lets a fake check ship, so the no-op set stays tight.
+ * A trailing shell comment is stripped per segment before matching, so the disguised noops
+ * `true # placeholder` / `exit 0 # done` / `: # noop` still trip the blocker (comment-stripping can
+ * only ever REMOVE gating text, never add a false positive).
  */
 const NOOP_SEGMENT = /^(true|:|exit\s+0|pwd|clear|echo\b.*|printf\b.*|#.*)$/;
 
@@ -74,7 +90,12 @@ function isNonGatingVerify(verify: string): boolean {
   if (!v) return false; // "no verify" is a separate (warn) rule, not "non-gating"
   const segments = v
     .split(/&&|\|\||[;|]/)
-    .map((s) => s.trim())
+    .map((s) =>
+      s
+        .trim()
+        .replace(/\s+#.*$/, "")
+        .trim(),
+    )
     .filter(Boolean);
   if (segments.length === 0) return false;
   return segments.every((s) => NOOP_SEGMENT.test(s));
@@ -83,11 +104,20 @@ function isNonGatingVerify(verify: string): boolean {
 /** Vague verbs that, used alone, describe an unverifiable blob of work rather than a concrete step. */
 const VAGUE_ONLY = /^(refactor|cleanup|clean\s?up|improve|polish|tidy|fix|update|handle|misc)\b/i;
 
+/** A token that names a concrete object — a file/path (`auth.ts`, `src/config.ts`), an identifier
+ *  (`snake_case`), or camelCase (`parseTodos`). Its presence gives the step a check to name. */
+const CONCRETE_OBJECT = /[/_.]|[a-z][A-Z]/;
+
 function isVagueAction(action: string): boolean {
   const words = action.split(/\s+/).filter(Boolean);
   if (words.length < 3) return true; // 1–2 words can't name a concrete, checkable change
-  // A short phrase led by a vague verb with no object beyond a word or two ("improve the code").
-  return words.length <= 4 && VAGUE_ONLY.test(action);
+  // A short phrase led by a vague verb ("improve the code") is unverifiable — UNLESS it names a
+  // concrete object (a file/path/identifier), which is checkable. Rule #5 targets "a vague verb
+  // with NO object", so a concrete object exempts the step from the warn.
+  if (words.length <= 4 && VAGUE_ONLY.test(action)) {
+    return !words.some((w) => CONCRETE_OBJECT.test(w));
+  }
+  return false;
 }
 
 /**
