@@ -1,4 +1,4 @@
-"""Optional zero-code intake: route ``mubit.learn`` auto-capture into Minima's lane.
+"""Optional TRACE ENRICHMENT (not the feedback loop): mubit.learn auto-capture in Minima's lane.
 
 This is a thin, opinionated wrapper over ``mubit.learn``. Calling :func:`enable` pins
 the learn run to the same memory lane Minima recalls from (``minima:<namespace>``) and a
