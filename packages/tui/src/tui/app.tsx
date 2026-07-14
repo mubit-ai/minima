@@ -101,7 +101,7 @@ import { linesFor, liveReplyLines, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { persistMode } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
-import { perfEnabled, perfSample } from "./perf.ts";
+import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -998,6 +998,20 @@ export function HarnessApp({
   // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
   const renderCountRef = useRef(0);
   renderCountRef.current++;
+  // Whole-render wall time + subprocess count, sampled once per commit (the dep-less effect
+  // is intentional). ms spans render body → post-commit, so any synchronous blocking inside
+  // render (the per-render git fork bug) shows up here even when window compute stays fast.
+  const renderT0 = perfEnabled ? performance.now() : 0;
+  useEffect(() => {
+    if (!perfEnabled) return;
+    perfSample({
+      kind: "render",
+      ms: performance.now() - renderT0,
+      renders: renderCountRef.current,
+      spawns: perfSpawns(),
+      stdinListeners: process.stdin.listenerCount("readable"),
+    });
+  });
   // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
   // height math) and mirrored into a ref so the key handler can gate on it.
   const [tocOpen, setTocOpen] = useState(false);

@@ -12,6 +12,29 @@ let flusher: ReturnType<typeof setInterval> | null = null;
 
 export const perfEnabled = target !== null;
 
+// Subprocess counter: with the probe on, Bun.spawnSync is wrapped so soak tests can assert
+// that rendering/scrolling forks NOTHING (a useRef(detectRepo(...)) argument once forked git
+// on every render — the freeze/title-flap bug). null = wrap unavailable; the verify script
+// treats a missing count as a failure rather than silently passing.
+let spawns = 0;
+let spawnsTracked = false;
+if (perfEnabled) {
+  try {
+    const orig = Bun.spawnSync.bind(Bun);
+    Bun.spawnSync = ((...args: Parameters<typeof Bun.spawnSync>) => {
+      spawns++;
+      return orig(...args);
+    }) as typeof Bun.spawnSync;
+    spawnsTracked = true;
+  } catch {
+    // Bun.spawnSync not writable in this runtime — counter stays off.
+  }
+}
+
+export function perfSpawns(): number | null {
+  return spawnsTracked ? spawns : null;
+}
+
 export function perfSample(sample: Record<string, unknown>): void {
   if (!target) return;
   buf.push(JSON.stringify({ t: Date.now(), ...sample }));

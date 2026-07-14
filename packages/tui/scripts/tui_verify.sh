@@ -85,22 +85,39 @@ assert seen("PLAN", 4.0, 99), "no PLAN badge after second Shift+Tab"
 print("tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)")
 PY
 
-echo "== tui-verify: perf budget (window compute bounded, listeners flat) =="
+echo "== tui-verify: perf budget (window compute bounded, listeners flat, zero spawns) =="
 python3 - "$TMP/perf.jsonl" <<'PY'
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1])]
 assert rows, "no perf samples - MINIMA_TUI_PERF probe not wired?"
-ms = sorted(r["ms"] for r in rows)
+win = [r for r in rows if r.get("kind") == "window"]
+rnd = [r for r in rows if r.get("kind") == "render"]
+assert win, "no window samples - window probe not wired?"
+assert rnd, "no render samples - render probe not wired?"
+ms = sorted(r["ms"] for r in win)
 cold, median = ms[-1], ms[len(ms) // 2]
 renders = rows[-1]["renders"]
 listeners = {r["stdinListeners"] for r in rows}
+rms = sorted(r["ms"] for r in rnd)
+r_p95 = rms[int(len(rms) * 0.95)] if len(rms) > 1 else rms[-1]
 print(f"samples={len(rows)} cold_max={cold:.1f}ms median={median:.2f}ms "
-      f"renders={renders} listeners={sorted(listeners)}")
+      f"render_p95={r_p95:.1f}ms renders={renders} listeners={sorted(listeners)}")
 # Generous machine-independent budgets: catch order-of-magnitude regressions, not noise.
 assert cold < 500, f"cold window compute {cold:.1f}ms exceeds 500ms"
 assert median < 30, f"median window compute {median:.2f}ms exceeds 30ms"
 assert renders < 300, f"{renders} renders for a 150-notch storm - coalescing broken?"
 assert max(listeners) <= 3, f"stdin listener growth: {sorted(listeners)}"
+assert r_p95 < 100, f"render wall-time p95 {r_p95:.1f}ms exceeds 100ms - render-path blocking?"
+# Scrolling must fork NOTHING. spawns is cumulative (startup git detection is legitimate);
+# assert it is FLAT from the first storm-window sample to the last. A missing counter is a
+# hard failure - a broken wrap must not silently pass.
+spawn_counts = [r["spawns"] for r in rnd]
+assert all(s is not None for s in spawn_counts), "Bun.spawnSync counter inactive"
+t0 = rows[0]["t"]
+storm = [r["spawns"] for r in rnd if r["t"] - t0 >= 3000]
+assert storm, "no render samples inside the storm window"
+assert storm[-1] == storm[0], (
+    f"subprocesses forked during scroll storm: spawns {storm[0]} -> {storm[-1]}")
 PY
 
 echo "== tui-verify: PASS =="
