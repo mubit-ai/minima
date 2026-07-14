@@ -100,7 +100,7 @@ class TestRoutingHealth:
         assert health["feedback_coverage"] == 0.5
         assert health["escalation_rate"] == 0.25
         assert health["exploration_share"] == 0.25  # actual exploration picks
-        assert health["epsilon_policy_share"] == 0.5  # rows where it was possible
+        assert health["thompson_policy_share"] == 0.0  # legacy epsilon rows are not thompson
 
     def test_empty(self):
         assert routing_health([])["recommendations"] == 0

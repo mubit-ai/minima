@@ -55,7 +55,7 @@ REQ = RecommendRequest(
 
 
 async def test_observed_cost_picks_truly_cheaper_model():
-    settings = Settings(mubit_api_key="t")  # observed-cost ranking on by default
+    settings = Settings(mubit_api_key="t", minima_selection_policy="argmin")
     engine = Recommender(
         settings, FakeMemory(_evidence()), _catalog(settings), RecommendationStore()
     )
@@ -66,7 +66,9 @@ async def test_observed_cost_picks_truly_cheaper_model():
 
 
 async def test_observed_cost_disabled_reverts_to_token_misranking():
-    settings = Settings(mubit_api_key="t", minima_use_observed_cost=False)
+    settings = Settings(
+        mubit_api_key="t", minima_use_observed_cost=False, minima_selection_policy="argmin"
+    )
     engine = Recommender(
         settings, FakeMemory(_evidence()), _catalog(settings), RecommendationStore()
     )

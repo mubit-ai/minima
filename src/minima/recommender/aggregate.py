@@ -160,23 +160,3 @@ def is_conflicted(agg: ModelAggregate, min_n: int = 4, lo: float = 0.35, hi: flo
     """A model whose neighbors show mixed success — broadened to catch degrading models."""
     return agg.n >= min_n and lo <= agg.weighted_success_rate <= hi
 
-
-def apply_ipw(
-    aggs: dict[str, ModelAggregate],
-    propensities: dict[str, float],
-    clip_low: float,
-    clip_high: float,
-) -> None:
-    """Re-weight each model's evidence mass by clipped inverse propensity, in place.
-
-    Scaling weight_sum and weighted_success by the same factor preserves the
-    empirical success rate while up-weighting evidence from rarely-recommended
-    models (low propensity) so it isn't drowned out by selection bias.
-    """
-    for model_id, agg in aggs.items():
-        pi = propensities.get(model_id)
-        if not pi or pi <= 0:
-            continue
-        factor = min(clip_high, max(clip_low, 1.0 / pi))
-        agg.weight_sum *= factor
-        agg.weighted_success *= factor

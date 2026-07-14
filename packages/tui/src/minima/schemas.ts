@@ -285,3 +285,34 @@ export interface CapabilitiesResponse {
   /** Constraint fields the engine actively filters on. */
   honored_constraints: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Policy value / regret-vs-oracle — metrics/ope.py + savings.py router
+// ---------------------------------------------------------------------------
+
+export interface PolicyEstimate {
+  policy: string;
+  n: number;
+  success_value: number;
+  cost_value: number;
+  /** Share of rows where this policy's pick equals the logged pick. */
+  matched_share: number;
+}
+
+export interface RegretReport {
+  n_trusted: number;
+  n_total_reconciled: number;
+  /** Share of trusted rows logged with a non-degenerate propensity. */
+  stochastic_share: number;
+  policies: PolicyEstimate[];
+  /** Model-based oracle success minus deployed success (honest upper bound). */
+  regret_vs_oracle: number;
+}
+
+export interface PolicyValueResponse {
+  org_id: string;
+  since: number;
+  days: number;
+  namespace?: string | null;
+  report: RegretReport;
+}

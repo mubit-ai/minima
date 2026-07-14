@@ -9,6 +9,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from minima.metrics.calibration import CalibrationReport, CusumFlag
+from minima.metrics.ope import RegretReport
 from minima.metrics.savings import SavingsSummary
 
 
@@ -37,3 +38,18 @@ class CalibrationResponse(BaseModel):
     health: dict[str, float | int] = Field(default_factory=dict)
     reports: list[CalibrationReport] = Field(default_factory=list)
     drift_flags: list[CusumFlag] = Field(default_factory=list)
+
+
+class PolicyValueResponse(BaseModel):
+    """Doubly-robust policy values + model-based regret over the trusted decision log.
+
+    The counterfactual estimates are only as good as the log's stochasticity
+    (``report.stochastic_share``) and label trust (``report.n_trusted``) — both are
+    surfaced so the number can never quietly overclaim.
+    """
+
+    org_id: str
+    since: float
+    days: float
+    namespace: str | None = None
+    report: RegretReport

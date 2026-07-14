@@ -39,8 +39,7 @@ from minima.memory.adapter import MubitMemory
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
 from minima.memory.records import OutcomeRecord
 from minima.recommender import score
-from minima.recommender.aggregate import aggregate_by_model, apply_ipw
-from minima.recommender.propensity import PropensityTracker
+from minima.recommender.aggregate import aggregate_by_model
 from minima.schemas.common import Constraints, TaskInput, TaskType
 from minima.schemas.models_catalog import ModelCard
 from minima.seeding import routerbench as rb
@@ -305,11 +304,6 @@ async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: lis
         seed_weight=settings.minima_seed_weight,
         seed_crowdout_n=settings.minima_seed_crowdout_n,
     )
-    # Mirror the shipped engine: IPW with a cold (empty) propensity store, exactly as a
-    # /recommend call does when there's no logging history yet.
-    if settings.minima_ipw_enabled and aggs:
-        apply_ipw(aggs, PropensityTracker().propensities(lane, "", candidates),
-                  settings.minima_ipw_clip_low, settings.minima_ipw_clip_high)
     rt = _toks(row.prompt)
     # Strip the "[task/diff] " prefix build_content adds, then measure overlap with neighbors.
     sims = [_jaccard(rt, _toks(re.sub(r"^\[[^\]]*\]\s*", "", e.content))) for e in recall.outcome_evidence]

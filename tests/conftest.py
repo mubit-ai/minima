@@ -63,7 +63,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(mubit_api_key="test-key", minima_reflect_every_n=3)
+    # argmin keeps behavioral tests deterministic; the Thompson default (production)
+    # has dedicated coverage in test_measurement_api.TestSelectionPolicy.
+    return Settings(
+        mubit_api_key="test-key",
+        minima_reflect_every_n=3,
+        minima_selection_policy="argmin",
+    )
 
 
 @pytest.fixture

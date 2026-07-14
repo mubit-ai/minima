@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from minima.recommender.propensity import OrgScopedPropensity, PropensityTracker
 from minima.recommender.recstore import (
     OrgScopedRecStore,
     RecommendationStore,
@@ -51,7 +50,6 @@ def test_org_id_stable_across_calls():
 
 def _make_runtime():
     from minima.config import Settings
-    from minima.recommender.propensity import build_propensity
     from minima.recommender.recstore import LaneCounter, build_recstore
 
     settings = Settings(mubit_api_key=None, minima_reasoner_provider="none")
@@ -64,7 +62,6 @@ def _make_runtime():
             catalog_store=catalog_store,
             reasoner=None,
             recstore_backend=build_recstore(settings),
-            propensity_backend=build_propensity(settings),
             lane_counter=LaneCounter(),
         )
     return rt
@@ -102,13 +99,3 @@ def test_org_scoped_recstore_isolates_by_org():
     assert b.get("shared-id") is None
 
 
-def test_org_scoped_propensity_isolates_by_org():
-    backend = PropensityTracker()
-    a = OrgScopedPropensity(backend, "acme")
-    b = OrgScopedPropensity(backend, "globex")
-    for _ in range(5):
-        a.record("minima:default", "qa:easy", "m1")
-    a_p = a.propensities("minima:default", "qa:easy", ["m1", "m2"])
-    b_p = b.propensities("minima:default", "qa:easy", ["m1", "m2"])
-    assert a_p["m1"] > a_p["m2"]
-    assert b_p["m1"] == b_p["m2"]

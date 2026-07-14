@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import random
 import time
 import uuid
@@ -18,11 +17,10 @@ from minima.memory.keys import build_content, salient_signature, task_cluster, t
 from minima.memory.records import clamp01, label_score
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
-from minima.recommender.aggregate import aggregate_by_model, apply_ipw
+from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details, classify_from_neighbors_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
-from minima.recommender.propensity import Propensity, PropensityTracker
 from minima.recommender.recstore import RecStore, StoredRecommendation
 from minima.recommender.types import CandidateScore, ModelAggregate
 from minima.schemas.common import DecisionBasis, Difficulty, TaskType
@@ -73,7 +71,6 @@ class Recommender:
         catalog_store: CatalogStore,
         recstore: RecStore,
         reasoner: Reasoner | None = None,
-        propensity: Propensity | None = None,
         decision_log: DecisionLog | None = None,
         org_id: str = "default",
         rng: random.Random | None = None,
@@ -84,19 +81,19 @@ class Recommender:
         self._catalog_store = catalog_store
         self._recstore = recstore
         self._reasoner = reasoner
-        self._propensity = propensity or PropensityTracker()
         self._decision_log = decision_log
         self._org_id = org_id
         self._durable_refs = durable_refs
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
-        epsilon_orgs = {
-            o.strip() for o in settings.minima_epsilon_selection_orgs.split(",") if o.strip()
-        }
-        self._epsilon_enabled = org_id in epsilon_orgs
-        thompson_orgs = {
-            o.strip() for o in settings.minima_thompson_selection_orgs.split(",") if o.strip()
-        }
-        self._thompson_enabled = org_id in thompson_orgs
+        argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
+        self._thompson_enabled = (
+            settings.minima_selection_policy.strip().lower() == "thompson"
+            and org_id not in argmin_orgs
+        )
+        # Running exploration-share counters for the per-org deviation cap (in-process;
+        # reset on restart — the cap bounds a burst, not lifetime spend).
+        self._explore_picks = 0
+        self._total_picks = 0
         # Lazily-fit, cached calibrator (org-scoped via this Recommender's decision log).
         self._calibrators: CalibratorSet | None = None
         self._calibrators_fitted_at: float = 0.0
@@ -215,14 +212,6 @@ class Recommender:
             seed_crowdout_n=settings.minima_seed_crowdout_n,
         )
         profile.mark("aggregate")
-        if settings.minima_ipw_enabled and aggregates:
-            apply_ipw(
-                aggregates,
-                self._propensity.propensities(lane, cluster, candidate_ids),
-                settings.minima_ipw_clip_low,
-                settings.minima_ipw_clip_high,
-            )
-        profile.mark("ipw")
 
         input_tokens = req.task.expected_input_tokens or settings.minima_default_input_tokens
         output_tokens = req.task.expected_output_tokens or int(
@@ -332,17 +321,18 @@ class Recommender:
         if catalog.stale:
             warnings.append("prices_stale")
 
-        # Selection policy: deterministic argmin everywhere; epsilon-softmax over the
-        # tau-ELIGIBLE set for opted-in orgs (the safety floor is eligibility itself).
-        # The propensity vector is logged either way so off-policy evaluation can tell
-        # a degenerate (deterministic) log from a stochastic one.
+        # Selection policy: calibrated Thompson sampling is THE default — sample each
+        # candidate's success from its Beta posterior, pick the cheapest clearing tau
+        # under the sample. Self-tuning exploration (well-evidenced candidates behave
+        # like argmin; uncertain ones get tried proportionally to plausibility) whose
+        # Monte-Carlo selection frequencies ARE the logged propensities, so off-policy
+        # evaluation is valid. "argmin" (per-org opt-out) keeps the deterministic
+        # cheapest-clearing-tau pick with degenerate propensities.
         selection_policy = "argmin"
         explored_pick = False
         sel_propensities: dict[str, float] = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
         sel_propensities[recommended.card.model_id] = 1.0
         if self._thompson_enabled and len(scored) >= 2:
-            # Posterior-sampling selection: sample each candidate's success, pick cheapest
-            # clearing tau under the sample. MC frequencies are the logged propensities.
             selection_policy = "thompson"
             items = [(c.card.model_id, c.alpha, c.beta, c.est_cost_usd) for c in scored]
             pick_id, pi = score.thompson_select(
@@ -351,43 +341,28 @@ class Recommender:
             sel_propensities = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
             sel_propensities.update(pi)
             if pick_id and pick_id != recommended.card.model_id:
-                sampled = next((c for c in scored if c.card.model_id == pick_id), None)
-                if sampled is not None:
-                    fallback = recommended  # the deterministic pick is the natural retry
-                    recommended = sampled
-                    overall_basis = recommended.decision_basis
-                    explored_pick = True
-                    warnings.append("thompson_pick")
-        elif self._epsilon_enabled:
-            eligible = [c for c in ranked if c.predicted_success >= tau]
-            if len(eligible) >= 2:
-                selection_policy = "epsilon_softmax"
-                argmin_id = recommended.card.model_id
-                pi = score.softmax_propensities(
-                    {c.card.model_id: c.score for c in eligible},
-                    argmin_id,
-                    settings.minima_epsilon,
-                    settings.minima_epsilon_softmax_temperature,
-                )
-                sel_propensities.update(pi)
-                sampled = self._maybe_explore(eligible, argmin_id)
-                if sampled is not None and sampled.card.model_id != argmin_id:
-                    fallback = recommended  # the deterministic pick is the natural retry
-                    recommended = sampled
-                    overall_basis = recommended.decision_basis
-                    explored_pick = True
-                    warnings.append("exploration_pick")
-
-        self._propensity.record(lane, cluster, recommended.card.model_id)
-
-        # Advisory shadow bandit: log what a UCB policy WOULD pick (never overrides).
-        shadow_pick: str | None = None
-        if settings.minima_shadow_bandit and ranked:
-            shadow_pick = _shadow_pick(
-                ranked, req.cost_quality_tradeoff, settings.minima_shadow_ucb_alpha
-            )
-            if shadow_pick is not None and shadow_pick != recommended.card.model_id:
-                warnings.append("shadow_disagree")
+                # Deviation cap: bound the running share of deliberate-exploration picks
+                # so a cold pool can't route a burst of live traffic away from argmin.
+                cap = settings.minima_explore_share_cap
+                share = self._explore_picks / max(1, self._total_picks)
+                if cap < 1.0 and share >= cap:
+                    selection_policy = "argmin"
+                    sel_propensities = dict.fromkeys(
+                        (c.card.model_id for c in ranked), 0.0
+                    )
+                    sel_propensities[recommended.card.model_id] = 1.0
+                    warnings.append("explore_budget_capped")
+                else:
+                    sampled = next((c for c in scored if c.card.model_id == pick_id), None)
+                    if sampled is not None:
+                        fallback = recommended  # the deterministic pick is the natural retry
+                        recommended = sampled
+                        overall_basis = recommended.decision_basis
+                        explored_pick = True
+                        warnings.append("thompson_pick")
+        self._total_picks += 1
+        if explored_pick:
+            self._explore_picks += 1
         profile.mark("selection")
 
         recommendation_id = uuid.uuid4().hex
@@ -428,7 +403,6 @@ class Recommender:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             est_cost_premium=est_cost_premium,
-            shadow_chosen_model_id=shadow_pick,
         )
         profile.mark("decision_log")
 
@@ -453,22 +427,6 @@ class Recommender:
             recommended_actions=_actions_for(recommended.card),
             stage_latency_ms=profile.as_dict(),
         )
-
-    def _maybe_explore(
-        self, eligible: list[CandidateScore], argmin_id: str
-    ) -> CandidateScore | None:
-        """Sample the epsilon branch: softmax over eligible ranking scores.
-
-        Returns the sampled candidate (possibly the argmin itself) or None when the
-        (1 - epsilon) deterministic branch was taken.
-        """
-        settings = self._settings
-        if self._rng.random() >= settings.minima_epsilon:
-            return None
-        t = max(settings.minima_epsilon_softmax_temperature, 1e-6)
-        peak = max(c.score for c in eligible)
-        weights = [math.exp((c.score - peak) / t) for c in eligible]
-        return self._rng.choices(eligible, weights=weights, k=1)[0]
 
     async def _recall_with_fastpath(
         self,
@@ -604,12 +562,10 @@ class Recommender:
         input_tokens: int,
         output_tokens: int,
         est_cost_premium: float,
-        shadow_chosen_model_id: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
             return
-        settings = self._settings
         # Counterfactual baselines on the same cost basis as the candidate set: premium =
         # the most expensive scored candidate BEFORE constraint filters (mirrors the
         # workflow endpoint's total_est_cost_if_all_premium); declared = the caller's
@@ -643,10 +599,9 @@ class Recommender:
                     ts=time.time(),
                     tau=tau,
                     policy=selection_policy,
-                    epsilon=settings.minima_epsilon if selection_policy != "argmin" else 0.0,
+                    epsilon=0.0,
                     chosen_model_id=recommended.card.model_id,
                     escalated=esc.should_escalate,
-                    shadow_chosen_model_id=shadow_chosen_model_id,
                     explored=explored_pick,
                     escalation_reasons=list(esc.reasons),
                     candidates=[
@@ -761,7 +716,7 @@ class Recommender:
             c.score = score.ranking_score(
                 c.predicted_success, c.est_cost_usd / max_cost, cost_quality_tradeoff
             )
-        return _optimize(scored, tau, self._settings.minima_collapse_margin)
+        return _optimize(scored, tau)
 
 
     # --------------------------------------------------------------- calibration
@@ -835,12 +790,9 @@ class Recommender:
                 agg, prior, settings.minima_beta_pseudocount
             )
             alpha, beta = score.beta_params(agg, prior, settings.minima_beta_pseudocount)
-            # Calibrate the honest Beta mean to a truthful probability BEFORE the
-            # exploration bonus (deliberate optimism) is layered on for the tau decision.
+            # Calibrate the honest Beta mean to a truthful probability. Deliberate
+            # optimism is Thompson's job at selection time, not a score-time bonus.
             predicted = self._calibrate(task_type.value, predicted)
-            predicted = score.with_exploration_bonus(
-                predicted, confidence, settings.minima_exploration_bonus
-            )
             use_cache = req.constraints.require_prompt_caching and card.supports_prompt_caching
             cache_fraction = (
                 settings.minima_cost_cache_input_fraction
@@ -919,26 +871,6 @@ class Recommender:
         return scored
 
 
-def _shadow_pick(
-    scored: list[CandidateScore], cost_quality_tradeoff: float, alpha: float
-) -> str | None:
-    """The UCB shadow policy's pick (argmax ucb_score over the scored candidates)."""
-    if not scored:
-        return None
-    max_cost = max((c.est_cost_usd for c in scored), default=0.0) or 1.0
-    best = max(
-        scored,
-        key=lambda c: score.ucb_score(
-            c.predicted_success,
-            c.interval_width,
-            c.est_cost_usd / max_cost,
-            cost_quality_tradeoff,
-            alpha,
-        ),
-    )
-    return best.card.model_id
-
-
 def _actions_for(card: ModelCard) -> list[str]:
     """Near-free cost-saving actions the caller should apply to realize the quoted cost.
 
@@ -998,57 +930,25 @@ def _select_candidates(
 
 
 def _optimize(
-    scored: list[CandidateScore], tau: float, collapse_margin: float = 0.0
+    scored: list[CandidateScore], tau: float
 ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
+    """Deterministic MAP pick: cheapest candidate clearing tau, else highest-predicted.
+
+    This is the argmin limit of the Thompson policy, which handles uncertainty-driven
+    optimism natively at selection time (subsuming the old collapse-margin rescue,
+    epsilon-softmax, and exploration-bonus mechanisms this replaced).
+    """
     warnings: list[str] = []
     ranked = sorted(scored, key=lambda c: c.score, reverse=True)
     eligible = [c for c in scored if c.predicted_success >= tau]
-
-    # Tau-aware optimism: the rescue shrinks as the quality bar rises, so at a HIGH
-    # cost_quality setting (user wants quality) the guard barely fires, and at a LOW bar
-    # (cost-leaning) it rescues cheap-but-uncertain models freely. This is what keeps the
-    # guard from trading away quality exactly where the user asked for it.
-    effective_margin = collapse_margin * max(0.0, 1.0 - tau)
-
-    def _optimistic_clears(c: CandidateScore) -> bool:
-        # Upper credible-bound view: predicted + effective_margin * half-width clears tau.
-        # Only applied to candidates with ACTUAL evidence (confidence > 0) — at cold start,
-        # capability priors (not optimism over a maximal interval) decide, so the guard is inert.
-        if c.confidence <= 0.0:
-            return False
-        return c.predicted_success + effective_margin * 0.5 * c.interval_width >= tau
 
     if eligible:
         recommended = min(
             eligible, key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence)
         )
-        # Routing-collapse guard: if the cheapest model clearing tau is ITSELF the priciest
-        # candidate, prefer a cheaper candidate whose credible interval could still clear tau
-        # (the judge/escalation loop catches an over-optimistic cheap pick).
-        if collapse_margin > 0.0 and len(scored) > 1:
-            max_cost = max(c.est_cost_usd for c in scored)
-            if recommended.est_cost_usd >= max_cost - 1e-12:
-                cheaper = [
-                    c
-                    for c in scored
-                    if c.est_cost_usd < recommended.est_cost_usd and _optimistic_clears(c)
-                ]
-                if cheaper:
-                    recommended = min(
-                        cheaper,
-                        key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence),
-                    )
-                    warnings.append("collapse_guard_applied")
     else:
         warnings.append("no_model_meets_threshold")
-        # Don't default to the strongest (usually priciest) model: prefer the cheapest whose
-        # optimistic upper bound could still clear tau, falling back to strongest if none.
-        plausible = [c for c in scored if _optimistic_clears(c)] if collapse_margin > 0.0 else []
-        if plausible:
-            recommended = min(plausible, key=lambda c: (c.est_cost_usd, -c.predicted_success))
-            warnings.append("collapse_guard_applied")
-        else:
-            recommended = max(scored, key=lambda c: c.predicted_success)
+        recommended = max(scored, key=lambda c: c.predicted_success)
 
     others = [c for c in eligible if c.card.model_id != recommended.card.model_id]
     reliable = [c for c in others if c.predicted_success >= tau + 0.05]
@@ -1057,7 +957,6 @@ def _optimize(
     else:
         rest = [c for c in ranked if c.card.model_id != recommended.card.model_id]
         fallback = max(rest, key=lambda c: c.predicted_success) if rest else None
-
     return recommended, fallback, ranked, warnings
 
 

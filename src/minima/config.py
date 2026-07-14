@@ -136,11 +136,6 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     gemini_api_key: str | None = None
 
-    # --- Selection-bias correction (inverse propensity weighting) ---
-    minima_ipw_enabled: bool = True
-    minima_ipw_clip_low: float = 0.1
-    minima_ipw_clip_high: float = 10.0
-
     # --- Learning maturity ---
     # Cluster granularity controls the upsert grouping (one durable record per cluster+model).
     # "coarse" = task_type:difficulty; "fine" appends a salient-keyword signature bucket so
@@ -150,9 +145,6 @@ class Settings(BaseSettings):
     # Promote a verified-in-production strong success to a durable Lesson (feeds reflect()).
     minima_lesson_on_verified_prod: bool = True
     minima_lesson_min_quality: float = 0.8
-    # Optimistic exploration bonus added to under-explored candidates' predicted success,
-    # scaled by their uncertainty. 0.0 = off (no exploration; pure exploitation).
-    minima_exploration_bonus: float = 0.0
 
     # --- Catalog ---
     minima_catalog_refresh_seconds: int = 21_600
@@ -196,19 +188,21 @@ class Settings(BaseSettings):
     # and reconciled with realized outcomes at feedback time. This powers /v1/savings,
     # /v1/calibration, feedback-coverage, and offline policy evaluation.
     minima_decision_log_retention_days: int = 90
-    # Orgs (comma-separated) that opt into epsilon-stochastic selection: with probability
-    # epsilon the pick is sampled from a softmax over the tau-ELIGIBLE candidates instead
-    # of the strict cheapest-eligible. Makes logged propensities non-degenerate so IPW and
-    # off-policy evaluation are valid. Default: nobody (deterministic argmin everywhere).
-    minima_epsilon_selection_orgs: str = ""
-    minima_epsilon: float = 0.03
-    minima_epsilon_softmax_temperature: float = 0.1
-    # Orgs (comma-separated) that opt into Thompson (posterior-sampling) selection instead of
-    # epsilon-softmax: each decision samples theta_m ~ Beta(alpha_m, beta_m) and picks the
-    # cheapest model clearing tau under the sample. Monte-Carlo selection frequencies are
-    # logged as propensities so IPW/OPE stay valid. Takes precedence over epsilon if both set.
-    minima_thompson_selection_orgs: str = ""
+    # Selection policy: "thompson" (default) samples theta_m ~ Beta(alpha_m, beta_m) per
+    # decision and picks the cheapest model clearing tau under the sample. Self-tuning
+    # exploration: well-evidenced candidates behave like argmin; uncertain ones get tried
+    # in proportion to how plausible it is that they're good — and the Monte-Carlo
+    # selection frequencies are the logged propensities, so off-policy evaluation is
+    # valid. "argmin" = deterministic cheapest-clearing-tau (degenerate propensities).
+    minima_selection_policy: str = "thompson"  # thompson | argmin
+    # Orgs (comma-separated) that opt OUT of Thompson back to deterministic argmin.
+    minima_argmin_orgs: str = ""
     minima_thompson_samples: int = 128
+    # Cap on the running share of decisions where Thompson deviates from the argmin pick
+    # (per org, per process). Above the cap the argmin pick is used (with degenerate
+    # propensities and an explore_budget_capped warning) — bounds deliberate-exploration
+    # spend on live traffic. 1.0 = uncapped.
+    minima_explore_share_cap: float = 0.25
 
     # --- Calibration monitoring ---
     minima_calibration_window_days: int = 30
@@ -231,17 +225,6 @@ class Settings(BaseSettings):
     minima_calibration_min_n: int = 30
     minima_calibration_refresh_seconds: int = 600
 
-    # --- Routing-collapse margin guard ---
-    # Scalar-score + cheapest-clearing-tau can collapse to the single most expensive model
-    # at high quality bars (arXiv 2602.03478). When the cheapest-eligible pick IS the
-    # priciest candidate, prefer a cheaper candidate whose success credible interval could
-    # still clear tau. The optimism is TAU-AWARE so it shrinks as the quality bar rises:
-    #   eligible_optimistic = predicted + margin * (1 - tau) * 0.5 * interval_width.
-    # margin >= 0: 0 disables the guard. The (1 - tau) factor keeps the guard gentle at high
-    # cost_quality (where the user wants quality) and active at low (cost-leaning). The judge
-    # / escalation loop is the safety net that catches an over-optimistic cheap pick.
-    minima_collapse_margin: float = 1.0
-
     # --- Lever-aware cost (prompt caching) ---
     # When on, the ESTIMATE cost tier prices a cache-supporting model's input at a blend of
     # its cache-read and full rates (assuming the caller applies prompt caching, as the
@@ -258,14 +241,6 @@ class Settings(BaseSettings):
     # LLM-classify call. Embedding-based routing already happens via recall; this just makes
     # the cluster KEY semantically coherent for ambiguous prompts.
     minima_neighbor_classify: bool = True
-
-    # --- Shadow bandit (advisory only) ---
-    # When on, a UCB contextual-bandit policy computes what it WOULD pick and logs it on the
-    # decision row (shadow_chosen_model_id) alongside the deployed conjugate pick. It NEVER
-    # overrides the recommendation — it exists so we can measure agreement / regret offline
-    # before considering promotion. alpha scales the exploration optimism.
-    minima_shadow_bandit: bool = False
-    minima_shadow_ucb_alpha: float = 1.0
 
     # --- Durable-record fast path ---
     # Dereference the durable (cluster, model) outcome records alongside ANN recall so the

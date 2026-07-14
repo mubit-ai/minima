@@ -28,7 +28,6 @@ from minima.memory.adapter import Memory
 from minima.recommender.decisionlog import build_decision_log
 from minima.recommender.durablerefs import build_durable_refs
 from minima.recommender.engine import Recommender
-from minima.recommender.propensity import build_propensity
 from minima.recommender.recstore import LaneCounter, RecStore, build_recstore
 from minima.tenancy.passthrough import PassthroughRuntime
 from minima.version import __version__
@@ -42,7 +41,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     injected: dict = getattr(app.state, "_injected", {})
     catalog_store: CatalogStore = injected.get("catalog_store") or CatalogStore(settings)
     recstore_backend: RecStore = injected.get("recstore") or build_recstore(settings)
-    propensity_backend = build_propensity(settings)
     decision_log_backend = build_decision_log(settings)
     reasoner = build_reasoner(settings)
     lane_counter = LaneCounter()
@@ -55,7 +53,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         catalog_store=catalog_store,
         reasoner=reasoner,
         recstore_backend=recstore_backend,
-        propensity_backend=propensity_backend,
         lane_counter=lane_counter,
         memory_factory=(lambda _key: injected_memory) if injected_memory is not None else None,
         decision_log_backend=decision_log_backend,
