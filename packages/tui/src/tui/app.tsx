@@ -184,6 +184,7 @@ const COMMANDS = [
   { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
   { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
   { name: "help", desc: "Show available commands list" },
+  { name: "shortcuts", desc: "List all keyboard shortcuts" },
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
@@ -1865,6 +1866,20 @@ export function HarnessApp({
             role: "tool",
             text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard shortcuts:\n${SHORTCUTS.map((s) => `  ${s.keys.padEnd(15)} ${s.desc}`).join("\n")}`,
             toolName: "help",
+          },
+        ]);
+        break;
+      case "shortcuts":
+        setMessages((m) => [
+          ...m,
+          {
+            role: "user",
+            text: `/${name} ${args}`.trim(),
+          },
+          {
+            role: "tool",
+            text: `Keyboard shortcuts:\n${SHORTCUTS.map((s) => `  ${s.keys.padEnd(15)} ${s.desc}`).join("\n")}`,
+            toolName: "shortcuts",
           },
         ]);
         break;
