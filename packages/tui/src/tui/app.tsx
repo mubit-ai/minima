@@ -1956,9 +1956,9 @@ export function HarnessApp({
           setCtxPct(stats.ctxPct);
         }
         if (undonePrompt) {
-      setPrefill({ text: undonePrompt, nonce: Date.now() });
-      setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
-    }
+          setPrefill({ text: undonePrompt, nonce: Date.now() });
+          setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
+        }
 
         setMessages((prev) => {
           const idxs: number[] = [];

@@ -77,7 +77,10 @@ export function TextInput({
   // stale snapshot — two ←← would move the cursor once. Mutations go through the ref
   // immediately; the state copy just mirrors it for the next paint.
   // B4 prefill: initialValue seeds the draft at mount (remount via `key` applies a new one).
-  const draftRef = useRef<Draft>({ value: initialValue ?? "", cursor: (initialValue ?? "").length });
+  const draftRef = useRef<Draft>({
+    value: initialValue ?? "",
+    cursor: (initialValue ?? "").length,
+  });
   const [, setPaintGen] = useState(0);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
