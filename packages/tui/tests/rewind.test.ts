@@ -173,6 +173,7 @@ describe("composer prefill seam (B4.3)", () => {
       new URL("../src/tui/text-input.tsx", import.meta.url).pathname,
     ).text();
     expect(input).toContain("initialValue?: string");
-    expect(input).toContain('useState(initialValue ?? "")');
+    // The input's source of truth is draftRef (stale-closure fix); prefill seeds it at mount.
+    expect(input).toContain('value: initialValue ?? ""');
   });
 });

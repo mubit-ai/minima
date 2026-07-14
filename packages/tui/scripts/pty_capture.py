@@ -16,14 +16,29 @@ Spec (JSON):
       "cols": 100, "rows": 30,       # terminal size (default 80x24)
       "duration": 8,                 # seconds to run before SIGKILL (default 8)
       "show_history": true,          # also print scrollback above the screen (default true)
+      "env": {"MINIMA_TUI_PERF": "/tmp/perf.jsonl"},  # optional; merged into the child env
+      "frames": "/tmp/frames.jsonl", # optional; per-chunk grid snapshots as JSONL
       "steps": [                     # timed keystrokes; "send" supports the tokens below
         {"after": 2.0, "send": "hello"},
-        {"after": 3.0, "send": "<CR>"}
+        {"after": 3.0, "send": "<CR>"},
+        {"after": 4.0, "send": "<WHEELUP>", "repeat": 100, "gap": 0.005}  # a wheel storm
       ]
     }
 
 Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <BS>
              <CTRLC> <CTRLL> <CTRLP> <CTRLR> <CTRLT> <CTRLE> <CTRLG> <SPACE>
+             <WHEELUP> <WHEELDN> <CLICK> <PASTE> <ENDPASTE> <SHIFTTAB> <CTRLZ> <CTRLD>
+             <HOME> <END> <ALTLEFT> <ALTRIGHT> <ALTB> <ALTF> <ALTBS>
+    A step may be {"after": s, "signal": "CONT"} to send SIGCONT instead of bytes.
+
+Steps may set "repeat" (send N times) and "gap" (seconds between repeats, default 0 = one
+burst). A nonzero gap spreads the repeats across separate stdin chunks — closer to a real
+trackpad storm than one giant write, and it exercises cross-chunk wheel coalescing.
+
+With "frames", every PTY read chunk appends {"t": <s since start>, "screen": [rows...]} to
+the given JSONL file (one pyte stream fed progressively — parser state carries across chunks,
+so split escapes stay correct). tui_assert.py consumes this for invariants like "the prompt
+box row never moves during a wheel storm".
 
 Notes:
   - A present CI env var (even empty) flips Ink into non-interactive mode, so it is stripped.
@@ -46,12 +61,24 @@ import time
 import pyte
 
 TOKENS = {
-    "<ESC>": "\x1b", "<CR>": "\r", "<ENTER>": "\r", "<TAB>": "\t",
+    "<ESC>": "\x1b", "<CR>": "\r", "<ENTER>": "\r", "<TAB>": "\t", "<SHIFTTAB>": "\x1b[Z",
     "<UP>": "\x1b[A", "<DOWN>": "\x1b[B", "<LEFT>": "\x1b[D", "<RIGHT>": "\x1b[C",
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
-    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07",
+    "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07", "<CTRLA>": "\x01",
+    "<CTRLK>": "\x0b", "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
+    "<CTRLZ>": "\x1a", "<CTRLD>": "\x04",
+    "<HOME>": "\x1b[H", "<END>": "\x1b[F",
+    "<ALTLEFT>": "\x1b[1;3D", "<ALTRIGHT>": "\x1b[1;3C", "<ALTB>": "\x1bb", "<ALTF>": "\x1bf",
+    "<ALTBS>": "\x1b\x7f",
     "<SPACE>": " ",
+    # Bracketed paste envelope (what the terminal sends around a paste when ?2004h is set).
+    "<PASTE>": "\x1b[200~", "<ENDPASTE>": "\x1b[201~",
+    # SGR mouse wheel reports (button 64 = up, 65 = down) at an arbitrary in-grid cell —
+    # what a terminal sends per wheel notch when ?1000h/?1006h tracking is on.
+    "<WHEELUP>": "\x1b[<64;10;10M", "<WHEELDN>": "\x1b[<65;10;10M",
+    # A left-button press+release (the start of a click-drag selection attempt).
+    "<CLICK>": "\x1b[<0;10;10M\x1b[<0;10;10m",
 }
 
 
@@ -138,6 +165,24 @@ def main() -> int:
     duration = spec.get("duration", 8)
     steps = spec.get("steps", [])
     show_history = spec.get("show_history", True)
+    frames_path = spec.get("frames")
+    raw_path = spec.get("raw")  # optional: dump the raw output byte stream (OSC 52 asserts etc.)
+
+    # Expand steps into a flat (time, bytes) schedule so "repeat"/"gap" storms interleave
+    # with PTY reads instead of blocking the loop mid-burst.
+    events = []
+    for s in steps:
+        # {"signal": "CONT"} sends SIGCONT to the child instead of writing bytes —
+        # pairs with <CTRLZ> to test suspend/resume (the shell's `fg`).
+        if "signal" in s:
+            events.append((float(s["after"]), ("signal", s["signal"])))
+            continue
+        data = expand(s["send"])
+        repeat = int(s.get("repeat", 1))
+        gap = float(s.get("gap", 0.0))
+        for i in range(repeat):
+            events.append((float(s["after"]) + i * gap, ("send", data)))
+    events.sort(key=lambda e: e[0])
 
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -146,6 +191,7 @@ def main() -> int:
     env["COLUMNS"] = str(cols)
     env["LINES"] = str(rows)
     env.pop("CI", None)  # a present CI var (even empty) flips Ink into non-interactive mode
+    env.update(spec.get("env", {}))
 
     p = subprocess.Popen(
         spec["cmd"], stdin=slave, stdout=slave, stderr=slave,
@@ -154,15 +200,22 @@ def main() -> int:
     os.close(slave)
 
     start = time.time()
-    sent = [False] * len(steps)
-    raw = bytearray()
+    next_event = 0
+    chunks = []  # (seconds-since-start, bytes) per PTY read — replayable for frame snapshots
     while time.time() - start < duration:
         now = time.time() - start
-        for i, s in enumerate(steps):
-            if not sent[i] and now >= s["after"]:
-                os.write(master, expand(s["send"]))
-                sent[i] = True
-        r, _, _ = select.select([master], [], [], 0.1)
+        while next_event < len(events) and now >= events[next_event][0]:
+            kind, payload = events[next_event][1]
+            if kind == "signal":
+                os.kill(p.pid, getattr(signal, f"SIG{payload}"))
+            else:
+                os.write(master, payload)
+            next_event += 1
+        # Wake for the next scheduled event (fine-grained during storms), else poll at 100ms.
+        wait = 0.1
+        if next_event < len(events):
+            wait = max(0.001, min(wait, events[next_event][0] - now))
+        r, _, _ = select.select([master], [], [], wait)
         if r:
             try:
                 data = os.read(master, 65536)
@@ -170,17 +223,33 @@ def main() -> int:
                 break
             if not data:
                 break
-            raw += data
+            chunks.append((time.time() - start, data))
 
     try:
         os.killpg(os.getpgid(p.pid), signal.SIGKILL)
     except Exception:
         pass
 
-    # Feed the full accumulated stream once (robust vs. escapes split across reads). HistoryScreen
-    # keeps lines that scrolled off the top in `history.top` — that is the native scrollback.
+    # One pyte stream fed progressively: parser state persists across feeds, so escapes split
+    # between reads stay correct (equivalent to one big feed). HistoryScreen keeps lines that
+    # scrolled off the top in `history.top` — that is the native scrollback. With "frames",
+    # snapshot the visible grid after each chunk for time-indexed assertions (tui_assert.py).
     screen = pyte.HistoryScreen(cols, rows, history=5000, ratio=0.5)
-    pyte.ByteStream(screen).feed(bytes(raw))
+    stream = pyte.ByteStream(screen)
+    frames_f = open(frames_path, "w") if frames_path else None
+    for t, data in chunks:
+        stream.feed(bytes(data))
+        if frames_f:
+            frame = {"t": round(t, 3), "screen": [line.rstrip() for line in screen.display]}
+            frames_f.write(json.dumps(frame) + "\n")
+    if frames_f:
+        frames_f.close()
+        print(f"=== wrote {len(chunks)} frames: {frames_path} ===")
+    if raw_path:
+        with open(raw_path, "wb") as f:
+            for _, data in chunks:
+                f.write(data)
+        print(f"=== wrote raw stream: {raw_path} ===")
 
     if show_history and screen.history.top:
         hist = list(screen.history.top)
