@@ -25,7 +25,8 @@ SPEC=$(cat <<EOF
     {"after": 3.0, "send": "<WHEELUP>", "repeat": 100, "gap": 0.005},
     {"after": 5.0, "send": "<WHEELDN>", "repeat": 50, "gap": 0.005},
     {"after": 6.5, "send": "<PGUP>"},
-    {"after": 7.0, "send": "<PGDN>"}
+    {"after": 7.0, "send": "<PGDN>"},
+    {"after": 7.6, "send": "<CLICK>"}
   ]
 }
 EOF
@@ -35,6 +36,15 @@ tail -2 "$TMP/capture.txt"
 
 python3 "$TUI/scripts/tui_assert.py" "$TMP/frames.jsonl" --after 2.5 \
   --check prompt-stable --check single-prompt --check advancing --check final-nonblank
+
+python3 - "$TMP/frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+hint = [f for f in frames if f["t"] >= 7.6
+        and any("select text: hold Option" in row for row in f["screen"])]
+assert hint, "click did not raise the selection hint on the status line"
+print("tui_assert: PASS select-hint (click surfaces the modifier-drag hint)")
+PY
 
 echo "== tui-verify: scenario clipboard (bracketed paste + Ctrl+Y OSC 52) =="
 SPEC2=$(cat <<EOF

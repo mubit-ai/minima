@@ -229,3 +229,28 @@ describe("home/end nav side-channel", () => {
     }
   });
 });
+
+describe("click detection (selection-attempt hint)", () => {
+  test("button presses count; releases and wheel notches do not", async () => {
+    const { processMouseChunk } = await import("../src/tui/input-filter.ts");
+    const r = processMouseChunk(
+      "",
+      `${ESC}[<0;10;10M${ESC}[<0;10;10m${ESC}[<64;5;5M${ESC}[<2;3;3M`,
+    );
+    expect(r.clicks).toBe(2); // left press + right press; release (m) and wheel excluded
+    expect(r.scrolls).toEqual(["up"]);
+    expect(r.output).toBe("");
+  });
+
+  test("clicks inside a bracketed paste are data, not clicks", async () => {
+    const { processInputChunk } = await import("../src/tui/input-filter.ts");
+    const start = `${ESC}[200~`;
+    const end = `${ESC}[201~`;
+    const r = processInputChunk(
+      { csiBuffer: "", paste: null },
+      `${start}${ESC}[<0;1;1M${end}${ESC}[<0;2;2M`,
+    );
+    expect(r.pastes).toEqual([`${ESC}[<0;1;1M`]);
+    expect(r.clicks).toBe(1); // only the one outside the paste
+  });
+});

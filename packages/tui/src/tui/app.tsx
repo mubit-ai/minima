@@ -76,7 +76,7 @@ import { type ActiveAction, currentActionLine, reduceActiveActions } from "./cur
 import { footerStatsFromMessages } from "./footer.ts";
 import { GtPanel } from "./gt-panel.tsx";
 import { buildGtOverview, renderGtOverviewText } from "./gt_overview.ts";
-import { setMouseScrollCallback } from "./input-filter.ts";
+import { setClickCallback, setMouseScrollCallback } from "./input-filter.ts";
 import {
   type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
@@ -999,6 +999,10 @@ export function HarnessApp({
   // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
   const renderCountRef = useRef(0);
   renderCountRef.current++;
+  // Selection hint: a click while mouse capture is on can never start a drag-select — the
+  // status line shows the escape hatches (modifier-drag, /mouse, Ctrl+Y) for a few seconds.
+  const [selectHint, setSelectHint] = useState(false);
+  const selectHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ctrl+Z resume: SIGCONT bumps this nonce; in fullscreen any commit repaints the whole
   // frame, so the bump alone restores the screen the shell drew over.
   const [, setResumeGen] = useState(0);
@@ -1108,6 +1112,13 @@ export function HarnessApp({
           setScrollOffset((p) => applyScrollDelta(p, notches * 3, maxScrollRef.current)),
         );
       }
+      // A click while capture is on is a doomed drag-select attempt — surface the escape
+      // hatches on the status line for a few seconds instead of silently eating the drag.
+      setClickCallback(() => {
+        setSelectHint(true);
+        if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
+        selectHintTimerRef.current = setTimeout(() => setSelectHint(false), 4000);
+      });
     } else {
       // Inline: mouse tracking stays OFF so native scroll/select/copy work with <Static>.
       process.stdout.write("\u001b[?1000l");
@@ -1117,6 +1128,8 @@ export function HarnessApp({
     return () => {
       process.stdout.off("resize", handleResize);
       setMouseScrollCallback(null);
+      setClickCallback(null);
+      if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
     };
@@ -3682,11 +3695,14 @@ export function HarnessApp({
             ) : null}
           </Box>
           {/* Permanent status row (both scroll states) — scroll alone never reflows the
-              region below, so the prompt box cannot jump during scrolling. */}
+              region below, so the prompt box cannot jump during scrolling. The selection
+              hint (a click attempt while mouse capture is on) outranks the scroll hint. */}
           <Text color="gray" wrap="truncate">
-            {view && !view.pinned
-              ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
-              : " "}
+            {selectHint
+              ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse off · Ctrl+Y copies last reply"
+              : view && !view.pinned
+                ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
+                : " "}
           </Text>
         </>
       ) : fullscreen ? (

@@ -64,6 +64,15 @@ export function setMouseScrollCallback(fn: ((notches: number) => void) | null): 
   }
 }
 
+// A left-button press while capture is on is a click-drag selection ATTEMPT the terminal
+// will never honor (mouse tracking owns the drag) — the app uses this to show a "hold
+// Option/Shift to select" hint. Wheel notches (64/65) are not clicks.
+let clickCallback: (() => void) | null = null;
+
+export function setClickCallback(fn: (() => void) | null): void {
+  clickCallback = fn;
+}
+
 // ESC (0x1b) built without a literal control char in source, so no regex/string control-char lint.
 const ESC = String.fromCharCode(27);
 // Complete SGR mouse report: ESC [ < button ; col ; row (M|m)
@@ -79,6 +88,8 @@ export interface MouseChunkResult {
   buffer: string;
   /** Wheel notches detected in this chunk, in order. */
   scrolls: ("up" | "down")[];
+  /** Left/middle/right button PRESSES detected (selection-attempt hint). */
+  clicks: number;
 }
 
 /**
@@ -89,12 +100,15 @@ export interface MouseChunkResult {
 export function processMouseChunk(prevBuffer: string, chunk: string): MouseChunkResult {
   const combined = prevBuffer + chunk;
   const scrolls: ("up" | "down")[] = [];
+  let clicks = 0;
   MOUSE_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = MOUSE_RE.exec(combined)) !== null) {
     const button = Number.parseInt(match[1]!, 10);
     if (button === 64) scrolls.push("up");
     else if (button === 65) scrolls.push("down");
+    // Buttons 0-2 with the press final ('M'): a click — the start of a doomed drag-select.
+    else if (button <= 2 && match[4] === "M") clicks++;
   }
 
   let cleaned = combined.replace(MOUSE_RE, "");
@@ -104,7 +118,7 @@ export function processMouseChunk(prevBuffer: string, chunk: string): MouseChunk
     buffer = cleaned.slice(escIdx);
     cleaned = cleaned.slice(0, escIdx);
   }
-  return { output: cleaned, buffer, scrolls };
+  return { output: cleaned, buffer, scrolls, clicks };
 }
 
 // -- bracketed paste --------------------------------------------------------------------------
@@ -137,6 +151,8 @@ export interface InputChunkResult {
   scrolls: ("up" | "down")[];
   /** Complete bracketed pastes captured in this chunk, in order. */
   pastes: string[];
+  /** Button presses detected outside pastes (selection-attempt hint). */
+  clicks: number;
 }
 
 /**
@@ -149,6 +165,7 @@ export interface InputChunkResult {
 export function processInputChunk(state: InputFilterState, chunk: string): InputChunkResult {
   const scrolls: ("up" | "down")[] = [];
   const pastes: string[] = [];
+  let clicks = 0;
   let output = "";
   let csi = state.csiBuffer;
   let paste = state.paste;
@@ -180,6 +197,7 @@ export function processInputChunk(state: InputFilterState, chunk: string): Input
     const m = processMouseChunk("", pre);
     output += m.output;
     scrolls.push(...m.scrolls);
+    clicks += m.clicks;
     if (start === -1) {
       csi = m.buffer;
       break;
@@ -190,7 +208,7 @@ export function processInputChunk(state: InputFilterState, chunk: string): Input
     rest = seg.slice(start + PASTE_START.length);
   }
 
-  return { output, state: { csiBuffer: csi, paste }, scrolls, pastes };
+  return { output, state: { csiBuffer: csi, paste }, scrolls, pastes, clicks };
 }
 
 // -- Home/End side-channel --------------------------------------------------------------------
@@ -298,6 +316,7 @@ export function installInputFilter(): void {
       const res = processInputChunk(state, str);
       state = res.state;
       for (const dir of res.scrolls) enqueueWheelNotch(dir);
+      if (res.clicks > 0) clickCallback?.();
       let output = res.output;
       for (const p of res.pastes) {
         if (pasteCallback) pasteCallback(p);
