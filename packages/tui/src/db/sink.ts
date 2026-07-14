@@ -28,7 +28,14 @@ interface PendingTool {
 }
 
 function messagePayload(m: Message): Record<string, unknown> {
-  const base: Record<string, unknown> = { role: m.role, text: m.textContent };
+  // Images are in-memory for the turn only — never persist base64 blobs into the event log.
+  // Record a lightweight count + text marker so the durable transcript stays truthful.
+  const nImages = m.content.filter((b) => b.type === "image").length;
+  const textOut = nImages
+    ? `${m.textContent}\n[+${nImages} image${nImages > 1 ? "s" : ""}]`
+    : m.textContent;
+  const base: Record<string, unknown> = { role: m.role, text: textOut };
+  if (nImages) base.n_images = nImages;
   if (m instanceof AssistantMessage) {
     base.model = m.model; // plain string on AssistantMessage
     base.stop_reason = m.stop_reason;

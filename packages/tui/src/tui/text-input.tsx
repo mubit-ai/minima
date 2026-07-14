@@ -14,6 +14,8 @@ export interface TextInputProps {
   onShiftTab?: () => void;
   onUp?: (value: string) => string | undefined;
   onDown?: (value: string) => string | undefined;
+  /** Ctrl+V: attempt to attach an image from the clipboard (handled at the app level). */
+  onPaste?: () => void;
   placeholder?: string;
   disabled?: boolean;
   /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
@@ -28,6 +30,7 @@ export function TextInput({
   onShiftTab,
   onUp,
   onDown,
+  onPaste,
   placeholder,
   disabled,
   disabledLabel,
@@ -93,6 +96,11 @@ export function TextInput({
     }
     if (key.backspace || key.delete) {
       updateValue(value.slice(0, -1));
+      return;
+    }
+    // Ctrl+V: stage a clipboard image (the read happens at the app level, async).
+    if (key.ctrl && input === "v") {
+      onPaste?.();
       return;
     }
     // Ctrl/Meta combos are handled at the app level (quit, abort, etc.).

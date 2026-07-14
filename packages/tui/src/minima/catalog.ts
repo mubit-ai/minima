@@ -12,7 +12,7 @@
 
 import { PROVIDERS, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { registerModel, tryGetModel } from "../ai/registry.ts";
-import type { ApiId, Model } from "../ai/types.ts";
+import type { ApiId, Modality, Model } from "../ai/types.ts";
 import { MinimaClient } from "./client.ts";
 import type { HarnessConfig } from "./config.ts";
 import type { ModelCard } from "./schemas.ts";
@@ -31,6 +31,9 @@ function synthModel(card: ModelCard): Model {
   const { api, baseUrl } = apiFor(card.provider);
   const reasoning =
     (card.capability_priors?.reasoning ?? card.capability_priors?.reason ?? 0) >= 0.5;
+  // Vision capability: flag from a card prior when present, else omit (unknown). The seed
+  // path declares `input` directly; this only lights up catalog-synthesized models.
+  const vision = (card.capability_priors?.vision ?? card.capability_priors?.image ?? 0) >= 0.5;
   return {
     id: card.model_id,
     provider: card.provider,
@@ -45,6 +48,7 @@ function synthModel(card: ModelCard): Model {
     context_window: card.context_window ?? 128_000,
     max_tokens: card.max_output_tokens ?? 8_192,
     reasoning,
+    ...(vision ? { input: ["text", "image"] as Modality[] } : {}),
     ...(baseUrl ? { base_url: baseUrl } : {}),
   };
 }

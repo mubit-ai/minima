@@ -14,7 +14,7 @@ import type { BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import { Message as AgentMessage, AssistantMessage, image } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
@@ -47,6 +47,7 @@ import type { SpawnFn } from "../tools/task.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { BusyIndicator } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
+import { type ClipboardImage, readClipboardImage } from "./clipboard_image.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
@@ -935,6 +936,9 @@ export function HarnessApp({
 
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
+  // Clipboard images staged for the next prompt (Ctrl+V). In-memory only — sent to the
+  // model on submit, then cleared; never persisted as base64.
+  const [pendingAttachments, setPendingAttachments] = useState<ClipboardImage[]>([]);
 
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
@@ -2496,6 +2500,20 @@ export function HarnessApp({
         },
       ]);
     }
+    // Warn-and-drop: the routed model couldn't see the attached image(s), so they were sent
+    // as text only. Muted note — the turn still ran.
+    if (agent.lastDroppedImages > 0) {
+      const n = agent.lastDroppedImages;
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: `⚠ ${n} image${n > 1 ? "s" : ""} dropped — ${agent.agentState.model?.id ?? "the routed model"} has no vision support.`,
+          toolName: "attach",
+          isError: false,
+        },
+      ]);
+    }
   }
 
   // A plan-mode conversational turn, delegated to the testable seam in ../minima/plan_turn.ts:
@@ -2541,6 +2559,21 @@ export function HarnessApp({
     });
   }
 
+  // Ctrl+V: read an image from the OS clipboard and stage it for the next prompt. Never
+  // throws (readClipboardImage is fail-safe); a miss just shows a muted hint.
+  async function handlePaste() {
+    if (busy) return;
+    const img = await readClipboardImage();
+    if (img) {
+      setPendingAttachments((a) => [...a, img]);
+    } else {
+      setMessages((m) => [
+        ...m,
+        { role: "tool", text: "ℹ no image in clipboard to attach", toolName: "attach" },
+      ]);
+    }
+  }
+
   async function onSubmit(text: string) {
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
@@ -2548,6 +2581,10 @@ export function HarnessApp({
       return;
     }
     setTypedText("");
+    // Snapshot then clear staged images: every submit consumes (or discards) them so they
+    // never leak onto a later, unrelated turn.
+    const staged = pendingAttachments;
+    if (staged.length) setPendingAttachments([]);
     setScrollOffset(0); // jump back to the newest content when the user sends (fullscreen viewport)
     setHistory((h) => {
       const trimmed = text.trim();
@@ -2560,6 +2597,16 @@ export function HarnessApp({
 
     const trimmed = text.trim();
     if (trimmed.startsWith("/")) {
+      if (staged.length) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            text: "ℹ attached image(s) ignored for slash commands",
+            toolName: "attach",
+          },
+        ]);
+      }
       const firstSpace = trimmed.indexOf(" ");
       const name = firstSpace !== -1 ? trimmed.slice(1, firstSpace) : trimmed.slice(1);
       const args = firstSpace !== -1 ? trimmed.slice(firstSpace + 1).trim() : "";
@@ -2573,11 +2620,31 @@ export function HarnessApp({
     setStreamingThoughts("");
     try {
       if (planModeRef.current && planSessionRef.current && planSpawn && planMetaModel) {
+        if (staged.length) {
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: "ℹ attached image(s) ignored in plan mode", toolName: "attach" },
+          ]);
+        }
         await handlePlanTurn(text);
       } else {
         const expanded = expandAtFiles(text, process.cwd());
-        const routing = await agent.promptRouted(expanded);
+        const attachments = staged.map((a) => image(a.data, a.mime));
+        const routing = await agent.promptRouted(expanded, { attachments });
         surfaceRouting(routing);
+        // Never let an image turn route silently: say where the screenshot actually went.
+        // (The warn-and-drop note is surfaced separately when the model can't see it.)
+        if (attachments.length && agent.lastDroppedImages === 0) {
+          const modelId = agent.agentState.model?.id ?? "the routed model";
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `ℹ ${attachments.length} image${attachments.length > 1 ? "s" : ""} → sent to ${modelId} (vision-capable)`,
+              toolName: "attach",
+            },
+          ]);
+        }
       }
     } catch (exc) {
       setMessages((m) => [
@@ -3000,6 +3067,19 @@ export function HarnessApp({
                 {planMode ? " plan mode " : " prompt "}
               </Text>
             </Box>
+            {pendingAttachments.length > 0 && (
+              <Box>
+                <Text color="cyan">
+                  📎 {pendingAttachments.length} image
+                  {pendingAttachments.length > 1 ? "s" : ""} attached (
+                  {Math.max(
+                    1,
+                    Math.round(pendingAttachments.reduce((sum, a) => sum + a.bytes, 0) / 1024),
+                  )}
+                  KB) · Enter to send
+                </Text>
+              </Box>
+            )}
             <TextInput
               key={gateFocus?.noteEntry ? "gate-note" : "prompt"}
               onSubmit={onSubmit}
@@ -3008,6 +3088,7 @@ export function HarnessApp({
               onShiftTab={cycleThinkingLevel}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
+              onPaste={handlePaste}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
               disabledLabel={
                 gateFocus && !busy

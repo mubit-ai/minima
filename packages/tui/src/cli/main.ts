@@ -80,6 +80,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 0.15, output: 0.6 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-4o",
@@ -89,6 +90,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 2.5, output: 10 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "deepseek-chat",
@@ -108,6 +110,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 5.0, cache_read: 0.08, cache_write: 1.25 },
     context_window: 200_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: false,
   },
   {
@@ -118,6 +121,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -128,6 +132,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -138,6 +143,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 0.3, output: 2.5 },
     context_window: 1_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -148,6 +154,7 @@ const SEED_MODELS: Model[] = [
     cost: { input: 1.25, output: 10.0 },
     context_window: 2_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
 ];

@@ -32,7 +32,7 @@ const FAUX_MODEL: Model = {
   cost: { input: 0, output: 0 },
   context_window: 8192,
   max_tokens: 4096,
-  input: ["text"],
+  input: ["text", "image"],
   reasoning: false,
 };
 
@@ -56,6 +56,9 @@ export interface FauxRequest {
   messageCount: number;
   /** Concatenated text of the LAST user message — the prompt under test. */
   user: string;
+  /** How many image blocks the LAST user message carried — lets tests assert an attached
+   * screenshot actually reached the provider. */
+  userImages: number;
 }
 
 /** Observable per-registration state. */
@@ -138,6 +141,7 @@ class FauxProvider implements Provider {
       systemPrompt: context.system_prompt ?? null,
       messageCount: context.messages.length,
       user: lastUser?.textContent ?? "",
+      userImages: lastUser?.content.filter((b) => b.type === "image").length ?? 0,
     });
     const queued = this.state.responses.shift();
     if (!queued) {

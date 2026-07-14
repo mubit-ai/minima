@@ -16,9 +16,9 @@
 import { Agent, type AgentOptions } from "../agent/agent.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
-import type { Model, Usage } from "../ai/types.ts";
-import { Usage as UsageClass } from "../ai/types.ts";
-import { AssistantMessage } from "../ai/types.ts";
+import type { ImageContent, Model, Usage } from "../ai/types.ts";
+import { Usage as UsageClass, text } from "../ai/types.ts";
+import { AssistantMessage, Message } from "../ai/types.ts";
 import { type MinimaDb, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
@@ -61,6 +61,13 @@ export function gradeOutcome(quality: number): "success" | "partial" | "failure"
   if (quality >= 0.8) return "success";
   if (quality >= 0.4) return "partial";
   return "failure";
+}
+
+/** A model can see images only when its declared modalities include "image". Unknown
+ * (undefined `input`) is treated as text-only — never gamble binary content on a model
+ * whose vision capability we can't confirm. */
+export function modelAcceptsImages(model: Model | undefined | null): boolean {
+  return model?.input?.includes("image") ?? false;
 }
 
 /** Effort Phase A: server-classified difficulty → per-prompt thinking level. */
@@ -112,6 +119,9 @@ export class MinimaAgent extends Agent {
   /** True when the last promptRouted was cut short by Esc during routing (so the
    * UI shows "aborted" instead of a misleading "routing offline" note). */
   lastAborted = false;
+  /** How many attached images the last turn dropped because the routed model can't see
+   * (0 = none). The UI surfaces this as a warn-and-drop note. */
+  lastDroppedImages = 0;
 
   /** Esc must stop BOTH phases: the in-flight route and the model run. */
   override abort(): void {
@@ -170,10 +180,16 @@ export class MinimaAgent extends Agent {
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
+      /** Images to attach to the model run only. The recommend/recall/label text stays
+       * the `content` string, so images never reach Minima's /v1/recommend. Dropped
+       * (with a warning) when the routed model isn't vision-capable. */
+      attachments?: ImageContent[];
     } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
+    const attachments = opts.attachments ?? [];
     this.promptsRun += 1;
+    this.lastDroppedImages = 0;
     // The surfaced learning-loop note must reflect THIS turn only. Reset here because
     // feedbackSafely early-returns without touching the field on turns that send no feedback
     // (pinned / offline / no-recommendation) — otherwise an earlier rejection would re-display
@@ -243,6 +259,10 @@ export class MinimaAgent extends Agent {
             maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
             minQuality: opts.minQuality,
             excludedModels: excluded.length ? excluded : undefined,
+            // An attached image restricts the candidate pool to vision-capable models
+            // (pre-request, propensity-safe) so routing never picks a model that would
+            // silently drop the screenshot.
+            visionRequired: attachments.length > 0,
             signal: routeController.signal,
           });
         } catch (exc) {
@@ -303,8 +323,20 @@ export class MinimaAgent extends Agent {
         const start = Date.now();
         let runError: unknown = null;
         this.currentRecId = rungRecId;
+        // Vision guard (warn-and-drop): only pass images to a model that can see them. The
+        // routed model lives on agentState.model, so this re-checks per escalation rung.
+        // A single user Message carries text + images (a bare ContentBlock[] would be coerced
+        // into one message PER block — see Agent.coercePrompts).
+        let runContent: string | Message = content;
+        if (attachments.length) {
+          if (modelAcceptsImages(this.agentState.model)) {
+            runContent = new Message({ role: "user", content: [text(content), ...attachments] });
+          } else {
+            this.lastDroppedImages = attachments.length;
+          }
+        }
         try {
-          await super.prompt(content);
+          await super.prompt(runContent);
         } catch (exc) {
           runError = exc;
         } finally {
@@ -532,6 +564,8 @@ export class MinimaAgent extends Agent {
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
+      /** Restrict the candidate pool to vision-capable models (image attached). */
+      visionRequired?: boolean;
       signal?: AbortSignal;
     },
   ): Promise<RoutingResult | null> {
@@ -556,7 +590,18 @@ export class MinimaAgent extends Agent {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
       });
-      const effective = runnable.length ? runnable : undefined;
+      // Image attached: prefer vision-capable candidates so the screenshot isn't silently
+      // dropped. Only narrow when at least one vision model survives — otherwise keep the
+      // full runnable set and let the run-phase guard warn-and-drop.
+      let pool = runnable;
+      if (opts.visionRequired) {
+        const vision = runnable.filter((id) => {
+          const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
+          return m ? modelAcceptsImages(m) : false;
+        });
+        if (vision.length) pool = vision;
+      }
+      const effective = pool.length ? pool : undefined;
       const routing = await this.router.recommend({
         task: taskText,
         taskType: opts.taskType ?? undefined,
