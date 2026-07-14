@@ -185,7 +185,10 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
 
     let runError: unknown = null;
     try {
-      await child.promptRouted(d.objective, { difficulty: d.difficulty });
+      await child.promptRouted(d.objective, {
+        difficulty: d.difficulty,
+        tags: ["phase:subtask"],
+      });
     } catch (exc) {
       runError = exc;
     } finally {

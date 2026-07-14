@@ -90,6 +90,9 @@ class DecisionRecord:
     # None on rows reconciled before provenance existed — treated as untrusted by every
     # label consumer (calibration fit, ECE, CUSUM).
     evidence_source: str | None = None
+    # Reasoning-effort tier the model actually ran at (client-reported) — the raw
+    # material for learning (model x effort) arms.
+    realized_effort: str | None = None
 
     @property
     def reconciled(self) -> bool:
@@ -156,6 +159,7 @@ class Reconciliation:
     ts: float = 0.0
     late: bool = False
     evidence_source: str | None = None
+    chosen_effort: str | None = None
 
 
 @runtime_checkable
@@ -200,6 +204,7 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
     rec.feedback_ts = update.ts or time.time()
     rec.late_feedback = update.late
     rec.evidence_source = update.evidence_source
+    rec.realized_effort = update.chosen_effort
     return True
 
 

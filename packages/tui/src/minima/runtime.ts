@@ -562,7 +562,9 @@ export class MinimaAgent extends Agent {
         task: taskText,
         taskType: opts.taskType ?? undefined,
         slider: opts.slider ?? undefined,
-        tags: opts.tags,
+        // Phase rides as a tag: recall boosts same-phase evidence and stored outcomes
+        // carry it, so planning/execution/sub-task work stops collapsing into one pool.
+        tags: opts.tags ?? ["phase:interactive"],
         difficulty: opts.difficulty,
         // The live context IS the input the chosen model will read — the server's cost
         // estimate is only truthful when it knows the real prompt size.
@@ -574,6 +576,9 @@ export class MinimaAgent extends Agent {
         // The server caps candidate selection at 8 by default; widen when the pool is larger.
         maxCandidates:
           effective && effective.length > 8 ? Math.min(effective.length, 16) : undefined,
+        // The current model holds this session's prompt cache; the server prices part
+        // of its input at the cache-read rate so stickiness emerges from honest cost.
+        incumbentModelId: this.agentState.model?.id,
         signal: opts.signal,
       });
       this.offlineReason = null;
@@ -692,6 +697,7 @@ export class MinimaAgent extends Agent {
         errorCause,
         verifiedInProduction,
         judged,
+        chosenEffort: this.agentState.thinkingLevel ?? undefined,
         notes: deterministic
           ? `verified_by=deterministic;tier=${deterministic.confidence ?? "unknown"}`
           : judged

@@ -148,6 +148,8 @@ export class MinimaRouter {
     maxCandidates?: number;
     /** Cost-control opt-out of the server's LLM-reasoner consult. */
     allowLlmEscalation?: boolean;
+    /** Model currently holding the session's prompt cache (stickiness pricing). */
+    incumbentModelId?: string;
     /** Abort the in-flight recommend HTTP call (Esc during routing). */
     signal?: AbortSignal;
   }): Promise<RoutingResult> {
@@ -190,6 +192,7 @@ export class MinimaRouter {
       baseline_model_id: this.config.baselineModelId ?? undefined,
       max_candidates: opts.maxCandidates,
       allow_llm_escalation: opts.allowLlmEscalation,
+      incumbent_model_id: opts.incumbentModelId,
       signal: opts.signal,
     });
 
@@ -269,6 +272,8 @@ export class MinimaRouter {
     verifiedInProduction: boolean;
     /** DEPRECATED alias: true→judge, false→none (old servers). */
     judged: boolean;
+    /** Reasoning-effort tier the model ran at (raw material for model x effort arms). */
+    chosenEffort?: string;
     /** Provenance tag, e.g. "unlabeled" for cadence-skipped/abstained turns. */
     notes?: string;
   }): Promise<FeedbackResponse> {
@@ -286,6 +291,7 @@ export class MinimaRouter {
       error_cause: opts.errorCause,
       verified_in_production: opts.verifiedInProduction,
       judged: opts.judged,
+      chosen_effort: opts.chosenEffort,
       notes: opts.notes,
     });
   }

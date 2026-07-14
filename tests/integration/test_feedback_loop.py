@@ -335,6 +335,24 @@ def test_degraded_keyed_lookup_is_surfaced(client, fake_memory):
     assert "keyed_lookup_degraded" in rec["warnings"]
 
 
+def test_chosen_effort_is_recorded(client, fake_memory):
+    """(model x effort) raw material: the effort tier rides the wire into the record."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "chosen_effort": "medium",
+        },
+    ).json()
+    assert fb["accepted"] is True
+    assert fake_memory.remembered[0]["record"].effort == "medium"
+
+
 def test_judge_source_cannot_claim_verified_in_production(client, fake_memory):
     """verified_in_production is derived from provenance (source == gate) — a caller
     combining judge provenance with the legacy vip flag must not mint gate trust."""
