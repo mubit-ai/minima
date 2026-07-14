@@ -151,9 +151,10 @@ export interface AppProps {
   /** Mutable ref written by main.ts so HarnessApp can receive sub-agent events. */
   childEventRef?: { handler: ((e: ChildEvent) => void) | null };
   /**
-   * Fullscreen renderer (default): alternate screen, full-height frame, prompt glued to the bottom
-   * row, history scrolled in-app (PgUp/PgDn + optional wheel). When false, the inline renderer is
-   * used (main buffer + <Static> + native OS scroll). Set by main.ts from the CLI flag/env.
+   * Fullscreen renderer (opt-in): alternate screen, full-height frame, prompt glued to the bottom
+   * row, history scrolled in-app (PgUp/PgDn + optional captured wheel). When false — the DEFAULT —
+   * the inline renderer is used (main buffer + <Static> + native OS scroll/select/copy, the Claude
+   * Code model). Set by main.ts from the CLI flag/env (`--fullscreen` / `MINIMA_TUI_FULLSCREEN=1`).
    */
   fullscreen?: boolean;
   /**
@@ -741,7 +742,7 @@ export function HarnessApp({
   banner: _banner,
   askUserRef,
   childEventRef,
-  fullscreen = true,
+  fullscreen = false,
   initialResume = null,
   planSpawn,
   planMetaModel,
@@ -1910,7 +1911,7 @@ export function HarnessApp({
             { role: "user", text: `/${name}` },
             {
               role: "tool",
-              text: "Mouse-wheel scroll is a fullscreen-mode feature; this session is inline (the terminal's native scroll already works). Restart without --no-fullscreen / MINIMA_TUI_INLINE to use it.",
+              text: "Mouse-wheel scroll is a fullscreen-mode feature; this inline session already uses the terminal's native scroll, click-drag select, and copy (no toggle needed). Restart with --fullscreen if you want the glued-prompt frame with in-app wheel scroll.",
               toolName: "mouse",
             },
           ]);
