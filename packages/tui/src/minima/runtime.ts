@@ -38,11 +38,13 @@ import {
   isTransientError,
   makeFailureMatcher,
   replanPreamble,
+  writeExhaustionGate,
   writeRecoveryGate,
 } from "./failure_kind.ts";
 import {
   GROUND_TRUTH_SYSTEM_GUIDANCE,
   type GroundedOutcome,
+  deterministicOutcomeLabel,
   groundedOutcomeFor,
   planProjectionFor,
   stampGroundedOutcome,
@@ -126,6 +128,8 @@ export class MinimaAgent extends Agent {
   ladderBackoffs = 0;
   /** A4: how many structural replans (plan-revision steer, same model) happened this session. */
   ladderReplans = 0;
+  /** A7: how many prompts exhausted the whole recovery ladder (every rung spent, still failing). */
+  ladderExhausted = 0;
   /** Effort routing Phase A (staged, default OFF): map the server's classified difficulty
    * to a per-prompt thinking level — route (model, effort), not just model. */
   autoEffort = false;
@@ -493,11 +497,36 @@ export class MinimaAgent extends Agent {
         // `gateFailed` was computed before feedback (so `transient` couldn't mask a real check-fail).
         const failedModel =
           routing !== null && routing.recommendationId !== null ? routing.chosenModelId : null;
-        const canRecover =
-          attempt < this.recoveryRungs &&
-          failedModel !== null &&
-          (failed || judgeFailed || gateFailed);
+        const stillFailing = failed || judgeFailed || gateFailed;
+        const canRecover = attempt < this.recoveryRungs && failedModel !== null && stillFailing;
         if (!canRecover) {
+          // A7: the ladder walked every rung (attempt is the last) and it is STILL failing on a
+          // routed model — record ONE terminal audit gate so an exhausted ladder is inspectable
+          // instead of a silent return. Gated by the failure matcher (like the backoff/replan audit
+          // rows); the counter always tracks. NOT exhaustion when: there was nothing to recover from
+          // (a clean success), the run was pinned/offline (no model to blame), or the ladder was
+          // disabled outright (recoveryRungs=0 — no rung ever existed to burn).
+          if (
+            stillFailing &&
+            failedModel !== null &&
+            this.recoveryRungs > 0 &&
+            attempt >= this.recoveryRungs
+          ) {
+            this.ladderExhausted += 1;
+            if (this.failureMatcherActive()) {
+              // A real check-fail ranks first; then a quality miss; then infra (transient) vs a
+              // non-transient hard error — kept distinct so an infra storm isn't audited as a
+              // capability exhaustion (mirrors A4's transient/capability split on the feedback side).
+              const cause = gateFailed
+                ? "gate_failed"
+                : judgeFailed
+                  ? "judge_failed"
+                  : transient
+                    ? "transient"
+                    : "hard_error";
+              writeExhaustionGate(this.recoveryGateDeps(), cause);
+            }
+          }
           if (runError !== null) throw runError;
           return routing;
         }
@@ -782,9 +811,13 @@ export class MinimaAgent extends Agent {
         outcome = "failure";
       } else if (deterministic) {
         // M7.2: the step carried a real check — its verdict IS the outcome (no judge, no
-        // fabricated quality). verified/failed/unrunnable → success/failure label only.
+        // fabricated quality). A7: grade the label by the gate's confidence tier when
+        // config.gradedOutcome is on — 🟢 verified→success, 🟡/🔴-tier verified→partial (weaker
+        // evidence), failed→failure — else the M7.2 binary verified→success. The recovery-ladder
+        // trigger reads the raw grounded.outcome (`failed`), never this label, so grading is
+        // learning-signal-only and never changes what escalates.
         quality = null;
-        outcome = deterministic.outcome === "verified" ? "success" : "failure";
+        outcome = deterministicOutcomeLabel(deterministic, this.config.gradedOutcome);
       } else if (!this.shouldJudge()) {
         quality = null;
         outcome = "success";

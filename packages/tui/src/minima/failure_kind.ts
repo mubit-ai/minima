@@ -197,3 +197,49 @@ export function writeRecoveryGate(deps: RecoveryGateDeps, decision: FailureDecis
     // audit is best-effort; never break the loop over a bookkeeping write.
   }
 }
+
+/** Why the recovery ladder gave up (audit `cause` on the terminal exhaustion gate). `transient`
+ * keeps an infra storm (a 429/timeout/5xx across every rung) distinct from a genuine capability
+ * exhaustion — the same distinction A4 draws on the feedback side must not blur in the audit. */
+export type ExhaustionCause = "gate_failed" | "judge_failed" | "hard_error" | "transient";
+
+/**
+ * A7: the ladder walked every rung and the final one is STILL failing — write ONE terminal
+ * audit-only `recovery` gate (`factors.exhausted=true`, tier 🔴) so an exhausted ladder is
+ * inspectable (`/why`) instead of a silent `return`. Like {@link writeRecoveryGate} it carries
+ * `recId: null` (invisible to the feedback join — it can never inflate/fail a routed rung) and is
+ * best-effort/fail-open. Distinct `kind='exhausted'` factor separates it from a per-rung
+ * backoff/replan row: those recovered, this one did not. Emitted once per exhausted prompt.
+ *
+ * Plan resolution falls back to the LATEST plan when no plan is `active`: a judge_failed or
+ * hard_error exhaustion can arrive AFTER the plan already closed to `done` (all verify-less steps
+ * marked complete), and dropping the row there would leave `ladderExhausted` counting an exhaustion
+ * with no gate to explain it — the exact silent-return this feature exists to remove.
+ */
+export function writeExhaustionGate(deps: RecoveryGateDeps, cause: ExhaustionCause): void {
+  if (!deps.db || !deps.sessionId) return;
+  try {
+    const plan = deps.db.getActivePlan(deps.sessionId) ?? deps.db.getLatestPlan(deps.sessionId);
+    if (!plan) return;
+    deps.db.insertGate({
+      planId: plan.id,
+      stepId: null,
+      kind: "recovery",
+      outcome: "unchecked",
+      confidence: "red",
+      verifiedBy: null,
+      factors: {
+        recovery: true,
+        kind: "exhausted",
+        exhausted: true,
+        cause,
+        reason: "recovery ladder exhausted — every rung spent, still failing",
+      },
+      recId: null,
+      sessionId: deps.sessionId,
+      agentId: deps.agentId,
+    });
+  } catch {
+    // audit is best-effort; never break the loop over a bookkeeping write.
+  }
+}

@@ -569,6 +569,38 @@ export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null):
   }
 }
 
+/**
+ * A7: turn a DETERMINISTIC grounded verdict into the feedback outcome label, graded by the gate's
+ * confidence tier. The caller (runtime.feedbackSafely) only reaches this with a grounded outcome
+ * that is `verified` or `failed` (an `unrunnable` is filtered upstream — it is an environment error,
+ * not model evidence, and falls back to the judge), so this function's whole job is the verified
+ * split:
+ *
+ *   - `failed`  → `failure`  (a red check; also the recovery-ladder trigger, read separately).
+ *   - `verified` + `graded`=false → `success`  (M7.2's original binary: any passing check → success).
+ *   - `verified` + `graded`=true:
+ *       - tier `green`         → `success`  (clean ground truth: pre-existing/user check, red→green,
+ *                                            coverage — the only tier that also flips vip=true).
+ *       - tier `yellow`/`red`/null → `partial`  (a passing-but-untrustworthy check: a self-written
+ *                                            test, no red→green evidence, coverage-unknown, or an A5
+ *                                            fabrication-floor red-TIER-but-verified pass). Weaker
+ *                                            positive evidence than green, so Minima learns it as
+ *                                            partial — never a fabricated `success`, never an
+ *                                            overstated `failure` (the check DID pass).
+ *
+ * Pure. A red-tier verified pass mapping to `partial` (not `failure`) is deliberate: it must not
+ * masquerade as recovery-worthy — a stronger model can't fix a fabricated test (A5), so the ladder
+ * (which triggers on `outcome==='failed'`) correctly stays out of it.
+ */
+export function deterministicOutcomeLabel(
+  grounded: GroundedOutcome,
+  graded: boolean,
+): "success" | "partial" | "failure" {
+  if (grounded.outcome !== "verified") return "failure";
+  if (!graded) return "success";
+  return grounded.confidence === "green" ? "success" : "partial";
+}
+
 // ---------------------------------------------------------------------------
 // afterToolCall sink — persist the plan + attribute file changes.
 // ---------------------------------------------------------------------------
