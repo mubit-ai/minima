@@ -78,3 +78,33 @@ Architecture (Ink 5.2.1 internals verified):
 | Styled/plain wrap parity drift | single shared break-point engine + fuzz property test; per-line truncate failsafe |
 | tmux re-encodes mouse/clipboard | test suite runs specs through tmux too; OSC 52 tmux passthrough wrapping |
 | TrackB moves under us | rebase before PR; fixes are localized to files TrackB rarely touches now |
+
+---
+
+## Follow-up (2026-07-14): the per-render git fork + standard shortcuts
+
+Field report after the first PR round (user running the B5 tip without this branch): scroll
+banked into an invisible buffer then took seconds to catch up, with the terminal title
+flapping `bun run`↔`git`.
+
+**Root cause (both branches): `useRef(detectRepo(process.cwd()))`** — a `useRef` argument
+is evaluated on EVERY render, and `detectRepo` forks `git rev-parse` synchronously
+(`Bun.spawnSync`, ~10ms event-loop block per render). Wheel storms saturated the loop,
+stdin backlogged, and Ctrl+C looked dead because its handler never ran. Same class:
+`useState(isTipsEnabled())` re-read a config file per render. Fix: lazy `useState(() => …)`
+initializers. The original soak missed it because the probe only timed window compute —
+it now samples whole-render wall time and wraps `Bun.spawnSync`, and tui-verify asserts a
+FLAT spawn count across the storm window plus render p95 < 100ms.
+
+Also landed in this round:
+- **Merged `fix/TUI-small-fixes` (B4 /undo + B5 /rewind)** into this branch; `initialValue`
+  prefill seeds the rewritten TextInput's draftRef, `typedText` syncs so the prompt-box
+  height matches a seeded multi-line draft.
+- **Ctrl+Z job control** (`src/tui/suspend.ts`): teardown mirrors main.ts's shutdown writes,
+  self-SIGTSTP; SIGCONT restores raw mode + alt screen + mouse/paste modes and repaints via
+  a state bump. PTY-tested with a real SIGCONT (`signal` step in pty_capture).
+- **Ctrl+D**: EOF quit on an empty draft; delete-forward otherwise. **Home/End** via an
+  input-filter side-channel (Ink 5 swallows them). **Alt+←/→ / Alt+B/F** word jumps,
+  **Alt+Backspace** kill-word. `/help` prints the full keyboard table.
+- **Selection hint**: a click under mouse capture raises a 4s status-line hint (hold
+  Option/Shift to select · /mouse off · Ctrl+Y copies last reply).
