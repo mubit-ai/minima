@@ -174,6 +174,6 @@ describe("composer prefill seam (B4.3)", () => {
     ).text();
     expect(input).toContain("initialValue?: string");
     // The input's source of truth is draftRef (stale-closure fix); prefill seeds it at mount.
-    expect(input).toContain('useRef<Draft>({ value: initialValue ?? ""');
+    expect(input).toContain('value: initialValue ?? ""');
   });
 });

@@ -792,7 +792,7 @@ export function HarnessApp({
   const [budgetStatus, setBudgetStatus] = useState<BudgetStatus | null>(null);
   // Startup tips (ON by default): a rotating tip shown on the empty welcome splash. `/tip on|off`
   // toggles the persisted preference; `startupTip` holds the tip rendered this launch.
-  const [tipsEnabled, setTipsEnabledState] = useState(isTipsEnabled());
+  const [tipsEnabled, setTipsEnabledState] = useState(() => isTipsEnabled());
   const [startupTip, setStartupTip] = useState<string | null>(null);
 
   // Sub-agent tree: childrenState tracks each in-flight child; treeOpen toggles the panel.
@@ -1005,7 +1005,10 @@ export function HarnessApp({
   // U3 (MUB-141): GT Plan Overview sidebar — same chassis/geometry as the ToC panel.
   const [gtPanelOpen, setGtPanelOpen] = useState(false);
   // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
-  const repoTopRef = useRef<string | null>(detectRepo(process.cwd()));
+  // LAZY initializer, load-bearing: detectRepo forks `git rev-parse` synchronously, and a
+  // plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking git
+  // spawn per keystroke/wheel notch was the "TUI freezes and the title flaps bun↔git" bug.
+  const [repoTop] = useState<string | null>(() => detectRepo(process.cwd()));
   const checkpointArmRef = useRef<(() => void) | null>(null);
   // B4 (MUB-139): /undo. Cursor = created-time of the last restored checkpoint, so stacked
   // /undo walks backwards; reset on the next real prompt. Prefill remounts TextInput (nonce
@@ -1156,7 +1159,7 @@ export function HarnessApp({
     // tree). Same effect as its neighbors: a separate effect with different deps would lose
     // the relative order on re-registration.
     const ckpt = makeCheckpointHook({
-      top: repoTopRef.current,
+      top: repoTop,
       db: agent.db ?? null,
       getRunId: () => agent.runId,
       getStepId: () => {
@@ -1176,7 +1179,7 @@ export function HarnessApp({
       checkpointArmRef.current = null;
       disposePermission();
     };
-  }, [agent, gtGateBefore]);
+  }, [agent, gtGateBefore, repoTop]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
@@ -1749,7 +1752,7 @@ export function HarnessApp({
     const runId = agent.runId;
     const notes: string[] = [];
     if (mode !== "convo") {
-      const top = repoTopRef.current;
+      const top = repoTop;
       if (!top) {
         notes.push("code: unavailable (not a git repository)");
       } else {
@@ -1883,7 +1886,7 @@ export function HarnessApp({
         // B4: checkpoint restore (safety snapshot inside) + rewind marker on the events
         // spine + in-memory truncation + composer prefilled with the undone prompt.
         const echo: ChatMessage = { role: "user", text: "/undo" };
-        const top = repoTopRef.current;
+        const top = repoTop;
         if (!top || !agent.db || !agent.runId) {
           setMessages((m) => [
             ...m,
@@ -1982,7 +1985,7 @@ export function HarnessApp({
       }
       case "ckpt": {
         const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
-        const top = repoTopRef.current;
+        const top = repoTop;
         if (!top || !agent.db || !agent.runId) {
           setMessages((m) => [
             ...m,
