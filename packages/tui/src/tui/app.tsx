@@ -1058,10 +1058,11 @@ export function HarnessApp({
         costUSD: s.usage.costUSD,
       }));
   }
-  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. ON by default so the wheel/trackpad
-  // scrolls the in-app history like Claude Code; run /mouse to turn it OFF and restore native
-  // click-drag text selection (which mouse capture disables).
-  const [mouseEnabled, setMouseEnabled] = useState(true);
+  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. OFF by default so native click-drag
+  // text selection + copy work out of the box (like Claude Code) — mouse capture is what disables
+  // them. Run /mouse to turn capture ON and let the wheel/trackpad scroll in-app history instead;
+  // PgUp/PgDn scroll in either state.
+  const [mouseEnabled, setMouseEnabled] = useState(false);
 
   /** /copy and Ctrl+Y: last assistant reply → OSC 52 (+tmux passthrough) + pbcopy/xclip. */
   function copyLastReply(echo?: string) {
@@ -1085,7 +1086,11 @@ export function HarnessApp({
       ...echoMsgs,
       {
         role: "tool",
-        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: /mouse (frees the wheel for native selection) or Option/Shift-drag.`,
+        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: ${
+          fullscreen && mouseEnabled
+            ? "run /mouse (frees the wheel for native selection) or hold Option/Shift while dragging."
+            : "just click-drag to select, then copy with your terminal."
+        }`,
         toolName: "copy",
       },
     ]);
@@ -2515,7 +2520,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview · PgUp/PgDn or wheel scroll\n  Text selection while wheel capture is on: hold Option (iTerm2) / Shift, or /mouse off`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview · PgUp/PgDn scroll history\n  Text select + copy work by default; /mouse turns ON wheel scroll (then Option/Shift-drag or /mouse off to select)`,
             toolName: "help",
           },
         ]);
@@ -3626,7 +3631,9 @@ export function HarnessApp({
         <Box marginTop={1}>
           <Text color="gray">
             {fullscreen
-              ? "scroll history with the wheel / trackpad or PgUp / PgDn · /mouse for text-select"
+              ? mouseEnabled
+                ? "wheel / trackpad or PgUp / PgDn scrolls history · /mouse to select text"
+                : "select & copy text freely · PgUp / PgDn scrolls · /mouse for wheel scroll"
               : "scroll with your terminal (wheel / trackpad) · select & copy freely"}
           </Text>
         </Box>
