@@ -1203,16 +1203,16 @@ provides-extras = ["server", "reasoner-anthropic", "reasoner-gemini", "seed", "d
 
 [[package]]
 name = "mubit-sdk"
-version = "0.10.0"
+version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/3d/ee6f95060e8715913c554a9b532ea05a3a0ae6fa89c069ff1e4b2db68d9f/mubit_sdk-0.10.0.tar.gz", hash = "sha256:b66d59e8d1a4df01181ee8927c3431080d7d14273bae700880fc4ce963cfe869", size = 109876, upload-time = "2026-06-05T13:26:44.908Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/1b/f61c3e5d9974891db19ba8ec7757918198f0faa8b6ceb98b1b1e17dff877/mubit_sdk-0.10.1.tar.gz", hash = "sha256:456bfa6b81cd29b22f0484da0df282ebbeb9604ad1a388472b9ed5f226b8bef5", size = 110634, upload-time = "2026-06-26T22:53:15.688Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/e3/abfa5afd066fed654598210170ecbb70e8bfbd25ddb3e5211afa96f56b7e/mubit_sdk-0.10.0-py3-none-any.whl", hash = "sha256:69778ea8456a2d9efbff8bb73d69b7fa524d9871d17202db06c50919272485f3", size = 124467, upload-time = "2026-06-05T13:26:43.772Z" },
+    { url = "https://files.pythonhosted.org/packages/10/27/2c787a63914f5c4128e8ddf3e25a5185e848ad1f5bb82dd5f02acd73f827/mubit_sdk-0.10.1-py3-none-any.whl", hash = "sha256:d9e0c6252bd951bf1f8ca4cabf660458f8c10e0071092d9e74a5ed2f74dc449e", size = 125249, upload-time = "2026-06-26T22:53:14.671Z" },
 ]
 
 [[package]]

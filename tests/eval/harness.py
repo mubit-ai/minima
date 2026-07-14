@@ -339,11 +339,31 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
         est, _ = score.effective_cost(
             card, agg, in_tokens, _OUT_TOKENS, False, cost_basis, min_cost_n
         )
-        scored.append((mid, pred, conf, est))
+        width = score.posterior_interval_width(agg, prior, settings.minima_beta_pseudocount)
+        scored.append((mid, pred, conf, est, width))
     tau = score.threshold_from_slider(slider, settings.minima_tau_min, settings.minima_tau_max, None)
+
+    # Routing-collapse guard, mirrored from engine `_optimize` (engine.py:985-1030): when the
+    # cheapest tau-clearing candidate is itself the priciest, prefer a cheaper candidate whose
+    # optimistic upper bound (pred + margin*(1-tau)*0.5*width, evidence-backed only) clears tau.
+    margin = settings.minima_collapse_margin
+    eff = margin * max(0.0, 1.0 - tau)
+
+    def _optimistic_clears(s) -> bool:
+        return s[2] > 0.0 and s[1] + eff * 0.5 * s[4] >= tau
+
     eligible = [s for s in scored if s[1] >= tau]
     if eligible:
-        return min(eligible, key=lambda s: (s[3], -s[1], -s[2]))[0]
+        rec = min(eligible, key=lambda s: (s[3], -s[1], -s[2]))
+        if margin > 0.0 and len(scored) > 1 and rec[3] >= max(s[3] for s in scored) - 1e-12:
+            cheaper = [s for s in scored if s[3] < rec[3] and _optimistic_clears(s)]
+            if cheaper:
+                rec = min(cheaper, key=lambda s: (s[3], -s[1], -s[2]))
+        return rec[0]
+    plausible = [s for s in scored if _optimistic_clears(s)] if margin > 0.0 else []
+    if plausible:
+        # Engine breaks ties without confidence in this branch (engine.py:1026).
+        return min(plausible, key=lambda s: (s[3], -s[1]))[0]
     return max(scored, key=lambda s: s[1])[0]
 
 
@@ -547,6 +567,28 @@ async def evaluate(
     seeded = await seed_train(memory, lane, train, candidates,
                               provider_for=provider_for, source_dataset=source_dataset)
     await _barrier(memory, lane, train[0], settings)
+
+    # V8 — recall must be QUERY-SENSITIVE. On a broken deployment recall returns the same
+    # records for any query (observed 2026-07-13 on local ricedb AND api.mubit.ai:
+    # jaccard 1.00 across orthogonal queries — see fieldnote/recall-bug-report.md), which
+    # silently degrades per-prompt routing into one global decision over an arbitrary
+    # sample. Fail fast instead of producing a void run.
+    _q1 = "Evaluate the integral of a polynomial and simplify the resulting expression."
+    _q2 = "My Python web scraper throws an HTTP error, help me debug the requests session."
+    _r1 = await memory.recall(query=_q1, lane=lane, limit=settings.minima_memory_recall_limit,
+                              timeout_ms=settings.minima_memory_recall_timeout_ms)
+    _r2 = await memory.recall(query=_q2, lane=lane, limit=settings.minima_memory_recall_limit,
+                              timeout_ms=settings.minima_memory_recall_timeout_ms)
+    _ids1 = {e.entry_id for e in _r1.outcome_evidence}
+    _ids2 = {e.entry_id for e in _r2.outcome_evidence}
+    _union = len(_ids1 | _ids2)
+    v8_jaccard = (len(_ids1 & _ids2) / _union) if _union else 1.0
+    if v8_jaccard > 0.5:
+        raise RuntimeError(
+            f"V8 FAIL: recall is query-independent (jaccard {v8_jaccard:.2f} across orthogonal "
+            f"probes, n={len(_ids1)}/{len(_ids2)}) — per-prompt routing cannot be evaluated on "
+            f"this deployment. See fieldnote/recall-bug-report.md."
+        )
 
     # One recall per val/test prompt; reuse for every slider.
     val_aggs = [(await _recall_aggs(memory, lane, r, candidates, settings))[0] for r in val]

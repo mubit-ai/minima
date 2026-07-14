@@ -35,13 +35,25 @@ async def test_llmrouterbench_cost_reduction():
         mubit_timeout_ms=120_000,  # long frontier prompts (swe-bench, arena) embed slowly
     )
 
+    # Optional candidate subset for pre-registered runs (e.g. the 6-model clean H1 —
+    # fieldnote/benchmark-plan.md Phase 1). Comma-separated ids; must be drawn from the
+    # config's audited CANDIDATES and include PREMIUM so C1 stays well-defined.
+    candidates = list(cfg.CANDIDATES)
+    env_cands = os.getenv("MINIMA_EVAL_CANDIDATES")
+    if env_cands:
+        requested = [c.strip() for c in env_cands.split(",") if c.strip()]
+        unknown = sorted(set(requested) - set(cfg.CANDIDATES))
+        assert not unknown, f"candidates not in llmrouterbench_config.CANDIDATES: {unknown}"
+        assert cfg.PREMIUM in requested, f"premium '{cfg.PREMIUM}' must be a candidate"
+        candidates = requested
+
     def load_df():
-        return lrb.load_llmrouterbench_df(cfg.CANDIDATES, cfg.EVAL_DATASETS)
+        return lrb.load_llmrouterbench_df(tuple(candidates), cfg.EVAL_DATASETS)
 
     try:
         result = await harness.evaluate(
             settings=settings,
-            candidates=list(cfg.CANDIDATES),
+            candidates=list(candidates),
             premium=cfg.PREMIUM,
             train_n=int(os.getenv("MINIMA_EVAL_TRAIN_N", "800")),
             val_n=int(os.getenv("MINIMA_EVAL_VAL_N", "60")),
