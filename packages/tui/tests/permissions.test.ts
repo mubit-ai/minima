@@ -416,6 +416,67 @@ describe("makeModeGatedBeforeToolCall (B2)", () => {
   });
 });
 
+describe("makeModeGatedBeforeToolCall — auto (accept-edits / bypass)", () => {
+  test("edit in acceptEdits mode → runs with NO prompt + mode-auto GuardEvent", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    const events: GuardEvent[] = [];
+    const offGuard = onGuardEvent((e) => events.push(e));
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => ACCEPT_EDITS_BUNDLE,
+    });
+    expect(await hook(editCtx())).toBeNull();
+    expect(prompted).toBe(false); // no "always" grant needed — the mode pre-approved it
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("mode-auto");
+    offGuard();
+  });
+
+  test("bash in acceptEdits mode keeps the NORMAL flow (prompts without a grant)", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: (p) => {
+        prompted = true;
+        p.resolve("deny");
+      },
+      getBundle: () => ACCEPT_EDITS_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { name: "bash" },
+      args: { command: "rm -rf /tmp/x" },
+    } as never);
+    expect(prompted).toBe(true);
+    expect(res?.block).toBe(true);
+  });
+
+  test("bash in bypass mode runs with no prompt", async () => {
+    const { BYPASS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => BYPASS_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { name: "bash" },
+      args: { command: "echo hi" },
+    } as never);
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
+  });
+});
+
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
   test("GT off: the historical array plus task (the approved default-path bypass fix)", () => {
     // Deliberate default-path change: a spawned child gets its own unrestricted toolset with

@@ -384,7 +384,11 @@ describe("tui/app.tsx wires tier→behavior", () => {
   test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
     const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
     expect(input).toContain("if (disabled || suspended) return;");
-    expect(input).toContain("if (key.ctrl || key.meta) return;");
+    // Ctrl combos are either readline edits handled locally or fall through to the app
+    // handlers — either way the branch returns before the draft-insert path, and meta
+    // combos never insert (the meta branch handles Alt+B/F word-jumps, then returns).
+    expect(input).toContain("if (key.ctrl) {");
+    expect(input).toContain("if (key.meta) {");
     // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
     expect(input).toContain('disabledLabel ?? "(busy…)"');
     expect(input).toContain('<Text wrap="truncate">');
@@ -506,25 +510,16 @@ describe("tui/app.tsx docked-sidebar key routing", () => {
 describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("Shift+Tab routes through toggleMode, not a bare store flip", () => {
-    expect(src).toContain("onShiftTab={toggleMode}");
-    expect(src).not.toContain("onShiftTab={() => cycleMode()}");
+  test("Shift+Tab drives the permission-mode ring; the auto-heal owns GT plan entry", () => {
+    // The ring (build → acceptEdits → plan …) is the single Shift+Tab semantic; landing on
+    // "plan" plants the GT session via the auto-heal effect below — no handler intercept
+    // that would skip acceptEdits.
+    expect(src).toContain("onShiftTab={() => cycleMode()}");
+    expect(src).not.toContain("toggleMode");
   });
 
-  test("toggleMode: GT-on build→plan takes the full workflow; everything else stays cycleMode", () => {
-    const idx = src.indexOf("const toggleMode = useCallback(");
-    expect(idx).toBeGreaterThan(-1);
-    const body = src.slice(idx, src.indexOf("}, [", idx));
-    expect(body).toContain(
-      'getMode() === "build" && agent.config.groundTruth === true && planSpawn && planMetaModel',
-    );
-    expect(body).toContain('enterPlanMode("")');
-    expect(body).toContain("PLAN_ON_NOTICE");
-    expect(body).toContain("cycleMode();");
-  });
-
-  test("one shared ON notice: definition + toggleMode + auto-heal + /plan", () => {
-    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(4);
+  test("one shared ON notice: definition + auto-heal + /plan", () => {
+    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(3);
   });
 
   test("planSessionGen keys exit_plan registration to session identity", () => {
