@@ -177,6 +177,21 @@ export function streamTailBudget(rows: number, reserved: number): number {
   return Math.max(0, rows - reserved - SCROLLBACK_SAFETY_ROWS);
 }
 
+/**
+ * Inline glued-bottom prompt: rows to pad the TOP of the live frame with so the prompt reaches the
+ * terminal's last row. In inline mode the finalized transcript lives in native scrollback (<Static>)
+ * and the live frame flows right after it, so a short transcript leaves the prompt floating high.
+ * The spacer fills `rows - staticRows - liveRows`, where `staticRows` is the transcript's on-screen
+ * height (capped at `rows`) and `liveRows` is every element sharing the live frame. Capped below
+ * `rows` by SCROLLBACK_SAFETY_ROWS so the padded live frame never reaches `rows` and trips Ink's
+ * scrollback-wiping clearTerminal. Collapses to 0 once the transcript alone fills the screen (the
+ * terminal has scrolled and the prompt sits at the bottom already). Never over-reaches: undercounting
+ * `liveRows` is the only unsafe direction, so callers pass reservations, not measured content.
+ */
+export function bottomSpacerRows(rows: number, staticRows: number, liveRows: number): number {
+  return Math.max(0, rows - staticRows - liveRows - SCROLLBACK_SAFETY_ROWS);
+}
+
 /** Max wrapped rows the question text may occupy in the overlay (see questionDisplayText). */
 export const QUESTION_TEXT_MAX_ROWS = 4;
 

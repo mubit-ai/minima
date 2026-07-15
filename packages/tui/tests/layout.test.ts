@@ -4,6 +4,7 @@ import {
   MAX_TOOL_LINES,
   QUESTION_TEXT_MAX_ROWS,
   SCROLLBACK_SAFETY_ROWS,
+  bottomSpacerRows,
   childTreeHeight,
   clampToolText,
   computeMsgHeight,
@@ -90,6 +91,33 @@ describe("streamTailBudget — keeps the live region below the terminal height",
   });
   test("allots the remaining rows on a roomy terminal", () => {
     expect(streamTailBudget(40, 16)).toBe(40 - 16 - SCROLLBACK_SAFETY_ROWS); // 22
+  });
+});
+
+describe("bottomSpacerRows — glues the inline prompt to the bottom without wiping scrollback", () => {
+  test("the padded live frame (liveRows + spacer) stays below rows - safety", () => {
+    // Same scrollback-wipe guard as streamTailBudget: the spacer must never push the LIVE FRAME
+    // to `rows`, or Ink's clearTerminal destroys the <Static> transcript. staticRows is in
+    // scrollback ABOVE the frame — only liveRows + spacer is the live frame height.
+    for (let rows = 24; rows <= 60; rows += 4) {
+      for (let staticRows = 0; staticRows <= rows; staticRows += 3) {
+        for (let liveRows = 4; liveRows <= 12; liveRows += 2) {
+          const spacer = bottomSpacerRows(rows, staticRows, liveRows);
+          expect(liveRows + spacer).toBeLessThanOrEqual(rows - SCROLLBACK_SAFETY_ROWS);
+        }
+      }
+    }
+  });
+  test("fills the gap down to the last row on a short transcript", () => {
+    // 40 rows, 6 rows of transcript, 8 rows of live frame → spacer fills the rest under the margin.
+    expect(bottomSpacerRows(40, 6, 8)).toBe(40 - 6 - 8 - SCROLLBACK_SAFETY_ROWS); // 24
+  });
+  test("collapses to 0 once the transcript alone fills the screen (terminal has scrolled)", () => {
+    expect(bottomSpacerRows(24, 24, 8)).toBe(0);
+    expect(bottomSpacerRows(24, 40, 8)).toBe(0); // over-full, still clamped
+  });
+  test("never negative when the live frame alone already overflows a cramped terminal", () => {
+    expect(bottomSpacerRows(10, 2, 12)).toBe(0);
   });
 });
 

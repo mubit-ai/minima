@@ -81,6 +81,7 @@ import {
   type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
   applyScrollDelta,
+  bottomSpacerRows,
   childTreeHeight,
   getScrollableMessages,
   gtFooterFit,
@@ -3510,6 +3511,19 @@ export function HarnessApp({
     if (streaming) out.push(...liveReplyLines(streaming, cols));
     return out;
   }, [fullscreen, busy, streaming, streamingThoughts, cols]);
+  // Inline glued-bottom prompt: rendered rows the finalized transcript occupies on screen,
+  // capped at one screenful (once it exceeds `rows` the terminal has already scrolled so the
+  // live frame's bottom IS the terminal's bottom, and the spacer below collapses to 0). Uses
+  // linesFor — the same per-message line count MessageRow renders — so the estimate can't drift.
+  const inlineStaticRows = useMemo(() => {
+    if (fullscreen) return rows;
+    let n = 0;
+    for (const m of messages) {
+      n += linesFor(m, cols).length;
+      if (n >= rows) return rows;
+    }
+    return n;
+  }, [fullscreen, messages, cols, rows]);
   let view = null;
   if (lineIndex) {
     const t0 = perfEnabled ? performance.now() : 0;
@@ -3646,6 +3660,34 @@ export function HarnessApp({
       </Box>
     ) : null;
 
+  // Inline glued-bottom prompt (fullscreen already glues via height={rows}): the live frame flows
+  // right after the last <Static> line, so a short transcript leaves the prompt floating mid-screen.
+  // Two cases, both placing the spacer just BELOW the banner (so the banner stays at the top and
+  // everything below it — stream, input, footer — is pushed to the bottom):
+  //   • WELCOME (no messages, empty <Static>): a flexGrow spacer inside a minHeight={rows-safety}
+  //     root fills the whole gap exactly — no height math, and safe because there is no scrollback
+  //     yet to wipe. This is the splash the user sees first.
+  //   • ACTIVE (messages present): a computed fixed-height spacer = rows − transcript − live rows,
+  //     capped below `rows` (SCROLLBACK_SAFETY_ROWS) so the padded live frame can't reach `rows`
+  //     and trip Ink's clearTerminal (which WIPES the <Static> scrollback). Collapses to 0 once the
+  //     transcript alone fills the screen; disabled while a picker overlay owns the bottom region.
+  const bottomSpacerGrow = !fullscreen && messages.length === 0 && !overlayOpen;
+  const inlineStreamRows = !fullscreen && streamTail ? 2 + markdownBodyHeight(streamTail, cols) : 0;
+  const inlineLiveRows =
+    footerHeight +
+    suggestionsHeight +
+    inputBoxHeight +
+    permPromptHeight +
+    questionPromptHeight +
+    treeHeight +
+    busyIndicatorHeight +
+    streamingThoughtsHeight +
+    inlineStreamRows;
+  const bottomSpacer =
+    fullscreen || messages.length === 0 || overlayOpen
+      ? 0
+      : bottomSpacerRows(rows, inlineStaticRows, inlineLiveRows);
+
   return (
     // Two layouts share one fixed footer (suggestions + input/overlays + status bar). FULLSCREEN wraps
     // the transcript in a bottom-anchored, in-app-scrolled viewport inside a height={rows} frame, so
@@ -3655,6 +3697,9 @@ export function HarnessApp({
       flexDirection="column"
       width="100%"
       height={fullscreen ? rows : undefined}
+      // Welcome splash: reserve (nearly) the full terminal so the flexGrow spacer below the banner
+      // can push the prompt to the bottom. Kept under `rows` so it never trips Ink's scrollback wipe.
+      minHeight={bottomSpacerGrow ? rows - SCROLLBACK_SAFETY_ROWS : undefined}
       overflow={fullscreen ? "hidden" : "visible"}
     >
       {fullscreen && VIEWPORT_ON ? (
@@ -3768,6 +3813,13 @@ export function HarnessApp({
             {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
           </Static>
           {bannerBlock}
+          {/* Glue the prompt to the bottom: below the banner, pad the live frame down to the last
+              row — flexGrow on the welcome splash, a computed fixed height once a transcript exists. */}
+          {bottomSpacerGrow ? (
+            <Box flexGrow={1} flexShrink={0} />
+          ) : bottomSpacer > 0 ? (
+            <Box height={bottomSpacer} flexShrink={0} />
+          ) : null}
           {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
               never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
           {busy && streamingThoughts && showThinkingRef.current ? (
