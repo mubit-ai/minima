@@ -614,3 +614,61 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
     expect(src).toContain("} finally {\n      pendingEchoRef.current = false;");
   });
 });
+
+// OpenCode-style sidebar (2026-07-15): full-terminal-height borderless panels in a
+// two-column fullscreen root; footer/input/overlays live in the LEFT column at
+// contentCols; narrow terminals overlay instead of docking.
+describe("tui/app.tsx two-column sidebar layout", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("sidebar geometry takes the FULL terminal and precedes the footer math", () => {
+    expect(src).toContain("sidebarGeometry(cols, rows) ?? sidebarOverlayGeometry(cols, rows)");
+    expect(src.indexOf("sidebarGeometry(cols, rows)")).toBeLessThan(src.indexOf("const gtBudget ="));
+  });
+
+  test("one shared footer block; footer widths follow the left column", () => {
+    expect(src).toContain("const footerBlock = (");
+    expect(src).toContain("wrappedLineCount(`${typedText}▋`, contentCols - 4)");
+    expect(src).toContain("permOverlayHeight(permPrompt, contentCols)");
+    // Left-column widths: legacy MessageRow window + both bottom-region overlays wrap at
+    // the column width (== cols inline). The inline <Static> row legitimately keeps cols.
+    expect(src.split("cols={contentCols}").length - 1).toBe(3);
+    expect(src.split("cols={cols}").length - 1).toBe(1);
+  });
+
+  test("overlay mode never reflows; docked mode narrows the column", () => {
+    expect(src).toContain(
+      "const sidebarDocked = sidebarOpen && sidebarGeom !== null && sidebarGeom.overlay !== true;",
+    );
+    expect(src).toContain("const sidebarOverlaid = sidebarOpen && sidebarGeom?.overlay === true;");
+    expect(src).toContain("{sidebarOverlaid ? sidebarPanels : null}");
+    expect(src).toContain("{sidebarDocked ? sidebarPanels : null}");
+  });
+
+  test("the rewind picker gates on its OWN geometry ref (null conditions diverged)", () => {
+    expect(src).toContain("fullscreen && overlayGeomRef.current && turns.length > 0");
+    expect(src).toContain("overlayGeomRef.current = overlayGeom;");
+    expect(src).toContain("if (rewindOpen && !overlayGeomOk) setRewindOpen(false);");
+  });
+
+  test("panels are borderless SidebarChassis instances with the version footer", () => {
+    const toc = readFileSync(join(import.meta.dir, "../src/tui/toc-panel.tsx"), "utf8");
+    const gt = readFileSync(join(import.meta.dir, "../src/tui/gt-panel.tsx"), "utf8");
+    const chassis = readFileSync(join(import.meta.dir, "../src/tui/sidebar-chassis.tsx"), "utf8");
+    expect(toc).toContain("<SidebarChassis");
+    expect(gt).toContain("<SidebarChassis");
+    expect(toc).not.toContain("borderStyle");
+    expect(gt).not.toContain("borderStyle");
+    expect(chassis).toContain("VERSION");
+    expect(chassis).toContain("cwdSegments");
+  });
+
+  test("wide fullscreen sessions auto-open the sidebar unfocused (mount-only)", () => {
+    expect(src).toContain("if (!fullscreen || cols < 100 || rows < 10) return;");
+    const idx = src.indexOf("if (!fullscreen || cols < 100 || rows < 10) return;");
+    const effect = src.slice(idx, idx + 400);
+    expect(effect).toContain("if (hasPlan) setGtPanelOpen(true);");
+    expect(effect).toContain("else setTocOpen(true);");
+    expect(effect).not.toContain("setSidebarFocused(true)");
+  });
+});

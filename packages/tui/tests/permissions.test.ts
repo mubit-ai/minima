@@ -227,7 +227,9 @@ describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
   test("reservation and render share the layout helpers (estimate == render)", () => {
-    expect(src).toContain("permOverlayHeight(permPrompt, cols)");
+    // contentCols, not cols: the footer lives in the fullscreen LEFT COLUMN beside the
+    // full-height sidebar, so the overlay wraps at the column width (== cols inline).
+    expect(src).toContain("permOverlayHeight(permPrompt, contentCols)");
     expect(src).toContain("permPreviewLines(prompt.diffPreview, cols)");
     expect(src).toContain("permToolLabel(prompt.toolName)");
     // The old source-line count is gone — it under-reserved whenever a line wrapped.
