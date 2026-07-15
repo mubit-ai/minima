@@ -182,8 +182,12 @@ export interface CliArgs {
   slider?: number;
   /**
    * Fullscreen renderer: alternate screen buffer, prompt glued to the bottom row, in-app scroll
-   * (PgUp/PgDn + optional mouse wheel) — like Claude Code's fullscreen mode. Default true; disable
-   * with `--no-fullscreen` or `MINIMA_TUI_INLINE=1` to fall back to the inline/native-scroll mode.
+   * (PgUp/PgDn + optional captured mouse wheel) plus the frame-anchored overlays (ToC, GT Plan
+   * Overview, /rewind). **Default false** — the default is the inline renderer, whose main-buffer
+   * `<Static>` transcript gives the terminal's OWN native scroll + click-drag select + copy all at
+   * once, with no mouse capture and no `/mouse` toggle (the Claude Code model). Opt into fullscreen
+   * with `--fullscreen` or `MINIMA_TUI_FULLSCREEN=1`; `--no-fullscreen` / `MINIMA_TUI_INLINE=1` are
+   * the explicit inline forms (now the default).
    */
   fullscreen: boolean;
   /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
@@ -201,7 +205,7 @@ export function parseArgs(argv: string[]): CliArgs {
     mode: "interactive",
     noTools: false,
     budgetEnforce: false,
-    fullscreen: !process.env.MINIMA_TUI_INLINE,
+    fullscreen: process.env.MINIMA_TUI_FULLSCREEN === "1" && process.env.MINIMA_TUI_INLINE !== "1",
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -301,7 +305,9 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
-      --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
+      --fullscreen         glued-prompt alt-screen UI (in-app scroll + ToC/GT/rewind overlays);
+                           default is the inline renderer — native terminal scroll + select + copy
+      --no-fullscreen      force the inline renderer (this is the default)
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
@@ -621,20 +627,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (savedMode) setMode(savedMode);
   }
 
-  // Two renderers (like Claude Code):
-  //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
-  //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
-  //    optional captured mouse wheel; installInputFilter strips wheel SGR + captures pastes before Ink sees them).
-  //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
-  //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
-  //    reserve seats the prompt at the bottom on first paint.
+  // Two renderers:
+  //  - inline (DEFAULT, like Claude Code's REPL): main buffer + Ink <Static> commits finished
+  //    output to the terminal's NATIVE scrollback, so wheel scroll + click-drag select + copy are
+  //    all the terminal's own — simultaneously, no mouse capture, no /mouse toggle. A one-time
+  //    newline reserve seats the prompt at the bottom on first paint.
+  //  - fullscreen (--fullscreen / MINIMA_TUI_FULLSCREEN=1): alternate screen buffer + hidden cursor.
+  //    The app draws a full-height frame with the prompt glued to the bottom row, scrolls history
+  //    IN-APP (PgUp/PgDn + an optional captured mouse wheel via /mouse), and hosts the frame-anchored
+  //    ToC / GT / rewind overlays. Capturing the wheel is what costs native selection here.
+  //    installInputFilter strips wheel SGR + captures pastes before Ink sees them.
   installInputFilter(); // strip wheel SGR + capture bracketed pastes before Ink's key parser
   process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
   if (args.fullscreen) {
     process.stdout.write("\u001b[?1049h"); // enter alternate screen
     process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
   } else {
-    process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
+    // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
+    // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
+    // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
+    // input render from the TOP and grow downward; Ink commits finished output to native
+    // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
+    process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
     process.stdout.write("\u001b[?25l");
   }
 
