@@ -154,6 +154,10 @@ class RecallResult:
     raw_confidence: float = 0.0
     timed_out: bool = False
     error: str | None = None
+    # Class-specific warning label for the recommend response (memory_unreachable,
+    # memory_auth_failed, memory_rejected_payload, memory_server_error, memory_recall_bug).
+    # Set only on the error path; the engine surfaces it instead of a generic label.
+    warning: str | None = None
 
     @property
     def outcome_evidence(self) -> list[RecalledEvidence]:

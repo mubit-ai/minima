@@ -142,7 +142,10 @@ class Recommender:
         if recall.timed_out:
             warnings.append("recall_timeout")
         elif recall.error:
-            warnings.append("memory_unavailable")
+            # Class-specific label (memory_unreachable / _auth_failed / _rejected_payload /
+            # _server_error / _recall_bug) so an outage isn't confused with an auth or schema
+            # failure. Falls back to the legacy generic label if none was classified.
+            warnings.append(recall.warning or "memory_unavailable")
         evidence = recall.outcome_evidence + fastpath_evidence
 
         # Neighbor-vote refinement: if the heuristic couldn't place the task, let the

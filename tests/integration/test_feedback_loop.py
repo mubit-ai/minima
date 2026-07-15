@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from mubit import ServerError
+
 from tests.factories import make_evidence
 
 
@@ -89,7 +91,7 @@ def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
     rec = _recommend_haiku(client, fake_memory)
 
     async def _boom(**kwargs):
-        raise RuntimeError("mubit unavailable (503)")
+        raise ServerError("mubit unavailable (503)")
 
     fake_memory.remember_outcome = _boom  # type: ignore[method-assign]
 
@@ -104,15 +106,39 @@ def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
             "latency_ms": 900,
         },
     ).json()
-    # The memory write failure is still surfaced honestly...
+    # The memory write failure is still surfaced honestly — and a Mubit 5xx is labeled as a
+    # server error, not conflated with an auth failure or a bug on our side.
     assert fb["accepted"] is False
-    assert "memory_write_failed" in fb["warnings"]
+    assert "memory_server_error" in fb["warnings"]
 
     # ...but the decision-log row was reconciled anyway: savings sees realized cost.
     savings = client.get("/v1/savings", params={"days": 1}).json()
     realized = savings["summary"]["realized"]
     assert realized["n_reconciled"] == 1
     assert abs(realized["realized_cost_usd"] - 0.0042) < 1e-9
+
+
+def test_non_mubit_write_error_is_labeled_a_bug_not_an_outage(client, fake_memory):
+    """A local bug in the write path (not a Mubit error) must be labeled memory_write_bug —
+    never disguised as a memory outage, which would send us hunting a healthy Mubit."""
+    rec = _recommend_haiku(client, fake_memory)
+
+    async def _boom(**kwargs):
+        raise KeyError("task_cluster")  # a bug in our own payload construction
+
+    fake_memory.remember_outcome = _boom  # type: ignore[method-assign]
+
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+        },
+    ).json()
+    assert fb["accepted"] is False
+    assert "memory_write_bug" in fb["warnings"]
 
 
 def test_judged_false_stores_null_quality_not_fabricated(client, fake_memory):

@@ -17,7 +17,14 @@ from typing import Any, Protocol, runtime_checkable
 
 import anyio
 import httpx
-from mubit import Client, TransportError
+from mubit import (
+    AuthError,
+    Client,
+    ServerError,
+    TransportError,
+    UnsupportedFeatureError,
+    ValidationError,
+)
 
 from minima.config import Settings
 from minima.logging import get_logger
@@ -25,6 +32,32 @@ from minima.memory import threadpool
 from minima.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
 
 log = get_logger("minima.memory")
+
+
+def classify_memory_error(exc: BaseException) -> str | None:
+    """Map a memory-layer exception to an honest, class-specific warning label.
+
+    The Mubit SDK raises a precise error taxonomy (see mubit.client._map_http_error):
+    auth (401/403), validation (400/404/422), unsupported (501), server (other 5xx), and
+    transport (network unreachable / deadline). A bare `except Exception` that collapses all
+    of these — plus any *local* bug (a KeyError in payload construction, a serialization
+    error) — into one label makes an expired API key or a schema mismatch look identical to
+    a Mubit outage. This keeps them distinct.
+
+    Returns None for anything that is NOT a known Mubit error: that is a bug on our own side
+    of the wire, and the caller labels it as such (never as an outage).
+    """
+    if isinstance(exc, AuthError):
+        return "memory_auth_failed"
+    if isinstance(exc, ValidationError):  # AlreadyExistsError (409) subclasses this too
+        return "memory_rejected_payload"
+    if isinstance(exc, UnsupportedFeatureError):
+        return "memory_unsupported"
+    if isinstance(exc, ServerError):
+        return "memory_server_error"
+    if isinstance(exc, TransportError):
+        return "memory_unreachable"
+    return None
 
 # Lowercase LTM entry-type tags for Mubit's query filter. Recall deliberately does
 # NOT filter by type (seeds land as "fact", feedback as "observation"); Minima outcomes
@@ -293,12 +326,21 @@ class MubitMemory:
             if settings.minima_recall_explain:
                 _log_explain(lane, raw)
             return result
-        except TransportError as exc:
-            log.warning("recall_transport_error", lane=lane, code=exc.args[0] if exc.args else "")
-            return RecallResult(evidence=[], degraded=True, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — recall must never break a recommendation
-            log.warning("recall_error", lane=lane, error=str(exc))
-            return RecallResult(evidence=[], degraded=True, error=str(exc))
+            # Classify honestly: a Mubit outage, an auth failure, a rejected payload, and a
+            # bug in our own recall path are distinct failures — do not conflate them all as
+            # "memory_unavailable". Non-Mubit exceptions are our bug (memory_recall_bug), not
+            # an outage. error_type makes the disguise visible without re-deriving it.
+            warning = classify_memory_error(exc) or "memory_recall_bug"
+            log.warning(
+                "recall_error",
+                lane=lane,
+                warning=warning,
+                error_type=type(exc).__name__,
+                code=getattr(exc, "code", None),
+                error=str(exc),
+            )
+            return RecallResult(evidence=[], degraded=True, error=str(exc), warning=warning)
 
     def _parse_recall(self, raw: object) -> RecallResult:
         data: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
