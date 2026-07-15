@@ -53,4 +53,10 @@ describe("parseArgs renderer default (inline is the CC-parity default)", () => {
       expect(parseArgs(["--no-fullscreen"]).fullscreen).toBe(false),
     );
   });
+
+  test("--inline is the alias form (the decision doc's name for it)", () => {
+    withEnv({ MINIMA_TUI_FULLSCREEN: "1" }, () =>
+      expect(parseArgs(["--inline"]).fullscreen).toBe(false),
+    );
+  });
 });

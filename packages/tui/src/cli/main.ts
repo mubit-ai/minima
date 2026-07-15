@@ -237,6 +237,7 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--offline":
         opts.offline = true;
         break;
+      case "--inline":
       case "--no-fullscreen":
         opts.fullscreen = false;
         break;
@@ -307,7 +308,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --offline            bypass Minima routing
       --fullscreen         glued-prompt alt-screen UI (in-app scroll + ToC/GT/rewind overlays);
                            default is the inline renderer — native terminal scroll + select + copy
-      --no-fullscreen      force the inline renderer (this is the default)
+      --inline, --no-fullscreen
+                           force the inline renderer (this is the default)
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
