@@ -1,17 +1,18 @@
 /**
- * GT Plan Overview panel (U3, MUB-141; docked 2026-07-14) — fullscreen renderer only,
- * same docked chassis as TocPanel: an in-flow right column with a focus toggle. Enter on
- * a step swaps the panel content to its detail card (stepCardLines — the shared J1 /why
- * component); Esc steps back out of the card, then blurs to the composer (panel stays
- * docked); Ctrl+G closes (or steps out of the card first) and Ctrl+T swaps to the ToC.
+ * GT Plan Overview panel (U3, MUB-141; borderless full-height chassis 2026-07-15) —
+ * fullscreen renderer only, same chassis as TocPanel: an in-flow right column (or
+ * narrow-terminal overpaint) with a focus toggle. Enter on a step swaps the panel
+ * content to its detail card (stepCardLines — the shared J1 /why component); Esc steps
+ * back out of the card, then blurs to the composer (panel stays docked); Ctrl+G closes
+ * (or steps out of the card first) and Ctrl+T swaps to the ToC.
  */
 
-import { Box, Text } from "ink";
 import { useInput } from "ink";
 import React, { useMemo, useState } from "react";
 
-import { type GtOverview, gtRows, padDisplay, stepCardLines } from "./gt_overview.ts";
+import { type GtOverview, gtRows, stepCardLines } from "./gt_overview.ts";
 import { type SidebarGeometry, clipPanelLines } from "./layout.ts";
+import { SidebarChassis, SidebarRow, sidebarBodyRows } from "./sidebar-chassis.tsx";
 
 export interface GtPanelProps {
   overview: GtOverview;
@@ -81,7 +82,7 @@ export function GtPanel({ overview, geometry, focused, onClose, onBlur, onSwitch
   let lines: string[];
   let top = 0;
   if (cardLines) {
-    ({ lines, top } = clipPanelLines(cardLines, geometry.innerHeight - 2, 0));
+    ({ lines, top } = clipPanelLines(cardLines, sidebarBodyRows(geometry), 0));
   } else {
     const cursorRow = Math.max(
       0,
@@ -89,39 +90,32 @@ export function GtPanel({ overview, geometry, focused, onClose, onBlur, onSwitch
     );
     ({ lines, top } = clipPanelLines(
       rows.map((r) => r.text),
-      geometry.innerHeight - 2, // first interior row is the header, last is the key hint
+      sidebarBodyRows(geometry), // chassis chrome rows live outside the body
       cursorRow,
     ));
   }
-  const accent = focused ? "green" : "gray";
 
   return (
-    <Box
-      flexShrink={0}
-      width={geometry.sidebarWidth}
-      height={geometry.height}
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={accent}
-      overflow="hidden"
+    <SidebarChassis
+      title="Plan overview"
+      accent="green"
+      focused={focused}
+      hint={hint}
+      geometry={geometry}
     >
-      <Text wrap="truncate" color={accent} bold>
-        {` ${padDisplay("Plan overview", geometry.innerWidth)} `}
-      </Text>
       {lines.map((line, i) => {
         const row = cardLines ? undefined : rows[top + i];
         const isCursor = focused && row?.isTitle === true && row.stepIdx === cursor;
         return (
-          <Text key={String(i)} wrap="truncate">
-            <Text color={isCursor ? "green" : undefined} inverse={isCursor || undefined}>
-              {` ${padDisplay(line, geometry.innerWidth)} `}
-            </Text>
-          </Text>
+          <SidebarRow
+            key={String(i)}
+            text={line}
+            width={geometry.innerWidth}
+            color={isCursor ? "green" : undefined}
+            inverse={isCursor}
+          />
         );
       })}
-      <Text wrap="truncate" color="gray">
-        {` ${padDisplay(hint, geometry.innerWidth)} `}
-      </Text>
-    </Box>
+    </SidebarChassis>
   );
 }

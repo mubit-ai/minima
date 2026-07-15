@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# PTY verification for the fullscreen TUI: drive a real session (500-msg fixture) through
-# wheel storms in a pseudo-terminal and assert rendering invariants (see tui_assert.py)
-# plus perf budgets from the MINIMA_TUI_PERF probe. Wired to `make tui-verify`.
+# PTY verification for the FULLSCREEN renderer (invoked explicitly via --fullscreen in every
+# scenario — a test that depends on a renderer says so; it never inherits the product default):
+# drive a real session (500-msg fixture) through wheel storms in a pseudo-terminal and assert
+# rendering invariants (see tui_assert.py) plus perf budgets from the MINIMA_TUI_PERF probe.
+# Wired to `make tui-verify`.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -16,7 +18,7 @@ echo "== tui-verify: generating 500-message fixture =="
 echo "== tui-verify: scenario storm (resume + 150-notch wheel storm) =="
 SPEC=$(cat <<EOF
 {
-  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline", "--resume", "fixture-500"],
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--fullscreen", "--offline", "--resume", "fixture-500"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 9,
   "env": {"MINIMA_DB_PATH": "$TMP/fixture.db", "MINIMA_TUI_PERF": "$TMP/perf.jsonl", "MINIMA_HARNESS_DIR": "$TMP"},
@@ -49,7 +51,7 @@ PY
 echo "== tui-verify: scenario clipboard (bracketed paste + Ctrl+Y OSC 52) =="
 SPEC2=$(cat <<EOF
 {
-  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline", "--resume", "fixture-500"],
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--fullscreen", "--offline", "--resume", "fixture-500"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 7,
   "env": {"MINIMA_DB_PATH": "$TMP/fixture.db", "MINIMA_HARNESS_DIR": "$TMP"},
@@ -72,7 +74,7 @@ echo "tui_assert: PASS clipboard (paste captured, no auto-submit, OSC 52 emitted
 echo "== tui-verify: scenario modes (Shift+Tab badge ring) =="
 SPEC3=$(cat <<EOF
 {
-  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--fullscreen", "--offline"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 7,
   "env": {"MINIMA_HARNESS_DIR": "$TMP"},
@@ -98,7 +100,7 @@ PY
 echo "== tui-verify: scenario shortcuts (Home/End, Alt word-jump, Ctrl+Z suspend/resume) =="
 SPEC4=$(cat <<EOF
 {
-  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--fullscreen", "--offline"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 10,
   "env": {"MINIMA_HARNESS_DIR": "$TMP"},
@@ -141,7 +143,7 @@ PY
 echo "== tui-verify: scenario ctrl-d (EOF quit on empty prompt) =="
 SPEC5=$(cat <<EOF
 {
-  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--offline"],
+  "cmd": ["bun", "run", "$TUI/src/cli/main.ts", "--fullscreen", "--offline"],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 6,
   "env": {"MINIMA_HARNESS_DIR": "$TMP"},
