@@ -137,7 +137,10 @@ class Recommender:
         if recall.timed_out:
             warnings.append("recall_timeout")
         elif recall.error:
-            warnings.append("memory_unavailable")
+            # Class-specific label (memory_unreachable / _auth_failed / _rejected_payload /
+            # _server_error / _recall_bug) so an outage isn't confused with an auth or schema
+            # failure. Falls back to the legacy generic label if none was classified.
+            warnings.append(recall.warning or "memory_unavailable")
         if lookup_degraded:
             # The deterministic per-(cluster, model) evidence channel is down (timeout,
             # transport error, or hosted policy) — the decision rests on ANN recall
