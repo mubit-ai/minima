@@ -748,8 +748,18 @@ describe("synthesizeGroundTruth", () => {
     ]);
   });
 
-  test("returns null on an essentially-empty model reply so finalize falls back", async () => {
-    reg.setResponses([json({})]);
+  test("returns null only after the concise retry also comes back empty", async () => {
+    reg.setResponses([json({}), json({})]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: hi", {
+      metaModel: META_MODEL,
+    });
+    expect(result).toBeNull();
+    expect(reg.state.callCount).toBe(2);
+  });
+
+  test("returns null (never throws) when the model errors on both attempts", async () => {
+    reg.setResponses([msg("not json at all — total garbage"), msg("still garbage")]);
     const store = new PlanSessionStore("g");
     const result = await synthesizeGroundTruth(store.session, "User: hi", {
       metaModel: META_MODEL,
@@ -757,12 +767,54 @@ describe("synthesizeGroundTruth", () => {
     expect(result).toBeNull();
   });
 
-  test("returns null (never throws) when the model errors", async () => {
-    reg.setResponses([msg("not json at all — total garbage")]);
+  // The dominant real-world failure: a giant plan overflows the model's output cap, the JSON
+  // arrives TRUNCATED (stop_reason "length", not "error"), and before the salvage pass the
+  // whole synthesis — and with it the entire seeded plan ledger — silently vanished.
+  test("salvages a truncated reply: partial doc beats none, no retry spent", async () => {
+    const full = JSON.stringify({
+      title: "QR registration",
+      goal: "scan people into a db",
+      overview: "backend + frontend + admin portal",
+      requirements: ["scan via qr", "admin portal"],
+      approach: [
+        { action: "scaffold backend", verify: "pytest -q backend" },
+        { action: "wire the scanner page", verify: "bun test scanner" },
+      ],
+      risks: ["duplicate scans"],
+    });
+    const truncated = full.slice(0, full.indexOf('"wire the scanner') + 9); // cut mid-string
+    reg.setResponses([msg(truncated)]);
+    const store = new PlanSessionStore("g");
+    const result = await synthesizeGroundTruth(store.session, "User: build it", {
+      metaModel: META_MODEL,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.title).toBe("QR registration");
+    expect(result!.approach.length).toBeGreaterThanOrEqual(1);
+    expect(result!.approach[0]).toEqual({
+      action: "scaffold backend",
+      verify: "pytest -q backend",
+      tools: [],
+    });
+    expect(reg.state.callCount).toBe(1); // salvage succeeded — the retry was not needed
+  });
+
+  test("retries ONCE with a concise instruction when the first reply is unusable", async () => {
+    reg.setResponses([
+      msg("I could not produce the document."),
+      json({
+        title: "T",
+        goal: "g",
+        approach: [{ action: "step", verify: "bun test x" }],
+      }),
+    ]);
     const store = new PlanSessionStore("g");
     const result = await synthesizeGroundTruth(store.session, "User: hi", {
       metaModel: META_MODEL,
     });
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.title).toBe("T");
+    expect(reg.state.callCount).toBe(2);
+    expect(reg.state.requests[1]!.user).toContain("Be CONCISE");
   });
 });

@@ -131,6 +131,46 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     expect(out2.seededCount).toBe(0);
   });
 
+  test("synthesis failure is SURFACED (synthFailed), never silent — no seeding happened", async () => {
+    const store = new PlanSessionStore("g");
+    const { base, written } = deps({
+      metaModel: META,
+      synthesize: async () => null,
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(out.synthFailed).toBe(true);
+    expect(out.seededCount).toBe(0);
+    expect(written[0]!.content).toBe(store.toGroundTruth(null));
+
+    // Deterministic-by-design (no metaModel) is NOT a failure; a working synth isn't either.
+    const { base: noMeta } = deps();
+    const out2 = await finalizePlan(new PlanSessionStore("g"), noMeta);
+    if (out2.kind !== "ok") throw new Error(`expected ok, got ${out2.kind}`);
+    expect(out2.synthFailed).toBe(false);
+    const { base: good } = deps({ metaModel: META, synthesize: async () => synth() });
+    const out3 = await finalizePlan(new PlanSessionStore("g"), good);
+    if (out3.kind !== "ok") throw new Error(`expected ok, got ${out3.kind}`);
+    expect(out3.synthFailed).toBe(false);
+  });
+
+  test("an aborted signal refuses finalize BEFORE writing — plan mode stays ON", async () => {
+    const store = new PlanSessionStore("g");
+    const controller = new AbortController();
+    controller.abort();
+    const { base, written } = deps({
+      metaModel: META,
+      signal: controller.signal,
+      synthesize: async () => synth(),
+    });
+    const out = await finalizePlan(store, base);
+    expect(out.kind).toBe("blocked");
+    if (out.kind !== "blocked") throw new Error("unreachable");
+    expect(out.message).toContain("Finalize aborted");
+    expect(out.message).toContain("plan mode stays ON");
+    expect(written).toHaveLength(0);
+  });
+
   test("fail-open: throwing question/synthesis helpers still write the deterministic doc", async () => {
     const store = new PlanSessionStore("g");
     const { base, written } = deps({

@@ -114,7 +114,10 @@ const asRecords = (v: unknown): Record<string, unknown>[] =>
 
 // --------------------------------------------------------------- defensive completion
 
-/** Extract the first balanced JSON object/array from `text`; undefined when none parses. */
+/** Extract the first balanced JSON object/array from `text`; undefined when none parses.
+ *  Falls back to salvaging a TRUNCATED value — a long reply cut off by the model's output
+ *  cap (stop_reason "length") or a timeout is the dominant real-world failure of the big
+ *  ground-truth synthesis, and dropping it wholesale silently costs the whole plan ledger. */
 function extractJson(text: string): unknown {
   let start = -1;
   for (let i = 0; i < text.length; i++) {
@@ -147,6 +150,60 @@ function extractJson(text: string): unknown {
         } catch {
           return undefined;
         }
+      }
+    }
+  }
+  return salvageTruncatedJson(text.slice(start));
+}
+
+/**
+ * Best-effort parse of a JSON value whose tail was cut off: walk it string-aware, remember
+ * every position where a VALUE just ended cleanly (closing quote/bracket or literal end)
+ * plus the bracket stack at that point, then try progressively earlier clean points —
+ * stripping a dangling `,`/`:`(+key) and appending the stack's closers — until one parses.
+ * Sanitizers downstream drop anything malformed, so a partial document is strictly better
+ * than none. Returns undefined when nothing parses.
+ */
+function salvageTruncatedJson(text: string): unknown {
+  const stackAt: { idx: number; stack: string[] }[] = [];
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') {
+        inStr = false;
+        stackAt.push({ idx: i, stack: [...stack] });
+      }
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") {
+      stack.pop();
+      stackAt.push({ idx: i, stack: [...stack] });
+    } else if (/[0-9el]/.test(ch) && !/[0-9a-zA-Z.+-]/.test(text[i + 1] ?? "")) {
+      // end of a number / true|false|null literal
+      stackAt.push({ idx: i, stack: [...stack] });
+    }
+  }
+  for (let a = stackAt.length - 1, tries = 0; a >= 0 && tries < 24; a--, tries++) {
+    const point = stackAt[a]!;
+    if (point.stack.length === 0) continue; // balanced-at-zero already failed JSON.parse above
+    const head = text.slice(0, point.idx + 1);
+    const closers = [...point.stack].reverse().join("");
+    // A closing quote can end a VALUE (close right after it) or a dangling KEY (strip the
+    // `"key"` and its comma first) — try both shapes.
+    const headSansKey = head.replace(/,?\s*"(?:[^"\\]|\\.)*"$/u, "");
+    for (const h of head === headSansKey ? [head] : [head, headSansKey]) {
+      try {
+        return JSON.parse(h + closers);
+      } catch {
+        // keep walking back
       }
     }
   }
@@ -661,34 +718,48 @@ export async function synthesizeGroundTruth(
     .filter(Boolean)
     .join("\n\n");
 
-  const raw = await completeJson<Record<string, unknown>>(
-    opts.metaModel,
-    GROUND_TRUTH_SYSTEM,
-    user,
-    {},
-    { apiKey: opts.apiKey, signal: opts.signal, timeout: 60, onCostUsd: opts.onCostUsd },
-  );
-  const synth: GroundTruthSynthesis = {
-    title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
-    goal: clip(asStr(raw.goal).replace(/\s+/g, " "), 600),
-    overview: asStr(raw.overview),
-    requirements: asStrList(raw.requirements),
-    constraints: asStrList(raw.constraints),
-    decisions: sanitizeDecisions(raw.decisions),
-    approach: sanitizeApproach(raw.approach),
-    risks: asStrList(raw.risks),
-    successCriteria: asStrList(raw.successCriteria),
-    openItems: asStrList(raw.openItems),
+  const attempt = async (extra: string): Promise<GroundTruthSynthesis | null> => {
+    const raw = await completeJson<Record<string, unknown>>(
+      opts.metaModel,
+      GROUND_TRUTH_SYSTEM,
+      extra ? `${user}\n\n${extra}` : user,
+      {},
+      { apiKey: opts.apiKey, signal: opts.signal, timeout: 120, onCostUsd: opts.onCostUsd },
+    );
+    const synth: GroundTruthSynthesis = {
+      title: clip(asStr(raw.title).replace(/\s+/g, " "), 120),
+      goal: clip(asStr(raw.goal).replace(/\s+/g, " "), 600),
+      overview: asStr(raw.overview),
+      requirements: asStrList(raw.requirements),
+      constraints: asStrList(raw.constraints),
+      decisions: sanitizeDecisions(raw.decisions),
+      approach: sanitizeApproach(raw.approach),
+      risks: asStrList(raw.risks),
+      successCriteria: asStrList(raw.successCriteria),
+      openItems: asStrList(raw.openItems),
+    };
+    const isEmpty =
+      !synth.title &&
+      !synth.goal &&
+      !synth.overview &&
+      synth.requirements.length === 0 &&
+      synth.constraints.length === 0 &&
+      synth.decisions.length === 0 &&
+      synth.approach.length === 0;
+    return isEmpty ? null : synth;
   };
-  const isEmpty =
-    !synth.title &&
-    !synth.goal &&
-    !synth.overview &&
-    synth.requirements.length === 0 &&
-    synth.constraints.length === 0 &&
-    synth.decisions.length === 0 &&
-    synth.approach.length === 0;
-  return isEmpty ? null : synth;
+
+  // A giant plan can overflow the model's output cap (truncated JSON) or the timeout — both
+  // surface as an empty parse. One concise retry recovers most of them; an aborted signal
+  // means the user cancelled, so don't spend again.
+  const first = await attempt("");
+  if (first) return first;
+  if (opts.signal?.aborted) return null;
+  return attempt(
+    "Your previous attempt did not produce parseable JSON (likely truncated). Be CONCISE this " +
+      "time: cap every list at 8 items, keep overview under 120 words and every string tight — " +
+      "but still include EVERY implementation step in approach, each with its verify.",
+  );
 }
 
 // --------------------------------------------------------------------------- sanitizers

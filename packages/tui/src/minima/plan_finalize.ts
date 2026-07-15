@@ -39,7 +39,17 @@ export interface PlanFinalizeDeps {
 export type PlanFinalizeOutcome =
   | { kind: "blocked"; message: string }
   | { kind: "write-failed"; message: string }
-  | { kind: "ok"; md: string; outPath: string; seededCount: number; auditNote: string };
+  | {
+      kind: "ok";
+      md: string;
+      outPath: string;
+      seededCount: number;
+      auditNote: string;
+      /** metaModel was available but synthesis still failed — the doc is the deterministic
+       * assembly, nothing was seeded, and the caller MUST surface it (silence cost the
+       * whole plan ledger once). */
+      synthFailed: boolean;
+    };
 
 /** The planning conversation as a labelled transcript (user/planner turns only). */
 export function buildPlanTranscript(messages: Message[]): string {
@@ -91,6 +101,16 @@ export async function finalizePlan(
       // fail-open
     }
   }
+  // An abort mid-synthesis (Esc while finalize was running) must not half-finalize: nothing
+  // was written yet, so refuse and keep plan mode ON — the user retries deliberately.
+  if (deps.signal?.aborted) {
+    return {
+      kind: "blocked",
+      message:
+        "Finalize aborted before the ground truth was written — plan mode stays ON. " +
+        "Run /plan finalize (or approve exit_plan again) to retry.",
+    };
+  }
 
   // A6 poka-yoke audit: statically lint the finalized plan against the characteristics of a
   // good plan. Blocker-severity findings (a fabricated always-passing check, a typo'd tool
@@ -132,5 +152,12 @@ export async function finalizePlan(
   }
 
   const auditNote = auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "";
-  return { kind: "ok", md, outPath: deps.outPath, seededCount, auditNote };
+  return {
+    kind: "ok",
+    md,
+    outPath: deps.outPath,
+    seededCount,
+    auditNote,
+    synthFailed: deps.metaModel != null && synth === null,
+  };
 }

@@ -562,3 +562,21 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(ternary).toContain('"no council model"');
   });
 });
+
+// Finalize handoff (2026-07-15): the ledger drives the whole GT build spine — when synthesis
+// fails (truncated output was silently costing every seeded step), the user sees it and the
+// agent is told to rebuild the ledger via todowrite as its first move.
+describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the user-facing note warns when synthesis failed and nothing was seeded", () => {
+    expect(src).toContain("synthFailed: boolean");
+    expect(src).toContain("NO steps were seeded to the plan ledger");
+  });
+
+  test("the model is steered by seeding outcome: follow seeded steps, or todowrite first", () => {
+    expect(src).toContain("Follow the seeded plan steps");
+    expect(src).toContain("The plan ledger has no seeded steps — FIRST record");
+    expect(src).toContain("shell `verify` check");
+  });
+});

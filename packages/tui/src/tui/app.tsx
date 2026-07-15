@@ -181,12 +181,16 @@ function finalizeSuccessNote(o: {
   outPath: string;
   seededCount: number;
   auditNote: string;
+  synthFailed: boolean;
 }): string {
   const seededNote =
     o.seededCount > 0
       ? ` ${o.seededCount} verifiable step${o.seededCount === 1 ? "" : "s"} seeded to the plan ledger.`
       : "";
-  return `Ground truth written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${o.auditNote}`;
+  const synthNote = o.synthFailed
+    ? "\n\n⚠ Plan synthesis failed (model output truncated or unavailable) — the doc is the deterministic assembly and NO steps were seeded to the plan ledger. The agent was told to record them with todowrite."
+    : "";
+  return `Ground truth written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
 }
 
 /** Suggested `/config set` hint for a provider (or a generic one). */
@@ -1041,9 +1045,15 @@ export function HarnessApp({
       outcome.seededCount > 0
         ? `; ${outcome.seededCount} verifiable step${outcome.seededCount === 1 ? "" : "s"} seeded to the plan ledger`
         : "";
+    // The ledger drives the whole GT build spine (plan strip, Ctrl+G overview, done-gates) —
+    // when finalize could not seed it, the agent must recreate it as its FIRST move.
+    const ledgerGuidance =
+      outcome.seededCount > 0
+        ? " Follow the seeded plan steps, marking progress with todowrite."
+        : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
     return {
       ok: true,
-      message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.`,
+      message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${ledgerGuidance}`,
     };
   }, [agent, runPlanFinalize, exitPlanMode]);
   const exitPlanCancel = useCallback(() => {

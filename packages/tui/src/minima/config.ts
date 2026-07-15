@@ -148,6 +148,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const b = Number(roundBudgetEnv);
     if (Number.isFinite(b) && b > 0) cfg.planRoundBudgetUsd = b;
   }
+  // MINIMA_JUDGE_MODEL repoints the judge AND the plan-council meta model (keeper/critic/
+  // synth + ground-truth synthesis) — without it, a missing/limited key for the default
+  // model silently degrades the whole planning pipeline with no way to choose another.
+  const judgeEnv = process.env.MINIMA_JUDGE_MODEL?.trim();
+  if (judgeEnv) cfg.judgeModel = judgeEnv;
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;
   if (process.env.MINIMA_TUI_TOOL_ALLOWLIST === "0") cfg.toolAllowlist = false;
   if (process.env.MINIMA_TUI_GRADED_OUTCOME === "0") cfg.gradedOutcome = false;
