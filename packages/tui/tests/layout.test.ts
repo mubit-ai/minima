@@ -263,6 +263,7 @@ import {
   clipPanelLines,
   offsetForMessage,
   sidebarGeometry,
+  sidebarOverlayGeometry,
   tocPanelGeometry,
 } from "../src/tui/layout.ts";
 
@@ -314,10 +315,11 @@ describe("tocPanelGeometry (legacy overlay chassis — remaining consumer: the B
   });
 });
 
-describe("sidebarGeometry (docked ToC/GT sidebar — the 2026-07-14 reflow revision)", () => {
-  test("null below TOC_MIN_COLS or for regionHeight < 5 → callers use the text fallback", () => {
+describe("sidebarGeometry (docked ToC/GT sidebar — full-height borderless, 2026-07-15)", () => {
+  test("null below TOC_MIN_COLS or for rows < 10 → callers try the overlay, then text", () => {
     expect(sidebarGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
-    expect(sidebarGeometry(100, 4)).toBeNull();
+    expect(sidebarGeometry(100, 9)).toBeNull();
+    expect(sidebarGeometry(100, 10)).not.toBeNull();
   });
 
   test("width caps at 40; sidebarWidth + contentCols partition cols exactly", () => {
@@ -326,8 +328,8 @@ describe("sidebarGeometry (docked ToC/GT sidebar — the 2026-07-14 reflow revis
       sidebarWidth: 40,
       contentCols: 60,
       height: 24,
-      innerWidth: 36,
-      innerHeight: 22,
+      innerWidth: 37,
+      innerHeight: 24,
     });
     const g60 = sidebarGeometry(60, 20)!;
     expect(g60.sidebarWidth).toBe(30);
@@ -337,6 +339,27 @@ describe("sidebarGeometry (docked ToC/GT sidebar — the 2026-07-14 reflow revis
       expect(g.sidebarWidth + g.contentCols).toBe(cols);
       expect(g.contentCols).toBeGreaterThanOrEqual(30);
     }
+  });
+
+  test("full-height contract: the sidebar spans every terminal row, borderless widths", () => {
+    const g = sidebarGeometry(100, 37)!;
+    expect(g.height).toBe(37);
+    expect(g.innerHeight).toBe(37);
+    expect(g.innerWidth).toBe(g.sidebarWidth - 3); // gutter(2) + right margin(1)
+    expect(g.overlay).toBeUndefined();
+  });
+
+  test("narrow band (45 ≤ cols < 60) overlays instead: full cols underneath, no reflow", () => {
+    expect(sidebarOverlayGeometry(44, 30)).toBeNull();
+    expect(sidebarOverlayGeometry(60, 30)).toBeNull(); // docked geometry owns ≥ 60
+    expect(sidebarOverlayGeometry(52, 9)).toBeNull();
+    const o = sidebarOverlayGeometry(52, 30)!;
+    expect(o.overlay).toBe(true);
+    expect(o.sidebarWidth).toBe(Math.min(40, Math.ceil(52 * 0.6)));
+    expect(o.contentCols).toBe(52); // the transcript keeps its full width underneath
+    expect(o.height).toBe(30);
+    expect(o.innerHeight).toBe(30);
+    expect(o.innerWidth).toBe(o.sidebarWidth - 3);
   });
 
   test("closed = no reflow (contentCols === cols); docked = the window recomputes at contentCols with Σ ≤ budget", () => {

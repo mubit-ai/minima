@@ -81,6 +81,7 @@ import { GtPanel } from "./gt-panel.tsx";
 import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import { setClickCallback, setMouseScrollCallback } from "./input-filter.ts";
 import {
+  type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
   type SidebarGeometry,
   applyScrollDelta,
@@ -96,6 +97,7 @@ import {
   questionDisplayText,
   questionOverlayHeight,
   sidebarGeometry,
+  sidebarOverlayGeometry,
   streamTailBudget,
   tailToFit,
   tocPanelGeometry,
@@ -1162,6 +1164,10 @@ export function HarnessApp({
   // height math) and mirrored into a ref so the key handler can gate on it.
   const [tocOpen, setTocOpen] = useState(false);
   const sidebarGeomRef = useRef<SidebarGeometry | null>(null);
+  // B5 rewind overlay geometry mirror — its null conditions DIVERGED from the sidebar's
+  // when the sidebar went full-height (rows ≥ 10 vs viewport ≥ 5), so /rewind gates on
+  // its own ref or an open picker could capture input while rendering nothing.
+  const overlayGeomRef = useRef<PanelGeometry | null>(null);
   // U3 (MUB-141): GT Plan Overview sidebar — same docked chassis as the ToC panel.
   const [gtPanelOpen, setGtPanelOpen] = useState(false);
   // Docked-sidebar focus (2026-07-14): the sidebar persists unfocused while the user types.
@@ -1203,6 +1209,20 @@ export function HarnessApp({
     setGtPanelOpen(true);
     setSidebarFocused(true);
   };
+  // OpenCode-style auto-open (2026-07-15): wide fullscreen sessions START with the
+  // sidebar docked and UNFOCUSED (Plan overview when the run already has a GT plan,
+  // else the ToC). Mount-only — after that Ctrl+T/Ctrl+G own the state, and closing
+  // it stays closed for the session.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-time auto-open — later resizes/toggles must not re-open
+  useEffect(() => {
+    if (!fullscreen || cols < 100 || rows < 10) return;
+    const hasPlan =
+      agent.config.groundTruth === true && agent.db && agent.runId
+        ? buildGtOverview(agent.db, agent.runId) !== null
+        : false;
+    if (hasPlan) setGtPanelOpen(true);
+    else setTocOpen(true);
+  }, []);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -2306,7 +2326,7 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (fullscreen && sidebarGeomRef.current && turns.length > 0) {
+        if (fullscreen && overlayGeomRef.current && turns.length > 0) {
           setTocOpen(false);
           setGtPanelOpen(false);
           setSidebarFocused(false);
@@ -3583,6 +3603,18 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
+  // Sidebar geometry derives from the FULL terminal (cols × rows): the sidebar spans every
+  // row (OpenCode-style two-column root), so it no longer depends on the footer math below —
+  // the footer math (input wrapping, overlay widths) instead depends on contentCols. Narrow
+  // terminals (45 ≤ cols < 60) fall back to a right-anchored full-height OVERLAY that does
+  // not reflow the transcript; below that, Ctrl+T/Ctrl+G print the one-shot text block.
+  const sidebarGeom = fullscreen
+    ? (sidebarGeometry(cols, rows) ?? sidebarOverlayGeometry(cols, rows))
+    : null;
+  sidebarGeomRef.current = sidebarGeom;
+  const sidebarDocked = sidebarOpen && sidebarGeom !== null && sidebarGeom.overlay !== true;
+  const sidebarOverlaid = sidebarOpen && sidebarGeom?.overlay === true;
+  const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;
   // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
   const gtFooterNote = gtBehavior?.footerNote ?? null;
   const gtBlock = gtBehavior?.block ?? null;
@@ -3611,12 +3643,14 @@ export function HarnessApp({
   const inputHidden = overlayOpen || permPrompt || questionPrompt;
   // The trailing "▋" accounts for the cursor cell: a draft line exactly at the interior
   // width wraps the cursor onto a fresh row, which the reserve must include.
-  const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
+  const inputRows = inputHidden
+    ? 1
+    : Math.max(1, wrappedLineCount(`${typedText}▋`, contentCols - 4));
   const inputExtraLines = inputHidden ? 0 : inputRows - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   // Wrapped-row height from the same helpers the overlay renders with (estimate == render): a
   // source-line count under-reserved whenever a preview line word-wrapped at narrow widths.
-  const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, cols) : 0;
+  const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, contentCols) : 0;
   // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
   // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -3632,7 +3666,10 @@ export function HarnessApp({
   // Component and reservation use the same numbers, so estimate == render.
   const questionChrome = questionPrompt
     ? 5 +
-      wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
+      wrappedLineCount(
+        questionDisplayText(questionPrompt.question, contentCols),
+        Math.max(1, contentCols - 4),
+      )
     : 0;
   const questionMaxOptionRows = Math.max(
     1,
@@ -3699,17 +3736,6 @@ export function HarnessApp({
   // Line viewport gives one region row to the permanent status line; everything that sizes
   // against the chat region under VIEWPORT_ON uses viewportRows instead.
   const viewportRows = Math.max(1, chatRegionHeight - 1);
-  // Docked sidebar geometry rides the same height math; null (too narrow/short) downgrades
-  // Ctrl+T/Ctrl+G to the one-shot text block. While a sidebar is docked, the transcript and
-  // the live stream reflow to contentCols beside it — the 2026-07-14 revision of the U2
-  // "never reflows" design (the sidebar is in-flow now; only the rewind overlay overpaints).
-  // Feeds BOTH fullscreen paths: the old getScrollableMessages window and the line viewport.
-  const sidebarGeom = fullscreen
-    ? sidebarGeometry(cols, VIEWPORT_ON ? viewportRows : chatRegionHeight)
-    : null;
-  sidebarGeomRef.current = sidebarGeom;
-  const sidebarDocked = sidebarOpen && sidebarGeom !== null;
-  const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;
   const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
   const fsThoughtsRows =
     fullscreen && !VIEWPORT_ON && pinned && busy && streamingThoughts && showThinkingRef.current
@@ -3807,11 +3833,22 @@ export function HarnessApp({
   const overlayGeom = fullscreen
     ? tocPanelGeometry(cols, VIEWPORT_ON ? viewportRows : chatRegionHeight)
     : null;
+  overlayGeomRef.current = overlayGeom;
+  const overlayGeomOk = overlayGeom !== null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: buildUsageLedger reads live agent state; tocOpen/messages are the real recompute triggers
   const tocSections = useMemo(
     () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
     [tocOpen, messages],
   );
+  // OpenCode-style Context block for the ToC sidebar footer — same sources as StatusBar.
+  const tocInfo = {
+    title: "Context",
+    lines: [
+      agent.agentState.model?.id ?? "(none)",
+      `ctx ${ctxPct.toFixed(0)}% · ↑${inputTokens} ↓${outputTokens}`,
+      `$${(actualCost ?? 0).toFixed(4)} spent`,
+    ],
+  };
   // U3: the overview tracks the ledger while docked — planStrip/gtBehavior are re-read from
   // the DB on every tool_execution_end, gate answer, and /gt-seed, so they are exactly the
   // "ledger changed" signals; the re-query is one cheap SQLite read, bounded to panel-open.
@@ -3843,8 +3880,8 @@ export function HarnessApp({
     [rewindOpen, messages],
   );
   useEffect(() => {
-    if (rewindOpen && !sidebarGeomOk) setRewindOpen(false);
-  }, [rewindOpen, sidebarGeomOk]);
+    if (rewindOpen && !overlayGeomOk) setRewindOpen(false);
+  }, [rewindOpen, overlayGeomOk]);
   // No plan in the ledger → nothing to render; close (else the guard list eats input for
   // an empty overlay) and say why instead.
   const gtOverviewMissing = gtPanelOpen && gtOverview === null;
@@ -3909,167 +3946,143 @@ export function HarnessApp({
       </Box>
     ) : null;
 
-  return (
-    // Two layouts share one fixed footer (suggestions + input/overlays + status bar). FULLSCREEN wraps
-    // the transcript in a bottom-anchored, in-app-scrolled viewport inside a height={rows} frame, so
-    // the prompt is glued to the last row (like Claude Code's fullscreen mode). INLINE prints the
-    // transcript to the terminal's native scrollback via <Static> and lets the terminal scroll it.
-    <Box
-      flexDirection="column"
-      width="100%"
-      height={fullscreen ? rows : undefined}
-      overflow={fullscreen ? "hidden" : "visible"}
-    >
-      {fullscreen && VIEWPORT_ON ? (
-        <>
-          {/* Chat region: a row that partitions cols exactly — the transcript column at
-              contentCols beside an (optional) in-flow docked sidebar. Explicit widths +
-              flexShrink={0} on both sides, so no flex arithmetic decides the split. */}
-          <Box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
-            <Box
-              width={contentCols}
-              flexShrink={0}
-              minHeight={0}
-              overflow="hidden"
-              flexDirection="column"
-              justifyContent="flex-end"
-            >
-              {bannerBlock}
-              {(view?.lines ?? []).map((line, i) => (
-                // Exactly one row per line: a newline-free string under wrap="truncate" can
-                // never render taller than 1 row, so Σ(rows) ≤ viewportRows by construction.
-                // biome-ignore lint/suspicious/noArrayIndexKey: windowed lines, positional key is fine
-                <Text key={i} wrap="truncate">
-                  {line || " "}
-                </Text>
-              ))}
-              {/* B5: /rewind turn picker — the one remaining absolute overpaint. It only
+  // U2/U3: the sidebar panels, rendered ONCE for both fullscreen paths — a docked panel
+  // mounts as the root row's second column; the narrow-terminal overlay variant mounts
+  // inside the left column and overpaints its right edge (chassis handles positioning).
+  // onJump targets whichever scroll machinery is live.
+  const sidebarPanels =
+    sidebarGeom && (sidebarDocked || sidebarOverlaid) && tocOpen ? (
+      <TocPanel
+        sections={tocSections}
+        geometry={sidebarGeom}
+        focused={sidebarFocused}
+        info={tocInfo}
+        onJump={(k) => {
+          if (VIEWPORT_ON) {
+            if (!lineIndex) return;
+            const target = lineIndex.prefix[k] ?? 0;
+            setScroll(
+              target >= maxTop(lineIndex.total + liveLines.length, viewportRows)
+                ? null
+                : { topLine: target },
+            );
+          } else {
+            setScrollOffset(offsetForMessage(messages, k, messagesBudget, contentCols));
+          }
+        }}
+        onClose={() => setTocOpen(false)}
+        onBlur={() => setSidebarFocused(false)}
+        onSwitch={requestGtSidebar}
+      />
+    ) : sidebarGeom && (sidebarDocked || sidebarOverlaid) && gtPanelOpen && gtOverview ? (
+      <GtPanel
+        overview={gtOverview}
+        geometry={sidebarGeom}
+        focused={sidebarFocused}
+        onClose={() => setGtPanelOpen(false)}
+        onBlur={() => setSidebarFocused(false)}
+        onSwitch={requestTocSidebar}
+      />
+    ) : null;
+
+  // The chat region per renderer path — everything ABOVE the shared footer in each layout.
+  const chatRegion =
+    fullscreen && VIEWPORT_ON ? (
+      <>
+        {/* Transcript viewport: fills the left column above the status row. The docked
+            sidebar is no longer its sibling — it spans the FULL terminal beside the whole
+            left column (see the two-column return below). */}
+        <Box
+          flexGrow={1}
+          minHeight={0}
+          overflow="hidden"
+          flexDirection="column"
+          justifyContent="flex-end"
+        >
+          {bannerBlock}
+          {(view?.lines ?? []).map((line, i) => (
+            // Exactly one row per line: a newline-free string under wrap="truncate" can
+            // never render taller than 1 row, so Σ(rows) ≤ viewportRows by construction.
+            // biome-ignore lint/suspicious/noArrayIndexKey: windowed lines, positional key is fine
+            <Text key={i} wrap="truncate">
+              {line || " "}
+            </Text>
+          ))}
+          {/* B5: /rewind turn picker — the one remaining absolute overpaint. It only
                   renders with both sidebars closed, so this column spans full cols and the
                   overlay geometry (and its Yoga static-position pin) match the original. */}
-              {rewindOpen && overlayGeom ? (
-                <RewindPanel
-                  turns={rewindTurns}
-                  geometry={overlayGeom}
-                  onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
-                  onClose={() => setRewindOpen(false)}
-                />
-              ) : null}
-            </Box>
-            {/* U2/U3: docked sidebars — in-flow siblings of the transcript column. */}
-            {sidebarDocked && sidebarGeom && tocOpen ? (
-              <TocPanel
-                sections={tocSections}
-                geometry={sidebarGeom}
-                focused={sidebarFocused}
-                onJump={(k) => {
-                  if (!lineIndex) return;
-                  const target = lineIndex.prefix[k] ?? 0;
-                  setScroll(
-                    target >= maxTop(lineIndex.total + liveLines.length, viewportRows)
-                      ? null
-                      : { topLine: target },
-                  );
-                }}
-                onClose={() => setTocOpen(false)}
-                onBlur={() => setSidebarFocused(false)}
-                onSwitch={requestGtSidebar}
-              />
-            ) : null}
-            {sidebarDocked && sidebarGeom && gtPanelOpen && gtOverview ? (
-              <GtPanel
-                overview={gtOverview}
-                geometry={sidebarGeom}
-                focused={sidebarFocused}
-                onClose={() => setGtPanelOpen(false)}
-                onBlur={() => setSidebarFocused(false)}
-                onSwitch={requestTocSidebar}
-              />
-            ) : null}
-          </Box>
-          {/* Permanent status row (both scroll states) — scroll alone never reflows the
-              region below, so the prompt box cannot jump during scrolling. The selection
-              hint (a click attempt while mouse capture is on) outranks the scroll hint. */}
-          <Text color="gray" wrap="truncate">
-            {selectHint
-              ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse off · Ctrl+Y copies last reply"
-              : view && !view.pinned
-                ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
-                : " "}
-          </Text>
-        </>
-      ) : fullscreen ? (
-        // OLD fullscreen path (MINIMA_TUI_VIEWPORT=0): same row partition, message-window
-        // transcript instead of the line viewport.
-        <Box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="row">
-          <Box
-            width={contentCols}
-            flexShrink={0}
-            minHeight={0}
-            overflow="hidden"
-            flexDirection="column"
-            justifyContent="flex-end"
-          >
-            {bannerBlock}
-            {(scrollWin?.visible ?? []).map((msg, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
-              <MessageRow key={i} msg={msg} cols={contentCols} />
-            ))}
-            {pinned && busy && streamingThoughts && showThinkingRef.current ? (
-              <StreamingThoughts text={streamingThoughts} />
-            ) : null}
-            {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
-            {scrollWin && !pinned ? (
-              <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
-            ) : null}
-            {rewindOpen && overlayGeom ? (
-              <RewindPanel
-                turns={rewindTurns}
-                geometry={overlayGeom}
-                onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
-                onClose={() => setRewindOpen(false)}
-              />
-            ) : null}
-          </Box>
-          {sidebarDocked && sidebarGeom && tocOpen ? (
-            <TocPanel
-              sections={tocSections}
-              geometry={sidebarGeom}
-              focused={sidebarFocused}
-              onJump={(k) =>
-                setScrollOffset(offsetForMessage(messages, k, messagesBudget, contentCols))
-              }
-              onClose={() => setTocOpen(false)}
-              onBlur={() => setSidebarFocused(false)}
-              onSwitch={requestGtSidebar}
-            />
-          ) : null}
-          {sidebarDocked && sidebarGeom && gtPanelOpen && gtOverview ? (
-            <GtPanel
-              overview={gtOverview}
-              geometry={sidebarGeom}
-              focused={sidebarFocused}
-              onClose={() => setGtPanelOpen(false)}
-              onBlur={() => setSidebarFocused(false)}
-              onSwitch={requestTocSidebar}
+          {rewindOpen && overlayGeom ? (
+            <RewindPanel
+              turns={rewindTurns}
+              geometry={overlayGeom}
+              onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
+              onClose={() => setRewindOpen(false)}
             />
           ) : null}
         </Box>
-      ) : (
-        <>
-          {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
-          <Static key={transcriptGen} items={messages}>
-            {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
-          </Static>
-          {bannerBlock}
-          {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
+        {/* Permanent status row (both scroll states) — scroll alone never reflows the
+              region below, so the prompt box cannot jump during scrolling. The selection
+              hint (a click attempt while mouse capture is on) outranks the scroll hint. */}
+        <Text color="gray" wrap="truncate">
+          {selectHint
+            ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse off · Ctrl+Y copies last reply"
+            : view && !view.pinned
+              ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
+              : " "}
+        </Text>
+      </>
+    ) : fullscreen ? (
+      // OLD fullscreen path (MINIMA_TUI_VIEWPORT=0): message-window transcript instead of
+      // the line viewport — same left-column contract.
+      <Box
+        flexGrow={1}
+        minHeight={0}
+        overflow="hidden"
+        flexDirection="column"
+        justifyContent="flex-end"
+      >
+        {bannerBlock}
+        {(scrollWin?.visible ?? []).map((msg, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
+          <MessageRow key={i} msg={msg} cols={contentCols} />
+        ))}
+        {pinned && busy && streamingThoughts && showThinkingRef.current ? (
+          <StreamingThoughts text={streamingThoughts} />
+        ) : null}
+        {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
+        {scrollWin && !pinned ? (
+          <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
+        ) : null}
+        {rewindOpen && overlayGeom ? (
+          <RewindPanel
+            turns={rewindTurns}
+            geometry={overlayGeom}
+            onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
+            onClose={() => setRewindOpen(false)}
+          />
+        ) : null}
+      </Box>
+    ) : (
+      <>
+        {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
+        <Static key={transcriptGen} items={messages}>
+          {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
+        </Static>
+        {bannerBlock}
+        {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
               never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
-          {busy && streamingThoughts && showThinkingRef.current ? (
-            <StreamingThoughts text={streamingThoughts} />
-          ) : null}
-          {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
-        </>
-      )}
+        {busy && streamingThoughts && showThinkingRef.current ? (
+          <StreamingThoughts text={streamingThoughts} />
+        ) : null}
+        {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
+      </>
+    );
 
+  // ONE footer block shared by both layouts — rendered inside the fullscreen LEFT COLUMN
+  // (at contentCols) and at the inline root, so the input/status/keys/overlay JSX never
+  // duplicates between renderer paths.
+  const footerBlock = (
+    <>
       {matchingCommands.length > 0 && (
         <Box
           borderStyle="round"
@@ -4153,7 +4166,7 @@ export function HarnessApp({
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
-              <Text color="magenta" bold>
+              <Text color="magenta" bold wrap="truncate">
                 {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
               </Text>
             </Box>
@@ -4237,7 +4250,7 @@ export function HarnessApp({
               permPrompt.resolve(decision);
             },
           }}
-          cols={cols}
+          cols={contentCols}
         />
       )}
 
@@ -4250,7 +4263,7 @@ export function HarnessApp({
               questionPrompt.resolve(answer);
             },
           }}
-          cols={cols}
+          cols={contentCols}
           maxOptionRows={questionMaxOptionRows}
         />
       )}
@@ -4283,7 +4296,9 @@ export function HarnessApp({
           badge={footerBadge}
         />
 
-        <Box justifyContent="space-between" width="100%">
+        {/* height={1} + clip: at narrow contentCols the legend texts would wrap onto a
+            second row Yoga never budgeted (footerHeight says 1) and garble the frame. */}
+        <Box justifyContent="space-between" width="100%" height={1} overflow="hidden">
           <Box>
             <Text color="yellow">ctrl+l </Text>
             <Text color="gray">Model </Text>
@@ -4310,6 +4325,34 @@ export function HarnessApp({
 
         {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
       </Box>
+    </>
+  );
+
+  return fullscreen ? (
+    // FULLSCREEN: a two-column root row — the LEFT column (chat region + status row +
+    // shared footer) at contentCols, and the full-terminal-height sidebar beside it
+    // (docked) or overpainting its right edge (narrow-terminal overlay, rendered inside
+    // the column so its alignSelf right-pin resolves against the full width).
+    <Box flexDirection="row" width="100%" height={rows} overflow="hidden">
+      <Box
+        flexDirection="column"
+        width={contentCols}
+        flexShrink={0}
+        height={rows}
+        overflow="hidden"
+      >
+        {chatRegion}
+        {footerBlock}
+        {sidebarOverlaid ? sidebarPanels : null}
+      </Box>
+      {sidebarDocked ? sidebarPanels : null}
+    </Box>
+  ) : (
+    // INLINE: the transcript commits to native scrollback via <Static>; only the live
+    // region + footer re-diff. No sidebar here — Ctrl+T/Ctrl+G print the text block.
+    <Box flexDirection="column" width="100%">
+      {chatRegion}
+      {footerBlock}
     </Box>
   );
 }
