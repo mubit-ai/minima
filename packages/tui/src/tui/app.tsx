@@ -1421,12 +1421,20 @@ export function HarnessApp({
   const thoughtsRef = useRef("");
   const thinkingStartRef = useRef<number | null>(null);
 
+  // onSubmit echoed the typed prompt optimistically; the loop's message_start(user) — which
+  // carries the @file-expanded/replan-prefixed run content — must be skipped, not double-posted.
+  const pendingEchoRef = useRef(false);
+
   // Subscribe to the agent event stream once.
   useEffect(() => {
     const unsub = agent.subscribe((ev: AgentEvent) => {
       switch (ev.type) {
         case "message_start":
           if (ev.message?.role === "user") {
+            if (pendingEchoRef.current) {
+              pendingEchoRef.current = false;
+              break;
+            }
             setMessages((m) => [...m, { role: "user", text: ev.message!.textContent }]);
           }
           break;
@@ -3483,6 +3491,10 @@ export function HarnessApp({
       return;
     }
 
+    // Optimistic echo: the VERBATIM prompt lands before recall/route (and before any council
+    // round in plan mode) — the loop's later message_start(user) is deduped via the ref.
+    setMessages((m) => [...m, { role: "user", text: trimmed }]);
+    pendingEchoRef.current = true;
     setBusy(true);
     setBusyState("reasoning");
     setStreaming("");
@@ -3527,6 +3539,7 @@ export function HarnessApp({
         },
       ]);
     } finally {
+      pendingEchoRef.current = false;
       setBusy(false);
       setBusyState("ready");
       setActiveActions([]);

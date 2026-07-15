@@ -575,3 +575,42 @@ describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
     expect(src).toContain("shell `verify` check");
   });
 });
+
+// Optimistic prompt echo (2026-07-15): onSubmit pushes the VERBATIM prompt before recall/route
+// (and before any council round), and the loop's message_start(user) — which carries the
+// @file-expanded/replan-prefixed run content — is deduped via pendingEchoRef.
+describe("tui/app.tsx echoes the prompt optimistically", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("verbatim echo lands in onSubmit between the slash dispatch and setBusy", () => {
+    const echo = 'setMessages((m) => [...m, { role: "user", text: trimmed }]);';
+    const idx = src.indexOf(echo);
+    expect(idx).toBeGreaterThan(src.indexOf("await handleCommand(name, args);"));
+    const after = src.slice(idx, idx + 300);
+    expect(after).toContain("pendingEchoRef.current = true;");
+    expect(after).toContain("setBusy(true);");
+    expect(after.indexOf("pendingEchoRef.current = true;")).toBeLessThan(
+      after.indexOf("setBusy(true);"),
+    );
+  });
+
+  test("the loop's message_start(user) is deduped, not double-posted", () => {
+    const idx = src.indexOf('case "message_start":');
+    expect(idx).toBeGreaterThan(-1);
+    const handler = src.slice(idx, idx + 500);
+    expect(handler).toContain("if (pendingEchoRef.current) {");
+    expect(handler).toContain("pendingEchoRef.current = false;");
+    // The event echo survives for non-optimistic user messages (finalize handoff, replays).
+    expect(handler).toContain('{ role: "user", text: ev.message!.textContent }');
+  });
+
+  test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {
+    expect(src).toContain("const pendingEchoRef = useRef(false);");
+    expect(src.split("pendingEchoRef.current = true;").length - 1).toBe(1);
+    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(2);
+  });
+
+  test("the finally clear keeps a failed turn from muting a later echo", () => {
+    expect(src).toContain("} finally {\n      pendingEchoRef.current = false;");
+  });
+});
