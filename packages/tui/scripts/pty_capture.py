@@ -51,6 +51,7 @@ TOKENS = {
     "<PGUP>": "\x1b[5~", "<PGDN>": "\x1b[6~", "<BS>": "\x7f",
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
     "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07",
+    "<SHIFTTAB>": "\x1b[Z",
     "<SPACE>": " ",
 }
 

@@ -498,3 +498,67 @@ describe("tui/app.tsx docked-sidebar key routing", () => {
     expect(src).toContain("[gtPanelOpen, planStrip, gtBehavior]");
   });
 });
+
+// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT
+// planning workflow — session + planner persona + exit_plan — never the badge-only half-state
+// (mode flipped, session null → prompts ran the NORMAL loop and the model executed with
+// per-call approval instead of planning; bare /plan then EXITED instead of recovering).
+describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("Shift+Tab routes through toggleMode, not a bare store flip", () => {
+    expect(src).toContain("onShiftTab={toggleMode}");
+    expect(src).not.toContain("onShiftTab={() => cycleMode()}");
+  });
+
+  test("toggleMode: GT-on build→plan takes the full workflow; everything else stays cycleMode", () => {
+    const idx = src.indexOf("const toggleMode = useCallback(");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, src.indexOf("}, [", idx));
+    expect(body).toContain(
+      'getMode() === "build" && agent.config.groundTruth === true && planSpawn && planMetaModel',
+    );
+    expect(body).toContain('enterPlanMode("")');
+    expect(body).toContain("PLAN_ON_NOTICE");
+    expect(body).toContain("cycleMode();");
+  });
+
+  test("one shared ON notice: definition + toggleMode + auto-heal + /plan", () => {
+    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(4);
+  });
+
+  test("planSessionGen keys exit_plan registration to session identity", () => {
+    expect(src).toContain("const [planSessionGen, setPlanSessionGen] = useState(0);");
+    expect(src.split("setPlanSessionGen((g) => g + 1);").length - 1).toBe(2); // enter + exit
+    expect(src).toContain(
+      "}, [mode, agent, askUserRef, exitPlanFinalize, exitPlanCancel, planSessionGen]);",
+    );
+  });
+
+  test("auto-heal effect: plan mode without a session converges to a real one (no loop)", () => {
+    const idx = src.indexOf("planSessionRef.current != null ||");
+    expect(idx).toBeGreaterThan(-1);
+    const effect = src.slice(idx - 400, idx + 400);
+    expect(effect).toContain('mode !== "plan" ||');
+    expect(effect).toContain("agent.config.groundTruth !== true ||");
+    expect(effect).toContain("!planSpawn ||");
+    expect(effect).toContain("!planMetaModel");
+    // The no-loop invariant: the heal's deps exclude planSessionGen and messages.
+    expect(effect).toContain("}, [mode, agent, planSpawn, planMetaModel, enterPlanMode]);");
+  });
+
+  test("bare /plan in plan-mode-without-a-session RECOVERS instead of exiting", () => {
+    expect(src).toContain('sub === "off" ? false : planSessionRef.current == null');
+    // The mode-store test survives only in the GT-off branch and promptPlanner's leak guard.
+    expect(src.split('getMode() !== "plan"').length - 1).toBe(2);
+  });
+
+  test("the onSubmit fallthrough is surfaced, never silent", () => {
+    expect(src).toContain("plan mode without a live council");
+    const idx = src.indexOf('? "no plan session"');
+    expect(idx).toBeGreaterThan(-1);
+    const ternary = src.slice(idx, idx + 200);
+    expect(ternary).toContain('"no council spawn"');
+    expect(ternary).toContain('"no council model"');
+  });
+});

@@ -170,6 +170,12 @@ function anyProviderKeyPresent(): boolean {
   return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
 }
 
+/** GT-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
+const PLAN_ON_NOTICE =
+  "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
+  "Talk through the plan; the design council convenes on substantive turns. " +
+  "/plan finalize writes the ground truth to the project root. /plan status · /plan cancel.";
+
 /** The finalize success note, shared by /plan finalize and the exit_plan tool. */
 function finalizeSuccessNote(o: {
   outPath: string;
@@ -905,6 +911,11 @@ export function HarnessApp({
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
   // ground-truth .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
+  // Session-identity counter (transcriptGen pattern): the session lives in a ref, so effects
+  // that must re-run when it is replaced (exit_plan registration) key on this instead. The
+  // load-bearing case is /plan recovering a session while the mode is ALREADY "plan" —
+  // setMode no-ops there, so nothing else re-renders.
+  const [planSessionGen, setPlanSessionGen] = useState(0);
   const plannerBaseSystemPromptRef = useRef<string | null>(null);
   const councilControllerRef = useRef<AbortController | null>(null);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
@@ -928,6 +939,7 @@ export function HarnessApp({
     (goal: string) => {
       setMode("plan");
       planSessionRef.current = new PlanSessionStore(goal);
+      setPlanSessionGen((g) => g + 1);
       // Snapshot the base prompt only once per plan session — re-entering (e.g. /plan
       // start while already planning) must not overwrite the snapshot with the planner
       // persona, or the agent's real system prompt is lost on exit.
@@ -941,6 +953,7 @@ export function HarnessApp({
   const exitPlanMode = useCallback(() => {
     setMode("build");
     planSessionRef.current = null;
+    setPlanSessionGen((g) => g + 1);
     councilControllerRef.current?.abort();
     councilControllerRef.current = null;
     if (plannerBaseSystemPromptRef.current != null) {
@@ -963,6 +976,36 @@ export function HarnessApp({
       },
     ]);
   }, [mode, exitPlanMode]);
+  // Mirror of the cleanup above: any store writer can flip INTO plan without planting a GT
+  // session — build one, so plan mode is never a badge-only half-state (prompts would route
+  // through the normal loop and the model could execute with per-call approval, never
+  // planning). Session-guarded, so the /plan and Shift+Tab paths (which call enterPlanMode
+  // themselves) make this a no-op; no council deps → leave the store flip alone and let the
+  // onSubmit fallthrough warning surface it.
+  useEffect(() => {
+    if (
+      mode !== "plan" ||
+      agent.config.groundTruth !== true ||
+      planSessionRef.current != null ||
+      !planSpawn ||
+      !planMetaModel
+    )
+      return;
+    enterPlanMode("");
+    setMessages((m) => [...m, { role: "tool", text: PLAN_ON_NOTICE, toolName: "plan" }]);
+  }, [mode, agent, planSpawn, planMetaModel, enterPlanMode]);
+  // Shift+Tab: with GT on (and the council wired), entering plan mode means entering the REAL
+  // planning workflow — session + planner persona + exit_plan, exactly like /plan. Leaving
+  // (and every GT-off flip) stays the bare B2 store toggle; a live session rides the cleanup
+  // effect above.
+  const toggleMode = useCallback(() => {
+    if (getMode() === "build" && agent.config.groundTruth === true && planSpawn && planMetaModel) {
+      enterPlanMode("");
+      setMessages((m) => [...m, { role: "tool", text: PLAN_ON_NOTICE, toolName: "plan" }]);
+      return;
+    }
+    cycleMode();
+  }, [agent, enterPlanMode, planSpawn, planMetaModel]);
 
   // Shared finalize core (../minima/plan_finalize.ts) — one path for /plan finalize and the
   // exit_plan tool, so audit refusals, fail-open synthesis, and ledger seeding never diverge.
@@ -1018,6 +1061,7 @@ export function HarnessApp({
   // the GT-off default path and headless runs never see the tool. Its approval overlay rides
   // the same AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab,
   // /plan off) flips the mode and the effect cleanup unregisters it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: planSessionGen keys re-registration to session IDENTITY — the session lives in a ref, so replacing it (e.g. /plan recovering while the mode is already "plan") never re-renders on its own
   useEffect(() => {
     if (mode !== "plan" || planSessionRef.current == null) return;
     const tool = exitPlanTool({
@@ -1031,7 +1075,7 @@ export function HarnessApp({
       const i = agent.agentState.tools.indexOf(tool);
       if (i >= 0) agent.agentState.tools.splice(i, 1);
     };
-  }, [mode, agent, askUserRef, exitPlanFinalize, exitPlanCancel]);
+  }, [mode, agent, askUserRef, exitPlanFinalize, exitPlanCancel, planSessionGen]);
 
   // Terminal sizing (rows/cols).
   const [rows, setRows] = useState(process.stdout.rows || 24);
@@ -2286,14 +2330,12 @@ export function HarnessApp({
         }
 
         if (sub === "" || sub === "on" || sub === "off" || sub === "toggle") {
-          const next = sub === "on" ? true : sub === "off" ? false : getMode() !== "plan";
+          // Toggle on SESSION presence, not the mode store: plan-mode-without-a-session (a
+          // raw store flip) must recover into a real session, not exit.
+          const next = sub === "on" ? true : sub === "off" ? false : planSessionRef.current == null;
           if (next && !planSessionRef.current) {
             enterPlanMode("");
-            pushPlan(
-              "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
-                "Talk through the plan; the design council convenes on substantive turns. " +
-                "/plan finalize writes the ground truth to the project root. /plan status · /plan cancel.",
-            );
+            pushPlan(PLAN_ON_NOTICE);
           } else if (!next) {
             exitPlanMode();
             pushPlan("Plan mode OFF — full write access restored.");
@@ -3245,6 +3287,22 @@ export function HarnessApp({
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
         await handlePlanTurn(text);
       } else {
+        if (getMode() === "plan" && agent.config.groundTruth === true) {
+          const why = !planSessionRef.current
+            ? "no plan session"
+            : !planSpawn
+              ? "no council spawn"
+              : "no council model";
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              toolName: "plan",
+              text: `⚠ plan mode without a live council (${why}) — this turn runs the normal loop.`,
+              isError: true,
+            },
+          ]);
+        }
         const expanded = expandAtFiles(text, process.cwd());
         const routing = await agent.promptRouted(expanded);
         surfaceRouting(routing);
@@ -3781,7 +3839,7 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={() => cycleMode()}
+              onShiftTab={toggleMode}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
