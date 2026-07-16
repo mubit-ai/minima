@@ -78,16 +78,10 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
 import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
-import { setClickCallback, setMouseScrollCallback } from "./input-filter.ts";
 import {
-  type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
-  applyScrollDelta,
   childTreeHeight,
-  getScrollableMessages,
   gtFooterFit,
-  markdownBodyHeight,
-  offsetForMessage,
   permHiddenMarker,
   permOverlayHeight,
   permPreviewLines,
@@ -96,10 +90,8 @@ import {
   questionOverlayHeight,
   streamTailBudget,
   tailToFit,
-  tocPanelGeometry,
   wrappedLineCount,
 } from "./layout.ts";
-import { linesFor, liveReplyLines, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { persistMode } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
@@ -114,7 +106,6 @@ import {
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
-import { RewindPanel } from "./rewind-panel.tsx";
 import {
   type RewindMode,
   buildRewindTurns,
@@ -127,22 +118,6 @@ import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
-import {
-  type ScrollState,
-  buildLineIndex,
-  maxTop,
-  scrollLinesBy,
-  windowLines,
-} from "./viewport.ts";
-
-/**
- * Fullscreen line viewport (Stage 3): windows the transcript by LINE (lines.ts +
- * viewport.ts) so sections can be partially visible and scrolling is smooth. Default ON;
- * MINIMA_TUI_VIEWPORT=0 restores the whole-section clip path (escape hatch for one
- * release, then the old path is deleted). Module const — never changes mid-session, so
- * hooks may branch on it.
- */
-const VIEWPORT_ON = process.env.MINIMA_TUI_VIEWPORT !== "0";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -151,13 +126,6 @@ export interface AppProps {
   askUserRef?: AskUserRef;
   /** Mutable ref written by main.ts so HarnessApp can receive sub-agent events. */
   childEventRef?: { handler: ((e: ChildEvent) => void) | null };
-  /**
-   * Fullscreen renderer (opt-in): alternate screen, full-height frame, prompt glued to the bottom
-   * row, history scrolled in-app (PgUp/PgDn + optional captured wheel). When false — the DEFAULT —
-   * the inline renderer is used (main buffer + <Static> + native OS scroll/select/copy, the Claude
-   * Code model). Set by main.ts from the CLI flag/env (`--fullscreen` / `MINIMA_TUI_FULLSCREEN=1`).
-   */
-  fullscreen?: boolean;
   /**
    * Rehydrated run from the `--resume` CLI flag (B1): main.ts resolves + applies it to the
    * agent BEFORE first render; the app seeds its transcript and footer stats from it so
@@ -285,7 +253,6 @@ const COMMANDS = [
   { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "mouse", desc: "Toggle mouse-wheel scroll (fullscreen; disables text select)" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
@@ -769,7 +736,6 @@ export function HarnessApp({
   banner: _banner,
   askUserRef,
   childEventRef,
-  fullscreen = false,
   initialResume = null,
   planSpawn,
   planMetaModel,
@@ -1115,27 +1081,11 @@ export function HarnessApp({
   const [rows, setRows] = useState(process.stdout.rows || 24);
   const [cols, setCols] = useState(process.stdout.columns || 80);
 
-  // Fullscreen scroll state: 0 = pinned to the newest line (bottom); positive = scrolled up N
-  // rows. Only used in fullscreen mode; inline mode uses the terminal's native scrollback.
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const atBottomRef = useRef(true);
-  const maxChatHeightRef = useRef(1);
-  // Max meaningful offset (total content rows - viewport rows), written each render so the
-  // wheel/PgUp handlers can clamp the STORED offset at mutation time (see applyScrollDelta).
-  const maxScrollRef = useRef(0);
-  // Line-viewport scroll state (VIEWPORT_ON path): null = pinned/follow, {topLine} = anchored.
-  // The ref mirrors the current virtual-line totals so input handlers can clamp at mutation time.
-  const [scroll, setScroll] = useState<ScrollState>(null);
-  const viewportRef = useRef({ total: 0, rows: 1 });
   // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
   const renderCountRef = useRef(0);
   renderCountRef.current++;
-  // Selection hint: a click while mouse capture is on can never start a drag-select — the
-  // status line shows the escape hatches (modifier-drag, /mouse, Ctrl+Y) for a few seconds.
-  const [selectHint, setSelectHint] = useState(false);
-  const selectHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Ctrl+Z resume: SIGCONT bumps this nonce; in fullscreen any commit repaints the whole
-  // frame, so the bump alone restores the screen the shell drew over.
+  // Ctrl+Z resume: SIGCONT bumps this nonce; the commit repaints the live region the
+  // shell drew over.
   const [, setResumeGen] = useState(0);
   useEffect(() => {
     setResumeCallback(() => setResumeGen((n) => n + 1));
@@ -1155,9 +1105,6 @@ export function HarnessApp({
       stdinListeners: process.stdin.listenerCount("readable"),
     });
   });
-  // B5 rewind overlay geometry mirror — /rewind gates on its own ref or an open picker
-  // could capture input while rendering nothing.
-  const overlayGeomRef = useRef<PanelGeometry | null>(null);
   // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
   // LAZY initializer, load-bearing: detectRepo forks `git rev-parse` synchronously, and a
   // plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking git
@@ -1169,14 +1116,14 @@ export function HarnessApp({
   // in its key) with the undone prompt's text seeded as the draft.
   const undoCursorRef = useRef<number | null>(null);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
-  // B5 (MUB-142): /rewind turn picker (fullscreen overlay on the legacy overpaint chassis).
-  const [rewindOpen, setRewindOpen] = useState(false);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
-  const panelCapture = rewindOpen;
+  // No panel captures keys since MP3 removed the rewind overlay; the D3b panels (MP7/MP9)
+  // re-populate this expression.
+  const panelCapture = false;
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1192,12 +1139,6 @@ export function HarnessApp({
         costUSD: s.usage.costUSD,
       }));
   }
-  // Mouse-wheel scroll (fullscreen only), toggled by /mouse. OFF by default so native click-drag
-  // text selection + copy work out of the box (like Claude Code) — mouse capture is what disables
-  // them. Run /mouse to turn capture ON and let the wheel/trackpad scroll in-app history instead;
-  // PgUp/PgDn scroll in either state.
-  const [mouseEnabled, setMouseEnabled] = useState(false);
-
   /** /copy and Ctrl+Y: last assistant reply → OSC 52 (+tmux passthrough) + pbcopy/xclip. */
   function copyLastReply(echo?: string) {
     const last = [...messages].reverse().find((msg) => msg.role === "assistant");
@@ -1220,11 +1161,7 @@ export function HarnessApp({
       ...echoMsgs,
       {
         role: "tool",
-        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: ${
-          fullscreen && mouseEnabled
-            ? "run /mouse (frees the wheel for native selection) or hold Option/Shift while dragging."
-            : "just click-drag to select, then copy with your terminal."
-        }`,
+        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: just click-drag to select, then copy with your terminal.`,
         toolName: "copy",
       },
     ]);
@@ -1237,64 +1174,16 @@ export function HarnessApp({
     };
     process.stdout.on("resize", handleResize);
 
-    if (fullscreen) {
-      // Coalesced wheel notches (decoded + batched by installMouseScrollFilter in main.ts;
-      // positive = up) adjust the scroll state, clamped so over-scroll never banks dead offset.
-      if (VIEWPORT_ON) {
-        setMouseScrollCallback((notches) =>
-          setScroll((cur) =>
-            scrollLinesBy(cur, -notches * 3, viewportRef.current.total, viewportRef.current.rows),
-          ),
-        );
-      } else {
-        setMouseScrollCallback((notches) =>
-          setScrollOffset((p) => applyScrollDelta(p, notches * 3, maxScrollRef.current)),
-        );
-      }
-      // A click while capture is on is a doomed drag-select attempt — surface the escape
-      // hatches on the status line for a few seconds instead of silently eating the drag.
-      setClickCallback(() => {
-        setSelectHint(true);
-        if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
-        selectHintTimerRef.current = setTimeout(() => setSelectHint(false), 4000);
-      });
-    } else {
-      // Inline: mouse tracking stays OFF so native scroll/select/copy work with <Static>.
-      process.stdout.write("\u001b[?1000l");
-      process.stdout.write("\u001b[?1006l");
-    }
+    // Mouse tracking stays OFF so native scroll/select/copy work with <Static>.
+    process.stdout.write("\u001b[?1000l");
+    process.stdout.write("\u001b[?1006l");
 
     return () => {
       process.stdout.off("resize", handleResize);
-      setMouseScrollCallback(null);
-      setClickCallback(null);
-      if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
       process.stdout.write("\u001b[?1006l");
       process.stdout.write("\u001b[?1000l");
     };
-  }, [fullscreen]);
-
-  // Toggle SGR mouse reporting as the user flips /mouse (fullscreen only). ON = wheel scroll
-  // (native selection disabled); OFF = native selection restored.
-  useEffect(() => {
-    if (!fullscreen) return;
-    if (mouseEnabled) {
-      process.stdout.write("\u001b[?1000h");
-      process.stdout.write("\u001b[?1006h");
-    } else {
-      process.stdout.write("\u001b[?1006l");
-      process.stdout.write("\u001b[?1000l");
-    }
-  }, [fullscreen, mouseEnabled]);
-
-  // Follow the newest content only when already pinned at the bottom (fullscreen, OLD path).
-  // The line viewport doesn't need this: pinned is the intrinsic `scroll === null` state — the
-  // window ends at the virtual total, so new content slides into view without an effect.
-  // The message/stream deps are intentional triggers (re-run when new content arrives).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are the follow-on-new-content triggers
-  useEffect(() => {
-    if (fullscreen && !VIEWPORT_ON && atBottomRef.current) setScrollOffset(0);
-  }, [messages.length, streaming, streamingThoughts, fullscreen]);
+  }, []);
 
   // Wire the beforeToolCall permission hook, then the Ground-Truth done-gate (when on) so
   // permission always runs first — first block wins, and no gate check ever executes for a
@@ -1613,7 +1502,7 @@ export function HarnessApp({
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
-      suspendToShell({ fullscreen, mouse: fullscreen && mouseEnabled });
+      suspendToShell();
       return;
     }
 
@@ -1655,31 +1544,8 @@ export function HarnessApp({
       return;
     }
 
-    // Fullscreen: scroll the in-app history viewport (allowed mid-run, so you can read back while a
-    // reply streams). Inline mode leaves scrolling to the terminal's native scrollback.
-    if (fullscreen) {
-      const page = Math.max(1, maxChatHeightRef.current - 2);
-      if (key.pageUp) {
-        if (VIEWPORT_ON)
-          setScroll((cur) =>
-            scrollLinesBy(cur, -page, viewportRef.current.total, viewportRef.current.rows),
-          );
-        else setScrollOffset((p) => applyScrollDelta(p, page, maxScrollRef.current));
-        return;
-      }
-      if (key.pageDown) {
-        if (VIEWPORT_ON)
-          setScroll((cur) =>
-            scrollLinesBy(cur, page, viewportRef.current.total, viewportRef.current.rows),
-          );
-        else setScrollOffset((p) => applyScrollDelta(p, -page, maxScrollRef.current));
-        return;
-      }
-    }
-
-    // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation, like PgUp).
-    // Fullscreen with room → docked sidebar (open focused / refocus / replace GT); inline
-    // or too-narrow → one-shot text block.
+    // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation); prints the
+    // one-shot text block.
     if (key.ctrl && input === "t") {
       requestTocSidebar();
       return;
@@ -1920,7 +1786,6 @@ export function HarnessApp({
 
     setTranscriptGen((g) => g + 1);
     setMessages(list);
-    setScroll(null); // fresh transcript — re-pin the line viewport
     agent.agentState.messages = agentMsgs;
 
     const label = store.displayName || "latest";
@@ -2041,34 +1906,6 @@ export function HarnessApp({
           ...m,
           { role: "user", text: `/${name}` },
           { role: "tool", text: lines.join("\n"), toolName: "perms" },
-        ]);
-        break;
-      }
-      case "mouse": {
-        if (!fullscreen) {
-          setMessages((m) => [
-            ...m,
-            { role: "user", text: `/${name}` },
-            {
-              role: "tool",
-              text: "Mouse-wheel scroll is a fullscreen-mode feature; this inline session already uses the terminal's native scroll, click-drag select, and copy (no toggle needed). Restart with --fullscreen if you want the glued-prompt frame with in-app wheel scroll.",
-              toolName: "mouse",
-            },
-          ]);
-          break;
-        }
-        const nextMouse = !mouseEnabled;
-        setMouseEnabled(nextMouse);
-        setMessages((m) => [
-          ...m,
-          { role: "user", text: `/${name}` },
-          {
-            role: "tool",
-            text: nextMouse
-              ? "Mouse-wheel scroll ON — the wheel now scrolls history; native click-drag text selection is disabled until you run /mouse again."
-              : "Mouse-wheel scroll OFF — native click-drag text selection restored; scroll history with PgUp/PgDn.",
-            toolName: "mouse",
-          },
         ]);
         break;
       }
@@ -2270,15 +2107,11 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (fullscreen && overlayGeomRef.current && turns.length > 0) {
-          setRewindOpen(true);
-        } else {
-          setMessages((m) => [
-            ...m,
-            echo,
-            { role: "tool", text: renderRewindText(turns, cols - 6), toolName: "rewind" },
-          ]);
-        }
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: renderRewindText(turns, cols - 6), toolName: "rewind" },
+        ]);
         break;
       }
       case "compact": {
@@ -2592,7 +2425,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview · PgUp/PgDn scroll history\n  Text select + copy work by default; /mouse turns ON wheel scroll (then Option/Shift-drag or /mouse off to select)`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
           },
         ]);
@@ -3432,8 +3265,6 @@ export function HarnessApp({
       return;
     }
     setTypedText("");
-    setScrollOffset(0); // jump back to the newest content when the user sends (fullscreen viewport)
-    setScroll(null); // line viewport: re-pin to follow
     setHistory((h) => {
       const trimmed = text.trim();
       if (trimmed && (h.length === 0 || h[h.length - 1] !== trimmed)) {
@@ -3605,7 +3436,7 @@ export function HarnessApp({
       : 0;
   // /tree panel renders above the status bar. Its row cap is derived from the rows the other
   // fixed live elements leave free (a naive rows/3 could push the fixed stack past terminal
-  // height — inline scrollback wipe / fullscreen clip); capped additionally at a third of the
+  // height — the scrollback-wiping clearTerminal); capped additionally at a third of the
   // screen so the chat region survives, and hidden entirely when not even one row fits.
   const TREE_CHROME = 5; // border(2) + header(1) + possible "+k more"(1) + marginBottom(1)
   const treeMaxRows = Math.min(
@@ -3637,144 +3468,6 @@ export function HarnessApp({
   const streamTail = streaming
     ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
-
-  // Fullscreen: window the transcript into the chat region above the fixed footer, RESERVING rows for
-  // the in-viewport live extras (streaming reply, reasoning peek, scroll hint) so that messages + live
-  // content together never exceed chatRegionHeight. If they did, the flex-end + overflow:"hidden"
-  // viewport would receive a taller-than-itself stack and stock Ink decimates/fuses lines (the scroll
-  // garble). The extras are mutually exclusive by scroll state: PINNED (offset 0) shows the stream /
-  // thoughts at the bottom; scrolled up shows the "↑ scrolled up" hint instead. Gating the reservation
-  // and the render on the same `pinned` (not on scrollWin.atBottom, which depends on the very budget we
-  // compute here) keeps them consistent and avoids a circular dependency.
-  const chatRegionHeight = Math.max(
-    1,
-    rows -
-      footerHeight -
-      suggestionsHeight -
-      inputBoxHeight -
-      permPromptHeight -
-      questionPromptHeight -
-      treeHeight -
-      busyIndicatorHeight,
-  );
-  // Line viewport gives one region row to the permanent status line; everything that sizes
-  // against the chat region under VIEWPORT_ON uses viewportRows instead.
-  const viewportRows = Math.max(1, chatRegionHeight - 1);
-  const pinned = scrollOffset <= 0; // pinned to the newest content — the live stream lives here
-  const fsThoughtsRows =
-    fullscreen && !VIEWPORT_ON && pinned && busy && streamingThoughts && showThinkingRef.current
-      ? 5
-      : 0;
-  const fsHintRows = fullscreen && !VIEWPORT_ON && !pinned ? 1 : 0;
-  const fsStreamTail =
-    fullscreen && !VIEWPORT_ON && pinned && busy && streaming
-      ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
-        tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
-      : "";
-  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
-  const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
-  // Windowing the transcript is O(messages) without the cachedMsgHeight WeakMap; with it this
-  // is O(lookups) even when it recomputes, and the memo skips it entirely for renders that
-  // change none of its inputs (typing, spinner, overlay state, ...). Old path only — the line
-  // viewport below replaces it under VIEWPORT_ON. Width is cols: a docked sidebar
-  // narrows the window (cache keys on width, so both widths stay cached).
-  const scrollWin = useMemo(() => {
-    if (!fullscreen || VIEWPORT_ON) return null;
-    const t0 = perfEnabled ? performance.now() : 0;
-    const win = getScrollableMessages(messages, messagesBudget, scrollOffset, cols);
-    if (perfEnabled)
-      perfSample({
-        kind: "window",
-        ms: performance.now() - t0,
-        msgs: messages.length,
-        renders: renderCountRef.current,
-        stdinListeners: process.stdin.listenerCount("readable"),
-      });
-    return win;
-  }, [fullscreen, messages, messagesBudget, scrollOffset, cols]);
-  // Publish the fullscreen viewport metrics AFTER render — mutating refs during render breaks
-  // React purity (order/StrictMode/concurrent-unsafe). Key handlers read the refs at key-time
-  // and tolerate the one-render lag; the state is the source of truth for scroll position.
-  useEffect(() => {
-    if (scrollWin) {
-      maxChatHeightRef.current = messagesBudget; // page size for PgUp/PgDn
-      atBottomRef.current = scrollWin.atBottom; // gates follow-on-new-content (auto-scroll to newest)
-      maxScrollRef.current = Math.max(0, scrollWin.totalHeight - messagesBudget);
-    }
-  }, [scrollWin, messagesBudget]);
-
-  // Line viewport (VIEWPORT_ON): the transcript as a virtual line array (cached per message
-  // in lines.ts) + the live region (reasoning peek / streaming reply) as ordinary lines at
-  // the tail. One row of the chat region is a PERMANENT status line, present in both pinned
-  // and scrolled states — so crossing pinned↔scrolled changes zero heights outside the
-  // viewport and the prompt box cannot move on scroll. Lines build at cols — a docked
-  // sidebar narrows them (linesFor caches per width, so toggling stays cheap).
-  const lineIndex = useMemo(
-    () =>
-      fullscreen && VIEWPORT_ON
-        ? buildLineIndex(messages.map((m) => linesFor(m, cols).length))
-        : null,
-    [fullscreen, messages, cols],
-  );
-  const liveLines = useMemo(() => {
-    if (!fullscreen || !VIEWPORT_ON || !busy) return [];
-    const out: string[] = [];
-    if (streamingThoughts && showThinkingRef.current)
-      out.push(...thoughtsPeekLines(streamingThoughts, cols));
-    if (streaming) out.push(...liveReplyLines(streaming, cols));
-    return out;
-  }, [fullscreen, busy, streaming, streamingThoughts, cols]);
-  let view = null;
-  if (lineIndex) {
-    const t0 = perfEnabled ? performance.now() : 0;
-    view = windowLines(
-      lineIndex,
-      (i) => linesFor(messages[i]!, cols),
-      liveLines,
-      scroll,
-      viewportRows,
-    );
-    if (perfEnabled)
-      perfSample({
-        kind: "window",
-        ms: performance.now() - t0,
-        msgs: messages.length,
-        renders: renderCountRef.current,
-        stdinListeners: process.stdin.listenerCount("readable"),
-      });
-  }
-  // Same render-purity rule as above: the line-viewport refs publish after render.
-  const viewTotal = view ? view.total : 0;
-  useEffect(() => {
-    if (!fullscreen || !VIEWPORT_ON) return;
-    viewportRef.current = { total: viewTotal, rows: viewportRows };
-    maxChatHeightRef.current = viewportRows; // page size for PgUp/PgDn
-  }, [fullscreen, viewTotal, viewportRows]);
-
-  // B5: the rewind picker keeps the legacy right-anchored OVERLAY geometry (it only renders
-  // with both sidebars closed, so the transcript column spans full cols underneath it). The
-  // line viewport gives one region row to the status line, so the overlay shrinks with it.
-  const overlayGeom = fullscreen
-    ? tocPanelGeometry(cols, VIEWPORT_ON ? viewportRows : chatRegionHeight)
-    : null;
-  overlayGeomRef.current = overlayGeom;
-  const overlayGeomOk = overlayGeom !== null;
-  // B5: turn list read at open time (same open-snapshot contract as before).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; rewindOpen/messages are the real recompute triggers
-  const rewindTurns = useMemo(
-    () =>
-      rewindOpen && agent.db && agent.runId
-        ? buildRewindTurns(
-            messages,
-            agent.db.listCheckpoints(agent.runId).map((c) => c.prompt_ordinal),
-            agent.db.countLeadUserEvents(agent.runId),
-          )
-        : [],
-    [rewindOpen, messages],
-  );
-  useEffect(() => {
-    if (rewindOpen && !overlayGeomOk) setRewindOpen(false);
-  }, [rewindOpen, overlayGeomOk]);
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -3813,11 +3506,7 @@ export function HarnessApp({
         </Box>
         <Box marginTop={1}>
           <Text color="gray">
-            {fullscreen
-              ? mouseEnabled
-                ? "wheel / trackpad or PgUp / PgDn scrolls history · /mouse to select text"
-                : "select & copy text freely · PgUp / PgDn scrolls · /mouse for wheel scroll"
-              : "scroll with your terminal (wheel / trackpad) · select & copy freely"}
+            scroll with your terminal (wheel / trackpad) · select & copy freely
           </Text>
         </Box>
         {tipsEnabled && startupTip ? (
@@ -3828,102 +3517,24 @@ export function HarnessApp({
       </Box>
     ) : null;
 
-  // The chat region per renderer path — everything ABOVE the shared footer in each layout.
-  const chatRegion =
-    fullscreen && VIEWPORT_ON ? (
-      <>
-        {/* Transcript viewport: fills the left column above the status row. The docked
-            sidebar is no longer its sibling — it spans the FULL terminal beside the whole
-            left column (see the two-column return below). */}
-        <Box
-          flexGrow={1}
-          minHeight={0}
-          overflow="hidden"
-          flexDirection="column"
-          justifyContent="flex-end"
-        >
-          {bannerBlock}
-          {(view?.lines ?? []).map((line, i) => (
-            // Exactly one row per line: a newline-free string under wrap="truncate" can
-            // never render taller than 1 row, so Σ(rows) ≤ viewportRows by construction.
-            // biome-ignore lint/suspicious/noArrayIndexKey: windowed lines, positional key is fine
-            <Text key={i} wrap="truncate">
-              {line || " "}
-            </Text>
-          ))}
-          {/* B5: /rewind turn picker — the one remaining absolute overpaint. It only
-                  renders with both sidebars closed, so this column spans full cols and the
-                  overlay geometry (and its Yoga static-position pin) match the original. */}
-          {rewindOpen && overlayGeom ? (
-            <RewindPanel
-              turns={rewindTurns}
-              geometry={overlayGeom}
-              onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
-              onClose={() => setRewindOpen(false)}
-            />
-          ) : null}
-        </Box>
-        {/* Permanent status row (both scroll states) — scroll alone never reflows the
-              region below, so the prompt box cannot jump during scrolling. The selection
-              hint (a click attempt while mouse capture is on) outranks the scroll hint. */}
-        <Text color="gray" wrap="truncate">
-          {selectHint
-            ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse off · Ctrl+Y copies last reply"
-            : view && !view.pinned
-              ? `  ↑ scrolled up${view.atTop ? " (top)" : ""} · wheel down / PgDn to catch up`
-              : " "}
-        </Text>
-      </>
-    ) : fullscreen ? (
-      // OLD fullscreen path (MINIMA_TUI_VIEWPORT=0): message-window transcript instead of
-      // the line viewport — same left-column contract.
-      <Box
-        flexGrow={1}
-        minHeight={0}
-        overflow="hidden"
-        flexDirection="column"
-        justifyContent="flex-end"
-      >
-        {bannerBlock}
-        {(scrollWin?.visible ?? []).map((msg, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
-          <MessageRow key={i} msg={msg} cols={cols} />
-        ))}
-        {pinned && busy && streamingThoughts && showThinkingRef.current ? (
-          <StreamingThoughts text={streamingThoughts} />
-        ) : null}
-        {pinned && busy && fsStreamTail ? <StreamingReply text={fsStreamTail} /> : null}
-        {scrollWin && !pinned ? (
-          <Text color="gray">{`  ↑ scrolled up${scrollWin.atTop ? " (top)" : ""} · PgDn to catch up`}</Text>
-        ) : null}
-        {rewindOpen && overlayGeom ? (
-          <RewindPanel
-            turns={rewindTurns}
-            geometry={overlayGeom}
-            onRewind={(turn, mode) => performRewind(turn.keepPrompts, mode)}
-            onClose={() => setRewindOpen(false)}
-          />
-        ) : null}
-      </Box>
-    ) : (
-      <>
-        {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
-        <Static key={transcriptGen} items={messages}>
-          {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
-        </Static>
-        {bannerBlock}
-        {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
-              never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
-        {busy && streamingThoughts && showThinkingRef.current ? (
-          <StreamingThoughts text={streamingThoughts} />
-        ) : null}
-        {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
-      </>
-    );
+  // The chat region — everything ABOVE the footer.
+  const chatRegion = (
+    <>
+      {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
+      <Static key={transcriptGen} items={messages}>
+        {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
+      </Static>
+      {bannerBlock}
+      {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
+            never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
+      {busy && streamingThoughts && showThinkingRef.current ? (
+        <StreamingThoughts text={streamingThoughts} />
+      ) : null}
+      {busy && streamTail ? <StreamingReply text={streamTail} /> : null}
+    </>
+  );
 
-  // ONE footer block shared by both layouts — rendered inside the fullscreen LEFT COLUMN
-  // (at cols) and at the inline root, so the input/status/keys/overlay JSX never
-  // duplicates between renderer paths.
+  // ONE footer block: input/status/keys/overlay JSX below the chat region.
   const footerBlock = (
     <>
       {matchingCommands.length > 0 && (
@@ -4171,15 +3782,9 @@ export function HarnessApp({
     </>
   );
 
-  return fullscreen ? (
-    // FULLSCREEN: single column pinned to the terminal height.
-    <Box flexDirection="column" width={cols} height={rows} overflow="hidden">
-      {chatRegion}
-      {footerBlock}
-    </Box>
-  ) : (
-    // INLINE: the transcript commits to native scrollback via <Static>; only the live
-    // region + footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks.
+  // The transcript commits to native scrollback via <Static>; only the live region +
+  // footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks.
+  return (
     <Box flexDirection="column" width="100%">
       {chatRegion}
       {footerBlock}

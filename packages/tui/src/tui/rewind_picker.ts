@@ -58,7 +58,7 @@ export function parseRewindArgs(args: string): { n: number; mode: RewindMode } |
   return { n, mode };
 }
 
-/** One-shot numbered list — the inline renderer's (and too-narrow fullscreen's) /rewind output. */
+/** One-shot numbered list — the /rewind output. */
 export function renderRewindText(turns: RewindTurn[], width: number): string {
   if (turns.length === 0) return "Nothing to rewind — no prompts in this session yet.";
   const lines = ["Rewind to before prompt N — /rewind <n> [convo|code|both] (default both):"];

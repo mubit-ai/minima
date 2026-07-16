@@ -2,25 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Guards the two-renderer wiring in main.ts:
-//  - INLINE (default, like Claude Code's REPL): main buffer + <Static> native scrollback, with a
-//    one-time newline reserve so the prompt still starts at the bottom. Native scroll + select + copy.
-//  - FULLSCREEN (--fullscreen / MINIMA_TUI_FULLSCREEN=1): alternate screen buffer + glued prompt +
-//    in-app scroll + frame-anchored overlays.
-// The alt-screen writes MUST stay guarded by the fullscreen flag — an unconditional [?1049h would
-// give inline mode a buffer with no scrollback and re-break "can't scroll the session".
-describe("cli/main.ts wires both TUI renderers", () => {
+// Guards the inline renderer wiring in main.ts (the only renderer since MP3, MUB-146):
+// main buffer + <Static> native scrollback. Native scroll + select + copy — the alternate
+// screen buffer must never come back (it has no scrollback: "can't scroll the session").
+describe("cli/main.ts wires the inline renderer", () => {
   const src = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
 
-  test("mode is chosen from args.fullscreen (inline default; --fullscreen / MINIMA_TUI_FULLSCREEN opts in)", () => {
-    expect(src).toContain("if (args.fullscreen)");
-    expect(src).toContain("MINIMA_TUI_FULLSCREEN");
-    expect(src).toContain("--no-fullscreen");
-  });
-
-  test("fullscreen enters and leaves the alternate screen buffer", () => {
-    expect(src).toContain("?1049h");
-    expect(src).toContain("?1049l");
+  test("no renderer selection and no alt-screen writes remain", () => {
+    expect(src).not.toContain("fullscreen");
+    expect(src).not.toContain("MINIMA_TUI_FULLSCREEN");
+    expect(src).not.toContain("?1049");
   });
 
   test("inline starts with a full clear (screen + scrollback) — clean-slate CC-style start", () => {

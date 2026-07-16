@@ -222,7 +222,7 @@ describe("todowrite permission prompt surfaces verify commands", () => {
 // Guards the wrapped-row lockstep between PermissionOverlay and its footer reservation in
 // tui/app.tsx: both must consume the SAME layout helpers, so a preview line that word-wraps at a
 // narrow width can never render taller than the rows reserved for it (inline: Ink's
-// scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+// scrollback-wiping clearTerminal).
 describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 

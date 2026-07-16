@@ -7,7 +7,6 @@ import {
   childTreeHeight,
   clampToolText,
   computeMsgHeight,
-  getScrollableMessages,
   gtFooterFit,
   markdownBodyHeight,
   permHiddenMarker,
@@ -112,90 +111,12 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
     );
   });
   test("the irreducible chrome floor per role (empty body still renders header + margin)", () => {
-    // A clipped boundary message can never shrink below this — the fullscreen clip must account for
-    // it or a sub-floor slot overflows the viewport (the scroll garble). thinking is 5 (border adds 2).
+    // A message can never render below this floor — the height estimate must account for it
+    // or reservations under-count (the garble class). thinking is 5 (border adds 2).
     expect(computeMsgHeight(user(""), 80)).toBe(3); // marginTop + "▸ you" + 1 body
     expect(computeMsgHeight(tool(""), 80)).toBe(3); // marginTop + "⚙ …:" + 1 body
     expect(computeMsgHeight(asst(""), 80)).toBe(3); // marginTop + "◆ assistant" + 1 body
     expect(computeMsgHeight(thinking(""), 80)).toBe(5); // marginTop + border(2) + header + 1 body
-  });
-});
-
-describe("getScrollableMessages — windows the transcript for the fullscreen viewport", () => {
-  test("empty transcript is at both top and bottom", () => {
-    const w = getScrollableMessages([], 10, 0, 80);
-    expect(w.visible).toEqual([]);
-    expect(w.atTop).toBe(true);
-    expect(w.atBottom).toBe(true);
-  });
-  test("offset 0 pins to the newest content; the newest message is shown whole", () => {
-    const msgs = [asst("A"), asst("B"), asst("C")];
-    const w = getScrollableMessages(msgs, 5, 0, 80);
-    expect(w.totalHeight).toBe(9);
-    expect(w.atBottom).toBe(true);
-    expect(w.atTop).toBe(false);
-    expect(w.visible.at(-1)?.text).toBe("C"); // newest untrimmed at the bottom
-  });
-  test("a large offset clamps to the top; the oldest message is shown whole", () => {
-    const msgs = [asst("A"), asst("B"), asst("C")];
-    const w = getScrollableMessages(msgs, 5, 9999, 80);
-    expect(w.atTop).toBe(true);
-    expect(w.atBottom).toBe(false);
-    expect(w.visible[0]?.text).toBe("A"); // oldest untrimmed at the top
-  });
-  test("a message taller than the viewport is fold-clipped so the window never overflows", () => {
-    // The garble class: a single child taller than the overflow:hidden flex-end box. Trimming the
-    // fold keeps the rendered window <= maxHeight, so nothing overflows.
-    const tall = asst(Array.from({ length: 40 }, (_, i) => String(i + 1)).join("\n"));
-    const w = getScrollableMessages([tall], 12, 0, 80);
-    const rendered = w.visible.reduce((n, m) => n + computeMsgHeight(m, 80), 0);
-    expect(rendered).toBeLessThanOrEqual(12);
-    expect(w.atBottom).toBe(true);
-  });
-
-  // A mixed transcript hitting every clip trap: a 1-line bash tool (the chrome-floor / "helloash"
-  // collision), a tool with one very long WRAPPED url line (source-line vs rendered-row over-trim),
-  // markdown headings + lists, a thinking block (floor 5), short user lines, and one assistant taller
-  // than the whole viewport (clipped on both folds).
-  const mixed: ChatMessage[] = [
-    user("hi"),
-    tool("hello"),
-    tool(`[1] Result title\nhttps://example.com/${"segment/".repeat(30)}end`, "web_search"),
-    asst("# Heading\nsome body text here\n- a bullet item\n- another bullet\nmore trailing text"),
-    thinking("reasoning about the problem\na second line of thoughts"),
-    user("do it again"),
-    asst(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")),
-  ];
-
-  test("scroll-sweep: the visible stack never exceeds the viewport at ANY offset (the scroll garble)", () => {
-    // This is the core regression. Ink decimates/fuses lines the instant the flex-end viewport's
-    // content exceeds its height; before the height-targeted clip, boundary messages re-added chrome
-    // that pushed the stack over `maxHeight` at many offsets. Sweep every offset (past the clamp) and
-    // assert the rendered stack fits AND no single child alone exceeds the box.
-    for (const cols of [40, 80]) {
-      const maxHeight = 12;
-      const total = getScrollableMessages(mixed, maxHeight, 0, cols).totalHeight;
-      const maxOffset = Math.max(0, total - maxHeight);
-      for (let off = 0; off <= maxOffset + 5; off++) {
-        const w = getScrollableMessages(mixed, maxHeight, off, cols);
-        const sum = w.visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
-        expect(sum).toBeLessThanOrEqual(maxHeight);
-        for (const m of w.visible) {
-          expect(computeMsgHeight(m, cols)).toBeLessThanOrEqual(maxHeight);
-        }
-      }
-    }
-  });
-
-  test("scrolling is monotonic — offset 0 pins the newest, max offset pins the oldest", () => {
-    const maxHeight = 12;
-    const total = getScrollableMessages(mixed, maxHeight, 0, 80).totalHeight;
-    const maxOffset = Math.max(0, total - maxHeight);
-    expect(getScrollableMessages(mixed, maxHeight, 0, 80).atBottom).toBe(true);
-    expect(getScrollableMessages(mixed, maxHeight, maxOffset, 80).atTop).toBe(true);
-    // The oldest message ("hi") is only reachable when scrolled to the top.
-    const top = getScrollableMessages(mixed, maxHeight, maxOffset, 80);
-    expect(top.visible[0]?.role).toBe("user");
   });
 });
 
@@ -242,7 +163,7 @@ describe("tailToFit budget enforcement", () => {
   });
   test("a single huge streamed paragraph is hard-sliced to the row budget", () => {
     // One source line until the model emits "\n": 3000 chars at interior 100 would render
-    // ~30 rows. The live region must NEVER exceed its budget (fullscreen garble / inline
+    // ~30 rows. The live region must NEVER exceed its budget (the garble class /
     // scrollback-wipe class), so the tail is sliced even though it is the final line.
     const para = "word ".repeat(600).trim();
     const out = tailToFit(para, 100, 10);
@@ -258,60 +179,7 @@ describe("tailToFit budget enforcement", () => {
 
 // ---------------------------------------------------------------- U2 (MUB-140)
 
-import {
-  TOC_MIN_COLS,
-  clipPanelLines,
-  offsetForMessage,
-  tocPanelGeometry,
-} from "../src/tui/layout.ts";
-
-describe("offsetForMessage (U2 jump)", () => {
-  const many: ChatMessage[] = Array.from({ length: 12 }, (_, i) => ({
-    role: (i % 2 === 0 ? "user" : "assistant") as ChatMessage["role"],
-    text: `message ${i}\nline two\nline three`,
-  }));
-
-  test("round-trip: the window at the returned offset starts with message k, unclipped", () => {
-    const cols = 80;
-    const maxHeight = 10;
-    for (const k of [0, 3, 6]) {
-      const off = offsetForMessage(many, k, maxHeight, cols);
-      const win = getScrollableMessages(many, maxHeight, off, cols);
-      expect(win.visible[0]!.text).toBe(many[k]!.text); // whole message at the top — no clip
-    }
-  });
-
-  test("k inside the last page → 0 (pinned-to-newest semantics)", () => {
-    expect(offsetForMessage(many, many.length - 1, 10, 80)).toBe(0);
-  });
-
-  test("clamps: k=0 lands at maxOffset (top); short transcripts always 0", () => {
-    const cols = 80;
-    const maxHeight = 10;
-    const total = many.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
-    expect(offsetForMessage(many, 0, maxHeight, cols)).toBe(total - maxHeight);
-    expect(offsetForMessage(many.slice(0, 1), 0, 50, cols)).toBe(0);
-  });
-});
-
-describe("tocPanelGeometry (legacy overlay chassis — remaining consumer: the B5 rewind picker)", () => {
-  test("null below TOC_MIN_COLS or for regionHeight < 5 → callers use the text fallback", () => {
-    expect(tocPanelGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
-    expect(tocPanelGeometry(100, 4)).toBeNull();
-  });
-
-  test("width caps at 40, always leaves ≥30 transcript cols; panel spans the full region height", () => {
-    const g60 = tocPanelGeometry(60, 20)!;
-    expect(g60.width).toBe(30);
-    expect(g60.left).toBe(30);
-    const g100 = tocPanelGeometry(100, 24)!;
-    expect(g100.width).toBe(40);
-    expect(g100.left + g100.width).toBe(100);
-    expect(g100.height).toBe(24);
-    expect(g100.innerWidth).toBe(36);
-    expect(g100.innerHeight).toBe(22);
-  });
-});
+import { clipPanelLines } from "../src/tui/layout.ts";
 
 describe("clipPanelLines (U2 panel interior)", () => {
   const lines = Array.from({ length: 10 }, (_, i) => `row ${i}`);
@@ -331,40 +199,6 @@ describe("clipPanelLines (U2 panel interior)", () => {
     const mid = clipPanelLines(lines, 4, 5);
     expect(mid.top).toBeLessThanOrEqual(5);
     expect(5).toBeLessThan(mid.top + 4);
-  });
-});
-
-describe("cachedMsgHeight", () => {
-  test("matches computeMsgHeight for every role and re-derives on width change", async () => {
-    const { cachedMsgHeight } = await import("../src/tui/layout.ts");
-    const fixtures: ChatMessage[] = [
-      user("short"),
-      user("word ".repeat(80)),
-      asst("## Head\n\n- item one\n- item two\n\n" + "body ".repeat(60)),
-      tool("line\n".repeat(50)),
-      thinking("pondering ".repeat(30)),
-      asst("你好世界 ".repeat(40) + "🧠🚀"),
-    ];
-    for (const msg of fixtures) {
-      for (const cols of [40, 80, 100]) {
-        expect(cachedMsgHeight(msg, cols)).toBe(computeMsgHeight(msg, cols));
-        // Second call (cache hit) must agree with the first.
-        expect(cachedMsgHeight(msg, cols)).toBe(computeMsgHeight(msg, cols));
-      }
-    }
-  });
-});
-
-describe("applyScrollDelta", () => {
-  test("clamps to [0, maxOffset] at mutation time (no banked dead offset)", async () => {
-    const { applyScrollDelta } = await import("../src/tui/layout.ts");
-    expect(applyScrollDelta(0, 3, 100)).toBe(3);
-    expect(applyScrollDelta(98, 3, 100)).toBe(100); // over-scroll up stops at max
-    expect(applyScrollDelta(100, 3, 100)).toBe(100); // further up-notches bank nothing…
-    expect(applyScrollDelta(100, -3, 100)).toBe(97); // …so one down-notch responds immediately
-    expect(applyScrollDelta(2, -3, 100)).toBe(0); // floor at pinned
-    expect(applyScrollDelta(5, 3, 0)).toBe(0); // content shorter than viewport
-    expect(applyScrollDelta(5, 3, -7)).toBe(0); // negative max treated as 0
   });
 });
 

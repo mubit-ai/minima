@@ -180,16 +180,6 @@ export interface CliArgs {
   budgetEnforce: boolean;
   /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
   slider?: number;
-  /**
-   * Fullscreen renderer: alternate screen buffer, prompt glued to the bottom row, in-app scroll
-   * (PgUp/PgDn + optional captured mouse wheel) plus the frame-anchored overlays (ToC, GT Plan
-   * Overview, /rewind). **Default false** — the default is the inline renderer, whose main-buffer
-   * `<Static>` transcript gives the terminal's OWN native scroll + click-drag select + copy all at
-   * once, with no mouse capture and no `/mouse` toggle (the Claude Code model). Opt into fullscreen
-   * with `--fullscreen` or `MINIMA_TUI_FULLSCREEN=1`; `--no-fullscreen` / `MINIMA_TUI_INLINE=1` are
-   * the explicit inline forms (now the default).
-   */
-  fullscreen: boolean;
   /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
   resume?: string;
   /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
@@ -205,7 +195,6 @@ export function parseArgs(argv: string[]): CliArgs {
     mode: "interactive",
     noTools: false,
     budgetEnforce: false,
-    fullscreen: process.env.MINIMA_TUI_FULLSCREEN === "1" && process.env.MINIMA_TUI_INLINE !== "1",
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -236,13 +225,6 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--offline":
         opts.offline = true;
-        break;
-      case "--inline":
-      case "--no-fullscreen":
-        opts.fullscreen = false;
-        break;
-      case "--fullscreen":
-        opts.fullscreen = true;
         break;
       case "--dangerously-bypass-permissions":
         opts.bypassPermissions = true;
@@ -306,10 +288,6 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
-      --fullscreen         glued-prompt alt-screen UI (in-app scroll + ToC/GT/rewind overlays);
-                           default is the inline renderer — native terminal scroll + select + copy
-      --inline, --no-fullscreen
-                           force the inline renderer (this is the default)
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
@@ -631,30 +609,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (savedMode) setMode(savedMode);
   }
 
-  // Two renderers:
-  //  - inline (DEFAULT, like Claude Code's REPL): main buffer + Ink <Static> commits finished
-  //    output to the terminal's NATIVE scrollback, so wheel scroll + click-drag select + copy are
-  //    all the terminal's own — simultaneously, no mouse capture, no /mouse toggle. A one-time
-  //    newline reserve seats the prompt at the bottom on first paint.
-  //  - fullscreen (--fullscreen / MINIMA_TUI_FULLSCREEN=1): alternate screen buffer + hidden cursor.
-  //    The app draws a full-height frame with the prompt glued to the bottom row, scrolls history
-  //    IN-APP (PgUp/PgDn + an optional captured mouse wheel via /mouse), and hosts the frame-anchored
-  //    ToC / GT / rewind overlays. Capturing the wheel is what costs native selection here.
-  //    installInputFilter strips wheel SGR + captures pastes before Ink sees them.
-  installInputFilter(); // strip wheel SGR + capture bracketed pastes before Ink's key parser
+  // One renderer — inline (like Claude Code's REPL): main buffer + Ink <Static> commits finished
+  // output to the terminal's NATIVE scrollback, so wheel scroll + click-drag select + copy are
+  // all the terminal's own — simultaneously, no mouse capture. installInputFilter strips stray
+  // wheel SGR + captures bracketed pastes before Ink's key parser sees them.
+  installInputFilter();
   process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
-  if (args.fullscreen) {
-    process.stdout.write("\u001b[?1049h"); // enter alternate screen
-    process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
-  } else {
-    // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
-    // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
-    // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
-    // input render from the TOP and grow downward; Ink commits finished output to native
-    // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
-    process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
-    process.stdout.write("\u001b[?25l");
-  }
+  // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
+  // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
+  // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
+  // input render from the TOP and grow downward; Ink commits finished output to native
+  // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
+  process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+  process.stdout.write("\u001b[?25l");
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
@@ -666,7 +633,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       banner: "minima",
       askUserRef,
       childEventRef,
-      fullscreen: args.fullscreen,
       initialResume,
       planSpawn: spawnFactory,
       planMetaModel,
@@ -676,8 +642,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   );
   await instance.waitUntilExit();
 
-  // Shutdown: leave the alternate screen (fullscreen only), drop bracketed paste, restore cursor.
-  if (args.fullscreen) process.stdout.write("\u001b[?1049l");
+  // Shutdown: drop bracketed paste, restore cursor.
   process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory

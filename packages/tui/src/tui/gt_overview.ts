@@ -232,7 +232,7 @@ function redGreenEvidence(gate: GateRow): string | null {
     : "green from the start (pre-satisfied — not proof of this change)";
 }
 
-/** One-shot text overview — the inline renderer's (and too-narrow fullscreen's) Ctrl+G output. */
+/** One-shot text overview — the Ctrl+G output. */
 export function renderGtOverviewText(overview: GtOverview | null, width: number): string {
   if (!overview) return "No Ground-Truth plan recorded for this run.";
   const lines = [`GT plan — ${overview.title} (step ${overview.stepPos}/${overview.stepTotal})`];

@@ -194,7 +194,7 @@ export function tocRows(sections: TocSection[], innerWidth: number): TocRow[] {
   return rows;
 }
 
-/** One-shot text ToC — the inline renderer's (and too-narrow fullscreen's) Ctrl+T output. */
+/** One-shot text ToC — the Ctrl+T output. */
 export function renderTocText(sections: TocSection[], width: number): string {
   if (sections.length === 0) return "Table of contents: (empty session)";
   const lines: string[] = ["Table of contents:"];

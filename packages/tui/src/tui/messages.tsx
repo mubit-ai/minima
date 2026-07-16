@@ -123,10 +123,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
  * One finalized message, rendered inline (no per-turn box). Used as a <Static> item — printed once
  * into scrollback. A `marginTop` gives visual separation between messages.
  *
- * memo: in the fullscreen viewport the whole visible window is re-mapped on every HarnessApp render
- * (e.g. each keystroke). Props are (msg, cols); getScrollableMessages preserves the object reference
- * of un-clipped messages, so memo lets every row except the fold-straddling one bail out of re-render
- * (and its markdown re-parse). Inline mode renders each row once via <Static>, where memo is a no-op.
+ * memo: each row renders once via <Static>; memo is a cheap guard for the rare re-mount paths
+ * (transcriptGen bumps on /clear and resume).
  */
 export const MessageRow = memo(function MessageRow({
   msg,
