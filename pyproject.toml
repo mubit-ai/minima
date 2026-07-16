@@ -47,6 +47,7 @@ Repository = "https://github.com/mubit-ai/minima"
 Issues = "https://github.com/mubit-ai/minima/issues"
 
 [project.optional-dependencies]
+adapters = ["litellm>=1.60", "openhands-sdk>=1.30; python_version >= '3.12'"]
 # Run the Minima API server (operator/self-host only — hosted users don't need this).
 server = [
   "fastapi>=0.115",
@@ -66,6 +67,7 @@ dev = [
 ]
 
 [project.scripts]
+minima-route = "minima_client.integrations.claude_code:main"
 # The `minima` CLI/TUI is NOT here — it is the TypeScript binary (packages/tui) shipped via
 # Homebrew. This package only exposes the server-side operator tools.
 minima-seed = "minima.seeding.run_seed:main"
