@@ -5,7 +5,12 @@ import json
 import pytest
 
 from minima.catalog.merge import overlay_litellm
-from minima.catalog.store import CatalogStore, load_aliases, load_snapshot_cards
+from minima.catalog.store import (
+    CatalogStore,
+    apply_benchmark_priors,
+    load_aliases,
+    load_snapshot_cards,
+)
 from minima.config import Settings
 from minima.memory.records import (
     OutcomeRecord,
@@ -128,9 +133,10 @@ def test_snapshot_json_shape_is_loader_contract():
 def test_overlay_litellm_converts_per_token_to_per_mtok():
     cards, _ = load_snapshot_cards()
     aliases = load_aliases()
-    # craft a litellm entry for one known alias of haiku
+    # craft a litellm entry for a SAME-model alias (cross-generation aliases are
+    # forbidden -- another generation's prices must never overlay a current id)
     litellm_map = {
-        "claude-3-5-haiku-20241022": {
+        "anthropic/claude-haiku-4.5": {
             "input_cost_per_token": 0.000001,  # -> 1.0 / Mtok
             "output_cost_per_token": 0.000005,  # -> 5.0 / Mtok
             "max_input_tokens": 200000,
@@ -143,3 +149,45 @@ def test_overlay_litellm_converts_per_token_to_per_mtok():
     assert haiku.output_cost_per_mtok == pytest.approx(5.0)
     assert haiku.cost_source == "litellm"
     assert haiku.cost_stale is False
+
+
+def test_benchmark_priors_overlay_stamps_provenance():
+    cards, _ = load_snapshot_cards()
+    haiku = next(c for c in cards if c.model_id == "claude-haiku-4-5")
+    # Capability beliefs come from the ONE versioned, refreshable overlay — not the
+    # hand-authored snapshot — and say so.
+    assert haiku.capability_source.startswith("benchmark-priors:")
+    assert haiku.capability_by_task_type.get("code") is not None
+
+
+def test_benchmark_priors_zero_overlap_fails_loudly():
+    from minima.schemas.models_catalog import ModelCard
+
+    stranger = ModelCard(
+        model_id="totally-unknown-model",
+        provider="acme",
+        input_cost_per_mtok=1.0,
+        output_cost_per_mtok=1.0,
+    )
+    with pytest.raises(RuntimeError, match="no model ids"):
+        apply_benchmark_priors([stranger])
+
+
+def test_routerbench_seeding_requires_catalog_overlap(monkeypatch):
+    from minima.seeding import routerbench
+
+    class _FakeDf:
+        columns = ["prompt", "eval_name", "old-model", "old-model|total_cost"]
+
+        def itertuples(self, index=False):
+            return iter([("2+2?", "gsm8k", 1.0, 0.001)])
+
+    monkeypatch.setattr(routerbench, "load_routerbench_df", lambda split="0shot": _FakeDf())
+    # Zero overlap with the catalog -> loud failure, never a silent no-op seed.
+    with pytest.raises(RuntimeError, match="no models with the live catalog"):
+        routerbench.load_records(10, {}, catalog_ids={"claude-haiku-4-5"})
+    # A dataset model present verbatim in the catalog still seeds.
+    items = routerbench.load_records(10, {}, catalog_ids={"old-model"})
+    assert len(items) == 1
+    assert items[0].record.model_id == "old-model"
+    assert items[0].record.evidence_source == "dataset"
