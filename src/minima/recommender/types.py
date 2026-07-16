@@ -48,6 +48,26 @@ class ModelAggregate:
             return 0.0
         return self.weighted_success / self.weight_sum
 
+    def _sample_pairs(self, field_name: str, latest_attr: str) -> list[tuple[float, float]]:
+        """(value, similarity-weight) pairs from each record's v4 sample ring, falling
+        back to the record's single latest value for pre-ring records. The rings are
+        what let ONE organic durable record clear ``min_n`` — before them, the upsert
+        capped every (cluster, model) at a single observation."""
+        pairs: list[tuple[float, float]] = []
+        for ev in self.evidence:
+            rec = ev.record
+            if rec is None:
+                continue
+            w = max(0.0, ev.score)
+            samples = getattr(rec, field_name)
+            if samples:
+                pairs.extend((float(v), w) for v in samples if v and float(v) > 0.0)
+            else:
+                latest = getattr(rec, latest_attr)
+                if latest and float(latest) > 0.0:
+                    pairs.append((float(latest), w))
+        return pairs
+
     def observed_cost(self, min_n: int) -> float | None:
         """Robust realized $/call over cost-bearing neighbors: a similarity-weighted MEDIAN.
 
@@ -58,11 +78,7 @@ class ModelAggregate:
         cumulative total, a timed-out retry) from dominating. Returns None when fewer than
         ``min_n`` recalled neighbors carry a positive cost.
         """
-        pairs = [
-            (ev.record.cost_usd, max(0.0, ev.score))
-            for ev in self.evidence
-            if ev.record is not None and ev.record.cost_usd and ev.record.cost_usd > 0.0
-        ]
+        pairs = self._sample_pairs("cost_samples", "cost_usd")
         if len(pairs) < min_n:
             return None
         return _weighted_median(pairs)
@@ -75,11 +91,7 @@ class ModelAggregate:
         keeping the realized output (thinking) volume. Similarity-weighted median; None when
         fewer than ``min_n`` recalled neighbors carry an output-token count.
         """
-        pairs = [
-            (float(ev.record.output_tokens), max(0.0, ev.score))
-            for ev in self.evidence
-            if ev.record is not None and ev.record.output_tokens and ev.record.output_tokens > 0
-        ]
+        pairs = self._sample_pairs("output_token_samples", "output_tokens")
         if len(pairs) < min_n:
             return None
         return _weighted_median(pairs)
@@ -92,11 +104,7 @@ class ModelAggregate:
         the median) is deliberate — SLA enforcement cares about the typical-worst case.
         None when fewer than ``min_n`` recalled neighbors carry a latency.
         """
-        pairs = [
-            (float(ev.record.latency_ms), max(0.0, ev.score))
-            for ev in self.evidence
-            if ev.record is not None and ev.record.latency_ms and ev.record.latency_ms > 0
-        ]
+        pairs = self._sample_pairs("latency_samples", "latency_ms")
         if len(pairs) < min_n:
             return None
         return _weighted_quantile(pairs, q)
@@ -108,11 +116,7 @@ class ModelAggregate:
         predictable cost range. Same (cost, similarity) pairs and similarity-only weighting as
         :meth:`observed_cost`; None when fewer than ``min_n`` neighbors carry a positive cost.
         """
-        pairs = [
-            (ev.record.cost_usd, max(0.0, ev.score))
-            for ev in self.evidence
-            if ev.record is not None and ev.record.cost_usd and ev.record.cost_usd > 0.0
-        ]
+        pairs = self._sample_pairs("cost_samples", "cost_usd")
         if len(pairs) < min_n:
             return None
         return (_weighted_quantile(pairs, q_low), _weighted_quantile(pairs, q_high))
@@ -122,11 +126,7 @@ class ModelAggregate:
     ) -> tuple[float, float] | None:
         """Robust p_low–p_high band of realized output tokens/call — for re-pricing the cost
         band to the current request's input size (rescaled basis). None below ``min_n``."""
-        pairs = [
-            (float(ev.record.output_tokens), max(0.0, ev.score))
-            for ev in self.evidence
-            if ev.record is not None and ev.record.output_tokens and ev.record.output_tokens > 0
-        ]
+        pairs = self._sample_pairs("output_token_samples", "output_tokens")
         if len(pairs) < min_n:
             return None
         return (_weighted_quantile(pairs, q_low), _weighted_quantile(pairs, q_high))

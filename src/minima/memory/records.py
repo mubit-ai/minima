@@ -11,7 +11,13 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = 3  # v3: nullable quality_score + evidence_source; v1/v2 records parse unchanged
+SCHEMA_VERSION = 4  # v4: accumulating counters + sample rings; v1-v3 records parse unchanged
+
+# Ring caps for the per-(cluster, model) durable record's accumulators. Small on
+# purpose: the rings feed robust medians/quantiles (a dozen samples is plenty) and
+# the whole record rides inside Mubit entry metadata.
+COST_SAMPLE_RING = 12
+REC_ID_RING = 8
 
 # Provenance of the quality signal. Only labeled evidence may enter the success
 # aggregate, reinforcement, or calibration; "none" is cost/latency telemetry.
@@ -108,6 +114,15 @@ class OutcomeRecord:
     # Unix seconds when the outcome was observed. Powers evidence age decay; None on
     # legacy (schema v1) records, which fall back to the binary staleness penalty.
     recorded_at: float | None = None
+    # --- v4 accumulating counters (the durable (cluster, model) record is an upsert,
+    # so history must live IN the record: without these, organic evidence caps at n=1
+    # and one failure erases every prior success). All maintained by merged_outcome().
+    n_outcomes: int = 0  # labeled outcomes folded into this record (0 = legacy/fresh)
+    success_mass: float = 0.0  # sum of label_score over those outcomes
+    cost_samples: list[float] = field(default_factory=list)  # realized $/call ring
+    output_token_samples: list[int] = field(default_factory=list)
+    latency_samples: list[int] = field(default_factory=list)
+    recent_rec_ids: list[str] = field(default_factory=list)  # duplicate-feedback guard
     kind: str = "outcome"
     schema_version: int = SCHEMA_VERSION
     extra: dict = field(default_factory=dict)
@@ -165,6 +180,12 @@ class OutcomeRecord:
                 _as_float(parsed.get("recorded_at")) if parsed.get("recorded_at") else None
             ),
             iterations=(_as_int(parsed.get("iterations")) if parsed.get("iterations") else None),
+            n_outcomes=_as_int(parsed.get("n_outcomes")),
+            success_mass=_as_float(parsed.get("success_mass")),
+            cost_samples=_as_float_list(parsed.get("cost_samples")),
+            output_token_samples=_as_int_list(parsed.get("output_token_samples")),
+            latency_samples=_as_int_list(parsed.get("latency_samples")),
+            recent_rec_ids=[str(r) for r in parsed.get("recent_rec_ids") or [] if r],
         )
 
 
@@ -213,11 +234,86 @@ def _coerce_mapping(meta: Mapping | str | None) -> dict | None:
     return None
 
 
+def merged_outcome(prev: OutcomeRecord | None, new: OutcomeRecord) -> OutcomeRecord:
+    """Fold a fresh labeled outcome into the durable (cluster, model) record.
+
+    The durable record is a last-write-wins upsert in Mubit, so accumulation must
+    happen here, read-modify-write style: counters and sample rings carry the
+    history; the point-in-time fields (quality/outcome/cost/...) describe the
+    LATEST outcome. Returns ``prev`` unchanged when ``new`` is a replay (its
+    recommendation_id is already in the ring) — callers should skip reinforcement.
+    Fail-open: with no readable prior record, ``new`` starts a fresh history (n=1).
+    """
+    if (
+        prev is not None
+        and new.recommendation_id
+        and new.recommendation_id in prev.recent_rec_ids
+    ):
+        return prev
+
+    base_n = prev.n_outcomes if prev is not None else 0
+    base_mass = prev.success_mass if prev is not None else 0.0
+    if prev is not None and prev.n_outcomes == 0:
+        # v1-v3 record: its single stored outcome is one unit of history (only if it
+        # was labeled — telemetry-era records contribute nothing to the success mass).
+        if is_labeled(prev.evidence_source):
+            base_n = 1
+            base_mass = label_score(prev.outcome, prev.quality_score)
+
+    def _ring(old: list, add: object | None, cap: int) -> list:
+        items = list(old)
+        if add:
+            items.append(add)
+        return items[-cap:]
+
+    new.n_outcomes = base_n + 1
+    new.success_mass = base_mass + label_score(new.outcome, new.quality_score)
+    prev_costs = prev.cost_samples if prev is not None else []
+    prev_tokens = prev.output_token_samples if prev is not None else []
+    prev_lat = prev.latency_samples if prev is not None else []
+    prev_recs = prev.recent_rec_ids if prev is not None else []
+    new.cost_samples = _ring(
+        prev_costs, new.cost_usd if new.cost_usd > 0 else None, COST_SAMPLE_RING
+    )
+    new.output_token_samples = _ring(
+        prev_tokens, new.output_tokens if new.output_tokens > 0 else None, COST_SAMPLE_RING
+    )
+    new.latency_samples = _ring(
+        prev_lat, new.latency_ms if new.latency_ms else None, COST_SAMPLE_RING
+    )
+    new.recent_rec_ids = _ring(prev_recs, new.recommendation_id or None, REC_ID_RING)
+    return new
+
+
 def _as_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _as_float_list(value: Any) -> list[float]:
+    if not isinstance(value, list):
+        return []
+    out: list[float] = []
+    for v in value:
+        try:
+            out.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _as_int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    out: list[int] = []
+    for v in value:
+        try:
+            out.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:

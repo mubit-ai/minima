@@ -39,8 +39,10 @@ class FakeMemory:
 
     async def lookup(
         self, *, lane: str, match: list[dict], limit: int = 256
-    ) -> list[RecalledEvidence]:
+    ) -> list[RecalledEvidence] | None:
         self.lookup_calls.append({"lane": lane, "match": match})
+        if self.lookup_results is None:  # simulate a degraded keyed channel
+            return None
         return list(self.lookup_results)
 
     async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
