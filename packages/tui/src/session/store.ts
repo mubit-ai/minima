@@ -251,7 +251,7 @@ export class SessionManager {
         out.push({
           sessionId: basename(name, ".jsonl"),
           path: p,
-          displayName: null,
+          displayName: firstUserText(nonempty),
           mtime: st.mtimeMs / 1000,
           nEntries: nonempty.length,
           created: firstEntryTs(nonempty) ?? st.mtimeMs / 1000,
@@ -272,4 +272,22 @@ function firstEntryTs(lines: string[]): number | null {
   } catch {
     return null;
   }
+}
+
+function firstUserText(lines: string[]): string | null {
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line) as { type?: unknown; payload?: { text?: unknown } };
+      if (obj.type !== "user") continue;
+      const text = obj.payload?.text;
+      if (typeof text !== "string") continue;
+      const firstLine = text.split(/\r?\n/).find((l) => l.trim());
+      if (!firstLine) continue;
+      const name = firstLine.trim().replace(/\s+/g, " ").slice(0, 48);
+      if (name) return name;
+    } catch {
+      // skip unparseable line
+    }
+  }
+  return null;
 }

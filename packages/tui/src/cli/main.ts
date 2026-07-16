@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { PassThrough } from "node:stream";
 import { render } from "ink";
 import React from "react";
 import type { BeforeToolCall } from "../agent/tools.ts";
@@ -38,7 +39,7 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
-import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
+import { filterMouseChunk } from "../tui/mouse-scroll.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -540,18 +541,45 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Two renderers (like Claude Code):
   //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
   //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
-  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
+  //    optional captured mouse wheel; filterMouseChunk strips wheel SGR before Ink sees it).
   //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
   //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
   //    reserve seats the prompt at the bottom on first paint.
   if (args.fullscreen) {
-    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
     process.stdout.write("\u001b[?1049h"); // enter alternate screen
     process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
   } else {
     process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
     process.stdout.write("\u001b[?25l");
   }
+
+  // Bun's raw-mode TTY delivers each keystroke one 'readable' edge LATE, so Ink's
+  // read-until-null drain (its only input path) registers every key a press behind —
+  // "press twice to move once" in arrow-driven pickers. Feed Ink a generic PassThrough
+  // instead: the real TTY's flowing-mode 'data' delivers promptly, and Ink's 'readable'
+  // drain on a normal stream returns the byte on the first pass. Wheel SGR is stripped here.
+  const inputProxy = new PassThrough() as PassThrough & {
+    isTTY: boolean;
+    setRawMode: (mode: boolean) => void;
+    ref: () => void;
+    unref: () => void;
+  };
+  inputProxy.isTTY = true;
+  inputProxy.setRawMode = (mode) => {
+    process.stdin.setRawMode?.(mode);
+  };
+  inputProxy.ref = () => {
+    process.stdin.ref?.();
+  };
+  inputProxy.unref = () => {
+    process.stdin.unref?.();
+  };
+  const onStdinData = (chunk: Buffer | string) => {
+    const cleaned = filterMouseChunk(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    if (cleaned.length > 0) inputProxy.write(cleaned);
+  };
+  process.stdin.on("data", onStdinData);
+  process.stdin.resume();
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
@@ -568,9 +596,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       planMetaModel,
       gtGateBefore,
     }),
-    { exitOnCtrlC: false },
+    { stdin: inputProxy as unknown as NodeJS.ReadStream, exitOnCtrlC: false },
   );
   await instance.waitUntilExit();
+  process.stdin.off("data", onStdinData);
 
   // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
   if (args.fullscreen) process.stdout.write("\u001b[?1049l");

@@ -1,14 +1,13 @@
 /**
  * Mouse wheel scroll support for the Ink TUI.
  *
- * Ink v5 reads stdin via `'readable'` + `stdin.read()` polling (not `'data'` events).
- * To intercept SGR mouse escape sequences before Ink's parseKeypress sees them,
- * we override `stdin.read()` itself — the exact point Ink pulls data from the stream.
+ * main.ts feeds Ink a PassThrough proxy fed from the real TTY's flowing `'data'` stream;
+ * `filterMouseChunk` strips SGR mouse escape sequences from each chunk before it reaches Ink.
  *
  * Usage:
- *   import { installMouseScrollFilter, setMouseScrollCallback } from "./mouse-scroll.ts";
- *   installMouseScrollFilter();   // call once before render()
+ *   import { filterMouseChunk, setMouseScrollCallback } from "./mouse-scroll.ts";
  *   setMouseScrollCallback((dir) => setScrollOffset(...));  // in component mount
+ *   stdin.on("data", (c) => proxy.write(filterMouseChunk(c)));  // in main, before render()
  */
 
 // The registered scroll handler; called on each wheel notch.
@@ -61,27 +60,12 @@ export function processMouseChunk(prevBuffer: string, chunk: string): MouseChunk
   return { output: cleaned, buffer, scrolls };
 }
 
-export function installMouseScrollFilter(): void {
-  const stdin = process.stdin;
-  const realRead = stdin.read.bind(stdin);
-  let buffer = "";
-
-  // Ink calls stdin.setEncoding('utf8'), so read() returns strings.
-  // We handle both string and Buffer for safety.
-  (stdin as any).read = (size?: number): string | Buffer | null => {
-    for (;;) {
-      const chunk = realRead(size);
-      if (chunk === null || chunk === undefined) return null;
-
-      const str: string = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      const res = processMouseChunk(buffer, str);
-      buffer = res.buffer;
-      for (const dir of res.scrolls) scrollCallback?.(dir);
-
-      if (res.output.length > 0) {
-        return typeof chunk === "string" ? res.output : Buffer.from(res.output, "utf8");
-      }
-      // All data was mouse / held — loop and try read() again until real stdin is drained.
-    }
-  };
+// Stateful chunk filter for the flowing 'data' input path (main.ts feeds Ink a PassThrough,
+// so mouse SGR is stripped here before Ink ever sees it). Returns the bytes to forward.
+let dataBuffer = "";
+export function filterMouseChunk(chunk: string): string {
+  const res = processMouseChunk(dataBuffer, chunk);
+  dataBuffer = res.buffer;
+  for (const dir of res.scrolls) scrollCallback?.(dir);
+  return res.output;
 }

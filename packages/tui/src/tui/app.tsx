@@ -295,6 +295,15 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
     if (Number.isInteger(n) && n >= 1 && n <= sessions.length) return pick(sessions[n - 1]!.path);
   });
 
+  const total = sessions.length;
+  // Scroll a window around the cursor so long lists stay reachable. Sized to the terminal,
+  // reserving rows for the border/title/hint/overflow markers; each row is one line (truncated).
+  const window = Math.max(5, Math.min(total, (process.stdout.rows ?? 24) - 8));
+  const start = total <= window ? 0 : Math.min(Math.max(0, cursor - (window >> 1)), total - window);
+  const above = start;
+  const below = total - (start + window);
+  const numWidth = String(total).length;
+
   return (
     <Box
       flexDirection="column"
@@ -307,27 +316,30 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
       <Box position="absolute" marginTop={-1} marginLeft={2}>
         <Text color="magenta"> sessions </Text>
       </Box>
-      {sessions.length === 0 ? (
+      {total === 0 ? (
         <Text color="gray">No previous sessions found.</Text>
       ) : (
-        sessions.slice(0, 15).map((s, i) => {
-          const ageCreated = formatAge(s.created);
-          const ageUpdated = formatAge(s.mtime);
-          const label = s.displayName || s.sessionId;
-          return (
-            <Text key={s.path} color={i === cursor ? "cyan" : undefined}>
-              {i === cursor ? "❯" : " "} {i < 9 ? `${i + 1} ` : "  "}
-              <Text bold color="yellow">
-                {label.padEnd(16)}
+        <>
+          <Text color="gray">{above > 0 ? `  ↑ ${above} more` : " "}</Text>
+          {sessions.slice(start, start + window).map((s, i) => {
+            const abs = start + i;
+            const label = s.displayName || s.sessionId;
+            return (
+              <Text key={s.path} color={abs === cursor ? "cyan" : undefined} wrap="truncate-end">
+                {abs === cursor ? "❯" : " "} {`${String(abs + 1).padStart(numWidth)} `}
+                <Text bold color="yellow">
+                  {label.padEnd(16)}
+                </Text>
+                <Text color="gray">
+                  {` · ${s.nEntries} entries · created ${formatAge(s.created)} · updated ${formatAge(s.mtime)}`}
+                </Text>
               </Text>
-              <Text color="gray">
-                {` · ${s.nEntries} entries · created ${ageCreated} · updated ${ageUpdated}`}
-              </Text>
-            </Text>
-          );
-        })
+            );
+          })}
+          <Text color="gray">{below > 0 ? `  ↓ ${below} more` : " "}</Text>
+        </>
       )}
-      <Text color="gray">{"↑/↓ select · ⏎ resume · Esc cancel"}</Text>
+      <Text color="gray">{`↑/↓ select · ⏎ resume · Esc cancel${total > window ? ` · ${total} sessions` : ""}`}</Text>
     </Box>
   );
 }
@@ -847,7 +859,7 @@ export function HarnessApp({
     process.stdout.on("resize", handleResize);
 
     if (fullscreen) {
-      // Wheel notches (decoded by installMouseScrollFilter in main.ts) adjust the scroll offset.
+      // Wheel notches (decoded by filterMouseChunk in main.ts) adjust the scroll offset.
       setMouseScrollCallback((dir) =>
         setScrollOffset((p) => (dir === "up" ? p + 3 : Math.max(0, p - 3))),
       );
@@ -2104,16 +2116,16 @@ export function HarnessApp({
             // DB-backed runs are the real record (JSONL sessions are legacy/read-only).
             if (agent.db) {
               const runs = agent.db
-                .listRuns(repoIdentity(process.cwd()))
+                .listResumableRuns(repoIdentity(process.cwd()))
                 .filter((r) => r.run_id !== agent.runId);
               setSessionsList(
                 runs.map((r) => ({
                   path: `run:${r.run_id}`,
                   sessionId: r.run_id.slice(0, 12),
                   displayName: r.display_name,
-                  nEntries: agent.db?.countEvents(r.run_id) ?? 0,
-                  created: r.created * 1000,
-                  mtime: r.updated * 1000,
+                  nEntries: agent.db?.countMessages(r.run_id) ?? 0,
+                  created: r.created,
+                  mtime: r.updated,
                 })),
               );
               setSessionPickerOpen(true);

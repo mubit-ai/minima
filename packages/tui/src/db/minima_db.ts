@@ -39,6 +39,13 @@ function isBusyError(e: unknown): boolean {
   return msg.includes("SQLITE_BUSY") || msg.includes("database is locked");
 }
 
+function runNameFromPrompt(text: string): string {
+  const firstLine = text.split(/\r?\n/).find((l) => l.trim());
+  if (!firstLine) return "untitled";
+  const name = firstLine.trim().replace(/\s+/g, " ").slice(0, 48);
+  return name || "untitled";
+}
+
 function tokenJaccard(a: string, b: string): number {
   const tokens = (s: string) =>
     new Set(
@@ -392,6 +399,7 @@ export class MinimaDb {
     }
     this.db.exec("PRAGMA foreign_keys=ON");
     this.migrate();
+    this.backfillDisplayNames();
   }
 
   private migrate(): void {
@@ -532,9 +540,60 @@ export class MinimaDb {
     return row.n;
   }
 
+  countMessages(runId: string): number {
+    const row = this.db
+      .query("SELECT count(*) AS n FROM events WHERE run_id = ? AND type != 'routing'")
+      .get(runId) as { n: number };
+    return row.n;
+  }
+
+  private setDisplayNameIfEmpty(runId: string, name: string): void {
+    this.db.run("UPDATE runs SET display_name = ? WHERE run_id = ? AND display_name IS NULL", [
+      name,
+      runId,
+    ]);
+  }
+
+  backfillDisplayNames(): void {
+    try {
+      const runs = this.db.query("SELECT run_id FROM runs WHERE display_name IS NULL").all() as {
+        run_id: string;
+      }[];
+      for (const { run_id } of runs) {
+        try {
+          const row = this.db
+            .query(
+              "SELECT payload FROM events WHERE run_id = ? AND type = 'user' ORDER BY ts, rowid LIMIT 1",
+            )
+            .get(run_id) as { payload: string } | null;
+          if (!row) continue;
+          const text = (JSON.parse(row.payload) as { text?: string }).text;
+          if (!text) continue;
+          this.setDisplayNameIfEmpty(run_id, runNameFromPrompt(text));
+        } catch {
+          // one malformed payload must not abort naming for the remaining runs
+        }
+      }
+    } catch {
+      // a malformed payload must not crash startup
+    }
+  }
+
   listRuns(projectKey: string, limit = 25): RunRow[] {
     return this.db
       .query("SELECT * FROM runs WHERE project_key = ? ORDER BY updated DESC LIMIT ?")
+      .all(projectKey, limit) as RunRow[];
+  }
+
+  /** Runs with at least one non-routing event — empty phantom startups are excluded in SQL,
+   * BEFORE the limit, so they never crowd real sessions out of the fetch window. */
+  listResumableRuns(projectKey: string, limit = 25): RunRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM runs r WHERE r.project_key = ?
+           AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.run_id AND e.type != 'routing')
+         ORDER BY r.updated DESC LIMIT ?`,
+      )
       .all(projectKey, limit) as RunRow[];
   }
 
@@ -561,6 +620,14 @@ export class MinimaDb {
         JSON.stringify(opts.payload),
       ],
     );
+    if (opts.type === "user") {
+      try {
+        const text = (opts.payload as { text?: string }).text;
+        if (text) this.setDisplayNameIfEmpty(opts.runId, runNameFromPrompt(text));
+      } catch {
+        // naming is best-effort — never break the hot path
+      }
+    }
     return id;
   }
 
