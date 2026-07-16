@@ -104,6 +104,8 @@ class OutcomeRecord:
     outcome: str = "success"
     # Provenance of the quality signal (EVIDENCE_*). Aggregation skips "none" records.
     evidence_source: str = EVIDENCE_NONE
+    # Reasoning-effort tier the model ran at (client-reported; latest outcome's value).
+    effort: str | None = None
     recommendation_id: str | None = None
     verified_in_production: bool = False
     source_dataset: str | None = None
@@ -173,6 +175,7 @@ class OutcomeRecord:
             quality_score=quality,
             outcome=str(parsed.get("outcome", "success")),
             evidence_source=str(source),
+            effort=(str(parsed["effort"]) if parsed.get("effort") else None),
             recommendation_id=parsed.get("recommendation_id"),
             verified_in_production=bool(parsed.get("verified_in_production", False)),
             source_dataset=parsed.get("source_dataset"),

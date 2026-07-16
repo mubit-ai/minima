@@ -355,6 +355,10 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     const req = recommendCalls[0] as Record<string, any>;
     expect(req.task.difficulty).toBe("hard");
     expect(req.task.expected_input_tokens).toBeGreaterThan(0); // live-context estimate
+    // Reference-client signals: phase rides as a tag; the incumbent model (the one
+    // holding the session's prompt cache) is declared for stickiness pricing.
+    expect(req.task.tags).toEqual(["phase:interactive"]);
+    expect(req.incumbent_model_id).toBe("test-faux");
     expect(req.constraints.max_cost_per_call).toBe(0.25);
     expect(req.constraints.min_quality).toBe(0.8);
     expect(req.constraints.excluded_models).toEqual(["dead-model"]);

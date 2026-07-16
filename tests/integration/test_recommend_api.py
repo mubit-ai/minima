@@ -125,3 +125,24 @@ def test_recommend_cheapest_eligible_with_memory(client, fake_memory):
     # Haiku clears the bar via memory and is far cheaper than Opus.
     assert body["recommended_model"]["model_id"] == "claude-haiku-4-5"
     assert body["recommended_model"]["decision_basis"] == "memory"
+
+
+def test_incumbent_model_gets_cache_aware_estimate(client, fake_memory):
+    """Stickiness via honest cost: the incumbent's estimate prices part of its input
+    at the cache-read rate (a switch forfeits the session's prompt cache)."""
+
+    def est(incumbent: str | None) -> float:
+        body = {
+            "task": {"task": "summarize this document please", "task_type": "summarization"},
+            "constraints": {"candidate_models": ["claude-haiku-4-5", "claude-sonnet-4-6"]},
+        }
+        if incumbent:
+            body["incumbent_model_id"] = incumbent
+        rec = client.post("/v1/recommend", json=body).json()
+        return next(
+            m["est_cost_usd"] for m in rec["ranked"] if m["model_id"] == "claude-sonnet-4-6"
+        )
+
+    baseline = est(None)
+    sticky = est("claude-sonnet-4-6")
+    assert sticky < baseline

@@ -234,6 +234,10 @@ class Settings(BaseSettings):
     # recommend() also returns `recommended_actions` (e.g. enable_prompt_cache) regardless.
     minima_cost_lever_aware: bool = False
     minima_cost_cache_input_fraction: float = 0.5
+    # Fraction of the INCUMBENT model's input priced at its cache-read rate on the
+    # estimate basis (the session's prompt cache survives only if the model doesn't
+    # change). 0 disables incumbent stickiness.
+    minima_incumbent_cache_fraction: float = 0.7
 
     # --- Neighbor-vote classification ---
     # When the heuristic classifier returns `other`, disambiguate the task_type from the

@@ -74,6 +74,12 @@ export interface RecommendRequest {
   constraints?: Constraints;
   user_id?: string;
   namespace?: string;
+  /**
+   * The model currently holding this session's context/prompt cache. Its
+   * estimate-basis input is priced partly at the cache-read rate (switching
+   * forfeits the cache) — stickiness via honest cost accounting.
+   */
+  incumbent_model_id?: string;
   max_candidates?: number;
   allow_llm_escalation?: boolean;
   explain?: boolean;
@@ -155,6 +161,8 @@ export interface FeedbackRequest {
   verified_in_production?: boolean;
   /** DEPRECATED: send evidence_source instead (true→judge, false→none). */
   judged?: boolean;
+  /** Reasoning-effort tier the model ran at — raw material for (model x effort) arms. */
+  chosen_effort?: string;
   notes?: string;
   idempotency_key?: string;
 }

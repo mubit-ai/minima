@@ -127,6 +127,7 @@ export class MinimaClient {
       allow_llm_escalation?: boolean;
       explain?: boolean;
       baseline_model_id?: string;
+      incumbent_model_id?: string;
       signal?: AbortSignal;
     } = {},
   ): Promise<RecommendResponse> {
@@ -141,6 +142,7 @@ export class MinimaClient {
         allow_llm_escalation: opts.allow_llm_escalation,
         explain: opts.explain,
         baseline_model_id: opts.baseline_model_id,
+        incumbent_model_id: opts.incumbent_model_id,
       }),
     };
     return this.post<RecommendResponse>("/v1/recommend", req, opts.signal);

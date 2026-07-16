@@ -177,6 +177,7 @@ async def feedback(
         quality_score=quality,
         outcome=req.outcome.value,
         evidence_source=source,
+        effort=req.chosen_effort,
         recommendation_id=req.recommendation_id,
         verified_in_production=verified,
         recorded_at=time.time(),
@@ -325,6 +326,7 @@ def _reconcile_decision(
                 ts=time.time(),
                 late=late,
                 evidence_source=evidence_source,
+                chosen_effort=req.chosen_effort,
             ),
         )
     except Exception as exc:  # noqa: BLE001 — analytics must never fail feedback
@@ -367,6 +369,7 @@ async def _late_feedback(
         quality_score=quality,
         outcome=req.outcome.value,
         evidence_source=source,
+        effort=req.chosen_effort,
         recommendation_id=req.recommendation_id,
         verified_in_production=source == EVIDENCE_GATE,
         recorded_at=time.time(),

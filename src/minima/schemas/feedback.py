@@ -51,6 +51,14 @@ class FeedbackRequest(BaseModel):
             "(caller-asserted outcome)."
         ),
     )
+    chosen_effort: str | None = Field(
+        None,
+        description=(
+            "reasoning-effort tier the model ran at (e.g. low/medium/high). Recorded "
+            "on the outcome record and decision log so (model x effort) arms can be "
+            "learned; not yet a routing dimension."
+        ),
+    )
     notes: str | None = None
     idempotency_key: str | None = None
 

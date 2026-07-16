@@ -801,6 +801,19 @@ class Recommender:
                 and not use_cache
                 else 0.0
             )
+            # The incumbent model keeps this session's prompt cache; a switch forfeits
+            # it. Pricing part of the incumbent's input at the cache-read rate makes
+            # stickiness fall out of honest cost accounting (estimate basis only —
+            # observed/rescaled already reflect realized caching), keeping Thompson's
+            # logged propensities valid instead of a post-hoc pick override.
+            if (
+                req.incumbent_model_id == card.model_id
+                and card.supports_prompt_caching
+                and not use_cache
+            ):
+                cache_fraction = max(
+                    cache_fraction, settings.minima_incumbent_cache_fraction
+                )
             est_cost, breakdown = score.effective_cost(
                 card,
                 agg,
