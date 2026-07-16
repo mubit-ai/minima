@@ -77,22 +77,55 @@ wf = minima.recommend_workflow(req)
 print(wf.total_est_cost_usd, "vs", wf.total_est_cost_if_all_premium)
 ```
 
-### `feedback(recommendation_id, chosen_model_id, outcome, **kwargs)`
+### `feedback(recommendation_id, chosen_model_id, outcome, usage=..., **kwargs)`
 
 Returns a `FeedbackResponse`. `outcome` is `"success" | "partial" | "failure"` (or an
-`OutcomeLabel`). Pass realized numbers to power the observed/rescaled cost tiers:
+`OutcomeLabel`). The typed `Usage` parameter is the loop's single biggest accuracy
+lever — report what the provider ACTUALLY billed (never echo Minima's own
+`est_cost_usd` back):
 
 ```python
+from minima_client import Usage
+
 minima.feedback(
     rec.recommendation_id,
     rec.recommended_model.model_id,
     "success",
-    quality_score=0.95,
-    input_tokens=180, output_tokens=640, actual_cost_usd=0.0034,
-    latency_ms=2100,
-    verified_in_production=True,
-    idempotency_key="…",   # optional
+    usage=Usage(input_tokens=180, output_tokens=640, cost_usd=0.0034, latency_ms=2100),
+    quality_score=0.95,          # your judge/eval score, if you have one
+    evidence_source="judge",     # gate | judge | human | none — label provenance
 )
+```
+
+Provenance matters: `evidence_source="none"` (or the deprecated `judged=False`) makes
+the outcome cost/latency **telemetry only** — it never teaches the success posterior.
+An outcome you asserted yourself is `"human"`; a deterministic check that passed is
+`"gate"` (the only origin that may claim verified-in-production). Provider/infra
+faults should carry `error_cause="infra"` so a rate-limit never reads as model
+quality.
+
+The full recommend → run → feedback loop, end to end:
+
+```python
+from minima_client import MinimaClient, Usage
+
+with MinimaClient("https://api.minima.sh", api_key="<mubit-key>") as minima:
+    rec = minima.recommend("Refactor this recursive function", cost_quality_tradeoff=3)
+    model = rec.recommended_model.model_id
+
+    result = run_your_model(model, prompt)          # you run the model — Minima never proxies
+
+    minima.feedback(
+        rec.recommendation_id, model,
+        "success" if your_check(result) else "failure",
+        usage=Usage(
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            cost_usd=result.usage.cost_usd,
+            latency_ms=result.latency_ms,
+        ),
+        evidence_source="human",
+    )
 ```
 
 ### `models(...)`, `strategies(...)`, `health()`
@@ -116,7 +149,7 @@ except MinimaError as exc:
     ...  # fall back to a default model
 ```
 
-## Zero-code intake: `autocapture`
+## Trace enrichment (not the feedback loop): `autocapture`
 
 `minima_client.autocapture` is a thin wrapper over `mubit.learn`. Calling `enable()` pins a
 learn session to the same memory lane Minima recalls from (`minima:<namespace>`) and
