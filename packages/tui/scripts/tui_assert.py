@@ -16,6 +16,11 @@ Checks (repeatable --check; all evaluated over frames with t >= --after, default
   advancing       At least --min-distinct (default 3) distinct grids among the frames —
                   the app is alive (spinner/stream mutating), not frozen.
   final-nonblank  The last frame has at least --min-rows (default 5) non-blank rows.
+  echo            The submitted prompt (--prompt-text) appears in the TRANSCRIPT (composer
+                  rows excluded) within --echo-budget seconds (default 0.35) of the Enter
+                  keystroke (--enter-after), and BEFORE any frame containing --reply-text.
+                  The inline echo-latency budget (guide §3); baselined at 0.01s in
+                  docs/BigPlan/shots/inline-baseline/README.md.
 
 Exit 0 = all pass. Exit 1 = failures (one line each on stderr). Exit 2 = usage error.
 """
@@ -77,6 +82,33 @@ def check_final_nonblank(frames, min_rows: int):
     return None
 
 
+def transcript_rows(screen):
+    # Composer/box rows start with a box-drawing border; transcript rows don't.
+    return [r for r in screen if not r.lstrip().startswith(("│", "╭", "╰"))]
+
+
+def check_echo(frames, enter_after: float, prompt_text: str, reply_text: str, budget: float):
+    echo_t = reply_t = None
+    for fr in frames:
+        t, screen = fr["t"], fr["screen"]
+        if echo_t is None and t >= enter_after and prompt_text in "\n".join(transcript_rows(screen)):
+            echo_t = t
+        if reply_t is None and reply_text in "\n".join(screen):
+            reply_t = t
+    print(f"echo: enter at t={enter_after:.2f}s (spec step)")
+    print(f"echo: first echo frame  {'t=%.2fs' % echo_t if echo_t is not None else 'NEVER'}")
+    print(f"echo: first reply frame {'t=%.2fs' % reply_t if reply_t is not None else 'NEVER'}")
+    if echo_t is None:
+        return "echo: prompt never echoed into the transcript"
+    if reply_t is not None and reply_t <= echo_t:
+        return f"echo: reply (t={reply_t:.2f}s) appeared before/with the echo (t={echo_t:.2f}s)"
+    latency = echo_t - enter_after
+    print(f"echo: latency after enter {latency:.2f}s (budget {budget:.2f}s)")
+    if latency > budget:
+        return f"echo: latency {latency:.2f}s exceeds the {budget:.2f}s budget"
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("frames")
@@ -84,9 +116,19 @@ def main() -> int:
     ap.add_argument("--prompt-pattern", default="╭─── prompt")
     ap.add_argument("--min-distinct", type=int, default=3)
     ap.add_argument("--min-rows", type=int, default=5)
+    ap.add_argument("--enter-after", type=float, help="echo: t of the Enter keystroke step")
+    ap.add_argument("--prompt-text", help="echo: submitted prompt text to find in the transcript")
+    ap.add_argument("--reply-text", help="echo: model-output text that must come after the echo")
+    ap.add_argument("--echo-budget", type=float, default=0.35)
     ap.add_argument("--check", action="append", required=True,
-                    choices=["prompt-stable", "single-prompt", "advancing", "final-nonblank"])
+                    choices=["prompt-stable", "single-prompt", "advancing", "final-nonblank",
+                             "echo"])
     args = ap.parse_args()
+
+    if "echo" in args.check and not (
+        args.enter_after is not None and args.prompt_text and args.reply_text
+    ):
+        ap.error("--check echo requires --enter-after, --prompt-text and --reply-text")
 
     frames = [fr for fr in load_frames(args.frames) if fr["t"] >= args.after]
     if not frames:
@@ -101,6 +143,9 @@ def main() -> int:
             err = check_single_prompt(frames, args.prompt_pattern)
         elif name == "advancing":
             err = check_advancing(frames, args.min_distinct)
+        elif name == "echo":
+            err = check_echo(frames, args.enter_after, args.prompt_text,
+                             args.reply_text, args.echo_budget)
         else:
             err = check_final_nonblank(frames, args.min_rows)
         if err:

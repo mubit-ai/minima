@@ -66,8 +66,8 @@ tui-shot:
 	@mkdir -p $(CURDIR)/playground
 	uv run --with pyte --with pillow python $(TUI)/scripts/pty_capture.py '$(SPEC)'
 
-# PTY invariants: drive a real 500-message session through wheel storms and assert the
-# prompt box never moves, no frame fusion, the app stays responsive, and window-compute
-# perf budgets hold (pty_capture.py frames + tui_assert.py + MINIMA_TUI_PERF probe).
+# PTY invariants for the INLINE renderer (the only renderer): prompt-echo latency,
+# zero scrollback wipes during streams, no alt-screen/mouse-capture sequences, clean
+# Ctrl+D exit, render perf budgets (pty_capture.py + tui_assert.py + MINIMA_TUI_PERF).
 tui-verify:
 	bash $(TUI)/scripts/tui_verify.sh

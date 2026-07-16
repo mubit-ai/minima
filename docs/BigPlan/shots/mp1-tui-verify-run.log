@@ -1,0 +1,48 @@
+bash packages/tui/scripts/tui_verify.sh
+== tui-verify: starting mock provider on :8451 ==
+== tui-verify: generating 500-message fixture ==
+== tui-verify: scenario echo-budget (prompt echoes before the delayed reply) ==
+35 |
+=== 36 visible rows; 0 in scrollback ===
+echo: enter at t=5.00s (spec step)
+echo: first echo frame  t=5.01s
+echo: first reply frame t=10.36s
+echo: latency after enter 0.01s (budget 0.35s)
+tui_assert: PASS echo (121 frames)
+tui_assert: PASS single-prompt (110 frames)
+tui_assert: PASS advancing (110 frames)
+tui_assert: PASS final-nonblank (110 frames)
+== tui-verify: scenario stream-wipe-perf (code-heavy stream, zero extra wipes) ==
+35 |
+=== 36 visible rows; 20 in scrollback ===
+tui_assert: PASS zero-wipe (single startup clear, none during the stream)
+tui_assert: PASS single-prompt (89 frames)
+tui_assert: PASS advancing (89 frames)
+tui_assert: PASS final-nonblank (89 frames)
+stream: samples=20 median=2.19ms p95=4.2ms max=35.6ms renders=28 listeners=[1]
+tui_assert: PASS perf (stream)
+== tui-verify: scenario resume-scrollback (500-msg resume, clean Ctrl+D exit) ==
+35 |
+=== 36 visible rows; 4158 in scrollback ===
+tui_assert: PASS resume-scrollback (no alt-screen, clean exit, transcript persists)
+resume: samples=5 median=1.94ms p95=3.2ms max=448.6ms renders=5 listeners=[1]
+tui_assert: PASS perf (resume)
+== tui-verify: scenario clipboard (bracketed paste + Ctrl+Y OSC 52) ==
+35 |
+=== 36 visible rows; 4131 in scrollback ===
+tui_assert: PASS clipboard (paste captured, no auto-submit, OSC 52 emitted)
+== tui-verify: scenario modes (Shift+Tab badge ring) ==
+35 |
+=== 36 visible rows; 0 in scrollback ===
+tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)
+== tui-verify: scenario shortcuts (edit keys + inline Ctrl+Z suspend/resume) ==
+35 |
+=== 36 visible rows; 0 in scrollback ===
+tui_assert: PASS shortcuts (edit keys + inline suspend/resume signature)
+== tui-verify: scenario narrow-55 (below the 60-col floor, ToC block still renders) ==
+19 |
+=== 20 visible rows; 18 in scrollback ===
+tui_assert: PASS narrow-55 (one-shot ToC block below the floor, app alive)
+== tui-verify: no-mouse-capture sweep (every raw stream) ==
+tui_assert: PASS no-mouse-capture (5 raw streams clean)
+== tui-verify: PASS ==
