@@ -51,8 +51,48 @@ def test_feedback_writes_outcome_and_credits_neighbors(client, fake_memory):
     assert len(fake_memory.outcomes) == 1
     outcome = fake_memory.outcomes[0]
     assert set(outcome["entry_ids"]) == {"e1", "e2", "e3"}
-    assert outcome["reference_id"] == "r1"
+    # The just-upserted durable record is the primary reference: guaranteed resolvable,
+    # so one bad neighbor ref can never sink the whole reinforcement call.
+    assert outcome["reference_id"] == "rec-fake-1"
     assert outcome["signal"] == 1.0
+
+
+def test_lookup_neighbors_reinforce_via_fact_uuid_not_node_id(client, fake_memory):
+    """Keyed-lookup neighbors carry numeric core-plane node ids as entry_id — the
+    reinforcement votes must land on their control-plane fact UUID instead, and a
+    node id with no known UUID is dropped rather than sent as an unlandable vote."""
+    fact_uuid = "295ac2a9-e38f-429e-abb8-582feac73508"
+    fake_memory.evidence = [
+        make_evidence("claude-haiku-4-5", 0.9, entry_id="e1", reference_id="r1"),
+        make_evidence("claude-haiku-4-5", 0.9, entry_id="12345", reference_id=fact_uuid),
+        make_evidence("claude-haiku-4-5", 0.85, entry_id="67890"),
+    ]
+    rec = client.post(
+        "/v1/recommend",
+        json={
+            "task": {
+                "task": "refactor this recursive def foo()",
+                "task_type": "code",
+                "difficulty": "hard",
+            },
+            "constraints": {"candidate_models": ["claude-haiku-4-5", "claude-opus-4-8"]},
+        },
+    ).json()
+
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+        },
+    ).json()
+
+    assert fb["accepted"] is True
+    outcome = fake_memory.outcomes[0]
+    assert set(outcome["entry_ids"]) == {"e1", fact_uuid}
+    assert outcome["reference_id"] == "rec-fake-1"
 
 
 def test_unknown_recommendation_is_rejected(client):
