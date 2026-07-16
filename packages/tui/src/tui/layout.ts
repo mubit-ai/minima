@@ -526,77 +526,14 @@ function clipMessageToHeight(
 }
 
 // ---------------------------------------------------------------------------
-// U2 (MUB-140): sidebar geometry + anchor jumps. REVISED 2026-07-15: the ToC and GT
-// sidebars are BORDERLESS, FULL-HEIGHT columns (OpenCode-style) — sidebarGeometry takes
-// the whole terminal (cols × rows), and contentCols feeds every width in the LEFT column
-// (transcript, footer, input wrapping), so opening one deliberately reflows the
-// characters-per-line beside it. Narrow terminals get a right-anchored full-height
-// OVERLAY variant instead (no reflow). The original bordered-overpaint contract
-// (PanelGeometry + clipPanelLines padding) survives only for the transient B5 rewind
-// picker.
+// Panel geometry. The docked/overlay sidebar system (U2, MUB-140) was removed in MP2
+// (MUB-145) — inline is the only renderer and panels live in the live region. The
+// bordered-overpaint contract (PanelGeometry + clipPanelLines padding) survives for the
+// transient B5 rewind picker; TOC_MIN_COLS is the TUI-wide readable-width floor.
 // ---------------------------------------------------------------------------
 
-/** Below this terminal width the sidebar doesn't DOCK; 45..59 cols overlay instead. */
+/** Min readable width for full rendering; below it panel surfaces degrade to text. */
 export const TOC_MIN_COLS = 60;
-/** Below this width even the overlay is useless; Ctrl+T falls back to a text block. */
-export const SIDEBAR_OVERLAY_MIN_COLS = 45;
-/** Fixed chassis rows the borderless panels render around the body: header(1) +
- * blank(1) + blank-above-footer(1) + cwd(1) + version(1) + hint(1). */
-export const SIDEBAR_CHROME_ROWS = 6;
-/** Left gutter columns inside the borderless sidebar (separation from the transcript). */
-export const SIDEBAR_GUTTER = 2;
-
-export interface SidebarGeometry {
-  /** Total sidebar width incl. the gutter and 1-col right margin. */
-  sidebarWidth: number;
-  /** Transcript columns beside it (cols − sidebarWidth while docked; the full cols in
-   * overlay mode) — feeds getScrollableMessages, computeMsgHeight, offsetForMessage,
-   * every MessageRow, and the footer width math while docked. */
-  contentCols: number;
-  /** Sidebar height — the FULL terminal height. */
-  height: number;
-  /** Text columns per row: sidebarWidth − gutter(2) − right margin(1). */
-  innerWidth: number;
-  /** Text rows — the full height; panels budget SIDEBAR_CHROME_ROWS around the body. */
-  innerHeight: number;
-  /** True → right-anchored overpaint (narrow terminals); the transcript does NOT reflow. */
-  overlay?: boolean;
-}
-
-/**
- * Docked right-sidebar geometry, or null when the terminal is too narrow/short — callers
- * then try sidebarOverlayGeometry, then the one-shot text block. Width caps at 40 and
- * always leaves ≥30 transcript columns beside it.
- */
-export function sidebarGeometry(cols: number, rows: number): SidebarGeometry | null {
-  if (cols < TOC_MIN_COLS || rows < 10) return null;
-  const sidebarWidth = Math.min(40, cols - 30);
-  return {
-    sidebarWidth,
-    contentCols: cols - sidebarWidth,
-    height: rows,
-    innerWidth: sidebarWidth - SIDEBAR_GUTTER - 1,
-    innerHeight: rows,
-  };
-}
-
-/**
- * Narrow-terminal (45 ≤ cols < 60) full-height OVERLAY geometry: the panel overpaints
- * the right ~60% of the screen (like OpenCode's narrow view) and the transcript keeps
- * its full width underneath. Null outside the band or when too short.
- */
-export function sidebarOverlayGeometry(cols: number, rows: number): SidebarGeometry | null {
-  if (cols < SIDEBAR_OVERLAY_MIN_COLS || cols >= TOC_MIN_COLS || rows < 10) return null;
-  const sidebarWidth = Math.min(40, Math.ceil(cols * 0.6));
-  return {
-    sidebarWidth,
-    contentCols: cols,
-    height: rows,
-    innerWidth: sidebarWidth - SIDEBAR_GUTTER - 1,
-    innerHeight: rows,
-    overlay: true,
-  };
-}
 
 export interface PanelGeometry {
   /** Columns left of the panel (transcript stays fully visible there). */

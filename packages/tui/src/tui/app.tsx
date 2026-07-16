@@ -77,13 +77,11 @@ import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { footerStatsFromMessages } from "./footer.ts";
-import { GtPanel } from "./gt-panel.tsx";
 import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import { setClickCallback, setMouseScrollCallback } from "./input-filter.ts";
 import {
   type PanelGeometry,
   SCROLLBACK_SAFETY_ROWS,
-  type SidebarGeometry,
   applyScrollDelta,
   childTreeHeight,
   getScrollableMessages,
@@ -96,8 +94,6 @@ import {
   permToolLabel,
   questionDisplayText,
   questionOverlayHeight,
-  sidebarGeometry,
-  sidebarOverlayGeometry,
   streamTailBudget,
   tailToFit,
   tocPanelGeometry,
@@ -130,7 +126,6 @@ import { StatusBar } from "./status.tsx";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
-import { TocPanel } from "./toc-panel.tsx";
 import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
 import {
   type ScrollState,
@@ -1160,20 +1155,9 @@ export function HarnessApp({
       stdinListeners: process.stdin.listenerCount("readable"),
     });
   });
-  // U2 (MUB-140): ToC sidebar. Geometry is computed during render (needs the region
-  // height math) and mirrored into a ref so the key handler can gate on it.
-  const [tocOpen, setTocOpen] = useState(false);
-  const sidebarGeomRef = useRef<SidebarGeometry | null>(null);
-  // B5 rewind overlay geometry mirror — its null conditions DIVERGED from the sidebar's
-  // when the sidebar went full-height (rows ≥ 10 vs viewport ≥ 5), so /rewind gates on
-  // its own ref or an open picker could capture input while rendering nothing.
+  // B5 rewind overlay geometry mirror — /rewind gates on its own ref or an open picker
+  // could capture input while rendering nothing.
   const overlayGeomRef = useRef<PanelGeometry | null>(null);
-  // U3 (MUB-141): GT Plan Overview sidebar — same docked chassis as the ToC panel.
-  const [gtPanelOpen, setGtPanelOpen] = useState(false);
-  // Docked-sidebar focus (2026-07-14): the sidebar persists unfocused while the user types.
-  // Focused → the panel's useInput is active and the composer suspends; unfocused → the
-  // panel is inert and every key behaves as if no sidebar were open (Ctrl+T/G refocus).
-  const [sidebarFocused, setSidebarFocused] = useState(false);
   // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
   // LAZY initializer, load-bearing: detectRepo forks `git rev-parse` synchronously, and a
   // plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking git
@@ -1192,37 +1176,7 @@ export function HarnessApp({
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
-  const sidebarOpen = tocOpen || gtPanelOpen;
-  const panelCapture = (sidebarOpen && sidebarFocused) || rewindOpen;
-  useEffect(() => {
-    if (!sidebarOpen && sidebarFocused) setSidebarFocused(false);
-  }, [sidebarOpen, sidebarFocused]);
-  // Sidebars are mutually exclusive and always open FOCUSED; the same helpers serve the
-  // global chords (open/refocus/replace) and the panels' onSwitch (Ctrl+T↔Ctrl+G swap).
-  const openTocSidebar = () => {
-    setGtPanelOpen(false);
-    setTocOpen(true);
-    setSidebarFocused(true);
-  };
-  const openGtSidebar = () => {
-    setTocOpen(false);
-    setGtPanelOpen(true);
-    setSidebarFocused(true);
-  };
-  // OpenCode-style auto-open (2026-07-15): wide fullscreen sessions START with the
-  // sidebar docked and UNFOCUSED (Plan overview when the run already has a GT plan,
-  // else the ToC). Mount-only — after that Ctrl+T/Ctrl+G own the state, and closing
-  // it stays closed for the session.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-time auto-open — later resizes/toggles must not re-open
-  useEffect(() => {
-    if (!fullscreen || cols < 100 || rows < 10) return;
-    const hasPlan =
-      agent.config.groundTruth === true && agent.db && agent.runId
-        ? buildGtOverview(agent.db, agent.runId) !== null
-        : false;
-    if (hasPlan) setGtPanelOpen(true);
-    else setTocOpen(true);
-  }, []);
+  const panelCapture = rewindOpen;
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1623,24 +1577,18 @@ export function HarnessApp({
     }
   }
 
-  // Open (or refocus) the ToC sidebar; inline / too-narrow → one-shot text block. Shared by
-  // the global Ctrl+T arm and GtPanel's onSwitch.
+  // Ctrl+T: one-shot ToC text block into the transcript (the inline surface until D3b).
   const requestTocSidebar = () => {
-    if (fullscreen && sidebarGeomRef.current) {
-      openTocSidebar();
-    } else {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
-          toolName: "toc",
-        },
-      ]);
-    }
+    setMessages((m) => [
+      ...m,
+      {
+        role: "tool",
+        text: renderTocText(buildSections(messages, buildUsageLedger()), cols - 6),
+        toolName: "toc",
+      },
+    ]);
   };
-  // Open (or refocus) the GT sidebar; GT off → one-line notice (the flag-off contract);
-  // inline / too-narrow → one-shot text block. Shared by Ctrl+G and TocPanel's onSwitch.
+  // Ctrl+G: GT off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestGtSidebar = () => {
     if (agent.config.groundTruth !== true) {
       setMessages((m) => [
@@ -1653,15 +1601,11 @@ export function HarnessApp({
       ]);
       return;
     }
-    if (fullscreen && sidebarGeomRef.current) {
-      openGtSidebar();
-    } else {
-      const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
-      setMessages((m) => [
-        ...m,
-        { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
-      ]);
-    }
+    const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+    setMessages((m) => [
+      ...m,
+      { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
+    ]);
   };
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
@@ -1680,7 +1624,7 @@ export function HarnessApp({
       permPrompt ||
       questionPrompt ||
       configOverlayOpen ||
-      panelCapture // a FOCUSED docked sidebar or the modal rewind picker owns the keys
+      panelCapture // the modal rewind picker owns the keys while mounted
     )
       return;
 
@@ -2327,9 +2271,6 @@ export function HarnessApp({
           break;
         }
         if (fullscreen && overlayGeomRef.current && turns.length > 0) {
-          setTocOpen(false);
-          setGtPanelOpen(false);
-          setSidebarFocused(false);
           setRewindOpen(true);
         } else {
           setMessages((m) => [
@@ -3603,18 +3544,6 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  // Sidebar geometry derives from the FULL terminal (cols × rows): the sidebar spans every
-  // row (OpenCode-style two-column root), so it no longer depends on the footer math below —
-  // the footer math (input wrapping, overlay widths) instead depends on contentCols. Narrow
-  // terminals (45 ≤ cols < 60) fall back to a right-anchored full-height OVERLAY that does
-  // not reflow the transcript; below that, Ctrl+T/Ctrl+G print the one-shot text block.
-  const sidebarGeom = fullscreen
-    ? (sidebarGeometry(cols, rows) ?? sidebarOverlayGeometry(cols, rows))
-    : null;
-  sidebarGeomRef.current = sidebarGeom;
-  const sidebarDocked = sidebarOpen && sidebarGeom !== null && sidebarGeom.overlay !== true;
-  const sidebarOverlaid = sidebarOpen && sidebarGeom?.overlay === true;
-  const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;
   // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
   const gtFooterNote = gtBehavior?.footerNote ?? null;
   const gtBlock = gtBehavior?.block ?? null;
@@ -3643,14 +3572,12 @@ export function HarnessApp({
   const inputHidden = overlayOpen || permPrompt || questionPrompt;
   // The trailing "▋" accounts for the cursor cell: a draft line exactly at the interior
   // width wraps the cursor onto a fresh row, which the reserve must include.
-  const inputRows = inputHidden
-    ? 1
-    : Math.max(1, wrappedLineCount(`${typedText}▋`, contentCols - 4));
+  const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
   const inputExtraLines = inputHidden ? 0 : inputRows - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   // Wrapped-row height from the same helpers the overlay renders with (estimate == render): a
   // source-line count under-reserved whenever a preview line word-wrapped at narrow widths.
-  const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, contentCols) : 0;
+  const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, cols) : 0;
   // The thoughts peek is wrap="truncate", so it never grows with content: marginTop(1) + round
   // border(2) + "🧠 reasoning..."(1) + truncated text(1) = 5 rows.
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
@@ -3666,10 +3593,7 @@ export function HarnessApp({
   // Component and reservation use the same numbers, so estimate == render.
   const questionChrome = questionPrompt
     ? 5 +
-      wrappedLineCount(
-        questionDisplayText(questionPrompt.question, contentCols),
-        Math.max(1, contentCols - 4),
-      )
+      wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
     : 0;
   const questionMaxOptionRows = Math.max(
     1,
@@ -3745,19 +3669,19 @@ export function HarnessApp({
   const fsStreamTail =
     fullscreen && !VIEWPORT_ON && pinned && busy && streaming
       ? // -2 leaves room for StreamingReply's own "◆ assistant" header + marginTop.
-        tailToFit(streaming, contentCols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
+        tailToFit(streaming, cols, Math.max(0, chatRegionHeight - fsThoughtsRows - 2))
       : "";
-  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, contentCols) : 0;
+  const fsStreamRows = fsStreamTail ? 2 + markdownBodyHeight(fsStreamTail, cols) : 0;
   const messagesBudget = Math.max(1, chatRegionHeight - fsThoughtsRows - fsStreamRows - fsHintRows);
   // Windowing the transcript is O(messages) without the cachedMsgHeight WeakMap; with it this
   // is O(lookups) even when it recomputes, and the memo skips it entirely for renders that
   // change none of its inputs (typing, spinner, overlay state, ...). Old path only — the line
-  // viewport below replaces it under VIEWPORT_ON. Width is contentCols: a docked sidebar
+  // viewport below replaces it under VIEWPORT_ON. Width is cols: a docked sidebar
   // narrows the window (cache keys on width, so both widths stay cached).
   const scrollWin = useMemo(() => {
     if (!fullscreen || VIEWPORT_ON) return null;
     const t0 = perfEnabled ? performance.now() : 0;
-    const win = getScrollableMessages(messages, messagesBudget, scrollOffset, contentCols);
+    const win = getScrollableMessages(messages, messagesBudget, scrollOffset, cols);
     if (perfEnabled)
       perfSample({
         kind: "window",
@@ -3767,7 +3691,7 @@ export function HarnessApp({
         stdinListeners: process.stdin.listenerCount("readable"),
       });
     return win;
-  }, [fullscreen, messages, messagesBudget, scrollOffset, contentCols]);
+  }, [fullscreen, messages, messagesBudget, scrollOffset, cols]);
   // Publish the fullscreen viewport metrics AFTER render — mutating refs during render breaks
   // React purity (order/StrictMode/concurrent-unsafe). Key handlers read the refs at key-time
   // and tolerate the one-render lag; the state is the source of truth for scroll position.
@@ -3783,29 +3707,29 @@ export function HarnessApp({
   // in lines.ts) + the live region (reasoning peek / streaming reply) as ordinary lines at
   // the tail. One row of the chat region is a PERMANENT status line, present in both pinned
   // and scrolled states — so crossing pinned↔scrolled changes zero heights outside the
-  // viewport and the prompt box cannot move on scroll. Lines build at contentCols — a docked
+  // viewport and the prompt box cannot move on scroll. Lines build at cols — a docked
   // sidebar narrows them (linesFor caches per width, so toggling stays cheap).
   const lineIndex = useMemo(
     () =>
       fullscreen && VIEWPORT_ON
-        ? buildLineIndex(messages.map((m) => linesFor(m, contentCols).length))
+        ? buildLineIndex(messages.map((m) => linesFor(m, cols).length))
         : null,
-    [fullscreen, messages, contentCols],
+    [fullscreen, messages, cols],
   );
   const liveLines = useMemo(() => {
     if (!fullscreen || !VIEWPORT_ON || !busy) return [];
     const out: string[] = [];
     if (streamingThoughts && showThinkingRef.current)
-      out.push(...thoughtsPeekLines(streamingThoughts, contentCols));
-    if (streaming) out.push(...liveReplyLines(streaming, contentCols));
+      out.push(...thoughtsPeekLines(streamingThoughts, cols));
+    if (streaming) out.push(...liveReplyLines(streaming, cols));
     return out;
-  }, [fullscreen, busy, streaming, streamingThoughts, contentCols]);
+  }, [fullscreen, busy, streaming, streamingThoughts, cols]);
   let view = null;
   if (lineIndex) {
     const t0 = perfEnabled ? performance.now() : 0;
     view = windowLines(
       lineIndex,
-      (i) => linesFor(messages[i]!, contentCols),
+      (i) => linesFor(messages[i]!, cols),
       liveLines,
       scroll,
       viewportRows,
@@ -3835,37 +3759,6 @@ export function HarnessApp({
     : null;
   overlayGeomRef.current = overlayGeom;
   const overlayGeomOk = overlayGeom !== null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: buildUsageLedger reads live agent state; tocOpen/messages are the real recompute triggers
-  const tocSections = useMemo(
-    () => (tocOpen ? buildSections(messages, buildUsageLedger()) : []),
-    [tocOpen, messages],
-  );
-  // OpenCode-style Context block for the ToC sidebar footer — same sources as StatusBar.
-  const tocInfo = {
-    title: "Context",
-    lines: [
-      agent.agentState.model?.id ?? "(none)",
-      `ctx ${ctxPct.toFixed(0)}% · ↑${inputTokens} ↓${outputTokens}`,
-      `$${(actualCost ?? 0).toFixed(4)} spent`,
-    ],
-  };
-  // U3: the overview tracks the ledger while docked — planStrip/gtBehavior are re-read from
-  // the DB on every tool_execution_end, gate answer, and /gt-seed, so they are exactly the
-  // "ledger changed" signals; the re-query is one cheap SQLite read, bounded to panel-open.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; gtPanelOpen + the ledger-change signals are the real recompute triggers
-  const gtOverview = useMemo(
-    () => (gtPanelOpen && agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null),
-    [gtPanelOpen, planStrip, gtBehavior],
-  );
-  // Resize below the minimum while open → close (otherwise input stays captured by a
-  // panel that no longer renders). Boolean dep — sidebarGeom is a fresh object every render.
-  const sidebarGeomOk = sidebarGeom !== null;
-  useEffect(() => {
-    if (tocOpen && !sidebarGeomOk) setTocOpen(false);
-  }, [tocOpen, sidebarGeomOk]);
-  useEffect(() => {
-    if (gtPanelOpen && !sidebarGeomOk) setGtPanelOpen(false);
-  }, [gtPanelOpen, sidebarGeomOk]);
   // B5: turn list read at open time (same open-snapshot contract as before).
   // biome-ignore lint/correctness/useExhaustiveDependencies: agent.db/runId are stable for a run; rewindOpen/messages are the real recompute triggers
   const rewindTurns = useMemo(
@@ -3882,17 +3775,6 @@ export function HarnessApp({
   useEffect(() => {
     if (rewindOpen && !overlayGeomOk) setRewindOpen(false);
   }, [rewindOpen, overlayGeomOk]);
-  // No plan in the ledger → nothing to render; close (else the guard list eats input for
-  // an empty overlay) and say why instead.
-  const gtOverviewMissing = gtPanelOpen && gtOverview === null;
-  useEffect(() => {
-    if (!gtOverviewMissing) return;
-    setGtPanelOpen(false);
-    setMessages((m) => [
-      ...m,
-      { role: "tool", text: "No Ground-Truth plan recorded for this run.", toolName: "gt" },
-    ]);
-  }, [gtOverviewMissing]);
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -3944,45 +3826,6 @@ export function HarnessApp({
           </Box>
         ) : null}
       </Box>
-    ) : null;
-
-  // U2/U3: the sidebar panels, rendered ONCE for both fullscreen paths — a docked panel
-  // mounts as the root row's second column; the narrow-terminal overlay variant mounts
-  // inside the left column and overpaints its right edge (chassis handles positioning).
-  // onJump targets whichever scroll machinery is live.
-  const sidebarPanels =
-    sidebarGeom && (sidebarDocked || sidebarOverlaid) && tocOpen ? (
-      <TocPanel
-        sections={tocSections}
-        geometry={sidebarGeom}
-        focused={sidebarFocused}
-        info={tocInfo}
-        onJump={(k) => {
-          if (VIEWPORT_ON) {
-            if (!lineIndex) return;
-            const target = lineIndex.prefix[k] ?? 0;
-            setScroll(
-              target >= maxTop(lineIndex.total + liveLines.length, viewportRows)
-                ? null
-                : { topLine: target },
-            );
-          } else {
-            setScrollOffset(offsetForMessage(messages, k, messagesBudget, contentCols));
-          }
-        }}
-        onClose={() => setTocOpen(false)}
-        onBlur={() => setSidebarFocused(false)}
-        onSwitch={requestGtSidebar}
-      />
-    ) : sidebarGeom && (sidebarDocked || sidebarOverlaid) && gtPanelOpen && gtOverview ? (
-      <GtPanel
-        overview={gtOverview}
-        geometry={sidebarGeom}
-        focused={sidebarFocused}
-        onClose={() => setGtPanelOpen(false)}
-        onBlur={() => setSidebarFocused(false)}
-        onSwitch={requestTocSidebar}
-      />
     ) : null;
 
   // The chat region per renderer path — everything ABOVE the shared footer in each layout.
@@ -4044,7 +3887,7 @@ export function HarnessApp({
         {bannerBlock}
         {(scrollWin?.visible ?? []).map((msg, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: windowed transcript, positional key is fine
-          <MessageRow key={i} msg={msg} cols={contentCols} />
+          <MessageRow key={i} msg={msg} cols={cols} />
         ))}
         {pinned && busy && streamingThoughts && showThinkingRef.current ? (
           <StreamingThoughts text={streamingThoughts} />
@@ -4079,7 +3922,7 @@ export function HarnessApp({
     );
 
   // ONE footer block shared by both layouts — rendered inside the fullscreen LEFT COLUMN
-  // (at contentCols) and at the inline root, so the input/status/keys/overlay JSX never
+  // (at cols) and at the inline root, so the input/status/keys/overlay JSX never
   // duplicates between renderer paths.
   const footerBlock = (
     <>
@@ -4250,7 +4093,7 @@ export function HarnessApp({
               permPrompt.resolve(decision);
             },
           }}
-          cols={contentCols}
+          cols={cols}
         />
       )}
 
@@ -4263,7 +4106,7 @@ export function HarnessApp({
               questionPrompt.resolve(answer);
             },
           }}
-          cols={contentCols}
+          cols={cols}
           maxOptionRows={questionMaxOptionRows}
         />
       )}
@@ -4296,7 +4139,7 @@ export function HarnessApp({
           badge={footerBadge}
         />
 
-        {/* height={1} + clip: at narrow contentCols the legend texts would wrap onto a
+        {/* height={1} + clip: at narrow cols the legend texts would wrap onto a
             second row Yoga never budgeted (footerHeight says 1) and garble the frame. */}
         <Box justifyContent="space-between" width="100%" height={1} overflow="hidden">
           <Box>
@@ -4329,27 +4172,14 @@ export function HarnessApp({
   );
 
   return fullscreen ? (
-    // FULLSCREEN: a two-column root row — the LEFT column (chat region + status row +
-    // shared footer) at contentCols, and the full-terminal-height sidebar beside it
-    // (docked) or overpainting its right edge (narrow-terminal overlay, rendered inside
-    // the column so its alignSelf right-pin resolves against the full width).
-    <Box flexDirection="row" width="100%" height={rows} overflow="hidden">
-      <Box
-        flexDirection="column"
-        width={contentCols}
-        flexShrink={0}
-        height={rows}
-        overflow="hidden"
-      >
-        {chatRegion}
-        {footerBlock}
-        {sidebarOverlaid ? sidebarPanels : null}
-      </Box>
-      {sidebarDocked ? sidebarPanels : null}
+    // FULLSCREEN: single column pinned to the terminal height.
+    <Box flexDirection="column" width={cols} height={rows} overflow="hidden">
+      {chatRegion}
+      {footerBlock}
     </Box>
   ) : (
     // INLINE: the transcript commits to native scrollback via <Static>; only the live
-    // region + footer re-diff. No sidebar here — Ctrl+T/Ctrl+G print the text block.
+    // region + footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks.
     <Box flexDirection="column" width="100%">
       {chatRegion}
       {footerBlock}
