@@ -58,7 +58,7 @@ bun run build     # -> dist/minima native binary (bun build --compile)
 Python (`src/minima`):
 
 - `from __future__ import annotations` at the top of every module.
-- Pydantic v2 `BaseModel` for serializable schemas; `@dataclass(slots=True)` for internal types; `StrEnum` for enums; `Protocol` for seams (`Memory`, `Reasoner`, `QualityJudge`).
+- Pydantic v2 `BaseModel` for serializable schemas; `@dataclass(slots=True)` for internal types; `StrEnum` for enums; `Protocol` for seams (`Memory`, `QualityJudge`).
 - Async-first. Bridge sync SDKs (Mubit) off the event loop via `anyio`/threadpools.
 - Logging: `structlog` via `get_logger("minima.<sub>")`.
 - ruff `line-length=100`, target `py311`, lint set `E,F,I,UP,B,C4`. **Never break the hot path**: bookkeeping/feedback failures are logged-and-swallowed.
@@ -74,7 +74,7 @@ Request flow (`api/routers/recommend.py` → `recommender/engine.py`):
 1. **classify** (`recommender/classify.py`) — derives task features/type from the prompt (regex + signal tables).
 2. **recall** (`memory/adapter.py`) — the *only* Mubit touchpoint; pulls similar past `task → model → outcome` records using Mubit's server-side embeddings (no local embedding model).
 3. **aggregate + score** (`recommender/aggregate.py`, `score.py`) — ranks candidates by *real* cost. The cost basis is one of three tiers chosen for the whole candidate set: `estimate` (catalog prices, cold start) → `observed` (median realized $/call) → `rescaled` (this request's input priced + observed output behavior).
-4. **escalation** (`recommender/escalation.py`) — when memory is thin/conflicting, optionally consult a cheap-LLM reasoner (`llm/`, off by default, `MINIMA_REASONER_PROVIDER`).
+4. **escalation** (`recommender/escalation.py`) — DIAGNOSTIC only: thin/conflicting/tied evidence is surfaced as `escalation_suggested:*` warnings + decision-log reasons. The harness owns the cascade (its recovery ladder re-decides after a VERIFIED failure); the old pre-decision LLM reasoner was deleted.
 5. **feedback** (`api/routers/feedback.py`) — writes the outcome back to Mubit, reinforcing memory.
 
 Other packages: `catalog/` (model cost + capability priors), `tenancy/` (multi-tenant runtime — many orgs, per-org Mubit, one deployment; auth is pass-through: the client's Mubit key IS the credential), `seeding/` (`minima-seed` CLI for cold-start history), `schemas/` (Pydantic request/response models — the wire source of truth; every field must also land in the TS mirror `packages/tui/src/minima/schemas.ts`).

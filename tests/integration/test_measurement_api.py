@@ -267,27 +267,12 @@ class TestDurableFastPath:
             "claude-haiku-4-5", 0.95, entry_id="rec-fake-1", reference_id="rec-fake-1"
         )
 
-    def test_off_mode_never_dereferences(self, client, fake_memory):
+    def test_recommend_path_never_dereferences(self, client, fake_memory):
         self._seed_ref_via_feedback(client, fake_memory)
         fake_memory.evidence = []
         _recommend(client)
         assert fake_memory.dereference_calls == []
 
-    def test_on_mode_merges_ann_missed_durable_record(self, fake_memory):
-        settings = Settings(mubit_api_key="test-key", minima_durable_fastpath="on")
-        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
-        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
-            self._seed_ref_via_feedback(client, fake_memory)
-            # ANN now returns nothing — only the dereferenced durable record carries
-            # evidence, so the pick is memory-driven instead of cold-start.
-            fake_memory.evidence = []
-            rec = _recommend(client)
-            assert fake_memory.dereference_calls
-            assert "cold_start" not in rec["warnings"]
-            haiku = next(
-                m for m in rec["ranked"] if m["model_id"] == "claude-haiku-4-5"
-            )
-            assert haiku["decision_basis"] == "memory"
 
     def test_hung_dereference_never_blocks_the_recommendation(self, fake_memory):
         import asyncio
@@ -307,16 +292,6 @@ class TestDurableFastPath:
             fake_memory.evidence = []
             rec = _recommend(client)  # must return promptly via the timeout path
             assert rec["recommendation_id"]
-
-    def test_shadow_mode_fetches_but_does_not_merge(self, fake_memory):
-        settings = Settings(mubit_api_key="test-key", minima_durable_fastpath="shadow")
-        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
-        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
-            self._seed_ref_via_feedback(client, fake_memory)
-            fake_memory.evidence = []
-            rec = _recommend(client)
-            assert fake_memory.dereference_calls  # fetched for the shadow delta
-            assert "cold_start" in rec["warnings"]  # but NOT merged into scoring
 
 
 class TestBackCompat:

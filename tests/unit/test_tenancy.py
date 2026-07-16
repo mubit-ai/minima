@@ -60,7 +60,6 @@ def _make_runtime():
         rt = PassthroughRuntime(
             settings=settings,
             catalog_store=catalog_store,
-            reasoner=None,
             recstore_backend=build_recstore(settings),
             lane_counter=LaneCounter(),
         )

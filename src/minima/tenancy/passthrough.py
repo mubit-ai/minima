@@ -13,7 +13,6 @@ from threading import Lock
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
-from minima.llm.base import Reasoner
 from minima.memory.adapter import Memory, MubitMemory
 from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
 from minima.recommender.durablerefs import (
@@ -42,7 +41,6 @@ class PassthroughRuntime:
         *,
         settings: Settings,
         catalog_store: CatalogStore,
-        reasoner: Reasoner | None,
         recstore_backend: RecStore,
         lane_counter: LaneCounter,
         memory_factory: Callable[[str], Memory] | None = None,
@@ -51,7 +49,6 @@ class PassthroughRuntime:
     ):
         self._settings = settings
         self._catalog_store = catalog_store
-        self._reasoner = reasoner
         self._recstore_backend = recstore_backend
         self._lane_counter = lane_counter
         self._memory_factory = memory_factory
@@ -82,7 +79,6 @@ class PassthroughRuntime:
             memory,
             self._catalog_store,
             scoped_recstore,
-            reasoner=self._reasoner,
             decision_log=scoped_decision_log,
             org_id=org_id,
             durable_refs=scoped_durable_refs,

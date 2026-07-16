@@ -11,6 +11,7 @@ from minima.api.auth import get_tenant
 from minima.config import Settings
 from minima.deps import get_settings
 from minima.logging import get_logger
+from minima.memory import threadpool
 from minima.memory.adapter import Memory
 from minima.memory.keys import (
     build_lesson_content,
@@ -116,8 +117,9 @@ async def feedback(
 ) -> FeedbackResponse:
     memory = tenant.memory
     # Org-scoped store: a recommendation_id minted for another org resolves to None here,
-    # so org A cannot credit or poison org B's recommendation.
-    stored = tenant.recstore.get(req.recommendation_id)
+    # so org A cannot credit or poison org B's recommendation. Sync store reads run off
+    # the event loop (sqlite/redis/postgres backends).
+    stored = await threadpool.run(tenant.recstore.get, req.recommendation_id)
     if stored is None:
         # Degraded late-feedback path: the recstore TTL expired but the decision log
         # (longer retention) still knows the recommendation. The outcome record is still

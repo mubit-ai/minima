@@ -22,7 +22,6 @@ from minima.api.routers import (
 from minima.catalog.refresh import refresh_loop
 from minima.catalog.store import CatalogStore
 from minima.config import Settings, get_settings
-from minima.llm.registry import build_reasoner
 from minima.logging import configure_logging
 from minima.memory.adapter import Memory
 from minima.recommender.decisionlog import build_decision_log
@@ -42,8 +41,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     catalog_store: CatalogStore = injected.get("catalog_store") or CatalogStore(settings)
     recstore_backend: RecStore = injected.get("recstore") or build_recstore(settings)
     decision_log_backend = build_decision_log(settings)
-    reasoner = build_reasoner(settings)
     lane_counter = LaneCounter()
+    if settings.minima_recommendation_store == "memory":
+        # The in-process store cannot join feedback across instances: on any
+        # horizontally-scaled deployment a feedback landing on a different instance
+        # than its recommend hits unknown_recommendation and the learning loop
+        # silently starves. Postgres (cloudsql) is the only multi-instance-correct
+        # backend — this is a hard operational requirement, not a tuning knob.
+        import structlog
+
+        structlog.get_logger("minima.main").warning(
+            "memory_store_single_instance_only",
+            hint="set MINIMA_RECOMMENDATION_STORE=cloudsql (or sqlite for one node) "
+            "before scaling beyond one instance — feedback joins break otherwise",
+        )
 
     app.state.catalog_store = catalog_store
     app.state.lane_counter = lane_counter
@@ -51,7 +62,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.passthrough_runtime = injected.get("passthrough_runtime") or PassthroughRuntime(
         settings=settings,
         catalog_store=catalog_store,
-        reasoner=reasoner,
         recstore_backend=recstore_backend,
         lane_counter=lane_counter,
         memory_factory=(lambda _key: injected_memory) if injected_memory is not None else None,
