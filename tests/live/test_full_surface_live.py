@@ -253,15 +253,8 @@ def test_feedback_reinforcement_loop_live():
 # --------------------------------------------------------------------------------------
 # 4. llm escalation (requires the gemini reasoner)
 # --------------------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not os.getenv("GEMINI_API_KEY"), reason="needs GEMINI_API_KEY for the reasoner"
-)
 def test_llm_escalation_live():
     settings = Settings(
-        minima_reasoner_provider="gemini",
-        gemini_api_key=os.environ["GEMINI_API_KEY"],
-        minima_reasoner_max_tokens=4096,
-        minima_reasoner_timeout_ms=15000,
         minima_memory_recall_timeout_ms=RECALL_TIMEOUT_MS,
         minima_reflect_every_n=0,
     )
@@ -275,8 +268,6 @@ def test_llm_escalation_live():
                 "task": {"task": TASK_FAMILY, "task_type": "code", "difficulty": "hard"},
                 "namespace": namespace,
                 "allow_llm_escalation": True,
-                # A small candidate set keeps the reasoner prompt compact (the full catalog
-                # can make the provider time out on a cold link).
                 "constraints": {
                     "candidate_models": ["gpt-4o-mini", "gemini-2.5-flash", "claude-opus-4-8"]
                 },
@@ -285,13 +276,11 @@ def test_llm_escalation_live():
         )
         assert resp.status_code == 200
         body = resp.json()
-        # Escalation must fire on a cold namespace (thin evidence).
+        # Escalation must fire on a cold namespace (thin evidence) — DIAGNOSTIC only:
+        # the reasoner was deleted; the harness recovery ladder owns the cascade.
         assert any(w.startswith("escalation_suggested:") for w in body["warnings"])
-        if "reasoner_failed" in body["warnings"]:
-            pytest.skip("gemini reasoner unreachable/timed out (provider hiccup)")
-        # When the reasoner answers, the decision is LLM-driven.
-        assert body["decision_basis"] == "llm"
-        assert "reasoner_consulted" in body["warnings"]
+        assert body["decision_basis"] in ("memory", "prior")
+        assert "reasoner_consulted" not in body["warnings"]
 
 
 # --------------------------------------------------------------------------------------
