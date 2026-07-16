@@ -31,6 +31,7 @@ def _reconciled(rec_id, predicted, outcome, *, quality=None, cost=None, task_typ
     rec.realized_quality = update.quality
     rec.realized_cost_usd = update.cost_usd
     rec.feedback_ts = update.ts
+    rec.evidence_source = "judge"
     return rec
 
 

@@ -100,6 +100,7 @@ def _seed_family(
                     task_fingerprint=task_fingerprint(variant),
                     task_cluster=cluster,
                     quality_score=q,
+                    evidence_source="judge",
                     outcome="success" if q >= 0.5 else "failure",
                 ),
                 env_tags=["seed:livetest"],

@@ -271,7 +271,7 @@ async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidate
                 model_id=m, provider=provider_for(m), task_type=tt, difficulty=diff,
                 task_fingerprint=row.fp, task_cluster=cluster, cost_usd=row.costs[m],
                 quality_score=q, outcome="success" if q >= 0.5 else "failure",
-                source_dataset=source_dataset,
+                evidence_source="dataset", source_dataset=source_dataset,
             )
             items.append(build_item(SeedItem(f"rbtrain-{i}-{m}", content, rec, ["seed:rbeval"])))
     inserted = 0

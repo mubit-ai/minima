@@ -60,6 +60,7 @@ async def test_seed_recommend_feedback_roundtrip():
                 task_cluster=cluster,
                 quality_score=q,
                 outcome="success" if q >= 0.5 else "failure",
+                evidence_source="judge",
             ),
             env_tags=["seed:e2e"],
         )
@@ -100,6 +101,7 @@ async def test_seed_recommend_feedback_roundtrip():
             difficulty="hard",
             task_cluster=cluster,
             quality_score=0.95,
+            evidence_source="judge",
             outcome="success",
             recommendation_id=resp.recommendation_id,
         ),

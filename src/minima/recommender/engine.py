@@ -15,7 +15,7 @@ from minima.llm.base import CandidateView, Reasoner
 from minima.logging import get_logger
 from minima.memory.adapter import Memory
 from minima.memory.keys import build_content, salient_signature, task_cluster, task_fingerprint
-from minima.memory.records import clamp01
+from minima.memory.records import clamp01, label_score
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model, apply_ipw
@@ -1048,7 +1048,11 @@ def _to_ranked_model(c: CandidateScore, explain: bool) -> RankedModel:
                 model_id=ev.record.model_id if ev.record else c.card.model_id,
                 score=round(ev.score, 4),
                 knowledge_confidence=round(ev.knowledge_confidence, 4),
-                observed_success=round(ev.record.quality_score, 4) if ev.record else 0.0,
+                observed_success=(
+                    round(label_score(ev.record.outcome, ev.record.quality_score), 4)
+                    if ev.record
+                    else 0.0
+                ),
                 is_stale=ev.is_stale,
             )
             for ev in c.evidence

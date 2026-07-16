@@ -144,6 +144,7 @@ def make_evidence(
     recorded_at: float | None = None,
     source_dataset: str | None = None,
     referenceable: bool = False,
+    evidence_source: str | None = None,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
@@ -154,6 +155,7 @@ def make_evidence(
         output_tokens=output_tokens,
         quality_score=quality,
         outcome="success" if quality >= 0.5 else "failure",
+        evidence_source=evidence_source or ("dataset" if source_dataset else "judge"),
         cost_usd=cost_usd,
         latency_ms=latency_ms,
         recorded_at=recorded_at,
