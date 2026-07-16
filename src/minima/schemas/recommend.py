@@ -124,7 +124,11 @@ class RecommendResponse(BaseModel):
     classification_profile: ClassificationProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     selection_policy: str = Field(
-        "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
+        "argmin",
+        description=(
+            '"thompson" (default posterior-sampling policy) | "argmin" '
+            "(deterministic; per-org opt-out or single-candidate/capped decisions)"
+        ),
     )
     recommended_actions: list[str] = Field(
         default_factory=list,

@@ -9,7 +9,6 @@ import random
 
 from minima.metrics.calibration import _ece, fit_calibrators
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionRecord
-from minima.recommender.engine import _optimize
 from minima.recommender.types import CandidateScore
 from minima.schemas.common import DecisionBasis
 from minima.schemas.models_catalog import ModelCard
@@ -85,32 +84,4 @@ def _cand(model_id: str, cost: float, predicted: float, width: float) -> Candida
     )
 
 
-def _collapse_run(margin: float) -> tuple[float, float, float]:
-    rng = random.Random(11)
-    picked_top = 0
-    cost_sum = 0.0
-    successes = 0
-    n = 2000
-    cheap_true, pricey_true = 0.80, 0.95
-    for _ in range(n):
-        cheap = _cand("cheap", 0.001, rng.uniform(0.78, 0.88), 0.20)
-        pricey = _cand("pricey", 0.010, rng.uniform(0.90, 0.98), 0.05)
-        rec, _fb, _ranked, _w = _optimize([cheap, pricey], tau=0.85, collapse_margin=margin)
-        picked_top += 1 if rec.card.model_id == "pricey" else 0
-        cost_sum += rec.est_cost_usd
-        true_p = pricey_true if rec.card.model_id == "pricey" else cheap_true
-        successes += 1 if rng.random() < true_p else 0
-    return picked_top / n, cost_sum / n, successes / n
 
-
-def test_collapse_guard_cuts_cost_without_sacrificing_quality():
-    # Default tau-aware margin (1.0). At a HIGH bar (tau=0.85) the guard must reduce collapse
-    # and cost while keeping the realized-success drop SMALL (the quality-retention threshold).
-    off_top, off_cost, off_succ = _collapse_run(margin=0.0)
-    on_top, on_cost, on_succ = _collapse_run(margin=1.0)
-    assert off_top > 0.6  # without the guard, collapse to the priciest model
-    assert on_top < off_top * 0.9  # guard meaningfully reduces priciest-model picks
-    assert on_cost < off_cost  # and lowers mean spend
-    # Quality-retention threshold: tau-aware scaling keeps the success drop <= 3pp at a high
-    # bar (the non-tau-aware guard cost ~7.9pp — this is the fix).
-    assert (off_succ - on_succ) <= 0.03

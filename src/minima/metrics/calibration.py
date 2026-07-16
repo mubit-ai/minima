@@ -64,7 +64,7 @@ def _pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, float]]:
     for r in rows:
         if not r.reconciled or not _trusted_label(r):
             continue
-        predicted = r.predicted_success_chosen
+        predicted = r.predicted_success_realized
         if predicted is None:
             continue
         label = 1.0 if r.realized_outcome == "success" else 0.0
@@ -168,7 +168,7 @@ def cusum_flags(
     for r in rows:
         if not r.reconciled or not _trusted_label(r):
             continue
-        predicted = r.predicted_success_chosen
+        predicted = r.predicted_success_realized
         if predicted is None or r.realized_model_id is None:
             continue
         label = 1.0 if r.realized_outcome == "success" else 0.0
@@ -234,16 +234,15 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
             "top_model_share": 0.0,
             "cheapest_model_share": 0.0,
             "cost_position": 0.0,
-            "shadow_agreement": 0.0,
         }
     reconciled = sum(1 for r in rows if r.reconciled)
     late = sum(1 for r in rows if r.late_feedback)
     escalated = sum(1 for r in rows if r.escalated)
     successes = sum(1 for r in rows if r.realized_outcome == "success")
-    # exploration_share = picks actually changed by the epsilon branch (~epsilon when
-    # active); epsilon_policy_share = share of decisions where exploration was possible.
+    # exploration_share = picks where the Thompson sample deviated from the argmin pick;
+    # thompson_policy_share = share of decisions made under the stochastic policy.
     explored = sum(1 for r in rows if r.explored)
-    epsilon_policy = sum(1 for r in rows if r.policy == "epsilon_softmax")
+    thompson_policy = sum(1 for r in rows if r.policy == "thompson")
     top_share, cheapest_share, cost_position = _cost_metrics(rows)
     return {
         "recommendations": n,
@@ -251,7 +250,7 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
         "late_feedback_share": round(late / reconciled, 4) if reconciled else 0.0,
         "escalation_rate": round(escalated / n, 4),
         "exploration_share": round(explored / n, 4),
-        "epsilon_policy_share": round(epsilon_policy / n, 4),
+        "thompson_policy_share": round(thompson_policy / n, 4),
         # success_rate over reconciled rows — pair with cost_position for the Pareto view.
         "success_rate": round(successes / reconciled, 4) if reconciled else 0.0,
         # Routing-optimality signals over the candidate price ladder:
@@ -265,22 +264,7 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
         "top_model_share": top_share,
         "cheapest_model_share": cheapest_share,
         "cost_position": cost_position,
-        # Share of decisions where the advisory shadow bandit agreed with the deployed pick
-        # (over rows that logged a shadow pick). Low agreement => the policies diverge; pair
-        # with offline regret before considering promotion.
-        "shadow_agreement": _shadow_agreement(rows),
     }
-
-
-def _shadow_agreement(rows: list[DecisionRecord]) -> float:
-    counted = agree = 0
-    for r in rows:
-        if r.shadow_chosen_model_id is None:
-            continue
-        counted += 1
-        if r.shadow_chosen_model_id == r.chosen_model_id:
-            agree += 1
-    return round(agree / counted, 4) if counted else 0.0
 
 
 def _cost_metrics(rows: list[DecisionRecord]) -> tuple[float, float, float]:
@@ -389,7 +373,7 @@ def _raw_label_pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, str
     for r in rows:
         if not r.reconciled or not _trusted_label(r):
             continue
-        raw = r.raw_predicted_success_chosen
+        raw = r.raw_predicted_success_realized
         if raw is None:
             continue
         label = 1.0 if r.realized_outcome == "success" else 0.0

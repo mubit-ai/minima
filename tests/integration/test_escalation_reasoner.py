@@ -15,7 +15,11 @@ CANDIDATES = Constraints(candidate_models=["claude-haiku-4-5", "claude-opus-4-8"
 
 
 def _engine(reasoner, memory=None, settings=None) -> Recommender:
-    settings = settings or Settings(mubit_api_key="t", minima_reasoner_provider="anthropic")
+    settings = settings or Settings(
+        mubit_api_key="t",
+        minima_reasoner_provider="anthropic",
+        minima_selection_policy="argmin",  # deterministic pick for behavioral assertions
+    )
     return Recommender(
         settings,
         memory or FakeMemory(),
@@ -56,6 +60,7 @@ async def test_fast_reasoner_trims_memory_and_candidates():
     settings = Settings(
         mubit_api_key="t",
         minima_reasoner_provider="anthropic",
+        minima_selection_policy="argmin",
         minima_reasoner_fast_mode=True,
         minima_reasoner_fast_memory_token_budget=321,
         minima_reasoner_fast_candidate_limit=2,
@@ -82,6 +87,7 @@ async def test_fast_reasoner_can_skip_low_value_escalation(monkeypatch):
         settings=Settings(
             mubit_api_key="t",
             minima_reasoner_provider="anthropic",
+            minima_selection_policy="argmin",
             minima_reasoner_fast_mode=True,
             minima_reasoner_fast_skip_low_value=True,
             anthropic_api_key="sk-test",
@@ -107,7 +113,7 @@ async def test_reasoner_failure_degrades_gracefully():
 
 
 async def test_no_reasoner_reports_disabled():
-    settings = Settings(mubit_api_key="t")  # provider none
+    settings = Settings(mubit_api_key="t", minima_selection_policy="argmin")  # provider none
     engine = Recommender(settings, FakeMemory(), CatalogStore(settings), RecommendationStore())
     resp = await engine.recommend(RecommendRequest(task=CODE_TASK, constraints=CANDIDATES))
     assert "reasoner_disabled" in resp.warnings

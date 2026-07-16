@@ -1,11 +1,6 @@
 from __future__ import annotations
 
 from minima.config import Settings
-from minima.recommender.propensity import (
-    PropensityTracker,
-    SqlitePropensityTracker,
-    build_propensity,
-)
 from minima.recommender.recstore import (
     RecommendationStore,
     SqliteRecommendationStore,
@@ -53,22 +48,6 @@ def test_sqlite_recstore_ttl_expiry(tmp_path):
     assert store.get("r1") is None  # already older than a 0s ttl
 
 
-def test_sqlite_propensity_roundtrip_and_persistence(tmp_path):
-    path = str(tmp_path / "prop.db")
-    p = SqlitePropensityTracker(path)
-    for _ in range(3):
-        p.record("minima:default", "code:hard", "claude-opus-4-8")
-    p.record("minima:default", "code:hard", "gpt-4o-mini")
-
-    shares = p.propensities("minima:default", "code:hard", ["claude-opus-4-8", "gpt-4o-mini"])
-    # Laplace-smoothed: opus (3+1)/(4+2)=0.667, mini (1+1)/6=0.333.
-    assert abs(shares["claude-opus-4-8"] - 4 / 6) < 1e-9
-    assert abs(shares["gpt-4o-mini"] - 2 / 6) < 1e-9
-
-    reopened = SqlitePropensityTracker(path)
-    again = reopened.propensities("minima:default", "code:hard", ["claude-opus-4-8"])
-    assert abs(again["claude-opus-4-8"] - (3 + 1) / (3 + 1)) < 1e-9  # only id -> (3+1)/(3+1)
-
 
 def test_factories_select_backend(tmp_path):
     path = str(tmp_path / "x.db")
@@ -76,5 +55,3 @@ def test_factories_select_backend(tmp_path):
     sql = Settings(mubit_api_key="t", minima_recommendation_store="sqlite", minima_sqlite_path=path)
     assert isinstance(build_recstore(mem), RecommendationStore)
     assert isinstance(build_recstore(sql), SqliteRecommendationStore)
-    assert isinstance(build_propensity(mem), PropensityTracker)
-    assert isinstance(build_propensity(sql), SqlitePropensityTracker)
