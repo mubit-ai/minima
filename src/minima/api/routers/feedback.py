@@ -226,9 +226,20 @@ async def feedback(
         except Exception as exc:  # noqa: BLE001 — bookkeeping must never fail feedback
             log.warning("durable_ref_upsert_failed", error=str(exc))
 
+    # Reinforcement id spaces: entry_ids must be control-plane fact UUIDs. Keyed-lookup
+    # neighbors carry a numeric core-plane node id as entry_id — substitute their fact
+    # UUID reference when present, else the vote is unlandable and dropped. The primary
+    # reference is the durable record we just upserted (guaranteed resolvable); one bad
+    # neighbor ref must never sink the whole reinforcement call.
     neighbors = stored.neighbors_by_model.get(req.chosen_model_id, [])
-    entry_ids = [eid for (eid, _ref) in neighbors if eid]
-    primary_ref = next((ref for (_eid, ref) in neighbors if ref), None) or record_id
+    seen: set[str] = set()
+    entry_ids: list[str] = []
+    for eid, ref in neighbors:
+        candidate = (ref or "") if (eid or "").isdigit() else (eid or "")
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            entry_ids.append(candidate)
+    primary_ref = record_id or next((ref for (_eid, ref) in neighbors if ref), None)
 
     updated_confidence: float | None = None
     if primary_ref:

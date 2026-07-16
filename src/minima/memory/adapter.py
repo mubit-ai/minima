@@ -11,6 +11,7 @@ across requests, and recall over the same run finds the accumulated outcomes.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
@@ -53,29 +54,41 @@ def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
     )
 
 
+_FACT_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
     """Parse a single LookupResponse item (from POST /v2/core/lookup) into RecalledEvidence.
 
     The lookup response shape differs from recall: no ANN scores, metadata is a dict
-    (not a JSON string), and id is a numeric node ID. Score and knowledge_confidence are
-    set to 1.0 — an exact keyed match is maximally certain.
+    (not a JSON string), and id is a numeric CORE-plane node ID. Score and
+    knowledge_confidence are set to 1.0 — an exact keyed match is maximally certain.
+
+    Node IDs live in a different ID space from the control-plane fact UUIDs that
+    record_outcome reinforces — a numeric node ID is never reinforceable. Only when
+    the flattened metadata carries the fact UUID does the hit get a reference_id.
     """
     raw_id = item.get("id")
     if raw_id is None:
         return None
-    record = OutcomeRecord.from_metadata(item.get("metadata"))
+    meta = item.get("metadata")
+    record = OutcomeRecord.from_metadata(meta)
     if record is None:
         return None
     entry_id = str(raw_id)
+    fact_id = str(meta.get("id") or "") if isinstance(meta, Mapping) else ""
+    reference_id = fact_id if _FACT_UUID_RE.match(fact_id) else None
     return RecalledEvidence(
         entry_id=entry_id,
-        reference_id=entry_id,
+        reference_id=reference_id,
         score=1.0,
         knowledge_confidence=1.0,
         is_stale=False,
         content="",
         record=record,
-        referenceable=True,
+        referenceable=reference_id is not None,
     )
 
 
