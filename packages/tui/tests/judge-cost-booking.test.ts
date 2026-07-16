@@ -175,7 +175,7 @@ describe("judge spend: wallet yes, feedback no (decision a)", () => {
     ]);
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
