@@ -4,6 +4,63 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-07-16
+
+The learning-loop rework: honest labels in, fabricated ones out, and a posterior
+that actually accumulates. Verified end-to-end against Mubit v0.12.0 (locally
+built and the deployed instance) before release.
+
+### Changed
+- **Truth rule across the wire** — quality is nullable everywhere; feedback carries
+  `evidence_source` (`gate` | `judge` | `human` | `none`) as the provenance of the
+  quality signal (the legacy `judged`/`verified_in_production` flags still map);
+  unlabeled turns and infra failures (`error_cause="infra"`) are cost/latency
+  telemetry only — they never touch the success aggregate, reinforcement, or
+  calibration. The fabricated 0.9-quality default is gone.
+- **Ground truth and honest labels are the default** — the GT verification spine is
+  ON (`MINIMA_TUI_GROUND_TRUTH=0` opts out); green gate verdicts are the label
+  source for gated turns, a sampled LLM judge (`MINIMA_JUDGE_SAMPLE`, default 15%)
+  labels a slice of the rest, and judge spend stays booked to the session wallet.
+- **Accumulating evidence** — the durable (cluster, model) record is a
+  read-modify-write upsert carrying outcome counters and sample rings, so organic
+  evidence no longer caps at n≈1 and one failure can't erase history. Recall embeds
+  the same gist text the write path stores, and a budgeted keyed lookup
+  (`/v2/core/lookup`, `evidence_only` recall) gives an exact-match evidence channel
+  (pairs with Mubit v0.12.0, now live).
+- **Thompson sampling is the default selection policy** — calibrated posterior
+  sampling with a capped explore share (`minima_selection_policy=argmin` or
+  `minima_argmin_orgs` opt out). The selection zoo (collapse guard, epsilon,
+  exploration bonus, shadow UCB, evidence-mass IPW) is deleted, and
+  `GET /v1/policy-value` reports doubly-robust regret-vs-oracle.
+- **Benchmark-derived catalog priors** replace hand-tuned capability numbers;
+  cross-generation seed aliasing is deleted (no more crediting 2024 outcomes to
+  2026 model ids); `minima-seed` defaults to the synthetic pack.
+- **The pre-decision LLM reasoner is deleted** — escalation is diagnostic-only
+  (`escalation_suggested:*` warnings + decision-log reasons); the harness recovery
+  ladder owns the cascade. Config shrinks 97 → 64 settings; recommendation-store
+  I/O and calibrator refits run off the event loop; a TS-mirror contract test pins
+  the wire schemas to `packages/tui/src/minima/schemas.ts`.
+- **The harness is a reference client** — phase tags, difficulty, and
+  `chosen_effort` go on the wire; cache-boundary stickiness prefers the incumbent
+  model mid-session when the tradeoff is marginal.
+
+### Added
+- **Typed SDK feedback** — `Usage(input_tokens, output_tokens, cost_usd, latency_ms)`
+  on `feedback()` in both clients, honest autocapture framing, and a loop quickstart
+  in the docs.
+- **Harness adapters** (`pip install "minima-cli[adapters]"`) — LiteLLM custom
+  routing strategy + realized-cost feedback logger, OpenHands `RouterLLM`, and a
+  `minima-route` CLI for shell-level integrations.
+
+### Fixed
+- **Reinforcement id-space discipline** — keyed-lookup hits carry numeric core-plane
+  node ids, which are never sent as reinforcement references anymore; the durable
+  record is the primary reference so one unresolvable neighbor can't drop the whole
+  reinforcement call (pairs with Mubit's cross-run `record_outcome` resolution fix).
+- Live-suite tests updated to the new contracts (diagnostic-only escalation,
+  deterministic asserts pinned to argmin) and adapter tests skip cleanly when the
+  frameworks are absent.
+
 ## [0.10.0] - 2026-07-12
 
 ### Fixed
