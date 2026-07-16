@@ -1,9 +1,12 @@
-# MP0 inline baseline (MUB-143)
+# Inline baseline (MP0, MUB-143 — recaptured under the bottom-mount rule)
 
-Captured 2026-07-16 on `mp0-inline-baseline` (product code identical to `f1a7c5c`; the
-capture scripts land in this commit). **This is the committed visual reference for the
-inline renderer** — every later MP (deletions MP1–3, panels MP5–9, rendering MP10–12) diffs
-its after-shots against these. Guide: `docs/BigPlan/inline-ux-guide.md` §5.
+First captured 2026-07-16 on `mp0-inline-baseline`; **recaptured 2026-07-16 on
+`inline-prompt-bottom`** after the prompt-placement rule landed (guide §2 "Prompt
+placement": the prompt section is mounted at the terminal bottom from frame 1 — startup
+newline reserve + minHeight/flex-end live box). Captures are HOME-isolated (tips rotation
+state ignores MINIMA_HARNESS_DIR), so the tip row is deterministic. **This is the committed
+visual reference for the inline renderer** — every later MP (panels MP5–9, rendering
+MP10–12) diffs its after-shots against these. Guide: `docs/BigPlan/inline-ux-guide.md` §5.
 
 Primary target: **iTerm2 @ 120×36** (user-confirmed daily size). Bookends: 60×24
 (`TOC_MIN_COLS` floor) and 55×20 (below-floor / tmux-narrow equivalent).
@@ -27,10 +30,10 @@ python3 docs/BigPlan/shots/inline-baseline/check_echo.py \
 |---|---|
 | Enter keystroke (spec step) | 5.00s |
 | **first frame with the prompt echoed in the transcript** | **5.01s** |
-| first frame with any reply text | 10.34s |
+| first frame with any reply text | 7.62s |
 
 Echo latency after Enter: **0.01s** (next captured frame) — PASS, echo precedes all model
-output by 5.3s. This assertion becomes MP1's echo-budget tui-verify scenario.
+output by 2.6s. This assertion is MP1's echo-budget tui-verify scenario (≤0.35s gate).
 
 ## Perf + cold start (MP1 budget inputs)
 
@@ -38,10 +41,10 @@ output by 5.3s. This assertion becomes MP1's echo-budget tui-verify scenario.
 
 | metric | value |
 |---|---|
-| `render` samples | 14 (p50 **1.4ms**, p95/max **381ms**) |
-| max `renders` counter / max `stdinListeners` | 17 / 1 |
-| `window` samples | **none — viewport(fullscreen)-path only**; inline budgets must gate on `render.ms` |
-| cold start (first PTY frame, `plain-chat.frames.jsonl`) | **0.21s** |
+| `render` samples | 14 (p50 **1.4ms**, max **352ms**) |
+| max `renders` counter / max `stdinListeners` | 18 / 1 |
+| `window` samples | **none** (the probe died with the fullscreen renderer in MP3) |
+| cold start (first PTY frame, `plain-chat.frames.jsonl`) | **0.16s** |
 
 The 381ms outlier is the one-time 500-message resume mount (`<Static>` commit), not
 steady-state: MP1's frame-cost budget needs a separate resume-mount allowance vs the
@@ -72,10 +75,11 @@ per-frame budget (steady-state renders are ~1–2ms).
 2. **Floor-width footer squeeze** (`code-heavy-60.png`, `boundary-60.png`): at 60 cols the
    keys legend fuses into `ctrl+Modelctrl+rRout⇧tabMode…` and the status bar truncates
    mid-token. Footer behavior at/below the floor is part of MP5's footer-restack scope.
-3. **Below-floor ghost frame** (`narrow-55.png`): after a `<Static>` append at 55 cols the
-   shot shows a stale duplicate of the prompt box + status above the new one — wrapped
-   footer rows break Ink's erase math below the floor. Evidence for the 60-col floor rule
-   (below it, degrade harder, never render the full footer).
+3. **Below-floor ghost frame** (`narrow-55.png`): in the ORIGINAL top-anchored capture, a
+   `<Static>` append at 55 cols left a stale duplicate of the prompt box + status — wrapped
+   footer rows break Ink's erase math below the floor. **Not reproduced in the bottom-mount
+   recapture** (constant-height frames appear to stabilize the erase math); the 60-col floor
+   rule stands, keep watching below it.
 4. **Long committed blocks already clamp** with a dim `… +N more lines` row (`toc-block`
    +473, `boundary-60` +475): prior art for MP12's tool-output indicator — MP12 should
    extend/reuse this, not invent a new one.

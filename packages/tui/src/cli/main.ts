@@ -621,6 +621,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // input render from the TOP and grow downward; Ink commits finished output to native
   // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
   process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+  // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
+  // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
+  // so the composer + footer sit at the bottom from frame 1 instead of under the banner at
+  // the top. Plain stdout BEFORE render(), not part of Ink's live frame, so it cannot trip
+  // Ink's overflow-clear. Enforced by render-buffer.test.ts + tui-verify's bottom-anchor
+  // check. Then hide the cursor (TextInput draws its own).
+  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
   process.stdout.write("\u001b[?25l");
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process

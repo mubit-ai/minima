@@ -81,6 +81,7 @@ import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overv
 import {
   SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
+  computeMsgHeight,
   gtFooterFit,
   permHiddenMarker,
   permOverlayHeight,
@@ -3517,13 +3518,32 @@ export function HarnessApp({
       </Box>
     ) : null;
 
-  // The chat region — everything ABOVE the footer.
+  // Bottom-mount the prompt section (THE RULE, 2026-07-16): while the committed transcript
+  // is shorter than the screen, the live frame keeps a minHeight of rows − SAFETY −
+  // (estimated committed rows) and bottom-justifies its content, so the composer + footer
+  // sit on the terminal's bottom rows from frame 1 and stay glued as messages commit above.
+  // computeMsgHeight is the same conservative ruler the reserve math uses (>= actual, so the
+  // frame can only end AT or above the bottom, never overflow toward Ink's wipe threshold);
+  // once the transcript outgrows the screen the minHeight hits 0 and this is inert. The
+  // startup newline reserve in main.ts seats the FIRST paint at the bottom; this keeps every
+  // later frame there. Enforced by tui-verify's bottom-anchor check.
+  const staticRowsEstimate = useMemo(() => {
+    const cap = rows;
+    let sum = 0;
+    for (const m of messages) {
+      sum += computeMsgHeight(m, cols);
+      if (sum >= cap) break;
+    }
+    return sum;
+  }, [messages, cols, rows]);
+  const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
+
+  // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
+  // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
+  // ancestor offsets it past its own render canvas — the static output silently clips to
+  // nothing and committed messages vanish).
   const chatRegion = (
     <>
-      {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
-      <Static key={transcriptGen} items={messages}>
-        {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
-      </Static>
       {bannerBlock}
       {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
             never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
@@ -3783,11 +3803,23 @@ export function HarnessApp({
   );
 
   // The transcript commits to native scrollback via <Static>; only the live region +
-  // footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks.
+  // footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks. The inner minHeight/flex-end
+  // box keeps the prompt section mounted at the terminal bottom while the transcript is
+  // short (THE RULE); <Static> stays on the flex-start root (see chatRegion note).
   return (
     <Box flexDirection="column" width="100%">
-      {chatRegion}
-      {footerBlock}
+      {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
+      <Static key={transcriptGen} items={messages}>
+        {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
+      </Static>
+      <Box
+        flexDirection="column"
+        minHeight={bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
+        justifyContent="flex-end"
+      >
+        {chatRegion}
+        {footerBlock}
+      </Box>
     </Box>
   );
 }

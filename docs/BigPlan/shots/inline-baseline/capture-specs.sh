@@ -19,12 +19,16 @@ RESUME='["bun","run","packages/tui/src/cli/main.ts","--offline","--model","mock-
   exit 1
 }
 
-# shot <name> <spec-json> [keep] — fresh per-scenario DB (unless keep) and prefs dir
-# (mode-ring persistence otherwise carries one scenario's END state into the next START).
+# shot <name> <spec-json> [keep] — fresh per-scenario DB (unless keep), prefs dir
+# (mode-ring persistence otherwise carries one scenario's END state into the next START)
+# and HOME (tips rotation state writes to the real ~/.minima-harness regardless of
+# MINIMA_HARNESS_DIR — isolating HOME keeps the tip row deterministic and the captures
+# hermetic).
 shot() {
   local name=$1 spec=$2 keep=${3:-}
   [ "$keep" = keep ] || rm -f "$SCRATCH/bl-$name.db" "$SCRATCH/bl-$name.db-shm" "$SCRATCH/bl-$name.db-wal"
-  MINIMA_DB_PATH=$SCRATCH/bl-$name.db MINIMA_HARNESS_DIR=$SCRATCH/prefs-$name \
+  mkdir -p "$SCRATCH/home-$name"
+  HOME=$SCRATCH/home-$name MINIMA_DB_PATH=$SCRATCH/bl-$name.db MINIMA_HARNESS_DIR=$SCRATCH/prefs-$name \
     uv run --with pyte --with pillow python packages/tui/scripts/pty_capture.py "$spec" | tail -2
 }
 

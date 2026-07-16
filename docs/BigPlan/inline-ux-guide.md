@@ -57,6 +57,23 @@ One MP at a time, in this loop:
 > (CSI 3 J) and wipes all `<Static>` scrollback. `app.tsx:3600`. Every panel height in this
 > guide is derived from this.
 
+**Prompt placement (THE RULE, added 2026-07-16)**
+
+- The prompt section (composer + status footer) is **mounted at the terminal bottom** — from
+  frame 1 and permanently. Supersedes the earlier "render from the top (CC-style)" choice.
+  Mechanism: a one-time `rows−1` newline reserve at startup (`main.ts`) seats the first
+  paint; a `minHeight = rows − SAFETY − Σ committed-row estimate` + `justifyContent:
+  flex-end` box around the live region keeps every later frame there until the transcript
+  outgrows the screen (then it is inert). The estimate is `computeMsgHeight` — conservative,
+  so the frame can only end at/above the bottom, never overflow toward the wipe threshold.
+- **`<Static>` must never sit under a flex-end ancestor** — it is position-absolute in Ink,
+  and a flex-end parent offsets it past its own render canvas: committed messages silently
+  clip to nothing. It mounts on the flex-start root, the flex-end box is its sibling.
+- Enforced (not guidance): `render-buffer.test.ts` source pins + `tui-verify`'s
+  `bottom-anchor` check (settled PTY frames must have content within 1 row of the grid
+  bottom; wired on the echo + modes scenarios). D3b's height math (`rows − footerChrome`)
+  builds on this rule.
+
 **Panel system (D3)**
 
 - **D3a** = compact footer task panel, CC-parity: renders whenever todos exist, read straight

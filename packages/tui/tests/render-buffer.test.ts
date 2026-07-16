@@ -20,9 +20,11 @@ describe("cli/main.ts wires the inline renderer", () => {
     expect(src).toContain("[2J\\u001b[3J\\u001b[H");
   });
 
-  test("inline renders from the top (no bottom-glued newline reserve — CC-style)", () => {
-    // The prompt must NOT be force-pushed to the bottom row; content grows downward from the top.
-    expect(src).not.toContain('"\\n".repeat('); // the removed rows-1 reserve
-    expect(src).not.toContain("stdout.rows ?? 24"); // its only consumer in main.ts
+  test("the prompt section is bottom-mounted (THE RULE, 2026-07-16 — reverses the CC-style top start)", () => {
+    // A one-time rows-1 newline reserve pushes the first paint to the terminal's bottom rows,
+    // so the composer + footer sit at the bottom from frame 1. Plain stdout BEFORE render(),
+    // never part of Ink's live frame. tui-verify's bottom-anchor check asserts the rendered
+    // result in a real PTY.
+    expect(src).toContain('"\\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1))');
   });
 });
