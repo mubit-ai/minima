@@ -65,9 +65,9 @@ def _litellm_router():
 
 
 def test_litellm_strategy_picks_minima_recommendation():
+    router = _litellm_router()
     from minima_client.integrations.litellm_router import MinimaRoutingStrategy
 
-    router = _litellm_router()
     minima = _MinimaStub(pick="claude-sonnet-4-6")
     strategy = MinimaRoutingStrategy(minima, router)
     router.set_custom_routing_strategy(strategy)
@@ -86,13 +86,13 @@ def test_litellm_strategy_picks_minima_recommendation():
 
 
 def test_litellm_strategy_fails_open_when_minima_is_down():
+    router = _litellm_router()
     from minima_client.integrations.litellm_router import MinimaRoutingStrategy
 
     class _Down:
         def recommend(self, *a, **k):
             raise RuntimeError("unreachable")
 
-    router = _litellm_router()
     strategy = MinimaRoutingStrategy(_Down(), router)
     deployment = strategy.get_available_deployment(
         "my-group", messages=[{"role": "user", "content": "hi"}]
@@ -101,12 +101,12 @@ def test_litellm_strategy_fails_open_when_minima_is_down():
 
 
 def test_litellm_logger_reports_realized_cost_as_telemetry():
+    router = _litellm_router()
     from minima_client.integrations.litellm_router import (
         MinimaFeedbackLogger,
         MinimaRoutingStrategy,
     )
 
-    router = _litellm_router()
     minima = _MinimaStub(pick="claude-haiku-4-5")
     strategy = MinimaRoutingStrategy(minima, router)
     messages = [{"role": "user", "content": "summarize"}]
