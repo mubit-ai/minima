@@ -1,4 +1,12 @@
-# Big Plan — Master Execution Plan
+# Big Plan — Master Execution Plan *(RETIRED)*
+
+> **RETIRED 2026-07-16 — do not execute from this file.** The build-out it planned landed
+> through B5/U3 (see §9); it is kept as the record of what was built and why. Unfinished rows
+> (A5–A7, B6) remain Track A/B backlog; J1's E2E-demo intent lives on as MP19 of the
+> successor. **The successor and current source of truth is
+> [`inline-ux-guide.md`](inline-ux-guide.md)** — the post-implementation revision (inline-only
+> rendering, fullscreen/sidebar removal, panel system, plan-workflow polish), built from
+> issues found after this plan was implemented.
 
 > **This file is the single source of truth for execution.** It absorbs
 > `docs/PLAN/ground-truth-plan.md` stages 3–8 (MUB-111…127) and the borrow roadmap from

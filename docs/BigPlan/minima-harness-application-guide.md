@@ -7,10 +7,10 @@
 > Audience: someone editing `packages/tui/` or extending the GT contract in
 > `docs/PLAN/ground-truth-plan.md`. Read this *before* opening a Linear ticket.
 >
-> **Execution status:** the recommendations below have been decided and scheduled — the
-> master execution plan is [`PLAN.md`](PLAN.md) (Track A deterministic guards · Track B
-> session & UX · phase gates = `bun test` + PTY shots). Where this guide and `PLAN.md`
-> disagree, **`PLAN.md` wins**. This guide remains the *why*; the plan is the *what/when/who*.
+> **Execution status:** the plan this guide fed — [`PLAN-retired.md`](PLAN-retired.md) —
+> has been executed and retired (2026-07-16). The current execution source of truth is
+> [`inline-ux-guide.md`](inline-ux-guide.md). This guide remains the *why* behind the
+> borrowed mechanisms; `PLAN.md` references below point at the retired record.
 
 ---
 
@@ -256,9 +256,9 @@ it absolute — same fix Claude Code made.)
 Borrowings, ranked by leverage (effected improvement ÷ implementation cost), with the Linear
 issue where one exists.
 
-> **Sequencing superseded:** this table decided *what* to borrow; [`PLAN.md`](PLAN.md) now
+> **Sequencing superseded:** this table decided *what* to borrow; [`PLAN-retired.md`](PLAN-retired.md) now
 > fixes *when and who* — Track A (deterministic guards) / Track B (session & UX), with phase
-> gates (`bun test` + PTY shots in both renderers). Kept here for the leverage rationale.
+> gates (`bun test` + PTY shots). Kept here for the leverage rationale.
 
 | # | Borrow | Property | Cost | Leverage | Wire into |
 |---|---|---|---|---|---|
@@ -403,5 +403,5 @@ That's the boundary Minima is crossing right now — these are what get it acros
 
 For the why behind each borrow, see `harness-research.md`. For the plan-shape that these
 mechanisms enforce, see `characteristics-of-successful-plans.md` and `playbook.md`. For
-**execution** — phases, tracks, owners, and gates — see [`PLAN.md`](PLAN.md); it wins on
-conflict.
+**execution** — phases, tracks, owners, and gates — see [`PLAN-retired.md`](PLAN-retired.md) (retired) and
+[`inline-ux-guide.md`](inline-ux-guide.md) (current); the guide wins on conflict.

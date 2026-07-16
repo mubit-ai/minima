@@ -2,6 +2,11 @@
 
 > **Status:** ACCEPTED — 2026-07-16. Binding unless new evidence (a custom renderer effort, or a
 > terminal-protocol change that removes the fullscreen tradeoffs) is presented.
+> **Amendment (2026-07-16, same day):** the §1 "legacy opt-in" clause is superseded by user
+> decision after trying fullscreen ("feels broken"): the fullscreen code is **removed
+> entirely** — flags, alt-screen, viewport path, mouse capture, docked sidebar, SidebarChassis
+> (`inline-ux-guide.md` MP1–MP3; `tui-verify` is re-based on inline before the deletion).
+> Everything else in this ADR stands; §5's reversal bar now also gates any *re-introduction*.
 > **Supersedes:** the fullscreen-default proposal in the prior "OpenCode-style sidebars" plan.
 > **Companion docs:** `inline-rendering-brief.md` (the *what* / build plan),
 > `tui-rendering-strategy.md` (research + prose rationale), `pr-default-renderer.md` (the
