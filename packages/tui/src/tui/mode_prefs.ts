@@ -47,3 +47,33 @@ export function persistMode(projectKey: string, mode: AgentMode): void {
     // Persistence is best-effort — never let it break the TUI.
   }
 }
+
+// D3a task-panel override (MP5). Same flat ui-modes.json, a SUFFIXED key — old builds
+// only ever read all[projectKey] and validate against PERSISTABLE, so the extra key is
+// invisible to them. Only the explicit HIDE persists; showing deletes the key, so new
+// projects keep the auto-show default.
+const TASK_PANEL_SUFFIX = "::task-panel";
+
+/** True when the user explicitly hid the task panel for this project. */
+export function loadTaskPanelHidden(projectKey: string): boolean {
+  return readAll()[projectKey + TASK_PANEL_SUFFIX] === "hidden";
+}
+
+/** Persist (hidden=true) or clear (hidden=false) the per-project task-panel override. */
+export function persistTaskPanelHidden(projectKey: string, hidden: boolean): void {
+  try {
+    const all = readAll();
+    const key = projectKey + TASK_PANEL_SUFFIX;
+    if (hidden) {
+      if (all[key] === "hidden") return;
+      all[key] = "hidden";
+    } else {
+      if (!(key in all)) return;
+      delete all[key];
+    }
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsPath(), `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  } catch {
+    // Persistence is best-effort — never let it break the TUI.
+  }
+}

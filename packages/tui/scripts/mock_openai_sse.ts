@@ -9,6 +9,9 @@
  * Reply selection by marker in the last user message:
  *   "SLOW" → wait MOCK_DELAY_MS (default 2500) before the first delta (echo-gap proof)
  *   "CODE" → code-heavy markdown (fenced blocks, long lines) for rendering baselines
+ *   "TODO" → a todowrite tool_calls stream (3 canned tasks, one in_progress) — TWO-PHASE:
+ *            once the transcript carries a tool result (role "tool"), the follow-up
+ *            request gets a plain text reply instead, so the agent loop terminates
  *   otherwise → a short text reply
  *
  * Env: MOCK_PORT (default 8399) · MOCK_DELAY_MS (default 2500)
@@ -63,6 +66,15 @@ function pickReply(prompt: string): { text: string; slow: boolean } {
   return { text: SHORT_REPLY, slow: false };
 }
 
+const TODO_TASKS = JSON.stringify([
+  { content: "scaffold the parser", status: "completed", priority: "high" },
+  { content: "wire the panel data", status: "in_progress", priority: "high" },
+  { content: "write regression tests", status: "pending", priority: "medium" },
+]);
+const TODO_DONE_REPLY =
+  "Todo list recorded — the canned plan is underway. This second-phase reply exists so " +
+  "the tool loop terminates deterministically.";
+
 function pieces(text: string, size = 48): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
@@ -84,13 +96,20 @@ Bun.serve({
     };
     const lastUser = [...(body.messages ?? [])].reverse().find((m) => m.role === "user");
     const prompt =
-      typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? "");
-    const { text, slow } = pickReply(prompt);
+      typeof lastUser?.content === "string"
+        ? lastUser.content
+        : JSON.stringify(lastUser?.content ?? "");
+    const hasToolResult = (body.messages ?? []).some((m) => m.role === "tool");
+    const wantTodo = prompt.includes("TODO") && !hasToolResult;
+    const { text, slow } = prompt.includes("TODO")
+      ? { text: TODO_DONE_REPLY, slow: false }
+      : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
-        const send = (obj: unknown) => controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+        const send = (obj: unknown) =>
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
         const chunk = (delta: object, finish: string | null = null, usage?: object) => ({
           id: "mock-1",
           object: "chat.completion.chunk",
@@ -98,6 +117,36 @@ Bun.serve({
           choices: [{ index: 0, delta, finish_reason: finish }],
           ...(usage ? { usage } : {}),
         });
+        if (wantTodo) {
+          send(chunk({ role: "assistant" }));
+          send(
+            chunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_todo_1",
+                  type: "function",
+                  function: { name: "todowrite", arguments: "" },
+                },
+              ],
+            }),
+          );
+          const args = JSON.stringify({ tasks: TODO_TASKS });
+          for (const p of pieces(args)) {
+            send(chunk({ tool_calls: [{ index: 0, function: { arguments: p } }] }));
+            await Bun.sleep(15);
+          }
+          send(
+            chunk({}, "tool_calls", {
+              prompt_tokens: Math.ceil(prompt.length / 4),
+              completion_tokens: Math.ceil(args.length / 4),
+              total_tokens: Math.ceil((prompt.length + args.length) / 4),
+            }),
+          );
+          controller.enqueue(enc.encode("data: [DONE]\n\n"));
+          controller.close();
+          return;
+        }
         if (slow) await Bun.sleep(delayMs);
         send(chunk({ role: "assistant" }));
         for (const p of pieces(text)) {

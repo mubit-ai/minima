@@ -329,6 +329,18 @@ is green.**
 
 **Deliverable:** `docs/BigPlan/spike-inline-panel.md` (spec, numbers, verdict) + the permanent
 scenario. Spike component itself is deleted in MP7's first commit.
+**Execution notes (landed): VERDICT = PASS** — see `spike-inline-panel.md`. Open 0.01s,
+zero extra `3J`, last grid row blank across every settled panel frame, perf median 2.55ms
+(vs 1.4ms baseline — no mitigation needed). The geometry is an *identity*, not an estimate:
+`panelOuterHeight()` + `PANEL_STATUS_ROWS` in layout.ts, explicit heights + truncate rows +
+suppressed footer extras ⇒ frame ≡ rows−2. One real finding: **panel close over a long
+transcript stranded the composer at the screen top** (log-update rewrites the shrunken
+frame at the old top; bottomMountMinRows was inert). Fixed by `closePanelReseat` — closing
+moves the static-estimate basis to the current message count, so THE RULE's decay restarts
+from a fresh screen; pinned by the scenario's post-close bottom-anchor. Also learned: Ink
+delivers coalesced stdin as ONE input string — `panelReduce` iterates characters, so key
+storms and `gg` both work regardless of chunking. `tui_assert.py` gained `--before` (frame
+windows that must exclude the post-exit state).
 
 ---
 
@@ -356,6 +368,17 @@ on status change, Ctrl+B hides, restart honors the persisted hide.
 **Manual test:** real GT-off run with todos; toggle; restart; check the footer order feels
 stable (nothing jumps when busy/suggestions appear).
 **Gate:** §1.7 + budgets (footer restack must not move frame cost).
+**Execution notes (landed):** data thread = the `todoState` array seam (`builtin.ts` →
+`toolsFor` → `todos` AppProp; `spawn.ts` untouched, so sub-agent todos can't leak).
+`tool_execution_end` carries **no toolName** — the re-read is an unconditional gen bump,
+same pattern as the GT strip refresh. Persistence = a SUFFIXED key
+(`<projectKey>::task-panel`) in the existing flat `ui-modes.json` — invisible to old
+readers; only the explicit hide persists. The mock gained a `TODO` marker that emits a
+real `tool_calls` stream (two-phase: a transcript containing a tool result gets plain
+text, or the loop would spin); scenario timing must approve the todowrite permission
+prompt AFTER it appears (~2.1s post-submit — the "a" step sits at 8.0s). A/B vs MP4:
+the only no-todos diff is the intended `ctrl+b Tasks` keys-legend hint (one row, every
+scenario); `tasks-footer` + `tasks-footer-restart` joined tui-verify permanently.
 
 ### MP6 — D3a GT enrichment — replace the plan banner *(M)*
 

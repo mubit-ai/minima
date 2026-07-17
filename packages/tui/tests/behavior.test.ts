@@ -453,12 +453,12 @@ describe("tui/app.tsx wires exit_plan", () => {
 // and the composer's `suspended`, so the two can never drift — the U3/B5 regression class
 // (a panel captured the global handler but left the composer live: arrows scrubbed history,
 // letters grew the draft, Enter could submit a prompt). MP2 (MUB-145) removed the docked
-// sidebars; the rewind modal is the remaining capturing panel.
+// sidebars; since MP4 (MUB-147) the expanded live-region panel is the only populator.
 describe("tui/app.tsx panel key routing", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("panelCapture seam survives with no capturing panel (D3b re-populates it)", () => {
-    expect(src).toContain("const panelCapture = false;");
+  test("panelCapture derives from the expanded-panel state — the only capturing panel", () => {
+    expect(src).toContain("const panelCapture = panel !== null;");
     expect(src).not.toContain("sidebarOpen");
     expect(src).not.toContain("sidebarFocused");
     expect(src).not.toContain("rewindOpen");

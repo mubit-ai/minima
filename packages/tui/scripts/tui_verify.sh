@@ -15,6 +15,13 @@
 #                     — swept across every raw stream captured by the suite
 #   narrow-55         below the 60-col floor (TOC_MIN_COLS) the one-shot ToC text block
 #                     still renders and the app stays alive
+#   spike-panel       MP4 gate (guide §7): a near-full live-region panel
+#                     (rows - input - status, MINIMA_TUI_SPIKE_PANEL=1) opens over a
+#                     500-msg resume, scrolls 200+ steps, and closes — zero extra ESC[3J,
+#                     the last grid row never painted, scrollback intact after close
+#   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
+#                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
+#                     session on the same prefs dir honors the persisted hide
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -317,9 +324,160 @@ assert len(distinct) >= 3, "app frozen at 55 cols"
 print("tui_assert: PASS narrow-55 (one-shot ToC block below the floor, app alive)")
 PY
 
+echo "== tui-verify: scenario spike-panel (MP4 gate: near-full panel, zero wipes) =="
+rm -f "$TMP/spike.db" "$TMP/spike.db-wal" "$TMP/spike.db-shm"
+cp "$TMP/fixture.db" "$TMP/spike.db"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV, "--resume", "fixture-500"],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 13,
+  "env": {"MINIMA_DB_PATH": "$TMP/spike.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-spike",
+          "MINIMA_TUI_SPIKE_PANEL": "1", "MINIMA_TUI_PERF": "$TMP/spike-perf.jsonl"},
+  "frames": "$TMP/spike-frames.jsonl",
+  "raw": "$TMP/spike-raw.bin",
+  "steps": [
+    {"after": 3.5, "send": "<CTRLT>"},
+    {"after": 4.0, "send": "jjjjjjjjjj", "repeat": 20, "gap": 0.18},
+    {"after": 7.8, "send": "<PGDN>"},
+    {"after": 8.1, "send": "<PGUP>"},
+    {"after": 8.4, "send": "G"},
+    {"after": 8.8, "send": "gg"},
+    {"after": 9.5, "send": "<ESC>"},
+    {"after": 11.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture spike "$SPEC"
+python3 - "$TMP/spike-raw.bin" "$TMP/spike-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during panel ops"
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear) - the panel tripped Ink's scrollback wipe"
+i_paste_off = raw.rfind(b"\x1b[?2004l")
+i_cursor = raw.rfind(b"\x1b[?25h")
+assert i_paste_off != -1 and i_cursor > i_paste_off, "clean-exit tail (?2004l then ?25h) missing"
+
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def frames_between(t0, t1):
+    return [f for f in frames if t0 <= f["t"] < t1]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+
+opened = [f for f in frames if f["t"] >= 3.5 and grid_has(f, "line 001")]
+assert opened, "spike panel never opened (no 'line 001' after Ctrl+T)"
+open_latency = opened[0]["t"] - 3.5
+print(f"spike: open latency {open_latency:.2f}s (budget 0.35s)")
+assert open_latency <= 0.35, f"panel open took {open_latency:.2f}s (budget 0.35s)"
+
+assert any(grid_has(f, "❯ line 201") for f in frames_between(7.0, 7.8)), (
+    "cursor not at line 201 after 200 j steps - scroll lost keystrokes")
+assert any(grid_has(f, "❯ line 201") for f in frames_between(8.1, 8.4)), (
+    "PgDn+PgUp did not return the cursor to line 201")
+assert any(grid_has(f, "❯ line 500") for f in frames_between(8.4, 8.8)), "G did not jump to the last line"
+assert any(grid_has(f, "❯ line 001") for f in frames_between(8.8, 9.5)), "gg did not jump back to the top"
+
+# The wipe-threshold identity: while the panel is open the frame ends at rows-2, so the
+# LAST grid row must never be painted. Settled frames only (a pty read can split a write).
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+open_settled = [f for f in settled if 3.9 <= f["t"] <= 9.4 and grid_has(f, "❯ line")]
+assert open_settled, "no settled panel frames captured"
+for f in open_settled:
+    assert not f["screen"][-1].strip(), (
+        f"panel painted the last grid row at t={f['t']} - one row from the wipe threshold")
+print(f"spike: last-row-clear held across {len(open_settled)} settled panel frames")
+
+closed = [f for f in settled if f["t"] >= 9.7]
+assert closed, "no settled frames after close"
+assert not any(grid_has(f, "❯ line") for f in closed), "panel still visible after Esc"
+last = frames[-1]["screen"]
+assert sum(1 for row in last if row.strip()) >= 5, "transcript gone from the main buffer after panel close + exit"
+print("tui_assert: PASS spike-panel (zero extra wipes, last row clear, scrollback intact)")
+PY
+# Post-close, pre-exit: the composer is back on the bottom rows (THE RULE). The window
+# opens AT the Esc step (the close render is the only output before Ctrl+D — nothing
+# re-renders after it) and ends before Ctrl+D (Ink erases the live region on exit).
+python3 "$TUI/scripts/tui_assert.py" "$TMP/spike-frames.jsonl" --after 9.5 --before 10.9 \
+  --check bottom-anchor
+perf_check "$TMP/spike-perf.jsonl" spike 3000
+
+echo "== tui-verify: scenario tasks-footer (D3a: mid-run todos, Ctrl+B, persisted hide) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 14,
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "frames": "$TMP/tasks-frames.jsonl",
+  "raw": "$TMP/tasks-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "TODO plan this work"},
+    {"after": 4.5, "send": "<CR>"},
+    {"after": 8.0, "send": "a"},
+    {"after": 11.2, "send": "<CTRLB>"}
+  ]
+}
+EOF
+)
+capture tasks "$SPEC"
+python3 - "$TMP/tasks-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# The panel appears MID-RUN (the todowrite lands while the second-phase reply streams;
+# the "a" step at 8.0 always-allows the todowrite permission prompt, which shows ~6.7).
+shown = [f for f in frames if 8.0 <= f["t"] < 11.2 and grid_has(f, "tasks 1/3")]
+assert shown, "task panel (tasks 1/3) never appeared after the TODO tool call"
+assert any(grid_has(f, "wire the panel data") for f in shown), (
+    "current in_progress task not shown in the panel header")
+first = shown[0]["t"]
+print(f"tasks-footer: panel first visible at t={first:.2f}s")
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+# The hide render is the only output after the Ctrl+B step — window opens AT the step.
+hidden = [f for f in settled if f["t"] >= 11.2]
+assert hidden, "no settled frames after Ctrl+B"
+assert not any(grid_has(f, "tasks 1/3") for f in hidden), "Ctrl+B did not hide the task panel"
+print("tui_assert: PASS tasks-footer (panel mid-run, current task shown, Ctrl+B hides)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/tasks-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor
+
+echo "== tui-verify: scenario tasks-footer-restart (persisted hide survives) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 12,
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "frames": "$TMP/tasks2-frames.jsonl",
+  "steps": [
+    {"after": 3.0, "send": "TODO plan this work"},
+    {"after": 4.5, "send": "<CR>"},
+    {"after": 8.0, "send": "a"}
+  ]
+}
+EOF
+)
+capture tasks2 "$SPEC"
+python3 - "$TMP/tasks2-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+assert not any("tasks 1/3" in row for f in frames for row in f["screen"]), (
+    "persisted hide ignored: the task panel reappeared in a fresh session on the same prefs dir")
+assert any("todowrite: 3 tasks" in row for f in frames for row in f["screen"]), (
+    "todowrite never ran in the restart session - the hide assert proved nothing")
+print("tui_assert: PASS tasks-footer-restart (hide persisted per-project)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
-          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin <<'PY'
+          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
+          "$TMP"/tasks-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

@@ -148,4 +148,32 @@ describe("mode_prefs persistence", () => {
       else process.env.MINIMA_HARNESS_DIR = prevEnv;
     }
   });
+
+  test("task-panel hide uses a suffixed key: persists, clears, never touches the mode", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-task-prefs-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const { loadPersistedMode, loadTaskPanelHidden, persistMode, persistTaskPanelHidden } =
+        await import("../src/tui/mode_prefs.ts");
+      expect(loadTaskPanelHidden("github.com/x/y")).toBe(false);
+      persistMode("github.com/x/y", "acceptEdits");
+      persistTaskPanelHidden("github.com/x/y", true);
+      expect(loadTaskPanelHidden("github.com/x/y")).toBe(true);
+      // The suffixed key is invisible to the mode reader — and vice versa.
+      expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
+      expect(loadPersistedMode("github.com/x/y::task-panel" as string)).toBeNull();
+      // Showing clears the override (auto-show default returns).
+      persistTaskPanelHidden("github.com/x/y", false);
+      expect(loadTaskPanelHidden("github.com/x/y")).toBe(false);
+      const raw = await Bun.file(join(dir, "ui-modes.json")).text();
+      expect(raw).not.toContain("task-panel");
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
 });
