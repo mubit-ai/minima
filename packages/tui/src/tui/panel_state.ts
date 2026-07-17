@@ -19,13 +19,17 @@ export interface PanelViewBase {
   cursor: number;
 }
 
-export type PanelView = PanelViewBase & {
-  kind: "toc";
-  rows: TocRow[];
-  sections: TocSection[];
-  /** The transcript reference captured at open (immutable-updated → a free snapshot). */
-  snapshot: ChatMessage[];
-};
+export type PanelView = PanelViewBase &
+  (
+    | {
+        kind: "toc";
+        rows: TocRow[];
+        sections: TocSection[];
+        /** The transcript reference captured at open (immutable-updated → a free snapshot). */
+        snapshot: ChatMessage[];
+      }
+    | { kind: "reader" }
+  );
 
 export interface PanelState {
   stack: PanelView[];
@@ -35,6 +39,7 @@ export interface PanelState {
 export interface PanelNavKey {
   upArrow?: boolean;
   downArrow?: boolean;
+  leftArrow?: boolean;
   pageUp?: boolean;
   pageDown?: boolean;
   return?: boolean;
@@ -83,10 +88,20 @@ function toEnd(view: PanelView, which: "first" | "last"): PanelView {
   );
 }
 
+/** h/← go BACK one view (reader → list); inert on the top-level view (Esc closes there). */
+function popIfNested(state: PanelState): PanelState {
+  if (state.stack.length <= 1) {
+    return state.pendingG ? { stack: state.stack, pendingG: false } : state;
+  }
+  return { stack: state.stack.slice(0, -1), pendingG: false };
+}
+
 function applyChar(state: PanelState, ch: string): PanelState {
   const top = state.stack[state.stack.length - 1];
   if (!top) return state;
   switch (ch) {
+    case "h":
+      return popIfNested(state);
     case "j":
       return replaceTop(state, stepStop(top, 1));
     case "k":
@@ -116,6 +131,7 @@ export function panelReduce(
   }
   if (key.downArrow) return replaceTop(state, stepStop(top, 1));
   if (key.upArrow) return replaceTop(state, stepStop(top, -1));
+  if (key.leftArrow) return popIfNested(state);
   if (key.pageDown) return replaceTop(state, jumpLines(top, innerHeight));
   if (key.pageUp) return replaceTop(state, jumpLines(top, -innerHeight));
   let next = state;
@@ -145,5 +161,16 @@ export function tocPanelState(
       },
     ],
     pendingG: false,
+  };
+}
+
+/** A pushed reader view (MP8): plain line scroll, every line a stop. */
+export function readerView(title: string, lines: string[]): PanelView {
+  return {
+    kind: "reader",
+    title,
+    lines: lines.length > 0 ? lines : ["(empty section)"],
+    stops: null,
+    cursor: 0,
   };
 }

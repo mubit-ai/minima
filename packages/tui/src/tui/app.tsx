@@ -93,7 +93,13 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
-import { type PanelNavKey, type PanelState, panelReduce, tocPanelState } from "./panel_state.ts";
+import {
+  type PanelNavKey,
+  type PanelState,
+  panelReduce,
+  readerView,
+  tocPanelState,
+} from "./panel_state.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
@@ -104,6 +110,7 @@ import {
   planModeBlockedTools,
 } from "./permissions.ts";
 import { repoIdentity, setProject } from "./projects.ts";
+import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
 import {
   type RewindMode,
@@ -3518,6 +3525,31 @@ export function HarnessApp({
       else setPanel(next);
       return;
     }
+    if (key.return) {
+      // Enter on a section title = read it IN the panel (Q27b — jump-as-scroll is
+      // impossible inline). Snapshot semantics: the reader slices the messages reference
+      // captured at open.
+      setPanel((prev) => {
+        const top = prev?.stack[prev.stack.length - 1];
+        if (!prev || !top || top.kind !== "toc") return prev;
+        const row = top.rows[top.cursor];
+        if (!row || row.sectionIdx === null) return prev;
+        const section = top.sections[row.sectionIdx];
+        if (!section) return prev;
+        const nextSec = top.sections[row.sectionIdx + 1];
+        const lines = sectionReaderLines(
+          top.snapshot,
+          section.startMsgIdx,
+          nextSec ? nextSec.startMsgIdx : top.snapshot.length,
+          Math.max(20, cols - 4),
+        );
+        return {
+          stack: [...prev.stack, readerView(`contents ▸ ${section.title}`, lines)],
+          pendingG: false,
+        };
+      });
+      return;
+    }
     setPanel((prev) => (prev ? panelReduce(prev, input, key, panelInnerRows) : prev));
   }
   // Wrapped-row height from the same helpers the overlay renders with (estimate == render): a
@@ -3931,7 +3963,11 @@ export function HarnessApp({
       >
         {panelVisible && panelTop ? (
           <ExpandPanel
-            title={`${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · esc closes`}
+            title={
+              panelTop.kind === "toc"
+                ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
+                : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+            }
             lines={panelTop.lines}
             cursor={panelTop.cursor}
             stops={panelTop.stops}

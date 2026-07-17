@@ -459,6 +459,16 @@ cannot scroll the terminal's scrollback, so reading happens in-panel).
 **Agent proof:** shots: list → Enter → reader scrolled → back → close; budgets green.
 **Manual test:** find yesterday's decision in a long session using only Ctrl+T.
 **Gate:** §1.7.
+**Execution notes (landed):** the keystone extraction is `wrapLineToWidth` in layout.ts —
+the WRAP PRODUCER; `wrapRows` (every height estimate) is now DEFINED as its `.length`, so
+the reader and the reservations cannot diverge (property-pinned across widths incl. CJK
+hard-breaks, where the char-accurate producer is a hair more conservative than the old
+ceil() — the safe direction). `reader.ts sectionReaderLines` mirrors the transcript
+headers (`▸ you` / `◆ assistant` / `⚙ tool:` / `🧠`), clamps tool bodies with the honest
+`… +N more lines` marker, and mirrors `markdownBodyHeight`'s three cases. Reader views are
+`stops: null` (plain line scroll) on the same cursor primitive; `h`/`←` back is a reducer
+rule (inert on the top-level list). The panel-toc scenario grew the reader leg
+(Enter → `contents ▸` breadcrumb → h back → Esc close, all inside the same byte gates).
 
 ### MP9 — D3b GT overview + step cards *(M)*
 

@@ -3,6 +3,7 @@ import {
   type PanelNavKey,
   type PanelState,
   panelReduce,
+  readerView,
   tocPanelState,
 } from "../src/tui/panel_state.ts";
 import type { TocRow, TocSection } from "../src/tui/toc.ts";
@@ -126,5 +127,42 @@ describe("panelReduce — close semantics", () => {
   test("unknown keys are inert and keep the same state object", () => {
     const s = open();
     expect(panelReduce(s, "x", {}, INNER)).toBe(s);
+  });
+});
+
+describe("panelReduce — the pushed reader view (MP8)", () => {
+  function withReader(): PanelState {
+    const base = open();
+    return {
+      stack: [...base.stack, readerView("contents ▸ first prompt", ["l1", "l2", "l3", "l4"])],
+      pendingG: false,
+    };
+  }
+
+  test("reader lines are plain stops — j/k move one LINE, not one section", () => {
+    let s = withReader();
+    s = step(s, "jj");
+    expect(cursorOf(s)).toBe(2);
+    s = step(s, "k");
+    expect(cursorOf(s)).toBe(1);
+  });
+
+  test("Esc pops back to the list (same list state), second Esc closes", () => {
+    const s = withReader();
+    const back = panelReduce(s, "", { escape: true }, INNER);
+    expect(back?.stack.length).toBe(1);
+    expect(back?.stack[0]!.kind).toBe("toc");
+    expect(panelReduce(back!, "", { escape: true }, INNER)).toBeNull();
+  });
+
+  test("h and ← also go back from the reader, but are inert on the top-level list", () => {
+    expect(panelReduce(withReader(), "h", {}, INNER)?.stack.length).toBe(1);
+    expect(panelReduce(withReader(), "", { leftArrow: true }, INNER)?.stack.length).toBe(1);
+    const list = open();
+    expect(panelReduce(list, "h", {}, INNER)).toBe(list);
+  });
+
+  test("an empty reader gets the placeholder line", () => {
+    expect(readerView("t", []).lines).toEqual(["(empty section)"]);
   });
 });

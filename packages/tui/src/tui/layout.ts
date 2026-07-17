@@ -53,35 +53,61 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
 }
 
 /**
- * Rows a single logical line occupies when word-wrapped to `width` display columns — matching Ink's
- * wrap-ansi ({ wordWrap: true, hard: true }): greedily pack space-separated words, wrap to a new row
- * when the next word (plus a joining space) won't fit, and hard-break any single word wider than a
- * full row. A char-based ceil(width) UNDER-counts this (words don't pack tightly), which is exactly
- * what desynced Ink's diff into garbled overlap — so we replicate the real algorithm to keep the
- * estimate >= actual. Uses display columns (stringWidth) so emoji/CJK (💡🧠⚙◆▸) count as 2.
+ * Word-wrap a single logical line to `width` display columns, PRODUCING the wrapped rows —
+ * matching Ink's wrap-ansi ({ wordWrap: true, hard: true }): greedily pack space-separated
+ * words, wrap to a new row when the next word (plus a joining space) won't fit, and
+ * hard-break any single word wider than a full row (by display columns — a wide char that
+ * doesn't fit moves whole to the next row). Uses stringWidth so emoji/CJK count as 2.
+ * `wrapRows` is DEFINED as this function's row count, so the string producer (the D3b
+ * reader) and every height estimate in this file can never diverge.
  */
-function wrapRows(line: string, width: number): number {
+export function wrapLineToWidth(line: string, width: number): string[] {
   const w = Math.max(1, width);
-  if (line === "") return 1;
-  let rows = 1;
+  if (line === "") return [""];
+  const out: string[] = [];
+  let cur = "";
   let col = 0;
+  const flush = () => {
+    out.push(cur);
+    cur = "";
+    col = 0;
+  };
   for (const word of line.split(" ")) {
     const wlen = stringWidth(word);
     const needed = col === 0 ? wlen : col + 1 + wlen;
     if (needed <= w) {
+      cur = col === 0 ? word : `${cur} ${word}`;
       col = needed;
       continue;
     }
-    if (col !== 0) rows += 1; // this word starts a fresh row
+    if (col !== 0) flush();
     if (wlen <= w) {
+      cur = word;
       col = wlen;
-    } else {
-      // hard-break an over-long word across full rows; the remainder sits on the last row
-      rows += Math.ceil(wlen / w) - 1;
-      col = wlen % w || w;
+      continue;
     }
+    let rest = word;
+    while (stringWidth(rest) > w) {
+      let take = "";
+      let tw = 0;
+      for (const ch of rest) {
+        const cw = stringWidth(ch);
+        if (tw + cw > w) break;
+        take += ch;
+        tw += cw;
+      }
+      out.push(take);
+      rest = rest.slice(take.length);
+    }
+    cur = rest;
+    col = stringWidth(rest);
   }
-  return rows;
+  out.push(cur);
+  return out;
+}
+
+function wrapRows(line: string, width: number): number {
+  return wrapLineToWidth(line, width).length;
 }
 
 /**
