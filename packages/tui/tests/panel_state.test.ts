@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type PanelNavKey,
   type PanelState,
+  gtPanelState,
   panelReduce,
   readerView,
   tocPanelState,
@@ -164,5 +165,33 @@ describe("panelReduce — the pushed reader view (MP8)", () => {
 
   test("an empty reader gets the placeholder line", () => {
     expect(readerView("t", []).lines).toEqual(["(empty section)"]);
+  });
+
+  test("embedded newlines are flattened — every view line is exactly ONE terminal row", () => {
+    // A multi-row line breaks the panel height identity (log-update desync → ghost row in
+    // scrollback; one more row trips the wipe). Caught live on a stepCardLines entry.
+    expect(readerView("t", ["a\nb", "c"]).lines).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("gtPanelState — the GT overview view (MP9)", () => {
+  test("stops are the step-title rows and the breadcrumb carries plan position", () => {
+    const overview = {
+      stepPos: 2,
+      stepTotal: 3,
+      steps: [],
+      gatesByStep: new Map(),
+    } as unknown as Parameters<typeof gtPanelState>[0];
+    const rows = [
+      { text: "⬜ 1. scaffold", stepIdx: 0, isTitle: true },
+      { text: "   check: bun test", stepIdx: 0, isTitle: false },
+      { text: "🟦 2. wire", stepIdx: 1, isTitle: true },
+    ];
+    const s = gtPanelState(overview, rows);
+    const top = s.stack[0]!;
+    expect(top.kind).toBe("gt");
+    expect(top.title).toBe("plan · 2/3");
+    expect(top.stops).toEqual([0, 2]);
+    expect(top.cursor).toBe(0);
   });
 });

@@ -30,12 +30,17 @@ export function ExpandPanel({ title, lines, cursor, stops, outerHeight, onKey }:
   const { lines: windowed, top } = clipPanelLines(lines, inner, cursor);
   const stopSet = stops ? new Set(stops) : null;
   return (
+    // marginRight 2 is LOAD-BEARING width armor, not styling: terminals and Ink can
+    // disagree by ±1 cell on emoji widths (the U+1F7Ex tier circles/squares), and on a
+    // full-width row that pushes the right border past the last column — the terminal
+    // wraps it, the frame gains a phantom row, log-update desyncs and a ghost row leaks
+    // into scrollback (one more row trips Ink's wipe). The slack absorbs the mismatch.
     <Box
       borderStyle="round"
       borderColor="gray"
       paddingX={1}
       flexDirection="column"
-      width="100%"
+      marginRight={2}
       height={outerHeight}
       flexShrink={0}
     >

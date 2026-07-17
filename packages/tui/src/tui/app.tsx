@@ -73,7 +73,7 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import { footerStatsFromMessages } from "./footer.ts";
-import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
+import { buildGtOverview, gtRows, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -96,6 +96,7 @@ import { ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
   type PanelState,
+  gtPanelState,
   panelReduce,
   readerView,
   tocPanelState,
@@ -1582,7 +1583,7 @@ export function HarnessApp({
     if (key.ctrl && input === "t") {
       if (!busy && cols >= TOC_MIN_COLS) {
         const sections = buildSections(messages, buildUsageLedger());
-        setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 4)), messages));
+        setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
         return;
       }
       requestTocSidebar();
@@ -1608,9 +1609,16 @@ export function HarnessApp({
 
     // U3 (MUB-141): GT Plan Overview on Ctrl+G — mid-run allowed (read-only, like the ToC).
     // Shared chord, gate wins: with a 🔴 block armed and not busy this falls through to the
-    // gate-answer arm below (its modal takes Ctrl+G first); any other time Ctrl+G is the
-    // overview (open focused / refocus / replace ToC).
+    // gate-answer arm below (its modal takes Ctrl+G first). Idle + GT-on at readable width
+    // opens the D3b overview panel (MP9); busy/narrow/GT-off keep the one-shot text path.
     if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
+      if (!busy && agent.config.groundTruth === true && cols >= TOC_MIN_COLS) {
+        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+        if (overview) {
+          setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
+          return;
+        }
+      }
       requestGtSidebar();
       return;
     }
@@ -2976,14 +2984,42 @@ export function HarnessApp({
         break;
       }
       case "why": {
-        // J1.1: `/why` = plan report · `/why <n>` = step n's detail card (the shared
-        // stepCardLines component the GT panel uses — gates, baseline, red→green evidence).
+        // J1.1 + MP9: in the TUI, `/why` opens the D3b GT overview panel and `/why <n>`
+        // opens it with step n's card pushed (the shared stepCardLines surface). The text
+        // path stays for GT-off, narrow terminals, and out-of-range steps — and is the
+        // only path headless runs ever had (no slash commands there).
+        const overview =
+          agent.config.groundTruth === true && agent.db && agent.runId
+            ? buildGtOverview(agent.db, agent.runId)
+            : null;
+        if (overview && cols >= TOC_MIN_COLS) {
+          const wantStep = /^\d+$/.test(args.trim()) ? Number(args.trim()) : null;
+          const step = wantStep !== null ? overview.steps[wantStep - 1] : undefined;
+          if (wantStep === null || step) {
+            const base = gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6)));
+            setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+            setPanel(
+              step
+                ? {
+                    stack: [
+                      ...base.stack,
+                      readerView(
+                        `plan ▸ step ${step.idx + 1}`,
+                        stepCardLines(step, overview.gatesByStep.get(step.stepId) ?? []),
+                      ),
+                    ],
+                    pendingG: false,
+                  }
+                : base,
+            );
+            break;
+          }
+        }
         let text: string;
         if (agent.config.groundTruth !== true) {
           text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to inspect verification.";
         } else if (/^\d+$/.test(args.trim())) {
           const n = Number(args.trim());
-          const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
           const row = overview?.steps[n - 1];
           text = !overview
             ? "No Ground-Truth plan recorded for this run."
@@ -3508,12 +3544,41 @@ export function HarnessApp({
     setPanel(null);
   }
   function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
-    if (key.ctrl && (input === "c" || input === "t")) {
+    const top = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
+    if (key.ctrl && input === "c") {
       closePanelReseat();
       return;
     }
+    if (key.ctrl && input === "t") {
+      // Ctrl+T toggles the ToC family closed; from the GT view it SWAPS to a fresh ToC.
+      if (!top || top.kind === "toc" || top.kind === "reader") {
+        closePanelReseat();
+        return;
+      }
+      const sections = buildSections(messages, buildUsageLedger());
+      setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
+      return;
+    }
     if (key.ctrl && input === "g") {
-      // Until the GT view lands (MP9): close and fall back to the one-shot overview text.
+      // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
+      // keyboard to the gate-focus modal (the same arm the global handler uses).
+      if (gtBehavior?.block) {
+        closePanelReseat();
+        dismissedGateRef.current = null;
+        setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
+        return;
+      }
+      if (top?.kind === "gt") {
+        closePanelReseat();
+        return;
+      }
+      if (agent.config.groundTruth === true) {
+        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+        if (overview) {
+          setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
+          return;
+        }
+      }
       closePanelReseat();
       requestGtSidebar();
       return;
@@ -3530,23 +3595,37 @@ export function HarnessApp({
       // impossible inline). Snapshot semantics: the reader slices the messages reference
       // captured at open.
       setPanel((prev) => {
-        const top = prev?.stack[prev.stack.length - 1];
-        if (!prev || !top || top.kind !== "toc") return prev;
-        const row = top.rows[top.cursor];
-        if (!row || row.sectionIdx === null) return prev;
-        const section = top.sections[row.sectionIdx];
-        if (!section) return prev;
-        const nextSec = top.sections[row.sectionIdx + 1];
-        const lines = sectionReaderLines(
-          top.snapshot,
-          section.startMsgIdx,
-          nextSec ? nextSec.startMsgIdx : top.snapshot.length,
-          Math.max(20, cols - 4),
-        );
-        return {
-          stack: [...prev.stack, readerView(`contents ▸ ${section.title}`, lines)],
-          pendingG: false,
-        };
+        const t = prev?.stack[prev.stack.length - 1];
+        if (!prev || !t) return prev;
+        if (t.kind === "toc") {
+          const row = t.rows[t.cursor];
+          if (!row || row.sectionIdx === null) return prev;
+          const section = t.sections[row.sectionIdx];
+          if (!section) return prev;
+          const nextSec = t.sections[row.sectionIdx + 1];
+          const lines = sectionReaderLines(
+            t.snapshot,
+            section.startMsgIdx,
+            nextSec ? nextSec.startMsgIdx : t.snapshot.length,
+            Math.max(20, cols - 6),
+          );
+          return {
+            stack: [...prev.stack, readerView(`contents ▸ ${section.title}`, lines)],
+            pendingG: false,
+          };
+        }
+        if (t.kind === "gt") {
+          const row = t.rows[t.cursor];
+          if (!row || row.stepIdx === null) return prev;
+          const step = t.overview.steps[row.stepIdx];
+          if (!step) return prev;
+          const lines = stepCardLines(step, t.overview.gatesByStep.get(step.stepId) ?? []);
+          return {
+            stack: [...prev.stack, readerView(`plan ▸ step ${step.idx + 1}`, lines)],
+            pendingG: false,
+          };
+        }
+        return prev;
       });
       return;
     }
@@ -3966,7 +4045,9 @@ export function HarnessApp({
             title={
               panelTop.kind === "toc"
                 ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
-                : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+                : panelTop.kind === "gt"
+                  ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
+                  : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
             }
             lines={panelTop.lines}
             cursor={panelTop.cursor}

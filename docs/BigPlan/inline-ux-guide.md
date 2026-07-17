@@ -486,7 +486,22 @@ rule (inert on the top-level list). The panel-toc scenario grew the reader leg
 **Agent proof:** seeded-ledger shots: overview, step card, gate-wins-chord, /why-opens-panel.
 **Manual test:** full GT run; use only Ctrl+G to follow execution; `/why` after a gate.
 **Gate:** §1.7. **Track P complete — Ctrl+T/Ctrl+G one-shot text blocks retire here** (the
-<60-col degrade keeps the text-snapshot path).
+<60-col degrade keeps the text-snapshot path; the busy path also keeps them — Q17a's
+sibling decision, 2026-07-17).
+**Execution notes (landed):** the `gt` view rides the same lines+stops primitive; step
+cards reuse `readerView` (breadcrumb `plan ▸ step N`, 1-based). Gate-wins is enforced at
+BOTH chord sites — the global guard falls through to the gate-answer arm, and the
+in-panel Ctrl+G closes + arms the SAME `gateFocus`. `/why` opens the panel (with `/why
+<n>` pushing the card); the text path survives for GT-off/narrow/out-of-range — headless
+never had slash commands. **Two real defects the panel-gt scenario caught:** (1)
+`stepCardLines` entries can carry embedded newlines — every panel view now FLATTENS its
+lines (a multi-row line breaks the height identity: log-update desyncs, a ghost row leaks
+into scrollback permanently, one more row would wipe); (2) terminals and Ink disagree by
+±1 cell on some emoji widths (the U+1F7Ex tier circles/squares — the Q12 emoji-width
+risk, live) — on a full-width row that pushes the right border past the last column and
+the terminal WRAPS it. Fix: `ExpandPanel` carries `marginRight={2}` width armor (2 cells
+of slack absorb the mismatch) and panel content builders take `cols − 6`. Both defects
+were invisible in bun tests and in Ink's own output — only the PTY byte gates saw them.
 
 ---
 
