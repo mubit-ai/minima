@@ -483,6 +483,7 @@ export class MinimaDb {
     }
     this.db.exec("PRAGMA foreign_keys=ON");
     this.migrate();
+    this.reconcileSchema();
   }
 
   private migrate(): void {
@@ -524,6 +525,32 @@ export class MinimaDb {
         }
       }
       if (!more) break;
+    }
+  }
+
+  /**
+   * Divergent-lineage self-heal, run on EVERY open after the version runner. Parallel
+   * branches have twice shipped DIFFERENT batches under the same version index (the
+   * TrackA/TrackB index-7 fork healed by v11, and a v6-index fork found in the field:
+   * a DB stamped version 11 with check_origin present but verify_cwd/gates.rec_id
+   * missing — its writers then crash on "no column named verify_cwd"). The version
+   * stamp cannot be trusted to imply THIS lineage's batch contents, so this pass
+   * replays every migration statement idempotently: CREATE ... IF NOT EXISTS as-is,
+   * ALTER ... ADD COLUMN only when pragma table_info lacks the column. One-off
+   * convergence batches (v11) fix an instance; this fixes the class. Concurrent
+   * openers may race an ALTER — execStep's duplicate-column swallow absorbs it.
+   */
+  private reconcileSchema(): void {
+    for (const batch of MIGRATIONS) {
+      for (const ddl of batch) {
+        const alter = ddl.match(/^ALTER TABLE (\w+) ADD COLUMN (\w+)/i);
+        if (alter) {
+          const cols = this.db.query(`PRAGMA table_info(${alter[1]})`).all() as { name: string }[];
+          if (!cols.some((c) => c.name === alter[2])) this.execStep(ddl);
+          continue;
+        }
+        if (/^CREATE (TABLE|INDEX) IF NOT EXISTS/i.test(ddl.trim())) this.execStep(ddl);
+      }
     }
   }
 
