@@ -57,6 +57,23 @@ One MP at a time, in this loop:
 > (CSI 3 J) and wipes all `<Static>` scrollback. `app.tsx:3600`. Every panel height in this
 > guide is derived from this.
 
+**Prompt placement (THE RULE, added 2026-07-16)**
+
+- The prompt section (composer + status footer) is **mounted at the terminal bottom** — from
+  frame 1 and permanently. Supersedes the earlier "render from the top (CC-style)" choice.
+  Mechanism: a one-time `rows−1` newline reserve at startup (`main.ts`) seats the first
+  paint; a `minHeight = rows − SAFETY − Σ committed-row estimate` + `justifyContent:
+  flex-end` box around the live region keeps every later frame there until the transcript
+  outgrows the screen (then it is inert). The estimate is `computeMsgHeight` — conservative,
+  so the frame can only end at/above the bottom, never overflow toward the wipe threshold.
+- **`<Static>` must never sit under a flex-end ancestor** — it is position-absolute in Ink,
+  and a flex-end parent offsets it past its own render canvas: committed messages silently
+  clip to nothing. It mounts on the flex-start root, the flex-end box is its sibling.
+- Enforced (not guidance): `render-buffer.test.ts` source pins + `tui-verify`'s
+  `bottom-anchor` check (settled PTY frames must have content within 1 row of the grid
+  bottom; wired on the echo + modes scenarios). D3b's height math (`rows − footerChrome`)
+  builds on this rule.
+
 **Panel system (D3)**
 
 - **D3a** = compact footer task panel, CC-parity: renders whenever todos exist, read straight
@@ -243,6 +260,13 @@ rule when D3b lands. Echo budget wired at ≤0.35s (observed 0.01s). Run log:
 **Agent proof:** inline shots byte-identical to MP0 baseline; suite green.
 **Manual test:** Ctrl+T / Ctrl+G print text blocks; nothing else changed.
 **Gate:** §1.7 + baseline diff clean.
+**Execution notes (landed):** the byte-identical gate runs via `docs/BigPlan/shots/ab/`
+(`ab_capture.sh` → frames per scenario, `ab_compare.py` → final-grid diff); the only masked
+rows are `/gt-seed`'s random UUIDs (`Seeded plan |seed-rec-`), proven volatile by a two-run
+control at the same commit. That control also surfaced a hermeticity wart: tips rotation
+state writes to the real `~/.minima-harness` regardless of `MINIMA_HARNESS_DIR`
+(`tips.ts` — `setTipsStateDir` exists but is never wired), so capture scripts must isolate
+`HOME`; a src fix is a follow-up, not part of the deletions.
 
 ### MP3 — Remove the fullscreen renderer *(L)*
 
@@ -266,6 +290,12 @@ rule when D3b lands. Echo budget wired at ≤0.35s (observed 0.01s). Run log:
 **Agent proof:** sweep output in PR body; inline shots still byte-identical to MP0; suite green.
 **Manual test:** `minima-loc` daily-drive for a session; confirm nothing feels different.
 **Gate:** §1.7 + baseline diff clean. **This closes the disposal work.**
+**Execution notes (landed):** `rewind_picker.ts` (the numbered list) survives whole — the
+overlay lived in `rewind-panel.tsx` + app.tsx call sites; `/mouse` is removed as a command
+(not stubbed); `clipPanelLines` + `computeMsgHeight` are kept in `layout.ts` for D3b
+(temporarily test-only); `input-filter.ts` keeps its defensive mouse-byte stripping — it
+already ran on the inline path, so deleting it would have changed inline behavior. The
+`panelCapture` guard/`suspended` seam stays as `false` for D3b to re-populate.
 
 ---
 

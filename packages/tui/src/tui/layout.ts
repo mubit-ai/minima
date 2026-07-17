@@ -1,24 +1,20 @@
 /**
  * Pure layout math for the TUI — no React/Ink, so it is unit-testable in isolation.
  *
- * Two consumers:
- *   - The INLINE renderer prints the finalized transcript via Ink's <Static> (native scrollback) and
- *     only re-diffs a small live region; the helpers below size that region.
- *   - The FULLSCREEN renderer owns an alternate-screen viewport and windows the whole transcript
- *     itself (getScrollableMessages + computeMsgHeight), because <Static>/native scroll is gone.
+ * The renderer prints the finalized transcript via Ink's <Static> (native scrollback) and
+ * only re-diffs a small live region; the helpers below size that region.
  *
  * Helpers:
  *   - wrappedLineCount     — input-box height as the typed text wraps
  *   - tailToFit            — the last lines of a streaming reply that fit the live area
  *   - clampToolText        — bound a huge tool result so the preview can't dwarf the screen
  *   - markdownBodyHeight   — rendered rows of a markdown body, mirroring MarkdownRenderer
- *   - computeMsgHeight     — rendered rows of one MessageRow (per role), the fullscreen window's ruler
- *   - getScrollableMessages — bottom-anchored window of the transcript for the fullscreen viewport
+ *   - computeMsgHeight     — rendered rows of one MessageRow (per role)
  *
  * The cardinal rule for these estimates: they MUST be >= the real rendered rows in messages.tsx (a
- * CONSERVATIVE bias). An under-count would let content grow past the space reserved for it and desync
- * Ink's frame diff (inline) or overflow the flex-end viewport (fullscreen) — the garbled-overlap /
- * decimation class of bug this module guards against.
+ * CONSERVATIVE bias). An under-count would let content grow past the space reserved for it and
+ * desync Ink's frame diff — the garbled-overlap / decimation class of bug this module guards
+ * against (an overgrown live region reaching `rows` makes Ink clearTerminal and wipe scrollback).
  */
 
 import stringWidth from "string-width";
@@ -145,8 +141,8 @@ export function tailToFit(text: string, interior: number, budgetRows: number): s
   let out = lines.slice(start).join("\n");
   // A streamed paragraph is ONE source line until the model emits "\n" — when even the
   // final line alone exceeds the budget, hard-slice its tail. Otherwise the live region
-  // outgrows the viewport: fullscreen re-enters the overflow garble class, and inline can
-  // reach terminal height and trip Ink's scrollback-wiping clearTerminal.
+  // outgrows its reservation, reaches terminal height, and trips Ink's scrollback-wiping
+  // clearTerminal.
   if (start === lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
     const iw = Math.max(1, interior);
     out = out.slice(-(budgetRows * iw));
@@ -295,8 +291,8 @@ export function permPreviewLines(
  * + the wrapped rows of every shown preview line + the wrapped marker row when lines are hidden
  * + one truncated hint row. Component and reservation consume the SAME helpers, so estimate ==
  * render by construction — the source-line count this replaces under-reserved whenever a preview
- * line word-wrapped at narrow widths, letting the live frame overflow its reservation (inline:
- * Ink's scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+ * line word-wrapped at narrow widths, letting the live frame overflow its reservation and trip
+ * Ink's scrollback-wiping clearTerminal.
  */
 export function permOverlayHeight(
   p: { toolName: string; promptText: string; argsSummary: string; diffPreview?: string | null },
@@ -349,10 +345,9 @@ export function gtFooterFit(
 }
 
 /**
- * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly, so the
- * fullscreen viewport (getScrollableMessages) can window history without overflowing the frame.
+ * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly.
  * CONSERVATIVE bias (>= actual): each role uses the accurate word-wrap helpers at the *narrowest*
- * width the real render could use, so we never under-count (an under-count would let the viewport
+ * width the real render could use, so we never under-count (an under-count would let content
  * render past its budget and desync Ink — the garble class). `cols` is the terminal width.
  */
 export function computeMsgHeight(msg: ChatMessage, cols: number): number {
@@ -373,200 +368,20 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
   return 2 + markdownBodyHeight(msg.text, cols);
 }
 
-/**
- * computeMsgHeight memoized by message identity. Sound because the TUI never mutates a
- * ChatMessage in place — transcript updates are appends or wholesale replaces with fresh
- * objects — so a given object's text is fixed; `cols` is the only other input. WeakMap:
- * entries die with the transcript that owns them (/resume, /clear rebuild from scratch),
- * so there is no explicit invalidation and no growth bound to manage. This is what turns
- * the fullscreen window from O(all messages × wrap) per render into O(map lookups).
- */
-const heightCache = new WeakMap<ChatMessage, { cols: number; h: number }>();
-
-export function cachedMsgHeight(msg: ChatMessage, cols: number): number {
-  const hit = heightCache.get(msg);
-  if (hit && hit.cols === cols) return hit.h;
-  const h = computeMsgHeight(msg, cols);
-  heightCache.set(msg, { cols, h });
-  return h;
-}
-
-/**
- * Next scroll offset after a wheel/page delta (positive = up), clamped to [0, maxOffset].
- * The STORED offset must clamp at mutation time — clamping only the render-derived value
- * (as getScrollableMessages does internally) lets over-scrolling bank unbounded "dead"
- * offset that later notches must pay down before anything moves on screen, which reads
- * as frozen/unresponsive scrolling.
- */
-export function applyScrollDelta(prev: number, delta: number, maxOffset: number): number {
-  return Math.max(0, Math.min(prev + delta, Math.max(0, maxOffset)));
-}
-
-/** A windowed view of the transcript for the fullscreen renderer. */
-export interface ScrollWindow {
-  /** Whole messages overlapping the visible window (the region clips the top fold). */
-  visible: ChatMessage[];
-  /** Total estimated rows of the whole transcript. */
-  totalHeight: number;
-  /** True when scrolled as far up as content allows. */
-  atTop: boolean;
-  /** True when pinned to the newest content (offset 0). */
-  atBottom: boolean;
-}
-
-/**
- * Select the messages visible in a `maxHeight`-row viewport at `scrollOffset` (0 = newest pinned to
- * the bottom; positive = scrolled up N rows). Sums per-message heights, clamps the offset to
- * `[0, total-maxHeight]`, and returns the whole messages overlapping the window `[end-maxHeight,
- * end]` where `end = total - offset`. Renders per-message (no turn boxes); the viewport bottom-aligns
- * with overflow:"hidden", so the message straddling the top fold is clipped (oldest content first).
- */
-export function getScrollableMessages(
-  messages: ChatMessage[],
-  maxHeight: number,
-  scrollOffset: number,
-  cols: number,
-): ScrollWindow {
-  if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
-
-  const heights = messages.map((m) => cachedMsgHeight(m, cols));
-  const totalHeight = heights.reduce((a, b) => a + b, 0);
-
-  const maxOffset = Math.max(0, totalHeight - maxHeight);
-  const effectiveOffset = Math.min(Math.max(0, scrollOffset), maxOffset);
-  const endLine = totalHeight - effectiveOffset;
-  const startLine = Math.max(0, endLine - maxHeight);
-
-  let currentLine = 0;
-  const visible: ChatMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const start = currentLine;
-    const end = currentLine + heights[i]!;
-    currentLine = end;
-    if (end <= startLine || start >= endLine) continue; // entirely outside the window
-    const dropTop = Math.max(0, startLine - start);
-    const dropBottom = Math.max(0, end - endLine);
-    if (dropTop === 0 && dropBottom === 0) {
-      visible.push(messages[i]!);
-      continue;
-    }
-    // This message straddles a fold. Clip it to the rows the window actually allots it. Clipping to a
-    // rendered HEIGHT (not a raw source-line count) is essential: MessageRow always re-adds chrome
-    // (marginTop + header + >=1 body row, and a border for thinking), so a naive text-line trim can
-    // still render TALLER than its slot and overflow the viewport — the exact cause of the scroll
-    // garble. clipMessageToHeight returns null when even the chrome floor can't fit; we then drop the
-    // message (a blank sliver at the fold, which justifyContent:"flex-end" handles cleanly).
-    const slot = Math.min(end, endLine) - Math.max(start, startLine);
-    const clipped = clipMessageToHeight(messages[i]!, slot, cols, dropTop, dropBottom);
-    if (clipped) visible.push(clipped);
-  }
-
-  // Belt-and-suspenders: guarantee the rendered stack never exceeds the viewport. The per-message
-  // clip already bounds each child to its disjoint slot (so the sum fits), but any height-parity
-  // drift between computeMsgHeight and MessageRow would otherwise re-introduce the overflow → Ink
-  // decimation. Trim/drop from the top (oldest) until the sum fits. Because computeMsgHeight >= the
-  // real render, `sum <= maxHeight` here implies the actual rendered stack is <= maxHeight too.
-  let sum = visible.reduce((n, m) => n + cachedMsgHeight(m, cols), 0);
-  while (sum > maxHeight && visible.length > 0) {
-    const first = visible[0]!;
-    const firstH = cachedMsgHeight(first, cols);
-    const shrunk = clipMessageToHeight(first, firstH - (sum - maxHeight), cols, 1, 0);
-    if (shrunk && cachedMsgHeight(shrunk, cols) < firstH) visible[0] = shrunk;
-    else visible.shift();
-    sum = visible.reduce((n, m) => n + cachedMsgHeight(m, cols), 0);
-  }
-
-  return {
-    visible,
-    totalHeight,
-    atTop: effectiveOffset >= maxOffset,
-    atBottom: effectiveOffset === 0,
-  };
-}
-
-/**
- * Clip `msg` so its rendered height (computeMsgHeight — which INCLUDES the chrome MessageRow always
- * re-adds: marginTop + header + border/padding) is `<= budget` rows, by dropping whole source lines
- * from the fold end(s): `dropTop > 0` keeps a suffix (top scrolled off), `dropBottom > 0` keeps a
- * prefix (bottom scrolled off), both keep a middle slice (a single message taller than the whole
- * viewport). Returns null when even an empty body exceeds `budget` (the role's irreducible chrome
- * floor won't fit) — the caller then leaves the slot blank, which is correct under
- * justifyContent:"flex-end" (a small gap at the fold, never an overflow).
- *
- * Height is strictly monotone as lines are trimmed (each source line renders >= 1 row and per-line
- * rows are position-independent), so every loop terminates at or before the empty body.
- */
-function clipMessageToHeight(
-  msg: ChatMessage,
-  budget: number,
-  cols: number,
-  dropTop: number,
-  dropBottom: number,
-): ChatMessage | null {
-  if (computeMsgHeight({ ...msg, text: "" }, cols) > budget) return null; // chrome floor won't fit
-  const full = computeMsgHeight(msg, cols);
-  const lines = msg.text.split("\n");
-  let lo = 0;
-  let hi = lines.length;
-  const heightOf = () => computeMsgHeight({ ...msg, text: lines.slice(lo, hi).join("\n") }, cols);
-  // Honor the top fold: drop leading lines until the remaining height reflects `dropTop` rows gone.
-  // For a top-fold-only message this trims straight to the budget; for a both-folds message it seats
-  // the top of the middle slice before the bottom trim below.
-  if (dropTop > 0) {
-    const target = full - dropTop;
-    while (lo < hi && heightOf() > target) lo++;
-  }
-  // Honor the bottom fold: drop trailing lines until it fits the budget.
-  if (dropBottom > 0) {
-    while (lo < hi && heightOf() > budget) hi--;
-  }
-  // Final safety against any residual over-count: trim from the top until it fits.
-  while (lo < hi && heightOf() > budget) lo++;
-  return { ...msg, text: lines.slice(lo, hi).join("\n") };
-}
-
 // ---------------------------------------------------------------------------
-// Panel geometry. The docked/overlay sidebar system (U2, MUB-140) was removed in MP2
-// (MUB-145) — inline is the only renderer and panels live in the live region. The
-// bordered-overpaint contract (PanelGeometry + clipPanelLines padding) survives for the
-// transient B5 rewind picker; TOC_MIN_COLS is the TUI-wide readable-width floor.
+// Panels. The docked/overlay sidebar system (U2, MUB-140) died in MP2 (MUB-145) and the
+// fullscreen renderer + rewind overlay in MP3 (MUB-146). TOC_MIN_COLS is the TUI-wide
+// readable-width floor; clipPanelLines is kept for the D3b live-region panels (guide MP7+).
 // ---------------------------------------------------------------------------
 
 /** Min readable width for full rendering; below it panel surfaces degrade to text. */
 export const TOC_MIN_COLS = 60;
 
-export interface PanelGeometry {
-  /** Columns left of the panel (transcript stays fully visible there). */
-  left: number;
-  /** Total panel width incl. borders. */
-  width: number;
-  /** Total panel height incl. borders — always the FULL region height (top- and
-   * bottom-aligned coincide, which pins Yoga's absolute static-position ambiguity). */
-  height: number;
-  /** Text columns inside borders + 1-col padding each side. */
-  innerWidth: number;
-  /** Text rows inside the borders. */
-  innerHeight: number;
-}
-
-/**
- * Right-anchored OVERLAY geometry, or null when the terminal is too narrow/short —
- * callers then print the one-shot text block instead. Width caps at 40 and always
- * leaves ≥30 transcript columns visible. Remaining consumer: the B5 rewind picker
- * (the ToC/GT sidebars dock via sidebarGeometry above).
- */
-export function tocPanelGeometry(cols: number, regionHeight: number): PanelGeometry | null {
-  if (cols < TOC_MIN_COLS || regionHeight < 5) return null;
-  const width = Math.min(40, cols - 30);
-  const height = regionHeight;
-  return { left: cols - width, width, height, innerWidth: width - 4, innerHeight: height - 2 };
-}
-
 /**
  * Window `lines` to exactly `innerHeight` rows with `cursorLine` visible: scrolls down
  * only as far as needed (cursor rides the bottom edge when moving down), clamps to the
  * content end, and pads with "" so every panel row paints — an unpainted row would let
- * the transcript underneath bleed through the overpaint.
+ * the content underneath bleed through.
  */
 export function clipPanelLines(
   lines: string[],
@@ -579,27 +394,4 @@ export function clipPanelLines(
   const windowed = lines.slice(top, top + innerHeight);
   while (windowed.length < innerHeight) windowed.push("");
   return { lines: windowed, top };
-}
-
-/**
- * The scrollOffset that puts message `k`'s top row at the top of a `maxHeight`-row
- * viewport (the U2 Enter-jump): offset = total − maxHeight − prefix(k), clamped to
- * [0, total − maxHeight]. A `k` inside the last page clamps to 0 — pinned to newest,
- * matching getScrollableMessages' offset semantics exactly.
- */
-export function offsetForMessage(
-  messages: ChatMessage[],
-  k: number,
-  maxHeight: number,
-  cols: number,
-): number {
-  let prefix = 0;
-  let total = 0;
-  for (let i = 0; i < messages.length; i++) {
-    const h = cachedMsgHeight(messages[i]!, cols);
-    if (i < k) prefix += h;
-    total += h;
-  }
-  const maxOffset = Math.max(0, total - maxHeight);
-  return Math.max(0, Math.min(total - maxHeight - prefix, maxOffset));
 }

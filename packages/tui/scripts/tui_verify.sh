@@ -15,6 +15,10 @@
 #                     — swept across every raw stream captured by the suite
 #   narrow-55         below the 60-col floor (TOC_MIN_COLS) the one-shot ToC text block
 #                     still renders and the app stays alive
+#   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
+#                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
+#                     root, app.tsx) and after content commits (asserted on the echo and
+#                     modes scenarios' settled frames)
 #
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
 # (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), shortcuts
@@ -118,7 +122,7 @@ capture echo "$SPEC"
 python3 "$TUI/scripts/tui_assert.py" "$TMP/echo-frames.jsonl" --check echo \
   --enter-after 5 --prompt-text "SLOW proof" --reply-text "Delayed reply" --echo-budget 0.35
 python3 "$TUI/scripts/tui_assert.py" "$TMP/echo-frames.jsonl" --after 2.5 \
-  --check single-prompt --check advancing --check final-nonblank
+  --check single-prompt --check advancing --check final-nonblank --check bottom-anchor
 
 echo "== tui-verify: scenario stream-wipe-perf (code-heavy stream, zero extra wipes) =="
 SPEC=$(cat <<EOF
@@ -240,6 +244,7 @@ assert seen("ACCEPT EDITS", 2.5, 4.0), "no ACCEPT EDITS badge after first Shift+
 assert seen("PLAN", 4.0, 99), "no PLAN badge after second Shift+Tab"
 print("tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)")
 PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/mode-frames.jsonl" --after 2.5 --check bottom-anchor
 
 echo "== tui-verify: scenario shortcuts (edit keys + inline Ctrl+Z suspend/resume) =="
 SPEC=$(cat <<EOF

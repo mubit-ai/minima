@@ -30,7 +30,7 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * Wheel coalescing window (ms). A fast wheel/trackpad flick delivers dozens of notches spread
  * across many stdin chunks within tens of ms; forwarding each notch as its own callback forces
- * one full React commit per notch (the fullscreen renderer repaints the whole frame per commit).
+ * one full React commit per notch.
  * Leading edge fires immediately — the first notch of a burst has zero added latency — then
  * everything inside the window nets into a single callback (~30 updates/s while scrolling).
  */

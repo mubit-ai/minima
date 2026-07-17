@@ -21,6 +21,10 @@ Checks (repeatable --check; all evaluated over frames with t >= --after, default
                   keystroke (--enter-after), and BEFORE any frame containing --reply-text.
                   The inline echo-latency budget (guide §3); baselined at 0.01s in
                   docs/BigPlan/shots/inline-baseline/README.md.
+  bottom-anchor   THE RULE (2026-07-16): the prompt section is mounted at the terminal
+                  bottom — in every frame the lowest non-blank row sits within
+                  --bottom-slack rows (default 1, for log-update's trailing newline) of
+                  the last grid row. A top-mounted prompt leaves the bottom blank and fails.
 
 Exit 0 = all pass. Exit 1 = failures (one line each on stderr). Exit 2 = usage error.
 """
@@ -87,6 +91,31 @@ def transcript_rows(screen):
     return [r for r in screen if not r.lstrip().startswith(("│", "╭", "╰"))]
 
 
+def check_bottom_anchor(frames, slack: int):
+    # Only SETTLED frames count: a pty read-chunk can split one log-update write, so a frame
+    # followed within 150ms by another is a torn intermediate, not a rendered state.
+    settled = [
+        fr
+        for i, fr in enumerate(frames)
+        if i == len(frames) - 1 or frames[i + 1]["t"] - fr["t"] >= 0.15
+    ]
+    if not settled:
+        return "bottom-anchor: no settled frames"
+    for fr in settled:
+        screen = fr["screen"]
+        nonblank = [i for i, row in enumerate(screen) if row.strip()]
+        if not nonblank:
+            return f"bottom-anchor: fully blank settled frame at t={fr['t']}"
+        low = nonblank[-1]
+        if low < len(screen) - 1 - slack:
+            return (
+                f"bottom-anchor: at t={fr['t']} the lowest content row is {low} of "
+                f"{len(screen)} — the prompt section is not mounted at the bottom"
+            )
+    print(f"tui_assert: bottom-anchor evaluated {len(settled)} settled frames")
+    return None
+
+
 def check_echo(frames, enter_after: float, prompt_text: str, reply_text: str, budget: float):
     echo_t = reply_t = None
     for fr in frames:
@@ -120,9 +149,11 @@ def main() -> int:
     ap.add_argument("--prompt-text", help="echo: submitted prompt text to find in the transcript")
     ap.add_argument("--reply-text", help="echo: model-output text that must come after the echo")
     ap.add_argument("--echo-budget", type=float, default=0.35)
+    ap.add_argument("--bottom-slack", type=int, default=1,
+                    help="bottom-anchor: blank rows tolerated under the footer")
     ap.add_argument("--check", action="append", required=True,
                     choices=["prompt-stable", "single-prompt", "advancing", "final-nonblank",
-                             "echo"])
+                             "echo", "bottom-anchor"])
     args = ap.parse_args()
 
     if "echo" in args.check and not (
@@ -146,6 +177,8 @@ def main() -> int:
         elif name == "echo":
             err = check_echo(frames, args.enter_after, args.prompt_text,
                              args.reply_text, args.echo_budget)
+        elif name == "bottom-anchor":
+            err = check_bottom_anchor(frames, args.bottom_slack)
         else:
             err = check_final_nonblank(frames, args.min_rows)
         if err:

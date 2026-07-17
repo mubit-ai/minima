@@ -457,10 +457,11 @@ describe("tui/app.tsx wires exit_plan", () => {
 describe("tui/app.tsx panel key routing", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("panelCapture derives from the rewind modal — the sidebar terms are gone", () => {
-    expect(src).toContain("const panelCapture = rewindOpen;");
+  test("panelCapture seam survives with no capturing panel (D3b re-populates it)", () => {
+    expect(src).toContain("const panelCapture = false;");
     expect(src).not.toContain("sidebarOpen");
     expect(src).not.toContain("sidebarFocused");
+    expect(src).not.toContain("rewindOpen");
   });
 
   test("the global guard list uses panelCapture — the per-panel lines are gone", () => {
@@ -474,11 +475,6 @@ describe("tui/app.tsx panel key routing", () => {
     expect(src).not.toContain("suspended={tocOpen}");
   });
 
-  test("the rewind modal owns keys only while mounted; Esc closes it", () => {
-    const rewind = readFileSync(join(import.meta.dir, "../src/tui/rewind-panel.tsx"), "utf8");
-    expect(rewind).toContain("onClose();");
-    expect(rewind).not.toContain("isActive");
-  });
 });
 
 // Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT
@@ -611,9 +607,9 @@ describe("tui/app.tsx sidebar removal", () => {
     expect(src).toContain("renderGtOverviewText(overview, cols - 6)");
   });
 
-  test("the rewind picker gates on its OWN geometry ref (null conditions diverged)", () => {
-    expect(src).toContain("fullscreen && overlayGeomRef.current && turns.length > 0");
-    expect(src).toContain("overlayGeomRef.current = overlayGeom;");
-    expect(src).toContain("if (rewindOpen && !overlayGeomOk) setRewindOpen(false);");
+  test("/rewind is the numbered text list everywhere (the overlay died with fullscreen)", () => {
+    expect(src).toContain("renderRewindText(turns, cols - 6)");
+    expect(src).not.toContain("RewindPanel");
+    expect(src).not.toContain("overlayGeom");
   });
 });
