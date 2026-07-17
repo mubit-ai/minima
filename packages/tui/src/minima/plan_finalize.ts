@@ -44,6 +44,8 @@ export type PlanFinalizeOutcome =
       md: string;
       outPath: string;
       seededCount: number;
+      /** MP18: the seeded steps' verify commands — plan approval IS their consent event. */
+      seededVerifies: string[];
       auditNote: string;
       /** metaModel was available but synthesis still failed — the doc is the deterministic
        * assembly, nothing was seeded, and the caller MUST surface it (silence cost the
@@ -137,6 +139,7 @@ export async function finalizePlan(
   // deliberated verifiable steps instead of re-inventing them. Fail-open: seeding is
   // bookkeeping and must never block finalize.
   let seededCount = 0;
+  const seededVerifies: string[] = [];
   if (deps.db && deps.runId && synth && synth.approach.length > 0) {
     try {
       const seedSteps = synth.approach
@@ -145,6 +148,13 @@ export async function finalizePlan(
       if (seedSteps.length > 0) {
         seededCount = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps).stepIds
           .length;
+        // MP18: the verifies the user just approved WITH the plan — the caller feeds them
+        // into the consent store, so the first in_progress todowrite (which carries no
+        // verify text of its own) does not dead-end at the execution-time consent check.
+        for (const st of seedSteps) {
+          const v = (st.verify ?? "").trim();
+          if (v) seededVerifies.push(v);
+        }
       }
     } catch {
       // fail-open
@@ -157,6 +167,7 @@ export async function finalizePlan(
     md,
     outPath: deps.outPath,
     seededCount,
+    seededVerifies,
     auditNote,
     synthFailed: deps.metaModel != null && synth === null,
   };

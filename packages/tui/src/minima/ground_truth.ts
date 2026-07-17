@@ -61,6 +61,21 @@ export interface GtAgentRef {
   readonly agentId?: string | null;
 }
 
+/** MP18: may this verify command execute on the host RIGHT NOW? Keyed on the exact string
+ *  that would run (the execution-time command, never the approved-at-todowrite one — a
+ *  post-approval swap must re-consent). Undefined = allow (the pre-MP18 library default);
+ *  fail-closed is a WIRING decision — the TUI injects its permission-state-backed checker,
+ *  headless injects headlessVerifyConsent. */
+export type VerifyConsent = (cmd: string) => boolean;
+
+export const VERIFY_CONSENT_BLOCK =
+  "could not run (this verify command was never approved by the user — approve it in an " +
+  "interactive session, or set MINIMA_TUI_ALLOW_VERIFY=1 to opt headless runs in)";
+
+export function headlessVerifyConsent(env: NodeJS.ProcessEnv = process.env): VerifyConsent {
+  return () => env.MINIMA_TUI_ALLOW_VERIFY === "1";
+}
+
 /** Compact footer facts about the active plan (M1.3 strip + M2.3 drift; D3a since MP6). */
 export interface PlanStripInfo {
   planId: string;
@@ -613,7 +628,11 @@ export const BASELINE_BUDGET_MS = 120_000;
  * Errored tool calls are ignored (nothing durable happened). All failures are swallowed —
  * ledger bookkeeping must never break a turn.
  */
-export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
+export function groundTruthAfterToolCall(
+  ref: GtAgentRef,
+  opts?: { verifyConsent?: VerifyConsent },
+): AfterToolCall {
+  const consent = opts?.verifyConsent;
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -629,6 +648,9 @@ export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
           const deadline = performance.now() + BASELINE_BUDGET_MS;
           for (const s of started) {
             if (!s.verify) continue;
+            // MP18: an unconsented verify never executes — the baseline stays NULL (signal
+            // withheld, never fabricated). Consent keys on the stored command about to run.
+            if (consent && !consent(s.verify)) continue;
             const remaining = deadline - performance.now();
             if (remaining <= 0) break;
             try {
@@ -870,12 +892,18 @@ function enforceStepAllowlist(
 
 export function groundTruthHooks(
   ref: GtAgentRef,
-  opts?: { gateBudgetMs?: number; fs?: FactorFs; enforceAllowlist?: boolean },
+  opts?: {
+    gateBudgetMs?: number;
+    fs?: FactorFs;
+    enforceAllowlist?: boolean;
+    verifyConsent?: VerifyConsent;
+  },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
   const enforceAllowlist = opts?.enforceAllowlist ?? false;
-  const sink = groundTruthAfterToolCall(ref);
+  const consent = opts?.verifyConsent;
+  const sink = groundTruthAfterToolCall(ref, { verifyConsent: consent });
   const pending = new Map<string, GateVerdict[]>();
 
   const before: BeforeToolCall = async (ctx) => {
@@ -957,6 +985,25 @@ export function groundTruthHooks(
             stepId: flip.stepId,
             outcome: "unchecked",
             factors: { ...uncheckedFactors(), tamper, blind, flipContent: flip.content },
+          });
+          continue;
+        }
+        // MP18: fail CLOSED on an unconsented verify — a completion claim without runnable
+        // evidence blocks (mirroring the unrunnable semantics), and the durable attempt row
+        // records why. Keyed on flip.verify, the EFFECTIVE execution-time command (a swap
+        // after approval re-prompts; the mutation-dodge is structurally closed).
+        if (consent && !consent(flip.verify)) {
+          failures.push({
+            flip,
+            outcome: "unrunnable",
+            why: VERIFY_CONSENT_BLOCK,
+            factors: {
+              ...uncheckedFactors(),
+              hasCheck: true,
+              tamper,
+              blind,
+              flipContent: flip.content,
+            },
           });
           continue;
         }

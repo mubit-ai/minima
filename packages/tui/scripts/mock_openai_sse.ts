@@ -10,8 +10,11 @@
  *   "SLOW" → wait MOCK_DELAY_MS (default 2500) before the first delta (echo-gap proof)
  *   "CODE" → code-heavy markdown (fenced blocks, long lines) for rendering baselines
  *   "TODO" → a todowrite tool_calls stream (3 canned tasks, one in_progress) — TWO-PHASE:
- *            once the transcript carries a tool result (role "tool"), the follow-up
- *            request gets a plain text reply instead, so the agent loop terminates
+ *            once THIS TURN carries a tool result (a role "tool" message after the last
+ *            user message), the follow-up request gets a plain text reply instead, so the
+ *            agent loop terminates; a NEW user turn re-arms the marker
+ *   "TODOV"/"TODOVSWAP"/"TODOVDONE" → MP18 consent drivers: one task with a verify shell
+ *            command / the same task with a MUTATED verify / a completed claim (done-gate)
  *   otherwise → a short text reply
  *
  * Council answering (MP14+): plan-mode meta calls carry a role-distinct SYSTEM prompt
@@ -100,7 +103,11 @@ const COUNCIL_SYNTH = JSON.stringify({
   ],
   findings: [
     { source: "researcher", summary: "footer registry exposes a factory seam", severity: "info" },
-    { source: "critic", summary: "rendered-row pin must cover the 60-col floor", severity: "concern" },
+    {
+      source: "critic",
+      summary: "rendered-row pin must cover the 60-col floor",
+      severity: "concern",
+    },
   ],
   questions: [],
   facts: ["the footer registry lives in the TUI layer"],
@@ -177,6 +184,19 @@ const TODO_DONE_REPLY =
   "Todo list recorded — the canned plan is underway. This second-phase reply exists so " +
   "the tool loop terminates deterministically.";
 
+// MP18: "TODOV" → a ONE-task todowrite carrying a `verify` shell command (drives the
+// consent overlay); "TODOVSWAP" mutates the verify (must re-prompt); "TODOVDONE" claims
+// completion with a verify (drives the done-gate — headless consent proof). All two-phase.
+// Substring precedence: TODOVDONE/TODOVSWAP before TODOV before TODO.
+function todoVTasks(prompt: string): string {
+  const task = prompt.includes("TODOVDONE")
+    ? { content: "Record the demo step", status: "completed", verify: "true" }
+    : prompt.includes("TODOVSWAP")
+      ? { content: "Record the demo step", status: "in_progress", verify: "echo consent-swapped" }
+      : { content: "Record the demo step", status: "in_progress", verify: "echo consent-ok" };
+  return JSON.stringify([task]);
+}
+
 // MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
 // GT-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
 const EXITPLAN_MD = [
@@ -217,17 +237,29 @@ Bun.serve({
     const sysMsg = (body.messages ?? []).find((m) => m.role === "system");
     const sys = typeof sysMsg?.content === "string" ? sysMsg.content : "";
     const council = councilReply(sys);
-    const hasToolResult = (body.messages ?? []).some((m) => m.role === "tool");
-    const wantTodo = council == null && prompt.includes("TODO") && !hasToolResult;
+    // Two-phase detection is TURN-scoped: a tool result AFTER the last user message means
+    // this request is the same turn's follow-up (phase 2 → plain text so the loop ends).
+    // Keying on any-tool-result-in-history froze every marker after the first tool turn.
+    const msgs = body.messages ?? [];
+    const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
+    const hasToolResult = msgs.slice(lastUserIdx + 1).some((m) => m.role === "tool");
+    const wantTodoV = council == null && prompt.includes("TODOV") && !hasToolResult;
+    const wantTodo =
+      council == null && prompt.includes("TODO") && !prompt.includes("TODOV") && !hasToolResult;
     const wantExitPlan = council == null && prompt.includes("EXITPLAN") && !hasToolResult;
-    const toolCall = wantTodo
-      ? { name: "todowrite", args: JSON.stringify({ tasks: TODO_TASKS }) }
-      : wantExitPlan
-        ? {
-            name: "exit_plan",
-            args: JSON.stringify({ plan: EXITPLAN_MD, summary: "Clean up the sandbox temp dirs" }),
-          }
-        : null;
+    const toolCall = wantTodoV
+      ? { name: "todowrite", args: JSON.stringify({ tasks: todoVTasks(prompt) }) }
+      : wantTodo
+        ? { name: "todowrite", args: JSON.stringify({ tasks: TODO_TASKS }) }
+        : wantExitPlan
+          ? {
+              name: "exit_plan",
+              args: JSON.stringify({
+                plan: EXITPLAN_MD,
+                summary: "Clean up the sandbox temp dirs",
+              }),
+            }
+          : null;
     const { text, slow } =
       council != null
         ? { text: council, slow: false }

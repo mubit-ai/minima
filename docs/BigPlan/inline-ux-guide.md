@@ -836,6 +836,35 @@ agent mutates the verify → re-prompt. Shots of each.
 **Manual test:** GT run; confirm the prompts feel right and don't nag.
 **Gate:** §1.7 + a test that the gate cannot be bypassed by verify mutation.
 
+**Execution notes (landed 2026-07-17):** **AMENDMENT (user decision): consent is
+session-only, in-memory** — the spec's "per project" persistence clause is dropped
+(approved shell-command strings never touch disk; a new session re-prompts once per
+verify). The audit (AUD-7) showed the TUI prompt path already existed
+(`approvedVerifies` exact-string consent, mutation re-prompt, commands verbatim in the
+overlay); MP18's real scope was ENFORCEMENT AT EXECUTION TIME: a `VerifyConsent` predicate
+threads into BOTH runCheck sites — baseline capture (unconsented → skip, baseline stays
+NULL: signal withheld, never fabricated) and the done-gate (unconsented → fail-CLOSED
+`unrunnable` gate row + block with `VERIFY_CONSENT_BLOCK`). Consent keys on
+`flip.verify` — the EFFECTIVE execution-time command — so the approve-A-then-swap-to-B
+dodge is structurally closed (pinned by test, with the swap also honestly voiding the
+baseline). Wiring: undefined = allow (library default, all embeddings unchanged);
+`main.ts` starts the seam at `headlessVerifyConsent` (deny-all unless
+`MINIMA_TUI_ALLOW_VERIFY=1` — headless `-p` now fails closed, breaking zero-consent
+automations BY DESIGN with the env escape documented in --help); the TUI swaps in
+`bypass-mode || approvedVerifies.has(cmd)` on mount (bypass = blanket consent; acceptEdits
+still prompts — todowrite is not in its auto bundle, pinned). Finalize-seeded checks:
+plan approval (which displays every verify) IS their consent — `PlanFinalizeOutcome.ok`
+gains `seededVerifies`, fed into the consent store by `runPlanFinalize`. Mock: TODOV /
+TODOVSWAP / TODOVDONE markers + a fix that mattered: two-phase detection is now
+TURN-scoped (tool-result after the LAST user message) — any-tool-result-in-history froze
+every marker after the first tool turn (the MP17 scenario's second EXITPLAN send is now a
+plain prompt for exactly that reason). Scenarios set `MINIMA_TUI_STOP_STRIKES=0` (an armed
+in_progress step otherwise spirals the plan-not-done nag through scripted sends). Gates:
+`verify-consent` (prompt → silent → mutation re-prompt) + `headless-verify-consent` (DB
+gate rows: unrunnable without the env, verified with it); `verify-consent.test.ts` (both
+runCheck sites, mutation-dodge, library default, env checker). Shots:
+`shots/mp18-verify-consent/`.
+
 ### MP19 — Final E2E acceptance demo *(M/L · last)*
 
 **Goal:** the whole story, proven — J1's demo intent, re-scoped to this guide.

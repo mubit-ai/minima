@@ -426,7 +426,10 @@ describe("tui/app.tsx wires exit_plan", () => {
 
   test("/plan finalize and the tool share ONE core (runPlanFinalize → finalizePlan)", () => {
     expect(src.split("await runPlanFinalize(").length - 1).toBe(2); // exit_plan + /plan finalize
-    expect(src).toContain("return finalizePlan(store, {");
+    // MP18: the shared core awaits finalizePlan so the ok-branch can feed seededVerifies
+    // into the consent store before returning.
+    expect(src).toContain("const outcome = await finalizePlan(store, {");
+    expect(src).toContain("permStateRef.current.approvedVerifies.add(v)");
     // The command path no longer inlines the synthesis/audit/write sequence.
     expect(src).not.toContain("synthesizeGroundTruth(store.session");
     expect(src).not.toContain("await Bun.write(outPath, md)");
