@@ -39,13 +39,7 @@ import { errText } from "../errtext.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
-import {
-  type PlanStripInfo,
-  planStripDrift,
-  planStripInfo,
-  planStripLabel,
-  stampGroundedOutcome,
-} from "../minima/ground_truth.ts";
+import { type PlanStripInfo, planStripInfo, stampGroundedOutcome } from "../minima/ground_truth.ts";
 import {
   PlanSessionStore,
   type RoutingResult,
@@ -85,7 +79,6 @@ import {
   TOC_MIN_COLS,
   childTreeHeight,
   computeMsgHeight,
-  gtFooterFit,
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
@@ -120,7 +113,7 @@ import {
 } from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
-import { taskFooterRows } from "./task_footer.ts";
+import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
@@ -3448,23 +3441,6 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  // GT tier→behavior footer rows (M6.2): one for the 🟡 milestone-review note, one for the 🔴 block.
-  const gtFooterNote = gtBehavior?.footerNote ?? null;
-  const gtBlock = gtBehavior?.block ?? null;
-  // Fit-derived GT row collapse (the #93 recipe): grant footer rows in priority order block →
-  // strip → note from what the terminal spares beyond the fixed stack (base footer 6 + live-action
-  // row + input-box floor + safety margin + one chat row). Reservation and the three renders BOTH
-  // derive from gtFit, so they can never drift; all-absent in → all-absent out keeps the GT-off
-  // footer math untouched. A dropped 🔴 row is display-only — the gate stays enforced in the
-  // dispatcher and answerable via the gate-focus modal's input-box hint.
-  const gtBudget =
-    rows - (6 + (currentAction ? 1 : 0) + (planMode ? 7 : 4) + SCROLLBACK_SAFETY_ROWS + 1);
-  const gtFit = gtFooterFit(gtBudget, {
-    block: gtBlock !== null,
-    strip: planStrip !== null,
-    note: gtFooterNote !== null,
-  });
-  const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0);
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -3494,13 +3470,18 @@ export function HarnessApp({
     !questionPrompt &&
     panelOuter >= 5 &&
     cols >= TOC_MIN_COLS;
-  // D3a task panel rows (MP5): read from the in-place-mutated todos array; todoGen forces
-  // the re-read after every tool end. GT rows keep grant priority until MP6 folds them in;
-  // reservation (taskGranted in footerHeight below) and render use the SAME value.
+  // D3a task panel rows (MP5; GT enrichment MP6 — ONE plan surface, the old planStrip
+  // banner + note/block rows are gone). Read from the in-place-mutated todos array
+  // (todoGen forces the re-read after every tool end); with a GT plan the ledger
+  // projection upgrades the header and arms the alert row. A dropped alert row is
+  // display-only — the gate stays enforced in the dispatcher and answerable via the
+  // gate-focus modal's input-box hint. Reservation (footerHeight) and render consume the
+  // SAME granted rows (the fit-grant discipline the old GT banner used).
   const taskRows = useMemo(() => {
     void todoGen;
-    return taskFooterRows(todos ?? []);
-  }, [todos, todoGen]);
+    const gt = planStrip ? { ...planStrip, blocked: (gtBehavior?.block ?? null) !== null } : null;
+    return taskFooterRows(todos ?? [], gt);
+  }, [todos, todoGen, planStrip, gtBehavior]);
   const taskVisible =
     taskRows.length > 0 &&
     !taskPanelHidden &&
@@ -3508,12 +3489,11 @@ export function HarnessApp({
     !permPrompt &&
     !questionPrompt &&
     !panelVisible;
-  const taskGranted = taskVisible
-    ? Math.min(taskRows.length, Math.max(0, gtBudget - gtRows - (gtFit.strip ? 1 : 0)))
-    : 0;
-  // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows
-  // + the granted D3a task rows.
-  const footerHeight = 6 + (currentAction ? 1 : 0) + (gtFit.strip ? 1 : 0) + gtRows + taskGranted;
+  const taskBudget =
+    rows - (6 + (currentAction ? 1 : 0) + (planMode ? 7 : 4) + SCROLLBACK_SAFETY_ROWS + 1);
+  const taskShown = taskVisible ? grantTaskRows(taskRows, taskBudget) : [];
+  // StatusBar (2 rows + margin) + keys row + quit line + the granted D3a task rows.
+  const footerHeight = 6 + (currentAction ? 1 : 0) + taskShown.length;
   const panelInnerRows = Math.max(1, panelOuter - PANEL_CHROME_ROWS);
   // Closing must also RE-SEAT the bottom mount: the panel covered the whole screen, so the
   // post-close frame starts from an effectively fresh screen. Moving the static-estimate
@@ -3703,9 +3683,9 @@ export function HarnessApp({
   // toggle); busy + suggestions hug the input inside the composer group below.
   const footerBlock = (
     <>
-      {taskGranted > 0 && (
+      {taskShown.length > 0 && (
         <Box flexDirection="column" width="100%" flexShrink={0}>
-          {taskRows.slice(0, taskGranted).map((r, i) => (
+          {taskShown.map((r, i) => (
             <Text key={`${i}-${r.text}`} color={r.color} bold={r.bold} wrap="truncate">
               {r.text}
             </Text>
@@ -3771,34 +3751,6 @@ export function HarnessApp({
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold wrap="truncate">
                 {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
-              </Text>
-            </Box>
-          )}
-          {planStrip && gtFit.strip && !panelVisible && (
-            <Box paddingX={1} width="100%">
-              <Text color="cyan" wrap="truncate-end">
-                {planStripLabel(planStrip)}
-                {planStrip.drift > 0 ? (
-                  <Text color="yellow">{planStripDrift(planStrip.drift)}</Text>
-                ) : null}
-              </Text>
-            </Box>
-          )}
-          {/* GT tier→behavior (M6.2): 🟡 milestone-review note, then the 🔴 block prompt. Each is
-              one truncated row, granted by gtFit in lockstep with footerHeight. The 🔴 answer keys
-              live in the gate-focus modal (M6.3) — this banner is display + the ctrl+g re-arm hint. */}
-          {gtFooterNote && gtFit.note && !panelVisible && (
-            <Box paddingX={1} width="100%">
-              <Text color="yellow" wrap="truncate-end">
-                {gtFooterNote}
-              </Text>
-            </Box>
-          )}
-          {gtBlock && gtFit.block && !panelVisible && (
-            <Box paddingX={1} width="100%">
-              <Text color="red" bold wrap="truncate-end">
-                {gtBlock.prompt}
-                {gateFocus ? "" : " · ctrl+g to answer"}
               </Text>
             </Box>
           )}

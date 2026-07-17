@@ -197,7 +197,11 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     };
 
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: hangingFetch });
-    const config = harnessConfig({ candidates: ["test-faux"], allowOffline: false, minimaApiKey: "k" });
+    const config = harnessConfig({
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
     const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9), tools: [] });
 

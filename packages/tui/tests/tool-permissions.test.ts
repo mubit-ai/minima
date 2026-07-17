@@ -133,7 +133,9 @@ describe("groundTruthHooks allowlist enforcement", () => {
     // A restrictive allowlist that is NOT in progress must not bite — this exercises the
     // getInProgressStep status filter (a broken filter would read the pending step's ["edit"] list
     // and wrongly block write). The allowlist must be restrictive or the test passes trivially.
-    d.seedPlanFromSteps("run1", "T", [{ content: "Edit the router", verify: "bun test x", tools: ["edit"] }]);
+    d.seedPlanFromSteps("run1", "T", [
+      { content: "Edit the router", verify: "bun test x", tools: ["edit"] },
+    ]);
     const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     expect(await before(toolCtx("write"))).toBeNull();
   });

@@ -44,7 +44,13 @@ function service() {
             score: 0.001,
           },
           ranked: [
-            { model_id: "m", provider: "p", predicted_success: 0.9, est_cost_usd: 0.001, score: 0.001 },
+            {
+              model_id: "m",
+              provider: "p",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
           ],
           confidence: 0.8,
           decision_basis: "prior",

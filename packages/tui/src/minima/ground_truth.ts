@@ -61,8 +61,9 @@ export interface GtAgentRef {
   readonly agentId?: string | null;
 }
 
-/** Compact footer facts about the active plan (M1.3 strip + M2.3 drift). */
+/** Compact footer facts about the active plan (M1.3 strip + M2.3 drift; D3a since MP6). */
 export interface PlanStripInfo {
+  planId: string;
   /** 1-based position of the active step. */
   stepPos: number;
   stepTotal: number;
@@ -70,6 +71,8 @@ export interface PlanStripInfo {
   title: string;
   /** Count of off-plan (drift) file changes recorded against the plan. */
   drift: number;
+  /** Plan-scoped realized cost (Σ per-step $ stamps); null when nothing is stamped yet. */
+  totalCostUsd: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -414,30 +417,15 @@ export function planStripInfo(db: MinimaDb | null, sessionId: string | null): Pl
   if (steps.length === 0) return null;
   const pos = activeStepPos(steps);
   const active = steps[Math.min(pos - 1, steps.length - 1)];
+  const { totalUsd } = db.stepCosts(plan.id);
   return {
+    planId: plan.id,
     stepPos: pos,
     stepTotal: steps.length,
     title: active?.content ?? plan.title ?? "",
     drift: db.countOffPlanChanges(plan.id),
+    totalCostUsd: totalUsd > 0 ? totalUsd : null,
   };
-}
-
-/**
- * M1.3: the footer plan-of-record line, e.g. `▸ plan 2/5 — Wire the router`. Interior newline
- * runs in the step content (plus surrounding indentation) collapse to a single space so the
- * strip is provably one rendered row against its one-row footer reservation — projection-only:
- * `plan_steps.content` stays verbatim in the DB.
- */
-export function planStripLabel(info: PlanStripInfo): string {
-  return `▸ plan ${info.stepPos}/${info.stepTotal} — ${info.title.replace(/\s*[\r\n]+\s*/g, " ")}`;
-}
-
-/**
- * M2.3: the drift suffix appended (in yellow) after the label when off-plan changes exist,
- * e.g. `   ⚠ 3 off-plan (drift)`. Returns "" for zero drift so the caller renders nothing.
- */
-export function planStripDrift(drift: number): string {
-  return drift > 0 ? `   ⚠ ${drift} off-plan (drift)` : "";
 }
 
 /**

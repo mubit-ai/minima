@@ -45,9 +45,7 @@ describe("upsertPlanFromTodos tools stickiness", () => {
     expect(toolsOf(d, planId)).toEqual(["edit", "bash"]);
 
     // 4. an empty array is treated as "omit" (serializes to NULL) → cannot clear
-    d.upsertPlanFromTodos("run1", [
-      { content: "Edit router", status: "in_progress", tools: [] },
-    ]);
+    d.upsertPlanFromTodos("run1", [{ content: "Edit router", status: "in_progress", tools: [] }]);
     expect(toolsOf(d, planId)).toEqual(["edit", "bash"]);
   });
 });

@@ -399,6 +399,17 @@ scenario); `tasks-footer` + `tasks-footer-restart` joined tui-verify permanently
 **Manual test:** `MINIMA_TUI_GROUND_TRUTH=1` run: watch a step go in-progress → done; trigger
 a gate block; confirm ^G answers it.
 **Gate:** §1.7 + GT-off path unchanged vs MP5 shots.
+**Execution notes (landed):** the A/B gate came out ideal — all four GT-off scenarios
+byte-IDENTICAL vs MP5, and the `gt` scenario's diff is exactly the three-row swap (D3a
+header replaces the `▸ plan …` banner row; `drift: 1 file off-plan` replaces the inline
+⚠ suffix; the 🟡 note row folds away — full tiers are Ctrl+G's per Q25). `PlanStripInfo`
+gained `planId` + `totalCostUsd` (null hides the cost segment — never `$0.0000`);
+`planStripLabel`/`planStripDrift` were deleted (app-orphaned once the banner died — the
+one-rendered-row newline collapse now lives in `task_footer.oneLine`, tested there).
+`grantTaskRows` grants alert → header → next, display order preserved. The 🟡 note text
+(`gtBehavior.footerNote`) intentionally has no D3a row; `gt-footer.test.ts` was rewritten
+in the same commit onto the successor invariants (banner strings ABSENT, taskShown
+lockstep, taskBudget constants, refresh cadence, fail-open).
 
 ### MP7 — D3b expanded panel + ToC list *(L · needs MP4 pass)*
 

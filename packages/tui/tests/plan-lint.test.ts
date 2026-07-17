@@ -96,9 +96,9 @@ describe("lintPlan", () => {
       "vague-action",
     );
     // Upper bound: a vague verb only fires at <= 4 words; a longer phrase is not flagged.
-    expect(rules([step({ content: "refactor the entire authentication subsystem now" })])).not.toContain(
-      "vague-action",
-    );
+    expect(
+      rules([step({ content: "refactor the entire authentication subsystem now" })]),
+    ).not.toContain("vague-action");
   });
 
   test("an unknown tool name in the allowlist is a blocker (typo would wedge runtime)", () => {
@@ -147,7 +147,11 @@ describe("synthAuditFindings (the /plan finalize gate)", () => {
 
   test("a typo'd council tool name reaches the unknown-tool blocker", () => {
     const findings = synthAuditFindings([
-      { action: "Edit the router", verify: "bun test tests/router.test.ts", tools: ["edt", "bash"] },
+      {
+        action: "Edit the router",
+        verify: "bun test tests/router.test.ts",
+        tools: ["edt", "bash"],
+      },
     ]);
     expect(findings.some((f) => f.rule === "unknown-tool" && f.severity === "blocker")).toBe(true);
     expect(hasBlockers(findings)).toBe(true);
@@ -155,7 +159,11 @@ describe("synthAuditFindings (the /plan finalize gate)", () => {
 
   test("a well-formed approach passes the gate cleanly", () => {
     const findings = synthAuditFindings([
-      { action: "Wire the router to the recommend endpoint", verify: "bun test x", tools: ["edit"] },
+      {
+        action: "Wire the router to the recommend endpoint",
+        verify: "bun test x",
+        tools: ["edit"],
+      },
     ]);
     expect(hasBlockers(findings)).toBe(false);
   });

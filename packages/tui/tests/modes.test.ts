@@ -94,9 +94,11 @@ describe("mode bundles + ring (Claude Code-style modes)", () => {
   });
 
   test("bundleForMode maps the new modes", async () => {
-    const { ACCEPT_EDITS_BUNDLE, BYPASS_BUNDLE, bundleForMode: bfm } = await import(
-      "../src/agent/modes.ts"
-    );
+    const {
+      ACCEPT_EDITS_BUNDLE,
+      BYPASS_BUNDLE,
+      bundleForMode: bfm,
+    } = await import("../src/agent/modes.ts");
     expect(bfm("acceptEdits")).toBe(ACCEPT_EDITS_BUNDLE);
     expect(bfm("bypass")).toBe(BYPASS_BUNDLE);
   });

@@ -44,7 +44,10 @@ function openerScript(dbPath: string): string {
   return file;
 }
 
-async function spawnOpeners(dbPath: string, n: number): Promise<{ codes: number[]; out: string[] }> {
+async function spawnOpeners(
+  dbPath: string,
+  n: number,
+): Promise<{ codes: number[]; out: string[] }> {
   const procs = Array.from({ length: n }, () =>
     Bun.spawn(["bun", openerScript(dbPath)], { stdout: "pipe", stderr: "pipe" }),
   );
