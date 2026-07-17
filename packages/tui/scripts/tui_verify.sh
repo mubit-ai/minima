@@ -29,10 +29,15 @@
 #   panel-gt          MP9 (D3b GT view): an unanswered 🔴 gate WINS the Ctrl+G chord (no
 #                     panel); answering it lets Ctrl+G open the overview; Enter opens the
 #                     step card; /why re-opens the panel — same zero-wipe byte gates
+#   plan-council      MP14: during a /plan turn the busy row shows the council progress
+#                     line advancing role-by-role (researcher → keeper → critic → synth,
+#                     canned council replies from the mock via MINIMA_JUDGE_MODEL=
+#                     mock-model); the old per-phase transcript pushes are gone
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
-#                     modes scenarios' settled frames)
+#                     modes scenarios' settled frames; slack 3 on the stream scenarios —
+#                     MP20 notes)
 #
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
 # (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), shortcuts
@@ -647,11 +652,65 @@ assert sum(1 for row in last if row.strip()) >= 5, "transcript gone after exit"
 print("tui_assert: PASS panel-gt (gate wins, overview, step card, /why, cancel kills GT)")
 PY
 
+echo "== tui-verify: scenario plan-council (MP14: busy-row council progress line) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 24,
+  "env": {"MINIMA_DB_PATH": "$TMP/plancouncil.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-plancouncil",
+          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model"},
+  "frames": "$TMP/plancouncil-frames.jsonl",
+  "raw": "$TMP/plancouncil-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "/plan start demo council progress"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 4.4, "send": "please research the codebase and draft a plan for the demo"},
+    {"after": 5.2, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture plancouncil "$SPEC"
+python3 - "$TMP/plancouncil-raw.bin" "$TMP/plancouncil-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+# The busy row's council line must ADVANCE role-by-role (first-seen strictly ordered).
+# MINIMA_JUDGE_MODEL=mock-model points the council meta calls at the mock (otherwise the
+# default judge model has no key, every meta call fails fast, and the phases blink by).
+def first_seen(needle):
+    for f in frames:
+        if any(needle in row for row in f["screen"]):
+            return f["t"]
+    return None
+stages = [
+    "council: researcher …",
+    "researcher ✓ · keeper …",
+    "keeper ✓ · critic …",
+    "critic ✓ · synth …",
+]
+times = [first_seen(s) for s in stages]
+for s, t in zip(stages, times):
+    assert t is not None, f"busy row never showed {s!r}"
+assert times == sorted(times), f"council phases out of order: {times}"
+assert times[-1] - times[0] > 0.5, f"phases blinked by in {times[-1] - times[0]:.2f}s - meta calls not hitting the mock"
+# MP14 dropped the per-phase transcript pushes - the round-summary note is the record.
+assert not any("· scope:" in row or "· research:" in row for f in frames for row in f["screen"]), (
+    "old per-phase council transcript pushes still render")
+assert any("council cost $" in row for f in frames for row in f["screen"]), (
+    "round-summary council note missing")
+print("tui_assert: PASS plan-council (line advances role-by-role, transcript pushes gone)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
-          "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin <<'PY'
+          "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
+          "$TMP"/plancouncil-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

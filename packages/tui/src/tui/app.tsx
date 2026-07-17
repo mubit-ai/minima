@@ -65,7 +65,7 @@ import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
-import { BusyIndicator } from "./busy.tsx";
+import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
@@ -786,6 +786,10 @@ export function HarnessApp({
   const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
+  // MP14: current council phase while a plan turn's round runs — drives the busy row's
+  // progress line (null = normal rotating verb). Set from runCouncilRound's onEvent,
+  // cleared when the planner takes over and belt-cleared in onSubmit's finally (abort).
+  const [councilPhase, setCouncilPhase] = useState<CouncilPhase | null>(null);
   const [busyState, setBusyState] = useState<"ready" | "reasoning" | "running">("ready");
   // Tools currently executing (parallel — keyed by toolCallId), newest last. Drives the live
   // "current action" line in the footer; cleared per-tool on tool_execution_end.
@@ -3397,11 +3401,10 @@ export function HarnessApp({
           spawn: planSpawn,
           signal: o.signal,
           roundBudgetUsd: o.roundBudgetUsd,
-          onEvent: (e) =>
-            setMessages((m) => [
-              ...m,
-              { role: "tool", toolName: "council", text: `· ${e.phase}: ${e.note}` },
-            ]),
+          // MP14: phases feed the busy-row progress line, not the transcript — the
+          // per-phase `· phase: note` scrollback pushes carried no post-hoc information
+          // (fixed strings; the round-summary note below is the durable record).
+          onEvent: (e) => setCouncilPhase(e.phase),
           onChildEvent: childEventRef?.handler ?? undefined,
         }),
       askUser: askUserRef?.current ?? null,
@@ -3412,6 +3415,7 @@ export function HarnessApp({
       // framing never leaks away.
       buildSystem: (s) => buildPlannerSystemPrompt(PLANNER_PERSONA, s),
       promptPlanner: async (turn, systemPrompt) => {
+        setCouncilPhase(null);
         // promptRouted's finally restores the system prompt it saw at entry — the planner
         // persona. If exit_plan finalized/canceled mid-turn, exitPlanMode's restore to the
         // build prompt would be stomped by that finally; re-apply it after the turn.
@@ -3507,6 +3511,7 @@ export function HarnessApp({
       pendingEchoRef.current = false;
       setBusy(false);
       setBusyState("ready");
+      setCouncilPhase(null);
       setActiveActions([]);
       setStreaming("");
       setStreamingThoughts("");
@@ -3935,7 +3940,13 @@ export function HarnessApp({
               </Text>
             </Box>
           )}
-          {busyIndicatorVisible && <BusyIndicator active showTip={tipsEnabled} />}
+          {busyIndicatorVisible && (
+            <BusyIndicator
+              active
+              showTip={tipsEnabled}
+              statusLine={councilPhase ? councilProgressLine(councilPhase) : null}
+            />
+          )}
           {matchingCommands.length > 0 && !panelVisible && (
             <Box
               borderStyle="round"

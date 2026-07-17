@@ -690,6 +690,26 @@ complete (roles' text stays internal — this is progress, not content). Works w
 **Manual test:** `/plan` a real feature; the wait should *feel* alive.
 **Gate:** §1.7.
 
+**Execution notes (landed 2026-07-17):** `councilProgressLine(phase)` (pure, `busy.tsx`)
+renders `council: researcher ✓ · keeper ✓ · critic … · synth ·` INSIDE the existing single
+busy row via a new `BusyIndicator.statusLine` prop that replaces the rotating verb + tip —
+footer row budget unchanged (2). `scope` folds into the researcher tick (sub-second prep,
+not a fifth role). Wiring: `runCouncilRound`'s existing `onEvent` → `councilPhase` state →
+the prop; cleared at `promptPlanner` start and belt-cleared in `onSubmit`'s finally.
+**Decision: the per-phase `· phase: note` transcript pushes are DROPPED** — fixed strings
+with no post-hoc information; the round-summary cost/faults note stays as the durable
+record. Mock: `mock_openai_sse.ts` now answers council meta calls with canned per-role
+replies keyed on the SYSTEM prompt's role phrases (`MOCK_COUNCIL_STAGE_MS` dwell, default
+400ms); PTY scenarios must set `MINIMA_JUDGE_MODEL=mock-model` or every meta call fails
+fast on the keyless default judge model and the phases blink by (that failure mode is
+itself asserted via a minimum round duration). Gate: `tui_verify.sh` scenario
+`plan-council` (first-seen phase ordering strict, transcript pushes absent, round-summary
+present, zero-wipe, no-mouse sweep). Shots: `shots/mp14-council-progress/` (busy-research,
+busy-synth PNGs + `council-line.frames.jsonl`). Known observation for MP19: the researcher
+SUB-AGENT falls back instantly in PTY runs (its child model defaults to a keyless catalog
+model) — research contributes no wall-clock; the full-loop demo will need the child model
+pointed at the mock too.
+
 ### MP15 — Council parallelization + conditional convening *(M)*
 
 **Goal:** kill the *actual* latency.

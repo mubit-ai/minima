@@ -14,11 +14,22 @@
  *            request gets a plain text reply instead, so the agent loop terminates
  *   otherwise → a short text reply
  *
- * Env: MOCK_PORT (default 8399) · MOCK_DELAY_MS (default 2500)
+ * Council answering (MP14+): plan-mode meta calls carry a role-distinct SYSTEM prompt
+ * (plan_council.ts — scopeSystem / KEEPER_CHECK_SYSTEM / DRAFT_SYSTEM / REVISE_SYSTEM /
+ * CRITIC_SYSTEM / SYNTH_SYSTEM / RESOLVE_SYSTEM / GROUND_TRUTH_SYSTEM). Requests whose
+ * system message matches a role phrase get that role's canned reply, each delayed
+ * MOCK_COUNCIL_STAGE_MS so the busy-row progress line visibly dwells per phase. The
+ * researcher sub-agent's request has no council system prompt, so it falls through to the
+ * default short reply. Markers key on role-name phrases (the stable identity of each stage);
+ * if a council prompt is reworded, update the matching substring here.
+ *
+ * Env: MOCK_PORT (default 8399) · MOCK_DELAY_MS (default 2500) ·
+ *      MOCK_COUNCIL_STAGE_MS (default 400)
  */
 
 const port = Number(process.env.MOCK_PORT ?? 8399);
 const delayMs = Number(process.env.MOCK_DELAY_MS ?? 2500);
+const councilStageMs = Number(process.env.MOCK_COUNCIL_STAGE_MS ?? 400);
 
 const SHORT_REPLY =
   "Baseline reply: the mock provider streamed this short answer end to end. " +
@@ -66,6 +77,90 @@ function pickReply(prompt: string): { text: string; slow: boolean } {
   return { text: SHORT_REPLY, slow: false };
 }
 
+const COUNCIL_DRAFT = [
+  "## Demo widget plan (draft)",
+  "",
+  "1. Scaffold `demo_widget.ts` with the render entry point.",
+  "2. Wire the widget into the footer registry.",
+  "3. Add a regression test that pins the rendered rows.",
+  "",
+  "Grounded in the researcher notes; the registry already exposes a factory seam.",
+].join("\n");
+
+const COUNCIL_SYNTH = JSON.stringify({
+  title: "Demo Widget Wiring",
+  goal: "Ship the demo widget through the existing footer registry seam.",
+  plan: COUNCIL_DRAFT,
+  decisions: [
+    {
+      topic: "registry seam",
+      decision: "reuse the existing factory registry",
+      rationale: "no new plumbing",
+    },
+  ],
+  findings: [
+    { source: "researcher", summary: "footer registry exposes a factory seam", severity: "info" },
+    { source: "critic", summary: "rendered-row pin must cover the 60-col floor", severity: "concern" },
+  ],
+  questions: [],
+  facts: ["the footer registry lives in the TUI layer"],
+  constraints: ["no new dependencies"],
+});
+
+const COUNCIL_GT = JSON.stringify({
+  title: "Demo Widget Wiring",
+  goal: "Ship the demo widget through the existing footer registry seam.",
+  overview: "Scaffold the widget, register it, and pin its rendering with a regression test.",
+  requirements: ["widget renders through the registry", "rows pinned by test"],
+  constraints: ["no new dependencies"],
+  decisions: [
+    {
+      topic: "registry seam",
+      decision: "reuse the existing factory registry",
+      rationale: "no new plumbing",
+    },
+  ],
+  approach: [
+    {
+      action: "Scaffold demo_widget.ts with the render entry point",
+      verify: "test -f demo_widget.ts",
+      tools: ["write"],
+    },
+    {
+      action: "Pin the rendered rows with a regression test",
+      verify: "bun test demo_widget.test.ts",
+      tools: ["write", "bash"],
+    },
+  ],
+  risks: ["registry ordering is load-bearing"],
+  successCriteria: ["bun test green"],
+  openItems: [],
+});
+
+// Reply per council role, keyed on the request's SYSTEM prompt (see header). Null = not a
+// council call. Critic/keeper return [] (clean pass) so the round stays single-pass and no
+// question overlay blocks a scripted PTY run (synth surfaces zero questions).
+function councilReply(system: string): string | null {
+  if (system.includes("break the RESEARCH needed")) {
+    return JSON.stringify([
+      {
+        focus: "Inspect the demo surface",
+        boundaries: "nothing beyond the demo area",
+        output_format: "terse notes",
+        difficulty: "easy",
+      },
+    ]);
+  }
+  if (system.includes("reviewing researcher findings")) return "[]";
+  if (system.includes("SYNTHESIST of a planning council. Using the research")) return COUNCIL_DRAFT;
+  if (system.includes("SYNTHESIST of a planning council revising")) return COUNCIL_DRAFT;
+  if (system.includes("adversarial CRITIC")) return "[]";
+  if (system.includes("RECORDER of a planning council. Turn the plan")) return COUNCIL_SYNTH;
+  if (system.includes("RECORDER of a planning council finalizing")) return "[]";
+  if (system.includes("RECORDER of a planning council writing the FINAL")) return COUNCIL_GT;
+  return null;
+}
+
 const TODO_TASKS = JSON.stringify([
   { content: "scaffold the parser", status: "completed", priority: "high" },
   { content: "wire the panel data", status: "in_progress", priority: "high" },
@@ -99,11 +194,17 @@ Bun.serve({
       typeof lastUser?.content === "string"
         ? lastUser.content
         : JSON.stringify(lastUser?.content ?? "");
+    const sysMsg = (body.messages ?? []).find((m) => m.role === "system");
+    const sys = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+    const council = councilReply(sys);
     const hasToolResult = (body.messages ?? []).some((m) => m.role === "tool");
-    const wantTodo = prompt.includes("TODO") && !hasToolResult;
-    const { text, slow } = prompt.includes("TODO")
-      ? { text: TODO_DONE_REPLY, slow: false }
-      : pickReply(prompt);
+    const wantTodo = council == null && prompt.includes("TODO") && !hasToolResult;
+    const { text, slow } =
+      council != null
+        ? { text: council, slow: false }
+        : prompt.includes("TODO")
+          ? { text: TODO_DONE_REPLY, slow: false }
+          : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({
@@ -148,6 +249,7 @@ Bun.serve({
           return;
         }
         if (slow) await Bun.sleep(delayMs);
+        if (council != null) await Bun.sleep(councilStageMs);
         send(chunk({ role: "assistant" }));
         for (const p of pieces(text)) {
           send(chunk({ content: p }));
