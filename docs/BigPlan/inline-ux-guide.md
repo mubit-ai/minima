@@ -800,6 +800,26 @@ revise loops back to planning; cancel discards.
 **Manual test:** both GT-on and GT-off plan sessions.
 **Gate:** §1.7.
 
+**Execution notes (landed 2026-07-17):** the tool now registers whenever `mode === "plan"`
+(GT on or off). GT-off contract (user decision, CC's ExitPlanMode shape): `exit_plan` gains
+a `plan` markdown argument — REQUIRED when no GT session exists (missing → an error asking
+the model to resend); `showPlan` pushes it into the transcript so the user approves exactly
+what they can see (the D3b panel cannot coexist with the question overlay — scrollback is
+the review surface); approve = the mode flip back to build, no GROUND_TRUTH.md. GT-on keeps
+the store/finalize path and ignores the argument. **Ring semantics (recorded):** Shift+Tab
+OUT of plan mode routes through the same 3-option gate — approve and cancel both land on
+build, Esc stays in plan; the fast path (sessionless AND no completed plan turn,
+`planTurnSeenRef`) keeps quick flipping, the modes scenario, and GT-off A/B byte-identity
+cycle-identical; with bypass enabled the ring's plan→bypass hop is sacrificed (bypass stays
+reachable via the next lap or /mode). GT-on Shift+Tab shows the draft doc in the transcript
+before the ask. The plan-mode system append now instructs calling `exit_plan` with the
+`plan` argument (PLAN_ESCAPE_HATCH sentence untouched, pinned). Mock: `EXITPLAN` marker →
+a two-phase exit_plan(plan) tool call (cross-turn note: any prior tool result suppresses
+re-issue — per-session, use fresh sessions or the Shift+Tab gate for repeats). Gate:
+`plan-exit-gate` scenario (tool overlay + plan md + approve clears the badge; Shift+Tab
+gate + Esc-stays + cancel discards); behavior pins migrated to the new registration +
+handler. Shots: `shots/mp17-plan-exit/`.
+
 ### MP18 — Verify-command consent at first run *(M · after MP9 recommended)*
 
 **Goal:** LLM-authored `verify` shell gets bash-class scrutiny (not trust-the-gate, not

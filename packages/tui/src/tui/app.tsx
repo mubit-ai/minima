@@ -1045,54 +1045,150 @@ export function HarnessApp({
     },
     [agent, planMetaModel],
   );
-  const exitPlanFinalize = useCallback(async () => {
-    const outcome = await runPlanFinalize(false, agent.runSignal);
-    if (outcome.kind === "no-session") {
-      return { ok: false, message: "Plan mode already exited — no session to finalize." };
-    }
-    if (outcome.kind !== "ok") return { ok: false, message: outcome.message };
-    exitPlanMode();
-    setMessages((m) => [
-      ...m,
-      { role: "tool", text: outcome.md, toolName: "plan" },
-      { role: "tool", text: finalizeSuccessNote(outcome), toolName: "plan" },
-    ]);
-    const seeded =
-      outcome.seededCount > 0
-        ? `; ${outcome.seededCount} verifiable step${outcome.seededCount === 1 ? "" : "s"} seeded to the plan ledger`
-        : "";
-    // The ledger drives the whole GT build spine (plan strip, Ctrl+G overview, done-gates) —
-    // when finalize could not seed it, the agent must recreate it as its FIRST move.
-    const ledgerGuidance =
-      outcome.seededCount > 0
-        ? " Follow the seeded plan steps, marking progress with todowrite."
-        : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
-    return {
-      ok: true,
-      message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${ledgerGuidance}`,
-    };
-  }, [agent, runPlanFinalize, exitPlanMode]);
+  const exitPlanFinalize = useCallback(
+    async (_planMd: string | null = null) => {
+      // MP17: sessionless (GT-off) plan mode has no store and writes no GROUND_TRUTH.md — the
+      // approved plan lives in the transcript (showPlan pushed the tool's `plan` markdown).
+      // Approval here is just the mode flip back to full tool access.
+      if (planSessionRef.current == null) {
+        setMode("build");
+        return {
+          ok: true,
+          message:
+            "Plan approved — plan mode is OFF and full tool access is restored. Begin " +
+            "implementing the approved plan now.",
+        };
+      }
+      const outcome = await runPlanFinalize(false, agent.runSignal);
+      if (outcome.kind === "no-session") {
+        return { ok: false, message: "Plan mode already exited — no session to finalize." };
+      }
+      if (outcome.kind !== "ok") return { ok: false, message: outcome.message };
+      exitPlanMode();
+      setMessages((m) => [
+        ...m,
+        { role: "tool", text: outcome.md, toolName: "plan" },
+        { role: "tool", text: finalizeSuccessNote(outcome), toolName: "plan" },
+      ]);
+      const seeded =
+        outcome.seededCount > 0
+          ? `; ${outcome.seededCount} verifiable step${outcome.seededCount === 1 ? "" : "s"} seeded to the plan ledger`
+          : "";
+      // The ledger drives the whole GT build spine (plan strip, Ctrl+G overview, done-gates) —
+      // when finalize could not seed it, the agent must recreate it as its FIRST move.
+      const ledgerGuidance =
+        outcome.seededCount > 0
+          ? " Follow the seeded plan steps, marking progress with todowrite."
+          : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
+      return {
+        ok: true,
+        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${ledgerGuidance}`,
+      };
+    },
+    [agent, runPlanFinalize, exitPlanMode],
+  );
   const exitPlanCancel = useCallback(() => {
+    const hadSession = planSessionRef.current != null;
     exitPlanMode();
     setMessages((m) => [
       ...m,
       {
         role: "tool",
-        text: "Plan session discarded — plan mode OFF (canceled from the exit-plan approval).",
+        text: hadSession
+          ? "Plan session discarded — plan mode OFF (canceled from the exit-plan approval)."
+          : "Plan discarded — plan mode OFF (canceled from the exit-plan approval).",
         toolName: "plan",
       },
     ]);
   }, [exitPlanMode]);
-  // exit_plan (model-callable plan exit): registered only while a GT plan session is live, so
-  // the GT-off default path and headless runs never see the tool. Its approval overlay rides
-  // the same AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab,
+  // MP17: Shift+Tab OUT of plan mode routes through the SAME 3-option gate as the
+  // exit_plan tool, so the plan and its approval live in one surface. Fast-path: a
+  // sessionless plan mode where no plan turn has completed has nothing to approve — the
+  // badge ring stays fluid (quick mode flipping, the modes scenario, and the GT-off A/B
+  // byte-identity are all preserved until a plan reply actually exists).
+  const planTurnSeenRef = useRef(false);
+  useEffect(() => {
+    if (mode === "plan") planTurnSeenRef.current = false;
+  }, [mode]);
+  const requestPlanExitGate = useCallback(async () => {
+    const ask = askUserRef?.current ?? null;
+    const store = planSessionRef.current;
+    if (!ask || (store == null && !planTurnSeenRef.current)) {
+      cycleMode();
+      return;
+    }
+    if (store) {
+      // Approve what you can see: the draft document lands in the transcript above the
+      // overlay (the D3b panel cannot coexist with the question overlay — panelVisible
+      // gates on !questionPrompt — so scrollback is the review surface here).
+      setMessages((m) => [...m, { role: "tool", text: store.toMarkdown(), toolName: "plan" }]);
+    }
+    const choice = await ask({
+      question: "Exit plan mode?",
+      header: "plan",
+      options: [
+        {
+          label: "Finalize & build",
+          description: store
+            ? "Write the ground truth, exit plan mode, start building."
+            : "Approve the plan, exit plan mode, start building.",
+        },
+        {
+          label: "Revise the plan",
+          description: "Stay in plan mode and tell the planner what to change.",
+        },
+        {
+          label: "Cancel plan mode",
+          description: store
+            ? "Discard the plan session — nothing is written."
+            : "Discard the plan.",
+        },
+      ],
+      allow_freetext: false,
+    });
+    if (choice === "Finalize & build") {
+      const r = await exitPlanFinalize(null);
+      // GT-on success pushes its own md + note inside runPlanFinalize's ok-branch; surface
+      // the message only for refusals and the sessionless approve.
+      if (!r.ok || store == null) {
+        setMessages((m) => [
+          ...m,
+          { role: "tool", text: r.message, toolName: "plan", isError: !r.ok },
+        ]);
+      }
+      return;
+    }
+    if (choice === "Revise the plan") {
+      const note = await ask({
+        question: "What should the planner change?",
+        header: "revise",
+        options: [],
+        allow_freetext: true,
+      });
+      if (note?.trim()) void onSubmit(note.trim());
+      return;
+    }
+    if (choice === "Cancel plan mode") {
+      exitPlanCancel();
+      return;
+    }
+    // Esc / dismissed: stay in plan mode, ring untouched.
+  }, [askUserRef, exitPlanFinalize, exitPlanCancel]);
+
+  // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
+  // universal gate, GT on or off; sessionless plan mode requires the `plan` markdown arg,
+  // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
+  // ask-null guard covers any other pathless case. Its approval overlay rides the same
+  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab gate,
   // /plan off) flips the mode and the effect cleanup unregisters it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: planSessionGen keys re-registration to session IDENTITY — the session lives in a ref, so replacing it (e.g. /plan recovering while the mode is already "plan") never re-renders on its own
   useEffect(() => {
-    if (mode !== "plan" || planSessionRef.current == null) return;
+    if (mode !== "plan") return;
     const tool = exitPlanTool({
       ask: askUserRef ?? { current: null },
-      isActive: () => planSessionRef.current != null,
+      isActive: () => getMode() === "plan",
+      requiresPlan: () => planSessionRef.current == null,
+      showPlan: (md) => setMessages((m) => [...m, { role: "tool", text: md, toolName: "plan" }]),
       finalize: exitPlanFinalize,
       cancel: exitPlanCancel,
     });
@@ -1426,6 +1522,7 @@ export function HarnessApp({
               ]);
             } else if (text) {
               setMessages((m) => [...m, { role: "assistant", text }]);
+              if (getMode() === "plan") planTurnSeenRef.current = true;
             }
           } else if (ev.message?.role === "toolResult") {
             setMessages((m) => [
@@ -4065,7 +4162,10 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={() => cycleMode()}
+              onShiftTab={() => {
+                if (getMode() === "plan") void requestPlanExitGate();
+                else cycleMode();
+              }}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}

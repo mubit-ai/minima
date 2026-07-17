@@ -1,0 +1,74 @@
+=== SCROLLBACK (34 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+=== SCREEN 120x36 (visible) ===
+ 0 |
+ 1 |
+ 2 |  ⚙ setup:
+ 3 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+ 4 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+ 5 |
+ 6 |▸ you
+ 7 | EXITPLAN draft the sandbox cleanup plan
+ 8 |
+ 9 |  ⚙ plan:
+10 |## Sandbox cleanup plan
+11 |
+12 |1. Inventory the sandbox temp dirs.
+13 |2. Delete the stale ones and verify the count drops.
+14 |3. Note the retention rule in the runbook.
+15 |
+16 |
+17 |
+18 |
+19 |
+20 |╭─── plan ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+21 |│ The plan is ready:                                                                                                   │
+22 |│ Clean up the sandbox temp dirs                                                                                       │
+23 |│                                                                                                                      │
+24 |│ Proceed?                                                                                                             │
+25 |│ › Finalize & build — Write the ground truth, exit plan mode, start building.                                         │
+26 |│   Revise the plan — Stay in plan mode and tell the planner what to change.                                           │
+27 |│   Cancel plan mode — Discard the plan session — nothing is written.                                                  │
+28 |│ ↑↓ select · ⏎ confirm · Esc dismiss                                                                                  │
+29 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+30 |⚙ exit_plan: {"summary":"Clean up the sandbox temp dirs","plan":"## Sandbox cleanup plan\n\n1. Inventory the sandbox te…
+31 |
+32 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑0 ↓0 · $0.0000 · sess ephemeral · running     [PLAN]
+33 |perms: r-x 0 dirs · w/e/b: ask · PLAN (ask)
+34 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                  ctrl+p palette
+35 |
+=== 36 visible rows; 34 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp17-plan-exit/gate-overlay.png ===
