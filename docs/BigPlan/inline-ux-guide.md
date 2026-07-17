@@ -561,6 +561,26 @@ reader. Acceptance = MP10's code-heavy fixtures render clean at 60, 80, 120 cols
 **Manual test:** paste a gnarly nested snippet, check it at your daily size + a 60-col split.
 **Gate:** §1.7 + budgets (wrapping is per-frame work in the live region — frame cost holds).
 
+**Execution notes (landed 2026-07-17):** wrap style = **hard-wrap CC-style** (user decision
+2026-07-17, supersedes "audit decides": wrap at width, no continuation glyphs). One shared
+pure classifier `classifyMarkdownLines(text): MdLine[]` in `layout.ts` now feeds all three
+sites — `MarkdownRenderer`, `markdownBodyHeight`, `sectionReaderLines` — so the mirror IS
+shared code. Fence rule v1: trim-starts-with-``` opens/closes; EOF-in-fence = code
+(streaming free by construction); tilde/indented fences out of scope. Delimiters render
+verbatim dim (exact height lockstep + language tag + scrollback stays valid markdown); code
+rows verbatim default-fg, empty code rows forced to " " (Ink collapses empty <Text>). List
+rule unified to `"- "`/`"* "` WITH space (the reader's rule; `-x`/`---`/`--flag` stop
+bulletizing). Two pre-existing bugs fixed en route: (1) `wrapLineToWidth` dropped LEADING
+SPACES from width math while Ink wraps trim:false — a live under-estimate on indented code
+(8sp+76ch@80 = 2 real rows, counted 1); indent is now peeled, seeded, and hard-broken when
+wider than a row; (2) `tailToFit` slices that started mid-fence lost their opener and
+re-classified code as prose — it now classifies the FULL text, re-anchors slices on the real
+opener via `openerIdx`, and measures the exact final string (estimate == render by
+construction). A/B gate: all five ab_capture scenarios byte-identical vs pre-MP11 (fence-free
+content untouched). New tui-verify bookends `stream-code-80`/`stream-code-60` + a
+```bash-verbatim assert on `stream-wipe-perf`. Shots: `shots/mp11-code-wrap/` (after) vs
+`shots/mp10-render-audit/code-*` (before), .txt dumps byte-diffable.
+
 ### MP12 — Tool-output truncation indicator *(S)*
 
 **Goal:** truncation-at-commit honesty: `… 214 more lines` instead of a silent cut.

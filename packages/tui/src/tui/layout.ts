@@ -54,10 +54,17 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
 
 /**
  * Word-wrap a single logical line to `width` display columns, PRODUCING the wrapped rows —
- * matching Ink's wrap-ansi ({ wordWrap: true, hard: true }): greedily pack space-separated
- * words, wrap to a new row when the next word (plus a joining space) won't fit, and
- * hard-break any single word wider than a full row (by display columns — a wide char that
- * doesn't fit moves whole to the next row). Uses stringWidth so emoji/CJK count as 2.
+ * matching Ink's wrap-ansi ({ trim: false, wordWrap: true, hard: true }): greedily pack
+ * space-separated words, wrap to a new row when the next word (plus a joining space) won't
+ * fit, and hard-break any single word wider than a full row (by display columns — a wide
+ * char that doesn't fit moves whole to the next row). Uses stringWidth so emoji/CJK count
+ * as 2. Because Ink wraps with trim:false, LEADING SPACES OCCUPY COLUMNS — the indent is
+ * peeled and seeded into the first row (hard-broken if wider than a row) so indented code
+ * measures and reproduces exactly; dropping it (the old `col === 0` join test) under-counted
+ * and let the live region overgrow its reservation.
+ * Known benign divergence: for an over-width token following text on the same row, wrap-ansi
+ * may pack the row's tail before hard-breaking while this always flushes first — one row
+ * MORE, never fewer (safe over-estimate).
  * `wrapRows` is DEFINED as this function's row count, so the string producer (the D3b
  * reader) and every height estimate in this file can never diverge.
  */
@@ -65,25 +72,35 @@ export function wrapLineToWidth(line: string, width: number): string[] {
   const w = Math.max(1, width);
   if (line === "") return [""];
   const out: string[] = [];
-  let cur = "";
-  let col = 0;
+  let lead = (line.match(/^ +/) ?? [""])[0];
+  const body = line.slice(lead.length);
+  while (lead.length > w) {
+    out.push(lead.slice(0, w));
+    lead = lead.slice(w);
+  }
+  let cur = lead;
+  let col = lead.length;
+  let join = false;
   const flush = () => {
     out.push(cur);
     cur = "";
     col = 0;
+    join = false;
   };
-  for (const word of line.split(" ")) {
+  for (const word of body.split(" ")) {
     const wlen = stringWidth(word);
-    const needed = col === 0 ? wlen : col + 1 + wlen;
+    const needed = join ? col + 1 + wlen : col + wlen;
     if (needed <= w) {
-      cur = col === 0 ? word : `${cur} ${word}`;
+      cur = join ? `${cur} ${word}` : cur + word;
       col = needed;
+      join = true;
       continue;
     }
     if (col !== 0) flush();
     if (wlen <= w) {
       cur = word;
       col = wlen;
+      join = true;
       continue;
     }
     let rest = word;
@@ -101,6 +118,7 @@ export function wrapLineToWidth(line: string, width: number): string[] {
     }
     cur = rest;
     col = stringWidth(rest);
+    join = true;
   }
   out.push(cur);
   return out;
@@ -122,27 +140,82 @@ export function wrappedLineCount(text: string, width: number): number {
 }
 
 /**
- * Rendered rows of an assistant markdown body, mirroring MarkdownRenderer in messages.tsx so the
- * live-streaming reservation in app.tsx agrees with what actually renders:
- *   - `#` heading   -> a marginTop={1} row + the wrapped heading text
- *   - `-`/`* ` list  -> body wrapped at interior-4 (marginLeft 2 + "- " bullet 2)
- *   - any other line -> wrapped at the full interior width
+ * One classified markdown line — THE shared representation consumed by all three rendering
+ * sites (MarkdownRenderer, markdownBodyHeight, sectionReaderLines), so the render, the
+ * height estimate, and the panel reader cannot classify a line differently (the divergence
+ * that garbled fenced code: delimiters hit the inline-backtick toggle, `#` code lines became
+ * headings with a phantom marginTop row, `- ` code lines became bullets).
+ *
+ * Fence rule (v1): a line whose trim starts with ``` opens a fence; the next such line
+ * closes it; EOF with an open fence leaves the trailing lines as code — which is exactly the
+ * mid-stream state, so streaming needs no special case. Tilde fences, 4-space-indent blocks,
+ * and CommonMark fence-length matching are deliberately out of scope (models emit backtick
+ * fences; each is a 2-line tweak here if ever needed).
+ * List rule: `- `/`* ` WITH the space (`-x`, `---`, `--flag` are plain text).
+ * Fence/code text is tab-expanded (4 spaces) because string-width counts \t as 0 while the
+ * terminal advances to a tab stop — the same width-lie class the thinking box guards.
+ */
+export interface MdLine {
+  kind: "heading" | "list" | "fence-open" | "fence-close" | "code" | "plain";
+  /** Heading text sans #'s; list body sans marker; tab-expanded verbatim for fence/code; raw for plain. */
+  text: string;
+  bullet?: "-" | "•";
+  /** code + fence-close: index of the opening ``` line (lets tailToFit re-anchor a mid-fence slice). */
+  openerIdx?: number;
+}
+
+export function classifyMarkdownLines(text: string): MdLine[] {
+  const out: MdLine[] = [];
+  let inFence = false;
+  let openerIdx = 0;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (inFence) {
+        inFence = false;
+        out.push({ kind: "fence-close", text: line.replaceAll("\t", "    "), openerIdx });
+      } else {
+        inFence = true;
+        openerIdx = i;
+        out.push({ kind: "fence-open", text: line.replaceAll("\t", "    ") });
+      }
+    } else if (inFence) {
+      out.push({ kind: "code", text: line.replaceAll("\t", "    "), openerIdx });
+    } else if (trimmed.startsWith("#")) {
+      const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
+      out.push({ kind: "heading", text: trimmed.slice(depth).trim() });
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      out.push({
+        kind: "list",
+        text: trimmed.slice(1).trim(),
+        bullet: trimmed.startsWith("- ") ? "-" : "•",
+      });
+    } else {
+      out.push({ kind: "plain", text: line });
+    }
+  }
+  return out;
+}
+
+/**
+ * Rendered rows of an assistant markdown body, in lockstep with MarkdownRenderer in
+ * messages.tsx via the shared classifier, so the live-streaming reservation in app.tsx
+ * agrees with what actually renders:
+ *   - heading            -> a marginTop={1} row + the wrapped heading text
+ *   - list               -> body wrapped at interior-4 (marginLeft 2 + "- " bullet 2)
+ *   - fence/code/plain   -> wrapped verbatim at the full interior width
  * `interior` is the content width (stream box interior = cols-4).
  */
 export function markdownBodyHeight(text: string, interior: number): number {
   const iw = Math.max(1, interior);
   const listw = Math.max(1, interior - 4);
   let rows = 0;
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("#")) {
-      const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
-      rows += 1 + wrapRows(trimmed.slice(depth).trim(), iw);
-    } else if (trimmed.startsWith("-") || trimmed.startsWith("* ")) {
-      rows += wrapRows(trimmed.slice(1).trim(), listw);
-    } else {
-      rows += wrapRows(line, iw);
-    }
+  for (const l of classifyMarkdownLines(text)) {
+    if (l.kind === "heading") rows += 1 + wrapRows(l.text, iw);
+    else if (l.kind === "list") rows += wrapRows(l.text, listw);
+    else rows += wrapRows(l.text, iw);
   }
   return rows;
 }
@@ -156,24 +229,55 @@ export function markdownBodyHeight(text: string, interior: number): number {
 export function tailToFit(text: string, interior: number, budgetRows: number): string {
   const lines = text.split("\n");
   if (budgetRows <= 0 || lines.length === 0) return "";
+  const iw = Math.max(1, interior);
+  const listw = Math.max(1, interior - 4);
+  // Classify the FULL text once: a slice that starts mid-fence must not re-classify code
+  // as prose (a `# comment` code line would gain a phantom marginTop row -> render >
+  // estimate -> the scrollback-wiping class), so per-line heights come from the whole-text
+  // classification and mid-fence slices get their real opener line prepended.
+  const md = classifyMarkdownLines(text);
+  const lineH = (l: MdLine): number => {
+    if (l.kind === "heading") return 1 + wrapRows(l.text, iw);
+    if (l.kind === "list") return wrapRows(l.text, listw);
+    return wrapRows(l.text, iw);
+  };
   let rows = 0;
   let start = lines.length - 1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const h = markdownBodyHeight(lines[i]!, interior);
+    const h = lineH(md[i]!);
     if (i < lines.length - 1 && rows + h > budgetRows) break;
     rows += h;
     start = i;
   }
-  let out = lines.slice(start).join("\n");
+  const sliceFrom = (s: number): string => {
+    const first = md[s]!;
+    const opener =
+      (first.kind === "code" || first.kind === "fence-close") && first.openerIdx !== undefined
+        ? `${lines[first.openerIdx]}\n`
+        : "";
+    return opener + lines.slice(s).join("\n");
+  };
+  let out = sliceFrom(start);
+  // The opener prepend adds a row the accumulate loop didn't count — measure the EXACT
+  // final string with the fence-aware height and advance until it fits (estimate == render
+  // by construction; touches only O(budget) short lines).
+  while (start < lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
+    start++;
+    out = sliceFrom(start);
+  }
   // A streamed paragraph is ONE source line until the model emits "\n" — when even the
-  // final line alone exceeds the budget, hard-slice its tail. Otherwise the live region
-  // outgrows its reservation, reaches terminal height, and trips Ink's scrollback-wiping
-  // clearTerminal.
+  // final line alone exceeds the budget, drop the prepended opener (budget is king; the
+  // sliced string is measured and rendered identically, so height stays exact — one
+  // pathological frame may style a code fragment as prose) and hard-slice its tail.
+  // Otherwise the live region outgrows its reservation, reaches terminal height, and trips
+  // Ink's scrollback-wiping clearTerminal.
   if (start === lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
-    const iw = Math.max(1, interior);
-    out = out.slice(-(budgetRows * iw));
-    while (out.length > iw && markdownBodyHeight(out, interior) > budgetRows) {
-      out = out.slice(iw);
+    out = lines[start] ?? "";
+    if (markdownBodyHeight(out, interior) > budgetRows) {
+      out = out.slice(-(budgetRows * iw));
+      while (out.length > iw && markdownBodyHeight(out, interior) > budgetRows) {
+        out = out.slice(iw);
+      }
     }
   }
   return out;

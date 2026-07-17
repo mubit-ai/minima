@@ -8,7 +8,7 @@
  * counts it (heading → blank + text; bullet → "- "; else plain). Not a MessageRow
  * re-mount — no Ink here.
  */
-import { clampToolText, wrapLineToWidth } from "./layout.ts";
+import { clampToolText, classifyMarkdownLines, wrapLineToWidth } from "./layout.ts";
 import type { ChatMessage } from "./messages.tsx";
 
 function bodyLines(text: string, w: number): string[] {
@@ -42,16 +42,14 @@ export function sectionReaderLines(
       out.push(...bodyLines(msg.text, w));
     } else {
       out.push("◆ assistant");
-      for (const line of msg.text.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("#")) {
-          const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
+      for (const l of classifyMarkdownLines(msg.text)) {
+        if (l.kind === "heading") {
           out.push("");
-          out.push(...wrapLineToWidth(trimmed.slice(depth).trim(), w));
-        } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-          out.push(...wrapLineToWidth(`- ${trimmed.slice(1).trim()}`, w));
+          out.push(...wrapLineToWidth(l.text, w));
+        } else if (l.kind === "list") {
+          out.push(...wrapLineToWidth(`- ${l.text}`, w));
         } else {
-          out.push(...wrapLineToWidth(line, w));
+          out.push(...wrapLineToWidth(l.text, w));
         }
       }
     }

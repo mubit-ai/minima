@@ -11,7 +11,7 @@
 
 import { Box, Text } from "ink";
 import { type ReactNode, memo } from "react";
-import { type ChatMessage, clampToolText } from "./layout.ts";
+import { type ChatMessage, clampToolText, classifyMarkdownLines } from "./layout.ts";
 
 // Re-exported so app.tsx keeps a single import site.
 export type { ChatMessage };
@@ -62,18 +62,12 @@ function renderInlineMarkdown(text: string): ReactNode {
 }
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string }) {
-  const lines = text.split("\n");
+  const lines = classifyMarkdownLines(text);
 
   return (
     <Box flexDirection="column">
-      {lines.map((line, idx) => {
-        const trimmed = line.trim();
-
-        // Header 1-6
-        if (trimmed.startsWith("#")) {
-          const depth = (trimmed.match(/^#+/) || [""])[0].length;
-          const headerText = trimmed.slice(depth).trim();
-
+      {lines.map((l, idx) => {
+        if (l.kind === "heading") {
           return (
             <Box
               // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
@@ -82,16 +76,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginBottom={0}
             >
               <Text bold color="cyan">
-                {headerText}
+                {l.text}
               </Text>
             </Box>
           );
         }
 
-        // List item with bullet point or hyphen
-        if (trimmed.startsWith("-") || trimmed.startsWith("* ")) {
-          const bullet = trimmed.startsWith("-") ? "-" : "•";
-          const body = trimmed.slice(1).trim();
+        if (l.kind === "list") {
           return (
             <Box
               // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
@@ -99,19 +90,45 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginLeft={2}
               flexDirection="row"
             >
-              <Text color="yellow">{`${bullet} `}</Text>
-              <Text>{renderInlineMarkdown(body)}</Text>
+              <Text color="yellow">{`${l.bullet} `}</Text>
+              <Text>{renderInlineMarkdown(l.text)}</Text>
             </Box>
           );
         }
 
-        // Regular line
+        // Fence delimiters render dim (kept, not dropped: exact height lockstep, the
+        // language tag stays visible, and scrollback copy-paste stays valid markdown).
+        if (l.kind === "fence-open" || l.kind === "fence-close") {
+          return (
+            <Box
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
+              key={idx}
+            >
+              <Text dimColor>{l.text}</Text>
+            </Box>
+          );
+        }
+
+        // Code: verbatim, default foreground, no inline markdown (kills the backtick
+        // cyan-toggle garble). The " " forces the row Ink would collapse for an empty
+        // <Text>, keeping render exactly equal to the estimate's 1 row per line.
+        if (l.kind === "code") {
+          return (
+            <Box
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
+              key={idx}
+            >
+              <Text>{l.text || " "}</Text>
+            </Box>
+          );
+        }
+
         return (
           <Box
             // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
             key={idx}
           >
-            <Text>{renderInlineMarkdown(line)}</Text>
+            <Text>{renderInlineMarkdown(l.text)}</Text>
           </Box>
         );
       })}
