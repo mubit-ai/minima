@@ -57,7 +57,8 @@ export interface GtOverview {
 
 /** Read the active (else latest) plan into the overview model; null = no plan recorded. */
 export function buildGtOverview(db: MinimaDb, sessionId: string): GtOverview | null {
-  const plan = db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId);
+  const plan =
+    db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) return null;
   const steps = db.getPlanSteps(plan.id);
   const { perStep, totalUsd } = db.stepCosts(plan.id);

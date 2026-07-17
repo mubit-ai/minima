@@ -22,7 +22,7 @@ export interface GateVerdict {
 
 export function whyReportFor(db: MinimaDb | null, sessionId: string | null): string {
   if (!db || !sessionId) return "No Ground-Truth ledger available.";
-  const plan = db.getLatestPlan(sessionId);
+  const plan = db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) {
     const orphans = orphanLines(db, sessionId);
     return orphans.length > 0

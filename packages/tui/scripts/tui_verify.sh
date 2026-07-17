@@ -515,7 +515,7 @@ SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
-  "cols": 120, "rows": 36, "duration": 16,
+  "cols": 120, "rows": 36, "duration": 18,
   "env": {"MINIMA_DB_PATH": "$TMP/gtpanel.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-gtpanel",
           "MINIMA_TUI_GROUND_TRUTH": "1"},
   "frames": "$TMP/gtpanel-frames.jsonl",
@@ -532,7 +532,10 @@ SPEC=$(cat <<EOF
     {"after": 11.2, "send": "/why"},
     {"after": 12.0, "send": "<CR>"},
     {"after": 13.2, "send": "<ESC>"},
-    {"after": 14.2, "send": "<CTRLD>"}
+    {"after": 13.7, "send": "/tasks cancel"},
+    {"after": 14.4, "send": "<CR>"},
+    {"after": 15.2, "send": "<CTRLG>"},
+    {"after": 16.2, "send": "<CTRLD>"}
   ]
 }
 EOF
@@ -572,9 +575,18 @@ closed = [f for f in frames_between(10.6, 11.2) if not grid_has(f, GTCRUMB)]
 assert closed, "Esc did not close the overview"
 # /why re-opens the panel (the primary /why surface in a TTY).
 assert any(grid_has(f, GTCRUMB) for f in frames_between(12.0, 13.2)), "/why did not open the GT panel"
+# /tasks cancel is a REAL reject: the plan closes and NOTHING resurrects it — the D3a
+# header disappears and Ctrl+G reports no plan instead of showing the cancelled one.
+assert any(grid_has(f, "Ground-Truth plan closed") for f in frames_between(14.4, 15.2)), (
+    "/tasks cancel did not report closing the GT plan")
+post = frames_between(15.2, 16.2)
+assert any(grid_has(f, "No Ground-Truth plan recorded") for f in post), (
+    "Ctrl+G after cancel did not report an empty ledger")
+assert not any(grid_has(f, GTCRUMB) for f in post), "GT panel resurrected a cancelled plan"
+assert not any(grid_has(f, " plan 3/3 · ▸") for f in post), "D3a header still shows the cancelled plan"
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone after exit"
-print("tui_assert: PASS panel-gt (gate wins the chord, overview, step card, /why panel)")
+print("tui_assert: PASS panel-gt (gate wins, overview, step card, /why, cancel kills GT)")
 PY
 
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="

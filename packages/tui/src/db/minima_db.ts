@@ -1039,14 +1039,31 @@ export class MinimaDb {
     );
   }
 
-  getLatestPlan(sessionId: string): PlanRow | null {
-    return (
-      (this.db
-        .query(
-          "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        )
-        .get(sessionId) as PlanRow) ?? null
+  /**
+   * The newest plan for a session regardless of status. Display/verification surfaces
+   * (Ctrl+G overview, /why, /verify refutation, failure classification) pass
+   * excludeCancelled — a cancelled plan is a USER-REJECTED plan, never the plan of
+   * record; only the todo-upsert path keeps the default (its reopen logic must see the
+   * cancelled row so it starts a FRESH plan instead of resurrecting an older done one).
+   */
+  getLatestPlan(sessionId: string, opts: { excludeCancelled?: boolean } = {}): PlanRow | null {
+    const sql = opts.excludeCancelled
+      ? "SELECT * FROM plans WHERE session_id = ? AND status <> 'cancelled' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+      : "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1";
+    return ((this.db.query(sql).get(sessionId) as PlanRow) ?? null) as PlanRow | null;
+  }
+
+  /**
+   * /tasks cancel: close EVERY active plan for the session — adoption on resume and
+   * repeated seeding can pile up several, and getActivePlan(LIMIT 1) would let the
+   * next-newest surface right back ("GT still holds"). Returns how many were cancelled.
+   */
+  cancelActivePlans(sessionId: string): number {
+    this.db.run(
+      "UPDATE plans SET status = 'cancelled', closed_at = COALESCE(closed_at, ?) WHERE session_id = ? AND status = 'active'",
+      [Date.now() / 1000, sessionId],
     );
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
   }
 
   getPlan(planId: string): PlanRow | null {
