@@ -1,0 +1,118 @@
+=== SCROLLBACK (54 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |
+h037 |
+h038 |
+h039 |
+h040 |
+h041 |
+h042 |
+h043 |
+h044 |
+h045 |
+h046 |
+h047 |
+h048 |
+h049 |
+h050 |
+h051 |
+h052 |
+h053 |
+=== SCREEN 120x60 (visible) ===
+ 0 |
+ 1 |
+ 2 |
+ 3 |
+ 4 |
+ 5 |
+ 6 |▸ you
+ 7 | Show me the routing implementation across languages (code profile).
+ 8 |
+ 9 |◆ assistant
+10 |TypeScript entry point first — watch the deep indent and the overlong call:
+11 |ts
+12 |export async function route(task: Task): Promise<Decision> {
+13 |  const features = classify(task.prompt);
+14 |  if (features.type === "code_gen") {
+15 |    const rec = await minima.recommend({ task: "summarize", prompt, slider: 0.35, pins: ["gpt-5-mini"], metadata: {
+16 |retries: 3, escalate: "auto", trace_id: "b428a3c4-6ebc-4227" } });
+17 |  }
+18 |  return fallback(task);
+19 |}
+20 |The Python mirror — comment lines start with #:
+21 |python
+22 |
+23 |derive the cost basis before scoring
+24 |def score(candidates, basis):
+25 |        weights = rescale(basis)  # deliberate 8-space indent
+26 |        return sorted(candidates, key=lambda c: c.cost * weights[c.tier])
+27 |def apply(kwargs):
+28 |
+29 |'#' lines and '**kwargs' both confuse the renderer today
+30 |    return kwargs
+31 |Config as YAML — dash lines inside code:
+32 |yaml
+33 |  - name: recommend
+34 |  cost_basis: observed
+35 |
+36 |a comment between items
+37 |  - name: feedback
+38 |  required: [input_tokens, output_tokens, actual_cost_usd]
+39 |And the stream cut out mid-block here (fence never closes):
+40 |bash
+41 |curl -s https://api.minima.sh/v1/feedback?rec=b428a3c46ebc4227&sig=aGVsbG8gd29ybGQgdGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgd
+42 |G9rZW4gZm9yIHdyYXAgdGVzdGluZyBvZiBoYXJkIGJyZWFrcw | jq .outcome
+43 |echo done
+44 |
+45 |  ⚙ resume:
+46 |Resumed run fixture-code (2 msg(s), 0 routed prompt(s), $0.0000 recorded)
+47 |
+48 |  ⚙ setup:
+49 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+50 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+51 |
+52 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+53 |│  ▋                                                                                                                   │
+54 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+55 |
+56 | model: gpt-4o-mini ▸ pinned · route: auto · reason: off │ ctx 1% · ↑1200 ↓400 · $0.0000 · sess ephemeral · ready
+57 |perms: r-x 0 dirs · w/e/b: ask
+58 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                  ctrl+p palette
+59 |
+=== 60 visible rows; 54 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp10-render-audit/code-tall.png ===

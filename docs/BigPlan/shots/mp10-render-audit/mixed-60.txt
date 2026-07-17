@@ -1,0 +1,169 @@
+=== SCROLLBACK (141 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |▸ you
+h025 | Draft the release notes for the renderer audit (md profile)
+h026 |.
+h027 |
+h028 |◆ assistant
+h029 |
+h030 |Release notes — renderer audit
+h031 |The routing layer weighs task difficulty against the
+h032 |configured cost slider and picks the cheapest model whose
+h033 |expected quality clears the threshold; when confidence is lo
+h034 |w
+h035 |it escalates one tier and records why. The routing layer
+h036 |weighs task difficulty against the configured cost slider an
+h037 |d
+h038 |picks the cheapest model whose expected quality clears the
+h039 |threshold; when confidence is low it escalates one tier and
+h040 |records why.
+h041 |
+h042 |What changed
+h043 |  - top-level item with bold and inline code plus a tail lon
+h044 |g
+h045 |    enough to wrap at sixty columns for the narrow bookend
+h046 |  - nested sub-item two spaces deep
+h047 |  - third level, four spaces deep
+h048 |  - *italic emphasis* and ~~strikethrough~~ pass through as-
+h049 |is
+h050 |  - tight-dash line that is NOT a markdown list item
+h051 |
+h052 |Cost table
+h053 || model | cost | quality |
+h054 ||-------|------|---------|
+h055 || haiku | $0.001 | 0.71 |
+h056 || opus | $0.075 | 0.94 |
+h057 |> Blockquote: feedback must carry realized usage —
+h058 |千里之行，始于足下 🚀🧠
+h059 |The routing layer weighs task difficulty against the
+h060 |configured cost slider and picks the cheapest model whose
+h061 |expected quality clears the threshold; when confidence is lo
+h062 |w
+h063 |it escalates one tier and records why.
+h064 |
+h065 |▸ you
+h066 | Now the code side, please.
+h067 |
+h068 |  ⚙ read_file:
+h069 |line 1: check=retry elapsed_ms=12
+h070 |line 2: check=pass elapsed_ms=13
+h071 |line 3: check=pass elapsed_ms=14
+h072 |line 4: check=pass elapsed_ms=15
+h073 |line 5: check=pass elapsed_ms=16
+h074 |line 6: check=pass elapsed_ms=17
+h075 |line 7: check=pass elapsed_ms=18
+h076 |line 8: check=retry elapsed_ms=19
+h077 |line 9: check=pass elapsed_ms=20
+h078 |line 10: check=pass elapsed_ms=21
+h079 |line 11: check=pass elapsed_ms=22
+h080 |line 12: check=pass elapsed_ms=23
+h081 |line 13: check=pass elapsed_ms=24
+h082 |line 14: check=pass elapsed_ms=25
+h083 |line 15: check=retry elapsed_ms=26
+h084 |line 16: check=pass elapsed_ms=27
+h085 |line 17: check=pass elapsed_ms=28
+h086 |line 18: WIDE status=ok bytes=4096 cache=hit tier=observed
+h087 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h088 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h089 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h090 |basis=rescaled end
+h091 |line 19: check=pass elapsed_ms=30
+h092 |line 20: check=pass elapsed_ms=31
+h093 |line 21: check=pass elapsed_ms=32
+h094 |line 22: check=retry elapsed_ms=33
+h095 |line 23: check=pass elapsed_ms=34
+h096 |line 24: check=pass elapsed_ms=35
+h097 |line 25: check=pass elapsed_ms=36
+h098 |  … +39 more lines
+h099 |
+h100 |◆ assistant
+h101 |TypeScript entry point first — watch the deep indent and the
+h102 |overlong call:
+h103 |ts
+h104 |export async function route(task: Task): Promise<Decision> {
+h105 |  const features = classify(task.prompt);
+h106 |  if (features.type === "code_gen") {
+h107 |    const rec = await minima.recommend({ task: "summarize",
+h108 |prompt, slider: 0.35, pins: ["gpt-5-mini"], metadata: {
+h109 |retries: 3, escalate: "auto", trace_id: "b428a3c4-6ebc-4227"
+h110 | }
+h111 | });
+h112 |  }
+h113 |  return fallback(task);
+h114 |}
+h115 |The Python mirror — comment lines start with #:
+h116 |python
+h117 |
+h118 |derive the cost basis before scoring
+h119 |def score(candidates, basis):
+h120 |        weights = rescale(basis)  # deliberate 8-space inden
+h121 |t
+h122 |        return sorted(candidates, key=lambda c: c.cost *
+h123 |weights[c.tier])
+h124 |def apply(kwargs):
+h125 |
+h126 |'#' lines and '**kwargs' both confuse the renderer today
+h127 |    return kwargs
+h128 |Config as YAML — dash lines inside code:
+h129 |yaml
+h130 |  - name: recommend
+h131 |  cost_basis: observed
+h132 |
+h133 |a comment between items
+h134 |  - name: feedback
+h135 |  required: [input_tokens, output_tokens, actual_cost_usd]
+h136 |And the stream cut out mid-block here (fence never closes):
+h137 |bash
+h138 |curl -s https://api.minima.sh/v1/feedback?rec=b428a3c46ebc42
+h139 |27
+h140 |&sig=aGVsbG8gd29ybGQgdGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgdG9
+=== SCREEN 60x24 (visible) ===
+ 0 |rZ
+ 1 |W4gZm9yIHdyYXAgdGVzdGluZyBvZiBoYXJkIGJyZWFrcw | jq .outcome
+ 2 |echo done
+ 3 |
+ 4 |  ⚙ resume:
+ 5 |Resumed run fixture-mixed (5 msg(s), 0 routed prompt(s),
+ 6 |$0.0000 recorded)
+ 7 |
+ 8 |
+ 9 |
+10 |
+11 |  ⚙ setup:
+12 |No model-provider API key set — set one to run models:
+13 |`/config set ANTHROPIC_API_KEY <key>` (or
+14 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+15 |
+16 |╭─── prompt ───────────────────────────────────────────────╮
+17 |│  ▋                                                       │
+18 |╰──────────────────────────────────────────────────────────╯
+19 |
+20 | model: gpt-4o-mini ▸ pinned · route: auto · reason: off │ …
+21 |perms: r-x 0 dirs · w/e/b: ask
+22 |ctrlModelctrlRoute⇧taModectrl+Reasctrl+TaskescAborctrlpalet
+23 |
+=== 24 visible rows; 141 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp10-render-audit/mixed-60.png ===
