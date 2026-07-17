@@ -662,6 +662,21 @@ track.**
 
 **Gate:** audit doc + assertion tests committed. Read-only on product code.
 
+**Execution notes (landed 2026-07-17):** `tests/plan-loop-audit.test.ts` (3 tests, 109
+asserts) drives finalize→seed→baseline-red→blocked-completion→escalation→red→green→
+milestone→feedback against the faux provider and pins every ledger row; the judgment doc is
+`docs/BigPlan/plan-loop-audit.md` (findings AUD-1..11 with the actual rows). Headlines —
+two real bugs: **AUD-1** the closing rung's `routing_decisions.step_id` is NULL (plan closes
+in the after-hook before `persistDecision` reads the active step → `stepCosts` undercounts
+every plan's final rung) and **AUD-2** the milestone rollup lands `unchecked` when ANY step
+is verify-less, even with genuine red→green evidence on the checked steps. Also pinned:
+zero-consent headless verify execution (AUD-7 → MP18), `|| undefined` dropping zero token
+counts from feedback (AUD-3), `parent_rec_id` flat-star (AUD-4), `gates.confidence`
+NULL-on-write for step_check rows (AUD-5), write-only `synced`/`schema_v` (AUD-10).
+Disposition per the doc: AUD-1+2 = one small fix MP; AUD-3/4/5/6/10 = one ledger-hygiene MP;
+AUD-8 (sub-agent consent scope) needs a product decision — all appended to this track's
+backlog, not built in MP13.
+
 ### MP14 — Council progress streaming *(M)*
 
 **Goal:** kill the *perceived* council latency — the single most-felt pain: every plan turn
