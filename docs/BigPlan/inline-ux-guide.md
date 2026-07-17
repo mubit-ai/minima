@@ -88,6 +88,12 @@ One MP at a time, in this loop:
   The `gateFocus` answer modal (`app.tsx:942`) coexists (triggered interaction, not a surface);
   D3a's 🔴 alert routes to it.
 - D3a sits at the **top** of the footer stack; busy + suggestions move to hug the input.
+- **The user can REJECT the task list** (added 2026-07-17, CC's plan-reject parity):
+  `/tasks cancel` clears the todowrite list, closes the active GT plan
+  (`status='cancelled'` — never resurrected, unlike `done`), disarms the gate modal, and
+  pushes a model-facing user turn ("do not re-create these tasks…") that rides the next
+  prompt — the notice is load-bearing: clearing state alone just gets re-seeded by the
+  model's next todowrite.
 - **D3b** = the same panel expanded (Ctrl+T = ToC, Ctrl+G = GT overview) filling
   `rows − (input + status bar)`; suggestions/busy suppressed, D3a hidden while open.
   **Snapshot at open** (re-read on reopen); stale/refresh = v1.5; live-subscribe = v2.
