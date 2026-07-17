@@ -591,6 +591,17 @@ expand = D3b reader). Indicator styling matches CC's.
 **Agent proof:** tool-heavy fixture before/after shots.
 **Gate:** §1.7.
 
+**Execution notes (landed 2026-07-17):** the audit (R3) found the premise stale — the
+indicator already existed on BOTH surfaces (`messages.tsx` gray `  … +N more lines`,
+`reader.ts` `… +N more lines`), diverging in format and indent. MP12 = one shared producer:
+`toolHiddenMarker(hidden)` in `layout.ts` returns the CC-style `… N more lines` (dim; call
+sites add their own indent), consumed by both `MessageRow` and `sectionReaderLines` — pinned
+by `tool_marker.test.ts` (helper format, both-sites-consume, no inline template rebuilds,
+`clampToolText` stays the only trim site, `computeMsgHeight`'s +1 indicator reservation).
+`_io.ts`'s read-tool pagination hint is a different (model-facing) surface — untouched.
+Shots: `shots/mp12-tool-truncate/` (`… 216 more lines` on the 244-line fixture) vs MP10's
+`tool-*.txt` before-dumps.
+
 ### MP20 — Stream-commit bottom-mount reseat *(S · spawned by MP10's R1)*
 
 **Goal:** the composer never strands mid-screen after a tall streamed reply commits.

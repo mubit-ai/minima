@@ -4,11 +4,16 @@
  * reading happens IN the panel). v1 is plain committed-text: the transcript's header
  * glyphs + word-wrap via the SAME wrapLineToWidth the height estimates are defined by
  * (estimate == render by construction), tool bodies clamped with the honest
- * `… +N more lines` marker, assistant markdown mirrored the way markdownBodyHeight
+ * `… N more lines` marker, assistant markdown mirrored the way markdownBodyHeight
  * counts it (heading → blank + text; bullet → "- "; else plain). Not a MessageRow
  * re-mount — no Ink here.
  */
-import { clampToolText, classifyMarkdownLines, wrapLineToWidth } from "./layout.ts";
+import {
+  clampToolText,
+  classifyMarkdownLines,
+  toolHiddenMarker,
+  wrapLineToWidth,
+} from "./layout.ts";
 import type { ChatMessage } from "./messages.tsx";
 
 function bodyLines(text: string, w: number): string[] {
@@ -36,7 +41,7 @@ export function sectionReaderLines(
       out.push(`⚙ ${msg.toolName ?? "tool"}:`);
       const { text, hiddenLines } = clampToolText(msg.text, w + 4);
       out.push(...bodyLines(text, w));
-      if (hiddenLines > 0) out.push(`… +${hiddenLines} more lines`);
+      if (hiddenLines > 0) out.push(toolHiddenMarker(hiddenLines));
     } else if (msg.role === "thinking") {
       out.push("🧠 reasoning");
       out.push(...bodyLines(msg.text, w));

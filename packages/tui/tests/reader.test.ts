@@ -70,11 +70,12 @@ describe("sectionReaderLines — a section's messages as plain panel lines", () 
     expect(lines).toContain("- bullet one");
   });
 
-  test("tool bodies keep the honest truncation marker", () => {
+  test("tool bodies keep the honest truncation marker (CC format — MP12)", () => {
     const big = msg("tool", Array(80).fill("row").join("\n"), "bash");
     const lines = sectionReaderLines([big], 0, 1, 80);
     expect(lines[0]).toBe("⚙ bash:");
-    expect(lines.some((l) => /^… \+\d+ more lines$/.test(l))).toBe(true);
+    expect(lines.some((l) => /^… \d+ more lines$/.test(l))).toBe(true);
+    expect(lines.some((l) => l.includes("+"))).toBe(false);
   });
 
   test("out-of-range slices and empty sections yield the placeholder", () => {
