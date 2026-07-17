@@ -121,8 +121,8 @@ import {
 } from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
-import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
+import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { type TocUsage, buildSections, renderTocText, tocRows } from "./toc.ts";
@@ -2769,11 +2769,7 @@ export function HarnessApp({
           agent.agentState.messages.push(
             new AgentMessage({
               role: "user",
-              content:
-                `[The user cancelled the current ${scope}. This is a user choice: do not ` +
-                "re-create these tasks with todowrite and do not continue executing the " +
-                "cancelled plan. Follow the user's next instructions instead, or ask how " +
-                "to proceed.]",
+              content: `[The user cancelled the current ${scope}. This is a user choice: do not re-create these tasks with todowrite and do not continue executing the cancelled plan. Follow the user's next instructions instead, or ask how to proceed.]`,
             }),
           );
           setMessages((m) => [
@@ -2781,10 +2777,7 @@ export function HarnessApp({
             { role: "user", text: `/${name} ${args}`.trim() },
             {
               role: "tool",
-              text:
-                `Cancelled: ${clearedCount} task(s) cleared` +
-                (planCancelled ? " and the Ground-Truth plan closed" : "") +
-                ". The model has been told not to re-create them.",
+              text: `Cancelled: ${clearedCount} task(s) cleared${planCancelled ? " and the Ground-Truth plan closed" : ""}. The model has been told not to re-create them.`,
               toolName: "tasks",
             },
           ]);

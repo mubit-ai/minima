@@ -1,0 +1,88 @@
+=== SCROLLBACK (60 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |▸ you
+h025 | Run the full verification sweep and show the log (tool
+h026 |profile).
+h027 |
+h028 |  ⚙ bash:
+h029 |line 1: check=retry elapsed_ms=12
+h030 |line 2: check=pass elapsed_ms=13
+h031 |line 3: check=pass elapsed_ms=14
+h032 |line 4: check=pass elapsed_ms=15
+h033 |line 5: check=pass elapsed_ms=16
+h034 |line 6: check=pass elapsed_ms=17
+h035 |line 7: check=pass elapsed_ms=18
+h036 |line 8: check=retry elapsed_ms=19
+h037 |line 9: check=pass elapsed_ms=20
+h038 |line 10: check=pass elapsed_ms=21
+h039 |line 11: check=pass elapsed_ms=22
+h040 |line 12: check=pass elapsed_ms=23
+h041 |line 13: check=pass elapsed_ms=24
+h042 |line 14: check=pass elapsed_ms=25
+h043 |line 15: check=retry elapsed_ms=26
+h044 |line 16: check=pass elapsed_ms=27
+h045 |line 17: check=pass elapsed_ms=28
+h046 |line 18: WIDE status=ok bytes=4096 cache=hit tier=observed
+h047 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h048 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h049 |basis=rescaled status=ok bytes=4096 cache=hit tier=observed
+h050 |basis=rescaled end
+h051 |line 19: check=pass elapsed_ms=30
+h052 |line 20: check=pass elapsed_ms=31
+h053 |line 21: check=pass elapsed_ms=32
+h054 |line 22: check=retry elapsed_ms=33
+h055 |line 23: check=pass elapsed_ms=34
+h056 |line 24: check=pass elapsed_ms=35
+h057 |line 25: check=pass elapsed_ms=36
+h058 |  … +219 more lines
+h059 |
+=== SCREEN 60x24 (visible) ===
+ 0 |  ⚙ grep:
+ 1 |rg: pattern not found in 3 of 41 files
+ 2 |
+ 3 |◆ assistant
+ 4 |The sweep passed — 244 log lines captured above, one benign
+ 5 |grep miss.
+ 6 |
+ 7 |  ⚙ resume:
+ 8 |Resumed run fixture-tool (4 msg(s), 0 routed prompt(s),
+ 9 |$0.0000 recorded)
+10 |
+11 |  ⚙ setup:
+12 |No model-provider API key set — set one to run models:
+13 |`/config set ANTHROPIC_API_KEY <key>` (or
+14 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+15 |
+16 |╭─── prompt ───────────────────────────────────────────────╮
+17 |│  ▋                                                       │
+18 |╰──────────────────────────────────────────────────────────╯
+19 |
+20 | model: gpt-4o-mini ▸ pinned · route: auto · reason: off │ …
+21 |perms: r-x 0 dirs · w/e/b: ask
+22 |ctrlModelctrlRoute⇧taModectrl+Reasctrl+TaskescAborctrlpalet
+23 |
+=== 24 visible rows; 60 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp10-render-audit/tool-60.png ===

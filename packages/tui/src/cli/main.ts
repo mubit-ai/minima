@@ -30,8 +30,8 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
-import type { TodoTask } from "../tools/todowrite.ts";
 import { taskTool } from "../tools/task.ts";
+import type { TodoTask } from "../tools/todowrite.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {

@@ -526,6 +526,30 @@ audit covers assistant/tool/code surfaces only.
 
 **Gate:** the committed audit doc + shots. No product code.
 
+**Execution notes (landed 2026-07-17):** fixtures = `gen-fixture-session.ts --profile
+md|code|tool|mixed` (fully scripted deterministic sessions; default path untouched); shots +
+full-scrollback `.txt` dumps (byte-diff targets for MP11/MP12 after-shots) in
+`shots/mp10-render-audit/` — 10 resume shots across the §3 matrix + one live-stream capture
+with frames. PNG rasterizer note: CJK/emoji render as tofu boxes in PNGs (Menlo fallback in
+`render_png`), NOT a TUI defect — the pyte grid and `.txt` dumps hold the correct glyphs.
+
+**Ranked defect list (agent-ranked per user's 2026-07-17 delegation; re-ranks → follow-up MPs):**
+
+| # | defect | evidence | severity | absorbed by |
+|---|---|---|---|---|
+| R1 | **Composer strands mid-screen after a TALL streamed reply commits** — during the stream the prompt box is bottom-anchored (row 28/36); at commit the live region shrinks and repaints at the old frame top: prompt jumps to row 10, 19 blank rows below, never re-anchors (no later repaint). Same shrink-repaint class MP4 fixed for panel close via `closePanelReseat()`; the stream-commit path has no reseat, and the `bottom-anchor` gate only rides short-reply scenarios (echo/modes) where `minHeight` still fills the screen. | `stream-code.png`, `stream-code.frames.jsonl` (prompt row 28→10 at t=3.32) | **P0 — every reply taller than the tail budget on a short transcript** | **MP20 (new, spawned by this audit)** |
+| R2 | **Fenced code blocks garble** — ``` delimiters eaten by the inline-backtick toggle (language tag left behind, styled); `#` code lines render as bold-cyan headings with a phantom marginTop row (python comments, yaml comments); `- ` code lines render as bullets with indent structure destroyed; `**kwargs` loses its asterisks and bolds `kwargs` — copy-paste from scrollback is corrupted. | `code-tall.png`, `code-120/80/60.png` | P1 — every code-bearing reply | MP11 |
+| R3 | **Tool-truncation marker format** — honesty already exists (`… +216 more lines`, gray) but live path prefixes 2 spaces, reader none, and the `+` diverges from CC's `… N more lines`. | `tool-120.png` | P3 — cosmetic | MP12 |
+| R4 | **List nesting flattened + false bullets** — all list depths render at one marginLeft with the same bullet glyph; `-tight-dash` (no space) renders as a bullet, eating the dash. | `md-120.png` | P2 — false bullets corrupt content; flat nesting is only lossy | false-bullet → MP11 (classifier requires `"- "`/`"* "`); depth rendering → v2 |
+| R5 | **Markdown fidelity passthroughs** — `*italic*`, `~~strike~~`, tables, blockquotes render as raw text (honest, readable, unstyled). | `md-120.png` | P4 | wontfix-v1 (CC-parity styling = v2) |
+| R6 | **Footer keys legend loses separators at 60 cols** (`ctrlModelctrlRoute…`) — not a transcript surface. | `code-60.png` bottom row | P4 — cosmetic, floor width only | MP-extra candidate, Track A backlog |
+
+**MP11 acceptance refined by R2** (before-shots = `code-*.png`/`.txt`): after-shots must show
+dim ``` delimiter rows with the language tag visible; `# comment` inside a fence NOT a
+heading (no phantom row); yaml `- name:` lines verbatim with indent intact; `**kwargs`
+literal; the overlong call + URL hard-wrapped without garble at 60/80/120; the unclosed
+bash fence rendered verbatim to EOF.
+
 ### MP11 — Code-block wrapping at 60–120 cols *(M)*
 
 **Goal:** code blocks never garble at any width ≥60. No syntax highlighting (v1 decision).
@@ -546,6 +570,25 @@ indicator row (dim). No expand mechanism (rejected: reprint pollutes scrollback;
 expand = D3b reader). Indicator styling matches CC's.
 **Agent proof:** tool-heavy fixture before/after shots.
 **Gate:** §1.7.
+
+### MP20 — Stream-commit bottom-mount reseat *(S · spawned by MP10's R1)*
+
+**Goal:** the composer never strands mid-screen after a tall streamed reply commits.
+
+**Problem (audit R1, 2026-07-17):** while streaming, the live region (stream tail + composer +
+status) is bottom-anchored; when the reply commits to `<Static>` the live region shrinks to
+~6 rows and log-update repaints it at the old frame TOP — prompt jumps from row 28 to row 10
+at 120×36 with 19 blank rows below, and nothing ever re-anchors it. Exact same
+shrink-repaint stranding MP4 found on panel close; `closePanelReseat()` fixed that path by
+reseating `staticBasisIdx` so `bottomMountMinRows` refills the screen. The stream-commit
+path needs the equivalent reseat at the commit site (fires only when the committed live
+region was tall — short replies already hold via `minHeight`).
+
+**Build:** reseat on tall stream-commit in `app.tsx` (mirror `closePanelReseat`); extend the
+`bottom-anchor` assertion to the `stream-wipe-perf` scenario (tall `CODE` reply — the class
+the current echo/modes wiring can't see). Evidence: re-run the MP10 `stream-code` capture —
+final frames must show the prompt within 1 row of the grid bottom.
+**Gate:** §1.7 + zero-wipe + the new bottom-anchor wiring green.
 
 ---
 
@@ -682,3 +725,4 @@ statuses live in Linear, not here (this file stays append-only for decisions/evi
 | MP7 | MUB-150 | | MP17 | MUB-160 |
 | MP8 | MUB-151 | | MP18 | MUB-161 |
 | MP9 | MUB-152 | | MP19 | MUB-162 |
+| MP20 | MUB-165 | | | |
