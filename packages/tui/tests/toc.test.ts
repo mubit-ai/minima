@@ -109,3 +109,32 @@ describe("tocRows / renderTocText (U2 render)", () => {
     expect(renderTocText([], 80)).toContain("(empty session)");
   });
 });
+
+describe("failed-then-fixed section marker (MP19)", () => {
+  test("an error milestone + a clean result marks the section title ⚠→✓", () => {
+    const msgs = [
+      user("build the step"),
+      tool("todowrite", "blocked: Step not verified", true),
+      tool("write"),
+      tool("todowrite", "Todo list updated (1/1 done):\n1. [x] step"),
+      assistant("done and verified"),
+    ];
+    const sections = buildSections(msgs, LEDGER);
+    const title = tocRows(sections, 80).find((r) => r.isTitle)!;
+    expect(title.text).toContain("⚠→✓");
+    expect(renderTocText(sections, 80)).toContain("⚠→✓");
+  });
+
+  test("a still-failing section (errored result / no clean result) keeps only the ⚠", () => {
+    const failing = buildSections(
+      [user("try it"), tool("bash", "boom", true), assistant("could not finish")],
+      LEDGER,
+    );
+    const cleanTitle = (msgs: ChatMessage[]) =>
+      tocRows(buildSections(msgs, LEDGER), 80).find((r) => r.isTitle)!.text;
+    expect(cleanTitle([user("ok run"), tool("bash"), assistant("fine")])).not.toContain("⚠→✓");
+    const failingRows = tocRows(failing, 80);
+    expect(failingRows.find((r) => r.isTitle)!.text).not.toContain("⚠→✓");
+    expect(failingRows.some((r) => r.text.includes("⚠"))).toBe(true);
+  });
+});

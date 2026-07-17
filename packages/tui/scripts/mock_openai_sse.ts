@@ -114,6 +114,10 @@ const COUNCIL_SYNTH = JSON.stringify({
   constraints: ["no new dependencies"],
 });
 
+// ONE step so a scripted acceptance run can close the whole plan (milestone gate) —
+// the action string must match the PLANDEMO todowrite content EXACTLY (step identity).
+const DEMO_STEP = "Scaffold demo_widget.ts with the render entry point";
+const DEMO_VERIFY = "test -f demo_widget.ts";
 const COUNCIL_GT = JSON.stringify({
   title: "Demo Widget Wiring",
   goal: "Ship the demo widget through the existing footer registry seam.",
@@ -127,22 +131,47 @@ const COUNCIL_GT = JSON.stringify({
       rationale: "no new plumbing",
     },
   ],
-  approach: [
-    {
-      action: "Scaffold demo_widget.ts with the render entry point",
-      verify: "test -f demo_widget.ts",
-      tools: ["write"],
-    },
-    {
-      action: "Pin the rendered rows with a regression test",
-      verify: "bun test demo_widget.test.ts",
-      tools: ["write", "bash"],
-    },
-  ],
+  approach: [{ action: DEMO_STEP, verify: DEMO_VERIFY, tools: ["write"] }],
   risks: ["registry ordering is load-bearing"],
-  successCriteria: ["bun test green"],
+  successCriteria: ["the step's verify goes red to green"],
   openItems: [],
 });
+
+// MP19 "PLANDEMO" — the acceptance-run execution script, phase-keyed on how many tool
+// results THIS turn already carries: in_progress (baseline red) → completing while red
+// (the done-gate BLOCKS; the block reason is the tool result) → write the file (the fix)
+// → completing again (red→green, gate verifies, plan closes) → final text.
+function planDemoToolCall(phase: number): { name: string; args: string } | null {
+  if (phase === 0) {
+    return {
+      name: "todowrite",
+      args: JSON.stringify({
+        tasks: JSON.stringify([{ content: DEMO_STEP, status: "in_progress", verify: DEMO_VERIFY }]),
+      }),
+    };
+  }
+  if (phase === 1 || phase === 3) {
+    return {
+      name: "todowrite",
+      args: JSON.stringify({
+        tasks: JSON.stringify([{ content: DEMO_STEP, status: "completed", verify: DEMO_VERIFY }]),
+      }),
+    };
+  }
+  if (phase === 2) {
+    return {
+      name: "write",
+      args: JSON.stringify({
+        path: "demo_widget.ts",
+        content: "export const demoWidget = true;\n",
+      }),
+    };
+  }
+  return null;
+}
+const PLANDEMO_DONE_REPLY =
+  "Demo complete: the step went red, the gate blocked the early completion, the fix landed, " +
+  "and the re-check verified it green. The plan is closed.";
 
 // Reply per council role, keyed on the request's SYSTEM prompt (see header). Null = not a
 // council call. Critic/keeper return [] (clean pass) so the round stays single-pass and no
@@ -242,32 +271,47 @@ Bun.serve({
     // Keying on any-tool-result-in-history froze every marker after the first tool turn.
     const msgs = body.messages ?? [];
     const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
-    const hasToolResult = msgs.slice(lastUserIdx + 1).some((m) => m.role === "tool");
-    const wantTodoV = council == null && prompt.includes("TODOV") && !hasToolResult;
+    const turnToolResults = msgs.slice(lastUserIdx + 1).filter((m) => m.role === "tool").length;
+    const hasToolResult = turnToolResults > 0;
+    // MP19 "PLANDEMO": phase-keyed on how many tool results THIS turn already carries.
+    // The plan-mode PLANNER turn must stay text-only (read-only persona, detected by the
+    // planning-lead system prompt) — only the build-mode execution turn runs the script.
+    const planningLead = sys.includes("planning lead");
+    const wantPlanDemo = council == null && !planningLead && prompt.includes("PLANDEMO");
+    const wantTodoV =
+      council == null && !wantPlanDemo && prompt.includes("TODOV") && !hasToolResult;
     const wantTodo =
-      council == null && prompt.includes("TODO") && !prompt.includes("TODOV") && !hasToolResult;
+      council == null &&
+      !wantPlanDemo &&
+      prompt.includes("TODO") &&
+      !prompt.includes("TODOV") &&
+      !hasToolResult;
     const wantExitPlan = council == null && prompt.includes("EXITPLAN") && !hasToolResult;
-    const toolCall = wantTodoV
-      ? { name: "todowrite", args: JSON.stringify({ tasks: todoVTasks(prompt) }) }
-      : wantTodo
-        ? { name: "todowrite", args: JSON.stringify({ tasks: TODO_TASKS }) }
-        : wantExitPlan
-          ? {
-              name: "exit_plan",
-              args: JSON.stringify({
-                plan: EXITPLAN_MD,
-                summary: "Clean up the sandbox temp dirs",
-              }),
-            }
-          : null;
+    const toolCall = wantPlanDemo
+      ? planDemoToolCall(turnToolResults)
+      : wantTodoV
+        ? { name: "todowrite", args: JSON.stringify({ tasks: todoVTasks(prompt) }) }
+        : wantTodo
+          ? { name: "todowrite", args: JSON.stringify({ tasks: TODO_TASKS }) }
+          : wantExitPlan
+            ? {
+                name: "exit_plan",
+                args: JSON.stringify({
+                  plan: EXITPLAN_MD,
+                  summary: "Clean up the sandbox temp dirs",
+                }),
+              }
+            : null;
     const { text, slow } =
       council != null
         ? { text: council, slow: false }
-        : prompt.includes("TODO")
-          ? { text: TODO_DONE_REPLY, slow: false }
-          : prompt.includes("EXITPLAN")
-            ? { text: EXITPLAN_DONE_REPLY, slow: false }
-            : pickReply(prompt);
+        : wantPlanDemo || (prompt.includes("PLANDEMO") && !planningLead)
+          ? { text: PLANDEMO_DONE_REPLY, slow: false }
+          : prompt.includes("TODO")
+            ? { text: TODO_DONE_REPLY, slow: false }
+            : prompt.includes("EXITPLAN")
+              ? { text: EXITPLAN_DONE_REPLY, slow: false }
+              : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({
