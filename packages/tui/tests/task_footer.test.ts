@@ -167,4 +167,39 @@ describe("tui/app.tsx wires the D3a task panel", () => {
   test("refresh is driven by tool_execution_end (no toolName on the event — unfiltered bump)", () => {
     expect(src).toContain("setTodoGen((g) => g + 1)");
   });
+
+  test("/tasks cancel is the CC-style reject: clear + close + TELL THE MODEL", () => {
+    const idx = src.indexOf('if (args.trim().toLowerCase() === "cancel")');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2600);
+    // Clearing state alone is meaningless — the model's next todowrite re-seeds a fresh
+    // active plan; the model-facing rejection notice is the load-bearing part.
+    expect(body).toContain("todos.length = 0");
+    expect(body).toContain('setPlanStatus(plan.id, "cancelled")');
+    expect(body).toContain("agent.agentState.messages.push");
+    expect(body).toContain("The user cancelled the current");
+    expect(body).toContain("do not");
+    // The armed gate belongs to the cancelled plan — the modal must disarm.
+    expect(body).toContain("setGateFocus(null)");
+  });
+});
+
+describe("cancelled plans stay dead (the ledger side of /tasks cancel)", () => {
+  test("a 'cancelled' plan never reopens; the next todowrite starts a FRESH plan", async () => {
+    const { MinimaDb } = await import("../src/db/minima_db.ts");
+    const db = new MinimaDb(":memory:");
+    const { planId } = db.upsertPlanFromTodos(
+      "run1",
+      [{ content: "a", status: "in_progress" }],
+      "First plan",
+    );
+    db.setPlanStatus(planId, "cancelled");
+    expect(db.getActivePlan("run1")).toBeNull();
+    const second = db.upsertPlanFromTodos("run1", [{ content: "b", status: "pending" }], "Second");
+    expect(second.planId).not.toBe(planId);
+    expect(db.getActivePlan("run1")!.id).toBe(second.planId);
+    // Unlike 'done' plans, cancelled ones are not resurrected by matching todos.
+    expect(db.getPlanSteps(planId).length).toBe(1);
+    db.db.close();
+  });
 });

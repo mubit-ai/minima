@@ -477,18 +477,20 @@ PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/tasks-frames.jsonl" --after 2.5 \
   --check single-prompt --check final-nonblank --check bottom-anchor
 
-echo "== tui-verify: scenario tasks-footer-restart (persisted hide survives) =="
+echo "== tui-verify: scenario tasks-footer-restart (persisted hide survives; /tasks cancel) =="
 SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
-  "cols": 120, "rows": 36, "duration": 12,
+  "cols": 120, "rows": 36, "duration": 13.5,
   "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
   "frames": "$TMP/tasks2-frames.jsonl",
   "steps": [
     {"after": 3.0, "send": "TODO plan this work"},
     {"after": 4.5, "send": "<CR>"},
-    {"after": 8.0, "send": "a"}
+    {"after": 8.0, "send": "a"},
+    {"after": 10.6, "send": "/tasks cancel"},
+    {"after": 11.3, "send": "<CR>"}
   ]
 }
 EOF
@@ -501,7 +503,11 @@ assert not any("tasks 1/3" in row for f in frames for row in f["screen"]), (
     "persisted hide ignored: the task panel reappeared in a fresh session on the same prefs dir")
 assert any("todowrite: 3 tasks" in row for f in frames for row in f["screen"]), (
     "todowrite never ran in the restart session - the hide assert proved nothing")
-print("tui_assert: PASS tasks-footer-restart (hide persisted per-project)")
+# The CC-style reject: /tasks cancel clears the list and reports the model was told.
+assert any("Cancelled: 3 task(s) cleared" in row
+           for f in frames if f["t"] >= 11.3 for row in f["screen"]), (
+    "/tasks cancel did not clear + report")
+print("tui_assert: PASS tasks-footer-restart (hide persisted; /tasks cancel rejects the list)")
 PY
 
 echo "== tui-verify: scenario panel-gt (MP9: gate wins the chord, overview, step card, /why) =="

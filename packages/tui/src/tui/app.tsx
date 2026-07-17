@@ -268,7 +268,7 @@ const COMMANDS = [
   { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "tasks", desc: "Toggle the footer task panel (Ctrl+B)" },
+  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + GT plan" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
@@ -2727,6 +2727,71 @@ export function HarnessApp({
         ]);
         break;
       case "tasks": {
+        // `/tasks cancel` — the CC-style plan reject, applied to todowrite + GT: clear the
+        // observable todo list, close the ledger plan, and TELL THE MODEL (mandatory —
+        // clearing state alone is meaningless: the next todowrite re-seeds a fresh active
+        // plan, ground_truth.ts upsert path). Cancelled plans stay dead: planForTodos only
+        // reopens 'done' plans.
+        if (args.trim().toLowerCase() === "cancel") {
+          const clearedCount = todos?.length ?? 0;
+          if (todos) todos.length = 0;
+          setTodoGen((g) => g + 1);
+          let planCancelled = false;
+          if (agent.config.groundTruth === true && agent.db && agent.runId) {
+            try {
+              const plan = agent.db.getActivePlan(agent.runId);
+              if (plan) {
+                agent.db.setPlanStatus(plan.id, "cancelled");
+                planCancelled = true;
+              }
+              setPlanStrip(planStripInfo(agent.db, agent.runId));
+              setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+            } catch {
+              setPlanStrip(null);
+              setGtBehavior(null);
+            }
+            setGateFocus(null);
+            dismissedGateRef.current = null;
+          }
+          if (clearedCount === 0 && !planCancelled) {
+            setMessages((m) => [
+              ...m,
+              { role: "user", text: `/${name} ${args}`.trim() },
+              {
+                role: "tool",
+                text: "Nothing to cancel — no task list or active plan.",
+                toolName: "tasks",
+              },
+            ]);
+            break;
+          }
+          // The model-facing rejection notice (the exit_plan CANCEL / denialReason
+          // precedent): rides the next prompt as a user turn, the /rewind pattern.
+          const scope = planCancelled ? "task list and its Ground-Truth plan" : "task list";
+          agent.agentState.messages.push(
+            new AgentMessage({
+              role: "user",
+              content:
+                `[The user cancelled the current ${scope}. This is a user choice: do not ` +
+                "re-create these tasks with todowrite and do not continue executing the " +
+                "cancelled plan. Follow the user's next instructions instead, or ask how " +
+                "to proceed.]",
+            }),
+          );
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            {
+              role: "tool",
+              text:
+                `Cancelled: ${clearedCount} task(s) cleared` +
+                (planCancelled ? " and the Ground-Truth plan closed" : "") +
+                ". The model has been told not to re-create them.",
+              toolName: "tasks",
+            },
+          ]);
+          break;
+        }
         const nextHidden = !taskPanelHidden;
         setTaskPanelHidden(nextHidden);
         if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
