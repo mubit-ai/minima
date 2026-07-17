@@ -93,7 +93,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
-import { type PanelNavKey, type PanelState, panelReduce, spikePanelState } from "./panel_state.ts";
+import { type PanelNavKey, type PanelState, panelReduce, tocPanelState } from "./panel_state.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
@@ -117,7 +117,7 @@ import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
-import { type TocUsage, buildSections, renderTocText } from "./toc.ts";
+import { type TocUsage, buildSections, renderTocText, tocRows } from "./toc.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -150,11 +150,6 @@ export interface AppProps {
    */
   todos?: TodoTask[];
 }
-
-// MP4 (MUB-147): the spike gate for the D3b live-region panels. Off by default — the
-// default path must be byte-identical (A/B-gated); MP7 replaces the flag with the real
-// ToC/GT panel opens.
-const SPIKE_PANEL = process.env.MINIMA_TUI_SPIKE_PANEL === "1";
 
 /** Persona the lead adopts in plan mode; the council's ground-truth snapshot is appended each turn. */
 const PLANNER_PERSONA =
@@ -1574,12 +1569,13 @@ export function HarnessApp({
       return;
     }
 
-    // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation); prints the
-    // one-shot text block. Idle + spike flag: the expanded panel instead (MP4; the busy
-    // and <60-col paths KEEP the text block — decided 2026-07-17).
+    // Ctrl+T: idle at readable width → the expanded ToC panel (D3b, MP7). Busy and
+    // <60-col keep the one-shot text block (decided 2026-07-17) — mid-run info access
+    // with zero wipe risk, and the narrow degrade path.
     if (key.ctrl && input === "t") {
-      if (SPIKE_PANEL && !busy && cols >= TOC_MIN_COLS) {
-        setPanel((p) => (p ? null : spikePanelState()));
+      if (!busy && cols >= TOC_MIN_COLS) {
+        const sections = buildSections(messages, buildUsageLedger());
+        setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 4)), messages));
         return;
       }
       requestTocSidebar();
@@ -3509,6 +3505,12 @@ export function HarnessApp({
       closePanelReseat();
       return;
     }
+    if (key.ctrl && input === "g") {
+      // Until the GT view lands (MP9): close and fall back to the one-shot overview text.
+      closePanelReseat();
+      requestGtSidebar();
+      return;
+    }
     if (key.ctrl) return;
     if (key.escape) {
       const next = panel ? panelReduce(panel, "", { escape: true }, panelInnerRows) : null;
@@ -3929,9 +3931,10 @@ export function HarnessApp({
       >
         {panelVisible && panelTop ? (
           <ExpandPanel
-            title={`${panelTop.title} · ${panelTop.lines.length} lines — j/k · pgup/pgdn · gg/G · esc closes`}
+            title={`${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · esc closes`}
             lines={panelTop.lines}
             cursor={panelTop.cursor}
+            stops={panelTop.stops}
             outerHeight={panelOuter}
             onKey={handlePanelKey}
           />
