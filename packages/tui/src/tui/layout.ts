@@ -324,27 +324,6 @@ export function childTreeHeight(childCount: number, maxRows: number): number {
 }
 
 /**
- * Fit the up-to-three Ground-Truth footer rows (🔴 block prompt, plan strip, 🟡 flagged note)
- * into `budget` spare rows, granting in priority order block → strip → note (the block is the
- * approval surface for a halted step, the strip is orientation, the note is the most droppable).
- * Absent rows are never granted, so an all-absent input is all-absent out at ANY budget — the
- * default (ground-truth off) path is structurally unaffected. Display only: dropping the 🔴 row
- * changes nothing about the done-gate, which is enforced in the tool dispatcher.
- */
-export function gtFooterFit(
-  budget: number,
-  present: { block: boolean; strip: boolean; note: boolean },
-): { block: boolean; strip: boolean; note: boolean } {
-  let left = budget;
-  const grant = (want: boolean): boolean => {
-    if (!want || left <= 0) return false;
-    left -= 1;
-    return true;
-  };
-  return { block: grant(present.block), strip: grant(present.strip), note: grant(present.note) };
-}
-
-/**
  * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly.
  * CONSERVATIVE bias (>= actual): each role uses the accurate word-wrap helpers at the *narrowest*
  * width the real render could use, so we never under-count (an under-count would let content

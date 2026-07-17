@@ -235,9 +235,7 @@ describe("Agent + agentLoop", () => {
 
     // Only the first turn ran; the second queued response was never streamed.
     expect(agent.agentState.turnsTaken).toBe(1);
-    expect(
-      agent.agentState.messages.some((m) => m.textContent === "should not run"),
-    ).toBe(false);
+    expect(agent.agentState.messages.some((m) => m.textContent === "should not run")).toBe(false);
     reg.unregister();
   });
 

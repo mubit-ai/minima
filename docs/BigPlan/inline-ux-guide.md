@@ -399,6 +399,17 @@ scenario); `tasks-footer` + `tasks-footer-restart` joined tui-verify permanently
 **Manual test:** `MINIMA_TUI_GROUND_TRUTH=1` run: watch a step go in-progress → done; trigger
 a gate block; confirm ^G answers it.
 **Gate:** §1.7 + GT-off path unchanged vs MP5 shots.
+**Execution notes (landed):** the A/B gate came out ideal — all four GT-off scenarios
+byte-IDENTICAL vs MP5, and the `gt` scenario's diff is exactly the three-row swap (D3a
+header replaces the `▸ plan …` banner row; `drift: 1 file off-plan` replaces the inline
+⚠ suffix; the 🟡 note row folds away — full tiers are Ctrl+G's per Q25). `PlanStripInfo`
+gained `planId` + `totalCostUsd` (null hides the cost segment — never `$0.0000`);
+`planStripLabel`/`planStripDrift` were deleted (app-orphaned once the banner died — the
+one-rendered-row newline collapse now lives in `task_footer.oneLine`, tested there).
+`grantTaskRows` grants alert → header → next, display order preserved. The 🟡 note text
+(`gtBehavior.footerNote`) intentionally has no D3a row; `gt-footer.test.ts` was rewritten
+in the same commit onto the successor invariants (banner strings ABSENT, taskShown
+lockstep, taskBudget constants, refresh cadence, fail-open).
 
 ### MP7 — D3b expanded panel + ToC list *(L · needs MP4 pass)*
 
@@ -421,6 +432,17 @@ when a mock stream starts, zero-wipe scenario green.
 **Manual test:** long real session → Ctrl+T, browse, Esc, confirm draft survived and
 scrollback is intact (scroll the terminal up).
 **Gate:** §1.7 + all four budgets.
+**Execution notes (landed):** no separate expand-panel chassis file was needed — MP4's
+`expand_panel.tsx` + `panel_state.ts` ARE the chassis; the spike view was replaced by the
+`toc` view (generic `lines` + `stops` cursor: stops = section-title rows; PgUp/PgDn jump
+lines then snap directionally; reader views pass `stops: null`). Snapshot-at-open holds
+the `messages` REFERENCE (immutable-updated → free). "Auto-close on stream start" is the
+`busy`-keyed effect from MP4 — the guide's `message_start` hint is stale (that event
+carries `message: null`, loop.ts). Failed-gate markers ride the EXISTING milestone-error
+join (a refused todowrite completion is an erroring tool → the section's `⚠`), no new db
+query. Ctrl+G inside the panel closes + falls back to the one-shot overview text until
+MP9. `resume-scrollback` was updated in the same commit (idle Ctrl+T now opens the panel).
+Open/close latency both 0.01s against the 0.35s budget.
 
 ### MP8 — D3b reader mode *(M)*
 

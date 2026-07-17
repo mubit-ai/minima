@@ -22,9 +22,7 @@ import {
 } from "../src/minima/behavior.ts";
 import {
   groundTruthHooks,
-  planStripDrift,
   planStripInfo,
-  planStripLabel,
   stampGroundedOutcome,
 } from "../src/minima/ground_truth.ts";
 import type { Factors } from "../src/minima/gt_contract.ts";
@@ -112,10 +110,12 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       origin: "off_plan",
     });
 
-    // --- Strip snapshot (M1.3 + M2.3) ---
+    // --- Strip snapshot (M1.3 + M2.3; D3a consumes these facts since MP6) ---
     const info = planStripInfo(db, runId)!;
-    expect(planStripLabel(info)).toBe("▸ plan 3/3 — integrate billing");
-    expect(planStripDrift(info.drift)).toBe("   ⚠ 1 off-plan (drift)");
+    expect(info.stepPos).toBe(3);
+    expect(info.stepTotal).toBe(3);
+    expect(info.title).toBe("integrate billing");
+    expect(info.drift).toBe(1);
 
     // --- Tier → behavior (M6.1/M6.2) ---
     const beh = ledgerBehavior(db, runId);

@@ -307,20 +307,12 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("agent.config.groundTruth === true");
   });
 
-  test("the 🟡 note and 🔴 block are rendered from the aggregate, not inline templates", () => {
-    expect(src).toContain("gtBehavior?.footerNote");
-    expect(src).toContain("gtBehavior?.block");
-    expect(src).toContain("{gtFooterNote}");
-    expect(src).toContain("{gtBlock.prompt}");
-  });
-
-  test("the note is yellow and the block prompt is red — one truncated row each", () => {
-    expect(src).toContain('<Text color="yellow" wrap="truncate-end">');
-    expect(src).toContain('<Text color="red" bold wrap="truncate-end">');
-    // Both rows are budgeted into footerHeight (via the gtFooterFit grant) so the chat window
-    // shrinks instead of clipping.
-    expect(src).toContain("const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0)");
-    expect(src).toContain("+ gtRows");
+  test("tier→behavior surfaces through the D3a alert fold, not banner rows (MP6)", () => {
+    // The armed 🔴 block reaches the panel as a boolean; the alert TEXT is built in
+    // task_footer.ts (colored ASCII, no emoji — Q25). The old banner templates are gone.
+    expect(src).toContain("blocked: (gtBehavior?.block ?? null) !== null");
+    expect(src).not.toContain("{gtFooterNote}");
+    expect(src).not.toContain("{gtBlock.prompt}");
   });
 
   test("fails open to a hidden footer (setGtBehavior(null)) — never a crash", () => {
@@ -474,7 +466,6 @@ describe("tui/app.tsx panel key routing", () => {
     expect(src).toContain("suspended={panelCapture}");
     expect(src).not.toContain("suspended={tocOpen}");
   });
-
 });
 
 // Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT

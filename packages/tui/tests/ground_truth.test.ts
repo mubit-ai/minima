@@ -10,9 +10,7 @@ import {
   parseTodos,
   pathsFromPatch,
   planProjectionFor,
-  planStripDrift,
   planStripInfo,
-  planStripLabel,
   writePathsFromArgs,
 } from "../src/minima/ground_truth.ts";
 
@@ -641,7 +639,7 @@ describe("planStripInfo", () => {
     expect(planStripInfo(db(), "run1")).toBeNull();
   });
 
-  test("reports position, total, active title, and drift count", () => {
+  test("reports position, total, active title, drift, plan id, and plan-scoped cost", () => {
     const d = db();
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "Edit config.ts", status: "in_progress" },
@@ -653,72 +651,22 @@ describe("planStripInfo", () => {
     expect(info.stepTotal).toBe(2);
     expect(info.title).toBe("Edit config.ts");
     expect(info.drift).toBe(1);
-  });
-});
-
-// --------------------------------------------------------------------------- footer strip formatters (M1.3/M2.3)
-
-describe("planStripLabel / planStripDrift", () => {
-  test("label renders `▸ plan pos/total — title` from the strip facts", () => {
-    expect(planStripLabel({ stepPos: 2, stepTotal: 5, title: "Wire the router", drift: 0 })).toBe(
-      "▸ plan 2/5 — Wire the router",
-    );
+    expect(info.planId).toBe(planId);
+    // No per-step $ stamps yet → null (the D3a header hides its cost segment, not $0.0000).
+    expect(info.totalCostUsd).toBeNull();
   });
 
-  test("label is total on an empty title (no trailing text beyond the em dash)", () => {
-    expect(planStripLabel({ stepPos: 1, stepTotal: 1, title: "", drift: 0 })).toBe("▸ plan 1/1 — ");
-  });
-
-  test("drift suffix renders `⚠ N off-plan (drift)` with leading spaces when N > 0", () => {
-    expect(planStripDrift(3)).toBe("   ⚠ 3 off-plan (drift)");
-  });
-
-  test("drift suffix is empty for zero (and never negative) so the caller renders nothing", () => {
-    expect(planStripDrift(0)).toBe("");
-    expect(planStripDrift(-1)).toBe("");
-  });
-
-  test("label + drift compose exactly as the footer <Text> concatenates them", () => {
-    const info = { stepPos: 1, stepTotal: 2, title: "Edit config.ts", drift: 2 };
-    const line = planStripLabel(info) + planStripDrift(info.drift);
-    expect(line).toBe("▸ plan 1/2 — Edit config.ts   ⚠ 2 off-plan (drift)");
-  });
-
-  // The footer reserves exactly one row for the strip, but step content may carry interior
-  // newlines — the label collapses them so the strip is provably one rendered row.
-  test("label collapses interior newlines in the title to single spaces", () => {
-    const label = planStripLabel({
-      stepPos: 2,
-      stepTotal: 5,
-      title: "Wire the router\nand the judge",
-      drift: 0,
-    });
-    expect(label).toBe("▸ plan 2/5 — Wire the router and the judge");
-    expect(label).not.toContain("\n");
-  });
-
-  test("label collapses \\r\\n and newline runs with surrounding indentation", () => {
-    expect(planStripLabel({ stepPos: 1, stepTotal: 1, title: "a\r\n  b\n\nc", drift: 0 })).toBe(
-      "▸ plan 1/1 — a b c",
-    );
-  });
-
-  test("newline-free titles render byte-identically (regression pin)", () => {
-    expect(planStripLabel({ stepPos: 2, stepTotal: 5, title: "Wire the router", drift: 0 })).toBe(
-      "▸ plan 2/5 — Wire the router",
-    );
-  });
-
-  test("round-trip: the label sanitizes the projection while the DB content stays verbatim", () => {
+  // The D3a header reserves exactly one row, but step content may carry interior newlines —
+  // the projection keeps them VERBATIM in the DB; the one-rendered-row collapse now lives in
+  // task_footer.ts (tested there) since the banner formatters died in MP6.
+  test("round-trip: the DB content stays verbatim; the strip title carries the raw text", () => {
     const d = db();
     const todos = parseTodos(
       JSON.stringify([{ content: "Wire the router\nand the judge", status: "in_progress" }]),
     );
     const { planId } = d.upsertPlanFromTodos("run1", todos);
     expect(d.getPlanSteps(planId)[0]!.content).toBe("Wire the router\nand the judge");
-    const label = planStripLabel(planStripInfo(d, "run1")!);
-    expect(label).not.toContain("\n");
-    expect(label).toBe("▸ plan 1/1 — Wire the router and the judge");
+    expect(planStripInfo(d, "run1")!.title).toBe("Wire the router\nand the judge");
   });
 });
 

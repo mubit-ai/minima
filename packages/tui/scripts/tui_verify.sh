@@ -15,10 +15,10 @@
 #                     — swept across every raw stream captured by the suite
 #   narrow-55         below the 60-col floor (TOC_MIN_COLS) the one-shot ToC text block
 #                     still renders and the app stays alive
-#   spike-panel       MP4 gate (guide §7): a near-full live-region panel
-#                     (rows - input - status, MINIMA_TUI_SPIKE_PANEL=1) opens over a
-#                     500-msg resume, scrolls 200+ steps, and closes — zero extra ESC[3J,
-#                     the last grid row never painted, scrollback intact after close
+#   panel-toc         MP7 (D3b, geometry certified by the MP4 spike): idle Ctrl+T opens the
+#                     near-full ToC panel over a 500-msg resume, browses (j/G/gg), Esc
+#                     restores the composer WITH the draft; busy Ctrl+T still prints the
+#                     one-shot text block; zero extra ESC[3J, last grid row never painted
 #   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
 #                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
 #                     session on the same prefs dir honors the persisted hide
@@ -174,6 +174,7 @@ SPEC=$(cat <<EOF
   "raw": "$TMP/resume-raw.bin",
   "steps": [
     {"after": 4.0, "send": "<CTRLT>"},
+    {"after": 5.2, "send": "<ESC>"},
     {"after": 6.0, "send": "still here"},
     {"after": 7.0, "send": "<CTRLU>"},
     {"after": 8.5, "send": "<CTRLD>"}
@@ -194,11 +195,12 @@ i_paste_off = raw.rfind(b"\x1b[?2004l")
 i_cursor = raw.rfind(b"\x1b[?25h")
 assert i_paste_off != -1 and i_cursor > i_paste_off, "clean-exit tail (?2004l then ?25h) missing"
 frames = [json.loads(l) for l in open(sys.argv[2])]
-assert any("Table of contents:" in row for f in frames if f["t"] >= 4.0 for row in f["screen"]), (
-    "Ctrl+T toc text block never rendered")
+# Idle Ctrl+T opens the ToC PANEL since MP7 (the text block remains the busy/narrow path).
+assert any("contents ·" in row for f in frames if 4.0 <= f["t"] < 5.2 for row in f["screen"]), (
+    "Ctrl+T ToC panel never opened on the resumed session")
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone from the main buffer after exit"
-print("tui_assert: PASS resume-scrollback (no alt-screen, clean exit, transcript persists)")
+print("tui_assert: PASS resume-scrollback (no alt-screen, panel open/close, clean exit, transcript persists)")
 PY
 perf_check "$TMP/resume-perf.jsonl" resume 3000
 
@@ -324,27 +326,30 @@ assert len(distinct) >= 3, "app frozen at 55 cols"
 print("tui_assert: PASS narrow-55 (one-shot ToC block below the floor, app alive)")
 PY
 
-echo "== tui-verify: scenario spike-panel (MP4 gate: near-full panel, zero wipes) =="
+echo "== tui-verify: scenario panel-toc (D3b: open, browse, draft survives, busy keeps text block) =="
 rm -f "$TMP/spike.db" "$TMP/spike.db-wal" "$TMP/spike.db-shm"
 cp "$TMP/fixture.db" "$TMP/spike.db"
 SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV, "--resume", "fixture-500"],
   "cwd": "$ROOT",
-  "cols": 120, "rows": 36, "duration": 13,
+  "cols": 120, "rows": 36, "duration": 15,
   "env": {"MINIMA_DB_PATH": "$TMP/spike.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-spike",
-          "MINIMA_TUI_SPIKE_PANEL": "1", "MINIMA_TUI_PERF": "$TMP/spike-perf.jsonl"},
+          "MINIMA_TUI_PERF": "$TMP/spike-perf.jsonl"},
   "frames": "$TMP/spike-frames.jsonl",
   "raw": "$TMP/spike-raw.bin",
   "steps": [
-    {"after": 3.5, "send": "<CTRLT>"},
-    {"after": 4.0, "send": "jjjjjjjjjj", "repeat": 20, "gap": 0.18},
-    {"after": 7.8, "send": "<PGDN>"},
-    {"after": 8.1, "send": "<PGUP>"},
-    {"after": 8.4, "send": "G"},
-    {"after": 8.8, "send": "gg"},
-    {"after": 9.5, "send": "<ESC>"},
-    {"after": 11.0, "send": "<CTRLD>"}
+    {"after": 3.5, "send": "draft123"},
+    {"after": 4.2, "send": "<CTRLT>"},
+    {"after": 4.6, "send": "jjjjjjjjjj", "repeat": 3, "gap": 0.15},
+    {"after": 5.6, "send": "G"},
+    {"after": 6.0, "send": "gg"},
+    {"after": 6.6, "send": "<ESC>"},
+    {"after": 7.4, "send": "<CTRLU>"},
+    {"after": 7.6, "send": "SLOW proof while busy"},
+    {"after": 8.0, "send": "<CR>"},
+    {"after": 8.8, "send": "<CTRLT>"},
+    {"after": 13.2, "send": "<CTRLD>"}
   ]
 }
 EOF
@@ -366,43 +371,51 @@ def frames_between(t0, t1):
 def grid_has(f, needle):
     return any(needle in row for row in f["screen"])
 
-opened = [f for f in frames if f["t"] >= 3.5 and grid_has(f, "line 001")]
-assert opened, "spike panel never opened (no 'line 001' after Ctrl+T)"
-open_latency = opened[0]["t"] - 3.5
-print(f"spike: open latency {open_latency:.2f}s (budget 0.35s)")
+BREADCRUMB = "contents ·"
+opened = [f for f in frames if f["t"] >= 4.2 and grid_has(f, BREADCRUMB)]
+assert opened, "ToC panel never opened (no breadcrumb after Ctrl+T)"
+open_latency = opened[0]["t"] - 4.2
+print(f"panel-toc: open latency {open_latency:.2f}s (budget 0.35s)")
 assert open_latency <= 0.35, f"panel open took {open_latency:.2f}s (budget 0.35s)"
 
-assert any(grid_has(f, "❯ line 201") for f in frames_between(7.0, 7.8)), (
-    "cursor not at line 201 after 200 j steps - scroll lost keystrokes")
-assert any(grid_has(f, "❯ line 201") for f in frames_between(8.1, 8.4)), (
-    "PgDn+PgUp did not return the cursor to line 201")
-assert any(grid_has(f, "❯ line 500") for f in frames_between(8.4, 8.8)), "G did not jump to the last line"
-assert any(grid_has(f, "❯ line 001") for f in frames_between(8.8, 9.5)), "gg did not jump back to the top"
+# Browsing really moves the cursor: the grids inside the open window keep changing.
+distinct = {tuple(f["screen"]) for f in frames_between(4.4, 6.5)}
+assert len(distinct) >= 4, f"only {len(distinct)} distinct panel grids - j/G/gg navigation dead?"
 
 # The wipe-threshold identity: while the panel is open the frame ends at rows-2, so the
 # LAST grid row must never be painted. Settled frames only (a pty read can split a write).
 settled = [f for i, f in enumerate(frames)
            if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
-open_settled = [f for f in settled if 3.9 <= f["t"] <= 9.4 and grid_has(f, "❯ line")]
+open_settled = [f for f in settled if 4.4 <= f["t"] <= 6.5 and grid_has(f, BREADCRUMB)]
 assert open_settled, "no settled panel frames captured"
 for f in open_settled:
     assert not f["screen"][-1].strip(), (
         f"panel painted the last grid row at t={f['t']} - one row from the wipe threshold")
-print(f"spike: last-row-clear held across {len(open_settled)} settled panel frames")
+print(f"panel-toc: last-row-clear held across {len(open_settled)} settled panel frames")
 
-closed = [f for f in settled if f["t"] >= 9.7]
-assert closed, "no settled frames after close"
-assert not any(grid_has(f, "❯ line") for f in closed), "panel still visible after Esc"
+# Esc closes ≤1 frame and the suspended draft SURVIVES into the restored composer.
+closed = [f for f in frames_between(6.6, 7.4) if not grid_has(f, BREADCRUMB)]
+assert closed, "panel still visible after Esc"
+close_latency = closed[0]["t"] - 6.6
+print(f"panel-toc: close latency {close_latency:.2f}s (budget 0.35s)")
+assert close_latency <= 0.35, f"panel close took {close_latency:.2f}s (budget 0.35s)"
+assert any(grid_has(f, "draft123") for f in closed), "composer draft lost across the panel session"
+
+# Busy Ctrl+T keeps the one-shot text block — the panel must NOT mount over a stream.
+busy_win = frames_between(8.8, 12.5)
+assert any(grid_has(f, "Table of contents:") for f in busy_win), (
+    "busy Ctrl+T did not print the one-shot ToC text block")
+assert not any(grid_has(f, BREADCRUMB) for f in busy_win), "panel mounted during a running turn"
+
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone from the main buffer after panel close + exit"
-print("tui_assert: PASS spike-panel (zero extra wipes, last row clear, scrollback intact)")
+print("tui_assert: PASS panel-toc (zero extra wipes, draft survives, busy keeps the text block)")
 PY
-# Post-close, pre-exit: the composer is back on the bottom rows (THE RULE). The window
-# opens AT the Esc step (the close render is the only output before Ctrl+D — nothing
-# re-renders after it) and ends before Ctrl+D (Ink erases the live region on exit).
-python3 "$TUI/scripts/tui_assert.py" "$TMP/spike-frames.jsonl" --after 9.5 --before 10.9 \
+# Post-close, pre-resubmit: the composer is back on the bottom rows (THE RULE) — the
+# reseat basis makes the close frame full-height and bottom-anchored.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/spike-frames.jsonl" --after 6.6 --before 7.9 \
   --check bottom-anchor
-perf_check "$TMP/spike-perf.jsonl" spike 3000
+perf_check "$TMP/spike-perf.jsonl" panel-toc 3000
 
 echo "== tui-verify: scenario tasks-footer (D3a: mid-run todos, Ctrl+B, persisted hide) =="
 SPEC=$(cat <<EOF

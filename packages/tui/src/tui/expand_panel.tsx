@@ -15,6 +15,8 @@ export interface ExpandPanelProps {
   title: string;
   lines: string[];
   cursor: number;
+  /** Cursor-stop line indices (section titles) — rendered cyan; null = plain reader. */
+  stops: number[] | null;
   outerHeight: number;
   onKey: (input: string, key: PanelNavKey & { ctrl?: boolean }) => void;
 }
@@ -22,10 +24,11 @@ export interface ExpandPanelProps {
 /** Border(2) + breadcrumb header(1): rows the chassis spends beyond the content window. */
 export const PANEL_CHROME_ROWS = 3;
 
-export function ExpandPanel({ title, lines, cursor, outerHeight, onKey }: ExpandPanelProps) {
+export function ExpandPanel({ title, lines, cursor, stops, outerHeight, onKey }: ExpandPanelProps) {
   useInput((input, key) => onKey(input, key));
   const inner = Math.max(1, outerHeight - PANEL_CHROME_ROWS);
   const { lines: windowed, top } = clipPanelLines(lines, inner, cursor);
+  const stopSet = stops ? new Set(stops) : null;
   return (
     <Box
       borderStyle="round"
@@ -42,8 +45,14 @@ export function ExpandPanel({ title, lines, cursor, outerHeight, onKey }: Expand
       {windowed.map((line, i) => {
         const idx = top + i;
         const active = idx === cursor && idx < lines.length;
+        const isStop = stopSet?.has(idx) ?? false;
         return (
-          <Text key={idx} wrap="truncate" color={active ? undefined : "gray"} bold={active}>
+          <Text
+            key={idx}
+            wrap="truncate"
+            color={active ? undefined : isStop ? "cyan" : "gray"}
+            bold={active || isStop}
+          >
             {active ? `❯ ${line}` : `  ${line}`}
           </Text>
         );
