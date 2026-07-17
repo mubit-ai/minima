@@ -129,9 +129,9 @@ Four gated budgets, all PTY/`MINIMA_TUI_PERF`-assertable (wired in MP0/MP1, exte
 Cold-start is tracked (recorded in MP0) but **not** a gating budget. "Flicker" is only ever
 asserted via its proxy (zero wipe + frame budget).
 
-**Test matrix:** primary = **iTerm2 @ 120×36** *(assumed from session history — correct §3 if
-your daily size differs)*; bookends = **60-col floor** (degrade boundary) and a **tmux narrow
-split** (text-snapshot fallback). Terminal.app is **out**. Byte-level checks run on the pyte
+**Test matrix:** primary = **iTerm2 @ 120×36** *(user-confirmed 2026-07-16)*; bookends =
+**60-col floor** (degrade boundary) and a **tmux narrow
+split** (simulated as a 55-col PTY — established practice). Terminal.app is **out**. Byte-level checks run on the pyte
 harness forever (automated); outcome/feel gets **one live iTerm2 pass per MP** (manual test).
 
 ---
@@ -182,6 +182,11 @@ perf numbers — the reference every later MP diffs against.
 **Manual test:** run `minima-loc --wt minima-j1`, submit a prompt, see it echo instantly;
 eyeball each baseline shot against your live terminal.
 **Gate:** §1.7 + shots committed. No product code changes in this MP.
+**Execution notes (landed):** live replies come from the committed mock
+`packages/tui/scripts/mock_openai_sse.ts` (:8399; `SLOW`/`CODE` prompt markers — the faux
+provider is tests-only and unreachable from the CLI); the GT-banner/overview shots seed via
+the in-app `/gt-seed` (run-scoped, no DB surgery); evidence + warts live in
+`shots/inline-baseline/README.md`.
 
 ---
 
