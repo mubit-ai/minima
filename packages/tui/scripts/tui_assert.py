@@ -142,6 +142,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("frames")
     ap.add_argument("--after", type=float, default=0.0, help="ignore frames before this t")
+    ap.add_argument("--before", type=float, default=None,
+                    help="ignore frames at/after this t (e.g. exclude the post-exit state)")
     ap.add_argument("--prompt-pattern", default="╭─── prompt")
     ap.add_argument("--min-distinct", type=int, default=3)
     ap.add_argument("--min-rows", type=int, default=5)
@@ -162,8 +164,10 @@ def main() -> int:
         ap.error("--check echo requires --enter-after, --prompt-text and --reply-text")
 
     frames = [fr for fr in load_frames(args.frames) if fr["t"] >= args.after]
+    if args.before is not None:
+        frames = [fr for fr in frames if fr["t"] < args.before]
     if not frames:
-        print(f"tui_assert: no frames at t >= {args.after}", file=sys.stderr)
+        print(f"tui_assert: no frames in the [{args.after}, {args.before}) window", file=sys.stderr)
         return 1
 
     failures = []

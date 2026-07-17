@@ -30,13 +30,15 @@ describe("tui/app.tsx wires the GT footer strip", () => {
     // Reservation and render both derive from the SAME fit result so they can never drift:
     // footerHeight counts the strip via gtFit.strip, and the render is gated on the same flag.
     expect(src).toContain("(gtFit.strip ? 1 : 0)");
-    expect(src).toContain("{planStrip && gtFit.strip && (");
+    // Since MP4 the rows are also suppressed while the expanded panel is visible — the
+    // panel's height identity already owns the whole live region.
+    expect(src).toContain("{planStrip && gtFit.strip && !panelVisible && (");
   });
 
   test("all three GT rows render only when gtFooterFit grants them (reservation/render lockstep)", () => {
     expect(src).toContain("const gtFit = gtFooterFit(gtBudget, {");
-    expect(src).toContain("{gtFooterNote && gtFit.note && (");
-    expect(src).toContain("{gtBlock && gtFit.block && (");
+    expect(src).toContain("{gtFooterNote && gtFit.note && !panelVisible && (");
+    expect(src).toContain("{gtBlock && gtFit.block && !panelVisible && (");
     expect(src).toContain("const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0)");
   });
 

@@ -76,13 +76,16 @@ import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import { footerStatsFromMessages } from "./footer.ts";
 import { buildGtOverview, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
+  TOC_MIN_COLS,
   childTreeHeight,
   computeMsgHeight,
   gtFooterFit,
+  panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
   permPreviewLines,
@@ -96,6 +99,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { persistMode } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
+import { type PanelNavKey, type PanelState, panelReduce, spikePanelState } from "./panel_state.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
@@ -144,6 +148,11 @@ export interface AppProps {
    */
   gtGateBefore?: BeforeToolCall | null;
 }
+
+// MP4 (MUB-147): the spike gate for the D3b live-region panels. Off by default — the
+// default path must be byte-identical (A/B-gated); MP7 replaces the flag with the real
+// ToC/GT panel opens.
+const SPIKE_PANEL = process.env.MINIMA_TUI_SPIKE_PANEL === "1";
 
 /** Persona the lead adopts in plan mode; the council's ground-truth snapshot is appended each turn. */
 const PLANNER_PERSONA =
@@ -1122,9 +1131,15 @@ export function HarnessApp({
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
-  // No panel captures keys since MP3 removed the rewind overlay; the D3b panels (MP7/MP9)
-  // re-populate this expression.
-  const panelCapture = false;
+  // The expanded live-region panel (panel_state.ts; MP4 spike, D3b from MP7) is the only
+  // populator: while it is mounted its own useInput owns the keys and the composer is
+  // suspended (draft survives).
+  const [panel, setPanel] = useState<PanelState | null>(null);
+  const panelCapture = panel !== null;
+  // Basis for the bottom-mount static estimate: messages BEFORE this index are treated as
+  // no-longer-on-screen. 0 for a whole normal session; moved to messages.length whenever
+  // the expanded panel closes (it covered the screen — see closePanelReseat below).
+  const [staticBasisIdx, setStaticBasisIdx] = useState(0);
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1514,7 +1529,7 @@ export function HarnessApp({
       permPrompt ||
       questionPrompt ||
       configOverlayOpen ||
-      panelCapture // the modal rewind picker owns the keys while mounted
+      panelCapture // the expanded panel owns the keys while mounted (ExpandPanel useInput)
     )
       return;
 
@@ -1546,8 +1561,13 @@ export function HarnessApp({
     }
 
     // U2 (MUB-140): ToC on Ctrl+T — allowed mid-run (read-only navigation); prints the
-    // one-shot text block.
+    // one-shot text block. Idle + spike flag: the expanded panel instead (MP4; the busy
+    // and <60-col paths KEEP the text block — decided 2026-07-17).
     if (key.ctrl && input === "t") {
+      if (SPIKE_PANEL && !busy && cols >= TOC_MIN_COLS) {
+        setPanel((p) => (p ? null : spikePanelState()));
+        return;
+      }
       requestTocSidebar();
       return;
     }
@@ -3407,6 +3427,47 @@ export function HarnessApp({
   const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
   const inputExtraLines = inputHidden ? 0 : inputRows - 1;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
+  // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
+  // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
+  // PANEL_STATUS_ROWS = rows − SCROLLBACK_SAFETY_ROWS. Not an estimate: the panel box has
+  // an explicit height, every row truncates, and suggestions/busy/GT-rows/ChildTree are
+  // suppressed while it is visible (gates below all AND on !panelVisible), so nothing can
+  // stack the frame toward Ink's scrollback-wiping clearTerminal. When the panel exists
+  // but cannot legitimately render (busy/overlay/too-small), chatRegion renders instead
+  // and the effect below closes it in the same pass.
+  const panelOuter = panelOuterHeight(rows, inputBoxHeight);
+  const panelTop = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
+  const panelVisible =
+    panelTop !== null &&
+    !busy &&
+    !permPrompt &&
+    !questionPrompt &&
+    panelOuter >= 5 &&
+    cols >= TOC_MIN_COLS;
+  const panelInnerRows = Math.max(1, panelOuter - PANEL_CHROME_ROWS);
+  // Closing must also RE-SEAT the bottom mount: the panel covered the whole screen, so the
+  // post-close frame starts from an effectively fresh screen. Moving the static-estimate
+  // basis to the current message count makes bottomMountMinRows go full and then decay per
+  // committed message — THE RULE's own math — instead of log-update stranding the shrunken
+  // composer frame at the old panel top (the spike's one real finding).
+  function closePanelReseat() {
+    setStaticBasisIdx(messages.length);
+    setPanel(null);
+  }
+  function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
+    if (key.ctrl && (input === "c" || input === "t")) {
+      closePanelReseat();
+      return;
+    }
+    if (key.ctrl) return;
+    if (key.escape) {
+      const next = panel ? panelReduce(panel, "", { escape: true }, panelInnerRows) : null;
+      if (next === null) closePanelReseat();
+      else setPanel(next);
+      return;
+    }
+    setPanel((prev) => (prev ? panelReduce(prev, input, key, panelInnerRows) : prev));
+  }
   // Wrapped-row height from the same helpers the overlay renders with (estimate == render): a
   // source-line count under-reserved whenever a preview line word-wrapped at narrow widths.
   const permPromptHeight = permPrompt ? permOverlayHeight(permPrompt, cols) : 0;
@@ -3452,7 +3513,7 @@ export function HarnessApp({
       busyIndicatorHeight -
       TREE_CHROME,
   );
-  const treeVisible = treeOpen && treeMaxRows > 0;
+  const treeVisible = treeOpen && treeMaxRows > 0 && !panelVisible;
   const treeHeight = treeVisible ? childTreeHeight(childrenState.size, treeMaxRows) : 0;
   // Rows left for the live streaming reply after the other live elements; bound its preview to that
   // (keeping the newest lines) so the re-diffed region never exceeds the terminal.
@@ -3469,6 +3530,14 @@ export function HarnessApp({
   const streamTail = streaming
     ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
+
+  // A panel that can no longer legitimately render (turn started, permission/question
+  // overlay claimed the bottom, terminal shrank below the floor) closes — the render
+  // above already fell back to chatRegion in the same pass, so no frame ever contains
+  // both the panel and the incoming surface.
+  useEffect(() => {
+    if (panel && !panelVisible) closePanelReseat();
+  });
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
@@ -3527,15 +3596,20 @@ export function HarnessApp({
   // once the transcript outgrows the screen the minHeight hits 0 and this is inert. The
   // startup newline reserve in main.ts seats the FIRST paint at the bottom; this keeps every
   // later frame there. Enforced by tui-verify's bottom-anchor check.
+  // The sum starts at staticBasisIdx: after the expanded panel closes (it covered the whole
+  // screen) only messages committed SINCE then are on screen above the frame, so the decay
+  // restarts from a fresh screen (min() guards /clear and rewind truncations).
   const staticRowsEstimate = useMemo(() => {
     const cap = rows;
     let sum = 0;
-    for (const m of messages) {
+    for (let i = Math.min(staticBasisIdx, messages.length); i < messages.length; i++) {
+      const m = messages[i];
+      if (!m) continue;
       sum += computeMsgHeight(m, cols);
       if (sum >= cap) break;
     }
     return sum;
-  }, [messages, cols, rows]);
+  }, [messages, cols, rows, staticBasisIdx]);
   const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
 
   // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
@@ -3557,7 +3631,7 @@ export function HarnessApp({
   // ONE footer block: input/status/keys/overlay JSX below the chat region.
   const footerBlock = (
     <>
-      {matchingCommands.length > 0 && (
+      {matchingCommands.length > 0 && !panelVisible && (
         <Box
           borderStyle="round"
           borderColor="gray"
@@ -3645,7 +3719,7 @@ export function HarnessApp({
               </Text>
             </Box>
           )}
-          {planStrip && gtFit.strip && (
+          {planStrip && gtFit.strip && !panelVisible && (
             <Box paddingX={1} width="100%">
               <Text color="cyan" wrap="truncate-end">
                 {planStripLabel(planStrip)}
@@ -3658,14 +3732,14 @@ export function HarnessApp({
           {/* GT tier→behavior (M6.2): 🟡 milestone-review note, then the 🔴 block prompt. Each is
               one truncated row, granted by gtFit in lockstep with footerHeight. The 🔴 answer keys
               live in the gate-focus modal (M6.3) — this banner is display + the ctrl+g re-arm hint. */}
-          {gtFooterNote && gtFit.note && (
+          {gtFooterNote && gtFit.note && !panelVisible && (
             <Box paddingX={1} width="100%">
               <Text color="yellow" wrap="truncate-end">
                 {gtFooterNote}
               </Text>
             </Box>
           )}
-          {gtBlock && gtFit.block && (
+          {gtBlock && gtFit.block && !panelVisible && (
             <Box paddingX={1} width="100%">
               <Text color="red" bold wrap="truncate-end">
                 {gtBlock.prompt}
@@ -3817,7 +3891,17 @@ export function HarnessApp({
         minHeight={bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
         justifyContent="flex-end"
       >
-        {chatRegion}
+        {panelVisible && panelTop ? (
+          <ExpandPanel
+            title={`${panelTop.title} · ${panelTop.lines.length} lines — j/k · pgup/pgdn · gg/G · esc closes`}
+            lines={panelTop.lines}
+            cursor={panelTop.cursor}
+            outerHeight={panelOuter}
+            onKey={handlePanelKey}
+          />
+        ) : (
+          chatRegion
+        )}
         {footerBlock}
       </Box>
     </Box>

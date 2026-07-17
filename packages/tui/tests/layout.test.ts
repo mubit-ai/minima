@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type ChatMessage,
   MAX_TOOL_LINES,
+  PANEL_STATUS_ROWS,
   QUESTION_TEXT_MAX_ROWS,
   SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
@@ -9,6 +10,7 @@ import {
   computeMsgHeight,
   gtFooterFit,
   markdownBodyHeight,
+  panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
   permPreviewLines,
@@ -407,6 +409,30 @@ describe("gtFooterFit — priority-ordered collapse of the GT footer rows", () =
       strip: false,
       note: true,
     });
+  });
+});
+
+describe("panelOuterHeight — the expanded-panel wipe-threshold identity (MP4)", () => {
+  test("panel + composer + status ≡ rows − SCROLLBACK_SAFETY_ROWS at every geometry", () => {
+    for (let rows = 12; rows <= 60; rows++) {
+      for (let extraInputLines = 0; extraInputLines <= 6; extraInputLines++) {
+        for (const planMode of [false, true]) {
+          const inputBoxHeight = (planMode ? 7 : 4) + extraInputLines;
+          const outer = panelOuterHeight(rows, inputBoxHeight);
+          expect(outer + inputBoxHeight + PANEL_STATUS_ROWS).toBe(
+            rows - SCROLLBACK_SAFETY_ROWS,
+          );
+        }
+      }
+    }
+  });
+
+  test("PANEL_STATUS_ROWS counts the status group that stays mounted under a panel", () => {
+    // StatusBar marginTop(1) + 2 truncated rows + keys-legend row(1). ChildTree, busy,
+    // suggestions, and the quit-armed line are suppressed/unreachable while a panel
+    // captures keys — if one of them becomes visible under a panel, this constant (and
+    // the identity above) must absorb it.
+    expect(PANEL_STATUS_ROWS).toBe(4);
   });
 });
 

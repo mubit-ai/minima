@@ -15,6 +15,10 @@
 #                     — swept across every raw stream captured by the suite
 #   narrow-55         below the 60-col floor (TOC_MIN_COLS) the one-shot ToC text block
 #                     still renders and the app stays alive
+#   spike-panel       MP4 gate (guide §7): a near-full live-region panel
+#                     (rows - input - status, MINIMA_TUI_SPIKE_PANEL=1) opens over a
+#                     500-msg resume, scrolls 200+ steps, and closes — zero extra ESC[3J,
+#                     the last grid row never painted, scrollback intact after close
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -317,9 +321,89 @@ assert len(distinct) >= 3, "app frozen at 55 cols"
 print("tui_assert: PASS narrow-55 (one-shot ToC block below the floor, app alive)")
 PY
 
+echo "== tui-verify: scenario spike-panel (MP4 gate: near-full panel, zero wipes) =="
+rm -f "$TMP/spike.db" "$TMP/spike.db-wal" "$TMP/spike.db-shm"
+cp "$TMP/fixture.db" "$TMP/spike.db"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV, "--resume", "fixture-500"],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 13,
+  "env": {"MINIMA_DB_PATH": "$TMP/spike.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-spike",
+          "MINIMA_TUI_SPIKE_PANEL": "1", "MINIMA_TUI_PERF": "$TMP/spike-perf.jsonl"},
+  "frames": "$TMP/spike-frames.jsonl",
+  "raw": "$TMP/spike-raw.bin",
+  "steps": [
+    {"after": 3.5, "send": "<CTRLT>"},
+    {"after": 4.0, "send": "jjjjjjjjjj", "repeat": 20, "gap": 0.18},
+    {"after": 7.8, "send": "<PGDN>"},
+    {"after": 8.1, "send": "<PGUP>"},
+    {"after": 8.4, "send": "G"},
+    {"after": 8.8, "send": "gg"},
+    {"after": 9.5, "send": "<ESC>"},
+    {"after": 11.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture spike "$SPEC"
+python3 - "$TMP/spike-raw.bin" "$TMP/spike-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during panel ops"
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear) - the panel tripped Ink's scrollback wipe"
+i_paste_off = raw.rfind(b"\x1b[?2004l")
+i_cursor = raw.rfind(b"\x1b[?25h")
+assert i_paste_off != -1 and i_cursor > i_paste_off, "clean-exit tail (?2004l then ?25h) missing"
+
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def frames_between(t0, t1):
+    return [f for f in frames if t0 <= f["t"] < t1]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+
+opened = [f for f in frames if f["t"] >= 3.5 and grid_has(f, "line 001")]
+assert opened, "spike panel never opened (no 'line 001' after Ctrl+T)"
+open_latency = opened[0]["t"] - 3.5
+print(f"spike: open latency {open_latency:.2f}s (budget 0.35s)")
+assert open_latency <= 0.35, f"panel open took {open_latency:.2f}s (budget 0.35s)"
+
+assert any(grid_has(f, "❯ line 201") for f in frames_between(7.0, 7.8)), (
+    "cursor not at line 201 after 200 j steps - scroll lost keystrokes")
+assert any(grid_has(f, "❯ line 201") for f in frames_between(8.1, 8.4)), (
+    "PgDn+PgUp did not return the cursor to line 201")
+assert any(grid_has(f, "❯ line 500") for f in frames_between(8.4, 8.8)), "G did not jump to the last line"
+assert any(grid_has(f, "❯ line 001") for f in frames_between(8.8, 9.5)), "gg did not jump back to the top"
+
+# The wipe-threshold identity: while the panel is open the frame ends at rows-2, so the
+# LAST grid row must never be painted. Settled frames only (a pty read can split a write).
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+open_settled = [f for f in settled if 3.9 <= f["t"] <= 9.4 and grid_has(f, "❯ line")]
+assert open_settled, "no settled panel frames captured"
+for f in open_settled:
+    assert not f["screen"][-1].strip(), (
+        f"panel painted the last grid row at t={f['t']} - one row from the wipe threshold")
+print(f"spike: last-row-clear held across {len(open_settled)} settled panel frames")
+
+closed = [f for f in settled if f["t"] >= 9.7]
+assert closed, "no settled frames after close"
+assert not any(grid_has(f, "❯ line") for f in closed), "panel still visible after Esc"
+last = frames[-1]["screen"]
+assert sum(1 for row in last if row.strip()) >= 5, "transcript gone from the main buffer after panel close + exit"
+print("tui_assert: PASS spike-panel (zero extra wipes, last row clear, scrollback intact)")
+PY
+# Post-close, pre-exit: the composer is back on the bottom rows (THE RULE). The window
+# opens AT the Esc step (the close render is the only output before Ctrl+D — nothing
+# re-renders after it) and ends before Ctrl+D (Ink erases the live region on exit).
+python3 "$TUI/scripts/tui_assert.py" "$TMP/spike-frames.jsonl" --after 9.5 --before 10.9 \
+  --check bottom-anchor
+perf_check "$TMP/spike-perf.jsonl" spike 3000
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
-          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin <<'PY'
+          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

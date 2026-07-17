@@ -329,6 +329,18 @@ is green.**
 
 **Deliverable:** `docs/BigPlan/spike-inline-panel.md` (spec, numbers, verdict) + the permanent
 scenario. Spike component itself is deleted in MP7's first commit.
+**Execution notes (landed): VERDICT = PASS** — see `spike-inline-panel.md`. Open 0.01s,
+zero extra `3J`, last grid row blank across every settled panel frame, perf median 2.55ms
+(vs 1.4ms baseline — no mitigation needed). The geometry is an *identity*, not an estimate:
+`panelOuterHeight()` + `PANEL_STATUS_ROWS` in layout.ts, explicit heights + truncate rows +
+suppressed footer extras ⇒ frame ≡ rows−2. One real finding: **panel close over a long
+transcript stranded the composer at the screen top** (log-update rewrites the shrunken
+frame at the old top; bottomMountMinRows was inert). Fixed by `closePanelReseat` — closing
+moves the static-estimate basis to the current message count, so THE RULE's decay restarts
+from a fresh screen; pinned by the scenario's post-close bottom-anchor. Also learned: Ink
+delivers coalesced stdin as ONE input string — `panelReduce` iterates characters, so key
+storms and `gg` both work regardless of chunking. `tui_assert.py` gained `--before` (frame
+windows that must exclude the post-exit state).
 
 ---
 

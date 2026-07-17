@@ -378,6 +378,25 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
 export const TOC_MIN_COLS = 60;
 
 /**
+ * Rows of the status group that stay mounted below an expanded live-region panel:
+ * StatusBar marginTop(1) + its 2 truncated rows + the keys-legend row(1). ChildTree,
+ * the quit-armed line, busy, and suggestions are suppressed/unreachable while a panel
+ * captures keys, so they are deliberately NOT part of this constant.
+ */
+export const PANEL_STATUS_ROWS = 4;
+
+/**
+ * Outer height (border included) of an expanded live-region panel (D3b, and the MP4
+ * spike that certified it): panel + composer box + status group must total EXACTLY
+ * rows − SCROLLBACK_SAFETY_ROWS — an identity, not an estimate — so the live frame can
+ * never reach `rows` (Ink's scrollback-wiping clearTerminal). `inputBoxHeight` is the
+ * app's reserve for the composer group (marginTop + border + input rows + plan banner).
+ */
+export function panelOuterHeight(rows: number, inputBoxHeight: number): number {
+  return rows - SCROLLBACK_SAFETY_ROWS - PANEL_STATUS_ROWS - inputBoxHeight;
+}
+
+/**
  * Window `lines` to exactly `innerHeight` rows with `cursorLine` visible: scrolls down
  * only as far as needed (cursor rides the bottom edge when moving down), clamps to the
  * content end, and pads with "" so every panel row paints — an unpainted row would let
