@@ -39,7 +39,12 @@ import { errText } from "../errtext.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
-import { type PlanStripInfo, planStripInfo, stampGroundedOutcome } from "../minima/ground_truth.ts";
+import {
+  type PlanStripInfo,
+  type VerifyConsent,
+  planStripInfo,
+  stampGroundedOutcome,
+} from "../minima/ground_truth.ts";
 import {
   PlanSessionStore,
   type RoutingResult,
@@ -153,6 +158,13 @@ export interface AppProps {
    * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
    */
   gtGateBefore?: BeforeToolCall | null;
+  /**
+   * MP18: the verify-consent seam main.ts wired into the GT hooks. Defaults to the headless
+   * fail-closed checker; this component swaps in the permission-state-backed one on mount
+   * (approvedVerifies — exact command strings the user allowed via the overlay; bypass mode
+   * is the user's blanket consent) and restores the headless checker on unmount.
+   */
+  verifyConsentRef?: { current: VerifyConsent };
   /**
    * The LEAD agent's live todo list (D3a task panel): the same array main.ts handed to
    * todowriteTool, mutated in place by the tool. Re-reads are driven by tool_execution_end
@@ -761,6 +773,7 @@ export function HarnessApp({
   planSpawn,
   planMetaModel,
   gtGateBefore,
+  verifyConsentRef,
   todos,
 }: AppProps) {
   const { exit } = useApp();
@@ -894,6 +907,19 @@ export function HarnessApp({
   const permStateRef = useRef<PermissionState>(
     createPermissionState(process.cwd(), { groundTruth: agent.config.groundTruth === true }),
   );
+  // MP18: swap the GT hooks' consent seam to the overlay-backed checker while the TUI is
+  // mounted. Consent keys on the exact command string; bypass mode is blanket consent
+  // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
+  // still prompt). Unmount restores the headless fail-closed default.
+  useEffect(() => {
+    if (!verifyConsentRef) return;
+    const headless = verifyConsentRef.current;
+    verifyConsentRef.current = (cmd) =>
+      getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd);
+    return () => {
+      verifyConsentRef.current = headless;
+    };
+  }, [verifyConsentRef]);
 
   // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
   const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
@@ -1033,7 +1059,7 @@ export function HarnessApp({
     async (force: boolean, signal: AbortSignal | null) => {
       const store = planSessionRef.current;
       if (!store) return { kind: "no-session" } as const;
-      return finalizePlan(store, {
+      const outcome = await finalizePlan(store, {
         metaModel: planMetaModel ?? null,
         signal,
         force,
@@ -1042,6 +1068,14 @@ export function HarnessApp({
         db: agent.db,
         runId: agent.runId,
       });
+      // MP18: approving the plan (which displays every step's verify) IS the consent event
+      // for the seeded checks — without this, the first in_progress todowrite after
+      // finalize (carrying no verify text of its own, so the overlay never re-prompts)
+      // would dead-end at the execution-time consent check.
+      if (outcome.kind === "ok") {
+        for (const v of outcome.seededVerifies) permStateRef.current.approvedVerifies.add(v);
+      }
+      return outcome;
     },
     [agent, planMetaModel],
   );

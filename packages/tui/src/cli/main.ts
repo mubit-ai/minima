@@ -22,7 +22,11 @@ import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehy
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
-import { groundTruthHooks } from "../minima/ground_truth.ts";
+import {
+  type VerifyConsent,
+  groundTruthHooks,
+  headlessVerifyConsent,
+} from "../minima/ground_truth.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
@@ -299,6 +303,10 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
+
+  Ground-Truth headless note (MINIMA_TUI_GROUND_TRUTH=1 + -p/--mode json): plan-step
+  \`verify\` shell commands fail CLOSED without an interactive user to approve them —
+  set MINIMA_TUI_ALLOW_VERIFY=1 to opt a headless run into executing them.
 `;
 
 function toolsFor(args: CliArgs, groundTruth: boolean, todoState?: TodoTask[]) {
@@ -435,6 +443,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   let sink: DbSinkHandle | null = null;
   let initialResume: RehydratedRun | null = null;
   let gtGateBefore: BeforeToolCall | null = null;
+  const verifyConsentRef: { current: VerifyConsent } = { current: headlessVerifyConsent() };
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
@@ -482,8 +491,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // registered later — headless below, or by the TUI AFTER its permission hook so permission
     // always runs first (first block wins) and no check runs on a call the user would deny.
     if (config.groundTruth) {
+      // MP18: verify commands are LLM-authored shell — bash-class scrutiny. The ref starts
+      // as the headless checker (deny-all unless MINIMA_TUI_ALLOW_VERIFY=1, fail-CLOSED);
+      // the TUI swaps in its permission-state-backed checker on mount, so interactive runs
+      // consent per exact command via the existing overlay and -p runs never execute an
+      // unapproved check.
       const { before, after } = groundTruthHooks(agent, {
         enforceAllowlist: config.toolAllowlist,
+        verifyConsent: (cmd) => verifyConsentRef.current(cmd),
       });
       agent.addAfterToolCall(after);
       gtGateBefore = before;
@@ -646,6 +661,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       planSpawn: spawnFactory,
       planMetaModel,
       gtGateBefore,
+      verifyConsentRef,
       todos: todoState,
     }),
     { exitOnCtrlC: false },

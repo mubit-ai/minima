@@ -531,3 +531,20 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     expect(prompted).toBe(false);
   });
 });
+
+describe("MP18 — mode interaction with verify consent", () => {
+  test("acceptEdits: todowrite with an unseen verify still prompts (not in the auto bundle)", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const { resolvePolicy } = await import("../src/agent/policy.ts");
+    expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "todowrite", subject: "" })).not.toBe("auto");
+  });
+
+  test("the TUI consent checker grants bypass mode blanket consent (source pin)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    expect(src).toContain(
+      'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
+    );
+  });
+});

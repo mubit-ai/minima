@@ -42,6 +42,10 @@
 #                     build; Shift+Tab OUT of plan mode (after a plan turn) opens the same
 #                     gate — Esc stays, Cancel discards (the no-plan-turn fast path keeps
 #                     the modes badge ring cycle-identical)
+#   verify-consent    MP18: first todowrite-with-verify prompts (command shown verbatim),
+#                     'a' + the same verify stays silent, a MUTATED verify re-prompts;
+#                     headless halves: -p fails CLOSED (gate unrunnable) without
+#                     MINIMA_TUI_ALLOW_VERIFY=1 and verifies with it
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -826,7 +830,7 @@ SPEC=$(cat <<EOF
     {"after": 8.0, "send": "<CR>"},
     {"after": 11.0, "send": "<SHIFTTAB>"},
     {"after": 11.4, "send": "<SHIFTTAB>"},
-    {"after": 12.0, "send": "EXITPLAN draft it again"},
+    {"after": 12.0, "send": "please describe the cleanup approach once more"},
     {"after": 12.8, "send": "<CR>"},
     {"after": 16.5, "send": "<SHIFTTAB>"},
     {"after": 17.5, "send": "<ESC>"},
@@ -874,12 +878,89 @@ assert not has(frames[-1], "[PLAN]"), "PLAN badge survived cancel (settled frame
 print("tui_assert: PASS plan-exit-gate (tool overlay + approve; Shift+Tab gate + Esc-stays + cancel)")
 PY
 
+echo "== tui-verify: scenario verify-consent (MP18: first-run prompt, silence, mutation re-prompt) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP",
+  "cols": 120, "rows": 36, "duration": 22,
+  "env": {"MINIMA_DB_PATH": "$TMP/vconsent.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-vconsent",
+          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_TUI_STOP_STRIKES": "0"},
+  "frames": "$TMP/vconsent-frames.jsonl",
+  "raw": "$TMP/vconsent-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "TODOV record the demo step"},
+    {"after": 3.8, "send": "<CR>"},
+    {"after": 7.0, "send": "a"},
+    {"after": 9.5, "send": "TODOV record the demo step once more"},
+    {"after": 10.3, "send": "<CR>"},
+    {"after": 14.0, "send": "TODOVSWAP mutate the verify now"},
+    {"after": 14.8, "send": "<CR>"},
+    {"after": 18.0, "send": "a"}
+  ]
+}
+EOF
+)
+capture vconsent "$SPEC"
+python3 - "$TMP/vconsent-raw.bin" "$TMP/vconsent-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def win(t0, t1):
+    return [f for f in frames if t0 <= f["t"] < t1]
+def has(f, n):
+    return any(n in row for row in f["screen"])
+# First TODOV: the overlay shows the verify as a shell command; 'a' grants allow-always.
+# (Stop-strikes are disabled in this scenario's env: an armed in_progress step otherwise
+# spirals the plan-not-done nag through every later turn and eats the scripted sends.)
+assert any(has(f, "echo consent-ok") for f in win(3.8, 7.0)), (
+    "first-run overlay did not show the verify command")
+# Second TODOV (same verify, always granted): NO overlay between submit and the reply.
+second = win(10.4, 14.0)
+assert second and not any(has(f, "verify (runs as a shell command)") for f in second), (
+    "an already-approved verify re-prompted")
+# TODOVSWAP (mutated verify): the overlay RE-PROMPTS with the new command.
+assert any(has(f, "echo consent-swapped") for f in win(14.9, 18.0)), (
+    "a mutated verify did not re-prompt")
+print("tui_assert: PASS verify-consent (first-run prompt, silent repeat, mutation re-prompt)")
+PY
+
+echo "== tui-verify: scenario headless-verify-consent (MP18: -p fails closed without opt-in) =="
+rm -f "$TMP/hconsent.db" "$TMP/hconsent.db-wal" "$TMP/hconsent.db-shm"
+MINIMA_DB_PATH="$TMP/hconsent.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent" MINIMA_TUI_GROUND_TRUTH=1 \
+  bun run "$TUI/src/cli/main.ts" --offline --model mock-model --provider mock \
+  --provider-url "http://127.0.0.1:$MOCK_PORT/v1" -p "TODOVDONE claim the step is done" > "$TMP/hconsent.out" 2>&1 || true
+python3 - "$TMP/hconsent.db" <<'PY'
+import sqlite3, sys
+rows = sqlite3.connect(sys.argv[1]).execute(
+    "SELECT outcome FROM gates WHERE kind = 'step_check'").fetchall()
+assert rows and all(r[0] == "unrunnable" for r in rows), (
+    f"headless deny-all should block the gate as unrunnable, got {rows}")
+print("tui_assert: PASS headless fail-closed (gate unrunnable, verify never ran)")
+PY
+rm -f "$TMP/hconsent2.db" "$TMP/hconsent2.db-wal" "$TMP/hconsent2.db-shm"
+MINIMA_DB_PATH="$TMP/hconsent2.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent2" MINIMA_TUI_GROUND_TRUTH=1 \
+  MINIMA_TUI_ALLOW_VERIFY=1 \
+  bun run "$TUI/src/cli/main.ts" --offline --model mock-model --provider mock \
+  --provider-url "http://127.0.0.1:$MOCK_PORT/v1" -p "TODOVDONE claim the step is done" > "$TMP/hconsent2.out" 2>&1 || true
+python3 - "$TMP/hconsent2.db" <<'PY'
+import sqlite3, sys
+rows = sqlite3.connect(sys.argv[1]).execute(
+    "SELECT outcome FROM gates WHERE kind = 'step_check'").fetchall()
+assert rows and all(r[0] == "verified" for r in rows), (
+    f"MINIMA_TUI_ALLOW_VERIFY=1 should let the gate verify, got {rows}")
+print("tui_assert: PASS headless opt-in (MINIMA_TUI_ALLOW_VERIFY=1 gate verified)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
-          "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin <<'PY'
+          "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
+          "$TMP"/vconsent-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

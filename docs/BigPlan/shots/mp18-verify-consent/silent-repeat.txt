@@ -1,0 +1,77 @@
+=== SCROLLBACK (37 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |  ⚙ setup:
+=== SCREEN 120x36 (visible) ===
+ 0 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+ 1 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+ 2 |
+ 3 |▸ you
+ 4 | TODOV record the demo step
+ 5 |
+ 6 |  ⚙ todowrite:
+ 7 |Todo list updated (0/1 done):
+ 8 |1. [>]   Record the demo step
+ 9 |
+10 |◆ assistant
+11 |Todo list recorded — the canned plan is underway. This second-phase reply exists so the tool loop terminates
+12 |deterministically.
+13 |
+14 |▸ you
+15 | TODOV record the demo step once more
+16 |
+17 |  ⚙ todowrite:
+18 |Todo list updated (0/1 done):
+19 |1. [>]   Record the demo step
+20 |
+21 |◆ assistant
+22 |Todo list recorded — the canned plan is underway. This second-phase reply exists so the tool loop terminates
+23 |deterministically.
+24 | plan 1/1 · ▸ Record the demo step
+25 |
+26 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+27 |│  ▋                                                                                                                   │
+28 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+29 |
+30 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑9 ↓32 · $0.0000 · sess ephemeral · ready
+31 |perms: r-x 0 dirs · --x todowrite
+32 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks ctrl+g Plan esc Abort                      ctrl+p palette
+33 |
+34 |
+35 |
+=== 36 visible rows; 37 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp18-verify-consent/silent-repeat.png ===
