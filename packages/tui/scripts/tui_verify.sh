@@ -8,7 +8,10 @@
 #                     BEFORE any model output (regression guard for the shipped echo fix)
 #   stream-wipe-perf  code-heavy streamed reply: exactly ONE ESC[3J in the whole byte
 #                     stream (the startup clear, main.ts) — an Ink overflow wipe would add
-#                     one — plus render-sample perf budgets
+#                     one — plus render-sample perf budgets; also asserts MP11's verbatim
+#                     ```bash fence delimiter in the settled frames
+#   stream-code-80/60 MP11 acceptance bookends: the same code-heavy stream at 80 cols and
+#                     the 60-col floor — fences verbatim, zero extra wipes, budgets hold
 #   resume-scrollback 500-msg resume: no alt-screen (?1049) ever, Ctrl+D exits cleanly,
 #                     the transcript persists in the main buffer after exit
 #   no-mouse-capture  inline never emits a mouse-capture enable (?1000h/?1002h/?1003h/?1006h)
@@ -163,6 +166,55 @@ PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/stream-frames.jsonl" --after 2.5 \
   --check single-prompt --check advancing --check final-nonblank
 perf_check "$TMP/stream-perf.jsonl" stream 4000
+python3 - "$TMP/stream-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+# MP11: fence delimiters render VERBATIM (dim) — the literal ```bash proves the line no
+# longer feeds the inline-backtick toggle (pre-MP11 it collapsed to a bare "bash").
+# Assert on the LAST frame (frames only exist when the PTY emits output, so a time window
+# after the stream settles can be empty).
+assert any("```bash" in row for row in frames[-1]["screen"]), (
+    "fence delimiter ```bash not rendered verbatim in the settled stream")
+print("tui_assert: PASS fence-verbatim (```bash delimiter visible at 120 cols)")
+PY
+
+# MP11 acceptance bookends: the same code-heavy stream at 80 and at the 60-col floor
+# (TOC_MIN_COLS) — clean fences, zero extra wipes, budgets hold while wrapping is live.
+for CW in 80 60; do
+echo "== tui-verify: scenario stream-code-$CW (MP11: fenced code at $CW cols) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": $CW, "rows": 36, "duration": 14,
+  "env": {"MINIMA_DB_PATH": "$TMP/streamcode$CW.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-streamcode$CW",
+          "MINIMA_TUI_PERF": "$TMP/streamcode$CW-perf.jsonl"},
+  "frames": "$TMP/streamcode$CW-frames.jsonl",
+  "raw": "$TMP/streamcode$CW-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE render some snippets"},
+    {"after": 4.5, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture "streamcode$CW" "$SPEC"
+python3 - "$TMP/streamcode$CW-raw.bin" "$TMP/streamcode$CW-frames.jsonl" "$CW" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes at {sys.argv[3]} cols (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+# Post-Enter, any frame: at narrow widths the opener scrolls off the settled screen, but it
+# always streams through the visible tail — and the pre-MP11 garble shows it in NO frame.
+assert any("```bash" in row for f in frames if f["t"] > 4.5 for row in f["screen"]), (
+    f"fence delimiter ```bash not rendered verbatim at {sys.argv[3]} cols")
+print(f"tui_assert: PASS stream-code-{sys.argv[3]} (zero extra wipes, fence verbatim)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/streamcode$CW-frames.jsonl" --after 2.5 \
+  --check single-prompt --check advancing --check final-nonblank
+perf_check "$TMP/streamcode$CW-perf.jsonl" "streamcode$CW" 4000
+done
 
 echo "== tui-verify: scenario resume-scrollback (500-msg resume, clean Ctrl+D exit) =="
 rm -f "$TMP/resume.db" "$TMP/resume.db-wal" "$TMP/resume.db-shm"
@@ -592,7 +644,8 @@ PY
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
-          "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin <<'PY'
+          "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
+          "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:
