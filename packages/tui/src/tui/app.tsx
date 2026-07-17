@@ -287,6 +287,7 @@ const COMMANDS = [
   { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
+  { name: "gt-seed", desc: "Seed a demo GT plan + gates for this run (GT on only)" },
   { name: "why", desc: "Show Ground-Truth verification (/why <n> opens the step card)" },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
