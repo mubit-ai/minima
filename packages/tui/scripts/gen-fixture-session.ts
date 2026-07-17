@@ -37,7 +37,8 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--project") out.project = take();
     else throw new Error(`unknown arg: ${a}`);
   }
-  if (!Number.isFinite(out.messages) || out.messages < 1) throw new Error("--messages must be >= 1");
+  if (!Number.isFinite(out.messages) || out.messages < 1)
+    throw new Error("--messages must be >= 1");
   return out;
 }
 
@@ -75,11 +76,17 @@ function assistantText(i: number, rnd: () => number): string {
   return parts[Math.floor(rnd() * parts.length)] ?? parts[0]!;
 }
 
-function toolEvent(i: number, rnd: () => number): { text: string; tool_name: string; is_error: boolean } {
+function toolEvent(
+  i: number,
+  rnd: () => number,
+): { text: string; tool_name: string; is_error: boolean } {
   const tools = ["bash", "read_file", "apply_patch", "web_search"];
   const name = tools[Math.floor(rnd() * tools.length)] ?? "bash";
   const lines = 3 + Math.floor(rnd() * 40); // some exceed the 30-row clamp on purpose
-  const body = Array.from({ length: lines }, (_, k) => `${name} output line ${k + 1} of turn ${i}: status=ok bytes=${1024 + k}`).join("\n");
+  const body = Array.from(
+    { length: lines },
+    (_, k) => `${name} output line ${k + 1} of turn ${i}: status=ok bytes=${1024 + k}`,
+  ).join("\n");
   return { text: body, tool_name: name, is_error: rnd() < 0.05 };
 }
 
@@ -115,7 +122,13 @@ function main(): void {
           text: assistantText(i, rnd),
           model: "fixture-model",
           stop_reason: "stop",
-          usage: { input: 1200 + i, output: 400 + i, cache_read: 0, cache_write: 0, cost_total: 0.001 * i },
+          usage: {
+            input: 1200 + i,
+            output: 400 + i,
+            cache_read: 0,
+            cache_write: 0,
+            cost_total: 0.001 * i,
+          },
         },
       });
       written++;
@@ -127,7 +140,13 @@ function main(): void {
   const count = db.countEvents(runId);
   db.close();
   console.log(
-    JSON.stringify({ run_id: runId, name: args.name, project_key: projectKey, events: count, db: args.db ?? "(default)" }),
+    JSON.stringify({
+      run_id: runId,
+      name: args.name,
+      project_key: projectKey,
+      events: count,
+      db: args.db ?? "(default)",
+    }),
   );
 }
 

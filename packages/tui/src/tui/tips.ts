@@ -23,6 +23,7 @@ export const TIPS: readonly string[] = [
   "/compact summarizes older context when the window fills up",
   "/prompt inspects the layered Mubit + local system prompt",
   "/tree, /fork and /clone branch and revisit your session history",
+  "/tasks (or Ctrl+B) toggles the footer task panel while the agent works",
   "web_search + web_fetch give the model live web access (set EXA_API_KEY)",
   "apply_patch edits many files atomically in one call",
   "/resume reopens a past session or run by id",

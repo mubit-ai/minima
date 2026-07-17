@@ -21,7 +21,9 @@ export async function buildOne(opts: { target?: string; outfile: string }): Prom
     target: "bun",
     minify: true,
     plugins: [stub as unknown as import("bun").BunPlugin],
-    compile: opts.target ? { target: opts.target, outfile: opts.outfile } : { outfile: opts.outfile },
+    compile: opts.target
+      ? { target: opts.target, outfile: opts.outfile }
+      : { outfile: opts.outfile },
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);

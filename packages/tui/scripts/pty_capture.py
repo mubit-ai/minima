@@ -27,7 +27,7 @@ Spec (JSON):
 
 Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <BS>
              <CTRLC> <CTRLL> <CTRLP> <CTRLR> <CTRLT> <CTRLE> <CTRLG> <SPACE>
-             <WHEELUP> <WHEELDN> <CLICK> <PASTE> <ENDPASTE> <SHIFTTAB> <CTRLZ> <CTRLD>
+             <WHEELUP> <WHEELDN> <CLICK> <PASTE> <ENDPASTE> <SHIFTTAB> <CTRLZ> <CTRLD> <CTRLB>
              <HOME> <END> <ALTLEFT> <ALTRIGHT> <ALTB> <ALTF> <ALTBS>
     A step may be {"after": s, "signal": "CONT"} to send SIGCONT instead of bytes.
 
@@ -67,7 +67,7 @@ TOKENS = {
     "<CTRLC>": "\x03", "<CTRLL>": "\x0c", "<CTRLP>": "\x10", "<CTRLR>": "\x12",
     "<CTRLT>": "\x14", "<CTRLE>": "\x05", "<CTRLG>": "\x07", "<CTRLA>": "\x01",
     "<CTRLK>": "\x0b", "<CTRLU>": "\x15", "<CTRLW>": "\x17", "<CTRLV>": "\x16", "<CTRLY>": "\x19",
-    "<CTRLZ>": "\x1a", "<CTRLD>": "\x04",
+    "<CTRLZ>": "\x1a", "<CTRLD>": "\x04", "<CTRLB>": "\x02",
     "<HOME>": "\x1b[H", "<END>": "\x1b[F",
     "<ALTLEFT>": "\x1b[1;3D", "<ALTRIGHT>": "\x1b[1;3C", "<ALTB>": "\x1bb", "<ALTF>": "\x1bf",
     "<ALTBS>": "\x1b\x7f",

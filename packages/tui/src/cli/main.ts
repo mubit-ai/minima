@@ -30,6 +30,7 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
+import type { TodoTask } from "../tools/todowrite.ts";
 import { taskTool } from "../tools/task.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
@@ -300,8 +301,8 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -h, --help
 `;
 
-function toolsFor(args: CliArgs, groundTruth: boolean) {
-  let tools = args.noTools ? [] : builtinTools({ groundTruth });
+function toolsFor(args: CliArgs, groundTruth: boolean, todoState?: TodoTask[]) {
+  let tools = args.noTools ? [] : builtinTools({ groundTruth, todoState });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -365,7 +366,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const mapping = await getProject(repoIdentity(process.cwd()));
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
-  const tools = toolsFor(args, config.groundTruth === true);
+  const todoState: TodoTask[] = [];
+  const tools = toolsFor(args, config.groundTruth === true, todoState);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
@@ -644,6 +646,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       planSpawn: spawnFactory,
       planMetaModel,
       gtGateBefore,
+      todos: todoState,
     }),
     { exitOnCtrlC: false },
   );

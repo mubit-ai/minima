@@ -66,8 +66,9 @@ describe("tui/app.tsx wires the GT footer strip", () => {
   test("the refresh is driven by tool_execution_end", () => {
     const endIdx = src.indexOf('case "tool_execution_end":');
     expect(endIdx).toBeGreaterThan(-1);
-    // The GT refresh lives inside the tool_execution_end case, before the next case/break.
-    const after = src.slice(endIdx, endIdx + 600);
+    // The GT refresh lives inside the tool_execution_end case, before the next case/break
+    // (the case body also carries the D3a todoGen bump since MP5, hence the window size).
+    const after = src.slice(endIdx, endIdx + 1200);
     expect(after).toContain("setPlanStrip(planStripInfo(agent.db, agent.runId))");
   });
 

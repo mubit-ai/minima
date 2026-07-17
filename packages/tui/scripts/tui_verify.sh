@@ -19,6 +19,9 @@
 #                     (rows - input - status, MINIMA_TUI_SPIKE_PANEL=1) opens over a
 #                     500-msg resume, scrolls 200+ steps, and closes — zero extra ESC[3J,
 #                     the last grid row never painted, scrollback intact after close
+#   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
+#                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
+#                     session on the same prefs dir honors the persisted hide
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -401,9 +404,80 @@ python3 "$TUI/scripts/tui_assert.py" "$TMP/spike-frames.jsonl" --after 9.5 --bef
   --check bottom-anchor
 perf_check "$TMP/spike-perf.jsonl" spike 3000
 
+echo "== tui-verify: scenario tasks-footer (D3a: mid-run todos, Ctrl+B, persisted hide) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 14,
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "frames": "$TMP/tasks-frames.jsonl",
+  "raw": "$TMP/tasks-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "TODO plan this work"},
+    {"after": 4.5, "send": "<CR>"},
+    {"after": 8.0, "send": "a"},
+    {"after": 11.2, "send": "<CTRLB>"}
+  ]
+}
+EOF
+)
+capture tasks "$SPEC"
+python3 - "$TMP/tasks-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# The panel appears MID-RUN (the todowrite lands while the second-phase reply streams;
+# the "a" step at 8.0 always-allows the todowrite permission prompt, which shows ~6.7).
+shown = [f for f in frames if 8.0 <= f["t"] < 11.2 and grid_has(f, "tasks 1/3")]
+assert shown, "task panel (tasks 1/3) never appeared after the TODO tool call"
+assert any(grid_has(f, "wire the panel data") for f in shown), (
+    "current in_progress task not shown in the panel header")
+first = shown[0]["t"]
+print(f"tasks-footer: panel first visible at t={first:.2f}s")
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+# The hide render is the only output after the Ctrl+B step — window opens AT the step.
+hidden = [f for f in settled if f["t"] >= 11.2]
+assert hidden, "no settled frames after Ctrl+B"
+assert not any(grid_has(f, "tasks 1/3") for f in hidden), "Ctrl+B did not hide the task panel"
+print("tui_assert: PASS tasks-footer (panel mid-run, current task shown, Ctrl+B hides)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/tasks-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor
+
+echo "== tui-verify: scenario tasks-footer-restart (persisted hide survives) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 12,
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "frames": "$TMP/tasks2-frames.jsonl",
+  "steps": [
+    {"after": 3.0, "send": "TODO plan this work"},
+    {"after": 4.5, "send": "<CR>"},
+    {"after": 8.0, "send": "a"}
+  ]
+}
+EOF
+)
+capture tasks2 "$SPEC"
+python3 - "$TMP/tasks2-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+assert not any("tasks 1/3" in row for f in frames for row in f["screen"]), (
+    "persisted hide ignored: the task panel reappeared in a fresh session on the same prefs dir")
+assert any("todowrite: 3 tasks" in row for f in frames for row in f["screen"]), (
+    "todowrite never ran in the restart session - the hide assert proved nothing")
+print("tui_assert: PASS tasks-footer-restart (hide persisted per-project)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
-          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin <<'PY'
+          "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
+          "$TMP"/tasks-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

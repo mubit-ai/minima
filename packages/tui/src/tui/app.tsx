@@ -68,6 +68,7 @@ import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
+import type { TodoTask } from "../tools/todowrite.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator } from "./busy.tsx";
@@ -97,7 +98,7 @@ import {
   wrappedLineCount,
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
-import { persistMode } from "./mode_prefs.ts";
+import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { ModelPicker } from "./model-picker.tsx";
 import { type PanelNavKey, type PanelState, panelReduce, spikePanelState } from "./panel_state.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
@@ -119,6 +120,7 @@ import {
 } from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
+import { taskFooterRows } from "./task_footer.ts";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
@@ -147,6 +149,13 @@ export interface AppProps {
    * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
    */
   gtGateBefore?: BeforeToolCall | null;
+  /**
+   * The LEAD agent's live todo list (D3a task panel): the same array main.ts handed to
+   * todowriteTool, mutated in place by the tool. Re-reads are driven by tool_execution_end
+   * (the event carries no toolName, so every tool end bumps the cheap re-read — the same
+   * unfiltered pattern the GT strip refresh uses).
+   */
+  todos?: TodoTask[];
 }
 
 // MP4 (MUB-147): the spike gate for the D3b live-region panels. Off by default — the
@@ -263,6 +272,7 @@ const COMMANDS = [
   { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
+  { name: "tasks", desc: "Toggle the footer task panel (Ctrl+B)" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
@@ -750,6 +760,7 @@ export function HarnessApp({
   planSpawn,
   planMetaModel,
   gtGateBefore,
+  todos,
 }: AppProps) {
   const { exit } = useApp();
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
@@ -1140,6 +1151,12 @@ export function HarnessApp({
   // no-longer-on-screen. 0 for a whole normal session; moved to messages.length whenever
   // the expanded panel closes (it covered the screen — see closePanelReseat below).
   const [staticBasisIdx, setStaticBasisIdx] = useState(0);
+  // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
+  // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
+  const [todoGen, setTodoGen] = useState(0);
+  const [taskPanelHidden, setTaskPanelHidden] = useState(() =>
+    loadTaskPanelHidden(repoIdentity(process.cwd())),
+  );
   /**
    * Usage ledger adapter (the U1↔U2 join): one TocUsage per REAL user prompt, in
    * submission order — computeSections runs over the agent's Message[] and its
@@ -1412,6 +1429,10 @@ export function HarnessApp({
           break;
         case "tool_execution_end":
           setActiveActions((a) => reduceActiveActions(a, ev));
+          // D3a: todowrite mutates the `todos` array in place — bump the gen so the memo
+          // re-reads it (the event carries no toolName; an unconditional bump is the
+          // established pattern, same as the GT refresh below).
+          setTodoGen((g) => g + 1);
           // Keep the GT footer strip in step with the ledger the afterToolCall sink just wrote:
           // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
           if (agent.config.groundTruth === true) {
@@ -1575,6 +1596,17 @@ export function HarnessApp({
     // Ctrl+Y: copy the last assistant reply — read-only, allowed mid-run (like Ctrl+T).
     if (key.ctrl && input === "y") {
       copyLastReply();
+      return;
+    }
+
+    // D3a (MP5): toggle the task panel — allowed mid-run (progress visibility is the
+    // point). Only the explicit hide persists; showing clears the per-project override
+    // so fresh projects keep the auto-show default.
+    if (key.ctrl && input === "b") {
+      const next = !taskPanelHidden;
+      setTaskPanelHidden(next);
+      if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
+      persistTaskPanelHidden(projectKeyRef.current, next);
       return;
     }
 
@@ -2689,6 +2721,26 @@ export function HarnessApp({
           },
         ]);
         break;
+      case "tasks": {
+        const nextHidden = !taskPanelHidden;
+        setTaskPanelHidden(nextHidden);
+        if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
+        persistTaskPanelHidden(projectKeyRef.current, nextHidden);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: nextHidden
+              ? "Task panel hidden for this project (persists). Ctrl+B or /tasks shows it again."
+              : (todos?.length ?? 0) > 0
+                ? "Task panel shown."
+                : "Task panel shown — it appears when the agent records todos.",
+            toolName: "tasks",
+          },
+        ]);
+        break;
+      }
       case "fork":
         setMessages((m) => [
           ...m,
@@ -3413,8 +3465,6 @@ export function HarnessApp({
     note: gtFooterNote !== null,
   });
   const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0);
-  // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows.
-  const footerHeight = 6 + (currentAction ? 1 : 0) + (gtFit.strip ? 1 : 0) + gtRows;
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
@@ -3444,6 +3494,26 @@ export function HarnessApp({
     !questionPrompt &&
     panelOuter >= 5 &&
     cols >= TOC_MIN_COLS;
+  // D3a task panel rows (MP5): read from the in-place-mutated todos array; todoGen forces
+  // the re-read after every tool end. GT rows keep grant priority until MP6 folds them in;
+  // reservation (taskGranted in footerHeight below) and render use the SAME value.
+  const taskRows = useMemo(() => {
+    void todoGen;
+    return taskFooterRows(todos ?? []);
+  }, [todos, todoGen]);
+  const taskVisible =
+    taskRows.length > 0 &&
+    !taskPanelHidden &&
+    !overlayOpen &&
+    !permPrompt &&
+    !questionPrompt &&
+    !panelVisible;
+  const taskGranted = taskVisible
+    ? Math.min(taskRows.length, Math.max(0, gtBudget - gtRows - (gtFit.strip ? 1 : 0)))
+    : 0;
+  // StatusBar (2 rows + margin) + keys row + quit line + GT plan strip + tier→behavior rows
+  // + the granted D3a task rows.
+  const footerHeight = 6 + (currentAction ? 1 : 0) + (gtFit.strip ? 1 : 0) + gtRows + taskGranted;
   const panelInnerRows = Math.max(1, panelOuter - PANEL_CHROME_ROWS);
   // Closing must also RE-SEAT the bottom mount: the panel covered the whole screen, so the
   // post-close frame starts from an effectively fresh screen. Moving the static-estimate
@@ -3628,35 +3698,20 @@ export function HarnessApp({
     </>
   );
 
-  // ONE footer block: input/status/keys/overlay JSX below the chat region.
+  // ONE footer block: input/status/keys/overlay JSX below the chat region. Stack order
+  // (Q26): D3a task rows at the TOP (persistent reference — stable while transients
+  // toggle); busy + suggestions hug the input inside the composer group below.
   const footerBlock = (
     <>
-      {matchingCommands.length > 0 && !panelVisible && (
-        <Box
-          borderStyle="round"
-          borderColor="gray"
-          paddingX={1}
-          flexDirection="column"
-          width="100%"
-          marginBottom={0}
-          flexShrink={0}
-        >
-          <Box position="absolute" marginTop={-1} marginLeft={2}>
-            <Text color="gray"> commands </Text>
-          </Box>
-          {matchingCommands.map((cmd) => (
-            <Box key={cmd.name}>
-              <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
-              <Text color="gray">{cmd.desc}</Text>
-            </Box>
+      {taskGranted > 0 && (
+        <Box flexDirection="column" width="100%" flexShrink={0}>
+          {taskRows.slice(0, taskGranted).map((r, i) => (
+            <Text key={`${i}-${r.text}`} color={r.color} bold={r.bold} wrap="truncate">
+              {r.text}
+            </Text>
           ))}
-          {hiddenSuggestions > 0 && (
-            <Text color="gray">…+{hiddenSuggestions} more · keep typing or Tab to complete</Text>
-          )}
         </Box>
       )}
-
-      {busyIndicatorVisible && <BusyIndicator active showTip={tipsEnabled} />}
 
       {pickerOpen ? (
         <ModelPicker
@@ -3745,6 +3800,33 @@ export function HarnessApp({
                 {gtBlock.prompt}
                 {gateFocus ? "" : " · ctrl+g to answer"}
               </Text>
+            </Box>
+          )}
+          {busyIndicatorVisible && <BusyIndicator active showTip={tipsEnabled} />}
+          {matchingCommands.length > 0 && !panelVisible && (
+            <Box
+              borderStyle="round"
+              borderColor="gray"
+              paddingX={1}
+              flexDirection="column"
+              width="100%"
+              marginBottom={0}
+              flexShrink={0}
+            >
+              <Box position="absolute" marginTop={-1} marginLeft={2}>
+                <Text color="gray"> commands </Text>
+              </Box>
+              {matchingCommands.map((cmd) => (
+                <Box key={cmd.name}>
+                  <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
+                  <Text color="gray">{cmd.desc}</Text>
+                </Box>
+              ))}
+              {hiddenSuggestions > 0 && (
+                <Text color="gray">
+                  …+{hiddenSuggestions} more · keep typing or Tab to complete
+                </Text>
+              )}
             </Box>
           )}
           <Box
@@ -3856,6 +3938,8 @@ export function HarnessApp({
             <Text color="gray">Mode </Text>
             <Text color="yellow">ctrl+e </Text>
             <Text color="gray">Reason </Text>
+            <Text color="yellow">ctrl+b </Text>
+            <Text color="gray">Tasks </Text>
             {agent.config.groundTruth === true ? (
               <>
                 <Text color="yellow">ctrl+g </Text>
