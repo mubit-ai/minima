@@ -2739,11 +2739,9 @@ export function HarnessApp({
           let planCancelled = false;
           if (agent.config.groundTruth === true && agent.db && agent.runId) {
             try {
-              const plan = agent.db.getActivePlan(agent.runId);
-              if (plan) {
-                agent.db.setPlanStatus(plan.id, "cancelled");
-                planCancelled = true;
-              }
+              // ALL active plans, not LIMIT 1 — adoption/reseeding can pile up several,
+              // and the next-newest would surface right back.
+              planCancelled = agent.db.cancelActivePlans(agent.runId) > 0;
               setPlanStrip(planStripInfo(agent.db, agent.runId));
               setGtBehavior(ledgerBehavior(agent.db, agent.runId));
             } catch {

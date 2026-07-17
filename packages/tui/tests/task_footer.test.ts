@@ -175,7 +175,7 @@ describe("tui/app.tsx wires the D3a task panel", () => {
     // Clearing state alone is meaningless — the model's next todowrite re-seeds a fresh
     // active plan; the model-facing rejection notice is the load-bearing part.
     expect(body).toContain("todos.length = 0");
-    expect(body).toContain('setPlanStatus(plan.id, "cancelled")');
+    expect(body).toContain("cancelActivePlans(agent.runId) > 0");
     expect(body).toContain("agent.agentState.messages.push");
     expect(body).toContain("The user cancelled the current");
     expect(body).toContain("do not");
@@ -200,6 +200,35 @@ describe("cancelled plans stay dead (the ledger side of /tasks cancel)", () => {
     expect(db.getActivePlan("run1")!.id).toBe(second.planId);
     // Unlike 'done' plans, cancelled ones are not resurrected by matching todos.
     expect(db.getPlanSteps(planId).length).toBe(1);
+    db.db.close();
+  });
+
+  test("cancelActivePlans sweeps EVERY active plan — adoption piles them up (the field bug)", async () => {
+    const { MinimaDb } = await import("../src/db/minima_db.ts");
+    const db = new MinimaDb(":memory:");
+    // Two active plans on one session, as after adoptActivePlans on a resumed run.
+    const a = db.upsertPlanFromTodos("old-run", [{ content: "a", status: "pending" }], "A");
+    const b = db.upsertPlanFromTodos("run1", [{ content: "b", status: "pending" }], "B");
+    db.adoptActivePlans("old-run", "run1");
+    expect(db.cancelActivePlans("run1")).toBe(2);
+    expect(db.getActivePlan("run1")).toBeNull();
+    for (const id of [a.planId, b.planId]) expect(db.getPlan(id)!.status).toBe("cancelled");
+    db.db.close();
+  });
+
+  test("display surfaces never resurrect a cancelled plan; the upsert path still sees it", async () => {
+    const { MinimaDb } = await import("../src/db/minima_db.ts");
+    const { buildGtOverview } = await import("../src/tui/gt_overview.ts");
+    const { whyReportFor } = await import("../src/minima/why.ts");
+    const db = new MinimaDb(":memory:");
+    db.upsertPlanFromTodos("run1", [{ content: "a", status: "in_progress" }], "Rejected plan");
+    db.cancelActivePlans("run1");
+    // Ctrl+G and /why: the "GT still holds" report — both must come back empty.
+    expect(buildGtOverview(db, "run1")).toBeNull();
+    expect(whyReportFor(db, "run1")).toContain("No Ground-Truth plan recorded");
+    // The todo-upsert path keeps the DEFAULT view so it starts fresh, never resurrects.
+    expect(db.getLatestPlan("run1")!.status).toBe("cancelled");
+    expect(db.getLatestPlan("run1", { excludeCancelled: true })).toBeNull();
     db.db.close();
   });
 });

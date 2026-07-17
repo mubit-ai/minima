@@ -28,7 +28,8 @@ export const REFUTATION_STEP_ID = "plan-refutation";
 
 /** Build the child's brief from the ledger; null when there is no plan or no steps. */
 export function buildRefutationDelegation(db: MinimaDb, sessionId: string): Delegation | null {
-  const plan = db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId);
+  const plan =
+    db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) return null;
   const steps = db.getPlanSteps(plan.id);
   if (steps.length === 0) return null;
@@ -140,7 +141,9 @@ export async function runPlanRefutation(opts: {
 }): Promise<RefutationOutcome | null> {
   const delegation = buildRefutationDelegation(opts.db, opts.sessionId);
   if (!delegation) return null;
-  const plan = opts.db.getActivePlan(opts.sessionId) ?? opts.db.getLatestPlan(opts.sessionId);
+  const plan =
+    opts.db.getActivePlan(opts.sessionId) ??
+    opts.db.getLatestPlan(opts.sessionId, { excludeCancelled: true });
   if (!plan) return null;
 
   let child: ChildResult;

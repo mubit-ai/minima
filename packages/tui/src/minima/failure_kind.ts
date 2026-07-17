@@ -219,7 +219,9 @@ export type ExhaustionCause = "gate_failed" | "judge_failed" | "hard_error" | "t
 export function writeExhaustionGate(deps: RecoveryGateDeps, cause: ExhaustionCause): void {
   if (!deps.db || !deps.sessionId) return;
   try {
-    const plan = deps.db.getActivePlan(deps.sessionId) ?? deps.db.getLatestPlan(deps.sessionId);
+    const plan =
+      deps.db.getActivePlan(deps.sessionId) ??
+      deps.db.getLatestPlan(deps.sessionId, { excludeCancelled: true });
     if (!plan) return;
     deps.db.insertGate({
       planId: plan.id,
