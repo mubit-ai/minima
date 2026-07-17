@@ -214,6 +214,14 @@ as inline scenarios asserting §3's budgets.
 **Agent proof:** `make tui-verify` green; committed run log.
 **Manual test:** run `make tui-verify` yourself; skim the assertions.
 **Gate:** §1.7. This MP touches only scripts/tests.
+**Execution notes (landed):** the suite self-starts the committed mock on **:8451** (never
+collides with a dev's :8399) and adds ported inline versions of the renderer-agnostic
+fullscreen-era scenarios (clipboard/modes/shortcuts) so coverage survives MP3. Two facts the
+scenarios pin: inline startup itself writes one `ESC[2J 3J H` (`main.ts`), so the zero-wipe
+budget is *exactly one* `3J` ever; and inline Ctrl+T has **no width gate today** — the 55-col
+scenario pins "text block renders below the floor", and inherits the §2 text-snapshot degrade
+rule when D3b lands. Echo budget wired at ≤0.35s (observed 0.01s). Run log:
+`docs/BigPlan/shots/mp1-tui-verify-run.log`.
 
 ### MP2 — Remove the sidebar system *(M)*
 

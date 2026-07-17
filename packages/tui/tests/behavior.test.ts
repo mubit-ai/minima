@@ -449,20 +449,22 @@ describe("tui/app.tsx wires exit_plan", () => {
   });
 });
 
-// Docked-sidebar input routing (2026-07-14): ONE derived `panelCapture` feeds both the
-// global-handler guard list and the composer's `suspended`, so the two can never drift —
-// the U3/B5 regression (GT/rewind panels captured the global handler but left the composer
-// live: arrows scrubbed history, letters grew the draft, Enter could submit a prompt).
-describe("tui/app.tsx docked-sidebar key routing", () => {
+// Panel input routing: ONE derived `panelCapture` feeds both the global-handler guard list
+// and the composer's `suspended`, so the two can never drift — the U3/B5 regression class
+// (a panel captured the global handler but left the composer live: arrows scrubbed history,
+// letters grew the draft, Enter could submit a prompt). MP2 (MUB-145) removed the docked
+// sidebars; the rewind modal is the remaining capturing panel.
+describe("tui/app.tsx panel key routing", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("panelCapture derives from focus (sidebars) or mount (rewind modal)", () => {
-    expect(src).toContain("const sidebarOpen = tocOpen || gtPanelOpen;");
-    expect(src).toContain("const panelCapture = (sidebarOpen && sidebarFocused) || rewindOpen;");
+  test("panelCapture derives from the rewind modal — the sidebar terms are gone", () => {
+    expect(src).toContain("const panelCapture = rewindOpen;");
+    expect(src).not.toContain("sidebarOpen");
+    expect(src).not.toContain("sidebarFocused");
   });
 
   test("the global guard list uses panelCapture — the per-panel lines are gone", () => {
-    expect(src).toContain("panelCapture // a FOCUSED docked sidebar or the modal rewind picker");
+    expect(src).toContain("panelCapture // ");
     expect(src).not.toContain("tocOpen || // U2");
     expect(src).not.toContain("gtPanelOpen || // U3");
   });
@@ -472,34 +474,10 @@ describe("tui/app.tsx docked-sidebar key routing", () => {
     expect(src).not.toContain("suspended={tocOpen}");
   });
 
-  test("panels own keys only while focused (Ink isActive); Esc blurs docked, closes rewind", () => {
-    const toc = readFileSync(join(import.meta.dir, "../src/tui/toc-panel.tsx"), "utf8");
-    const gt = readFileSync(join(import.meta.dir, "../src/tui/gt-panel.tsx"), "utf8");
+  test("the rewind modal owns keys only while mounted; Esc closes it", () => {
     const rewind = readFileSync(join(import.meta.dir, "../src/tui/rewind-panel.tsx"), "utf8");
-    expect(toc).toContain("{ isActive: focused }");
-    expect(gt).toContain("{ isActive: focused }");
-    // Esc: docked panels hand the keyboard back (panel stays); the rewind modal closes.
-    expect(toc).toContain("onBlur();");
-    expect(gt).toContain("else onBlur();");
     expect(rewind).toContain("onClose();");
     expect(rewind).not.toContain("isActive");
-    // Width-aware padding everywhere — a raw padEnd under-counts wide glyphs (border bleed).
-    expect(toc).not.toContain(".padEnd(");
-  });
-
-  test("the transcript reflows beside a docked sidebar: contentCols threads the width math", () => {
-    expect(src).toContain(
-      "const contentCols = sidebarDocked && sidebarGeom ? sidebarGeom.contentCols : cols;",
-    );
-    expect(src).toContain(
-      "getScrollableMessages(messages, messagesBudget, scrollOffset, contentCols)",
-    );
-    expect(src).toContain("<MessageRow key={i} msg={msg} cols={contentCols} />");
-    expect(src).toContain("offsetForMessage(messages, k, messagesBudget, contentCols)");
-  });
-
-  test("the docked GT overview tracks the ledger (planStrip/gtBehavior are the change signals)", () => {
-    expect(src).toContain("[gtPanelOpen, planStrip, gtBehavior]");
   });
 });
 
@@ -615,60 +593,27 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   });
 });
 
-// OpenCode-style sidebar (2026-07-15): full-terminal-height borderless panels in a
-// two-column fullscreen root; footer/input/overlays live in the LEFT column at
-// contentCols; narrow terminals overlay instead of docking.
-describe("tui/app.tsx two-column sidebar layout", () => {
+// MP2 (MUB-145): the docked/overlay sidebar system is deleted. These pins keep it deleted
+// and protect the survivors (rewind overlay geometry, one-shot text blocks).
+describe("tui/app.tsx sidebar removal", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("sidebar geometry takes the FULL terminal and precedes the footer math", () => {
-    expect(src).toContain("sidebarGeometry(cols, rows) ?? sidebarOverlayGeometry(cols, rows)");
-    expect(src.indexOf("sidebarGeometry(cols, rows)")).toBeLessThan(src.indexOf("const gtBudget ="));
+  test("no sidebar system: geometry, panels and auto-open are gone", () => {
+    expect(src).not.toContain("sidebarGeometry");
+    expect(src).not.toContain("sidebarPanels");
+    expect(src).not.toContain("SidebarChassis");
+    expect(src).not.toContain("contentCols");
+    expect(src).not.toContain("cols < 100");
   });
 
-  test("one shared footer block; footer widths follow the left column", () => {
-    expect(src).toContain("const footerBlock = (");
-    expect(src).toContain("wrappedLineCount(`${typedText}▋`, contentCols - 4)");
-    expect(src).toContain("permOverlayHeight(permPrompt, contentCols)");
-    // Left-column widths: legacy MessageRow window + both bottom-region overlays wrap at
-    // the column width (== cols inline). The inline <Static> row legitimately keeps cols.
-    expect(src.split("cols={contentCols}").length - 1).toBe(3);
-    expect(src.split("cols={cols}").length - 1).toBe(1);
-  });
-
-  test("overlay mode never reflows; docked mode narrows the column", () => {
-    expect(src).toContain(
-      "const sidebarDocked = sidebarOpen && sidebarGeom !== null && sidebarGeom.overlay !== true;",
-    );
-    expect(src).toContain("const sidebarOverlaid = sidebarOpen && sidebarGeom?.overlay === true;");
-    expect(src).toContain("{sidebarOverlaid ? sidebarPanels : null}");
-    expect(src).toContain("{sidebarDocked ? sidebarPanels : null}");
+  test("Ctrl+T / Ctrl+G always print the one-shot text blocks", () => {
+    expect(src).toContain("renderTocText(buildSections(messages, buildUsageLedger()), cols - 6)");
+    expect(src).toContain("renderGtOverviewText(overview, cols - 6)");
   });
 
   test("the rewind picker gates on its OWN geometry ref (null conditions diverged)", () => {
     expect(src).toContain("fullscreen && overlayGeomRef.current && turns.length > 0");
     expect(src).toContain("overlayGeomRef.current = overlayGeom;");
     expect(src).toContain("if (rewindOpen && !overlayGeomOk) setRewindOpen(false);");
-  });
-
-  test("panels are borderless SidebarChassis instances with the version footer", () => {
-    const toc = readFileSync(join(import.meta.dir, "../src/tui/toc-panel.tsx"), "utf8");
-    const gt = readFileSync(join(import.meta.dir, "../src/tui/gt-panel.tsx"), "utf8");
-    const chassis = readFileSync(join(import.meta.dir, "../src/tui/sidebar-chassis.tsx"), "utf8");
-    expect(toc).toContain("<SidebarChassis");
-    expect(gt).toContain("<SidebarChassis");
-    expect(toc).not.toContain("borderStyle");
-    expect(gt).not.toContain("borderStyle");
-    expect(chassis).toContain("VERSION");
-    expect(chassis).toContain("cwdSegments");
-  });
-
-  test("wide fullscreen sessions auto-open the sidebar unfocused (mount-only)", () => {
-    expect(src).toContain("if (!fullscreen || cols < 100 || rows < 10) return;");
-    const idx = src.indexOf("if (!fullscreen || cols < 100 || rows < 10) return;");
-    const effect = src.slice(idx, idx + 400);
-    expect(effect).toContain("if (hasPlan) setGtPanelOpen(true);");
-    expect(effect).toContain("else setTocOpen(true);");
-    expect(effect).not.toContain("setSidebarFocused(true)");
   });
 });

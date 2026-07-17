@@ -262,8 +262,6 @@ import {
   TOC_MIN_COLS,
   clipPanelLines,
   offsetForMessage,
-  sidebarGeometry,
-  sidebarOverlayGeometry,
   tocPanelGeometry,
 } from "../src/tui/layout.ts";
 
@@ -312,78 +310,6 @@ describe("tocPanelGeometry (legacy overlay chassis — remaining consumer: the B
     expect(g100.height).toBe(24);
     expect(g100.innerWidth).toBe(36);
     expect(g100.innerHeight).toBe(22);
-  });
-});
-
-describe("sidebarGeometry (docked ToC/GT sidebar — full-height borderless, 2026-07-15)", () => {
-  test("null below TOC_MIN_COLS or for rows < 10 → callers try the overlay, then text", () => {
-    expect(sidebarGeometry(TOC_MIN_COLS - 1, 20)).toBeNull();
-    expect(sidebarGeometry(100, 9)).toBeNull();
-    expect(sidebarGeometry(100, 10)).not.toBeNull();
-  });
-
-  test("width caps at 40; sidebarWidth + contentCols partition cols exactly", () => {
-    const g100 = sidebarGeometry(100, 24)!;
-    expect(g100).toEqual({
-      sidebarWidth: 40,
-      contentCols: 60,
-      height: 24,
-      innerWidth: 37,
-      innerHeight: 24,
-    });
-    const g60 = sidebarGeometry(60, 20)!;
-    expect(g60.sidebarWidth).toBe(30);
-    expect(g60.contentCols).toBe(30);
-    for (const cols of [60, 75, 100, 200]) {
-      const g = sidebarGeometry(cols, 20)!;
-      expect(g.sidebarWidth + g.contentCols).toBe(cols);
-      expect(g.contentCols).toBeGreaterThanOrEqual(30);
-    }
-  });
-
-  test("full-height contract: the sidebar spans every terminal row, borderless widths", () => {
-    const g = sidebarGeometry(100, 37)!;
-    expect(g.height).toBe(37);
-    expect(g.innerHeight).toBe(37);
-    expect(g.innerWidth).toBe(g.sidebarWidth - 3); // gutter(2) + right margin(1)
-    expect(g.overlay).toBeUndefined();
-  });
-
-  test("narrow band (45 ≤ cols < 60) overlays instead: full cols underneath, no reflow", () => {
-    expect(sidebarOverlayGeometry(44, 30)).toBeNull();
-    expect(sidebarOverlayGeometry(60, 30)).toBeNull(); // docked geometry owns ≥ 60
-    expect(sidebarOverlayGeometry(52, 9)).toBeNull();
-    const o = sidebarOverlayGeometry(52, 30)!;
-    expect(o.overlay).toBe(true);
-    expect(o.sidebarWidth).toBe(Math.min(40, Math.ceil(52 * 0.6)));
-    expect(o.contentCols).toBe(52); // the transcript keeps its full width underneath
-    expect(o.height).toBe(30);
-    expect(o.innerHeight).toBe(30);
-    expect(o.innerWidth).toBe(o.sidebarWidth - 3);
-  });
-
-  test("closed = no reflow (contentCols === cols); docked = the window recomputes at contentCols with Σ ≤ budget", () => {
-    const cols = 100;
-    const fixture: ChatMessage[] = [
-      { role: "user", text: "a question" },
-      { role: "assistant", text: `an answer ${"word ".repeat(40)}` },
-      { role: "tool", text: "tool output", toolName: "bash" },
-    ];
-    // Sidebar closed: app.tsx passes contentCols = cols — byte-identical to the original.
-    const closed = getScrollableMessages(fixture, 12, 0, cols);
-    expect(JSON.stringify(getScrollableMessages(fixture, 12, 0, cols))).toBe(
-      JSON.stringify(closed),
-    );
-    // Docked: the window is computed at the narrowed width and the Σ≤budget guarantee holds
-    // there by construction (conservative heights + the trim loop, now fed contentCols).
-    const { contentCols } = sidebarGeometry(cols, 20)!;
-    const docked = getScrollableMessages(fixture, 12, 0, contentCols);
-    const sum = docked.visible.reduce((n, m) => n + computeMsgHeight(m, contentCols), 0);
-    expect(sum).toBeLessThanOrEqual(12);
-    // The long assistant line wraps differently at 60 cols than at 100 — reflow is real.
-    expect(computeMsgHeight(fixture[1]!, contentCols)).toBeGreaterThan(
-      computeMsgHeight(fixture[1]!, cols),
-    );
   });
 });
 
