@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   type PanelNavKey,
   type PanelState,
+  gtPanelState,
   panelReduce,
+  readerView,
   tocPanelState,
 } from "../src/tui/panel_state.ts";
 import type { TocRow, TocSection } from "../src/tui/toc.ts";
@@ -126,5 +128,70 @@ describe("panelReduce — close semantics", () => {
   test("unknown keys are inert and keep the same state object", () => {
     const s = open();
     expect(panelReduce(s, "x", {}, INNER)).toBe(s);
+  });
+});
+
+describe("panelReduce — the pushed reader view (MP8)", () => {
+  function withReader(): PanelState {
+    const base = open();
+    return {
+      stack: [...base.stack, readerView("contents ▸ first prompt", ["l1", "l2", "l3", "l4"])],
+      pendingG: false,
+    };
+  }
+
+  test("reader lines are plain stops — j/k move one LINE, not one section", () => {
+    let s = withReader();
+    s = step(s, "jj");
+    expect(cursorOf(s)).toBe(2);
+    s = step(s, "k");
+    expect(cursorOf(s)).toBe(1);
+  });
+
+  test("Esc pops back to the list (same list state), second Esc closes", () => {
+    const s = withReader();
+    const back = panelReduce(s, "", { escape: true }, INNER);
+    expect(back?.stack.length).toBe(1);
+    expect(back?.stack[0]!.kind).toBe("toc");
+    expect(panelReduce(back!, "", { escape: true }, INNER)).toBeNull();
+  });
+
+  test("h and ← also go back from the reader, but are inert on the top-level list", () => {
+    expect(panelReduce(withReader(), "h", {}, INNER)?.stack.length).toBe(1);
+    expect(panelReduce(withReader(), "", { leftArrow: true }, INNER)?.stack.length).toBe(1);
+    const list = open();
+    expect(panelReduce(list, "h", {}, INNER)).toBe(list);
+  });
+
+  test("an empty reader gets the placeholder line", () => {
+    expect(readerView("t", []).lines).toEqual(["(empty section)"]);
+  });
+
+  test("embedded newlines are flattened — every view line is exactly ONE terminal row", () => {
+    // A multi-row line breaks the panel height identity (log-update desync → ghost row in
+    // scrollback; one more row trips the wipe). Caught live on a stepCardLines entry.
+    expect(readerView("t", ["a\nb", "c"]).lines).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("gtPanelState — the GT overview view (MP9)", () => {
+  test("stops are the step-title rows and the breadcrumb carries plan position", () => {
+    const overview = {
+      stepPos: 2,
+      stepTotal: 3,
+      steps: [],
+      gatesByStep: new Map(),
+    } as unknown as Parameters<typeof gtPanelState>[0];
+    const rows = [
+      { text: "⬜ 1. scaffold", stepIdx: 0, isTitle: true },
+      { text: "   check: bun test", stepIdx: 0, isTitle: false },
+      { text: "🟦 2. wire", stepIdx: 1, isTitle: true },
+    ];
+    const s = gtPanelState(overview, rows);
+    const top = s.stack[0]!;
+    expect(top.kind).toBe("gt");
+    expect(top.title).toBe("plan · 2/3");
+    expect(top.stops).toEqual([0, 2]);
+    expect(top.cursor).toBe(0);
   });
 });

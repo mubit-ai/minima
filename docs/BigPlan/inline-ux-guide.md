@@ -459,6 +459,16 @@ cannot scroll the terminal's scrollback, so reading happens in-panel).
 **Agent proof:** shots: list → Enter → reader scrolled → back → close; budgets green.
 **Manual test:** find yesterday's decision in a long session using only Ctrl+T.
 **Gate:** §1.7.
+**Execution notes (landed):** the keystone extraction is `wrapLineToWidth` in layout.ts —
+the WRAP PRODUCER; `wrapRows` (every height estimate) is now DEFINED as its `.length`, so
+the reader and the reservations cannot diverge (property-pinned across widths incl. CJK
+hard-breaks, where the char-accurate producer is a hair more conservative than the old
+ceil() — the safe direction). `reader.ts sectionReaderLines` mirrors the transcript
+headers (`▸ you` / `◆ assistant` / `⚙ tool:` / `🧠`), clamps tool bodies with the honest
+`… +N more lines` marker, and mirrors `markdownBodyHeight`'s three cases. Reader views are
+`stops: null` (plain line scroll) on the same cursor primitive; `h`/`←` back is a reducer
+rule (inert on the top-level list). The panel-toc scenario grew the reader leg
+(Enter → `contents ▸` breadcrumb → h back → Esc close, all inside the same byte gates).
 
 ### MP9 — D3b GT overview + step cards *(M)*
 
@@ -476,7 +486,22 @@ cannot scroll the terminal's scrollback, so reading happens in-panel).
 **Agent proof:** seeded-ledger shots: overview, step card, gate-wins-chord, /why-opens-panel.
 **Manual test:** full GT run; use only Ctrl+G to follow execution; `/why` after a gate.
 **Gate:** §1.7. **Track P complete — Ctrl+T/Ctrl+G one-shot text blocks retire here** (the
-<60-col degrade keeps the text-snapshot path).
+<60-col degrade keeps the text-snapshot path; the busy path also keeps them — Q17a's
+sibling decision, 2026-07-17).
+**Execution notes (landed):** the `gt` view rides the same lines+stops primitive; step
+cards reuse `readerView` (breadcrumb `plan ▸ step N`, 1-based). Gate-wins is enforced at
+BOTH chord sites — the global guard falls through to the gate-answer arm, and the
+in-panel Ctrl+G closes + arms the SAME `gateFocus`. `/why` opens the panel (with `/why
+<n>` pushing the card); the text path survives for GT-off/narrow/out-of-range — headless
+never had slash commands. **Two real defects the panel-gt scenario caught:** (1)
+`stepCardLines` entries can carry embedded newlines — every panel view now FLATTENS its
+lines (a multi-row line breaks the height identity: log-update desyncs, a ghost row leaks
+into scrollback permanently, one more row would wipe); (2) terminals and Ink disagree by
+±1 cell on some emoji widths (the U+1F7Ex tier circles/squares — the Q12 emoji-width
+risk, live) — on a full-width row that pushes the right border past the last column and
+the terminal WRAPS it. Fix: `ExpandPanel` carries `marginRight={2}` width armor (2 cells
+of slack absorb the mismatch) and panel content builders take `cols − 6`. Both defects
+were invisible in bun tests and in Ink's own output — only the PTY byte gates saw them.
 
 ---
 

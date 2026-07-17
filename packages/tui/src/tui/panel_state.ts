@@ -9,6 +9,7 @@
  * land on (ToC section titles); null means every line is a stop (a plain reader). The
  * cursor is ALWAYS a valid line index — with stops present it is always ON a stop.
  */
+import type { GtOverview, GtPanelRow } from "./gt_overview.ts";
 import type { ChatMessage } from "./messages.tsx";
 import type { TocRow, TocSection } from "./toc.ts";
 
@@ -19,13 +20,18 @@ export interface PanelViewBase {
   cursor: number;
 }
 
-export type PanelView = PanelViewBase & {
-  kind: "toc";
-  rows: TocRow[];
-  sections: TocSection[];
-  /** The transcript reference captured at open (immutable-updated → a free snapshot). */
-  snapshot: ChatMessage[];
-};
+export type PanelView = PanelViewBase &
+  (
+    | {
+        kind: "toc";
+        rows: TocRow[];
+        sections: TocSection[];
+        /** The transcript reference captured at open (immutable-updated → a free snapshot). */
+        snapshot: ChatMessage[];
+      }
+    | { kind: "reader" }
+    | { kind: "gt"; rows: GtPanelRow[]; overview: GtOverview }
+  );
 
 export interface PanelState {
   stack: PanelView[];
@@ -35,6 +41,7 @@ export interface PanelState {
 export interface PanelNavKey {
   upArrow?: boolean;
   downArrow?: boolean;
+  leftArrow?: boolean;
   pageUp?: boolean;
   pageDown?: boolean;
   return?: boolean;
@@ -83,10 +90,20 @@ function toEnd(view: PanelView, which: "first" | "last"): PanelView {
   );
 }
 
+/** h/← go BACK one view (reader → list); inert on the top-level view (Esc closes there). */
+function popIfNested(state: PanelState): PanelState {
+  if (state.stack.length <= 1) {
+    return state.pendingG ? { stack: state.stack, pendingG: false } : state;
+  }
+  return { stack: state.stack.slice(0, -1), pendingG: false };
+}
+
 function applyChar(state: PanelState, ch: string): PanelState {
   const top = state.stack[state.stack.length - 1];
   if (!top) return state;
   switch (ch) {
+    case "h":
+      return popIfNested(state);
     case "j":
       return replaceTop(state, stepStop(top, 1));
     case "k":
@@ -116,6 +133,7 @@ export function panelReduce(
   }
   if (key.downArrow) return replaceTop(state, stepStop(top, 1));
   if (key.upArrow) return replaceTop(state, stepStop(top, -1));
+  if (key.leftArrow) return popIfNested(state);
   if (key.pageDown) return replaceTop(state, jumpLines(top, innerHeight));
   if (key.pageUp) return replaceTop(state, jumpLines(top, -innerHeight));
   let next = state;
@@ -142,6 +160,44 @@ export function tocPanelState(
         rows,
         sections,
         snapshot,
+      },
+    ],
+    pendingG: false,
+  };
+}
+
+/**
+ * A pushed reader view (MP8): plain line scroll, every line a stop. Embedded newlines are
+ * flattened — every view line MUST render exactly one terminal row or the panel frame
+ * outgrows the height identity: log-update desyncs, a ghost row leaks into scrollback,
+ * and one more row trips Ink's wipe (caught live by the panel-gt scenario on a
+ * stepCardLines entry that carried a newline).
+ */
+export function readerView(title: string, lines: string[]): PanelView {
+  const flat = lines.flatMap((l) => l.split("\n"));
+  return {
+    kind: "reader",
+    title,
+    lines: flat.length > 0 ? flat : ["(empty section)"],
+    stops: null,
+    cursor: 0,
+  };
+}
+
+/** The GT plan-overview view (MP9): snapshot-at-open, cursor stops on step-title rows. */
+export function gtPanelState(overview: GtOverview, rows: GtPanelRow[]): PanelState {
+  const lines = rows.length > 0 ? rows.map((r) => r.text) : ["(no plan steps)"];
+  const stops = rows.flatMap((r, i) => (r.isTitle ? [i] : []));
+  return {
+    stack: [
+      {
+        kind: "gt",
+        title: `plan · ${overview.stepPos}/${overview.stepTotal}`,
+        lines,
+        stops,
+        cursor: stops[0] ?? 0,
+        rows,
+        overview,
       },
     ],
     pendingG: false,

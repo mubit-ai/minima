@@ -466,6 +466,25 @@ describe("tui/app.tsx panel key routing", () => {
     expect(src).toContain("suspended={panelCapture}");
     expect(src).not.toContain("suspended={tocOpen}");
   });
+
+  test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
+    // Global arm: the guard keeps falling through to the gate-answer arm.
+    expect(src).toContain('input === "g" && !(gtBehavior?.block && !busy)');
+    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery.
+    const idx = src.indexOf("function handlePanelKey");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2600);
+    expect(body).toContain("if (gtBehavior?.block) {");
+    expect(body).toContain("setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false })");
+  });
+
+  test("/why opens the GT panel in the TUI; the text path survives for GT-off/narrow", () => {
+    const idx = src.indexOf('case "why": {');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2400);
+    expect(body).toContain("gtPanelState(overview, gtRows(overview,");
+    expect(body).toContain("whyReportFor(agent.db, agent.runId)");
+  });
 });
 
 // Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT
