@@ -472,12 +472,13 @@ export async function runKeeperMiniUpdate(
   opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
 ): Promise<{ update: KeeperMiniResult | null; costUsd: number }> {
   let costUsd = 0;
-  const user =
-    `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>\n\n` +
-    `<draft>\n${fenced(session.draft || "(empty)", 6000)}\n</draft>\n\n` +
-    `<user>\n${midTruncate(userTurn, 4000)}\n</user>\n\n` +
-    `<approach>\n${fenced(plannerReply || "(no reply)", 6000)}\n</approach>\n\n` +
-    "Fold the exchange into the draft.";
+  const user = [
+    `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>`,
+    `<draft>\n${fenced(session.draft || "(empty)", 6000)}\n</draft>`,
+    `<user>\n${midTruncate(userTurn, 4000)}\n</user>`,
+    `<approach>\n${fenced(plannerReply || "(no reply)", 6000)}\n</approach>`,
+    "Fold the exchange into the draft.",
+  ].join("\n\n");
   const raw = await completeJson<unknown>(opts.metaModel, KEEPER_UPDATE_SYSTEM, user, undefined, {
     apiKey: opts.apiKey,
     signal: opts.signal,

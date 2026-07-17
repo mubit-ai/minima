@@ -12,6 +12,7 @@ import {
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
+  permPreviewKey,
   permPreviewLines,
   permToolLabel,
   questionDisplayText,
@@ -308,6 +309,31 @@ describe("permPreviewLines — clips the permission preview by RENDERED rows", (
     const { lines, hidden } = permPreviewLines("x".repeat(40), 10);
     expect(lines).toEqual(["x".repeat(40)]); // 2 rows at width 20 — fits, kept whole
     expect(hidden).toBe(0);
+  });
+});
+
+describe("permPreviewKey — unique React key per preview row", () => {
+  test("todowrite verify rows sharing the fixed label prefix get distinct keys", () => {
+    // The GT todowrite preview shape (permissions.ts buildDiffPreview): the verify label
+    // prefix is 39 chars, so a bare line.slice(0, 40) key collides whenever two commands
+    // start with the same character — exactly this fixture.
+    const preview = [
+      "1. [x] create line_counter.py",
+      "     verify (runs as a shell command): python line_counter.py sample.py",
+      "2. [ ] add unit tests",
+      "     verify (runs as a shell command): pytest tests/",
+    ].join("\n");
+    const { lines } = permPreviewLines(preview, 120);
+    const contentSliced = lines.map((l) => l.slice(0, 40));
+    expect(new Set(contentSliced).size).toBeLessThan(contentSliced.length);
+    const keys = lines.map((l, i) => permPreviewKey(i, l));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test("identical duplicate lines (edit diff repeats) still key uniquely", () => {
+    const lines = ["+ same", "+ same", "+ same"];
+    const keys = lines.map((l, i) => permPreviewKey(i, l));
+    expect(new Set(keys).size).toBe(3);
   });
 });
 

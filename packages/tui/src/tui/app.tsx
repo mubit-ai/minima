@@ -57,6 +57,7 @@ import {
 } from "../minima/index.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
 import { runPlanRefutation } from "../minima/plan_refute.ts";
+import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
@@ -88,6 +89,7 @@ import {
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
+  permPreviewKey,
   permPreviewLines,
   permToolLabel,
   questionDisplayText,
@@ -107,8 +109,6 @@ import {
   readerView,
   tocPanelState,
 } from "./panel_state.ts";
-import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
-import { draftPanelState } from "./plan_draft_view.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
@@ -118,6 +118,7 @@ import {
   planModeBlockReason,
   planModeBlockedTools,
 } from "./permissions.ts";
+import { draftPanelState } from "./plan_draft_view.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
@@ -487,9 +488,9 @@ export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; 
             const { lines, hidden } = permPreviewLines(prompt.diffPreview, cols);
             return (
               <>
-                {lines.map((line) => (
+                {lines.map((line, i) => (
                   <Text
-                    key={line.slice(0, 40)}
+                    key={permPreviewKey(i, line)}
                     color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
                   >
                     {line}

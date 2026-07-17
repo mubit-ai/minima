@@ -396,6 +396,17 @@ export function permHiddenMarker(hidden: number): string {
   return `… +${hidden} more lines not shown — reject if unsure`;
 }
 
+/** React key for a permission-preview row — POSITION first. Todowrite verify rows share a
+ * fixed 39-char label prefix ("     verify (runs as a shell command): "), so a content-sliced
+ * key collides whenever two verify commands start with the same character, and React may then
+ * drop or duplicate rows on the one surface whose contract is that every command is visible
+ * before approval (plus a stderr warning wall into scrollback). The preview is rebuilt
+ * wholesale per prompt and static while shown, so the index is the identity; the content tail
+ * is only a debugging aid. */
+export function permPreviewKey(index: number, line: string): string {
+  return `${index}:${line.slice(0, 24)}`;
+}
+
 /**
  * The permission-overlay preview clipped to its RENDERED-row budget: whole source lines are
  * kept while the wrapped total stays within 12 rows when everything fits, else 11 so the

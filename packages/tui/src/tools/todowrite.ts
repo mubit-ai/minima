@@ -62,7 +62,10 @@ export function todowriteTool(
     ...(opts.groundTruth ? { executionMode: "sequential" as const } : {}),
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
       try {
-        const parsed = JSON.parse(String(params.tasks));
+        // Tolerate a real array: the schema says string-of-JSON, but models sometimes emit the
+        // array unencoded, and String([{…}]) would mangle it into "[object Object]".
+        const raw = params.tasks;
+        const parsed = Array.isArray(raw) ? raw : JSON.parse(String(raw));
         if (!Array.isArray(parsed)) return { content: [text("tasks must be a JSON array")] };
 
         state.length = 0;
