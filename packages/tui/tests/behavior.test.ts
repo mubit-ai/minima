@@ -413,14 +413,15 @@ describe("tui/app.tsx wires exit_plan", () => {
     expect(persona).not.toContain("/plan finalize");
   });
 
-  test("registered only for a live GT plan session; cleanup unregisters by identity", () => {
-    const effectIdx = src.indexOf('if (mode !== "plan" || planSessionRef.current == null) return;');
+  test("registered whenever plan mode is ON (MP17 universal gate); cleanup by identity", () => {
+    const effectIdx = src.indexOf('if (mode !== "plan") return;');
     expect(effectIdx).toBeGreaterThan(-1);
-    const effect = src.slice(effectIdx, effectIdx + 700);
+    const effect = src.slice(effectIdx, effectIdx + 900);
     expect(effect).toContain("exitPlanTool({");
     expect(effect).toContain("agent.agentState.tools.push(tool)");
     expect(effect).toContain("agent.agentState.tools.splice(i, 1)");
-    expect(effect).toContain("isActive: () => planSessionRef.current != null");
+    expect(effect).toContain('isActive: () => getMode() === "plan"');
+    expect(effect).toContain("requiresPlan: () => planSessionRef.current == null");
   });
 
   test("/plan finalize and the tool share ONE core (runPlanFinalize → finalizePlan)", () => {
@@ -494,11 +495,17 @@ describe("tui/app.tsx panel key routing", () => {
 describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("Shift+Tab drives the permission-mode ring; the auto-heal owns GT plan entry", () => {
-    // The ring (build → acceptEdits → plan …) is the single Shift+Tab semantic; landing on
-    // "plan" plants the GT session via the auto-heal effect below — no handler intercept
-    // that would skip acceptEdits.
-    expect(src).toContain("onShiftTab={() => cycleMode()}");
+  test("Shift+Tab cycles the ring EXCEPT out of plan mode, which routes the gate (MP17)", () => {
+    // Entering plan still rides the ring (auto-heal plants the GT session); LEAVING plan
+    // goes through the 3-option exit gate so approval and the ring share one surface. The
+    // sessionless-no-plan-turn fast-path keeps quick flipping (and the modes scenario)
+    // cycle-identical.
+    const handlerIdx = src.indexOf("onShiftTab={() => {");
+    expect(handlerIdx).toBeGreaterThan(-1);
+    const handler = src.slice(handlerIdx, handlerIdx + 220);
+    expect(handler).toContain('if (getMode() === "plan") void requestPlanExitGate();');
+    expect(handler).toContain("else cycleMode();");
+    expect(src).toContain("store == null && !planTurnSeenRef.current");
     expect(src).not.toContain("toggleMode");
   });
 

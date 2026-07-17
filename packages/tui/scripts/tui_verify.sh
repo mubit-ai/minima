@@ -37,6 +37,11 @@
 #   panel-draft       MP16: /plan-seed rounds show the D3b `plan (draft)` view converging
 #                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
 #                     chord to the ledger-backed GT overview (structural switch)
+#   plan-exit-gate    MP17: GT-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
+#                     markdown lands in the transcript, the 3-option overlay approves into
+#                     build; Shift+Tab OUT of plan mode (after a plan turn) opens the same
+#                     gate — Esc stays, Cancel discards (the no-plan-turn fast path keeps
+#                     the modes badge ring cycle-identical)
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -804,12 +809,77 @@ assert not any(has(f, "plan (draft)") for f in post), "draft view survived final
 print("tui_assert: PASS panel-draft (round 1 -> round 2 -> finalize flips to the GT overview)")
 PY
 
+echo "== tui-verify: scenario plan-exit-gate (MP17: universal exit gate, GT OFF) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP",
+  "cols": 120, "rows": 36, "duration": 24,
+  "env": {"MINIMA_DB_PATH": "$TMP/planexit.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planexit"},
+  "frames": "$TMP/planexit-frames.jsonl",
+  "raw": "$TMP/planexit-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "<SHIFTTAB>"},
+    {"after": 3.4, "send": "<SHIFTTAB>"},
+    {"after": 4.0, "send": "EXITPLAN draft the sandbox cleanup plan"},
+    {"after": 4.8, "send": "<CR>"},
+    {"after": 8.0, "send": "<CR>"},
+    {"after": 11.0, "send": "<SHIFTTAB>"},
+    {"after": 11.4, "send": "<SHIFTTAB>"},
+    {"after": 12.0, "send": "EXITPLAN draft it again"},
+    {"after": 12.8, "send": "<CR>"},
+    {"after": 16.5, "send": "<SHIFTTAB>"},
+    {"after": 17.5, "send": "<ESC>"},
+    {"after": 18.5, "send": "<SHIFTTAB>"},
+    {"after": 19.5, "send": "<DOWN>"},
+    {"after": 19.9, "send": "<DOWN>"},
+    {"after": 20.3, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture planexit "$SPEC"
+python3 - "$TMP/planexit-raw.bin" "$TMP/planexit-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during exit-gate ops"
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def win(t0, t1):
+    return [f for f in frames if t0 <= f["t"] < t1]
+def has(f, n):
+    return any(n in row for row in f["screen"])
+# The model's exit_plan(plan) call: the plan markdown lands in the transcript and the
+# 3-option approval overlay opens; Enter approves; the PLAN badge clears (GT off, no
+# GROUND_TRUTH.md — approval is the mode flip).
+tool = win(4.85, 8.0)
+assert any(has(f, "Sandbox cleanup plan") for f in tool), "plan markdown not shown before the ask"
+assert any(has(f, "Finalize & build") for f in tool), "approval overlay missing"
+approved = win(8.0, 10.5)
+assert any(has(f, "Plan approved") for f in approved), "approve did not flip to build"
+# Settled-state check (frames only exist on output, and mode-flip repaints straggle
+# under load): the LAST frame before plan re-entry at t=11 is the settled post-approval
+# screen — the badge must be gone there.
+pre_reentry = [f for f in frames if f["t"] < 11.0]
+assert pre_reentry, "no frames before plan re-entry"
+assert not has(pre_reentry[-1], "[PLAN]"), "PLAN badge survived approval (settled frame)"
+# Shift+Tab OUT of plan mode (after a plan turn) opens the SAME 3-option gate; Esc stays;
+# a second gate + Cancel discards and clears the badge.
+assert any(has(f, "Exit plan mode?") for f in win(16.5, 17.5)), "Shift+Tab did not open the exit gate"
+assert any(has(f, "[PLAN]") for f in win(17.5, 18.5)), "Esc did not stay in plan mode"
+assert any(has(f, "Exit plan mode?") for f in win(18.5, 19.5)), "second Shift+Tab gate missing"
+assert any(has(f, "Plan discarded") for f in win(20.3, 23.5)), "cancel did not discard the plan"
+assert not has(frames[-1], "[PLAN]"), "PLAN badge survived cancel (settled frame)"
+print("tui_assert: PASS plan-exit-gate (tool overlay + approve; Shift+Tab gate + Esc-stays + cancel)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
-          "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin <<'PY'
+          "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

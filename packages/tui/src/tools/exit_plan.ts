@@ -2,9 +2,15 @@
  * exit_plan — let the model request leaving plan mode when the plan is ready (or the user
  * says to proceed). The decision stays with the USER: the tool surfaces an approval prompt
  * through the same AskUserRef seam as `question` — finalize & build / revise / cancel —
- * so enforcement lives in the overlay + dispatcher, never in prompt text. Interactive,
- * GT-plan-session-only: registered by enterPlanMode and disposed on exit, so headless
- * runs and the GT-off default path never see it.
+ * so enforcement lives in the overlay + dispatcher, never in prompt text. Interactive:
+ * registered whenever plan mode is on (MP17 — GT on OR off), disposed on exit; headless
+ * runs get the ask-null guard.
+ *
+ * MP17 (universal gate): without a GT plan session there is no store to finalize from, so
+ * the tool REQUIRES the complete plan as a markdown argument (CC's ExitPlanMode contract) —
+ * `showPlan` pushes it into the transcript first, so the user approves exactly what they
+ * can see. With a session, the store/finalize path is authoritative and the argument is
+ * ignored.
  */
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
@@ -20,12 +26,17 @@ const CANCEL = "Cancel plan mode";
 
 export interface ExitPlanDeps {
   ask: AskUserRef;
-  /** Shared /plan finalize path; ok=false (audit blocker, write failure) stays in plan mode. */
-  finalize: () => Promise<{ ok: boolean; message: string }>;
-  /** Discard the plan session and exit plan mode without writing anything. */
+  /** Shared finalize path. planMd is the tool's `plan` argument on the sessionless (GT-off)
+   *  path, null on the store path; ok=false (audit blocker, write failure) stays in plan mode. */
+  finalize: (planMd: string | null) => Promise<{ ok: boolean; message: string }>;
+  /** Discard the plan (session if any) and exit plan mode without writing anything. */
   cancel: () => void;
-  /** Guards a second call in the same batch after the session is already gone. */
+  /** Guards a second call in the same batch after plan mode already ended. */
   isActive: () => boolean;
+  /** True when no GT plan session exists — the `plan` argument becomes REQUIRED. */
+  requiresPlan: () => boolean;
+  /** Surface the plan markdown (transcript push) before the approval ask. */
+  showPlan?: (planMd: string) => void;
 }
 
 const parameters: ToolSchema = {
@@ -35,6 +46,13 @@ const parameters: ToolSchema = {
       summary: {
         type: "string",
         description: "Optional 1-2 sentence recap of the plan, shown in the approval prompt.",
+        default: "",
+      },
+      plan: {
+        type: "string",
+        description:
+          "The complete plan as markdown. REQUIRED when no ground-truth plan session is " +
+          "active — it is exactly what the user reviews and approves.",
         default: "",
       },
     },
@@ -49,7 +67,13 @@ const parameters: ToolSchema = {
       return { ok: false, errors: ["parameters must be an object"] };
     }
     const obj = (value ?? {}) as Record<string, unknown>;
-    return { ok: true, value: { summary: typeof obj.summary === "string" ? obj.summary : "" } };
+    return {
+      ok: true,
+      value: {
+        summary: typeof obj.summary === "string" ? obj.summary : "",
+        plan: typeof obj.plan === "string" ? obj.plan : "",
+      },
+    };
   },
 };
 
@@ -58,11 +82,12 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
     name: EXIT_PLAN_TOOL_NAME,
     description:
       "Request to exit plan mode. Call this when the plan is solid, or whenever the user asks " +
-      'to proceed with it ("go", "build it", "looks good"). The user is shown an approval ' +
-      "prompt with three outcomes: finalize (the ground-truth document is written, plan mode " +
-      "ends, and you begin implementing immediately), revise (you stay in plan mode and address " +
-      "their note), or cancel (the plan is discarded — do not implement it). Never tell the " +
-      "user to run slash commands; call this tool instead.",
+      'to proceed with it ("go", "build it", "looks good"). Pass the COMPLETE plan as markdown ' +
+      "in `plan` — it is what the user reviews and approves. The user is shown an approval " +
+      "prompt with three outcomes: approve (plan mode ends and you begin implementing " +
+      "immediately), revise (you stay in plan mode and address their note), or cancel (the " +
+      "plan is discarded — do not implement it). Never tell the user to run slash commands; " +
+      "call this tool instead.",
     parameters,
     executionMode: "sequential",
     async execute(
@@ -89,6 +114,16 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
       }
       if (signal?.aborted) return errorResult("exit_plan aborted");
 
+      const planMd = String(params.plan ?? "").trim();
+      const sessionless = deps.requiresPlan();
+      if (sessionless && !planMd) {
+        return errorResult(
+          "exit_plan requires the `plan` argument here: resend with the complete plan as " +
+            "markdown in `plan` so the user can review what they are approving.",
+        );
+      }
+      if (sessionless) deps.showPlan?.(planMd);
+
       const summary = String(params.summary ?? "").trim();
       const choice = await ask({
         question: summary
@@ -107,7 +142,7 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
       });
 
       if (choice === FINALIZE) {
-        const r = await deps.finalize();
+        const r = await deps.finalize(sessionless ? planMd : null);
         return { content: [text(r.message)], details: { choice: "finalize", ok: r.ok } };
       }
 

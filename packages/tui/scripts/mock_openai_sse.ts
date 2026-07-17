@@ -177,6 +177,19 @@ const TODO_DONE_REPLY =
   "Todo list recorded — the canned plan is underway. This second-phase reply exists so " +
   "the tool loop terminates deterministically.";
 
+// MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
+// GT-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
+const EXITPLAN_MD = [
+  "## Sandbox cleanup plan",
+  "",
+  "1. Inventory the sandbox temp dirs.",
+  "2. Delete the stale ones and verify the count drops.",
+  "3. Note the retention rule in the runbook.",
+].join("\n");
+const EXITPLAN_DONE_REPLY =
+  "Acknowledged — proceeding per the approval outcome. This second-phase reply exists so " +
+  "the tool loop terminates deterministically.";
+
 function pieces(text: string, size = 48): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
@@ -206,12 +219,23 @@ Bun.serve({
     const council = councilReply(sys);
     const hasToolResult = (body.messages ?? []).some((m) => m.role === "tool");
     const wantTodo = council == null && prompt.includes("TODO") && !hasToolResult;
+    const wantExitPlan = council == null && prompt.includes("EXITPLAN") && !hasToolResult;
+    const toolCall = wantTodo
+      ? { name: "todowrite", args: JSON.stringify({ tasks: TODO_TASKS }) }
+      : wantExitPlan
+        ? {
+            name: "exit_plan",
+            args: JSON.stringify({ plan: EXITPLAN_MD, summary: "Clean up the sandbox temp dirs" }),
+          }
+        : null;
     const { text, slow } =
       council != null
         ? { text: council, slow: false }
         : prompt.includes("TODO")
           ? { text: TODO_DONE_REPLY, slow: false }
-          : pickReply(prompt);
+          : prompt.includes("EXITPLAN")
+            ? { text: EXITPLAN_DONE_REPLY, slow: false }
+            : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({
@@ -225,21 +249,21 @@ Bun.serve({
           choices: [{ index: 0, delta, finish_reason: finish }],
           ...(usage ? { usage } : {}),
         });
-        if (wantTodo) {
+        if (toolCall) {
           send(chunk({ role: "assistant" }));
           send(
             chunk({
               tool_calls: [
                 {
                   index: 0,
-                  id: "call_todo_1",
+                  id: `call_${toolCall.name}_1`,
                   type: "function",
-                  function: { name: "todowrite", arguments: "" },
+                  function: { name: toolCall.name, arguments: "" },
                 },
               ],
             }),
           );
-          const args = JSON.stringify({ tasks: TODO_TASKS });
+          const args = toolCall.args;
           for (const p of pieces(args)) {
             send(chunk({ tool_calls: [{ index: 0, function: { arguments: p } }] }));
             await Bun.sleep(15);

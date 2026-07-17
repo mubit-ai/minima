@@ -74,6 +74,12 @@ describe("plan-mode prompt hint (B2.3)", () => {
     expect(block).toContain(PLAN_ESCAPE_HATCH);
     expect(block).toContain("advisory, not a hard rule");
   });
+
+  test("plan names the exit_plan tool and its plan argument (MP17 universal gate)", () => {
+    const block = modeSystemAppend("plan");
+    expect(block).toContain("exit_plan");
+    expect(block).toContain("`plan` argument");
+  });
 });
 
 describe("mode bundles + ring (Claude Code-style modes)", () => {

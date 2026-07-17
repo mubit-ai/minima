@@ -14,7 +14,8 @@ function resultText(r: ToolResult): string {
 /** Scripted overlay: answers[i] resolves the i-th ask; records every question shown. */
 function harness(answers: (string | null)[], over: Partial<ExitPlanDeps> = {}) {
   const asked: QuestionParams[] = [];
-  const finalized: boolean[] = [];
+  const finalized: (string | null)[] = [];
+  const shown: string[] = [];
   let canceled = 0;
   const deps: ExitPlanDeps = {
     ask: {
@@ -23,17 +24,21 @@ function harness(answers: (string | null)[], over: Partial<ExitPlanDeps> = {}) {
         return answers[asked.length - 1] ?? null;
       },
     },
-    finalize: async () => {
-      finalized.push(true);
+    finalize: async (planMd) => {
+      finalized.push(planMd);
       return { ok: true, message: "finalized — build mode on" };
     },
     cancel: () => {
       canceled += 1;
     },
     isActive: () => true,
+    requiresPlan: () => false,
+    showPlan: (md) => {
+      shown.push(md);
+    },
     ...over,
   };
-  return { tool: exitPlanTool(deps), asked, finalized, canceled: () => canceled };
+  return { tool: exitPlanTool(deps), asked, finalized, shown, canceled: () => canceled };
 }
 
 describe("exit_plan tool (model-callable plan-mode exit)", () => {
@@ -134,5 +139,40 @@ describe("exit_plan tool (model-callable plan-mode exit)", () => {
     function h0() {
       return harness([]);
     }
+  });
+});
+
+describe("MP17 — universal exit gate (GT-off plan argument)", () => {
+  test("GT-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
+    const h = harness(["Finalize & build"], { requiresPlan: () => true });
+    const r = await h.tool.execute("t1", { summary: "s" }, null, null);
+    expect(r.details?.error).toBe(true);
+    expect(resultText(r)).toContain("plan");
+    expect(h.asked).toHaveLength(0);
+    expect(h.finalized).toHaveLength(0);
+  });
+
+  test("GT-off: the plan markdown is SHOWN before the ask and reaches finalize", async () => {
+    const h = harness(["Finalize & build"], { requiresPlan: () => true });
+    const md = "## The plan\n\n1. do the thing\n2. verify it";
+    const r = await h.tool.execute("t1", { plan: md }, null, null);
+    expect(h.shown).toEqual([md]);
+    expect(h.asked).toHaveLength(1);
+    expect(h.finalized).toEqual([md]);
+    expect(r.details?.choice).toBe("finalize");
+  });
+
+  test("GT-on: the plan argument is ignored — finalize receives null (store path)", async () => {
+    const h = harness(["Finalize & build"], { requiresPlan: () => false });
+    await h.tool.execute("t1", { plan: "## ignored" }, null, null);
+    expect(h.finalized).toEqual([null]);
+    expect(h.shown).toHaveLength(0);
+  });
+
+  test("GT-off cancel still terminates with the not-approved text", async () => {
+    const h = harness(["Cancel plan mode"], { requiresPlan: () => true });
+    const r = await h.tool.execute("t1", { plan: "## p" }, null, null);
+    expect(h.canceled()).toBe(1);
+    expect(r.terminate).toBe(true);
   });
 });
