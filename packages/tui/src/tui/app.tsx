@@ -102,6 +102,8 @@ import {
   readerView,
   tocPanelState,
 } from "./panel_state.ts";
+import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
+import { draftPanelState } from "./plan_draft_view.ts";
 import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
@@ -289,6 +291,7 @@ const COMMANDS = [
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
   { name: "gt-seed", desc: "Seed a demo GT plan + gates for this run (GT on only)" },
+  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (GT on only)" },
   { name: "why", desc: "Show Ground-Truth verification (/why <n> opens the step card)" },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
@@ -1529,6 +1532,20 @@ export function HarnessApp({
   };
   // Ctrl+G: GT off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestGtSidebar = () => {
+    // MP16: a live plan session's fallback (busy / narrow terminal) is a terse draft
+    // summary — "No Ground-Truth plan recorded" would be misleading mid-drafting.
+    const draftStore = planSessionRef.current;
+    if (getMode() === "plan" && draftStore) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: `${draftStore.summary()}\n(idle Ctrl+G at ≥${TOC_MIN_COLS} cols opens the draft panel)`,
+          toolName: "plan",
+        },
+      ]);
+      return;
+    }
     if (agent.config.groundTruth !== true) {
       setMessages((m) => [
         ...m,
@@ -1630,6 +1647,14 @@ export function HarnessApp({
     // opens the D3b overview panel (MP9); busy/narrow/GT-off keep the one-shot text path.
     if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
       if (!busy && agent.config.groundTruth === true && cols >= TOC_MIN_COLS) {
+        // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
+        // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
+        // falls through to the normal overview: the before/after switch is structural).
+        const draftStore = planSessionRef.current;
+        if (getMode() === "plan" && draftStore) {
+          setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
+          return;
+        }
         const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
         if (overview) {
           setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
@@ -3207,6 +3232,35 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "plan-seed": {
+        // MP16 demo/evidence path (precedent /gt-seed): each invocation applies one canned
+        // council round to a live plan session — entering plan mode first if needed — so a
+        // scripted capture can show the draft view converging round-over-round with zero
+        // model calls. Purely in-memory; the ledger is untouched until finalize.
+        let text: string;
+        if (agent.config.groundTruth !== true) {
+          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 before seeding.";
+        } else if (!planSpawn || !planMetaModel) {
+          text = "Plan session deps unavailable — cannot seed a draft.";
+        } else {
+          if (!(getMode() === "plan" && planSessionRef.current)) {
+            enterPlanMode("Demo: plan-draft visibility");
+          }
+          const store = planSessionRef.current;
+          if (store) {
+            store.applyCouncilResult(store.session.rounds === 0 ? SEED_ROUND_1 : SEED_ROUND_2);
+            text = `Seeded council round ${store.session.rounds} — Ctrl+G shows the draft.`;
+          } else {
+            text = "No plan session — /plan start first.";
+          }
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          { role: "tool", text, toolName: "plan" },
+        ]);
+        break;
+      }
       case "gt-seed": {
         let text: string;
         if (agent.config.groundTruth !== true) {
@@ -3651,11 +3705,16 @@ export function HarnessApp({
         setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
         return;
       }
-      if (top?.kind === "gt") {
+      if (top?.kind === "gt" || top?.kind === "draft") {
         closePanelReseat();
         return;
       }
       if (agent.config.groundTruth === true) {
+        const draftStore = planSessionRef.current;
+        if (getMode() === "plan" && draftStore) {
+          setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
+          return;
+        }
         const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
         if (overview) {
           setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
@@ -4136,7 +4195,9 @@ export function HarnessApp({
                 ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
                 : panelTop.kind === "gt"
                   ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
-                  : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+                  : panelTop.kind === "draft"
+                    ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
+                    : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
             }
             lines={panelTop.lines}
             cursor={panelTop.cursor}

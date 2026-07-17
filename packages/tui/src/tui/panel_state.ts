@@ -31,6 +31,7 @@ export type PanelView = PanelViewBase &
       }
     | { kind: "reader" }
     | { kind: "gt"; rows: GtPanelRow[]; overview: GtOverview }
+    | { kind: "draft" }
   );
 
 export interface PanelState {
