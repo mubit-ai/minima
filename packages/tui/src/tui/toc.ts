@@ -39,6 +39,9 @@ export interface TocSection {
   usage: TocUsage;
   /** Prefix sum through this section, inclusive. */
   cumulative: TocUsage;
+  /** MP19 failed-then-fixed: a tool errored mid-section but the LAST tool event was clean
+   *  (and the section produced a result) — the red→green story, findable in history. */
+  recovered: boolean;
 }
 
 const zero = (): TocUsage => ({ tokens: 0, costUSD: 0 });
@@ -65,10 +68,12 @@ export function buildSections(messages: ChatMessage[], usageLedger: TocUsage[]):
   // Per-section scratch for the aggregate "tools" child.
   let toolCounts = new Map<string, number>();
   let toolErr = false;
+  let lastToolErr = false;
   let lastAssistantIdx = -1;
 
   const flushChildren = (s: TocSection | null) => {
     if (!s) return;
+    s.recovered = toolErr && !lastToolErr && lastAssistantIdx >= 0;
     if (toolCounts.size > 0) {
       const total = [...toolCounts.values()].reduce((a, b) => a + b, 0);
       const detail = [...toolCounts.entries()].map(([n, c]) => `${n}×${c}`).join(", ");
@@ -88,6 +93,7 @@ export function buildSections(messages: ChatMessage[], usageLedger: TocUsage[]):
     }
     toolCounts = new Map();
     toolErr = false;
+    lastToolErr = false;
     lastAssistantIdx = -1;
   };
 
@@ -106,6 +112,7 @@ export function buildSections(messages: ChatMessage[], usageLedger: TocUsage[]):
         milestones: [],
         usage: isPrompt ? (usageLedger[promptOrdinal] ?? zero()) : zero(),
         cumulative: zero(),
+        recovered: false,
       };
       sections.push(current);
       if (isPrompt) continue;
@@ -113,7 +120,10 @@ export function buildSections(messages: ChatMessage[], usageLedger: TocUsage[]):
     if (!current) continue;
     if (msg.role === "assistant") {
       lastAssistantIdx = i;
-    } else if (msg.role === "tool" && msg.toolName === "todowrite") {
+    } else if (msg.role === "tool" && msg.toolName === "todowrite" && !msg.isError) {
+      // A clean todowrite is the plan-milestone signal (never a generic tool child) — and
+      // for the MP19 recovered marker it is also the "fixed" event that clears the strike.
+      lastToolErr = false;
       const m = TODO_SUMMARY.exec(msg.text);
       if (m) {
         const [, x, y] = m;
@@ -133,6 +143,7 @@ export function buildSections(messages: ChatMessage[], usageLedger: TocUsage[]):
       const name = msg.toolName ?? "tool";
       toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
       if (msg.isError) toolErr = true;
+      lastToolErr = Boolean(msg.isError);
     }
   }
   flushChildren(current);
@@ -166,7 +177,11 @@ export interface TocRow {
 export function tocRows(sections: TocSection[], innerWidth: number): TocRow[] {
   const rows: TocRow[] = [];
   for (const s of sections) {
-    rows.push({ text: fit(`▸ ${s.title}`, innerWidth), sectionIdx: s.index, isTitle: true });
+    rows.push({
+      text: fit(`▸ ${s.title}${s.recovered ? " ⚠→✓" : ""}`, innerWidth),
+      sectionIdx: s.index,
+      isTitle: true,
+    });
     rows.push({
       text: fit(`   ${fmtUsd(s.usage.costUSD)} · ${fmtTok(s.usage.tokens)} tok`, innerWidth),
       sectionIdx: s.index,
@@ -201,7 +216,7 @@ export function renderTocText(sections: TocSection[], width: number): string {
   for (const s of sections) {
     lines.push(
       fit(
-        `${s.index + 1}. ${s.title} — ${fmtUsd(s.usage.costUSD)} · ${fmtTok(s.usage.tokens)} tok`,
+        `${s.index + 1}. ${s.title}${s.recovered ? " ⚠→✓" : ""} — ${fmtUsd(s.usage.costUSD)} · ${fmtTok(s.usage.tokens)} tok`,
         width,
       ),
     );

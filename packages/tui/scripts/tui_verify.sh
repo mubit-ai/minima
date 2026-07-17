@@ -46,6 +46,11 @@
 #                     'a' + the same verify stays silent, a MUTATED verify re-prompts;
 #                     headless halves: -p fails CLOSED (gate unrunnable) without
 #                     MINIMA_TUI_ALLOW_VERIFY=1 and verifies with it
+#   acceptance        MP19: the whole Track W story in ONE scripted run — /plan (council
+#                     line ticks) → Ctrl+G draft → Shift+Tab gate approves (finalize seeds
+#                     ledger + consent) → PLANDEMO executes: baseline red → done-gate
+#                     blocks → write fixes → re-check verifies → plan closes → ToC ⚠→✓ →
+#                     overview + step card → /why; perf budgets green during the run
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -954,13 +959,95 @@ assert rows and all(r[0] == "verified" for r in rows), (
 print("tui_assert: PASS headless opt-in (MINIMA_TUI_ALLOW_VERIFY=1 gate verified)")
 PY
 
+echo "== tui-verify: scenario acceptance (MP19: the whole Track W story, one scripted run) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP",
+  "cols": 120, "rows": 40, "duration": 42,
+  "env": {"MINIMA_DB_PATH": "$TMP/accept.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-accept",
+          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "MINIMA_TUI_PERF": "$TMP/accept-perf.jsonl",
+          "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
+          "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
+          "OPENROUTER_API_KEY": "", "DEEPSEEK_API_KEY": "", "GROQ_API_KEY": "", "XAI_API_KEY": ""},
+  "frames": "$TMP/accept-frames.jsonl",
+  "raw": "$TMP/accept-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "/plan start build the demo widget"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 4.4, "send": "please research and draft the demo widget plan"},
+    {"after": 5.2, "send": "<CR>"},
+    {"after": 12.5, "send": "<CTRLG>"},
+    {"after": 14.0, "send": "<ESC>"},
+    {"after": 15.0, "send": "<SHIFTTAB>"},
+    {"after": 16.5, "send": "<CR>"},
+    {"after": 20.0, "send": "PLANDEMO build it now"},
+    {"after": 20.8, "send": "<CR>"},
+    {"after": 23.5, "send": "a"},
+    {"after": 27.0, "send": "a"},
+    {"after": 31.0, "send": "<CTRLT>"},
+    {"after": 33.0, "send": "<ESC>"},
+    {"after": 34.0, "send": "<CTRLG>"},
+    {"after": 35.5, "send": "<CR>"},
+    {"after": 37.0, "send": "<ESC>"},
+    {"after": 37.6, "send": "<ESC>"},
+    {"after": 38.5, "send": "/why"},
+    {"after": 39.1, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture accept "$SPEC"
+python3 - "$TMP/accept-raw.bin" "$TMP/accept-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during the acceptance run"
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def has(f, n):
+    return any(n in row for row in f["screen"])
+def first(n, t0=0.0):
+    for f in frames:
+        if f["t"] >= t0 and has(f, n):
+            return f["t"]
+    return None
+# The story, in order: council line ticks -> the draft is visible -> the Shift+Tab exit
+# gate -> approval flips to build (badge gone by the execution prompt) -> the done-gate
+# blocks the early completion -> the fix lands -> the re-check verifies -> the ToC carries
+# the failed-then-fixed marker -> the overview + step card show the verified step -> /why.
+beats = [
+    ("council line", first("council: researcher")),
+    ("draft view", first("plan (draft) · round 1", 12.0)),
+    ("exit gate", first("Exit plan mode?", 14.5)),
+    ("verify in todowrite overlay", first("test -f demo_widget.ts", 20.0)),
+    ("gate blocked red", first("Step not verified", 21.0)),
+    ("the fix (write overlay)", first("run write", 21.0)),
+    ("gate green + plan closed", first("Demo complete", 24.0)),
+    ("ToC failed-then-fixed", first("⚠→✓", 30.0)),
+    ("overview verified step", first("✅", 33.5)),
+    ("step card", first("plan ▸ step 1", 35.0)),
+    ("why evidence", first("test -f demo_widget.ts", 38.5)),
+]
+missing = [name for name, t in beats if t is None]
+assert not missing, f"acceptance beats missing: {missing}"
+order = [t for _, t in beats]
+assert order == sorted(order), f"acceptance beats out of order: {beats}"
+pre_exec = [f for f in frames if f["t"] < 20.0]
+assert pre_exec and not has(pre_exec[-1], "[PLAN]"), (
+    "approval did not flip plan mode off before the execution prompt")
+print("tui_assert: PASS acceptance (plan -> draft -> gate -> red -> fix -> green -> evidence)")
+PY
+perf_check "$TMP/accept-perf.jsonl" accept 4000
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
-          "$TMP"/vconsent-raw.bin <<'PY'
+          "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

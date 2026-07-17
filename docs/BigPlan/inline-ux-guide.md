@@ -877,6 +877,31 @@ failed-then-fixed section marker (MP7) → Ctrl+G/`/why` shows the evidence (MP9
 green during the run.
 **Gate:** the demo test + shot series committed. **This closes the guide.**
 
+**Execution notes (landed 2026-07-17):** the story runs TWICE — once in-process
+(`tests/acceptance-e2e.test.ts`: canned council round → MP16 draft rows → `exit_plan`
+approve → finalize seeds ledger + MP18 consent → the REAL done-gate loop red→block→fix→
+green→milestone → `/v1/feedback` captured with realized usage → `buildGtOverview` +
+`whyText` evidence, all with the STRICT consent checker installed) and once through a real
+PTY (`tui_verify.sh` scenario `acceptance`, 42s, ordered-beat asserts + zero-wipe +
+no-mouse + perf budgets): `/plan start` → council line ticking (MP14) → planner reply →
+Ctrl+G `plan (draft)` (MP16) → Shift+Tab exit gate approves (MP17; finalize via the mock's
+RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
+executes phase-scripted: in_progress todowrite (permission overlay shows the verify;
+baseline red) → completing while red → **the done-gate blocks** → `write` fixes → completing
+again → **red→green verified, plan closes** (milestone) → Ctrl+T shows the section's
+**`⚠→✓` failed-then-fixed marker** (built in this MP: `TocSection.recovered` = a tool
+errored mid-section but the LAST tool event was clean and a result exists; an ERRORED
+todowrite now falls through to generic tool tracking — previously the todowrite branch
+swallowed it and no gate block could ever flag a section — and a clean todowrite clears the
+strike) → Ctrl+G overview (✅ step, honest tier) → step card → `/why`. Mock additions:
+single-step `COUNCIL_GT` (a one-step plan can CLOSE, exercising the milestone) and the
+`PLANDEMO` phase-counter script (phase = tool results this turn). Observed honesty note:
+the verified step's tier lands 🟡 (coverage "unknown" on a `test -f` check) — the tier
+ladder's strictness, already documented in the MP13 audit; the demo asserts reality.
+Shots: `shots/mp19-acceptance/` numbered 1-council … 7-step-card. **Track W complete —
+the guide is closed** (remaining follow-ups live in the MP13 audit's disposition and the
+§12 backlog, not here).
+
 ---
 
 ## 11. What NOT to do
