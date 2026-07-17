@@ -767,6 +767,25 @@ finalize.
 **Manual test:** plan something real; check convergence is visible turn-over-turn.
 **Gate:** §1.7.
 
+**Execution notes (landed 2026-07-17):** discovery answer — the pre-finalize draft lives in
+the in-memory `PlanSessionStore` (never the DB; finalize seeds the ledger). The view is a
+new `PanelView` variant `{kind:"draft"}` + pure builders in `src/tui/plan_draft_view.ts`:
+`draftRows(store, innerWidth)` flattens `store.toMarkdown()` through the SHARED
+`classifyMarkdownLines` + `wrapLineToWidth` pair (MP11 lockstep — every row exactly one
+terminal row, the panel frame-height identity), heading first-rows = cursor stops, Enter
+inert; `draftPanelState` titles the view `plan (draft) · round N` — the round count IS the
+convergence signal. Wiring: in plan mode with a live session, Ctrl+G (global + in-panel)
+opens the draft; after finalize the session is nulled and the SAME chord falls through to
+`buildGtOverview` — the before/after switch is structural, no flag. Busy/narrow fallback:
+`requestGtSidebar` pushes a terse `store.summary()` instead of the misleading "No
+Ground-Truth plan recorded". Hermetic evidence path: `/plan-seed` (precedent `/gt-seed`)
+applies canned `SEED_ROUND_1/2` council rounds — zero model calls. Gate: `panel-draft`
+scenario (round 1 → nav (cursor moves) → round 2 → `/plan finalize --force` flips the chord
+to the GT overview; zero-wipe; no-mouse sweep; cwd sandboxed so finalize's GROUND_TRUTH.md
+lands in scratch). Shots: `shots/mp16-plan-draft/` (draft-round1, draft-round2,
+final-overview). v1 wart (accepted): the panel is a plain-text surface — `**bold**`/`_em_`
+in the doc render raw, like the reader.
+
 ### MP17 — Universal plan-exit gate: approve / revise / cancel *(M · needs MP16)*
 
 **Goal:** CC-ExitPlanMode-style explicit exit, GT on or off — the plan and its approval in

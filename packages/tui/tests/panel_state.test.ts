@@ -195,3 +195,26 @@ describe("gtPanelState — the GT overview view (MP9)", () => {
     expect(top.cursor).toBe(0);
   });
 });
+
+describe("draft view navigation (MP16)", () => {
+  test("j/k step between heading stops, gg/G jump, Esc closes", async () => {
+    const { PlanSessionStore } = await import("../src/minima/plan_session.ts");
+    const { SEED_ROUND_1 } = await import("../src/minima/plan_seed.ts");
+    const { draftPanelState } = await import("../src/tui/plan_draft_view.ts");
+    const store = new PlanSessionStore("demo");
+    store.applyCouncilResult(SEED_ROUND_1);
+    let state: ReturnType<typeof draftPanelState> | null = draftPanelState(store, 80);
+    const top = () => state!.stack[state!.stack.length - 1]!;
+    expect(top().kind).toBe("draft");
+    const stops = top().stops!;
+    expect(stops.length).toBeGreaterThanOrEqual(3);
+    state = panelReduce(state!, "j", {}, 10);
+    expect(top().cursor).toBe(stops[1]!);
+    state = panelReduce(state!, "G", {}, 10);
+    expect(top().cursor).toBe(stops[stops.length - 1]!);
+    state = panelReduce(state!, "gg", {}, 10);
+    expect(top().cursor).toBe(stops[0]!);
+    state = panelReduce(state!, "", { escape: true }, 10);
+    expect(state).toBeNull();
+  });
+});

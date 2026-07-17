@@ -32,7 +32,11 @@
 #   plan-council      MP14: during a /plan turn the busy row shows the council progress
 #                     line advancing role-by-role (researcher → keeper → critic → synth,
 #                     canned council replies from the mock via MINIMA_JUDGE_MODEL=
-#                     mock-model); the old per-phase transcript pushes are gone
+#                     mock-model); the old per-phase transcript pushes are gone; MP15:
+#                     a substantive follow-up turn skips the council (one round summary)
+#   panel-draft       MP16: /plan-seed rounds show the D3b `plan (draft)` view converging
+#                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
+#                     chord to the ledger-backed GT overview (structural switch)
 #   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
 #                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
 #                     root, app.tsx) and after content commits (asserted on the echo and
@@ -739,12 +743,73 @@ assert len(cost_rows) == 1, f"expected ONE council round summary, saw: {cost_row
 print("tui_assert: PASS plan-council (line advances role-by-role; follow-up skips the council)")
 PY
 
+echo "== tui-verify: scenario panel-draft (MP16: D3b plan-draft view, round-over-round) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP",
+  "cols": 120, "rows": 36, "duration": 18,
+  "env": {"MINIMA_DB_PATH": "$TMP/plandraft.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-plandraft",
+          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
+          "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
+          "OPENROUTER_API_KEY": "", "DEEPSEEK_API_KEY": "", "GROQ_API_KEY": "", "XAI_API_KEY": ""},
+  "frames": "$TMP/plandraft-frames.jsonl",
+  "raw": "$TMP/plandraft-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "/plan-seed"},
+    {"after": 3.5, "send": "<CR>"},
+    {"after": 4.2, "send": "<CTRLG>"},
+    {"after": 5.0, "send": "jj"},
+    {"after": 5.4, "send": "G"},
+    {"after": 5.8, "send": "gg"},
+    {"after": 6.2, "send": "<ESC>"},
+    {"after": 7.0, "send": "/plan-seed"},
+    {"after": 7.4, "send": "<CR>"},
+    {"after": 8.0, "send": "<CTRLG>"},
+    {"after": 8.8, "send": "<ESC>"},
+    {"after": 9.6, "send": "/plan finalize --force"},
+    {"after": 10.2, "send": "<CR>"},
+    {"after": 14.5, "send": "<CTRLG>"},
+    {"after": 16.0, "send": "<ESC>"}
+  ]
+}
+EOF
+)
+capture plandraft "$SPEC"
+python3 - "$TMP/plandraft-raw.bin" "$TMP/plandraft-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during draft panel ops"
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def win(t0, t1):
+    return [f for f in frames if t0 <= f["t"] < t1]
+def has(f, needle):
+    return any(needle in row for row in f["screen"])
+# Round 1 draft view: crumb + the seeded step text; the cursor moves during nav.
+r1 = [f for f in win(4.2, 6.2) if has(f, "plan (draft) · round 1")]
+assert r1, "Ctrl+G did not open the round-1 draft view"
+assert any(has(f, "Scaffold") for f in r1), "seeded draft steps missing from the view"
+cursors = {i for f in r1 for i, row in enumerate(f["screen"]) if "❯" in row}
+assert len(cursors) >= 2, f"draft cursor never moved during nav (rows {cursors})"
+# Round 2: same chord, richer snapshot.
+assert any(has(f, "plan (draft) · round 2") for f in win(8.0, 9.0)), (
+    "second seed did not show round 2 in the draft view")
+# After finalize the SAME chord opens the ledger-backed GT overview (structural switch).
+post = win(14.5, 16.0)
+assert any(has(f, "plan · ") for f in post), "post-finalize Ctrl+G did not open the GT overview"
+assert not any(has(f, "plan (draft)") for f in post), "draft view survived finalize"
+print("tui_assert: PASS panel-draft (round 1 -> round 2 -> finalize flips to the GT overview)")
+PY
+
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
-          "$TMP"/plancouncil-raw.bin <<'PY'
+          "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:
