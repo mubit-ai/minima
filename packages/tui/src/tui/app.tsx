@@ -1368,6 +1368,31 @@ export function HarnessApp({
               ? (Date.now() - thinkingStartRef.current) / 1000
               : 0;
             const accumulatedThoughts = thoughtsRef.current.trim();
+            // MP20 (MUB-165): tear the live stream DOWN before committing to <Static>.
+            // These setStates flush as separate Ink renders; with the old order (commit
+            // first) render A printed the static reply while the live frame was still
+            // stream-tall, and render B's erase then walked that tall height back UP from
+            // the bottom, repainting the shrunken composer mid-screen with dead rows below
+            // — the stranded-prompt class (once the static estimate saturates, no minHeight
+            // refills the shrink). Clearing first flips the order: the shrink is erased in
+            // place, then the static commit scrolls the reply in ABOVE the short frame,
+            // landing the composer on the bottom rows with the reply tail visible — CC's
+            // post-reply look. The stream tail is disposable live content; the full reply
+            // commits in the very next flush, so no frame can lose transcript rows.
+            setStreaming("");
+            setStreamingThoughts("");
+            streamingBufRef.current = "";
+            streamingThoughtsBufRef.current = "";
+            if (streamFlushRef.current) {
+              clearTimeout(streamFlushRef.current);
+              streamFlushRef.current = null;
+            }
+            if (thoughtsFlushRef.current) {
+              clearTimeout(thoughtsFlushRef.current);
+              thoughtsFlushRef.current = null;
+            }
+            thoughtsRef.current = "";
+            thinkingStartRef.current = null;
             if (showThinkingRef.current && accumulatedThoughts) {
               setMessages((m) => [
                 ...m,
@@ -1394,20 +1419,6 @@ export function HarnessApp({
             } else if (text) {
               setMessages((m) => [...m, { role: "assistant", text }]);
             }
-            setStreaming("");
-            setStreamingThoughts("");
-            streamingBufRef.current = "";
-            streamingThoughtsBufRef.current = "";
-            if (streamFlushRef.current) {
-              clearTimeout(streamFlushRef.current);
-              streamFlushRef.current = null;
-            }
-            if (thoughtsFlushRef.current) {
-              clearTimeout(thoughtsFlushRef.current);
-              thoughtsFlushRef.current = null;
-            }
-            thoughtsRef.current = "";
-            thinkingStartRef.current = null;
           } else if (ev.message?.role === "toolResult") {
             setMessages((m) => [
               ...m,

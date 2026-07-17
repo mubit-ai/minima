@@ -621,6 +621,26 @@ the current echo/modes wiring can't see). Evidence: re-run the MP10 `stream-code
 final frames must show the prompt within 1 row of the grid bottom.
 **Gate:** §1.7 + zero-wipe + the new bottom-anchor wiring green.
 
+**Execution notes (landed 2026-07-17):** frame archaeology overturned the reseat sketch — the
+root cause is COMMIT ORDER, not a missing reseat. `message_end` pushed the reply to
+`messages` and only then cleared `streaming`; those setStates flush as separate Ink renders,
+so render A printed the static reply while the live frame was still stream-tall, and render
+B's log-update erase walked that tall height back UP from the screen bottom, repainting the
+shrunken composer at the old frame top (prompt 28 → 10, 19 dead rows). A
+`closePanelReseat`-style basis reset (built first) DID anchor the composer but blanked the
+reply off the settled screen — the fence-verbatim gate caught it, and any live-region filler
+content would be erased (not scrolled) on the next commit, corrupting scrollback. The landed
+fix is the two-line inversion: tear the live stream down FIRST, then commit — the shrink is
+erased in place and the static print scrolls the reply in above the short frame (CC's
+post-reply look; reply tail visible, composer on the bottom rows, zero-wipe intact).
+Residual, documented: at turn end the busy row's teardown (2 rows) shrinks the saturated
+frame once more, floating the frame ~2 rows — cosmetic, self-heals at the next commit, and
+generic to any saturated late shrink (not stream-specific); deferred. The stream gates
+therefore assert `bottom-anchor --bottom-slack 3` (the strand class this kills was 19 rows;
+pre-fix lowest content row 16/36). Gates: `stream-wipe-perf` + `stream-code-80/60` now carry
+bottom-anchor; evidence `shots/mp20-stream-reseat/` (capture.sh re-runs the MP10 stream shot
+and asserts) vs before `shots/mp10-render-audit/stream-code.*`.
+
 ---
 
 ## 10. Track W — plan workflow
