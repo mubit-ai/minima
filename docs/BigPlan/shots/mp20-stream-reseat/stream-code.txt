@@ -1,0 +1,87 @@
+=== wrote 59 frames: /tmp/mp20-reseat.2XrdNT/stream-code.frames.jsonl ===
+=== SCROLLBACK (46 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |  ⚙ setup:
+h037 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+h038 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+h039 |
+h040 |▸ you
+h041 | CODE audit stream
+h042 |
+h043 |◆ assistant
+h044 |Code-heavy baseline. First, a TypeScript block with a long line:
+h045 |```ts
+=== SCREEN 120x36 (visible) ===
+ 0 |export function resolveWidget(registry: Map<string, WidgetFactory>, id: string, fallbacks: readonly string[] =
+ 1 |DEFAULT_FALLBACK_CHAIN): Widget {
+ 2 |  const factory = registry.get(id) ?? fallbacks.map((f) => registry.get(f)).find(Boolean);
+ 3 |  if (!factory) throw new Error(`no widget factory for ${id}`);
+ 4 |  return factory({ id, theme: currentTheme(), locale: navigator.language });
+ 5 |}
+ 6 |```
+ 7 |Then nested Python with deep indentation:
+ 8 |```python
+ 9 |def walk(node, depth=0):
+10 |    for child in node.children:
+11 |        if child.kind == 'section':
+12 |            yield from walk(child, depth + 1)
+13 |        else:
+14 |            yield (depth, child.title, child.span.start, child.span.end, child.checksum())
+15 |```
+16 |And a shell one-liner that exceeds a hundred and twenty columns to exercise wrapping behaviour in the transcript
+17 |renderer:
+18 |```bash
+19 |rg -n 'clearTerminal|CSI 3 J' packages/tui/src/tui/app.tsx | awk -F: '{print $1":"$2}' | sort -t: -k2 -n | uniq -c |
+20 |sort -rn | head -20
+21 |```
+22 |  - wrapped list item: the quick brown fox jumps over the lazy dog repeatedly until the line must wrap at the current
+23 |    width
+24 |  - inline code mixed with bold and _italic_ markdown
+25 |
+26 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+27 |│  ▋                                                                                                                   │
+28 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+29 |
+30 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑5 ↓303 · $0.0000 · sess ephemeral · ready
+31 |perms: r-x 0 dirs · w/e/b: ask
+32 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                  ctrl+p palette
+33 |
+34 |
+35 |
+=== 36 visible rows; 46 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp20-stream-reseat/stream-code.png ===

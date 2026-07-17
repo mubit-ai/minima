@@ -163,8 +163,13 @@ wipes = raw.count(b"\x1b[3J")
 assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear) - Ink overflow wipe fired"
 print("tui_assert: PASS zero-wipe (single startup clear, none during the stream)")
 PY
+# bottom-anchor with slack 3 (not the default 1): after the MP20 commit-order fix the reply
+# commit lands the composer ON the bottom rows, but the busy row's teardown at turn end still
+# shrinks the frame 2 rows with the static estimate saturated — a cosmetic float, distinct
+# from the 10+-row stream-commit strand this gate exists to catch (pre-fix: lowest row 16/36).
 python3 "$TUI/scripts/tui_assert.py" "$TMP/stream-frames.jsonl" --after 2.5 \
-  --check single-prompt --check advancing --check final-nonblank
+  --check single-prompt --check advancing --check final-nonblank \
+  --check bottom-anchor --bottom-slack 3
 perf_check "$TMP/stream-perf.jsonl" stream 4000
 python3 - "$TMP/stream-frames.jsonl" <<'PY'
 import json, sys
@@ -212,7 +217,8 @@ assert any("```bash" in row for f in frames if f["t"] > 4.5 for row in f["screen
 print(f"tui_assert: PASS stream-code-{sys.argv[3]} (zero extra wipes, fence verbatim)")
 PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/streamcode$CW-frames.jsonl" --after 2.5 \
-  --check single-prompt --check advancing --check final-nonblank
+  --check single-prompt --check advancing --check final-nonblank \
+  --check bottom-anchor --bottom-slack 3
 perf_check "$TMP/streamcode$CW-perf.jsonl" "streamcode$CW" 4000
 done
 
