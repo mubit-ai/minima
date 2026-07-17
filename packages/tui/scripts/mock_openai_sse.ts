@@ -152,6 +152,13 @@ function councilReply(system: string): string | null {
     ]);
   }
   if (system.includes("reviewing researcher findings")) return "[]";
+  if (system.includes("keeping the working draft current")) {
+    return JSON.stringify({
+      plan: "## Demo widget plan (draft)\n\nKeeper-refreshed after the follow-up exchange.",
+      decisions: [],
+      questions: [],
+    });
+  }
   if (system.includes("SYNTHESIST of a planning council. Using the research")) return COUNCIL_DRAFT;
   if (system.includes("SYNTHESIST of a planning council revising")) return COUNCIL_DRAFT;
   if (system.includes("adversarial CRITIC")) return "[]";

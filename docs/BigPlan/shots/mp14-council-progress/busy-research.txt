@@ -1,4 +1,4 @@
-=== wrote 71 frames: /tmp/mp14-council.ddLBXA/busy-research.frames.jsonl ===
+=== wrote 71 frames: /tmp/mp14-council.SEcMeK/busy-research.frames.jsonl ===
 === SCROLLBACK (34 lines above the screen) ===
 h000 |
 h001 |

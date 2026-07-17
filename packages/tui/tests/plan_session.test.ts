@@ -578,3 +578,41 @@ describe("PlanSessionStore.toGroundTruth", () => {
     expect(store.toGroundTruth(null)).toBe(store.toMarkdown());
   });
 });
+
+describe("MP15 — applyKeeperUpdate", () => {
+  const round = (draft: string) => ({
+    draft,
+    decisions: [],
+    findings: [],
+    faults: [],
+    questions: [],
+    facts: [],
+    constraints: [],
+    costUsd: 0,
+    aborted: false,
+  });
+
+  test("REPLACE draft, merge decisions/questions, rounds unchanged, cost accrues", () => {
+    const store = new PlanSessionStore("goal");
+    store.applyCouncilResult(round("Original draft."));
+    store.applyKeeperUpdate(
+      {
+        draft: "Freshened draft.",
+        decisions: [{ topic: "scope", decision: "defer caching", rationale: "later" }],
+        questions: [],
+      },
+      0.003,
+    );
+    expect(store.session.draft).toBe("Freshened draft.");
+    expect(store.session.decisions.some((d) => d.topic === "scope")).toBe(true);
+    expect(store.session.rounds).toBe(1);
+    expect(store.session.totalCouncilCostUsd).toBeCloseTo(0.003, 6);
+  });
+
+  test("empty plan keeps the previous draft (never clobber with nothing)", () => {
+    const store = new PlanSessionStore("goal");
+    store.applyCouncilResult(round("Original draft."));
+    store.applyKeeperUpdate({ draft: "", decisions: [], questions: [] }, 0.001);
+    expect(store.session.draft).toBe("Original draft.");
+  });
+});

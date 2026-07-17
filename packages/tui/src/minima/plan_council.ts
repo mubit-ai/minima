@@ -23,6 +23,7 @@ import { midTruncate } from "./judge.ts";
 import {
   type CouncilRoundResult,
   type GroundTruthSynthesis,
+  type KeeperMiniResult,
   type OpenQuestion,
   type PlanSession,
   type SurfacedQuestion,
@@ -290,7 +291,7 @@ const scopeSystem = (max: number): string =>
 
 const KEEPER_CHECK_SYSTEM = `You are the KEEPER of a planning council reviewing researcher findings. Flag any findings that drift OFF-SCOPE or are unsupported — these are down-weighted, not discarded. Reply with ONLY a JSON array of {"summary": "the off-scope/weak finding, one line", "severity": "info|concern|blocker"}. Return [] if everything is on-scope. ${UNTRUSTED}`;
 
-const DRAFT_SYSTEM = `You are the SYNTHESIST of a planning council. Using the research findings and the user's latest message, write a concise, concrete PLAN (prose, ordered steps where natural) that advances the goal. Ground claims in the findings; do not invent facts. Reply with ONLY the plan prose — no JSON, no preamble, no meta-commentary. ${UNTRUSTED}`;
+const DRAFT_SYSTEM = `You are the SYNTHESIST of a planning council. Using the research findings and the user's latest message, write a concise, concrete PLAN (prose, ordered steps where natural) that advances the goal. Ground claims in the findings; do not invent facts. When critic faults are listed, address each one — resolve it or explicitly acknowledge it. Reply with ONLY the plan prose — no JSON, no preamble, no meta-commentary. ${UNTRUSTED}`;
 
 const REVISE_SYSTEM = `You are the SYNTHESIST of a planning council revising a plan to address a critic's faults. Rewrite the plan so each fault is resolved or explicitly acknowledged; keep what already works. Reply with ONLY the revised plan prose — no JSON, no preamble. ${UNTRUSTED}`;
 
@@ -455,17 +456,67 @@ export class Critic {
   }
 }
 
-/** SYNTHESIST: write the initial plan prose from findings + the user's message. */
+const KEEPER_UPDATE_SYSTEM = `You are the KEEPER of a planning council keeping the working draft current between council rounds. Fold the user's latest message and the planner's reply into the draft: apply what the exchange settled, added, or retracted — change nothing else. Reply with ONLY a JSON object {"plan": "the COMPLETE updated plan prose (a full replacement, not a delta; empty keeps the previous draft)", "decisions": [{"topic": "...", "decision": "...", "rationale": "..."}], "questions": [{"question": "...", "header": "short label", "options": [{"label": "...", "description": "...", "recommended": true|false}], "why": "why it matters"}]}. Omit or empty any field with nothing to add. ${UNTRUSTED}`;
+
+/**
+ * MP15: ONE cheap meta call that keeps the draft current on planner-only turns (the full
+ * council only convenes on plan-stakes turns, but MP16's draft view must not stale between
+ * councils). Fail-open: any parse failure returns update:null and the draft stays as-is —
+ * stale beats wrong; the next stakes turn's council repairs it. Realized cost is always
+ * reported so the caller can book it.
+ */
+export async function runKeeperMiniUpdate(
+  session: PlanSession,
+  userTurn: string,
+  plannerReply: string,
+  opts: { metaModel: Model; apiKey?: string; signal?: AbortSignal | null },
+): Promise<{ update: KeeperMiniResult | null; costUsd: number }> {
+  let costUsd = 0;
+  const user =
+    `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>\n\n` +
+    `<draft>\n${fenced(session.draft || "(empty)", 6000)}\n</draft>\n\n` +
+    `<user>\n${midTruncate(userTurn, 4000)}\n</user>\n\n` +
+    `<approach>\n${fenced(plannerReply || "(no reply)", 6000)}\n</approach>\n\n` +
+    "Fold the exchange into the draft.";
+  const raw = await completeJson<unknown>(opts.metaModel, KEEPER_UPDATE_SYSTEM, user, undefined, {
+    apiKey: opts.apiKey,
+    signal: opts.signal,
+    onCostUsd: (usd) => {
+      if (Number.isFinite(usd) && usd > 0) costUsd += usd;
+    },
+  });
+  if (raw === undefined || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { update: null, costUsd };
+  }
+  const rec = raw as Record<string, unknown>;
+  return {
+    update: {
+      draft: asStr(rec.plan),
+      decisions: sanitizeDecisions(rec.decisions),
+      questions: sanitizeQuestions(rec.questions),
+    },
+    costUsd,
+  };
+}
+
+/** SYNTHESIST: write the plan prose from findings + the user's message. MP15: standing
+ *  critic faults (gathered in parallel with research) ride in as a <faults> block so the
+ *  drafting call folds the revision — no separate revise round-trip on rounds ≥2. */
 async function draftPlan(
   session: PlanSession,
   userTurn: string,
   digest: string,
   keeperFindings: Finding[],
+  faults: Fault[],
   opts: CouncilOptions,
 ): Promise<string> {
   const user = `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>\n\n<user>\n${midTruncate(userTurn, 4000)}\n</user>\n\n<draft>\n${fenced(session.draft || "(empty)", 3000)}\n</draft>\n\n<findings>\n${fenced(digest, 6000)}\n</findings>\n\n${
     keeperFindings.length
       ? `Keeper flags (down-weight):\n<flags>\n${keeperFindings.map((f) => `- ${fenceUntrusted(f.summary)}`).join("\n")}\n</flags>\n\n`
+      : ""
+  }${
+    faults.length
+      ? `Critic faults to address (resolve or explicitly acknowledge each):\n<faults>\n${faults.map((f) => `- (${f.severity}) ${fenceUntrusted(f.summary)}`).join("\n")}\n</faults>\n\n`
       : ""
   }Write the plan.`;
   return completeText(opts.metaModel, DRAFT_SYSTEM, user, session.draft || "", {
@@ -905,10 +956,40 @@ export function shouldConveneCouncil(userTurn: string): boolean {
   return words.length > 6;
 }
 
+// MP15: the FULL council convenes only on plan-stakes turns — the first substantive turn
+// (rounds 0 covers both the /plan start goal and the opening ask) or an explicit replan
+// intent. Follow-up Q&A goes straight to the planner, with the keeper mini-update keeping
+// the draft current. The regex is the deliberate escape hatch for reworks phrased in
+// ordinary words; /plan start is always available to force a fresh council.
+const REPLAN_RE =
+  /\b(re-?plan|rethink|start (over|again)|from scratch|new plan|scrap th(is|e) plan|different approach|redo the plan)\b/i;
+
+export function isPlanStakesTurn(session: PlanSession, userTurn: string): boolean {
+  if (session.rounds === 0) return true;
+  return REPLAN_RE.test(userTurn ?? "");
+}
+
+export function shouldConveneFullCouncil(session: PlanSession, userTurn: string): boolean {
+  return shouldConveneCouncil(userTurn) && isPlanStakesTurn(session, userTurn);
+}
+
+/** Critic input on the parallel branch: the STANDING draft is judged against the session's
+ *  accumulated findings — fresh research is still in flight by design (the critic's job
+ *  there is faults in the plan that already exists, not reacting to new findings). */
+export function sessionFindingsDigest(session: PlanSession): string {
+  if (!session.findings.length) return "(no findings yet)";
+  return session.findings.map((f) => `- (${f.source}/${f.severity}) ${f.summary}`).join("\n");
+}
+
 /**
- * One council round: keeper scopes → read-only researchers → keeper post-check → critic
- * self-improve loop → synth. Meta calls are off the routing loop; only researchers route.
- * Never throws — on abort or any failure it returns a partial result (aborted flagged).
+ * One council round (MP15 shape): keeper scopes → researchers ∥ critic-vs-standing-draft →
+ * keeper post-check → draft (folding the standing faults) → synth. Round 1 has no standing
+ * draft, so the critic instead runs ONE bounded fresh-draft pass (attack + revise) after the
+ * draft — every session still gets at least one adversarial look. `maxCriticPasses` 0
+ * disables the critic; ≥1 means the single pass (the old multi-pass self-improve loop is
+ * gone — it serialized 2×N meta calls for marginal gains). Meta calls are off the routing
+ * loop; only researchers route. Never throws — on abort or any failure it returns a partial
+ * result (aborted flagged).
  */
 export async function runCouncilRound(
   session: PlanSession,
@@ -953,10 +1034,40 @@ export async function runCouncilRound(
     const scopes = await deriveScopes(session, userTurn, mopts);
     if (aborted()) return { ...result, costUsd: totalCost(), aborted: true };
 
-    emit("research", `dispatching ${scopes.length} researcher(s)`);
-    const { costUsd, digest } = await research(scopes, mopts);
-    result.costUsd = costUsd;
-    if (aborted()) return { ...result, costUsd: totalCost(), aborted: true };
+    // Critic ∥ research: with a standing draft the critic needs neither the new scopes nor
+    // the new findings, so it attacks NOW while the researchers run. null = no standing
+    // draft (round 1) — the fresh-draft pass below covers it. Both branches are
+    // never-reject so one failing cannot leave the other dangling; the shared signal
+    // settles both on abort.
+    const critic = new Critic(opts.metaModel, { apiKey: opts.apiKey, onCostUsd: mopts.onCostUsd });
+    const maxPasses = Math.max(0, opts.maxCriticPasses ?? 3);
+    const standing = session.draft.trim();
+    const criticP: Promise<Fault[] | null> =
+      standing && maxPasses > 0
+        ? critic
+            .attack(session.goal, standing, sessionFindingsDigest(session), opts.signal ?? null)
+            .catch(() => [] as Fault[])
+        : Promise.resolve(null);
+
+    emit(
+      "research",
+      `dispatching ${scopes.length} researcher(s)${standing ? " · critic reviewing the draft" : ""}`,
+    );
+    const researchFallback = { results: [], costUsd: 0, digest: "(research failed)" };
+    const [researchOut, standingFaults] = await Promise.all([
+      research(scopes, mopts).catch(() => researchFallback),
+      criticP,
+    ]);
+    result.costUsd = researchOut.costUsd;
+    const digest = researchOut.digest;
+    if (aborted()) {
+      return {
+        ...result,
+        costUsd: totalCost(),
+        faults: dedupFaults(standingFaults ?? []),
+        aborted: true,
+      };
+    }
 
     emit("keeper", "checking findings against scope");
     const keeperFindings = await keeperPostCheck(scopes, digest, mopts);
@@ -964,18 +1075,28 @@ export async function runCouncilRound(
       return { ...result, costUsd: totalCost(), findings: keeperFindings, aborted: true };
     }
 
-    emit("critic", "drafting and stress-testing the plan");
-    let draft = await draftPlan(session, userTurn, digest, keeperFindings, mopts);
-    const critic = new Critic(opts.metaModel, { apiKey: opts.apiKey, onCostUsd: mopts.onCostUsd });
-    const maxPasses = Math.max(0, opts.maxCriticPasses ?? 3);
-    const allFaults: Fault[] = [];
-    for (let pass = 0; pass < maxPasses; pass++) {
-      if (aborted()) break;
-      const faults = await critic.attack(session.goal, draft, digest, opts.signal ?? null);
-      if (faults.length === 0) break;
-      for (const f of faults) allFaults.push(f);
-      if (aborted()) break;
-      draft = await reviseDraft(session.goal, draft, faults, digest, mopts);
+    const allFaults: Fault[] = [...(standingFaults ?? [])];
+    let draft: string;
+    if (standingFaults !== null) {
+      emit("critic", "folding the standing critique into the draft");
+      draft = await draftPlan(
+        session,
+        userTurn,
+        digest,
+        keeperFindings,
+        dedupFaults(allFaults),
+        mopts,
+      );
+    } else {
+      emit("critic", "drafting and stress-testing the plan");
+      draft = await draftPlan(session, userTurn, digest, keeperFindings, [], mopts);
+      if (maxPasses > 0 && !aborted()) {
+        const freshFaults = await critic.attack(session.goal, draft, digest, opts.signal ?? null);
+        for (const f of freshFaults) allFaults.push(f);
+        if (freshFaults.length > 0 && !aborted()) {
+          draft = await reviseDraft(session.goal, draft, freshFaults, digest, mopts);
+        }
+      }
     }
     const faults = dedupFaults(allFaults);
     if (aborted()) {

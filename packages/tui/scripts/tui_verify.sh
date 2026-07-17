@@ -657,16 +657,23 @@ SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
-  "cols": 120, "rows": 36, "duration": 24,
+  "cols": 120, "rows": 36, "duration": 32,
   "env": {"MINIMA_DB_PATH": "$TMP/plancouncil.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-plancouncil",
-          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model"},
+          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
+          "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
+          "OPENROUTER_API_KEY": "", "DEEPSEEK_API_KEY": "", "GROQ_API_KEY": "", "XAI_API_KEY": ""},
   "frames": "$TMP/plancouncil-frames.jsonl",
   "raw": "$TMP/plancouncil-raw.bin",
   "steps": [
     {"after": 3.0, "send": "/plan start demo council progress"},
     {"after": 3.6, "send": "<CR>"},
     {"after": 4.4, "send": "please research the codebase and draft a plan for the demo"},
-    {"after": 5.2, "send": "<CR>"}
+    {"after": 5.2, "send": "<CR>"},
+    {"after": 18.0, "send": "how should the widget registry interact with the tests you proposed?"},
+    {"after": 18.8, "send": "<CR>"},
+    {"after": 25.0, "send": "how should the widget registry interact with the tests you proposed?"},
+    {"after": 25.8, "send": "<CR>"}
   ]
 }
 EOF
@@ -681,6 +688,11 @@ frames = [json.loads(l) for l in open(sys.argv[2])]
 # The busy row's council line must ADVANCE role-by-role (first-seen strictly ordered).
 # MINIMA_JUDGE_MODEL=mock-model points the council meta calls at the mock (otherwise the
 # default judge model has no key, every meta call fails fast, and the phases blink by).
+# Provider keys are pinned EMPTY in the spec env: spawn.ts unpins children, so the
+# researcher would otherwise run the catalog default model — and keychain hydration can
+# supply a REAL key on a dev machine (a real network call + nondeterministic seconds of
+# latency inside the gate). Empty-but-defined blocks hydration; the child fails fast and
+# the round's research digest falls back — real research-through-the-mock is MP19's job.
 def first_seen(needle):
     for f in frames:
         if any(needle in row for row in f["screen"]):
@@ -702,7 +714,29 @@ assert not any("· scope:" in row or "· research:" in row for f in frames for r
     "old per-phase council transcript pushes still render")
 assert any("council cost $" in row for f in frames for row in f["screen"]), (
     "round-summary council note missing")
-print("tui_assert: PASS plan-council (line advances role-by-role, transcript pushes gone)")
+# MP15: the substantive FOLLOW-UP turn is not plan-stakes - it goes straight to the
+# planner (+ silent keeper mini-update): no council busy line after it submits and no
+# second round summary. Anchored to the ACTUAL submission frame, not wall-clock (under
+# load turn 1's council can still be live at the scripted send time, false-positiving a
+# wall-clock window on ITS busy line — and keys typed while busy are eaten, so the send
+# is RETRIED at 25.0; a doubled submission is harmless: every follow-up is non-stakes,
+# the councils-stay-at-one invariant is exactly what is asserted).
+FOLLOWUP = "how should the widget registry"
+t_submit = None
+for f in frames:
+    if any(FOLLOWUP in row and "▋" not in row for row in f["screen"]) and f["t"] > 18.0:
+        t_submit = f["t"]
+        break
+assert t_submit is not None, "follow-up turn never rendered - bump the step times"
+assert any(
+    "Baseline reply" in row for f in frames if f["t"] <= t_submit for row in f["screen"]
+), "turn 1 had not completed before the follow-up - bump the step times"
+assert not any(
+    "council: researcher" in row for f in frames if f["t"] > t_submit for row in f["screen"]
+), "follow-up turn re-convened the council (MP15 conditional convening broken)"
+cost_rows = {row.strip() for f in frames for row in f["screen"] if "council cost $" in row}
+assert len(cost_rows) == 1, f"expected ONE council round summary, saw: {cost_rows}"
+print("tui_assert: PASS plan-council (line advances role-by-role; follow-up skips the council)")
 PY
 
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
