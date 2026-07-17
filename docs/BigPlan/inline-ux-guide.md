@@ -723,6 +723,36 @@ plan-stakes heuristic here. Measure wall-clock delta on a scripted 3-turn planni
 **Manual test:** a real planning session; second turn should not re-convene.
 **Gate:** §1.7.
 
+**Execution notes (landed 2026-07-17):** the recorded **plan-stakes heuristic**
+(`shouldConveneFullCouncil`, plan_council.ts): substance (`shouldConveneCouncil` — not an
+ack/option-pick/≤6 words) AND stakes (`isPlanStakesTurn` — `session.rounds === 0`, covering
+both the `/plan start` goal and the opening ask, OR explicit replan intent per `REPLAN_RE`:
+replan/rethink/start over/from scratch/new plan/scrap this plan/different approach). All
+other turns: planner reply + **keeper mini-update** (user decision) — ONE cheap meta call
+(`runKeeperMiniUpdate`, REPLACE-draft semantics via `applyKeeperUpdate`, rounds NOT bumped,
+budgeted at ≤$0.05 with a "plan keeper update" ledger/meter row, silent fail-open: stale
+beats wrong). **Parallel shape**: on rounds ≥2 the critic attacks the STANDING draft against
+the session's accumulated findings CONCURRENTLY with the researchers (both branches
+never-reject, one shared AbortController; keeper post-check stays after the research join
+because the draft consumes its flags); the standing faults ride into `draftPlan` as a
+`<faults>` block, so no separate revise round-trip. Round 1 (no standing draft) keeps ONE
+bounded fresh-draft attack+revise — every session gets at least one adversarial look; the
+old multi-pass self-improve loop is deleted (`maxCriticPasses`: 0 = critic off, ≥1 = the
+single pass). **Measured** (scripts/plan_latency_bench.ts, meta=400ms research=1500ms,
+3-turn scripted session, base ec34f74 vs branch): base 3.91s/3.91s/3.91s = 11.74s (3
+rounds); MP15 3.92s/0.81s/0.81s = 5.52s — **−53% total, −79% per follow-up turn**.
+Council-output quality: the round fixtures assert unchanged CouncilRoundResult contents
+(migrated to the single-pass call order). Gate: `plan-council` scenario extended to a
+follow-up turn — no council busy line and exactly ONE round summary after it, anchored to
+the ACTUAL submission frame with a retried send (keys typed while busy are eaten; under
+load a wall-clock window false-positives on turn 1's own busy line). **Hermeticity hole
+found and closed by this gate**: `spawn.ts` unpins children, so the PTY researcher ran the
+catalog default model — and keychain hydration supplies a REAL key on a dev machine (a real
+network call inside the gate, nondeterministic seconds of latency). Council scenarios now
+pin every provider key EMPTY in the spec env (empty-but-defined blocks hydration; the child
+fails fast; the digest falls back). Real research-through-the-mock is MP19's job — it must
+point the CHILD at the mock, not just the meta model.
+
 ### MP16 — Plan-draft visibility *(M · needs MP7+MP9)*
 
 **Goal:** the plan is visible **while it's being drafted** — not only after `/plan finalize`

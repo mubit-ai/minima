@@ -47,6 +47,7 @@ import {
   buildPlannerSystemPrompt,
   finalizePlan,
   runCouncilRound,
+  runKeeperMiniUpdate,
   runPlanTurn,
 } from "../minima/index.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
@@ -3432,6 +3433,15 @@ export function HarnessApp({
       budget: agent.budget,
       meter: agent.meter,
       roundBudgetUsd: agent.config.planRoundBudgetUsd,
+      // MP15: on non-council turns the keeper folds the planner's just-committed reply
+      // into the draft so the Ctrl+G draft view never stales between councils.
+      runMiniUpdate: async (session, turn, o) => {
+        const reply = getLastAssistant(agent)?.textContent ?? "";
+        return runKeeperMiniUpdate(session, turn, reply, {
+          metaModel: planMetaModel,
+          signal: o.signal,
+        });
+      },
     });
   }
 

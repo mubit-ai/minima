@@ -216,3 +216,112 @@ describe("runPlanTurn — council budget + metering", () => {
     db.close();
   });
 });
+
+describe("MP15 — conditional convening + keeper mini-update", () => {
+  const seededStore = (): PlanSessionStore => {
+    const store = new PlanSessionStore("goal");
+    store.applyCouncilResult(roundResult({ draft: "Standing plan prose." }));
+    return store;
+  };
+
+  test("default convene: a substantive FOLLOW-UP turn skips the council (planner only)", async () => {
+    const r = makeDeps();
+    (r.deps as { convene?: unknown }).convene = undefined;
+    const store = seededStore();
+    await runPlanTurn(store, "what does the second step imply for the migration tests?", r.deps);
+    expect(r.roundCalls).toHaveLength(0);
+    expect(r.plannerCalls).toHaveLength(1);
+  });
+
+  test("default convene: the FIRST substantive turn still convenes", async () => {
+    const r = makeDeps();
+    (r.deps as { convene?: unknown }).convene = undefined;
+    const store = new PlanSessionStore("");
+    await runPlanTurn(store, "please design the storage layer for the cache", r.deps);
+    expect(r.roundCalls).toHaveLength(1);
+  });
+
+  test("non-council turn runs the keeper mini-update AFTER the planner and applies it", async () => {
+    const order: string[] = [];
+    const r = makeDeps({
+      convene: () => false,
+      promptPlanner: async () => {
+        order.push("planner");
+        return null;
+      },
+      runMiniUpdate: async () => {
+        order.push("mini");
+        return {
+          update: { draft: "Freshened draft.", decisions: [], questions: [] },
+          costUsd: 0.002,
+        };
+      },
+    });
+    const store = seededStore();
+    await runPlanTurn(store, "short follow up", r.deps);
+    expect(order).toEqual(["planner", "mini"]);
+    expect(store.session.draft).toBe("Freshened draft.");
+    expect(store.session.rounds).toBe(1);
+  });
+
+  test("mini-update books reserve+reconcile labelled 'plan keeper update' + one meter row", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const budget = new BudgetLedger({ db, scopeKey: "sess-mini", limitUsd: 1, mode: "warn" });
+    const meter = new CostMeter();
+    const r = makeDeps({
+      convene: () => false,
+      budget,
+      meter,
+      runMiniUpdate: async () => ({
+        update: { draft: "D.", decisions: [], questions: [] },
+        costUsd: 0.004,
+      }),
+    });
+    await runPlanTurn(seededStore(), "short follow up", r.deps);
+    expect(budget.status().spentUsd).toBeCloseTo(0.004, 6);
+    const rows = meter.rows.filter((m) => m.label === "plan keeper update");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.actualCostUsd).toBeCloseTo(0.004, 6);
+    db.close();
+  });
+
+  test("mini-update failure is fail-open and silent: draft unchanged, no error note", async () => {
+    const r = makeDeps({
+      convene: () => false,
+      runMiniUpdate: async () => {
+        throw new Error("meta model down");
+      },
+    });
+    const store = seededStore();
+    await runPlanTurn(store, "short follow up", r.deps);
+    expect(store.session.draft).toBe("Standing plan prose.");
+    expect(r.notes).toHaveLength(0);
+    expect(r.plannerCalls).toHaveLength(1);
+  });
+
+  test("mini-update skipped when the turn aborted and when enforce-budget is exhausted", async () => {
+    let miniCalls = 0;
+    const mini = async () => {
+      miniCalls += 1;
+      return { update: null, costUsd: 0 };
+    };
+    const r1 = makeDeps({ convene: () => false, runMiniUpdate: mini });
+    r1.deps.promptPlanner = async () => {
+      r1.deps.controllerRef.current?.abort();
+      return null;
+    };
+    await runPlanTurn(seededStore(), "short follow up", r1.deps);
+    expect(miniCalls).toBe(0);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const budget = new BudgetLedger({ db, scopeKey: "sess-exh", limitUsd: 0.001, mode: "enforce" });
+    const res = budget.reserve(0.001);
+    if (res.ok) budget.reconcile(res.id, 0.002);
+    const r2 = makeDeps({ convene: () => false, budget, runMiniUpdate: mini });
+    await runPlanTurn(seededStore(), "short follow up", r2.deps);
+    expect(miniCalls).toBe(0);
+    db.close();
+  });
+});

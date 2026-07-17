@@ -149,6 +149,14 @@ export interface GroundTruthSynthesis {
   openItems: string[];
 }
 
+/** MP15: the keeper mini-update's payload — the shape lives HERE (this module stays
+ *  zero-import pure); plan_council's runKeeperMiniUpdate produces it. */
+export interface KeeperMiniResult {
+  draft: string;
+  decisions: { topic: string; decision: string; rationale: string }[];
+  questions: SurfacedQuestion[];
+}
+
 export interface PlanSession {
   goal: string;
   /** Concise LLM-authored title (own words); falls back to `goal` for display when empty. */
@@ -275,6 +283,38 @@ export class PlanSessionStore {
 
       this.state.rounds = round;
       this.state.totalCouncilCostUsd += Number.isFinite(r.costUsd) ? r.costUsd : 0;
+      this.state.updatedAt = now();
+    } catch {
+      // planning telemetry must never break the conversation loop
+    }
+  }
+
+  /** MP15: fold a keeper mini-update (non-council turn) into the session — REPLACE draft
+   *  when non-empty (never clobber with nothing), dedup-merge decisions/questions, accrue
+   *  realized cost. Deliberately does NOT bump `rounds`: rounds counts COUNCIL rounds (the
+   *  stakes heuristic and the cost line key on it). Fail-open like applyCouncilResult. */
+  applyKeeperUpdate(u: KeeperMiniResult, costUsd: number): void {
+    try {
+      const draft = (u.draft ?? "").trim();
+      if (draft) this.state.draft = draft;
+
+      const seenTopics = new Set(this.state.decisions.map((d) => norm(d.topic)));
+      for (const d of u.decisions ?? []) {
+        const key = norm(d.topic);
+        if (!key || seenTopics.has(key)) continue;
+        seenTopics.add(key);
+        this.state.decisions.push({
+          id: newId(),
+          topic: d.topic.trim(),
+          decision: d.decision.trim(),
+          rationale: d.rationale.trim(),
+          resolvedBy: "council",
+          round: this.state.rounds,
+        });
+      }
+
+      this.addSurfacedQuestions(u.questions ?? [], this.state.rounds);
+      if (Number.isFinite(costUsd) && costUsd > 0) this.state.totalCouncilCostUsd += costUsd;
       this.state.updatedAt = now();
     } catch {
       // planning telemetry must never break the conversation loop

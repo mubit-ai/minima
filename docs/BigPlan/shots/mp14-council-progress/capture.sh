@@ -29,7 +29,10 @@ shot() {
   mkdir -p "$SCRATCH/home-$name"
   local spec='{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"rows":36,"duration":'$duration',
     "frames":"'$SCRATCH'/'$name'.frames.jsonl",
-    "env":{"MINIMA_TUI_GROUND_TRUTH":"1","MINIMA_JUDGE_MODEL":"mock-model"},
+    "env":{"MINIMA_TUI_GROUND_TRUTH":"1","MINIMA_JUDGE_MODEL":"mock-model",
+      "ANTHROPIC_API_KEY":"","ANTHROPIC_OAUTH_TOKEN":"","OPENAI_API_KEY":"","GEMINI_API_KEY":"",
+      "GOOGLE_API_KEY":"","GOOGLE_GENAI_API_KEY":"","OPENROUTER_API_KEY":"","DEEPSEEK_API_KEY":"",
+      "GROQ_API_KEY":"","XAI_API_KEY":""},
     "steps":[{"after":2.0,"send":"/plan start demo council progress"},{"after":2.6,"send":"<CR>"},
              {"after":3.4,"send":"please research the codebase and draft a plan for the demo"},{"after":4.2,"send":"<CR>"}],
     "png":"'$OUT'/'$name'.png"}'
