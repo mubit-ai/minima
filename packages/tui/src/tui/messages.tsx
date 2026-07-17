@@ -11,7 +11,12 @@
 
 import { Box, Text } from "ink";
 import { type ReactNode, memo } from "react";
-import { type ChatMessage, clampToolText, classifyMarkdownLines } from "./layout.ts";
+import {
+  type ChatMessage,
+  clampToolText,
+  classifyMarkdownLines,
+  toolHiddenMarker,
+} from "./layout.ts";
 
 // Re-exported so app.tsx keeps a single import site.
 export type { ChatMessage };
@@ -165,7 +170,7 @@ export const MessageRow = memo(function MessageRow({
         <Text color={msg.isError ? "red" : "yellow"}>{`  ⚙ ${msg.toolName ?? "tool"}:`}</Text>
         {/* default fg (no hardcoded white — invisible on light themes); body is clipped */}
         <Text color={msg.isError ? "red" : undefined}>{body}</Text>
-        {hiddenLines > 0 && <Text color="gray">{`  … +${hiddenLines} more lines`}</Text>}
+        {hiddenLines > 0 && <Text dimColor>{`  ${toolHiddenMarker(hiddenLines)}`}</Text>}
       </Box>
     );
   }

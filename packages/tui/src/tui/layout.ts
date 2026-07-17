@@ -53,6 +53,16 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
 }
 
 /**
+ * The tool-truncation indicator row, CC-style (`… 214 more lines`). ONE producer for both
+ * truncation surfaces — the live transcript (MessageRow) and the D3b reader — so the
+ * committed scrollback and the panel can never show different markers. Call sites add
+ * their own indent; this string carries none.
+ */
+export function toolHiddenMarker(hidden: number): string {
+  return `… ${hidden} more lines`;
+}
+
+/**
  * Word-wrap a single logical line to `width` display columns, PRODUCING the wrapped rows —
  * matching Ink's wrap-ansi ({ trim: false, wordWrap: true, hard: true }): greedily pack
  * space-separated words, wrap to a new row when the next word (plus a joining space) won't
