@@ -7,6 +7,7 @@
  * diff approval, mouse capture, sessions, and themes land in later passes.)
  */
 
+import { appendFileSync } from "node:fs";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import React, {
   useEffect,
@@ -665,6 +666,9 @@ const CONFIG_OVERLAY_MAX_ROWS = 2 + SECTIONS.length + ALL_CONFIG_FIELDS.length +
 // Rollback for the anchor ledger: =1 restores the estimate-decay minHeight bottom mount
 // (staticBasisIdx + closePanelReseat basis reset). Delete after the ledger has soaked.
 const ANCHOR_LEGACY = process.env.MINIMA_TUI_ANCHOR_LEGACY === "1";
+// MINIMA_TUI_DEBUG_ANCHOR=<file>: per-render ledger trace (rows/cols/heights/reset reason)
+// for diagnosing anchor loss in terminals the PTY harness can't reproduce.
+const ANCHOR_DEBUG = process.env.MINIMA_TUI_DEBUG_ANCHOR || null;
 // Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
 // reservation can't drift from the render.
 const BANNER_TAGLINES = [
@@ -4323,6 +4327,31 @@ export function HarnessApp({
     liveHeightRef.current = liveHeight;
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
+    if (ANCHOR_DEBUG) {
+      try {
+        appendFileSync(
+          ANCHOR_DEBUG,
+          `${JSON.stringify({
+            t: Date.now(),
+            rows,
+            cols,
+            liveHeight,
+            contentRows,
+            committedRows,
+            reset: anchorReset
+              ? anchorPrev === null
+                ? "mount"
+                : anchorRemounted
+                  ? "remount"
+                  : "resize"
+              : null,
+            msgs: messages.length,
+            busy,
+            panel: panelVisible,
+          })}\n`,
+        );
+      } catch {}
+    }
   });
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
