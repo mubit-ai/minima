@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from importlib import metadata as _importlib_metadata
+from typing import Any, Literal
 
 import httpx
+from tenacity import (
+    AsyncRetrying,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
+from minima.schemas.capabilities import CapabilitiesResponse
 from minima.schemas.common import Constraints, OutcomeLabel, TaskInput
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
 from minima.schemas.models_catalog import ModelsResponse
 from minima.schemas.recommend import RecommendRequest, RecommendResponse
-from minima.schemas.savings import CalibrationResponse, SavingsResponse
+from minima.schemas.savings import CalibrationResponse, PolicyValueResponse, SavingsResponse
 from minima.schemas.strategies import StrategiesResponse
 from minima.schemas.workflow import WorkflowRequest, WorkflowResponse
-from minima_client.errors import raise_for_status
+from minima_client.errors import MinimaUnavailable, raise_for_status
+
+EvidenceSource = Literal["gate", "judge", "human", "none"]
+ErrorCause = Literal["infra", "quality"]
 
 
 def _report_params(
@@ -42,8 +54,47 @@ def _coerce_task(task: TaskLike) -> TaskInput:
     raise TypeError(f"unsupported task type: {type(task)!r}")
 
 
+def _client_version() -> str:
+    try:
+        return _importlib_metadata.version("minima-cli")
+    except _importlib_metadata.PackageNotFoundError:
+        return "0.0.0-dev"
+
+
 def _headers(api_key: str | None) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    version = _client_version()
+    headers = {
+        # Server-side compat gating (mirrors the TS client): new servers can
+        # version-gate response shapes on this; old servers ignore it.
+        "x-minima-client": version,
+        "user-agent": f"minima-cli/{version} (python-httpx)",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+# Feedback retries: the server's reconcile replay guard makes /v1/feedback safe to
+# retry, and a transiently lost label is a silent learning loss. Transport faults and
+# 502/503/504 retry; 4xx (including 429) surface immediately.
+_FEEDBACK_RETRY = {
+    "retry": retry_if_exception(
+        lambda exc: isinstance(exc, httpx.TransportError | MinimaUnavailable)
+    ),
+    "stop": stop_after_attempt(3),
+    "wait": wait_exponential(multiplier=0.5, max=4),
+    "reraise": True,
+}
+
+
+def _apply_phase(task: TaskInput, phase: str | None) -> TaskInput:
+    """Reference-client convention: phase rides as a `phase:<value>` tag."""
+    if not phase:
+        return task
+    tag = f"phase:{phase}"
+    if tag in task.tags:
+        return task
+    return task.model_copy(update={"tags": [*task.tags, tag]})
 
 
 @dataclass(slots=True)
@@ -116,15 +167,20 @@ class MinimaClient:
         namespace: str | None = None,
         explain: bool = True,
         baseline_model_id: str | None = None,
+        incumbent_model_id: str | None = None,
+        max_candidates: int = 8,
+        phase: str | None = None,
     ) -> RecommendResponse:
         req = RecommendRequest(
-            task=_coerce_task(task),
+            task=_apply_phase(_coerce_task(task), phase),
             cost_quality_tradeoff=cost_quality_tradeoff,
             constraints=constraints or Constraints(),
             user_id=user_id,
             namespace=namespace,
             explain=explain,
             baseline_model_id=baseline_model_id,
+            incumbent_model_id=incumbent_model_id,
+            max_candidates=max_candidates,
         )
         return RecommendResponse.model_validate(self._post("/v1/recommend", req))
 
@@ -158,10 +214,28 @@ class MinimaClient:
         chosen_model_id: str,
         outcome: OutcomeLabel | str,
         usage: Usage | None = None,
+        *,
+        quality_score: float | None = None,
+        evidence_source: EvidenceSource | None = None,
+        error_cause: ErrorCause | None = None,
+        chosen_effort: str | None = None,
+        iterations: int | None = None,
         **kwargs: Any,
     ) -> FeedbackResponse:
+        for key, value in (
+            ("quality_score", quality_score),
+            ("evidence_source", evidence_source),
+            ("error_cause", error_cause),
+            ("chosen_effort", chosen_effort),
+            ("iterations", iterations),
+        ):
+            if value is not None:
+                kwargs.setdefault(key, value)
         req = _feedback_request(recommendation_id, chosen_model_id, outcome, usage, **kwargs)
-        return FeedbackResponse.model_validate(self._post("/v1/feedback", req))
+        for attempt in Retrying(**_FEEDBACK_RETRY):
+            with attempt:
+                return FeedbackResponse.model_validate(self._post("/v1/feedback", req))
+        raise AssertionError("unreachable")  # reraise=True guarantees the loop exits by raise
 
     def models(
         self,
@@ -199,6 +273,21 @@ class MinimaClient:
         raise_for_status(resp)
         return StrategiesResponse.model_validate(resp.json())
 
+    def capabilities(self) -> CapabilitiesResponse:
+        resp = self._client.get("/v1/capabilities")
+        raise_for_status(resp)
+        return CapabilitiesResponse.model_validate(resp.json())
+
+    def policy_value(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+    ) -> PolicyValueResponse:
+        """Regret-vs-oracle: doubly-robust policy values over reconciled decisions."""
+        resp = self._client.get("/v1/policy-value", params=_report_params(namespace, days))
+        raise_for_status(resp)
+        return PolicyValueResponse.model_validate(resp.json())
+
     def health(self) -> dict[str, Any]:
         resp = self._client.get("/v1/health")
         raise_for_status(resp)
@@ -235,15 +324,20 @@ class AsyncMinimaClient:
         namespace: str | None = None,
         explain: bool = True,
         baseline_model_id: str | None = None,
+        incumbent_model_id: str | None = None,
+        max_candidates: int = 8,
+        phase: str | None = None,
     ) -> RecommendResponse:
         req = RecommendRequest(
-            task=_coerce_task(task),
+            task=_apply_phase(_coerce_task(task), phase),
             cost_quality_tradeoff=cost_quality_tradeoff,
             constraints=constraints or Constraints(),
             user_id=user_id,
             namespace=namespace,
             explain=explain,
             baseline_model_id=baseline_model_id,
+            incumbent_model_id=incumbent_model_id,
+            max_candidates=max_candidates,
         )
         return RecommendResponse.model_validate(await self._post("/v1/recommend", req))
 
@@ -279,10 +373,28 @@ class AsyncMinimaClient:
         chosen_model_id: str,
         outcome: OutcomeLabel | str,
         usage: Usage | None = None,
+        *,
+        quality_score: float | None = None,
+        evidence_source: EvidenceSource | None = None,
+        error_cause: ErrorCause | None = None,
+        chosen_effort: str | None = None,
+        iterations: int | None = None,
         **kwargs: Any,
     ) -> FeedbackResponse:
+        for key, value in (
+            ("quality_score", quality_score),
+            ("evidence_source", evidence_source),
+            ("error_cause", error_cause),
+            ("chosen_effort", chosen_effort),
+            ("iterations", iterations),
+        ):
+            if value is not None:
+                kwargs.setdefault(key, value)
         req = _feedback_request(recommendation_id, chosen_model_id, outcome, usage, **kwargs)
-        return FeedbackResponse.model_validate(await self._post("/v1/feedback", req))
+        async for attempt in AsyncRetrying(**_FEEDBACK_RETRY):
+            with attempt:
+                return FeedbackResponse.model_validate(await self._post("/v1/feedback", req))
+        raise AssertionError("unreachable")  # reraise=True guarantees the loop exits by raise
 
     async def strategies(
         self,
@@ -319,6 +431,21 @@ class AsyncMinimaClient:
         resp = await self._client.get("/v1/models", params=params)
         raise_for_status(resp)
         return ModelsResponse.model_validate(resp.json())
+
+    async def capabilities(self) -> CapabilitiesResponse:
+        resp = await self._client.get("/v1/capabilities")
+        raise_for_status(resp)
+        return CapabilitiesResponse.model_validate(resp.json())
+
+    async def policy_value(
+        self,
+        namespace: str | None = None,
+        days: float | None = None,
+    ) -> PolicyValueResponse:
+        """Regret-vs-oracle: doubly-robust policy values over reconciled decisions."""
+        resp = await self._client.get("/v1/policy-value", params=_report_params(namespace, days))
+        raise_for_status(resp)
+        return PolicyValueResponse.model_validate(resp.json())
 
     async def health(self) -> dict[str, Any]:
         resp = await self._client.get("/v1/health")
