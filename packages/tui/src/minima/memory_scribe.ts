@@ -498,10 +498,12 @@ export interface DrainDeps extends Omit<ScribePassDeps, "projectKey"> {
 }
 
 /**
- * Claim-and-run queued jobs (FIFO, bounded). A pass that throws marks its job `failed`
- * and the drain continues — one bad pass never wedges the queue.
+ * Claim-and-run queued jobs (FIFO, bounded). `reflect`/`consolidate` jobs run a scribe
+ * pass; `dream` jobs run the offline consolidation (B3). A pass that throws marks its
+ * job `failed` and the drain continues — one bad pass never wedges the queue.
  */
 export async function drainMemoryJobs(deps: DrainDeps, maxJobs = 3): Promise<ScribeReport[]> {
+  const { runDream } = await import("./memory_dream.ts");
   const reports: ScribeReport[] = [];
   for (let i = 0; i < maxJobs; i++) {
     const job = deps.db.claimNextMemoryJob();
@@ -512,7 +514,11 @@ export async function drainMemoryJobs(deps: DrainDeps, maxJobs = 3): Promise<Scr
       continue;
     }
     try {
-      reports.push(await runScribePass({ ...deps, projectKey }));
+      if (job.kind === "dream") {
+        runDream(deps.db, projectKey);
+      } else {
+        reports.push(await runScribePass({ ...deps, projectKey }));
+      }
       deps.db.finishMemoryJob(job.id, "done");
     } catch {
       deps.db.finishMemoryJob(job.id, "failed");

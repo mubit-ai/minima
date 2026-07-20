@@ -52,6 +52,7 @@ import {
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
+import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
@@ -258,6 +259,21 @@ export class MinimaAgent extends Agent {
     // Lead only: children run quarantined with their own focused context. Each DISTINCT
     // injected id-set is recorded once as an `inject` memory_event + a run event, so "what
     // the model saw" is replayable without logging every turn.
+    // B3 replay-with-cheap: a CONFIRMED workflow covering this task tags the route call
+    // `procedure:known` — tags feed the server's cluster keying, so procedure-present
+    // tasks build their own outcome pool and Thompson learns the cheaper frontier
+    // organically. Computed once per prompt; every ladder rung reuses it.
+    let procedureTag = false;
+    if (this.config.memoryLedger && this.agentId === null && this.db && this.runId) {
+      try {
+        const run = this.db.getRun(this.runId);
+        procedureTag =
+          run !== null && knownProcedureFor(this.db, run.project_key, content) !== null;
+      } catch {
+        // tag detection is advisory
+      }
+    }
+    const routeTags = procedureTag ? [...(opts.tags ?? []), "procedure:known"] : opts.tags;
     if (this.config.memoryLedger && this.agentId === null) {
       const proj = memoryProjectionFor(this.db, this.runId);
       if (proj) {
@@ -317,7 +333,7 @@ export class MinimaAgent extends Agent {
           routing = await this.route(content, {
             taskType: effectiveTaskType ?? null,
             slider: opts.slider ?? null,
-            tags: opts.tags,
+            tags: routeTags,
             difficulty: opts.difficulty,
             // The remaining budget rides into the server as a (soft) per-call cost cap.
             maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
