@@ -200,6 +200,14 @@ class Recommender:
         # refit scans the decision-log window — a sync DB read that must not stall the
         # loop). _score_candidates then reads the warm cache synchronously.
         await threadpool.run(self._get_calibrators)
+        # Recall-track: invalidated records (tombstoned by their recall track record) are
+        # surfaced as a warning, then excluded from ranking (aggregate_by_model skips them
+        # too — the count here is the diagnostic).
+        n_invalidated = sum(
+            1 for ev in evidence if ev.record is not None and ev.record.invalidated_at is not None
+        )
+        if n_invalidated:
+            warnings.append(f"recall_invalidated_skipped:{n_invalidated}")
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -207,6 +215,7 @@ class Recommender:
             decay_floor=settings.minima_evidence_decay_floor,
             seed_weight=settings.minima_seed_weight,
             seed_crowdout_n=settings.minima_seed_crowdout_n,
+            recall_vote_min_n=settings.minima_recall_vote_min_n,
         )
         profile.mark("aggregate")
 

@@ -416,3 +416,129 @@ def test_judge_source_cannot_claim_verified_in_production(client, fake_memory):
     assert written.verified_in_production is False
     assert written.quality_score == 0.95
     assert fb["lesson_promoted"] is False
+
+
+def test_recall_votes_land_on_recalled_durable_records(client, fake_memory):
+    """Recall-track: a trusted-label outcome casts one vote per recalled durable record
+    (dereference -> fold -> upsert), skipping the record the feedback itself upserted."""
+    from minima.memory.records import OutcomeRecord
+
+    rec = _recommend_haiku(client, fake_memory)
+    durable = OutcomeRecord(
+        model_id="claude-haiku-4-5",
+        task_type="code",
+        difficulty="hard",
+        task_cluster="code:hard",
+        outcome="success",
+        quality_score=0.9,
+        evidence_source="judge",
+        n_outcomes=3,
+        success_mass=2.5,
+    )
+    fake_memory.deref_results["r1"] = make_evidence(
+        "claude-haiku-4-5", 0.9, entry_id="e1", reference_id="r1"
+    )
+    fake_memory.deref_results["r1"].record = durable
+
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "failure",
+            "quality_score": 0.1,
+            "evidence_source": "judge",
+        },
+    ).json()
+    assert fb["accepted"] is True
+
+    votes = [w for w in fake_memory.remembered if w["idempotency_key"].startswith("rv:")]
+    assert len(votes) == 1
+    voted = votes[0]["record"]
+    assert (voted.recall_n, voted.recall_success_mass) == (1, 0.0)
+    assert voted.invalidated_at is None  # one bad vote is not a collapse
+    # The direct observation history is untouched by the vote.
+    assert (voted.n_outcomes, voted.success_mass) == (3, 2.5)
+    assert votes[0]["upsert_key"] == "minima:om:code:hard:claude-haiku-4-5"
+
+
+def test_recall_vote_collapse_stamps_invalidation(client, fake_memory):
+    """The vote that drops a record's recall rate below the threshold (min_n=5,
+    rate<0.2) stamps invalidated_at — bi-temporal tombstone, never a delete."""
+    from minima.memory.records import OutcomeRecord
+
+    rec = _recommend_haiku(client, fake_memory)
+    doomed = OutcomeRecord(
+        model_id="claude-haiku-4-5",
+        task_type="code",
+        difficulty="hard",
+        task_cluster="code:hard",
+        outcome="success",
+        quality_score=0.9,
+        evidence_source="judge",
+        recall_n=4,
+        recall_success_mass=0.0,
+    )
+    fake_memory.deref_results["r1"] = make_evidence(
+        "claude-haiku-4-5", 0.9, entry_id="e1", reference_id="r1"
+    )
+    fake_memory.deref_results["r1"].record = doomed
+
+    client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "failure",
+            "quality_score": 0.1,
+            "evidence_source": "judge",
+        },
+    )
+    votes = [w for w in fake_memory.remembered if w["idempotency_key"].startswith("rv:")]
+    assert len(votes) == 1
+    voted = votes[0]["record"]
+    assert (voted.recall_n, voted.recall_success_mass) == (5, 0.0)
+    assert voted.invalidated_at is not None
+
+
+def test_partial_outcome_casts_no_recall_votes(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    fake_memory.deref_results["r1"] = make_evidence(
+        "claude-haiku-4-5", 0.9, entry_id="e1", reference_id="r1"
+    )
+    client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "partial",
+            "quality_score": 0.5,
+            "evidence_source": "judge",
+        },
+    )
+    votes = [w for w in fake_memory.remembered if w["idempotency_key"].startswith("rv:")]
+    assert votes == []
+
+
+def test_invalidated_evidence_is_skipped_and_warned_at_recommend(client, fake_memory):
+    """An invalidated record is out of ranking (aggregation skip) and the recommend
+    response says so; the tombstone stays readable in memory."""
+    dead = make_evidence("claude-haiku-4-5", 0.9, entry_id="e1", reference_id="r1")
+    assert dead.record is not None
+    dead.record.invalidated_at = 1_700_000_000.0
+    live = make_evidence("claude-opus-4-8", 0.9, entry_id="e2", reference_id="r2")
+    fake_memory.evidence = [dead, live]
+
+    resp = client.post(
+        "/v1/recommend",
+        json={
+            "task": {"task": "refactor foo", "task_type": "code", "difficulty": "hard"},
+            "constraints": {"candidate_models": ["claude-haiku-4-5", "claude-opus-4-8"]},
+        },
+    ).json()
+    assert "recall_invalidated_skipped:1" in resp["warnings"]
+    # Only the live record votes: haiku has no usable evidence left.
+    basis = {r["model_id"]: r for r in resp["ranked"]}
+    opus = basis["claude-opus-4-8"]["predicted_success"]
+    haiku = basis["claude-haiku-4-5"]["predicted_success"]
+    assert opus >= haiku

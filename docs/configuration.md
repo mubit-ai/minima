@@ -40,6 +40,8 @@ single-tenant mode). A complete annotated template ships as
 | `MINIMA_REFLECT_EVERY_N` | `25` | Trigger reflection every N feedbacks per lane. |
 | `MINIMA_USE_OBSERVED_COST` | `true` | Rank by realized cost (observed/rescaled tiers) instead of a flat token estimate. |
 | `MINIMA_OBSERVED_COST_MIN_N` | `3` | Min observations per candidate before the observed/rescaled tiers are trusted. |
+| `MINIMA_RECALL_VOTE_MIN_N` | `5` | Recall-track: votes required before a record's aggregation weight scales with its recall success rate (floor 0.25). `0` disables the whole recall track. |
+| `MINIMA_RECALL_INVALIDATE_RATE` | `0.2` | Recall success rate below which a record (with ≥ min-n votes) is stamped `invalidated_at` — out of ranking, still readable. |
 
 See [Cost-basis tiers](concepts.md#cost-basis-tiers-estimate--observed--rescaled) for what
 `MINIMA_USE_OBSERVED_COST` / `MIN_N` actually switch between.
