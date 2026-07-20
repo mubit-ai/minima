@@ -67,3 +67,30 @@ jobs:
 
       - name: Typecheck
         run: bun run check
+
+  sdk-ts:
+    name: TS SDK — bun test + tsc
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Lint
+        run: bun run lint
