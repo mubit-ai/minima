@@ -506,7 +506,10 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
 // readable-width floor; clipPanelLines is kept for the D3b live-region panels (guide MP7+).
 // ---------------------------------------------------------------------------
 
-/** Min readable width for full rendering; below it panel surfaces degrade to text. */
+/**
+ * Min readable width for full rendering. Since always-panel (2026-07-20) only /why still
+ * degrades to text below it — Ctrl+T/Ctrl+G open the panel at any width the app renders.
+ */
 export const TOC_MIN_COLS = 60;
 
 /**

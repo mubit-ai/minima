@@ -16,13 +16,14 @@
 #                     the transcript persists in the main buffer after exit
 #   no-mouse-capture  inline never emits a mouse-capture enable (?1000h/?1002h/?1003h/?1006h)
 #                     — swept across every raw stream captured by the suite
-#   narrow-55         below the 60-col floor (TOC_MIN_COLS) the one-shot ToC text block
-#                     still renders and the app stays alive
+#   narrow-55         always-panel (2026-07-20): Ctrl+T opens the panel even below the old
+#                     60-col text-degrade floor; Esc closes; the app stays alive
 #   panel-toc         MP7+MP8 (D3b, geometry certified by the MP4 spike): idle Ctrl+T opens
 #                     the near-full ToC panel over a 500-msg resume, browses (j/G/gg),
 #                     Enter READS the section in-panel (MP8), h backs out, Esc restores the
-#                     composer WITH the draft; busy Ctrl+T still prints the one-shot text
-#                     block; zero extra ESC[3J, last grid row never painted
+#                     composer WITH the draft; busy Ctrl+T mounts the panel OVER the
+#                     stream (always-panel) holding the same last-row-clear identity;
+#                     zero extra ESC[3J, last grid row never painted
 #   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
 #                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
 #                     session on the same prefs dir honors the persisted hide
@@ -58,7 +59,9 @@
 #                     MP20 notes)
 #
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
-# (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), shortcuts
+# (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), modes-busy (the badge
+# flips MID-STREAM — the global Shift+Tab arm, 2026-07-20), modes-perm (Shift+Tab over
+# the permission overlay auto-approves the pending write, Claude Code parity), shortcuts
 # (Home/End/Alt word-jump + Ctrl+Z suspend/resume — inline signature: ?2004l+?25h down,
 # ?25l+?2004h back up, never ?1049).
 #
@@ -71,6 +74,16 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 TUI=$ROOT/packages/tui
 TMP=$(mktemp -d)
+
+# Hermeticity (suite-wide, was previously acceptance-only): the TUI under test must never
+# see real provider keys. An ambient OPENAI_API_KEY makes mapping.defaultModel() prefer a
+# REAL provider model over the zero-cost mock, and a lost pinned-routing race then sends
+# the turn to the live API — observed as run-to-run scenario flakes (hung "dispatching…"
+# turns, missing replies, dirty exit tails) that vanish standalone. Blank rather than
+# unset: a defined-empty var also stops the keychain hydration from re-injecting one.
+export ANTHROPIC_API_KEY="" ANTHROPIC_OAUTH_TOKEN="" OPENAI_API_KEY="" \
+  OPENAI_COMPAT_API_KEY="" GEMINI_API_KEY="" GOOGLE_API_KEY="" GOOGLE_GENAI_API_KEY="" \
+  OPENROUTER_API_KEY="" DEEPSEEK_API_KEY="" GROQ_API_KEY="" XAI_API_KEY=""
 MOCK_PORT=${MOCK_PORT:-8451}
 MOCK_PID=""
 trap '[ -n "$MOCK_PID" ] && { kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null || true; }; rm -rf "$TMP"' EXIT
@@ -340,6 +353,97 @@ print("tui_assert: PASS modes (Shift+Tab cycles accept-edits -> plan badges)")
 PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/mode-frames.jsonl" --after 2.5 --check bottom-anchor
 
+echo "== tui-verify: scenario modes-busy (Shift+Tab flips the badge while a turn streams) =="
+# Temp cwd: from $ROOT the offline router can pick up repo .env.harness credentials and
+# stall ~8s in a live recall before falling back to the pinned mock — from a bare dir the
+# route resolves immediately and the SLOW turn fits the capture window deterministically.
+mkdir -p "$TMP/busywork"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP/busywork",
+  "cols": 120, "rows": 36, "duration": 20,
+  "env": {"MINIMA_DB_PATH": "$TMP/modes-busy.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-modes-busy"},
+  "frames": "$TMP/modes-busy-frames.jsonl",
+  "steps": [
+    {"after": 3.5, "send": "SLOW mid-run mode flip"},
+    {"after": 4.0, "send": "<CR>"},
+    {"after": 4.7, "send": "<SHIFTTAB>"}
+  ]
+}
+EOF
+)
+capture modes-busy "$SPEC"
+python3 - "$TMP/modes-busy-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(screen, needle):
+    return any(needle in row for row in screen)
+# Fail loud on the mount race: keys typed before Ink mounts are dropped, and a prompt
+# that lost its "SLOW" marker gets the instant short reply — every later assert would
+# then blame the wrong thing.
+assert any(grid_has(f["screen"], "SLOW mid-run mode flip") for f in frames if f["t"] >= 4.0), (
+    "typed prompt truncated - the send raced the app mount, retime the steps")
+# The SLOW reply's first delta lands ~2.5s after submit, so 4.7-6.3 is a guaranteed
+# mid-turn window: the badge must flip there, BEFORE any model output exists (the old
+# composer-owned Shift+Tab was disabled the whole time a turn ran).
+mid = [f for f in frames if 4.7 <= f["t"] <= 6.3
+       and grid_has(f["screen"], "ACCEPT EDITS") and not grid_has(f["screen"], "Delayed reply")]
+assert mid, "no ACCEPT EDITS badge while the turn was still streaming"
+assert any(grid_has(f["screen"], "Delayed reply") for f in frames if f["t"] >= 6.0), (
+    "the delayed reply never arrived - the mode flip disturbed the running turn")
+print("tui_assert: PASS modes-busy (Shift+Tab flips the badge mid-stream)")
+PY
+
+echo "== tui-verify: scenario modes-perm (Shift+Tab over the permission overlay auto-approves) =="
+rm -rf "$TMP/permwork" && mkdir -p "$TMP/permwork"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP/permwork",
+  "cols": 120, "rows": 36, "duration": 18,
+  "env": {"MINIMA_DB_PATH": "$TMP/modes-perm.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-modes-perm"},
+  "frames": "$TMP/perm-frames.jsonl",
+  "steps": [
+    {"after": 3.5, "send": "WRITEFILE please"},
+    {"after": 4.0, "send": "<CR>"},
+    {"after": 6.5, "send": "<SHIFTTAB>"}
+  ]
+}
+EOF
+)
+capture modes-perm "$SPEC"
+python3 - "$TMP/perm-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(screen, needle):
+    return any(needle in row for row in screen)
+def seen(needle, t0, t1=99.0):
+    return any(grid_has(f["screen"], needle) for f in frames if t0 <= f["t"] <= t1)
+# Fail loud on the mount race (see modes-busy): a truncated prompt loses the WRITEFILE
+# marker and no tool call ever fires.
+assert seen("WRITEFILE please", 4.0), (
+    "typed prompt truncated - the send raced the app mount, retime the steps")
+# The overlay must be parked on screen BEFORE Shift+Tab (no y/a/n is ever sent).
+assert seen("run write", 4.0, 6.5), "permission overlay for the write never appeared"
+# Claude Code parity: cycling into accept-edits resolves the pending prompt itself.
+# Assert on the LAST frame (frames only exist when the PTY emits output — the resolve,
+# the write, and the reply can all settle within ~0.2s of the chord, after which the
+# screen never changes again and a time-window assert would see zero frames).
+last = frames[-1]["screen"]
+assert any("ACCEPT EDITS" in row for row in last), (
+    "no ACCEPT EDITS badge after Shift+Tab over the overlay")
+assert not any(" permission " in row for row in last), (
+    "permission overlay still on screen after the mode cycle")
+assert seen("File recorded", 5.5), (
+    "the write's second-phase reply never arrived - the prompt was not auto-resolved")
+print("tui_assert: PASS modes-perm (Shift+Tab auto-approves the pending write)")
+PY
+test -f "$TMP/permwork/perm_probe.txt" || { echo "FAIL: perm_probe.txt was not written"; exit 1; }
+grep -q "mode-cycled approval" "$TMP/permwork/perm_probe.txt" || {
+  echo "FAIL: perm_probe.txt content wrong"; exit 1; }
+echo "tui_assert: PASS modes-perm file content"
+
 echo "== tui-verify: scenario shortcuts (edit keys + inline Ctrl+Z suspend/resume) =="
 SPEC=$(cat <<EOF
 {
@@ -386,7 +490,7 @@ assert any(want in row for f in post for row in f["screen"]), (
 print("tui_assert: PASS shortcuts (edit keys + inline suspend/resume signature)")
 PY
 
-echo "== tui-verify: scenario narrow-55 (below the 60-col floor, ToC block still renders) =="
+echo "== tui-verify: scenario narrow-55 (always-panel: Ctrl+T opens the panel below 60 cols) =="
 SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
@@ -395,7 +499,8 @@ SPEC=$(cat <<EOF
   "env": {"MINIMA_DB_PATH": "$TMP/narrow.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-narrow"},
   "frames": "$TMP/narrow-frames.jsonl",
   "steps": [
-    {"after": 3.5, "send": "<CTRLT>"}
+    {"after": 3.5, "send": "<CTRLT>"},
+    {"after": 5.5, "send": "<ESC>"}
   ]
 }
 EOF
@@ -404,14 +509,22 @@ capture narrow "$SPEC"
 python3 - "$TMP/narrow-frames.jsonl" <<'PY'
 import json, sys
 frames = [json.loads(l) for l in open(sys.argv[1])]
-assert any("Table of contents:" in row for f in frames if f["t"] >= 3.5 for row in f["screen"]), (
-    "ToC text block did not render below the 60-col floor")
+def seen(needle, t0, t1=99):
+    return any(needle in row for f in frames if t0 <= f["t"] <= t1 for row in f["screen"])
+# Always-panel (2026-07-20): the old 60-col text degrade is gone — the panel opens at
+# any width the app renders, and Esc still restores the composer.
+assert seen("contents ·", 3.5, 5.5), "ToC panel did not open below the old 60-col floor"
+assert not seen("Table of contents:", 3.5), "narrow Ctrl+T still printed the text block"
+# Last-frame assert: the close repaint can settle within ~0.05s of the Esc, after which
+# the screen emits nothing more — a time-window check would see zero frames.
+assert not any("contents ·" in row for row in frames[-1]["screen"]), (
+    "panel still visible after Esc at 55 cols")
 distinct = {tuple(f["screen"]) for f in frames}
 assert len(distinct) >= 3, "app frozen at 55 cols"
-print("tui_assert: PASS narrow-55 (one-shot ToC block below the floor, app alive)")
+print("tui_assert: PASS narrow-55 (panel opens below 60 cols, Esc closes, app alive)")
 PY
 
-echo "== tui-verify: scenario panel-toc (D3b: open, browse, draft survives, busy keeps text block) =="
+echo "== tui-verify: scenario panel-toc (D3b: open, browse, draft survives, busy opens the panel too) =="
 rm -f "$TMP/spike.db" "$TMP/spike.db-wal" "$TMP/spike.db-shm"
 cp "$TMP/fixture.db" "$TMP/spike.db"
 SPEC=$(cat <<EOF
@@ -437,6 +550,7 @@ SPEC=$(cat <<EOF
     {"after": 8.6, "send": "SLOW proof while busy"},
     {"after": 9.0, "send": "<CR>"},
     {"after": 9.8, "send": "<CTRLT>"},
+    {"after": 14.0, "send": "<ESC>"},
     {"after": 15.2, "send": "<CTRLD>"}
   ]
 }
@@ -498,16 +612,24 @@ print(f"panel-toc: close latency {close_latency:.2f}s (budget 0.35s)")
 assert close_latency <= 0.35, f"panel close took {close_latency:.2f}s (budget 0.35s)"
 assert any(grid_has(f, "draft123") for f in closed), "composer draft lost across the panel session"
 
-# Busy Ctrl+T keeps the one-shot text block — the panel must NOT mount over a stream.
+# Always-panel (2026-07-20): busy Ctrl+T mounts the panel OVER the running stream — the
+# zero-wipe byte gate above already covers this window, and the settled busy-panel frames
+# must hold the same last-row-clear identity as the idle ones.
 busy_win = frames_between(9.8, 13.5)
-assert any(grid_has(f, "Table of contents:") for f in busy_win), (
-    "busy Ctrl+T did not print the one-shot ToC text block")
-assert not any(grid_has(f, LIST) or grid_has(f, READER) for f in busy_win), (
-    "panel mounted during a running turn")
+assert any(grid_has(f, LIST) for f in busy_win), "busy Ctrl+T did not mount the ToC panel"
+assert not any(grid_has(f, "Table of contents:") for f in busy_win), (
+    "busy Ctrl+T still printed the one-shot text block")
+busy_settled = [f for f in settled if 10.0 <= f["t"] <= 13.5 and grid_has(f, LIST)]
+assert busy_settled, "no settled busy-panel frames captured"
+for f in busy_settled:
+    assert not f["screen"][-1].strip(), (
+        f"busy panel painted the last grid row at t={f['t']} - one row from the wipe threshold")
+closed_busy = [f for f in frames_between(14.0, 15.2) if not grid_has(f, LIST)]
+assert closed_busy, "panel still visible after the post-stream Esc"
 
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone from the main buffer after panel close + exit"
-print("tui_assert: PASS panel-toc (zero extra wipes, reader in-panel, draft survives, busy keeps the text block)")
+print("tui_assert: PASS panel-toc (zero extra wipes, reader in-panel, draft survives, busy panel mounts)")
 PY
 # Post-close, pre-resubmit: the composer is back on the bottom rows (THE RULE) — the
 # reseat basis makes the close frame full-height and bottom-anchored.

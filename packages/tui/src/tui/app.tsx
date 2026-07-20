@@ -28,6 +28,7 @@ import {
   setMode,
   subscribeMode,
 } from "../agent/modes.ts";
+import { emitGuardEvent } from "../agent/policy.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
@@ -118,6 +119,7 @@ import {
   type PermissionState,
   createPermissionState,
   makeModeGatedBeforeToolCall,
+  modeAutoApproves,
   planModeBlockReason,
   planModeBlockedTools,
 } from "./permissions.ts";
@@ -1669,7 +1671,16 @@ export function HarnessApp({
     }
   }
 
-  // Ctrl+T: one-shot ToC text block into the transcript (the inline surface until D3b).
+  // Always-panel floor: can a ≥5-row panel coexist with the CURRENT composer height?
+  // Mirrors the render's inputBoxHeight math (wrapped draft included) so the chord and
+  // panelVisible can never disagree — an opened panel below the floor would be closed by
+  // the same-pass effect and the chord would silently do nothing.
+  const panelCanRender = () =>
+    panelOuterHeight(
+      rows,
+      (planMode ? 7 : 4) + Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4)) - 1,
+    ) >= 5;
+  // Ctrl+T: one-shot ToC text block into the transcript (cannot-render floor only).
   const requestTocSidebar = () => {
     setMessages((m) => [
       ...m,
@@ -1682,18 +1693,11 @@ export function HarnessApp({
   };
   // Ctrl+G: GT off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestGtSidebar = () => {
-    // MP16: a live plan session's fallback (busy / narrow terminal) is a terse draft
-    // summary — "No Ground-Truth plan recorded" would be misleading mid-drafting.
+    // MP16: a live plan session's cannot-render fallback is a terse draft summary —
+    // "No Ground-Truth plan recorded" would be misleading mid-drafting.
     const draftStore = planSessionRef.current;
     if (getMode() === "plan" && draftStore) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          text: `${draftStore.summary()}\n(idle Ctrl+G at ≥${TOC_MIN_COLS} cols opens the draft panel)`,
-          toolName: "plan",
-        },
-      ]);
+      setMessages((m) => [...m, { role: "tool", text: draftStore.summary(), toolName: "plan" }]);
       return;
     }
     if (agent.config.groundTruth !== true) {
@@ -1720,6 +1724,41 @@ export function HarnessApp({
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
       suspendToShell();
+      return;
+    }
+
+    // Shift+Tab switches the permission mode from ANY state — idle, mid-run, with the
+    // permission overlay up, or under the expanded panel (Claude Code parity: the switch
+    // is immediate, never queued). Modal selectors (pickers, palette, config, question
+    // overlay) keep the keyboard instead — Tab can mean something there.
+    if (key.tab && key.shift) {
+      if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
+        return;
+      if (getMode() === "plan") {
+        // MP17: leaving plan mode routes the 3-option exit gate. Mid-council the
+        // in-flight plan turn stops FIRST, so finalize never interleaves a live round.
+        if (busy) {
+          councilControllerRef.current?.abort();
+          agent.abort();
+        }
+        void requestPlanExitGate();
+        return;
+      }
+      const next = cycleMode();
+      // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
+      // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
+      // the same mode-auto guard event the hook's no-prompt path emits); a mode that
+      // still asks leaves the prompt up.
+      if (permPrompt && modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary)) {
+        emitGuardEvent({
+          kind: "mode-auto",
+          detail: permPrompt.argsSummary
+            ? `${permPrompt.toolName}: ${permPrompt.argsSummary}`
+            : permPrompt.toolName,
+        });
+        setPermPrompt(null);
+        permPrompt.resolve("allow");
+      }
       return;
     }
 
@@ -1761,11 +1800,12 @@ export function HarnessApp({
       return;
     }
 
-    // Ctrl+T: idle at readable width → the expanded ToC panel (D3b, MP7). Busy and
-    // <60-col keep the one-shot text block (decided 2026-07-17) — mid-run info access
-    // with zero wipe risk, and the narrow degrade path.
+    // Ctrl+T: the expanded ToC panel in EVERY situation — idle, mid-run, narrow
+    // (always-panel, 2026-07-20; supersedes the busy/<60-col text degrade of 2026-07-17).
+    // The one-shot text block survives only below the cannot-render floor, where the
+    // same-pass close effect would kill the panel anyway.
     if (key.ctrl && input === "t") {
-      if (!busy && cols >= TOC_MIN_COLS) {
+      if (panelCanRender()) {
         const sections = buildSections(messages, buildUsageLedger());
         setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
         return;
@@ -1791,12 +1831,13 @@ export function HarnessApp({
       return;
     }
 
-    // U3 (MUB-141): GT Plan Overview on Ctrl+G — mid-run allowed (read-only, like the ToC).
-    // Shared chord, gate wins: with a 🔴 block armed and not busy this falls through to the
-    // gate-answer arm below (its modal takes Ctrl+G first). Idle + GT-on at readable width
-    // opens the D3b overview panel (MP9); busy/narrow/GT-off keep the one-shot text path.
+    // U3 (MUB-141): GT Plan Overview on Ctrl+G — the panel in EVERY situation (always-
+    // panel, 2026-07-20). Shared chord, gate wins: with a 🔴 block armed and not busy this
+    // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
+    // states stay one-line chat notices (GT off / no plan yet — nothing to page); the
+    // text path otherwise survives only below the cannot-render floor.
     if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
-      if (!busy && agent.config.groundTruth === true && cols >= TOC_MIN_COLS) {
+      if (agent.config.groundTruth === true && panelCanRender()) {
         // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
         // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
         // falls through to the normal overview: the before/after switch is structural).
@@ -3945,20 +3986,17 @@ export function HarnessApp({
   // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
   // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
   // PANEL_STATUS_ROWS = rows − SCROLLBACK_SAFETY_ROWS. Not an estimate: the panel box has
-  // an explicit height, every row truncates, and suggestions/busy/GT-rows/ChildTree are
-  // suppressed while it is visible (gates below all AND on !panelVisible), so nothing can
-  // stack the frame toward Ink's scrollback-wiping clearTerminal. When the panel exists
-  // but cannot legitimately render (busy/overlay/too-small), chatRegion renders instead
-  // and the effect below closes it in the same pass.
+  // an explicit height, every row truncates, and suggestions/busy-indicator/GT-rows/
+  // ChildTree/currentAction are suppressed while it is visible (gates below all AND on
+  // !panelVisible), so nothing can stack the frame toward Ink's scrollback-wiping
+  // clearTerminal. Busy is allowed (always-panel, 2026-07-20): the panel replaces the
+  // streaming chatRegion while completed messages keep committing to <Static> scrollback
+  // above it. When the panel exists but cannot legitimately render (permission/question
+  // prompt claimed the bottom, too-small), chatRegion renders instead and the effect
+  // below closes it in the same pass.
   const panelOuter = panelOuterHeight(rows, inputBoxHeight);
   const panelTop = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
-  const panelVisible =
-    panelTop !== null &&
-    !busy &&
-    !permPrompt &&
-    !questionPrompt &&
-    panelOuter >= 5 &&
-    cols >= TOC_MIN_COLS;
+  const panelVisible = panelTop !== null && !permPrompt && !questionPrompt && panelOuter >= 5;
   // D3a task panel rows (MP5; GT enrichment MP6 — ONE plan surface, the old planStrip
   // banner + note/block rows are gone). Read from the in-place-mutated todos array
   // (todoGen forces the re-read after every tool end); with a GT plan the ledger
@@ -4011,8 +4049,9 @@ export function HarnessApp({
     }
     if (key.ctrl && input === "g") {
       // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
-      // keyboard to the gate-focus modal (the same arm the global handler uses).
-      if (gtBehavior?.block) {
+      // keyboard to the gate-focus modal (the same arm the global handler uses). The
+      // modal is idle-only, so a busy chord swaps views instead of arming it dead.
+      if (gtBehavior?.block && !busy) {
         closePanelReseat();
         dismissedGateRef.current = null;
         setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
@@ -4094,7 +4133,8 @@ export function HarnessApp({
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
   // The busy indicator (spinner + tip) renders as one line above the input box while a turn
   // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
-  const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
+  const busyIndicatorVisible =
+    busy && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
   // The question overlay owns the bottom region when no permission prompt does (matching the
   // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
@@ -4149,10 +4189,10 @@ export function HarnessApp({
     ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
 
-  // A panel that can no longer legitimately render (turn started, permission/question
-  // overlay claimed the bottom, terminal shrank below the floor) closes — the render
-  // above already fell back to chatRegion in the same pass, so no frame ever contains
-  // both the panel and the incoming surface.
+  // A panel that can no longer legitimately render (permission/question overlay claimed
+  // the bottom, terminal shrank below the floor — a running turn no longer closes it)
+  // closes — the render above already fell back to chatRegion in the same pass, so no
+  // frame ever contains both the panel and the incoming surface.
   useEffect(() => {
     if (panel && !panelVisible) closePanelReseat();
   });
@@ -4378,10 +4418,6 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={() => {
-                if (getMode() === "plan") void requestPlanExitGate();
-                else cycleMode();
-              }}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
@@ -4429,7 +4465,9 @@ export function HarnessApp({
 
       <Box flexDirection="column" flexShrink={0}>
         {treeVisible && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
-        {currentAction ? (
+        {/* Suppressed under the panel like the busy indicator: a busy-only footer row
+            would exceed the PANEL_STATUS_ROWS the panel identity budgeted. */}
+        {currentAction && !panelVisible ? (
           <Text color="yellow" wrap="truncate">
             {currentAction}
           </Text>

@@ -15,6 +15,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { type AgentMode, bundleForMode } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
@@ -279,6 +280,16 @@ function verifyCommands(args: Record<string, unknown>): string[] {
   const tasks = parseTodowriteTasks(args);
   if (!tasks) return [];
   return tasks.map((t) => t.verify).filter((v): v is string => typeof v === "string" && v !== "");
+}
+
+/**
+ * Would `mode`'s policy run this tool call with NO prompt? Drives the Claude Code-parity
+ * Shift+Tab-during-a-permission-prompt path: cycling into a mode whose bundle says "auto"
+ * for the pending call (accept-edits → write/edit/apply_patch, bypass → everything)
+ * resolves the on-screen prompt instead of leaving it stranded under the new mode.
+ */
+export function modeAutoApproves(mode: AgentMode, toolName: string, subject: string): boolean {
+  return resolvePolicy(bundleForMode(mode), { tool: toolName, subject }) === "auto";
 }
 
 /**

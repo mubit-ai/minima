@@ -185,3 +185,33 @@ describe("mode_prefs persistence", () => {
     }
   });
 });
+
+// Shift+Tab-over-a-permission-prompt (Claude Code parity): cycling into a mode whose
+// bundle pre-approves the pending call resolves the on-screen prompt; a mode that still
+// asks leaves it up. Pure policy resolution — the app arm consumes exactly this.
+describe("modeAutoApproves (prompt re-resolution on mode cycle)", () => {
+  test("acceptEdits auto-approves write/edit/apply_patch but never bash", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    for (const tool of ["write", "edit", "apply_patch"]) {
+      expect(modeAutoApproves("acceptEdits", tool, "src/a.ts")).toBe(true);
+    }
+    expect(modeAutoApproves("acceptEdits", "bash", "rm -rf /")).toBe(false);
+    expect(modeAutoApproves("acceptEdits", "read", "src/a.ts")).toBe(false);
+  });
+
+  test("build and plan auto-approve nothing", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    for (const mode of ["build", "plan"] as const) {
+      for (const tool of ["write", "edit", "apply_patch", "bash", "read"]) {
+        expect(modeAutoApproves(mode, tool, "anything")).toBe(false);
+      }
+    }
+  });
+
+  test("bypass auto-approves everything", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    for (const tool of ["write", "edit", "apply_patch", "bash", "read", "todowrite"]) {
+      expect(modeAutoApproves("bypass", tool, "anything")).toBe(true);
+    }
+  });
+});

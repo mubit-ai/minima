@@ -474,11 +474,12 @@ describe("tui/app.tsx panel key routing", () => {
   test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
     // Global arm: the guard keeps falling through to the gate-answer arm.
     expect(src).toContain('input === "g" && !(gtBehavior?.block && !busy)');
-    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery.
+    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery — but
+    // only idle, since the modal is idle-only (a busy chord swaps views, never arms dead).
     const idx = src.indexOf("function handlePanelKey");
     expect(idx).toBeGreaterThan(-1);
     const body = src.slice(idx, idx + 2600);
-    expect(body).toContain("if (gtBehavior?.block) {");
+    expect(body).toContain("if (gtBehavior?.block && !busy) {");
     expect(body).toContain("setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false })");
   });
 
@@ -502,14 +503,35 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     // Entering plan still rides the ring (auto-heal plants the GT session); LEAVING plan
     // goes through the 3-option exit gate so approval and the ring share one surface. The
     // sessionless-no-plan-turn fast-path keeps quick flipping (and the modes scenario)
-    // cycle-identical.
-    const handlerIdx = src.indexOf("onShiftTab={() => {");
+    // cycle-identical. Since the global-arm move the chord lives in app.tsx's useInput
+    // ABOVE the overlay/busy guards (Claude Code parity: works mid-run and over the
+    // permission overlay) — the composer no longer knows about Shift+Tab at all.
+    const handlerIdx = src.indexOf("if (key.tab && key.shift) {");
     expect(handlerIdx).toBeGreaterThan(-1);
-    const handler = src.slice(handlerIdx, handlerIdx + 220);
-    expect(handler).toContain('if (getMode() === "plan") void requestPlanExitGate();');
-    expect(handler).toContain("else cycleMode();");
+    const handler = src.slice(handlerIdx, handlerIdx + 1600);
+    expect(handler).toContain('if (getMode() === "plan") {');
+    expect(handler).toContain("void requestPlanExitGate();");
+    expect(handler).toContain("const next = cycleMode();");
+    // The arm sits BEFORE the modal early-return and the busy guard — mid-run parity.
+    expect(handlerIdx).toBeLessThan(src.indexOf("panelCapture // the expanded panel owns"));
+    expect(handlerIdx).toBeLessThan(src.indexOf("if (busy && (key.escape ||"));
     expect(src).toContain("store == null && !planTurnSeenRef.current");
     expect(src).not.toContain("toggleMode");
+    expect(src).not.toContain("onShiftTab");
+    const composer = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
+    expect(composer).not.toContain("onShiftTab");
+  });
+
+  test("a pending permission prompt re-resolves under the newly cycled mode", () => {
+    // Claude Code parity: Shift+Tab with the overlay up auto-approves the waiting call
+    // when the new mode's bundle says auto — one-time allow, audited as mode-auto, and
+    // never a recorded "always" grant.
+    const idx = src.indexOf("modeAutoApproves(next, permPrompt.toolName");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 500);
+    expect(body).toContain('kind: "mode-auto"');
+    expect(body).toContain("setPermPrompt(null);");
+    expect(body).toContain('permPrompt.resolve("allow");');
   });
 
   test("one shared ON notice: definition + auto-heal + /plan", () => {
