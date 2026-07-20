@@ -1072,6 +1072,13 @@ export function HarnessApp({
         outPath: `${process.cwd()}/GROUND_TRUTH.md`,
         db: agent.db,
         runId: agent.runId,
+        // E1 Planning Critic: spend books like judge/council spend (MINIMA_TUI_PLAN_CRITIC=0
+        // disables by injecting a no-op critic — the seam stays, the call never happens).
+        critic: process.env.MINIMA_TUI_PLAN_CRITIC === "0" ? async () => null : undefined,
+        onCriticCostUsd: (usd) => {
+          agent.meter?.addOverhead(usd);
+          agent.budget?.bookSpend(usd, "plan-critic");
+        },
       });
       // MP18: approving the plan (which displays every step's verify) IS the consent event
       // for the seeded checks — without this, the first in_progress todowrite after

@@ -11,6 +11,7 @@ import type { Message } from "../ai/types.ts";
 import type { Model } from "../ai/types.ts";
 import { errText } from "../errtext.ts";
 import { answerOpenQuestions, synthesizeGroundTruth } from "./plan_council.ts";
+import { formatCriticNote, runPlanCritic } from "./plan_critic.ts";
 import { formatFindings, hasBlockers, synthAuditFindings } from "./plan_lint.ts";
 import type { GroundTruthSynthesis, PlanSessionStore } from "./plan_session.ts";
 
@@ -34,6 +35,10 @@ export interface PlanFinalizeDeps {
   write?: (path: string, content: string) => Promise<unknown>;
   answerQuestions?: typeof answerOpenQuestions;
   synthesize?: typeof synthesizeGroundTruth;
+  /** E1 Planning Critic seam (injectable for tests). Runs on the synthesized steps. */
+  critic?: typeof runPlanCritic;
+  /** Books the critic call's realized spend (meter + budget), like judge spend. */
+  onCriticCostUsd?: (usd: number) => void;
 }
 
 export type PlanFinalizeOutcome =
@@ -51,6 +56,9 @@ export type PlanFinalizeOutcome =
        * assembly, nothing was seeded, and the caller MUST surface it (silence cost the
        * whole plan ledger once). */
       synthFailed: boolean;
+      /** E1 Planning Critic findings (advisory, also folded into auditNote). [] = explicit
+       * OK; null = critic skipped (no model / unusable reply / error). */
+      criticFlags: string[] | null;
     };
 
 /** The planning conversation as a labelled transcript (user/planner turns only). */
@@ -161,7 +169,24 @@ export async function finalizePlan(
     }
   }
 
-  const auditNote = auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "";
+  // E1 Planning Critic: one cheap completion over the approved steps + their checks —
+  // are the verifies discriminative (red before the work)? hidden step dependencies?
+  // Advisory only (folded into the note, never a blocker); fail-open like synthesis.
+  // Runs AFTER the write so a slow/flaky critic can never cost the plan document.
+  let criticFlags: string[] | null = null;
+  if (deps.metaModel && synth && synth.approach.length > 0 && !deps.signal?.aborted) {
+    const critic = deps.critic ?? runPlanCritic;
+    criticFlags = await critic({
+      metaModel: deps.metaModel,
+      steps: synth.approach.map((st) => ({ action: st.action, verify: st.verify })),
+      signal: deps.signal,
+      onCostUsd: deps.onCriticCostUsd,
+    });
+  }
+
+  const auditNote =
+    (auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "") +
+    formatCriticNote(criticFlags);
   return {
     kind: "ok",
     md,
@@ -170,5 +195,6 @@ export async function finalizePlan(
     seededVerifies,
     auditNote,
     synthFailed: deps.metaModel != null && synth === null,
+    criticFlags,
   };
 }

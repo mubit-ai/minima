@@ -897,6 +897,9 @@ export function groundTruthHooks(
     fs?: FactorFs;
     enforceAllowlist?: boolean;
     verifyConsent?: VerifyConsent;
+    /** E1: fired (post-commit, fail-open) when a plan closes with every step completed —
+     * the diff-review trigger. Must not throw and must not block (fire-and-forget). */
+    onPlanClosed?: (planId: string) => void;
   },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
@@ -1171,6 +1174,11 @@ export function groundTruthHooks(
         if (steps.length > 0 && steps.every((s) => s.status === "completed")) {
           writeMilestoneGate(db, plan.id, ref, session);
           db.setPlanStatus(plan.id, "done");
+          try {
+            opts?.onPlanClosed?.(plan.id);
+          } catch {
+            // the closure callback is advisory — never let it break the turn
+          }
         }
       } catch {
         // fail-open: closure bookkeeping must never break the turn.

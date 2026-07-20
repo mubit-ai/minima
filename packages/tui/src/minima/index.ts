@@ -83,4 +83,22 @@ export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_coun
 export { runPlanTurn } from "./plan_turn.ts";
 export type { PlanTurnDeps } from "./plan_turn.ts";
 export { finalizePlan, buildPlanTranscript } from "./plan_finalize.ts";
+export {
+  runPlanCritic,
+  parseCriticFlags,
+  buildCriticPrompt,
+  formatCriticNote,
+  PLAN_CRITIC_SYSTEM,
+  type PlanCriticOptions,
+} from "./plan_critic.ts";
+export {
+  runDiffReview,
+  parseDiffReviewVerdict,
+  collectRunDiff,
+  DIFF_REVIEW_SYSTEM,
+  DIFF_REVIEW_CAP_CHARS,
+  type DiffReviewVerdict,
+  type DiffReviewOutcome,
+  type DiffReviewOptions,
+} from "./diff_review.ts";
 export type { PlanFinalizeDeps, PlanFinalizeOutcome, PlanFinalizeDb } from "./plan_finalize.ts";
