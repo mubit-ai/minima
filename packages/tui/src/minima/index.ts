@@ -92,6 +92,15 @@ export {
   type PlanCriticOptions,
 } from "./plan_critic.ts";
 export {
+  mineRepoGates,
+  attachAutoGates,
+  fastGate,
+  fullGate,
+  formatAutoGateNote,
+  type RepoGate,
+  type AutoGateResult,
+} from "./repo_gates.ts";
+export {
   mineGreenEpisodes,
   distillWorkflow,
   runDream,

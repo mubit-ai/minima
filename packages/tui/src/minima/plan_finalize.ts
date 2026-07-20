@@ -14,6 +14,7 @@ import { answerOpenQuestions, synthesizeGroundTruth } from "./plan_council.ts";
 import { formatCriticNote, runPlanCritic } from "./plan_critic.ts";
 import { formatFindings, hasBlockers, synthAuditFindings } from "./plan_lint.ts";
 import type { GroundTruthSynthesis, PlanSessionStore } from "./plan_session.ts";
+import { attachAutoGates, formatAutoGateNote, mineRepoGates } from "./repo_gates.ts";
 
 export interface PlanFinalizeDb {
   seedPlanFromSteps(
@@ -39,6 +40,12 @@ export interface PlanFinalizeDeps {
   critic?: typeof runPlanCritic;
   /** Books the critic call's realized spend (meter + budget), like judge spend. */
   onCriticCostUsd?: (usd: number) => void;
+  /** E3 auto-gates: where to mine repo checks. Omitted/null = mining disabled — callers
+   * opt in explicitly (the TUI passes cwd), so library users and tests are never
+   * surprised by an attached command. */
+  repoDir?: string | null;
+  /** E3 seam (injectable for tests). */
+  mineGates?: typeof mineRepoGates;
 }
 
 export type PlanFinalizeOutcome =
@@ -122,6 +129,37 @@ export async function finalizePlan(
     };
   }
 
+  // E3 auto-gates: fill verify-less steps with the repo's OWN check commands (mined from
+  // manifests — trusted by construction, never agent-authored oracles). Fast command
+  // (typecheck/lint) in-loop; the full test suite on the final step. Attached BEFORE the
+  // audit/doc/critic/seed so everything downstream — including the plan the user approves,
+  // which is the MP18 consent event for these commands — sees the same checks.
+  // MINIMA_TUI_AUTO_GATES=0 opts out.
+  let autoGateNote = "";
+  if (synth && synth.approach.length > 0 && deps.repoDir) {
+    try {
+      if (process.env.MINIMA_TUI_AUTO_GATES !== "0") {
+        const mine = deps.mineGates ?? mineRepoGates;
+        const gates = mine(deps.repoDir);
+        if (gates.length > 0) {
+          const result = attachAutoGates(
+            synth.approach.map((st) => ({ content: st.action, verify: st.verify })),
+            gates,
+          );
+          if (result.attached.length > 0) {
+            synth.approach = synth.approach.map((st, i) => ({
+              ...st,
+              verify: result.steps[i]?.verify ?? st.verify,
+            }));
+            autoGateNote = formatAutoGateNote(result);
+          }
+        }
+      }
+    } catch {
+      // mining is fail-open — a broken manifest never blocks finalize
+    }
+  }
+
   // A6 poka-yoke audit: statically lint the finalized plan against the characteristics of a
   // good plan. Blocker-severity findings (a fabricated always-passing check, a typo'd tool
   // allowlist, an empty plan) REFUSE finalize unless forced; warns/infos are advisory and
@@ -186,6 +224,7 @@ export async function finalizePlan(
 
   const auditNote =
     (auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "") +
+    autoGateNote +
     formatCriticNote(criticFlags);
   return {
     kind: "ok",

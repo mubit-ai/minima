@@ -1075,6 +1075,8 @@ export function HarnessApp({
         outPath: `${process.cwd()}/GROUND_TRUTH.md`,
         db: agent.db,
         runId: agent.runId,
+        // E3 auto-gates: mine this repo's own check commands into verify-less steps.
+        repoDir: process.cwd(),
         // E1 Planning Critic: spend books like judge/council spend (MINIMA_TUI_PLAN_CRITIC=0
         // disables by injecting a no-op critic — the seam stays, the call never happens).
         critic: process.env.MINIMA_TUI_PLAN_CRITIC === "0" ? async () => null : undefined,
