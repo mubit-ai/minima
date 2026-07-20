@@ -497,7 +497,8 @@ describe("plan-loop audit (MP13)", () => {
     expect(fb2.judged).toBe(false);
     expect(fb2.quality_score).toBeUndefined();
     expect(fb2.verified_in_production).toBe(false); // yellow pass — vip is green-only
-    expect(String(fb2.notes)).toBe("verified_by=deterministic;tier=yellow");
+    // E2: rung 2 exists because rung 1's red gate escalated — the notes say so by name.
+    expect(String(fb2.notes)).toBe("verified_by=deterministic;tier=yellow;recovery=revise_step");
     expect(fb2.input_tokens).toBeUndefined();
     expect(fb2.output_tokens as number).toBeGreaterThan(0);
     expect(fb2.actual_cost_usd as number).toBeCloseTo(rows[1]!.actual_cost_usd as number, 8);

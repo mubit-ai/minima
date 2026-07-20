@@ -64,6 +64,17 @@ export const INTERVENTION_TIER: Record<Intervention, ConfidenceTier> = {
   replan: "red", // the approach is wrong — serious
 };
 
+/** E2 named rung states (H-RePlan vocabulary): what each intervention IS in ladder terms —
+ * retry_step (same model again), revise_step (stronger model, same plan), replan
+ * (structural: revise the plan itself). Recorded on recovery gates and in the NEXT rung's
+ * feedback notes so failure attribution reaches the server with its shape intact. */
+export type RungName = "retry_step" | "revise_step" | "replan";
+export const RUNG_NAMES: Record<Intervention, RungName> = {
+  backoff: "retry_step",
+  escalate: "revise_step",
+  replan: "replan",
+};
+
 export const TIER_GLYPHS: Record<ConfidenceTier, string> = {
   green: "🟢",
   yellow: "🟡",
@@ -88,10 +99,18 @@ export interface FailureDecision {
   intervention: Intervention;
   tier: ConfidenceTier;
   reason: string;
+  /** E2: the named rung state this decision enters. */
+  rung: RungName;
 }
 
 function decide(kind: FailureKind, intervention: Intervention, reason: string): FailureDecision {
-  return { kind, intervention, tier: INTERVENTION_TIER[intervention], reason };
+  return {
+    kind,
+    intervention,
+    tier: INTERVENTION_TIER[intervention],
+    reason,
+    rung: RUNG_NAMES[intervention],
+  };
 }
 
 /**
@@ -187,6 +206,7 @@ export function writeRecoveryGate(deps: RecoveryGateDeps, decision: FailureDecis
         recovery: true,
         kind: decision.kind,
         intervention: decision.intervention,
+        rung: decision.rung,
         reason: decision.reason,
       },
       recId: null,

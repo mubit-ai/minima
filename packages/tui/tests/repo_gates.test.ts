@@ -16,7 +16,9 @@ describe("repo-gate mining", () => {
     const d = dir();
     writeFileSync(
       join(d, "package.json"),
-      JSON.stringify({ scripts: { test: "bun test", check: "tsc --noEmit", lint: "biome check src" } }),
+      JSON.stringify({
+        scripts: { test: "bun test", check: "tsc --noEmit", lint: "biome check src" },
+      }),
     );
     writeFileSync(join(d, "bun.lock"), "");
     const gates = mineRepoGates(d);

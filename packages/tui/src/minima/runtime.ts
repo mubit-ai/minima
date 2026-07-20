@@ -31,6 +31,7 @@ import {
   toolCallFailed,
 } from "./anti_spiral.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
+import { runCheck, wasAborted } from "./check.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import {
   type FailureDecision,
@@ -49,7 +50,7 @@ import {
   planProjectionFor,
   stampGroundedOutcome,
 } from "./ground_truth.ts";
-import { type QualityJudge, clamp01 } from "./judge.ts";
+import { type QualityJudge, clamp01, midTruncate } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
 import { knownProcedureFor } from "./memory_dream.ts";
@@ -77,6 +78,24 @@ export interface MinimaAgentOptions extends Omit<AgentOptions, "model"> {
   memory?: HarnessMemory;
   /** Recovery-ladder retries per prompt (default 2; 0 disables the ladder). */
   recoveryRungs?: number;
+}
+
+/** Compose the feedback `notes` field: evidence provenance first, then (E2) the named
+ * rung whose intervention produced this attempt. Undefined only for a plain judged turn
+ * with nothing else to say — exactly the pre-E2 behavior. */
+export function buildFeedbackNotes(
+  deterministic: { confidence: string | null } | null,
+  judged: boolean,
+  recoveryRung: string | null,
+): string | undefined {
+  const parts: string[] = [];
+  if (deterministic) {
+    parts.push(`verified_by=deterministic;tier=${deterministic.confidence ?? "unknown"}`);
+  } else if (!judged) {
+    parts.push("unlabeled");
+  }
+  if (recoveryRung) parts.push(`recovery=${recoveryRung}`);
+  return parts.length > 0 ? parts.join(";") : undefined;
 }
 
 export function gradeOutcome(quality: number): "success" | "partial" | "failure" {
@@ -318,6 +337,9 @@ export class MinimaAgent extends Agent {
       // A pending `replan` steer to prepend to the NEXT rung's prompt (null = none). Steering drains
       // post-turn, so prepending to the prompt is the only way a replan lands on the model turn-1.
       let replanPrefix: string | null = null;
+      // E2: the named rung state (retry_step/revise_step/replan) the PREVIOUS decision entered —
+      // the next rung's feedback carries it so the server sees WHY this rung exists.
+      let lastRungName: string | null = null;
 
       for (let attempt = 0; attempt <= this.recoveryRungs; attempt++) {
         // Budget gate (enforce mode only): refuse BEFORE any provider spend.
@@ -510,6 +532,7 @@ export class MinimaAgent extends Agent {
           turnsTaken,
           transient,
           grounded,
+          lastRungName,
         );
 
         if (this.meter) {
@@ -591,6 +614,7 @@ export class MinimaAgent extends Agent {
           decision = failureMatcher({ hardError: failed, errorText, judgeFailed, gateFailed });
           if (decision) intervention = decision.intervention;
         }
+        lastRungName = decision?.rung ?? null;
         // Roll back this rung's messages so the retry starts from the same context the failed rung
         // saw (no confusing half-answers in the next rung's prompt).
         this.agentState.messages.length = preRunIdx;
@@ -601,6 +625,11 @@ export class MinimaAgent extends Agent {
         } else if (intervention === "replan") {
           // Keep the model; prepend a plan-revision steer to the next rung. Audit-only gate.
           replanPrefix = replanPreamble(decision?.reason ?? "verification keeps failing");
+          // E2 diagnostics unlock (debug-gym debug(5)): repeated verified failures mean the
+          // model is guessing from a truncated verdict — hand it the failing check's FULL
+          // output so the retry reasons from evidence. Feedback DESIGN over retry count.
+          const diag = await this.collectFailureDiagnostics();
+          if (diag) replanPrefix += `\n\n${diag}`;
           if (decision) writeRecoveryGate(this.recoveryGateDeps(), decision);
           this.ladderReplans += 1;
         } else {
@@ -841,6 +870,9 @@ export class MinimaAgent extends Agent {
     /** M7.2/M7.3: the grounded (deterministic) verdict THIS rung minted, read once by the caller
      * (A4 reads it before feedback so a transient error can't mask a real check-fail). */
     grounded: GroundedOutcome | null = null,
+    /** E2: the named rung state (retry_step/revise_step/replan) whose intervention produced
+     * THIS rung — richer failure attribution for the server; null on the first attempt. */
+    recoveryRung: string | null = null,
   ): Promise<{
     quality: number | null;
     outcome: "success" | "partial" | "failure";
@@ -936,11 +968,7 @@ export class MinimaAgent extends Agent {
         verifiedInProduction,
         judged,
         chosenEffort: this.agentState.thinkingLevel ?? undefined,
-        notes: deterministic
-          ? `verified_by=deterministic;tier=${deterministic.confidence ?? "unknown"}`
-          : judged
-            ? undefined
-            : "unlabeled",
+        notes: buildFeedbackNotes(deterministic, judged, recoveryRung),
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
       // cites which memory entries this outcome reinforced.
@@ -997,6 +1025,40 @@ export class MinimaAgent extends Agent {
     agentId: string | null;
   } {
     return { db: this.db, sessionId: this.runId, agentId: this.agentId };
+  }
+
+  /**
+   * E2 diagnostics unlock: re-run the in-progress step's verify with FULL output for the
+   * replan retry prompt. The command is the exact string the done-gate just consented to
+   * and executed — no new consent surface. Null when there is nothing to diagnose
+   * (no plan / no in-progress verify / GT off) or the re-run itself breaks.
+   */
+  private async collectFailureDiagnostics(): Promise<string | null> {
+    if (!this.config.groundTruth || !this.db || !this.runId) return null;
+    try {
+      const plan = this.db.getActivePlan(this.runId);
+      if (!plan) return null;
+      const step = this.db
+        .getPlanSteps(plan.id)
+        .find((s) => s.status === "in_progress" && s.verify?.trim());
+      if (!step) return null;
+      const verify = step.verify!.trim();
+      const result = await runCheck(verify, {
+        cwd: step.verify_cwd ?? undefined,
+        signal: this.runSignal ?? undefined,
+      });
+      if (wasAborted(result)) return null;
+      const output = result.output.trim() || "(no output)";
+      return [
+        `Expanded diagnostics — full output of the failing check \`${verify}\` (exit ${result.exitCode ?? "?"}):`,
+        "```",
+        midTruncate(output, 6000),
+        "```",
+        "Reason from this evidence — do not guess at the failure again.",
+      ].join("\n");
+    } catch {
+      return null;
+    }
   }
 
   /** Rough input-token estimate for THIS turn: live context + system prompt + the new task
