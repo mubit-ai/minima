@@ -97,7 +97,17 @@ jobs:
           # --force-with-lease always fails with "stale info" once the branch exists.
           git push -u origin "$BRANCH" --force
 
-          gh pr create --base main --head "$BRANCH" \
+          # Fail LOUD when the PR can't be opened: `|| echo` masked a hard denial
+          # ("GitHub Actions is not permitted to create ... pull requests") for days —
+          # green runs, branch pushed, no PR, nobody the wiser. An existing open PR is
+          # the only benign create-failure; anything else must turn the run red.
+          if ! gh pr create --base main --head "$BRANCH" \
             --title "chore(catalog): refresh vendored model snapshot" \
-            --body "Automated refresh of \`$SNAPSHOT_PATH\` from the live catalog at \`$CATALOG_URL\` (normalized to the loader's shape). Opened by \`.github/workflows/catalog-snapshot.yml\`. Review the diff — this is the cold-start fallback the server serves when the live cost feed is unreachable." \
-            || echo "PR already open for $BRANCH; pushed update."
+            --body "Automated refresh of \`$SNAPSHOT_PATH\` from the live catalog at \`$CATALOG_URL\` (normalized to the loader's shape). Opened by \`.github/workflows/catalog-snapshot.yml\`. Review the diff — this is the cold-start fallback the server serves when the live cost feed is unreachable."; then
+            if [ -n "$(gh pr list --base main --head "$BRANCH" --json number --jq '.[0].number // empty')" ]; then
+              echo "PR already open for $BRANCH; pushed update."
+            else
+              echo "::error::pushed $BRANCH but could not open its PR — likely the repo forbids Actions-created PRs (Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests')"
+              exit 1
+            fi
+          fi
