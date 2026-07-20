@@ -1309,8 +1309,11 @@ assert wipes <= 2, f"{wipes} ESC[3J wipes (expect <=2: startup clear + at most I
 print(f"tui_assert: PASS resize-wipes ({wipes} total)")
 PY
 # Post-resize: the cap-seeded frame re-anchors within SCROLLBACK_SAFETY_ROWS (pre-ledger
-# this was a PERMANENT float — the app repainted once and never re-anchored)...
-python3 "$TUI/scripts/tui_assert.py" "$TMP/resizere-frames.jsonl" --after 8.6 --before 10.4 \
+# this was a PERMANENT float — the app repainted once and never re-anchored). Window opens
+# AT the resize step (8.5): with the suite's Mubit key blanked the CODE turn finishes
+# before ~8.6, so the only guaranteed output in this window is the resize repaint itself
+# (~0.05s after the step) — a later window start sees zero frames and errors out.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/resizere-frames.jsonl" --after 8.5 --before 10.4 \
   --check bottom-anchor --bottom-slack 2
 # ...and the next commit re-pins it exactly.
 python3 "$TUI/scripts/tui_assert.py" "$TMP/resizere-frames.jsonl" --after 12.0 \
