@@ -1271,8 +1271,8 @@ SPEC=$(cat <<EOF
     {"after": 3.6, "send": "<CR>"},
     {"after": 12.0, "send": "TODO plan this work"},
     {"after": 12.5, "send": "<CR>"},
-    {"after": 16.5, "send": "y"},
-    {"after": 19.5, "send": "y"}
+    {"after": 16.5, "send": "<CR>"},
+    {"after": 19.5, "send": "<CR>"}
   ]
 }
 EOF
@@ -1285,14 +1285,18 @@ wipes = raw.count(b"\x1b[3J")
 assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
 frames = [json.loads(l) for l in open(sys.argv[2])]
 # Liveness: the todowrite permission overlay must actually have appeared — otherwise the
-# teardown under test never ran and the anchor gate below passes vacuously. The 'y' is
-# retried (20.5, 23.0) because keys typed while busy are eaten under load (plan-council
-# precedent); a doubled 'y' post-approve just lands in the composer.
+# teardown under test never ran and the anchor gate below passes vacuously. The approve key
+# is Enter (2026-07-21: pins key.return→"Yes once" in a real PTY — the only scripted
+# approval in this scenario, so a regression parks the overlay forever and the settled
+# assert below fails). It is retried at 19.5 because keys typed while busy are eaten under
+# load (plan-council precedent); a post-approve CR on the empty composer is a no-op.
 assert any("permission" in row for f in frames for row in f["screen"]), (
     "the todowrite permission overlay never appeared - mock too slow? bump step times")
-print("tui_assert: PASS overlay-anchor liveness (zero extra wipes, perm overlay shown)")
+assert not any(" permission " in row for row in frames[-1]["screen"]), (
+    "the permission overlay never resolved - Enter did not accept the pending call")
+print("tui_assert: PASS overlay-anchor liveness (zero extra wipes, perm overlay Enter-approved)")
 PY
-# The 'y' approves the todowrite permission overlay (~10-16 rows) → its teardown is the
+# Enter approves the todowrite permission overlay (~10-16 rows) → its teardown is the
 # shrink under test. Pre-ledger: composer stranded 3 rows up (before-evidence shots).
 python3 "$TUI/scripts/tui_assert.py" "$TMP/otanchor-frames.jsonl" --after 2.5 \
   --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1

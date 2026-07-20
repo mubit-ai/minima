@@ -5,6 +5,7 @@ import { MinimaDb } from "../src/db/minima_db.ts";
 import {
   formatPlanProjection,
   groundTruthAfterToolCall,
+  isGateBlockReason,
   isPathClaimed,
   kindForTool,
   parseTodos,
@@ -924,5 +925,29 @@ describe("baseline capture (M3.3)", () => {
     const steps = real.getPlanSteps(plan.id);
     expect(steps[0]!.baseline).toBeNull();
     expect(steps[1]!.baseline).toBe("red");
+  });
+});
+
+describe("isGateBlockReason (renderer signature for done-gate blocks)", () => {
+  test("matches the three gate-block families", () => {
+    expect(isGateBlockReason('Step not verified — "add tests": check `false` exit 1')).toBe(true);
+    expect(
+      isGateBlockReason("Only one todowrite per assistant message: another todowrite …"),
+    ).toBe(true);
+    expect(
+      isGateBlockReason(
+        "This todowrite marks steps completed, but the same message also calls write.",
+      ),
+    ).toBe(true);
+  });
+
+  test("never matches a permission denial or a generic tool error", () => {
+    expect(
+      isGateBlockReason(
+        "The user declined the todowrite call — this is a user choice, not an environment restriction",
+      ),
+    ).toBe(false);
+    expect(isGateBlockReason("todowrite failed: invalid tasks JSON")).toBe(false);
+    expect(isGateBlockReason("")).toBe(false);
   });
 });

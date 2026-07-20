@@ -936,6 +936,24 @@ gate rows: unrunnable without the env, verified with it); `verify-consent.test.t
 runCheck sites, mutation-dodge, library default, env checker). Shots:
 `shots/mp18-verify-consent/`.
 
+**Follow-ups (user acceptance, 2026-07-21):** three fixes from the first live run of the
+CC-parity ring. (a) **Gate blocks render as `⊘ verify gate — completion blocked, statuses
+unchanged:`** (yellow, body uncolored) instead of the red `⚙ todowrite:` error styling — an
+approved-then-gate-blocked todowrite read as "Enter cancelled my todowrite" when it was the
+done-gate refusing unverified completion flips; `isGateBlockReason` (ground_truth.ts,
+prefix-keyed on the three block families) is the renderer's signature, so replayed sessions
+get the same treatment. (b) **Enter on the permission overlay is pinned as ACCEPT** ("Yes
+once") — it always was; now `behavior.test.ts` pins return-in-the-allow-branch and the
+`overlay-anchor` scenario approves with `<CR>` alone. (c) **Bash `[a]` became a persisted
+per-command-family grant** — "Always allow `pip` commands" (leading word per compound
+segment, substitution never analyzed, all-families-granted or prompt), stored per project
+in `~/.minima-harness/perm-grants.json` (perm_grants.ts) so a granted family never re-asks
+across sessions; unanalyzable commands keep the whole-tool session grant. The MP18
+session-only rule STANDS for verify consent: approved verify strings still never touch
+disk — the persisted store holds bash command families only. accept-edits itself stays CC
+parity (bash prompts; the user chose persisted grants over mode-scoped auto-bash).
+Scenario: `bash-grants`.
+
 ### MP19 — Final E2E acceptance demo *(M/L · last)*
 
 **Goal:** the whole story, proven — J1's demo intent, re-scoped to this guide.

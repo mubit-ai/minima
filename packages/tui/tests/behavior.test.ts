@@ -553,6 +553,27 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(body).toContain('permPrompt.resolve("allow");');
   });
 
+  test("Enter on the permission overlay ACCEPTS (Yes once) — it can never cancel", () => {
+    // 2026-07-21: an approved-then-gate-blocked todowrite read as "Enter cancelled it".
+    // Pin the actual mapping: return sits in the ALLOW branch (escape in deny), and the
+    // overlay is the only Enter consumer while it is up — the composer unmounts entirely.
+    const idx = src.indexOf('if (input === "y" || input === "Y" || key.return) {');
+    expect(idx).toBeGreaterThan(-1);
+    const handler = src.slice(idx, idx + 300);
+    const allowAt = handler.indexOf('prompt.resolve("allow");');
+    expect(allowAt).toBeGreaterThan(-1);
+    expect(allowAt).toBeLessThan(handler.indexOf('prompt.resolve("deny");'));
+    expect(src).toContain("permPrompt || questionPrompt ? null : (");
+  });
+
+  test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {
+    // The done-gate refusing a completion flip is NOT a cancellation — the renderer keys
+    // on isGateBlockReason so the block can never be confused with a permission denial.
+    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    expect(messages).toContain("isGateBlockReason(msg.text)");
+    expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
+  });
+
   test("one shared ON notice: definition + auto-heal + /plan", () => {
     expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(3);
   });
