@@ -7,8 +7,8 @@ OpenAI/Anthropic/LiteLLM/Google-GenAI clients so every LLM call auto-ingests its
 and gets relevant lessons injected — no code changes at the call site.
 
 What this does and does NOT do:
-- It DOES land traces + lessons in Minima's lane, so they enrich the reasoner's memory
-  block (``get_context``) and Mubit's own reflection/strategy promotion.
+- It DOES land traces + lessons in Minima's lane, so they enrich Mubit's reflection/
+  strategy promotion and anything that recalls from that lane (e.g. ``/v1/strategies``).
 - It does NOT, on its own, produce Minima *outcome records* (the ``kind="outcome"``
   rows the deterministic k-NN aggregator scores), and ``mubit.learn`` never fabricates
   a success signal. To close the loop, either call :func:`feedback` (credits the

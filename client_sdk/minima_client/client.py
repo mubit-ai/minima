@@ -52,12 +52,13 @@ class Usage:
 
     Report what the provider ACTUALLY billed (never echo Minima's own est_cost_usd
     back): these numbers are what let the cost basis climb estimate -> observed ->
-    rescaled for your org.
+    rescaled for your org. Fields default to None (= not measured); an explicit 0 is
+    a real measurement and is reported as such.
     """
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost_usd: float = 0.0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
     latency_ms: int | None = None
 
 
@@ -69,10 +70,14 @@ def _feedback_request(
     **kwargs: Any,
 ) -> FeedbackRequest:
     if usage is not None:
-        kwargs.setdefault("input_tokens", usage.input_tokens or None)
-        kwargs.setdefault("output_tokens", usage.output_tokens or None)
-        kwargs.setdefault("actual_cost_usd", usage.cost_usd or None)
-        kwargs.setdefault("latency_ms", usage.latency_ms)
+        if usage.input_tokens is not None:
+            kwargs.setdefault("input_tokens", usage.input_tokens)
+        if usage.output_tokens is not None:
+            kwargs.setdefault("output_tokens", usage.output_tokens)
+        if usage.cost_usd is not None:
+            kwargs.setdefault("actual_cost_usd", usage.cost_usd)
+        if usage.latency_ms is not None:
+            kwargs.setdefault("latency_ms", usage.latency_ms)
     return FeedbackRequest(
         recommendation_id=recommendation_id,
         chosen_model_id=chosen_model_id,
@@ -109,7 +114,6 @@ class MinimaClient:
         constraints: Constraints | None = None,
         user_id: str | None = None,
         namespace: str | None = None,
-        allow_llm_escalation: bool = True,
         explain: bool = True,
         baseline_model_id: str | None = None,
     ) -> RecommendResponse:
@@ -119,7 +123,6 @@ class MinimaClient:
             constraints=constraints or Constraints(),
             user_id=user_id,
             namespace=namespace,
-            allow_llm_escalation=allow_llm_escalation,
             explain=explain,
             baseline_model_id=baseline_model_id,
         )
@@ -230,7 +233,6 @@ class AsyncMinimaClient:
         constraints: Constraints | None = None,
         user_id: str | None = None,
         namespace: str | None = None,
-        allow_llm_escalation: bool = True,
         explain: bool = True,
         baseline_model_id: str | None = None,
     ) -> RecommendResponse:
@@ -240,7 +242,6 @@ class AsyncMinimaClient:
             constraints=constraints or Constraints(),
             user_id=user_id,
             namespace=namespace,
-            allow_llm_escalation=allow_llm_escalation,
             explain=explain,
             baseline_model_id=baseline_model_id,
         )
