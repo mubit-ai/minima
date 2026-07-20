@@ -308,6 +308,41 @@ export function tailToFit(text: string, interior: number, budgetRows: number): s
 export const SCROLLBACK_SAFETY_ROWS = 2;
 
 /**
+ * The anchor-ledger kernel (2026-07-20). The live frame's next explicit height, holding THE
+ * RULE's invariant structurally instead of via the estimate-decay minHeight:
+ *
+ *   H >= H_prev − K   and   H <= rows − SCROLLBACK_SAFETY_ROWS
+ *
+ * where K = transcript rows committed to <Static> with this frame. log-update rewrites each
+ * frame TOP-anchored at the previous frame's top, so a frame that shrinks faster than the
+ * static rows printed above it lands its bottom above the terminal bottom — the stranded-
+ * composer float (perm/question teardown, busy teardown, wide-terminal stream commits where
+ * the reply wraps to fewer rows than the stream-frame shrink). With the floor, K + H >=
+ * H_prev keeps the bottom at/below the old bottom and the terminal scroll re-pins it; the
+ * inequalities telescope across Ink's 32ms write throttle (H_n >= H_0 − ΣK_i), so skipped
+ * intermediate frames cannot break it. The cap makes Ink's scrollback-wiping clearTerminal
+ * unreachable from our own frames: the wipe threshold reads the root's Yoga height and
+ * <Static> is position-absolute (excluded), so an explicit height <= rows − 2 can never
+ * reach `rows`. Estimate errors degrade to transient padding (over-count) or a top-clip
+ * under overflow="hidden" (under-count) — never a strand, never a wipe.
+ *
+ * prevHeight 0 = reset (startup, /clear, rewind, resume — the <Static> remount reprints the
+ * transcript and seats itself); a resize reset seeds `rows − SCROLLBACK_SAFETY_ROWS` instead
+ * (one full-height flex-end frame writes past the last row and re-anchors — the same physics
+ * the panel-close reseat used).
+ */
+export function nextLiveFrameHeight(
+  prevHeight: number,
+  committedRows: number,
+  contentRows: number,
+  rows: number,
+): number {
+  const cap = Math.max(1, rows - SCROLLBACK_SAFETY_ROWS);
+  const floor = Math.max(0, Math.min(prevHeight, cap) - Math.max(0, committedRows));
+  return Math.min(cap, Math.max(contentRows, floor));
+}
+
+/**
  * Rows to allot the live streaming-reply preview, given the terminal height `rows` and the rows
  * already reserved for the other live elements (input box, status/footer, busy, thoughts, header).
  * Keeps the total live frame `<= rows - SCROLLBACK_SAFETY_ROWS` so it never trips Ink's

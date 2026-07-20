@@ -90,6 +90,8 @@ import {
   TOC_MIN_COLS,
   childTreeHeight,
   computeMsgHeight,
+  markdownBodyHeight,
+  nextLiveFrameHeight,
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
@@ -104,7 +106,7 @@ import {
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
-import { ModelPicker } from "./model-picker.tsx";
+import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
   type PanelState,
@@ -657,6 +659,20 @@ export interface ConfigOverlayProps {
 }
 
 const ALL_CONFIG_FIELDS = SECTIONS.flatMap((s) => s.fields);
+// Anchor-ledger reservation for ConfigOverlay (colocated with its render below): border(2)
+// + per-section title + one row per field + edit row(2, over-counted when idle) + hint(1).
+const CONFIG_OVERLAY_MAX_ROWS = 2 + SECTIONS.length + ALL_CONFIG_FIELDS.length + 2 + 1;
+// Rollback for the anchor ledger: =1 restores the estimate-decay minHeight bottom mount
+// (staticBasisIdx + closePanelReseat basis reset). Delete after the ledger has soaked.
+const ANCHOR_LEGACY = process.env.MINIMA_TUI_ANCHOR_LEGACY === "1";
+// Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
+// reservation can't drift from the render.
+const BANNER_TAGLINES = [
+  "CLI · cost-aware model routing",
+  "recommend → run → judge → feedback → memory",
+  "type a prompt, or / for commands",
+  "scroll with your terminal (wheel / trackpad) · select & copy freely",
+];
 
 export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   const allFields = ALL_CONFIG_FIELDS;
@@ -1303,10 +1319,18 @@ export function HarnessApp({
   // suspended (draft survives).
   const [panel, setPanel] = useState<PanelState | null>(null);
   const panelCapture = panel !== null;
-  // Basis for the bottom-mount static estimate: messages BEFORE this index are treated as
-  // no-longer-on-screen. 0 for a whole normal session; moved to messages.length whenever
-  // the expanded panel closes (it covered the screen — see closePanelReseat below).
+  // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1) basis for the estimate-decay bottom mount:
+  // messages BEFORE this index are treated as no-longer-on-screen. 0 for a whole normal
+  // session; moved to messages.length whenever the expanded panel closes. Superseded by the
+  // anchor ledger (see the bottom-mount block before the render tree); kept compiled-in so
+  // the old path stays one env var away until the ledger has soaked.
   const [staticBasisIdx, setStaticBasisIdx] = useState(0);
+  // Anchor ledger (2026-07-20, layout.ts nextLiveFrameHeight): the live frame's height from
+  // the LAST committed render, the message count whose rows were already booked as committed
+  // scrollback, and the (transcriptGen, rows, cols) identity whose change resets the ledger.
+  const liveHeightRef = useRef(0);
+  const committedLenRef = useRef(0);
+  const anchorGenRef = useRef<{ gen: number; rows: number; cols: number } | null>(null);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -1528,6 +1552,10 @@ export function HarnessApp({
               : 0;
             const accumulatedThoughts = thoughtsRef.current.trim();
             // MP20 (MUB-165): tear the live stream DOWN before committing to <Static>.
+            // Under the anchor ledger this ordering is UX, not correctness (either order
+            // stays bottom-anchored — the floor absorbs the shrink as padding): teardown-
+            // first still minimizes the transient padding gap and keeps the reply tail
+            // adjacent to the composer on the settled screen (the fence-verbatim gates).
             // These setStates flush as separate Ink renders; with the old order (commit
             // first) render A printed the static reply while the live frame was still
             // stream-tall, and render B's erase then walked that tall height back UP from
@@ -4023,12 +4051,14 @@ export function HarnessApp({
   const footerHeight = 6 + (currentAction ? 1 : 0) + taskShown.length;
   const panelInnerRows = Math.max(1, panelOuter - PANEL_CHROME_ROWS);
   // Closing must also RE-SEAT the bottom mount: the panel covered the whole screen, so the
-  // post-close frame starts from an effectively fresh screen. Moving the static-estimate
-  // basis to the current message count makes bottomMountMinRows go full and then decay per
-  // committed message — THE RULE's own math — instead of log-update stranding the shrunken
-  // composer frame at the old panel top (the spike's one real finding).
+  // post-close frame starts from an effectively fresh screen. Under the anchor ledger this
+  // is free — the panel frame IS the rows−2 identity, so the close floor keeps a
+  // full-height flex-end frame that decays per commit (exactly what the legacy basis reset
+  // produced). Legacy path: move the static-estimate basis to the current message count so
+  // bottomMountMinRows goes full and decays fresh, instead of log-update stranding the
+  // shrunken composer frame at the old panel top (the MP4 spike's one real finding).
   function closePanelReseat() {
-    setStaticBasisIdx(messages.length);
+    if (ANCHOR_LEGACY) setStaticBasisIdx(messages.length);
     setPanel(null);
   }
   function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
@@ -4197,6 +4227,104 @@ export function HarnessApp({
     if (panel && !panelVisible) closePanelReseat();
   });
 
+  // Bottom-mount the prompt section (THE RULE, 2026-07-16; anchor ledger 2026-07-20): the
+  // startup newline reserve in main.ts seats the FIRST paint at the terminal bottom, and the
+  // ledger keeps every later frame there by giving the live frame an EXPLICIT height that
+  // never shrinks faster than the rows committed to <Static> above it (floor) and never
+  // reaches the terminal height (cap) — nextLiveFrameHeight in layout.ts states the
+  // invariant and the telescoping argument. Estimate errors degrade to transient padding
+  // (over-count) or a top-clip under overflow="hidden" (under-count) — never a stranded
+  // composer, never Ink's scrollback-wiping clearTerminal. Enforced by tui-verify's
+  // bottom-anchor checks and tests/anchor-ledger.test.ts.
+  //
+  // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1): the estimate-decay flex-end minHeight — inert once
+  // the transcript outgrows the screen, so any later live-frame shrink (perm/question
+  // teardown, wide-terminal stream commit, resize) stranded the composer mid-screen.
+  const staticRowsEstimate = useMemo(() => {
+    if (!ANCHOR_LEGACY) return 0;
+    const cap = rows;
+    let sum = 0;
+    for (let i = Math.min(staticBasisIdx, messages.length); i < messages.length; i++) {
+      const m = messages[i];
+      if (!m) continue;
+      sum += computeMsgHeight(m, cols);
+      if (sum >= cap) break;
+    }
+    return sum;
+  }, [messages, cols, rows, staticBasisIdx]);
+  const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
+
+  // Anchor-ledger inputs. contentRows conservatively counts everything the live frame shows
+  // THIS render — every conditional footer element must be booked here (an uncounted element
+  // top-clips under the explicit height). While the panel renders, the frame is the MP4
+  // identity: panelOuter + PANEL_STATUS_ROWS + inputBoxHeight ≡ rows − SCROLLBACK_SAFETY_ROWS.
+  const bannerShown = messages.length === 0 && matchingCommands.length === 0 && !overlayOpen;
+  const bannerRows = bannerShown
+    ? 1 +
+      wrappedLineCount(getAsciiBanner("MINIMA"), cols) +
+      BANNER_TAGLINES.reduce((n, line) => n + 1 + wrappedLineCount(line, cols), 0) +
+      (tipsEnabled && startupTip ? 1 + wrappedLineCount(startupTip, cols) : 0)
+    : 0;
+  const pickerRows = pickerOpen
+    ? MODEL_PICKER_MAX_ROWS
+    : paletteOpen
+      ? COMMANDS.length + 3
+      : sessionPickerOpen
+        ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
+        : configOverlayOpen
+          ? CONFIG_OVERLAY_MAX_ROWS
+          : 0;
+  const streamTailRows = busy && streamTail ? 2 + markdownBodyHeight(streamTail, cols) : 0;
+  const contentRows =
+    panelVisible && panelTop
+      ? Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
+      : bannerRows +
+        streamingThoughtsHeight +
+        streamTailRows +
+        busyIndicatorHeight +
+        suggestionsHeight +
+        inputBoxHeight +
+        permPromptHeight +
+        questionPromptHeight +
+        treeHeight +
+        footerHeight +
+        pickerRows;
+  // Ledger resets: a <Static> remount (startup, /clear, rewind, resume) reprints the
+  // transcript and seats itself → content-sized frame. A resize seeds one full-height frame
+  // instead: it writes past the last row and re-anchors — including after Ink's one
+  // unavoidable old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst
+  // until the next commit scrolls it home).
+  const anchorPrev = anchorGenRef.current;
+  const anchorRemounted =
+    anchorPrev === null ||
+    anchorPrev.gen !== transcriptGen ||
+    messages.length < committedLenRef.current;
+  const anchorResized =
+    anchorPrev !== null && (anchorPrev.rows !== rows || anchorPrev.cols !== cols);
+  const anchorReset = anchorRemounted || anchorResized;
+  let committedRows = 0;
+  if (!anchorReset) {
+    for (let i = committedLenRef.current; i < messages.length; i++) {
+      const m = messages[i];
+      if (m) committedRows += computeMsgHeight(m, cols);
+    }
+  }
+  const liveHeight = nextLiveFrameHeight(
+    anchorReset
+      ? anchorRemounted
+        ? 0
+        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
+      : liveHeightRef.current,
+    committedRows,
+    contentRows,
+    rows,
+  );
+  useEffect(() => {
+    liveHeightRef.current = liveHeight;
+    committedLenRef.current = messages.length;
+    anchorGenRef.current = { gen: transcriptGen, rows, cols };
+  });
+
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI.
   if (rows < 10 || cols < 40) {
@@ -4217,58 +4345,23 @@ export function HarnessApp({
     );
   }
 
-  const bannerBlock =
-    messages.length === 0 && matchingCommands.length === 0 && !overlayOpen ? (
-      <Box flexDirection="column" alignItems="center" marginTop={1}>
-        <Text color="green" bold>
-          {getAsciiBanner("MINIMA")}
-        </Text>
-        <Box marginTop={1}>
-          <Text color="gray">CLI · cost-aware model routing</Text>
+  const bannerBlock = bannerShown ? (
+    <Box flexDirection="column" alignItems="center" marginTop={1}>
+      <Text color="green" bold>
+        {getAsciiBanner("MINIMA")}
+      </Text>
+      {BANNER_TAGLINES.map((line) => (
+        <Box key={line} marginTop={1}>
+          <Text color="gray">{line}</Text>
         </Box>
+      ))}
+      {tipsEnabled && startupTip ? (
         <Box marginTop={1}>
-          <Text color="gray">recommend → run → judge → feedback → memory</Text>
+          <Text color="yellow">{startupTip}</Text>
         </Box>
-        <Box marginTop={1}>
-          <Text color="gray">type a prompt, or / for commands</Text>
-        </Box>
-        <Box marginTop={1}>
-          <Text color="gray">
-            scroll with your terminal (wheel / trackpad) · select & copy freely
-          </Text>
-        </Box>
-        {tipsEnabled && startupTip ? (
-          <Box marginTop={1}>
-            <Text color="yellow">{startupTip}</Text>
-          </Box>
-        ) : null}
-      </Box>
-    ) : null;
-
-  // Bottom-mount the prompt section (THE RULE, 2026-07-16): while the committed transcript
-  // is shorter than the screen, the live frame keeps a minHeight of rows − SAFETY −
-  // (estimated committed rows) and bottom-justifies its content, so the composer + footer
-  // sit on the terminal's bottom rows from frame 1 and stay glued as messages commit above.
-  // computeMsgHeight is the same conservative ruler the reserve math uses (>= actual, so the
-  // frame can only end AT or above the bottom, never overflow toward Ink's wipe threshold);
-  // once the transcript outgrows the screen the minHeight hits 0 and this is inert. The
-  // startup newline reserve in main.ts seats the FIRST paint at the bottom; this keeps every
-  // later frame there. Enforced by tui-verify's bottom-anchor check.
-  // The sum starts at staticBasisIdx: after the expanded panel closes (it covered the whole
-  // screen) only messages committed SINCE then are on screen above the frame, so the decay
-  // restarts from a fresh screen (min() guards /clear and rewind truncations).
-  const staticRowsEstimate = useMemo(() => {
-    const cap = rows;
-    let sum = 0;
-    for (let i = Math.min(staticBasisIdx, messages.length); i < messages.length; i++) {
-      const m = messages[i];
-      if (!m) continue;
-      sum += computeMsgHeight(m, cols);
-      if (sum >= cap) break;
-    }
-    return sum;
-  }, [messages, cols, rows, staticBasisIdx]);
-  const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
+      ) : null}
+    </Box>
+  ) : null;
 
   // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
   // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
@@ -4531,9 +4624,13 @@ export function HarnessApp({
   );
 
   // The transcript commits to native scrollback via <Static>; only the live region +
-  // footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks. The inner minHeight/flex-end
-  // box keeps the prompt section mounted at the terminal bottom while the transcript is
-  // short (THE RULE); <Static> stays on the flex-start root (see chatRegion note).
+  // footer re-diff. The live box carries the anchor ledger's EXPLICIT height (never
+  // minHeight: Ink's wipe threshold reads the root's Yoga height, and <Static> is
+  // position-absolute — an explicit height <= rows − 2 makes the scrollback-wiping
+  // clearTerminal unreachable). flex-end + the inner flexShrink={0} wrapper make padding
+  // land ABOVE the content and any over-tall content TOP-clip under overflow="hidden" —
+  // Yoga's default shrink would instead compress the children into the fixed height and
+  // garble the composer. <Static> stays on the flex-start root (see chatRegion note).
   return (
     <Box flexDirection="column" width="100%">
       {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
@@ -4542,30 +4639,34 @@ export function HarnessApp({
       </Static>
       <Box
         flexDirection="column"
-        minHeight={bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
+        height={ANCHOR_LEGACY ? undefined : liveHeight}
+        minHeight={ANCHOR_LEGACY && bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
+        overflow={ANCHOR_LEGACY ? undefined : "hidden"}
         justifyContent="flex-end"
       >
-        {panelVisible && panelTop ? (
-          <ExpandPanel
-            title={
-              panelTop.kind === "toc"
-                ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
-                : panelTop.kind === "gt"
-                  ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
-                  : panelTop.kind === "draft"
-                    ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
-                    : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
-            }
-            lines={panelTop.lines}
-            cursor={panelTop.cursor}
-            stops={panelTop.stops}
-            outerHeight={panelOuter}
-            onKey={handlePanelKey}
-          />
-        ) : (
-          chatRegion
-        )}
-        {footerBlock}
+        <Box flexDirection="column" flexShrink={0}>
+          {panelVisible && panelTop ? (
+            <ExpandPanel
+              title={
+                panelTop.kind === "toc"
+                  ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
+                  : panelTop.kind === "gt"
+                    ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
+                    : panelTop.kind === "draft"
+                      ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
+                      : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+              }
+              lines={panelTop.lines}
+              cursor={panelTop.cursor}
+              stops={panelTop.stops}
+              outerHeight={panelOuter}
+              onKey={handlePanelKey}
+            />
+          ) : (
+            chatRegion
+          )}
+          {footerBlock}
+        </Box>
       </Box>
     </Box>
   );
