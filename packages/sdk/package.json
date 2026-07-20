@@ -1,0 +1,22 @@
+{
+  "name": "@mubit-ai/minima-sdk",
+  "version": "0.12.0",
+  "description": "TypeScript SDK for the Minima recommender service (api.minima.sh) — typed /v1/* client for the recommend → run → judge → feedback loop.",
+  "type": "module",
+  "license": "FSL-1.1-Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "README.md"],
+  "scripts": {
+    "test": "bun test",
+    "check": "tsc --noEmit",
+    "lint": "biome check src tests",
+    "format": "biome format --write src tests"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
