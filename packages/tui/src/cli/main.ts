@@ -22,6 +22,7 @@ import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehy
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
+import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
 import {
   type VerifyConsent,
   groundTruthHooks,
@@ -455,6 +456,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // B2 memory scribe: drains queued curation jobs (built once db + agent exist; reads
   // agent.budget at call time since --budget attaches it later).
   let scribeDrain: (() => Promise<void>) | null = null;
+  // E1 diff reviewer: late-bound — the GT hooks are built before the plan meta model
+  // exists, so closure events route through this ref; the reviewer is armed further down.
+  const planClosedRef: { current: ((planId: string) => void) | null } = { current: null };
+  let pendingDiffReview: Promise<unknown> | null = null;
   const verifyConsentRef: { current: VerifyConsent } = { current: headlessVerifyConsent() };
   try {
     db = new MinimaDb();
@@ -511,6 +516,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       const { before, after } = groundTruthHooks(agent, {
         enforceAllowlist: config.toolAllowlist,
         verifyConsent: (cmd) => verifyConsentRef.current(cmd),
+        onPlanClosed: (planId) => planClosedRef.current?.(planId),
       });
       agent.addAfterToolCall(after);
       gtGateBefore = before;
@@ -559,6 +565,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // shutdown must never fail on bookkeeping
     }
   };
+  // E1: an in-flight diff review gets a bounded window at exit to land its verdict gate;
+  // one that can't finish simply writes nothing (advisory — a skip never degrades a tier).
+  const settleDiffReview = async (): Promise<void> => {
+    if (!pendingDiffReview) return;
+    try {
+      await Promise.race([pendingDiffReview, new Promise<void>((r) => setTimeout(r, 8000))]);
+    } catch {
+      // advisory — never delay shutdown on an error
+    }
+  };
   // B2: session end enqueues one reflect job and gives the drain a bounded window; a pass
   // that can't finish here stays queued and the next session's startup drain runs it.
   const endScribeSafely = async (): Promise<void> => {
@@ -593,6 +609,35 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
   const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();
+
+  // E1 zero-context diff reviewer: when a plan closes with every step completed, review
+  // the run's whole diff with fresh eyes (one cheap completion — no plan, no transcript).
+  // Fire-and-forget off the tool dispatch; the exits await it briefly so a one-shot run
+  // still lands its verdict gate. MINIMA_TUI_DIFF_REVIEW=0 opts out.
+  if (
+    process.env.MINIMA_TUI_DIFF_REVIEW !== "0" &&
+    config.groundTruth &&
+    db &&
+    providerKeyPresent(planMetaModel.provider)
+  ) {
+    const reviewDb = db;
+    const reviewTop = detectRepo(process.cwd());
+    planClosedRef.current = (planId) => {
+      if (!reviewTop || !agent.runId) return;
+      const run = reviewDb.getRun(agent.runId);
+      pendingDiffReview = runDiffReview({
+        db: reviewDb,
+        sessionId: agent.runId,
+        planId,
+        metaModel: planMetaModel,
+        diff: collectRunDiff(reviewTop, run?.git_base_sha ?? null),
+        onCostUsd: (usd) => {
+          agent.meter?.addOverhead(usd);
+          agent.budget?.bookSpend(usd, "diff-review");
+        },
+      }).catch(() => null);
+    };
+  }
 
   // The `question` tool lets the model ask the user a structured clarifying question mid-run.
   // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
@@ -661,6 +706,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     } finally {
       await endSessionSafely(agent); // distil the one-shot run into durable memory
       await endScribeSafely(); // curate the run's ledger signals into the memory ledger
+      await settleDiffReview(); // let an in-flight closure review land its gate
       closeDb(rc === 0 ? "done" : "aborted");
     }
     return rc;
@@ -744,6 +790,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   await endScribeSafely(); // curate the run's ledger signals into the memory ledger
+  await settleDiffReview(); // let an in-flight closure review land its gate
   closeDb("done");
   return 0;
 }
