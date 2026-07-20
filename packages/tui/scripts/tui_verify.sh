@@ -1084,8 +1084,11 @@ assert any(has(f, "echo consent-ok") for f in win(3.8, 7.0)), (
 second = win(10.4, 14.0)
 assert second and not any(has(f, "verify (runs as a shell command)") for f in second), (
     "an already-approved verify re-prompted")
-# TODOVSWAP (mutated verify): the overlay RE-PROMPTS with the new command.
-assert any(has(f, "echo consent-swapped") for f in win(14.9, 18.0)), (
+# TODOVSWAP (mutated verify): the overlay RE-PROMPTS with the new command. Window opens
+# AT the CR step (14.8): with MUBIT_API_KEY blanked suite-wide the pre-route recall is
+# gone and the overlay can paint <0.1s after submit — a later window start sees zero
+# frames (frames exist only on output) and misses the one overlay repaint.
+assert any(has(f, "echo consent-swapped") for f in win(14.5, 18.0)), (
     "a mutated verify did not re-prompt")
 print("tui_assert: PASS verify-consent (first-run prompt, silent repeat, mutation re-prompt)")
 PY
