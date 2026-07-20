@@ -19,8 +19,13 @@ import { errText } from "../errtext.ts";
 import type { AskUser } from "../tools/question.ts";
 import type { BudgetLedger } from "./budget.ts";
 import type { CostMeter } from "./meter.ts";
-import { shouldConveneCouncil } from "./plan_council.ts";
-import type { CouncilRoundResult, PlanSession, PlanSessionStore } from "./plan_session.ts";
+import { shouldConveneFullCouncil } from "./plan_council.ts";
+import type {
+  CouncilRoundResult,
+  KeeperMiniResult,
+  PlanSession,
+  PlanSessionStore,
+} from "./plan_session.ts";
 import type { RoutingResult } from "./router.ts";
 
 export interface PlanTurnDeps {
@@ -40,8 +45,15 @@ export interface PlanTurnDeps {
   promptPlanner: (text: string, systemPrompt: string) => Promise<RoutingResult | null>;
   /** Whole-turn AbortController stash; Esc aborts through it. */
   controllerRef: { current: AbortController | null };
-  /** Convene heuristic (default shouldConveneCouncil). */
-  convene?: (text: string) => boolean;
+  /** Convene heuristic (default shouldConveneFullCouncil — MP15: substance AND stakes). */
+  convene?: (text: string, session: PlanSession) => boolean;
+  /** MP15: keeper mini-update for non-council turns — folds the planner's reply into the
+   *  draft (one cheap meta call). Optional; absent = the draft stales between councils. */
+  runMiniUpdate?: (
+    session: PlanSession,
+    text: string,
+    o: { signal: AbortSignal },
+  ) => Promise<{ update: KeeperMiniResult | null; costUsd: number }>;
   /** Session budget: each round reserves before and reconciles realized spend after. */
   budget?: BudgetLedger | null;
   /** Lead cost meter: one row per council round so /cost shows the spend. */
@@ -61,14 +73,63 @@ export async function runPlanTurn(
   const controller = new AbortController();
   deps.controllerRef.current = controller;
   try {
-    const convene = deps.convene ?? shouldConveneCouncil;
-    if (convene(text)) {
+    const convene = deps.convene ?? ((t: string, s: PlanSession) => shouldConveneFullCouncil(s, t));
+    const convened = convene(text, store.session);
+    if (convened) {
       const proceed = await conveneCouncil(store, text, controller, deps);
       if (!proceed) return;
     }
     await deps.promptPlanner(text, deps.buildSystem(store));
+    // MP15: on a planner-only turn the keeper folds the reply into the draft so MP16's
+    // draft view never stales between councils. Only for NON-convened turns — a convened
+    // round already replaced the draft; the budget-exhausted/error "proceed" paths were
+    // convened and intentionally get no mini-update either.
+    if (!convened && deps.runMiniUpdate && !controller.signal.aborted) {
+      await runMiniUpdateBudgeted(store, text, controller, deps);
+    }
   } finally {
     if (deps.controllerRef.current === controller) deps.controllerRef.current = null;
+  }
+}
+
+/** MP15: reserve → run → reconcile the keeper mini-update. Silent fail-open: a failed or
+ *  skipped update leaves the draft stale (the next stakes council repairs it) — no note,
+ *  because a per-turn bookkeeping whine would out-noise the feature. */
+const MINI_UPDATE_RESERVE_USD = 0.05;
+
+async function runMiniUpdateBudgeted(
+  store: PlanSessionStore,
+  text: string,
+  controller: AbortController,
+  deps: PlanTurnDeps,
+): Promise<void> {
+  const budget = deps.budget ?? null;
+  if (budget && budget.mode === "enforce" && budget.exhausted()) return;
+  const label = "plan keeper update";
+  let reservationId: string | null = null;
+  if (budget) {
+    const remaining = budget.status().remainingUsd;
+    const r = budget.reserve(Math.min(MINI_UPDATE_RESERVE_USD, Math.max(0, remaining)), label);
+    if (!r.ok) return;
+    reservationId = r.id;
+  }
+  try {
+    if (!deps.runMiniUpdate) return;
+    const { update, costUsd } = await deps.runMiniUpdate(store.session, text, {
+      signal: controller.signal,
+    });
+    const realized = Number.isFinite(costUsd) ? costUsd : 0;
+    if (budget && reservationId) budget.reconcile(reservationId, realized, label);
+    deps.meter?.record({
+      label,
+      routing: null,
+      actualCostUsd: realized,
+      quality: null,
+      outcome: "success",
+    });
+    if (update && !controller.signal.aborted) store.applyKeeperUpdate(update, realized);
+  } catch {
+    if (budget && reservationId) budget.release(reservationId);
   }
 }
 

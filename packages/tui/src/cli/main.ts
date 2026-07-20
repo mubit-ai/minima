@@ -11,23 +11,31 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
+import { enableBypass, setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { MinimaDb } from "../db/minima_db.ts";
+import { MinimaDb, type RunRow } from "../db/minima_db.ts";
+import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
-import { groundTruthHooks } from "../minima/ground_truth.ts";
+import {
+  type VerifyConsent,
+  groundTruthHooks,
+  headlessVerifyConsent,
+} from "../minima/ground_truth.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
+import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
+import type { TodoTask } from "../tools/todowrite.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -38,7 +46,8 @@ import {
   setValue as storeSetValue,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
-import { installMouseScrollFilter } from "../tui/mouse-scroll.ts";
+import { installInputFilter } from "../tui/input-filter.ts";
+import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
@@ -158,10 +167,12 @@ function seedDefaultModels(): void {
 }
 
 // --- arg parsing --------------------------------------------------------------------
-interface CliArgs {
+export interface CliArgs {
   prompt: string[];
   model?: string;
   provider?: string;
+  /** OpenAI-compatible base URL for a custom --provider (ollama/vLLM/llama.cpp/mock). */
+  providerUrl?: string;
   thinking: string;
   offline: boolean;
   print: boolean;
@@ -174,15 +185,13 @@ interface CliArgs {
   budgetEnforce: boolean;
   /** cost/quality slider 0..10 (0 = cheapest acceptable, 10 = highest quality). */
   slider?: number;
-  /**
-   * Fullscreen renderer: alternate screen buffer, prompt glued to the bottom row, in-app scroll
-   * (PgUp/PgDn + optional mouse wheel) — like Claude Code's fullscreen mode. Default true; disable
-   * with `--no-fullscreen` or `MINIMA_TUI_INLINE=1` to fall back to the inline/native-scroll mode.
-   */
-  fullscreen: boolean;
+  /** Resume a previous session by display name or run-id (prefix ≥ 4 chars). */
+  resume?: string;
+  /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
+  bypassPermissions?: boolean;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const opts: CliArgs = {
     prompt: [],
     thinking: "off",
@@ -191,7 +200,6 @@ function parseArgs(argv: string[]): CliArgs {
     mode: "interactive",
     noTools: false,
     budgetEnforce: false,
-    fullscreen: !process.env.MINIMA_TUI_INLINE,
   };
   const take = (i: number): string => {
     const v = argv[i + 1];
@@ -214,17 +222,17 @@ function parseArgs(argv: string[]): CliArgs {
       case "--provider":
         opts.provider = take(i++);
         break;
+      case "--provider-url":
+        opts.providerUrl = take(i++);
+        break;
       case "--thinking":
         opts.thinking = take(i++);
         break;
       case "--offline":
         opts.offline = true;
         break;
-      case "--no-fullscreen":
-        opts.fullscreen = false;
-        break;
-      case "--fullscreen":
-        opts.fullscreen = true;
+      case "--dangerously-bypass-permissions":
+        opts.bypassPermissions = true;
         break;
       case "-t":
       case "--tools":
@@ -248,6 +256,9 @@ function parseArgs(argv: string[]): CliArgs {
       }
       case "--budget-enforce":
         opts.budgetEnforce = true;
+        break;
+      case "--resume":
+        opts.resume = take(i++);
         break;
       case "--slider": {
         const v = Number(take(i++));
@@ -279,20 +290,27 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --mode {interactive|print|json}
       --model ID           pin a model (bypasses routing)
       --provider NAME      provider for a pinned --model
+      --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
-      --no-fullscreen      inline renderer (native scroll) instead of the glued-prompt fullscreen UI
+      --dangerously-bypass-permissions
+                           start in bypass mode: every tool call runs without prompting
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
+      --resume NAME|ID     resume a previous session by name or run-id prefix (see /name, /rename)
   -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
+
+  Ground-Truth headless note (MINIMA_TUI_GROUND_TRUTH=1 + -p/--mode json): plan-step
+  \`verify\` shell commands fail CLOSED without an interactive user to approve them —
+  set MINIMA_TUI_ALLOW_VERIFY=1 to opt a headless run into executing them.
 `;
 
-function toolsFor(args: CliArgs, groundTruth: boolean) {
-  let tools = args.noTools ? [] : builtinTools({ groundTruth });
+function toolsFor(args: CliArgs, groundTruth: boolean, todoState?: TodoTask[]) {
+  let tools = args.noTools ? [] : builtinTools({ groundTruth, todoState });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -342,6 +360,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       cost: { input: 0, output: 0 },
       context_window: 128_000,
       max_tokens: 8_192,
+      base_url: args.providerUrl,
     });
   }
 
@@ -355,7 +374,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const mapping = await getProject(repoIdentity(process.cwd()));
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
-  const tools = toolsFor(args, config.groundTruth === true);
+  const todoState: TodoTask[] = [];
+  const tools = toolsFor(args, config.groundTruth === true, todoState);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: sampled LLM grading is ON by default (config.judgeSampleRate, ~15% of
@@ -425,14 +445,36 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   agent.memory = await createMubitMemory(memorySession);
 
   // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
-  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run.
+  // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run — EXCEPT
+  // --resume, where continuing without the store would silently start a fresh session.
   let db: MinimaDb | null = null;
   let sink: DbSinkHandle | null = null;
+  let initialResume: RehydratedRun | null = null;
   let gtGateBefore: BeforeToolCall | null = null;
+  const verifyConsentRef: { current: VerifyConsent } = { current: headlessVerifyConsent() };
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
     db.ensureProject(projectKey, config.namespace ?? null);
+    // Resolve --resume BEFORE startRun so a typo never leaves a stray 'active' run row.
+    let resumeFrom: RunRow | null = null;
+    if (args.resume) {
+      resumeFrom = db.findRunByName(projectKey, args.resume);
+      if (!resumeFrom) {
+        const near = db.searchRuns(projectKey, args.resume);
+        process.stderr.write(
+          `minima: no session matching "${args.resume}"\n${
+            near.length
+              ? `${near
+                  .map((r) => `  ${r.run_id.slice(0, 12)}  ${r.display_name ?? "(unnamed)"}`)
+                  .join("\n")}\n`
+              : "  (no near matches — run /resume inside minima to browse sessions)\n"
+          }`,
+        );
+        db.close();
+        return 2;
+      }
+    }
     const runId = db.startRun({
       projectKey,
       providerSessionId: agent.sessionId,
@@ -441,6 +483,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     sink = attachDbSink(agent, db, { runId });
+    if (resumeFrom) {
+      // Same shape as the interactive /resume path: context + meter + judge cadence,
+      // with lineage recorded on the new run. Rehydrated BEFORE first render.
+      initialResume = rehydrateRun(db, resumeFrom.run_id);
+      applyRehydratedRun(agent, initialResume);
+      db.setRunParent(runId, resumeFrom.run_id);
+    }
     // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
     // sink keeps the SQLite plan of record in step with what the agent actually did (plan
     // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
@@ -450,11 +499,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // registered later — headless below, or by the TUI AFTER its permission hook so permission
     // always runs first (first block wins) and no check runs on a call the user would deny.
     if (config.groundTruth) {
-      const { before, after } = groundTruthHooks(agent);
+      // MP18: verify commands are LLM-authored shell — bash-class scrutiny. The ref starts
+      // as the headless checker (deny-all unless MINIMA_TUI_ALLOW_VERIFY=1, fail-CLOSED);
+      // the TUI swaps in its permission-state-backed checker on mount, so interactive runs
+      // consent per exact command via the existing overlay and -p runs never execute an
+      // unapproved check.
+      const { before, after } = groundTruthHooks(agent, {
+        enforceAllowlist: config.toolAllowlist,
+        verifyConsent: (cmd) => verifyConsentRef.current(cmd),
+      });
       agent.addAfterToolCall(after);
       gtGateBefore = before;
     }
   } catch (exc) {
+    if (args.resume) {
+      process.stderr.write(`minima: cannot --resume: persistence unavailable: ${errText(exc)}\n`);
+      return 2;
+    }
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;
   }
@@ -496,6 +557,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
   const askUserRef: AskUserRef = { current: null };
   agent.agentState.tools.push(questionTool(askUserRef));
+  // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
+  // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
+  agent.askUser = askUserRef;
 
   // Budget following: --budget creates a session-scoped ledger (warn mode unless
   // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
@@ -521,7 +585,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     });
   }
-  // Headless has no permission hook, so the done-gate registers directly (sole before-hook).
+  // Headless has no permission hook, so B3's checkpoint hook registers first (snapshot
+  // before the done-gate can block) and the done-gate second — same relative order as the
+  // TUI's stack. One-shot run = one prompt, so arm once here.
+  if (nonInteractive && agent.db) {
+    const headlessTop = detectRepo(process.cwd());
+    const ckpt = makeCheckpointHook({
+      top: headlessTop,
+      db: agent.db,
+      getRunId: () => agent.runId,
+      notify: (message) => process.stderr.write(`minima: ${message}\n`),
+    });
+    agent.addBeforeToolCall(ckpt.hook);
+    ckpt.arm();
+  }
+  // Headless has no permission hook, so the done-gate registers after the checkpoint hook.
   if (nonInteractive && gtGateBefore) agent.addBeforeToolCall(gtGateBefore);
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
@@ -545,21 +623,37 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return rc;
   }
 
-  // Two renderers (like Claude Code):
-  //  - fullscreen (default): alternate screen buffer + hidden cursor. The app draws a full-height
-  //    frame with the prompt glued to the bottom row and scrolls history IN-APP (PgUp/PgDn + an
-  //    optional captured mouse wheel; installMouseScrollFilter strips wheel SGR before Ink sees it).
-  //  - inline (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + Ink <Static> commits to the
-  //    terminal's NATIVE scrollback (wheel/select/copy are the terminal's own); a one-time newline
-  //    reserve seats the prompt at the bottom on first paint.
-  if (args.fullscreen) {
-    installMouseScrollFilter(); // strip wheel SGR from stdin before Ink's key parser
-    process.stdout.write("\u001b[?1049h"); // enter alternate screen
-    process.stdout.write("\u001b[?25l"); // hide cursor (TextInput draws its own)
+  // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
+  // this project's last persisted mode (build when none). Bypass is never persisted — it
+  // must be re-consented each session via the flag or /mode bypass.
+  if (args.bypassPermissions) {
+    enableBypass();
+    setMode("bypass");
   } else {
-    process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
-    process.stdout.write("\u001b[?25l");
+    const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
+    if (savedMode) setMode(savedMode);
   }
+
+  // One renderer — inline (like Claude Code's REPL): main buffer + Ink <Static> commits finished
+  // output to the terminal's NATIVE scrollback, so wheel scroll + click-drag select + copy are
+  // all the terminal's own — simultaneously, no mouse capture. installInputFilter strips stray
+  // wheel SGR + captures bracketed pastes before Ink's key parser sees them.
+  installInputFilter();
+  process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
+  // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
+  // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
+  // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
+  // input render from the TOP and grow downward; Ink commits finished output to native
+  // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
+  process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+  // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
+  // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
+  // so the composer + footer sit at the bottom from frame 1 instead of under the banner at
+  // the top. Plain stdout BEFORE render(), not part of Ink's live frame, so it cannot trip
+  // Ink's overflow-clear. Enforced by render-buffer.test.ts + tui-verify's bottom-anchor
+  // check. Then hide the cursor (TextInput draws its own).
+  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
+  process.stdout.write("\u001b[?25l");
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
@@ -571,17 +665,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       banner: "minima",
       askUserRef,
       childEventRef,
-      fullscreen: args.fullscreen,
+      initialResume,
       planSpawn: spawnFactory,
       planMetaModel,
       gtGateBefore,
+      verifyConsentRef,
+      todos: todoState,
     }),
     { exitOnCtrlC: false },
   );
   await instance.waitUntilExit();
 
-  // Shutdown: leave the alternate screen (fullscreen only) and always restore the cursor.
-  if (args.fullscreen) process.stdout.write("\u001b[?1049l");
+  // Shutdown: drop bracketed paste, restore cursor.
+  process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
   closeDb("done");

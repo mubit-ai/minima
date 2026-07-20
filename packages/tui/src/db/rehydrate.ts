@@ -4,10 +4,36 @@
  * (judge cadence continuity). The inverse of the DbSink + DecisionRecord writer.
  */
 
-import { AssistantMessage, Message } from "../ai/types.ts";
+import { AssistantMessage, Message, type StopReason, Usage } from "../ai/types.ts";
 import type { CostRow } from "../minima/meter.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import { parseRewindMarker, truncateBeforePrompt } from "../session/rewind.ts";
 import type { MinimaDb, RunRow } from "./minima_db.ts";
+
+const STOP_REASONS: readonly StopReason[] = ["stop", "length", "toolUse", "error", "aborted"];
+
+/** Validate a persisted stop_reason against the union; unknown/legacy rows → "stop". */
+function stopReasonFrom(raw: unknown): StopReason {
+  return STOP_REASONS.includes(raw as StopReason) ? (raw as StopReason) : "stop";
+}
+
+/**
+ * Rebuild Usage from the sink payload (sink.ts messagePayload). Missing/legacy payloads →
+ * zeroed Usage. Only cost.total is persisted (cost_total); per-component dollars stay 0 —
+ * nothing downstream consumes them (meter/budget/sections all read cost.total).
+ */
+function usageFrom(raw: unknown): Usage {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const n = (v: unknown) => Number(v) || 0;
+  const usage = new Usage({
+    input: n(r.input),
+    output: n(r.output),
+    cache_read: n(r.cache_read),
+    cache_write: n(r.cache_write),
+  });
+  usage.cost.total = n(r.cost_total);
+  return usage;
+}
 
 export interface RehydratedRun {
   run: RunRow;
@@ -22,7 +48,7 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
   const run = db.getRun(runId);
   if (!run) throw new Error(`no such run: ${runId}`);
 
-  const messages: Message[] = [];
+  let messages: Message[] = [];
   for (const ev of db.getRunEvents(runId)) {
     if (ev.agent_id) continue; // sub-agent context stays out of the lead conversation
     let payload: Record<string, unknown>;
@@ -31,11 +57,25 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
     } catch {
       continue; // skip unparseable rows rather than corrupt the context
     }
+    if (ev.type === "rewind") {
+      // B4: replay-with-truncation — the marker cuts everything from prompt keep+1 on.
+      // (Meter rows and promptsRun stay full below: the spend happened — feedback truth.)
+      const marker = parseRewindMarker(payload);
+      if (marker) messages = truncateBeforePrompt(messages, marker.keep_prompts);
+      continue;
+    }
     const text = String(payload.text ?? "");
     if (ev.type === "user") {
       messages.push(new Message({ role: "user", content: text }));
     } else if (ev.type === "assistant") {
-      messages.push(new AssistantMessage({ content: text, model: String(payload.model ?? "") }));
+      messages.push(
+        new AssistantMessage({
+          content: text,
+          model: String(payload.model ?? ""),
+          stop_reason: stopReasonFrom(payload.stop_reason),
+          usage: usageFrom(payload.usage),
+        }),
+      );
     } else if (ev.type === "tool") {
       messages.push(
         new Message({

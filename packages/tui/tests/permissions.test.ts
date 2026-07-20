@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { permHiddenMarker, permOverlayHeight, permPreviewLines } from "../src/tui/layout.ts";
 import {
+  type PermissionPrompt,
   checkPermission,
   createPermissionState,
   denialReason,
   formatActionLabel,
   formatToolArgs,
-  type PermissionPrompt,
   planModeBlockReason,
   planModeBlockedTools,
 } from "../src/tui/permissions.ts";
@@ -222,7 +222,7 @@ describe("todowrite permission prompt surfaces verify commands", () => {
 // Guards the wrapped-row lockstep between PermissionOverlay and its footer reservation in
 // tui/app.tsx: both must consume the SAME layout helpers, so a preview line that word-wraps at a
 // narrow width can never render taller than the rows reserved for it (inline: Ink's
-// scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+// scrollback-wiping clearTerminal).
 describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
@@ -275,9 +275,7 @@ describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
 
 describe("formatActionLabel", () => {
   test("prefixes the tool name and a compact arg summary", () => {
-    expect(formatActionLabel("bash", { command: "git diff --stat" })).toBe(
-      "bash: git diff --stat",
-    );
+    expect(formatActionLabel("bash", { command: "git diff --stat" })).toBe("bash: git diff --stat");
     expect(formatActionLabel("grep", { pattern: "needle" })).toBe("grep: needle");
   });
 
@@ -288,6 +286,194 @@ describe("formatActionLabel", () => {
 
   test("uses the bare tool name when the arg summary is empty", () => {
     expect(formatActionLabel("bash", { command: "" })).toBe("bash");
+  });
+});
+
+// ---------------------------------------------------------------- B2: plan-mode force-prompt
+
+import { BUILD_BUNDLE, PLAN_BUNDLE } from "../src/agent/modes.ts";
+import { type GuardEvent, onGuardEvent } from "../src/agent/policy.ts";
+import type { AgentState } from "../src/agent/state.ts";
+import type { BeforeToolCallContext } from "../src/agent/tools.ts";
+import { makeModeGatedBeforeToolCall } from "../src/tui/permissions.ts";
+
+function editCtx(): BeforeToolCallContext {
+  return {
+    toolCall: { type: "toolCall", id: "tc-1", name: "edit", arguments: {} },
+    args: { filePath: "src/x.ts", old_string: "a", new_string: "b" },
+    context: {} as AgentState, // the factory never reads it
+  };
+}
+
+describe("checkPermission forcePrompt (B2 plan-mode ask)", () => {
+  test("prompts even when allowAlways contains the tool", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("bash");
+    let prompt: PermissionPrompt | null = null;
+    const res = checkPermission(
+      "bash",
+      { command: "ls" },
+      state,
+      (p) => {
+        prompt = p;
+        p.resolve("allow");
+      },
+      { forcePrompt: true, promptTextPrefix: "plan mode — asks every time: " },
+    );
+    expect(await res).toBeNull();
+    expect(prompt!.promptText).toBe("plan mode — asks every time: run bash");
+  });
+
+  test("'always' records the grant, but the next forced call still prompts", async () => {
+    const state = createPermissionState("/repo");
+    let prompts = 0;
+    const ask = () =>
+      checkPermission(
+        "edit",
+        { filePath: "x" },
+        state,
+        (p) => {
+          prompts += 1;
+          p.resolve("always");
+        },
+        { forcePrompt: true },
+      );
+    await ask();
+    expect(state.allowAlways.has("edit")).toBe(true); // pays off in build mode…
+    await ask();
+    expect(prompts).toBe(2); // …but the mode rule keeps outranking it
+  });
+
+  test("deny under forcePrompt blocks with the anti-spiral copy", async () => {
+    const state = createPermissionState("/repo");
+    const res = await checkPermission("write", { path: "x" }, state, (p) => p.resolve("deny"), {
+      forcePrompt: true,
+    });
+    expect(res?.block).toBe(true);
+    expect(res?.reason).toContain("user choice");
+  });
+});
+
+describe("makeModeGatedBeforeToolCall (B2)", () => {
+  test("edit in plan mode → forced prompt + mode-ask GuardEvent", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("edit"); // must NOT short-circuit in plan mode
+    const events: GuardEvent[] = [];
+    const offGuard = onGuardEvent((e) => events.push(e));
+    let promptText = "";
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: (p) => {
+        promptText = p.promptText;
+        p.resolve("allow");
+      },
+      getBundle: () => PLAN_BUNDLE,
+    });
+    expect(await hook(editCtx())).toBeNull();
+    expect(promptText).toBe("plan mode — asks every time: run edit");
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("mode-ask");
+    expect(events[0]!.detail).toContain("edit");
+    offGuard();
+  });
+
+  test("edit in build mode with an 'always' grant → silent allow, promptFn never called", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("edit");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => BUILD_BUNDLE,
+    });
+    expect(await hook(editCtx())).toBeNull();
+    expect(prompted).toBe(false);
+  });
+
+  test("an explicit deny rule blocks with the policy reason — no prompt, no guard event", async () => {
+    const state = createPermissionState("/repo");
+    const events: GuardEvent[] = [];
+    const offGuard = onGuardEvent((e) => events.push(e));
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => ({
+        name: "locked",
+        rules: [{ tool: "edit", pattern: "*", action: "deny" }],
+      }),
+    });
+    const res = await hook(editCtx());
+    expect(res?.block).toBe(true);
+    expect(res?.reason).toContain("locked mode policy");
+    expect(prompted).toBe(false);
+    expect(events).toHaveLength(0);
+    offGuard();
+  });
+});
+
+describe("makeModeGatedBeforeToolCall — auto (accept-edits / bypass)", () => {
+  test("edit in acceptEdits mode → runs with NO prompt + mode-auto GuardEvent", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    const events: GuardEvent[] = [];
+    const offGuard = onGuardEvent((e) => events.push(e));
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => ACCEPT_EDITS_BUNDLE,
+    });
+    expect(await hook(editCtx())).toBeNull();
+    expect(prompted).toBe(false); // no "always" grant needed — the mode pre-approved it
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("mode-auto");
+    offGuard();
+  });
+
+  test("bash in acceptEdits mode keeps the NORMAL flow (prompts without a grant)", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: (p) => {
+        prompted = true;
+        p.resolve("deny");
+      },
+      getBundle: () => ACCEPT_EDITS_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { name: "bash" },
+      args: { command: "rm -rf /tmp/x" },
+    } as never);
+    expect(prompted).toBe(true);
+    expect(res?.block).toBe(true);
+  });
+
+  test("bash in bypass mode runs with no prompt", async () => {
+    const { BYPASS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: () => {
+        prompted = true;
+      },
+      getBundle: () => BYPASS_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { name: "bash" },
+      args: { command: "echo hi" },
+    } as never);
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
   });
 });
 
@@ -311,6 +497,11 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     );
     expect(planModeBlockReason("task", false)).toContain("task is blocked");
     expect(planModeBlockReason("task", false)).toContain("unrestricted toolset");
+    // The default path stays frozen: exit_plan exists only in GT plan sessions, so GT-off
+    // reasons must never point the model at a tool it does not have.
+    expect(planModeBlockReason("write", false)).toEndWith("Use /plan to exit.");
+    expect(planModeBlockReason("task", false)).toEndWith("Use /plan to exit.");
+    expect(planModeBlockReason("write", false)).not.toContain("exit_plan");
   });
 
   test("GT-on task reason explains hook-free children + council read-only delegation", () => {
@@ -320,5 +511,40 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     expect(reason).toContain("read-only");
     // Other GT-on tools keep the general plan-mode copy naming the verify hazard.
     expect(planModeBlockReason("todowrite", true)).toContain("`verify` shell checks");
+  });
+
+  test("GT-on reasons steer the model to exit_plan, never to user-only slash commands", () => {
+    for (const tool of ["write", "todowrite", "task"]) {
+      const reason = planModeBlockReason(tool, true);
+      expect(reason).toContain("call the exit_plan tool");
+      expect(reason).not.toContain("Use /plan to exit.");
+    }
+  });
+
+  test("exit_plan is never gated — its approval overlay IS the user interaction (no prompt)", async () => {
+    const state = createPermissionState("/repo");
+    let prompted = false;
+    const res = await checkPermission("exit_plan", {}, state, () => {
+      prompted = true;
+    });
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
+  });
+});
+
+describe("MP18 — mode interaction with verify consent", () => {
+  test("acceptEdits: todowrite with an unseen verify still prompts (not in the auto bundle)", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const { resolvePolicy } = await import("../src/agent/policy.ts");
+    expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "todowrite", subject: "" })).not.toBe("auto");
+  });
+
+  test("the TUI consent checker grants bypass mode blanket consent (source pin)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    expect(src).toContain(
+      'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
+    );
   });
 });

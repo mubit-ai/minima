@@ -113,6 +113,9 @@ function setup(
     allowOffline: false,
     minimaApiKey: "k",
     groundTruth: opts.groundTruth ?? false,
+    // The ladder tests script the model-routing recovery loop, not the A2 stop-gate; disable the
+    // stop-gate so its force-continue can't exhaust the mock and spuriously trip escalation.
+    stopStrikes: 0,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const agent = new MinimaAgent({ config, router, judge, meter: new CostMeter(), tools: [] });
@@ -309,6 +312,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     expect(svc.recommendCalls).toHaveLength(2);
     expect((svc.recommendCalls[1] as any).constraints.excluded_models).toEqual(["cheap-model"]);
     expect(agent.ladderEscalations).toBe(1);
+    expect(agent.ladderExhausted).toBe(0); // A7: it RECOVERED — the ladder was not exhausted
 
     // failure@A then success@B — the grounded loss AND the recovery both reach Minima.
     expect(svc.feedbackCalls).toHaveLength(2);
@@ -352,7 +356,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     db.close();
   });
 
-  test("a persistent RED check walks every rung", async () => {
+  test("a persistent RED check walks every rung — escalate once, then replan (A4)", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
@@ -377,10 +381,130 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
       new AssistantMessage({ content: [text("3")] }),
     ]);
     await agent.promptRouted("hard");
-    // 1 + 2 retries, like a judge that fails every rung — the red gate never clears.
+    // Still walks every rung (1 + 2 retries). A4: the FIRST red escalates (a stronger model might
+    // fix it); once the red persists across rungs the approach — not the model — is at fault, so
+    // the ladder REPLANS the remaining rungs (keep the model, inject a plan-revision steer) instead
+    // of burning more model swaps.
+    // 3 rungs = attempts 0,1,2. Only 0 and 1 recover (the last has no rung left): attempt 0's
+    // first red escalates, attempt 1's persistent red replans; attempt 2 just ends.
     expect(svc.recommendCalls).toHaveLength(3);
-    expect(agent.ladderEscalations).toBe(2);
+    expect(agent.ladderEscalations).toBe(1);
+    expect(agent.ladderReplans).toBe(1);
+    // All 3 rungs still send failure feedback (replan/escalate never suppress a real check-fail);
+    // the length pin guards against a regression silently dropping a rung via transient-suppression.
+    expect(svc.feedbackCalls).toHaveLength(3);
     expect(svc.feedbackCalls.every((f) => (f as any).outcome === "failure")).toBe(true);
+    // Two audit-only `recovery` gates, both rec_id NULL (invisible to the feedback join): the
+    // replan from attempt 1, and A7's terminal EXHAUSTION gate from attempt 2 (the last rung was
+    // still red with no rung left to recover on).
+    const recoveries = db.getGates(planId).filter((g) => g.kind === "recovery");
+    expect(recoveries).toHaveLength(2);
+    expect(recoveries.every((g) => g.rec_id === null)).toBe(true);
+    const replan = recoveries.find(
+      (g) => JSON.parse(g.factors_json ?? "{}").intervention === "replan",
+    );
+    const exhausted = recoveries.find((g) => JSON.parse(g.factors_json ?? "{}").exhausted === true);
+    expect(replan).toBeDefined();
+    expect(exhausted).toBeDefined();
+    expect(exhausted!.confidence).toBe("red");
+    expect(JSON.parse(exhausted!.factors_json ?? "{}")).toMatchObject({
+      kind: "exhausted",
+      cause: "gate_failed",
+    });
+    expect(agent.ladderExhausted).toBe(1);
+    reg.unregister();
+    db.close();
+  });
+});
+
+describe("recovery ladder — exhaustion causes (A7)", () => {
+  /** Seed an active plan with one in_progress, verify-less step (no gate) so the exhaustion writer
+   * has a plan to attach to, without any grounded verdict interfering with the cause under test. */
+  function seedActivePlan(db: MinimaDb, runId: string) {
+    db.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress" }]);
+    return db.getLatestPlan(runId)!.id;
+  }
+  function exhaustionGate(db: MinimaDb, planId: string) {
+    return db
+      .getGates(planId)
+      .filter((g) => g.kind === "recovery")
+      .find((g) => JSON.parse(g.factors_json ?? "{}").exhausted === true);
+  }
+
+  test("no gate + a persistent sub-τ judge → exhaustion cause='judge_failed'", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const { agent, reg, svc } = setup(new ConstJudge(0.3), db, { groundTruth: true });
+    const planId = seedActivePlan(db, agent.runId!);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("1")] }),
+      new AssistantMessage({ content: [text("2")] }),
+      new AssistantMessage({ content: [text("3")] }),
+    ]);
+    await agent.promptRouted("hard");
+    expect(svc.recommendCalls).toHaveLength(3); // escalate x2 then exhaust
+    expect(agent.ladderEscalations).toBe(2);
+    expect(agent.ladderExhausted).toBe(1);
+    const g = exhaustionGate(db, planId);
+    expect(g).toBeDefined();
+    expect(g!.confidence).toBe("red");
+    expect(JSON.parse(g!.factors_json ?? "{}").cause).toBe("judge_failed");
+    reg.unregister();
+    db.close();
+  });
+
+  test("persistent non-transient provider error → exhaustion cause='hard_error'", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const planId = seedActivePlan(db, agent.runId!);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("")], stop_reason: "error", error_message: "boom" }),
+      new AssistantMessage({ content: [text("")], stop_reason: "error", error_message: "boom" }),
+      new AssistantMessage({ content: [text("")], stop_reason: "error", error_message: "boom" }),
+    ]);
+    await agent.promptRouted("x");
+    expect(agent.ladderEscalations).toBe(2); // a non-transient error escalates
+    expect(agent.ladderExhausted).toBe(1);
+    const g = exhaustionGate(db, planId);
+    expect(g).toBeDefined();
+    expect(JSON.parse(g!.factors_json ?? "{}").cause).toBe("hard_error");
+    reg.unregister();
+    db.close();
+  });
+
+  test("a rate-limit storm across every rung → exhaustion cause='transient' (not hard_error)", async () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const planId = seedActivePlan(db, agent.runId!);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("")],
+        stop_reason: "error",
+        error_message: "HTTP 503",
+      }),
+      new AssistantMessage({
+        content: [text("")],
+        stop_reason: "error",
+        error_message: "HTTP 503",
+      }),
+      new AssistantMessage({
+        content: [text("")],
+        stop_reason: "error",
+        error_message: "HTTP 503",
+      }),
+    ]);
+    await agent.promptRouted("x");
+    // A transient blip backs off the SAME model (no exclusion, no feedback) — A4 — so the infra
+    // storm never teaches Minima; the exhaustion audit keeps it distinct from a capability failure.
+    expect(agent.ladderBackoffs).toBe(2);
+    expect(agent.ladderEscalations).toBe(0);
+    expect(svc.feedbackCalls).toHaveLength(0); // transient suppresses feedback on every rung
+    expect(agent.ladderExhausted).toBe(1);
+    const g = exhaustionGate(db, planId);
+    expect(g).toBeDefined();
+    expect(JSON.parse(g!.factors_json ?? "{}").cause).toBe("transient");
     reg.unregister();
     db.close();
   });

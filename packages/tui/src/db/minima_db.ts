@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
   Baseline,
+  CheckOrigin,
   ConfidenceTier,
   GateKind,
   GateOutcome,
@@ -224,8 +225,9 @@ const MIGRATIONS: string[][] = [
   // v6 — gate identity: rec_id scopes every gate row to the routed rung that minted it
   // (NULL = pre-identity/manual, invisible to the feedback join by construction);
   // session_id/agent_id are reporting/provenance only, never feedback inputs. plans.closed_at
-  // records closure; plan_steps.verify_cwd is a seam for per-check cwd policy (no writer yet);
-  // user_signals.note carries the steer key's free text.
+  // records closure; plan_steps.verify_cwd carries a per-check working dir (writer added in v7
+  // era — sticky through upsertPlanFromTodos, passed to runCheck); user_signals.note carries the
+  // steer key's free text.
   [
     "ALTER TABLE gates ADD COLUMN rec_id TEXT",
     "ALTER TABLE gates ADD COLUMN session_id TEXT",
@@ -236,6 +238,58 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE user_signals ADD COLUMN note TEXT",
     "CREATE INDEX IF NOT EXISTS ix_gates_rec ON gates(rec_id)",
     "CREATE INDEX IF NOT EXISTS ix_gates_session ON gates(session_id, created_at)",
+  ],
+  // v7 — check provenance: plan_steps.check_origin records who authored a step's check when it
+  // is known up-front (currently 'user' — a check the user accepted at /plan finalize, i.e. NOT
+  // agent-graded homework). NULL means "compute at gate time from the verify + file changes"
+  // (classifyCheckOrigin); a non-NULL value overrides that computation. Provenance is a fact
+  // about who wrote the check, so it persists across content edits (unlike verify/baseline).
+  [
+    "ALTER TABLE plan_steps ADD COLUMN check_origin TEXT", // pre_existing|agent_new|user (NULL=compute)
+  ],
+  // v8 — A6 per-step tool allowlist: plan_steps.tools holds a JSON array of the tool names a step
+  // is permitted to call (e.g. ["read","edit","bash"]). NULL or an empty array means unrestricted
+  // (the historical behavior — no enforcement). Sticky through upsertPlanFromTodos like verify:
+  // omit to keep, resend to overwrite, never clear. The dispatcher (tool_permissions.ts) hard-
+  // blocks a mutating tool call absent from the in-progress step's allowlist when it is non-empty.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
+  ],
+  // v9 — per-step cost attribution (U3): the in-progress plan step at routing time, stamped by
+  // the DecisionRecord writer when ground truth is on. This is provenance for reporting (U3
+  // sidebar / J1 /why), never a feedback input. NULL = pre-v8 row or no step in progress.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
+    "CREATE INDEX IF NOT EXISTS ix_decisions_step ON routing_decisions(step_id)",
+  ],
+  // v10 — git-shadow checkpoints (B3): one row per worktree snapshot, keyed to the run and
+  // the replay-space prompt ordinal (count of lead user events persisted BEFORE the prompt
+  // that triggered the snapshot — the sink flushes at turn_end, so mid-turn the current
+  // prompt is not yet counted). kind 'turn' = pre-mutation snapshot · 'safety' = auto
+  // snapshot taken just before a restore (so /undo is itself undoable). The git objects
+  // live under refs/minima/ckpt/<run_id>/<checkpoint_id>; this table is the mapping ledger.
+  [
+    `CREATE TABLE IF NOT EXISTS checkpoints (
+       id             TEXT PRIMARY KEY,
+       run_id         TEXT NOT NULL REFERENCES runs(run_id),
+       ref            TEXT NOT NULL,
+       commit_sha     TEXT NOT NULL,
+       tree_sha       TEXT NOT NULL,
+       prompt_ordinal INTEGER NOT NULL,
+       step_id        TEXT REFERENCES plan_steps(id),
+       kind           TEXT NOT NULL DEFAULT 'turn',  -- turn|safety
+       created        REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_checkpoints_run ON checkpoints(run_id, created DESC)",
+  ],
+  // v11 — lineage convergence (TrackA/TrackB merge): both feature branches shipped a batch at
+  // index 7 (TrackA: plan_steps.tools · TrackB: routing_decisions.step_id), so a DB migrated on
+  // the TrackB lineage sits at version 9 having never seen the tools ALTER that now lives at
+  // index 7. Re-running it here converges every lineage; execStep's duplicate-column self-heal
+  // makes it a no-op for fresh and TrackA-lineage DBs. Append-only discipline holds — no shipped
+  // batch string was edited.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
   ],
 ];
 
@@ -291,6 +345,8 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
+  /** In-progress GT plan step at routing time (v9) — reporting provenance, not feedback. */
+  stepId?: string | null;
 }
 
 // ---------------------------------------------------------------- ground-truth rows
@@ -313,6 +369,9 @@ export interface PlanStepRow {
   baseline: Baseline | null;
   created_at: string | null;
   verify_cwd: string | null;
+  check_origin: CheckOrigin | null;
+  /** A6: JSON array of permitted tool names, or NULL/"[]" for unrestricted. See tool_permissions.ts. */
+  tools: string | null;
 }
 
 export interface FileChangeRow {
@@ -349,11 +408,28 @@ export interface UserSignalRow {
   note: string | null;
 }
 
+/** One git-shadow worktree snapshot (B3, v10) — the ref ↔ run ↔ prompt ↔ step mapping. */
+export interface CheckpointRow {
+  id: string;
+  run_id: string;
+  ref: string;
+  commit_sha: string;
+  tree_sha: string;
+  /** Lead user events persisted before the triggering prompt (replay space). */
+  prompt_ordinal: number;
+  step_id: string | null;
+  kind: "turn" | "safety";
+  created: number;
+}
+
 /** One todo as handed to the ledger (a subset of the todowrite tool's TodoTask). */
 export interface TodoInput {
   content: string;
   status: string;
   verify?: string | null;
+  verify_cwd?: string | null;
+  /** A6: per-step tool allowlist. Sticky like verify (omit to keep, resend to overwrite, never clear). */
+  tools?: string[] | null;
 }
 
 /** M4.1: one step a todowrite would flip to completed — the done-gate's unit of work. */
@@ -365,6 +441,21 @@ export interface CompletionFlip {
   verify: string | null;
   /** The matched step's pre-work baseline (null for new steps or when never captured). */
   baseline: Baseline | null;
+  /** Post-COALESCE working dir for the check (null → runCheck defaults to process.cwd()). */
+  verify_cwd: string | null;
+  /** Stored check provenance, when known up-front (else null → compute at gate time). */
+  check_origin: CheckOrigin | null;
+}
+
+/**
+ * A6: normalize a per-step tool allowlist to the DB representation. Trimmed non-empty strings only;
+ * an empty/absent list serializes to NULL (unrestricted), never "[]" — so a NULL bind through
+ * COALESCE in upsertPlanFromTodos preserves an existing allowlist (sticky, like verify). Total.
+ */
+function serializeToolList(tools: string[] | null | undefined): string | null {
+  if (!Array.isArray(tools)) return null;
+  const clean = tools.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean);
+  return clean.length > 0 ? JSON.stringify(clean) : null;
 }
 
 export class MinimaDb {
@@ -392,6 +483,7 @@ export class MinimaDb {
     }
     this.db.exec("PRAGMA foreign_keys=ON");
     this.migrate();
+    this.reconcileSchema();
   }
 
   private migrate(): void {
@@ -433,6 +525,32 @@ export class MinimaDb {
         }
       }
       if (!more) break;
+    }
+  }
+
+  /**
+   * Divergent-lineage self-heal, run on EVERY open after the version runner. Parallel
+   * branches have twice shipped DIFFERENT batches under the same version index (the
+   * TrackA/TrackB index-7 fork healed by v11, and a v6-index fork found in the field:
+   * a DB stamped version 11 with check_origin present but verify_cwd/gates.rec_id
+   * missing — its writers then crash on "no column named verify_cwd"). The version
+   * stamp cannot be trusted to imply THIS lineage's batch contents, so this pass
+   * replays every migration statement idempotently: CREATE ... IF NOT EXISTS as-is,
+   * ALTER ... ADD COLUMN only when pragma table_info lacks the column. One-off
+   * convergence batches (v11) fix an instance; this fixes the class. Concurrent
+   * openers may race an ALTER — execStep's duplicate-column swallow absorbs it.
+   */
+  private reconcileSchema(): void {
+    for (const batch of MIGRATIONS) {
+      for (const ddl of batch) {
+        const alter = ddl.match(/^ALTER TABLE (\w+) ADD COLUMN (\w+)/i);
+        if (alter) {
+          const cols = this.db.query(`PRAGMA table_info(${alter[1]})`).all() as { name: string }[];
+          if (!cols.some((c) => c.name === alter[2])) this.execStep(ddl);
+          continue;
+        }
+        if (/^CREATE (TABLE|INDEX) IF NOT EXISTS/i.test(ddl.trim())) this.execStep(ddl);
+      }
     }
   }
 
@@ -538,6 +656,51 @@ export class MinimaDb {
       .all(projectKey, limit) as RunRow[];
   }
 
+  /**
+   * Resolve a resume target (B1): exact display_name → case-insensitive name → exact run_id
+   * → run_id prefix (only for queries ≥ 4 chars, so short strings don't match everything).
+   * Names outrank id prefixes — they are the user-facing handle. Most-recent `updated` wins
+   * at every stage. Scoped to projectKey.
+   */
+  findRunByName(projectKey: string, query: string): RunRow | null {
+    const one = (sql: string, ...params: (string | number)[]) =>
+      (this.db.query(sql).get(...params) as RunRow) ?? null;
+    return (
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND display_name = ? ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND lower(display_name) = lower(?) ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      one(
+        "SELECT * FROM runs WHERE project_key = ? AND run_id = ? ORDER BY updated DESC LIMIT 1",
+        projectKey,
+        query,
+      ) ??
+      (query.length >= 4
+        ? one(
+            "SELECT * FROM runs WHERE project_key = ? AND run_id LIKE ? ESCAPE '\\' ORDER BY updated DESC LIMIT 1",
+            projectKey,
+            `${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`,
+          )
+        : null)
+    );
+  }
+
+  /** Near-matches for a failed resolution (name substring OR id prefix), recency-ordered. */
+  searchRuns(projectKey: string, query: string, limit = 5): RunRow[] {
+    const escaped = query.replace(/[\\%_]/g, (c) => `\\${c}`);
+    return this.db
+      .query(
+        "SELECT * FROM runs WHERE project_key = ? AND (display_name LIKE ? ESCAPE '\\' OR run_id LIKE ? ESCAPE '\\') ORDER BY updated DESC LIMIT ?",
+      )
+      .all(projectKey, `%${escaped}%`, `${escaped}%`, limit) as RunRow[];
+  }
+
   // ---------------------------------------------------------------- events / tools
   appendEvent(opts: {
     id?: string;
@@ -617,12 +780,13 @@ export class MinimaDb {
          chosen_model, decision_basis, selection_policy, confidence, threshold_used, ranked,
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
-         turns, latency_ms, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
          turns = excluded.turns, latency_ms = excluded.latency_ms,
+         step_id = COALESCE(routing_decisions.step_id, excluded.step_id),
          reinforced_entry_ids = excluded.reinforced_entry_ids,
          lesson_promoted = excluded.lesson_promoted`,
       [
@@ -652,6 +816,7 @@ export class MinimaDb {
         d.routed ?? "server",
         d.turns,
         d.latencyMs,
+        d.stepId ?? null,
         d.reinforcedEntryIds?.length ? JSON.stringify(d.reinforcedEntryIds) : null,
         d.lessonPromoted === null || d.lessonPromoted === undefined
           ? null
@@ -667,6 +832,134 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM routing_decisions WHERE run_id = ? ORDER BY ts")
       .all(runId) as Record<string, unknown>[];
+  }
+
+  /**
+   * U3: realized $ per plan step, from the v9 step_id stamp. Realized cost only
+   * (actual_cost_usd) — estimates never masquerade as spend. Steps with no stamped
+   * decisions are absent from the map (the UI renders them as "—", not $0.00).
+   */
+  stepCosts(planId: string): { perStep: Map<string, number>; totalUsd: number } {
+    const rows = this.db
+      .query(
+        `SELECT step_id, SUM(COALESCE(actual_cost_usd, 0)) AS cost
+         FROM routing_decisions
+         WHERE step_id IN (SELECT id FROM plan_steps WHERE plan_id = ?)
+         GROUP BY step_id`,
+      )
+      .all(planId) as { step_id: string; cost: number }[];
+    const perStep = new Map<string, number>();
+    let totalUsd = 0;
+    for (const r of rows) {
+      perStep.set(r.step_id, r.cost);
+      totalUsd += r.cost;
+    }
+    return { perStep, totalUsd };
+  }
+
+  // ================================================================ checkpoints (B3)
+
+  insertCheckpoint(opts: {
+    id?: string;
+    runId: string;
+    ref: string;
+    commitSha: string;
+    treeSha: string;
+    promptOrdinal: number;
+    stepId?: string | null;
+    kind?: "turn" | "safety";
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      `INSERT INTO checkpoints (id, run_id, ref, commit_sha, tree_sha, prompt_ordinal, step_id, kind, created)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        opts.runId,
+        opts.ref,
+        opts.commitSha,
+        opts.treeSha,
+        opts.promptOrdinal,
+        opts.stepId ?? null,
+        opts.kind ?? "turn",
+        Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** All of a run's checkpoints, oldest first. */
+  listCheckpoints(runId: string): CheckpointRow[] {
+    return this.db
+      .query("SELECT * FROM checkpoints WHERE run_id = ? ORDER BY created, id")
+      .all(runId) as CheckpointRow[];
+  }
+
+  /**
+   * Newest checkpoint of the run — optionally only rows strictly older than `beforeCreated`
+   * (the /undo walk-back cursor) and/or of one kind ('turn' skips safety snapshots).
+   */
+  latestCheckpoint(
+    runId: string,
+    opts?: { beforeCreated?: number; kind?: "turn" | "safety" },
+  ): CheckpointRow | null {
+    const conds = ["run_id = ?"];
+    const params: (string | number)[] = [runId];
+    if (opts?.beforeCreated !== undefined) {
+      conds.push("created < ?");
+      params.push(opts.beforeCreated);
+    }
+    if (opts?.kind) {
+      conds.push("kind = ?");
+      params.push(opts.kind);
+    }
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE ${conds.join(" AND ")} ORDER BY created DESC, id DESC LIMIT 1`,
+      )
+      .get(...params) as CheckpointRow | null;
+    return row ?? null;
+  }
+
+  /**
+   * B5 code-rewind target: the checkpoint capturing the worktree AS OF prompt
+   * `promptOrdinal`+1's submission — i.e. the smallest prompt_ordinal >= promptOrdinal
+   * (snapshots are taken BEFORE a mutating prompt's changes, so the state after prompt k
+   * lives in the NEXT mutating prompt's snapshot). Null = no changes since that prompt.
+   */
+  earliestCheckpointAtOrAfter(runId: string, promptOrdinal: number): CheckpointRow | null {
+    const row = this.db
+      .query(
+        `SELECT * FROM checkpoints WHERE run_id = ? AND prompt_ordinal >= ?
+         ORDER BY prompt_ordinal ASC, created ASC LIMIT 1`,
+      )
+      .get(runId, promptOrdinal) as CheckpointRow | null;
+    return row ?? null;
+  }
+
+  /** Delete a run's checkpoint rows (GC companion — the caller deletes the git refs). */
+  deleteCheckpoints(runId: string): void {
+    this.db.run("DELETE FROM checkpoints WHERE run_id = ?", [runId]);
+  }
+
+  /** Distinct run_ids holding checkpoints, most recently snapshotted first (GC policy input). */
+  checkpointRuns(): string[] {
+    const rows = this.db
+      .query(
+        "SELECT run_id, MAX(created) AS latest FROM checkpoints GROUP BY run_id ORDER BY latest DESC",
+      )
+      .all() as { run_id: string }[];
+    return rows.map((r) => r.run_id);
+  }
+
+  /** Lead user events persisted for the run — the replay-space prompt ordinal (B3/B4). */
+  countLeadUserEvents(runId: string): number {
+    const row = this.db
+      .query(
+        "SELECT COUNT(*) AS n FROM events WHERE run_id = ? AND agent_id IS NULL AND type = 'user'",
+      )
+      .get(runId) as { n: number };
+    return row.n;
   }
 
   // ================================================================ ground-truth ledger
@@ -694,6 +987,47 @@ export class MinimaDb {
     return id;
   }
 
+  /**
+   * Seed a fresh active plan + its steps from an APPROVED ground-truth plan (the planner→ledger
+   * bridge). Each step is inserted `pending` with its verify; a step that carries a check is
+   * stamped `check_origin='user'` — the user accepted this plan at /plan finalize, so its checks
+   * are user-trusted, not agent-graded homework. Once seeded this becomes the session's active
+   * plan, so formatPlanProjection carries the verifiable steps into the first execution turn and
+   * the agent's first todowrite reuses them (content-match preserves verify + check_origin).
+   */
+  seedPlanFromSteps(
+    sessionId: string,
+    title: string | null,
+    steps: {
+      content: string;
+      verify?: string | null;
+      verifyCwd?: string | null;
+      tools?: string[] | null;
+    }[],
+  ): { planId: string; stepIds: string[] } {
+    const planId = this.insertPlan({ sessionId, title, status: "active" });
+    const stepIds: string[] = [];
+    const tx = this.db.transaction(() => {
+      steps.forEach((st, i) => {
+        const verify = st.verify?.trim() ? st.verify.trim() : null;
+        stepIds.push(
+          this.insertStep({
+            planId,
+            idx: i,
+            content: st.content,
+            status: "pending",
+            verify,
+            verifyCwd: st.verifyCwd?.trim() ? st.verifyCwd.trim() : null,
+            checkOrigin: verify ? "user" : null,
+            tools: st.tools ?? null,
+          }),
+        );
+      });
+    });
+    tx();
+    return { planId, stepIds };
+  }
+
   /** The newest still-active plan for a session (run), or null. */
   getActivePlan(sessionId: string): PlanRow | null {
     return (
@@ -705,14 +1039,31 @@ export class MinimaDb {
     );
   }
 
-  getLatestPlan(sessionId: string): PlanRow | null {
-    return (
-      (this.db
-        .query(
-          "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        )
-        .get(sessionId) as PlanRow) ?? null
+  /**
+   * The newest plan for a session regardless of status. Display/verification surfaces
+   * (Ctrl+G overview, /why, /verify refutation, failure classification) pass
+   * excludeCancelled — a cancelled plan is a USER-REJECTED plan, never the plan of
+   * record; only the todo-upsert path keeps the default (its reopen logic must see the
+   * cancelled row so it starts a FRESH plan instead of resurrecting an older done one).
+   */
+  getLatestPlan(sessionId: string, opts: { excludeCancelled?: boolean } = {}): PlanRow | null {
+    const sql = opts.excludeCancelled
+      ? "SELECT * FROM plans WHERE session_id = ? AND status <> 'cancelled' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+      : "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1";
+    return ((this.db.query(sql).get(sessionId) as PlanRow) ?? null) as PlanRow | null;
+  }
+
+  /**
+   * /tasks cancel: close EVERY active plan for the session — adoption on resume and
+   * repeated seeding can pile up several, and getActivePlan(LIMIT 1) would let the
+   * next-newest surface right back ("GT still holds"). Returns how many were cancelled.
+   */
+  cancelActivePlans(sessionId: string): number {
+    this.db.run(
+      "UPDATE plans SET status = 'cancelled', closed_at = COALESCE(closed_at, ?) WHERE session_id = ? AND status = 'active'",
+      [Date.now() / 1000, sessionId],
     );
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
   }
 
   getPlan(planId: string): PlanRow | null {
@@ -750,10 +1101,13 @@ export class MinimaDb {
     status?: string;
     verify?: string | null;
     baseline?: Baseline | null;
+    verifyCwd?: string | null;
+    checkOrigin?: CheckOrigin | null;
+    tools?: string[] | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -763,6 +1117,9 @@ export class MinimaDb {
         opts.verify ?? null,
         opts.baseline ?? null,
         new Date().toISOString(),
+        opts.verifyCwd ?? null,
+        opts.checkOrigin ?? null,
+        serializeToolList(opts.tools),
       ],
     );
     return id;
@@ -874,6 +1231,8 @@ export class MinimaDb {
         stepId: prev?.id ?? null,
         verify: t.verify ?? prev?.verify ?? null,
         baseline: verifyChanged ? null : (prev?.baseline ?? null),
+        verify_cwd: t.verify_cwd ?? prev?.verify_cwd ?? null,
+        check_origin: prev?.check_origin ?? null,
       });
     }
     return flips;
@@ -917,7 +1276,11 @@ export class MinimaDb {
     sessionId: string,
     tasks: TodoInput[],
     title?: string | null,
-  ): { planId: string; stepIds: string[]; started: { id: string; verify: string | null }[] } {
+  ): {
+    planId: string;
+    stepIds: string[];
+    started: { id: string; verify: string | null; verify_cwd: string | null }[];
+  } {
     const existingPlan = this.planForTodos(sessionId, tasks);
     if (existingPlan && existingPlan.status === "done") {
       this.setPlanStatus(existingPlan.id, "active");
@@ -928,7 +1291,7 @@ export class MinimaDb {
     const existing = this.getPlanSteps(planId);
     const matchedSteps = this.matchStepsToTodos(existing, tasks);
     const stepIds: string[] = [];
-    const started: { id: string; verify: string | null }[] = [];
+    const started: { id: string; verify: string | null; verify_cwd: string | null }[] = [];
     const tx = this.db.transaction(() => {
       const matched = new Set<string>();
       for (let i = 0; i < tasks.length; i++) {
@@ -940,8 +1303,18 @@ export class MinimaDb {
           // always be scoped to the check that produced the red (a swapped-in check crediting
           // the old check's red would fabricate verified_in_production).
           this.db.run(
-            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify) WHERE id = ?",
-            [i, t.content, t.status, t.verify ?? null, t.verify ?? null, t.verify ?? null, prev.id],
+            "UPDATE plan_steps SET idx = ?, content = ?, status = ?, baseline = CASE WHEN ? IS NOT NULL AND verify IS NOT NULL AND ? <> verify THEN NULL ELSE baseline END, verify = COALESCE(?, verify), verify_cwd = COALESCE(?, verify_cwd), tools = COALESCE(?, tools) WHERE id = ?",
+            [
+              i,
+              t.content,
+              t.status,
+              t.verify ?? null,
+              t.verify ?? null,
+              t.verify ?? null,
+              t.verify_cwd ?? null,
+              serializeToolList(t.tools),
+              prev.id,
+            ],
           );
           stepIds.push(prev.id);
           const entered = t.status === "in_progress" && prev.status !== "in_progress";
@@ -953,7 +1326,11 @@ export class MinimaDb {
             prev.verify !== null &&
             t.verify !== prev.verify;
           if (changedVerify || ((entered || gainedVerify) && prev.baseline === null)) {
-            started.push({ id: prev.id, verify: t.verify ?? prev.verify ?? null });
+            started.push({
+              id: prev.id,
+              verify: t.verify ?? prev.verify ?? null,
+              verify_cwd: t.verify_cwd ?? prev.verify_cwd ?? null,
+            });
           }
         } else {
           const id = this.insertStep({
@@ -962,9 +1339,12 @@ export class MinimaDb {
             content: t.content,
             status: t.status,
             verify: t.verify ?? null,
+            verifyCwd: t.verify_cwd ?? null,
+            tools: t.tools ?? null,
           });
           stepIds.push(id);
-          if (t.status === "in_progress") started.push({ id, verify: t.verify ?? null });
+          if (t.status === "in_progress")
+            started.push({ id, verify: t.verify ?? null, verify_cwd: t.verify_cwd ?? null });
         }
       }
       for (const s of existing) {

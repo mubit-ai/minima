@@ -45,6 +45,31 @@ export function pickVerb(n: number): string {
   return VERBS[((n % len) + len) % len] as string;
 }
 
+// MP14: council-phase progress rendered INSIDE the existing single busy row (it replaces
+// the rotating verb + tip while a council runs, so the footer row budget is unchanged).
+// `scope` is sub-second prep for the research fan-out, so it folds into the researcher
+// tick rather than showing a fifth role; phases only ever advance, so done-marks are
+// always a prefix. Kept a pure string producer so tests pin the exact format.
+export type CouncilPhase = "scope" | "research" | "keeper" | "critic" | "synth" | "done";
+export const COUNCIL_ROLES = ["researcher", "keeper", "critic", "synth"] as const;
+const PHASE_TICK: Record<CouncilPhase, number> = {
+  scope: 0,
+  research: 0,
+  keeper: 1,
+  critic: 2,
+  synth: 3,
+  done: 4,
+};
+
+export function councilProgressLine(phase: CouncilPhase): string {
+  const at = PHASE_TICK[phase];
+  const roles = COUNCIL_ROLES.map((role, i) => {
+    const mark = i < at ? "✓" : i === at ? "…" : "·";
+    return `${role} ${mark}`;
+  });
+  return `council: ${roles.join(" · ")}`;
+}
+
 const SPINNER_INTERVAL_MS = 120; // glyph animation cadence (~8fps)
 const VERB_ROTATE_MS = 3000; // swap the verb roughly every 3s of waiting
 const TIP_ROTATE_MS = 7000; // swap the tip roughly every 7s of waiting
@@ -59,9 +84,11 @@ export interface BusyIndicatorProps {
   active: boolean;
   /** When false, the tip is hidden (spinner + verb + elapsed still show). */
   showTip?: boolean;
+  /** When set, replaces the rotating verb + tip (same single truncating row) — MP14. */
+  statusLine?: string | null;
 }
 
-export function BusyIndicator({ active, showTip = true }: BusyIndicatorProps) {
+export function BusyIndicator({ active, showTip = true, statusLine = null }: BusyIndicatorProps) {
   const [tick, setTick] = useState(0);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [base, setBase] = useState(0);
@@ -87,8 +114,14 @@ export function BusyIndicator({ active, showTip = true }: BusyIndicatorProps) {
           (busyIndicatorHeight reserves exactly 1 line + the marginTop). */}
       <Text wrap="truncate">
         <Text color="yellow">{spinnerFrame(tick)} </Text>
-        <Text color="gray">{verb}… </Text>
-        {showTip ? <Text color="yellow">{formatTip(pick(tipIdx))} </Text> : null}
+        {statusLine ? (
+          <Text color="gray">{statusLine} </Text>
+        ) : (
+          <>
+            <Text color="gray">{verb}… </Text>
+            {showTip ? <Text color="yellow">{formatTip(pick(tipIdx))} </Text> : null}
+          </>
+        )}
         <Text color="gray">{`· ${elapsed}s · esc to abort`}</Text>
       </Text>
     </Box>

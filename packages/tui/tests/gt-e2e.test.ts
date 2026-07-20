@@ -22,9 +22,7 @@ import {
 } from "../src/minima/behavior.ts";
 import {
   groundTruthHooks,
-  planStripDrift,
   planStripInfo,
-  planStripLabel,
   stampGroundedOutcome,
 } from "../src/minima/ground_truth.ts";
 import type { Factors } from "../src/minima/gt_contract.ts";
@@ -112,10 +110,12 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       origin: "off_plan",
     });
 
-    // --- Strip snapshot (M1.3 + M2.3) ---
+    // --- Strip snapshot (M1.3 + M2.3; D3a consumes these facts since MP6) ---
     const info = planStripInfo(db, runId)!;
-    expect(planStripLabel(info)).toBe("▸ plan 3/3 — integrate billing");
-    expect(planStripDrift(info.drift)).toBe("   ⚠ 1 off-plan (drift)");
+    expect(info.stepPos).toBe(3);
+    expect(info.stepTotal).toBe(3);
+    expect(info.title).toBe("integrate billing");
+    expect(info.drift).toBe(1);
 
     // --- Tier → behavior (M6.1/M6.2) ---
     const beh = ledgerBehavior(db, runId);
@@ -240,6 +240,9 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       allowOffline: false,
       minimaApiKey: "k",
       groundTruth: true,
+      // This live-loop test scripts the done-gate + escalation ladder, not the A2 run-level
+      // stop-gate; disable the latter so it can't force-continue past the scripted responses.
+      stopStrikes: 0,
     });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
     const agent = new MinimaAgent({
@@ -300,17 +303,30 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     // Escalated exactly once, recovered on the bigger model.
     expect(routing?.chosenModelId).toBe("big-model");
     expect(agent.ladderEscalations).toBe(1);
-    expect(feedbackCalls.map((f) => (f as any).outcome)).toEqual(["failure", "success"]);
+    // A7 graded outcome: the recovered rung passed only a YELLOW check (no coverage — see below),
+    // so it earns `partial`, not a clean `success`. The red rung is still `failure`.
+    expect(feedbackCalls.map((f) => (f as any).outcome)).toEqual(["failure", "partial"]);
 
     // Gate rows written by the hooks, not seeded — the blocked attempt then the recovered pass,
     // both attributed to the same step, with measured factors (the red→green flip is real).
-    const gateRows = db.getGates(plan.id);
-    expect(gateRows.map((g) => g.outcome)).toEqual(["failed", "verified"]);
-    expect(gateRows.map((g) => g.step_id)).toEqual([step.id, step.id]);
-    expect(gateRows.map((g) => g.rec_id)).toEqual(["rec-1", "rec-2"]); // minted inside their rungs
-    const passFactors = JSON.parse(gateRows[1]!.factors_json!) as Record<string, unknown>;
+    const stepGates = db.getGates(plan.id).filter((g) => g.kind === "step_check");
+    expect(stepGates.map((g) => g.outcome)).toEqual(["failed", "verified"]);
+    expect(stepGates.map((g) => g.step_id)).toEqual([step.id, step.id]);
+    expect(stepGates.map((g) => g.rec_id)).toEqual(["rec-1", "rec-2"]); // minted inside their rungs
+    const passFactors = JSON.parse(stepGates[1]!.factors_json!) as Record<string, unknown>;
     expect(passFactors.redToGreen).toBe(true); // measured against the captured baseline
     expect(db.getPlanSteps(plan.id)[0]!.status).toBe("completed");
+
+    // Plan closure wrote exactly one milestone gate rolling up the terminal step verdict: the
+    // step verified (yellow, no coverage), so the milestone is verified/yellow, minted under the
+    // rung that closed the plan (rec-2), attributed to no single step.
+    const milestones = db.getGates(plan.id).filter((g) => g.kind === "milestone");
+    expect(milestones).toHaveLength(1);
+    expect(milestones[0]!.outcome).toBe("verified");
+    expect(milestones[0]!.confidence).toBe("yellow");
+    expect(milestones[0]!.verified_by).toBe("deterministic");
+    expect(milestones[0]!.step_id).toBeNull();
+    expect(milestones[0]!.rec_id).toBe("rec-2");
 
     // DB dump: two routing rows, per model, each with a grounded outcome stamped (M7.1) and the
     // grounded loss/win recorded (M7.3), chained by parent_rec_id. Live tiers are honest: the
@@ -324,8 +340,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(rows[0]!.gt_outcome).toBe("failed");
     expect(rows[0]!.gt_confidence).toBe("red");
     expect(rows[1]!.chosen_model).toBe("big-model");
-    expect(rows[1]!.outcome).toBe("success");
-    expect(rows[1]!.gt_outcome).toBe("verified");
+    expect(rows[1]!.outcome).toBe("partial"); // A7: yellow verified → partial (weaker than green)
+    expect(rows[1]!.gt_outcome).toBe("verified"); // the raw gate verdict stamp is unchanged
     expect(rows[1]!.gt_confidence).toBe("yellow");
     expect(rows[1]!.parent_rec_id).toBe(String(rows[0]!.rec_id));
     reg.unregister();

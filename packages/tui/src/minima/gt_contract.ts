@@ -39,8 +39,15 @@ export type ConfidenceTier = (typeof CONFIDENCE_TIERS)[number];
 export const VERIFIED_BY = ["deterministic", "judge", "user"] as const;
 export type VerifiedBy = (typeof VERIFIED_BY)[number];
 
-/** Kind of gate — `gates.kind`. */
-export const GATE_KINDS = ["step_check", "milestone"] as const;
+/**
+ * Kind of gate — `gates.kind`. `stop` (A2/A3): a plan-level row written when the run-level stop-gate
+ * denies the agent's attempt to END the run with unfinished/failing steps and, after N strikes,
+ * lets it stop anyway (also A3's doom-loop / step-cap stops). `recovery` (A4): a row recording a
+ * failure-kind recovery decision (backoff / replan) taken between ladder rungs. Both are audit-only
+ * — written with `recId: null` so they are invisible to the feedback join by construction (never
+ * inflate or fail a routed rung); the real per-step evidence lives in the `step_check` rows.
+ */
+export const GATE_KINDS = ["step_check", "milestone", "stop", "recovery"] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
 /** Pre-work baseline captured when a step starts — `plan_steps.baseline` (M3.3). */
@@ -71,9 +78,17 @@ export interface Factors {
   redToGreen: boolean;
   /** The step wrote code but carries no acceptance check at all → caps the tier at 🟡. (M6.1) */
   hasCheck: boolean;
-  /** Provenance: a pre-existing test (trust) vs one the agent wrote this run (scrutiny). (M5.1) */
+  /**
+   * Provenance: a pre-existing test (trust) vs one the agent wrote this run (scrutiny). (M5.1)
+   * `agent_new` alone caps at 🟡 ("self-written test"); combined with `coverageHit === false` it
+   * forces 🔴 ("unverified self-test") — the A5 fabrication floor.
+   */
   checkOrigin: CheckOrigin;
-  /** Does the check actually exercise the changed file? `"unknown"` when we can't tell. (M5.2) */
+  /**
+   * Does the check actually exercise the changed file? `"unknown"` when we can't tell. (M5.2)
+   * A proven miss (`false`) on an `agent_new` check forces 🔴 (A5 fabrication floor); `"unknown"`
+   * never does — it is not evidence of non-coverage, so it stays a 🟡 signal.
+   */
   coverageHit: boolean | "unknown";
   /** Tests were skipped/deleted/weakened this step — always forces 🔴. (M5.3) */
   tamper: boolean;

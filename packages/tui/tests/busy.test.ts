@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { SPINNER_FRAMES, VERBS, pickVerb, spinnerFrame } from "../src/tui/busy.tsx";
+import {
+  SPINNER_FRAMES,
+  VERBS,
+  councilProgressLine,
+  pickVerb,
+  spinnerFrame,
+} from "../src/tui/busy.tsx";
 
 describe("spinnerFrame", () => {
   test("returns the frame at the tick, in order", () => {
@@ -34,5 +40,34 @@ describe("pickVerb", () => {
       expect(v).not.toBe("thinking");
       expect(v).not.toBe("working");
     }
+  });
+});
+
+describe("councilProgressLine — the busy-row council progress string (MP14)", () => {
+  test("critic-active matches the guide string byte-exact", () => {
+    expect(councilProgressLine("critic")).toBe(
+      "council: researcher ✓ · keeper ✓ · critic … · synth ·",
+    );
+  });
+  test("scope folds into an active researcher (prep, not a fifth role)", () => {
+    expect(councilProgressLine("scope")).toBe(
+      "council: researcher … · keeper · · critic · · synth ·",
+    );
+    expect(councilProgressLine("research")).toBe(councilProgressLine("scope"));
+  });
+  test("keeper marks the researcher done", () => {
+    expect(councilProgressLine("keeper")).toBe(
+      "council: researcher ✓ · keeper … · critic · · synth ·",
+    );
+  });
+  test("synth marks everyone before it done", () => {
+    expect(councilProgressLine("synth")).toBe(
+      "council: researcher ✓ · keeper ✓ · critic ✓ · synth …",
+    );
+  });
+  test("done marks every role ✓", () => {
+    expect(councilProgressLine("done")).toBe(
+      "council: researcher ✓ · keeper ✓ · critic ✓ · synth ✓",
+    );
   });
 });

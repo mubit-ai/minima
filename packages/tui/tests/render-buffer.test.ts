@@ -2,28 +2,29 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Guards the two-renderer wiring in main.ts:
-//  - FULLSCREEN (default): alternate screen buffer + glued prompt + in-app scroll (like Claude Code).
-//  - INLINE (--no-fullscreen / MINIMA_TUI_INLINE=1): main buffer + <Static> native scrollback, with a
-//    one-time newline reserve so the prompt still starts at the bottom.
-// The alt-screen writes MUST stay guarded by the fullscreen flag — an unconditional [?1049h would
-// give inline mode a buffer with no scrollback and re-break "can't scroll the session".
-describe("cli/main.ts wires both TUI renderers", () => {
+// Guards the inline renderer wiring in main.ts (the only renderer since MP3, MUB-146):
+// main buffer + <Static> native scrollback. Native scroll + select + copy — the alternate
+// screen buffer must never come back (it has no scrollback: "can't scroll the session").
+describe("cli/main.ts wires the inline renderer", () => {
   const src = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
 
-  test("mode is chosen from args.fullscreen (default on; --no-fullscreen / MINIMA_TUI_INLINE off)", () => {
-    expect(src).toContain("if (args.fullscreen)");
-    expect(src).toContain("MINIMA_TUI_INLINE");
-    expect(src).toContain("--no-fullscreen");
+  test("no renderer selection and no alt-screen writes remain", () => {
+    expect(src).not.toContain("fullscreen");
+    expect(src).not.toContain("MINIMA_TUI_FULLSCREEN");
+    expect(src).not.toContain("?1049");
   });
 
-  test("fullscreen enters and leaves the alternate screen buffer", () => {
-    expect(src).toContain("?1049h");
-    expect(src).toContain("?1049l");
+  test("inline starts with a full clear (screen + scrollback) — clean-slate CC-style start", () => {
+    // [2J erases the visible screen, [3J drops prior scrollback (no leftover shell/prev session
+    // above), [H homes the cursor. Within-session scroll-up works on fresh scrollback thereafter.
+    expect(src).toContain("[2J\\u001b[3J\\u001b[H");
   });
 
-  test("inline fallback seats the prompt via a startup newline reserve (no alt-screen)", () => {
-    expect(src).toContain("process.stdout.rows");
-    expect(src).toContain(".repeat(");
+  test("the prompt section is bottom-mounted (THE RULE, 2026-07-16 — reverses the CC-style top start)", () => {
+    // A one-time rows-1 newline reserve pushes the first paint to the terminal's bottom rows,
+    // so the composer + footer sit at the bottom from frame 1. Plain stdout BEFORE render(),
+    // never part of Ink's live frame. tui-verify's bottom-anchor check asserts the rendered
+    // result in a real PTY.
+    expect(src).toContain('"\\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1))');
   });
 });

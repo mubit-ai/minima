@@ -89,5 +89,6 @@ bypasses the recommender; `--model`/`--provider` pin a model and skip routing.
 Phases 0–7 complete: scaffold → client → AI layer (3 providers) → agent core → tools →
 Minima integration → Ink TUI + CLI → compiled native binary (`bun build --compile`).
 Remaining for full parity with the Python TUI: the rest of the overlays (session picker,
-diff-approval gating, themes, goals), mouse capture, and `keytar`-bundled keychain in the
-compiled binary (it falls back to the file store today).
+diff-approval gating, themes, goals) and `keytar`-bundled keychain in the compiled binary
+(it falls back to the file store today). Mouse capture is deliberately out — the inline
+renderer leaves scroll/select/copy to the terminal.

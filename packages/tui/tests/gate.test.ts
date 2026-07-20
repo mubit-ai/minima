@@ -45,13 +45,28 @@ function bctx(
 
 function actx(todos: unknown[], id = "tc", isError = false): AfterToolCallContext {
   return {
-    toolCall: { type: "toolCall", id, name: "todowrite", arguments: { tasks: JSON.stringify(todos) } },
+    toolCall: {
+      type: "toolCall",
+      id,
+      name: "todowrite",
+      arguments: { tasks: JSON.stringify(todos) },
+    },
     isError,
   } as unknown as AfterToolCallContext;
 }
 
+// Step-level gate rows only — the plan-closure milestone gate (kind 'milestone') is a separate
+// concern with its own helper + tests below, so it never perturbs the step_check assertions.
 function gates(d: MinimaDb): GateRow[] {
-  return d.db.query("SELECT * FROM gates ORDER BY created_at, rowid").all() as GateRow[];
+  return d.db
+    .query("SELECT * FROM gates WHERE kind = 'step_check' ORDER BY created_at, rowid")
+    .all() as GateRow[];
+}
+
+function milestoneGates(d: MinimaDb): GateRow[] {
+  return d.db
+    .query("SELECT * FROM gates WHERE kind = 'milestone' ORDER BY created_at, rowid")
+    .all() as GateRow[];
 }
 
 function factorsOf(row: GateRow): Record<string, unknown> {
@@ -69,8 +84,22 @@ describe("MinimaDb.completionsForTodos", () => {
       { content: "C", status: "completed" },
     ]);
     expect(flips).toEqual([
-      { content: "A", stepId: null, verify: "true", baseline: null },
-      { content: "C", stepId: null, verify: null, baseline: null },
+      {
+        content: "A",
+        stepId: null,
+        verify: "true",
+        baseline: null,
+        verify_cwd: null,
+        check_origin: null,
+      },
+      {
+        content: "C",
+        stepId: null,
+        verify: null,
+        baseline: null,
+        verify_cwd: null,
+        check_origin: null,
+      },
     ]);
   });
 
@@ -86,8 +115,22 @@ describe("MinimaDb.completionsForTodos", () => {
       { content: "B", status: "completed", verify: "bun test b" },
     ]);
     expect(flips).toEqual([
-      { content: "A", stepId: first.stepIds[0]!, verify: "bun test a", baseline: "red" },
-      { content: "B", stepId: first.stepIds[1]!, verify: "bun test b", baseline: null },
+      {
+        content: "A",
+        stepId: first.stepIds[0]!,
+        verify: "bun test a",
+        baseline: "red",
+        verify_cwd: null,
+        check_origin: null,
+      },
+      {
+        content: "B",
+        stepId: first.stepIds[1]!,
+        verify: "bun test b",
+        baseline: null,
+        verify_cwd: null,
+        check_origin: null,
+      },
     ]);
   });
 
@@ -108,6 +151,8 @@ describe("MinimaDb.completionsForTodos", () => {
         stepId: first.stepIds[0]!,
         verify: "exit 1",
         baseline: "red",
+        verify_cwd: null,
+        check_origin: null,
       },
     ]);
   });
@@ -124,7 +169,14 @@ describe("MinimaDb.completionsForTodos", () => {
       { content: "A", status: "completed", verify: "true" },
     ]);
     expect(flips).toEqual([
-      { content: "A", stepId: first.stepIds[0]!, verify: "true", baseline: null },
+      {
+        content: "A",
+        stepId: first.stepIds[0]!,
+        verify: "true",
+        baseline: null,
+        verify_cwd: null,
+        check_origin: null,
+      },
     ]);
   });
 
@@ -165,7 +217,16 @@ describe("MinimaDb.completionsForTodos", () => {
       { content: "A", status: "completed" },
     ]);
     // First todo matches the already-completed row (no flip); second matches the pending one.
-    expect(flips).toEqual([{ content: "A", stepId: stepIds[1]!, verify: "true", baseline: null }]);
+    expect(flips).toEqual([
+      {
+        content: "A",
+        stepId: stepIds[1]!,
+        verify: "true",
+        baseline: null,
+        verify_cwd: null,
+        check_origin: null,
+      },
+    ]);
   });
 });
 
@@ -349,7 +410,9 @@ describe("done-gate before-hook (M4.1)", () => {
   test("a brand-new todo inserted directly as completed with a failing verify is blocked (no plan yet)", async () => {
     const d = db();
     const { before } = groundTruthHooks({ db: d, runId: "run1" });
-    const decision = await before(bctx([{ content: "New", status: "completed", verify: "exit 1" }]));
+    const decision = await before(
+      bctx([{ content: "New", status: "completed", verify: "exit 1" }]),
+    );
     expect(decision?.block).toBe(true);
     expect(d.getActivePlan("run1")).toBeNull(); // gate never creates the plan
     const rows = gates(d);
@@ -380,7 +443,9 @@ describe("done-gate before-hook (M4.1)", () => {
       },
     } as unknown as MinimaDb;
     const { before } = groundTruthHooks({ db: throwing, runId: "run1" });
-    await expect(before(bctx([{ content: "A", status: "completed", verify: "exit 1" }]))).resolves.toBeNull();
+    await expect(
+      before(bctx([{ content: "A", status: "completed", verify: "exit 1" }])),
+    ).resolves.toBeNull();
   });
 
   test("fail-open: missing db or runId allows the call", async () => {
@@ -832,5 +897,141 @@ describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
     expect(factorsOf(gates(d)[0]!).tamper).toBe(true);
+  });
+});
+
+// v7 — check provenance + per-check cwd writers. check_origin persists across content edits
+// (it is a fact about who wrote the check, not about the check itself); verify_cwd is sticky
+// like verify (COALESCE — omitted-when-blank never clears).
+describe("MinimaDb — check_origin + verify_cwd writers (v7)", () => {
+  test("insertStep persists check_origin and verify_cwd, and getPlanSteps reads them back", () => {
+    const d = db();
+    const planId = d.insertPlan({ sessionId: "run1", status: "active" });
+    d.insertStep({
+      planId,
+      idx: 0,
+      content: "A",
+      verify: "true",
+      verifyCwd: "packages/tui",
+      checkOrigin: "user",
+    });
+    const step = d.getPlanSteps(planId)[0]!;
+    expect(step.check_origin).toBe("user");
+    expect(step.verify_cwd).toBe("packages/tui");
+  });
+
+  test("check_origin survives an upsert content edit; verify_cwd is COALESCE-sticky", () => {
+    const d = db();
+    const planId = d.insertPlan({ sessionId: "run1", status: "active" });
+    d.insertStep({
+      planId,
+      idx: 0,
+      content: "Wire the parser",
+      verify: "bun test",
+      verifyCwd: "packages/tui",
+      checkOrigin: "user",
+    });
+    // Agent rewors the step slightly (Jaccard rescue keeps the id) and omits verify_cwd.
+    d.upsertPlanFromTodos("run1", [{ content: "Wire the parser module", status: "in_progress" }]);
+    const step = d.getPlanSteps(planId)[0]!;
+    expect(step.check_origin).toBe("user"); // provenance persists
+    expect(step.verify_cwd).toBe("packages/tui"); // sticky (not cleared by omission)
+    expect(step.verify).toBe("bun test"); // sticky verify unchanged
+  });
+});
+
+// Phase 3 — the planner→ledger bridge: /plan finalize seeds an active plan from the approved
+// implementation steps, and execution inherits it.
+describe("MinimaDb.seedPlanFromSteps (planner→ledger bridge)", () => {
+  test("seeds an active plan; steps carry verify and check_origin=user", () => {
+    const d = db();
+    const { planId } = d.seedPlanFromSteps("run1", "Binary search", [
+      { content: "Create binary_search.py", verify: "test -f binary_search.py" },
+      { content: "Add tests", verify: "pytest -q" },
+      { content: "Doc pass", verify: "" }, // no check → no user origin to claim
+    ]);
+    expect(d.getActivePlan("run1")!.id).toBe(planId);
+    const steps = d.getPlanSteps(planId);
+    expect(steps.map((s) => s.status)).toEqual(["pending", "pending", "pending"]);
+    expect(steps[0]!.verify).toBe("test -f binary_search.py");
+    expect(steps[0]!.check_origin).toBe("user");
+    expect(steps[2]!.verify).toBeNull();
+    expect(steps[2]!.check_origin).toBeNull(); // verify-less step has nothing to attribute
+  });
+
+  test("a following todowrite with matching content reuses the seeded verify + origin", () => {
+    const d = db();
+    const { planId } = d.seedPlanFromSteps("run1", "T", [
+      { content: "Create binary_search.py", verify: "pytest -q" },
+    ]);
+    // The agent's first todowrite mirrors the seeded step (same content) and moves it forward.
+    d.upsertPlanFromTodos("run1", [{ content: "Create binary_search.py", status: "in_progress" }]);
+    const step = d.getPlanSteps(planId)[0]!;
+    expect(step.status).toBe("in_progress");
+    expect(step.verify).toBe("pytest -q"); // preserved (COALESCE — todo omitted verify)
+    expect(step.check_origin).toBe("user"); // provenance preserved across the flip
+  });
+
+  test("a seeded user-origin check yields checkOrigin=user at the gate (not agent_new)", async () => {
+    const d = db();
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    // A step whose verify names a test the agent also 'wrote' this run would normally classify
+    // agent_new; because the check came from the approved plan (check_origin='user'), it does not.
+    d.seedPlanFromSteps("run1", "T", [{ content: "A", verify: "true" }]);
+    await after(actx([{ content: "A", status: "in_progress" }], "tc0"));
+    d.insertFileChange({
+      planId: d.getActivePlan("run1")!.id,
+      path: "true", // pretend the verify names a file the agent changed
+      kind: "created",
+    });
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos, "tc1"))).toBeNull();
+    await after(actx(todos, "tc1"));
+    expect(factorsOf(gates(d)[0]!).checkOrigin).toBe("user");
+  });
+});
+
+// Phase 5 — the plan-closure milestone gate (kind 'milestone' — a real, single, non-fabricated
+// rollup of the terminal per-step verdicts).
+describe("done-gate milestone rollup (M4.3)", () => {
+  test("closing an all-verified plan writes one milestone gate (verified/deterministic)", async () => {
+    const d = db();
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
+    const todos = [{ content: "A", status: "completed" }];
+    expect(await before(bctx(todos, "t1"))).toBeNull();
+    await after(actx(todos, "t1"));
+    const ms = milestoneGates(d);
+    expect(ms).toHaveLength(1);
+    expect(ms[0]!.outcome).toBe("verified");
+    expect(ms[0]!.verified_by).toBe("deterministic");
+    expect(ms[0]!.step_id).toBeNull();
+    expect(JSON.parse(ms[0]!.factors_json!).milestone).toBe(true);
+  });
+
+  test("a plan closed with an unchecked step rolls up to unchecked (not verified)", async () => {
+    const d = db();
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    // One checked step, one verify-less step; complete both so the plan closes.
+    await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
+    const todos = [
+      { content: "A", status: "completed" },
+      { content: "B", status: "completed" }, // no verify → unchecked
+    ];
+    expect(await before(bctx(todos, "t1"))).toBeNull();
+    await after(actx(todos, "t1"));
+    const ms = milestoneGates(d);
+    expect(ms).toHaveLength(1);
+    expect(ms[0]!.outcome).toBe("unchecked"); // not every terminal step verdict was verified
+  });
+
+  test("a plan that never fully completes writes no milestone gate", async () => {
+    const d = db();
+    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
+    // Never mark A completed → plan stays active → no closure, no milestone.
+    expect(milestoneGates(d)).toHaveLength(0);
+    await before(bctx([{ content: "A", status: "in_progress" }], "t1"));
+    expect(milestoneGates(d)).toHaveLength(0);
   });
 });

@@ -176,9 +176,9 @@ describe("hasSkipMarker (M5.3)", () => {
   });
   test("no false positive: a marker inside a comment, docstring, or string literal", () => {
     expect(hasSkipMarker("// do not use it.skip( here\nit('x', () => {})")).toBe(false);
-    expect(hasSkipMarker('"""\npytest.skip("example in a docstring")\n"""\ndef test_x(): ...')).toBe(
-      false,
-    );
+    expect(
+      hasSkipMarker('"""\npytest.skip("example in a docstring")\n"""\ndef test_x(): ...'),
+    ).toBe(false);
     expect(hasSkipMarker('const doc = "call it.skip( to disable";')).toBe(false);
     expect(hasSkipMarker("query { field @skip(if: $hide) }")).toBe(false);
   });

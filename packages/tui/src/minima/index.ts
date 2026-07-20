@@ -43,11 +43,16 @@ export type {
 } from "./plan_session.ts";
 export {
   runCouncilRound,
+  runKeeperMiniUpdate,
   answerOpenQuestions,
   synthesizeGroundTruth,
   Critic,
   shouldConveneCouncil,
+  shouldConveneFullCouncil,
+  isPlanStakesTurn,
 } from "./plan_council.ts";
 export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_council.ts";
 export { runPlanTurn } from "./plan_turn.ts";
 export type { PlanTurnDeps } from "./plan_turn.ts";
+export { finalizePlan, buildPlanTranscript } from "./plan_finalize.ts";
+export type { PlanFinalizeDeps, PlanFinalizeOutcome, PlanFinalizeDb } from "./plan_finalize.ts";

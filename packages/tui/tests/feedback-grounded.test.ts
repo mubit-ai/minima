@@ -109,6 +109,9 @@ function setup(judge: ReturnType<typeof countingJudge>) {
     allowOffline: false,
     minimaApiKey: "k",
     groundTruth: true,
+    // These tests seed an in_progress step purely as a feedback-path fixture; they are not about
+    // the A2 stop-gate, so disable it (its default would force-continue the single-response mock).
+    stopStrikes: 0,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const db = new MinimaDb(":memory:");
@@ -168,18 +171,20 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     db.close();
   });
 
-  test("yellow gate (self-written test) → success but verified_in_production=false", async () => {
+  test("yellow gate (self-written test) → partial (A7 graded), verified_in_production=false", async () => {
     const { agent, reg, feedbackCalls, db, runId } = setup(judge);
     seedGate(db, runId, "verified", "yellow");
 
     await agent.promptRouted("do the thing");
 
     const fb = feedbackCalls[0] as Record<string, unknown>;
-    expect(fb.outcome).toBe("success");
+    // A7: a passing-but-untrustworthy check is weaker evidence than green — graded to partial.
+    expect(fb.outcome).toBe("partial");
     expect(fb.verified_in_production).toBe(false); // agent-authored trust is never ground truth
     expect(fb.evidence_source).toBe("none"); // gameable label stays telemetry
+    expect(fb.quality_score).toBeUndefined(); // still no fabricated quality
     expect(String(fb.notes)).toContain("tier=yellow");
-    expect(judge.calls).toBe(0);
+    expect(judge.calls).toBe(0); // the gate still outranks the judge
     reg.unregister();
     db.close();
   });

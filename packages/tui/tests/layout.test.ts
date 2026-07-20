@@ -2,16 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   type ChatMessage,
   MAX_TOOL_LINES,
+  PANEL_STATUS_ROWS,
   QUESTION_TEXT_MAX_ROWS,
   SCROLLBACK_SAFETY_ROWS,
   childTreeHeight,
   clampToolText,
   computeMsgHeight,
-  getScrollableMessages,
-  gtFooterFit,
   markdownBodyHeight,
+  panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
+  permPreviewKey,
   permPreviewLines,
   permToolLabel,
   questionDisplayText,
@@ -111,91 +112,24 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
       2 + MAX_TOOL_LINES + 1,
     );
   });
+  test("a tool body wraps at the FULL box width, like MessageRow paints it", () => {
+    // The GT plan-mode notice (239 chars): MessageRow renders the body unindented, so at
+    // 120 cols it wraps to 2 rows. Counting at an interior width (cols-4 → 3 rows) floats
+    // the composer off the terminal bottom — the tui-verify bottom-anchor regression.
+    const notice =
+      "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
+      "Talk through the plan; the design council convenes on substantive turns. " +
+      "/plan finalize writes the ground truth to the project root. /plan status · /plan cancel.";
+    expect(computeMsgHeight(tool(notice, "plan"), 120)).toBe(2 + wrappedLineCount(notice, 120));
+    expect(wrappedLineCount(notice, 120)).toBe(2);
+  });
   test("the irreducible chrome floor per role (empty body still renders header + margin)", () => {
-    // A clipped boundary message can never shrink below this — the fullscreen clip must account for
-    // it or a sub-floor slot overflows the viewport (the scroll garble). thinking is 5 (border adds 2).
+    // A message can never render below this floor — the height estimate must account for it
+    // or reservations under-count (the garble class). thinking is 5 (border adds 2).
     expect(computeMsgHeight(user(""), 80)).toBe(3); // marginTop + "▸ you" + 1 body
     expect(computeMsgHeight(tool(""), 80)).toBe(3); // marginTop + "⚙ …:" + 1 body
     expect(computeMsgHeight(asst(""), 80)).toBe(3); // marginTop + "◆ assistant" + 1 body
     expect(computeMsgHeight(thinking(""), 80)).toBe(5); // marginTop + border(2) + header + 1 body
-  });
-});
-
-describe("getScrollableMessages — windows the transcript for the fullscreen viewport", () => {
-  test("empty transcript is at both top and bottom", () => {
-    const w = getScrollableMessages([], 10, 0, 80);
-    expect(w.visible).toEqual([]);
-    expect(w.atTop).toBe(true);
-    expect(w.atBottom).toBe(true);
-  });
-  test("offset 0 pins to the newest content; the newest message is shown whole", () => {
-    const msgs = [asst("A"), asst("B"), asst("C")];
-    const w = getScrollableMessages(msgs, 5, 0, 80);
-    expect(w.totalHeight).toBe(9);
-    expect(w.atBottom).toBe(true);
-    expect(w.atTop).toBe(false);
-    expect(w.visible.at(-1)?.text).toBe("C"); // newest untrimmed at the bottom
-  });
-  test("a large offset clamps to the top; the oldest message is shown whole", () => {
-    const msgs = [asst("A"), asst("B"), asst("C")];
-    const w = getScrollableMessages(msgs, 5, 9999, 80);
-    expect(w.atTop).toBe(true);
-    expect(w.atBottom).toBe(false);
-    expect(w.visible[0]?.text).toBe("A"); // oldest untrimmed at the top
-  });
-  test("a message taller than the viewport is fold-clipped so the window never overflows", () => {
-    // The garble class: a single child taller than the overflow:hidden flex-end box. Trimming the
-    // fold keeps the rendered window <= maxHeight, so nothing overflows.
-    const tall = asst(Array.from({ length: 40 }, (_, i) => String(i + 1)).join("\n"));
-    const w = getScrollableMessages([tall], 12, 0, 80);
-    const rendered = w.visible.reduce((n, m) => n + computeMsgHeight(m, 80), 0);
-    expect(rendered).toBeLessThanOrEqual(12);
-    expect(w.atBottom).toBe(true);
-  });
-
-  // A mixed transcript hitting every clip trap: a 1-line bash tool (the chrome-floor / "helloash"
-  // collision), a tool with one very long WRAPPED url line (source-line vs rendered-row over-trim),
-  // markdown headings + lists, a thinking block (floor 5), short user lines, and one assistant taller
-  // than the whole viewport (clipped on both folds).
-  const mixed: ChatMessage[] = [
-    user("hi"),
-    tool("hello"),
-    tool(`[1] Result title\nhttps://example.com/${"segment/".repeat(30)}end`, "web_search"),
-    asst("# Heading\nsome body text here\n- a bullet item\n- another bullet\nmore trailing text"),
-    thinking("reasoning about the problem\na second line of thoughts"),
-    user("do it again"),
-    asst(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n")),
-  ];
-
-  test("scroll-sweep: the visible stack never exceeds the viewport at ANY offset (the scroll garble)", () => {
-    // This is the core regression. Ink decimates/fuses lines the instant the flex-end viewport's
-    // content exceeds its height; before the height-targeted clip, boundary messages re-added chrome
-    // that pushed the stack over `maxHeight` at many offsets. Sweep every offset (past the clamp) and
-    // assert the rendered stack fits AND no single child alone exceeds the box.
-    for (const cols of [40, 80]) {
-      const maxHeight = 12;
-      const total = getScrollableMessages(mixed, maxHeight, 0, cols).totalHeight;
-      const maxOffset = Math.max(0, total - maxHeight);
-      for (let off = 0; off <= maxOffset + 5; off++) {
-        const w = getScrollableMessages(mixed, maxHeight, off, cols);
-        const sum = w.visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
-        expect(sum).toBeLessThanOrEqual(maxHeight);
-        for (const m of w.visible) {
-          expect(computeMsgHeight(m, cols)).toBeLessThanOrEqual(maxHeight);
-        }
-      }
-    }
-  });
-
-  test("scrolling is monotonic — offset 0 pins the newest, max offset pins the oldest", () => {
-    const maxHeight = 12;
-    const total = getScrollableMessages(mixed, maxHeight, 0, 80).totalHeight;
-    const maxOffset = Math.max(0, total - maxHeight);
-    expect(getScrollableMessages(mixed, maxHeight, 0, 80).atBottom).toBe(true);
-    expect(getScrollableMessages(mixed, maxHeight, maxOffset, 80).atTop).toBe(true);
-    // The oldest message ("hi") is only reachable when scrolled to the top.
-    const top = getScrollableMessages(mixed, maxHeight, maxOffset, 80);
-    expect(top.visible[0]?.role).toBe("user");
   });
 });
 
@@ -242,7 +176,7 @@ describe("tailToFit budget enforcement", () => {
   });
   test("a single huge streamed paragraph is hard-sliced to the row budget", () => {
     // One source line until the model emits "\n": 3000 chars at interior 100 would render
-    // ~30 rows. The live region must NEVER exceed its budget (fullscreen garble / inline
+    // ~30 rows. The live region must NEVER exceed its budget (the garble class /
     // scrollback-wipe class), so the tail is sliced even though it is the final line.
     const para = "word ".repeat(600).trim();
     const out = tailToFit(para, 100, 10);
@@ -253,6 +187,31 @@ describe("tailToFit budget enforcement", () => {
   test("budget 1 with a long line still fits one row", () => {
     const out = tailToFit("x".repeat(500), 50, 1);
     expect(markdownBodyHeight(out, 50)).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------- U2 (MUB-140)
+
+import { clipPanelLines } from "../src/tui/layout.ts";
+
+describe("clipPanelLines (U2 panel interior)", () => {
+  const lines = Array.from({ length: 10 }, (_, i) => `row ${i}`);
+
+  test("always exactly innerHeight rows; short content padded with empty (painted) rows", () => {
+    const { lines: out, top } = clipPanelLines(lines.slice(0, 3), 6, 0);
+    expect(out).toHaveLength(6);
+    expect(out.slice(3)).toEqual(["", "", ""]);
+    expect(top).toBe(0);
+  });
+
+  test("cursor stays visible at both extremes and while walking down", () => {
+    expect(clipPanelLines(lines, 4, 0).top).toBe(0);
+    const bottom = clipPanelLines(lines, 4, 9);
+    expect(bottom.top).toBe(6);
+    expect(bottom.lines[3]).toBe("row 9");
+    const mid = clipPanelLines(lines, 4, 5);
+    expect(mid.top).toBeLessThanOrEqual(5);
+    expect(5).toBeLessThan(mid.top + 4);
   });
 });
 
@@ -320,8 +279,7 @@ describe("permToolLabel", () => {
 });
 
 describe("permPreviewLines — clips the permission preview by RENDERED rows", () => {
-  const shortLines = (n: number) =>
-    Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
+  const shortLines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
 
   test("source-line parity with the old budget when nothing wraps: 12 fit, 13+ clip to 11", () => {
     expect(permPreviewLines(shortLines(12), 80)).toEqual({
@@ -362,6 +320,31 @@ describe("permPreviewLines — clips the permission preview by RENDERED rows", (
     const { lines, hidden } = permPreviewLines("x".repeat(40), 10);
     expect(lines).toEqual(["x".repeat(40)]); // 2 rows at width 20 — fits, kept whole
     expect(hidden).toBe(0);
+  });
+});
+
+describe("permPreviewKey — unique React key per preview row", () => {
+  test("todowrite verify rows sharing the fixed label prefix get distinct keys", () => {
+    // The GT todowrite preview shape (permissions.ts buildDiffPreview): the verify label
+    // prefix is 39 chars, so a bare line.slice(0, 40) key collides whenever two commands
+    // start with the same character — exactly this fixture.
+    const preview = [
+      "1. [x] create line_counter.py",
+      "     verify (runs as a shell command): python line_counter.py sample.py",
+      "2. [ ] add unit tests",
+      "     verify (runs as a shell command): pytest tests/",
+    ].join("\n");
+    const { lines } = permPreviewLines(preview, 120);
+    const contentSliced = lines.map((l) => l.slice(0, 40));
+    expect(new Set(contentSliced).size).toBeLessThan(contentSliced.length);
+    const keys = lines.map((l, i) => permPreviewKey(i, l));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test("identical duplicate lines (edit diff repeats) still key uniquely", () => {
+    const lines = ["+ same", "+ same", "+ same"];
+    const keys = lines.map((l, i) => permPreviewKey(i, l));
+    expect(new Set(keys).size).toBe(3);
   });
 });
 
@@ -421,47 +404,25 @@ describe("permOverlayHeight — mirrors PermissionOverlay, estimate == render", 
   });
 });
 
-describe("gtFooterFit — priority-ordered collapse of the GT footer rows", () => {
-  const all = { block: true, strip: true, note: true };
-
-  test("a roomy budget grants every present row", () => {
-    expect(gtFooterFit(3, all)).toEqual({ block: true, strip: true, note: true });
-    expect(gtFooterFit(10, all)).toEqual({ block: true, strip: true, note: true });
-  });
-
-  test("rows collapse in reverse priority: note first, then strip, then block", () => {
-    expect(gtFooterFit(2, all)).toEqual({ block: true, strip: true, note: false });
-    expect(gtFooterFit(1, all)).toEqual({ block: true, strip: false, note: false });
-  });
-
-  test("a zero or negative budget grants nothing", () => {
-    expect(gtFooterFit(0, all)).toEqual({ block: false, strip: false, note: false });
-    expect(gtFooterFit(-4, all)).toEqual({ block: false, strip: false, note: false });
-  });
-
-  test("all-absent in is all-absent out at ANY budget (default path structurally inert)", () => {
-    const absent = { block: false, strip: false, note: false };
-    for (const budget of [-1, 0, 1, 3, 10]) {
-      expect(gtFooterFit(budget, absent)).toEqual(absent);
+describe("panelOuterHeight — the expanded-panel wipe-threshold identity (MP4)", () => {
+  test("panel + composer + status ≡ rows − SCROLLBACK_SAFETY_ROWS at every geometry", () => {
+    for (let rows = 12; rows <= 60; rows++) {
+      for (let extraInputLines = 0; extraInputLines <= 6; extraInputLines++) {
+        for (const planMode of [false, true]) {
+          const inputBoxHeight = (planMode ? 7 : 4) + extraInputLines;
+          const outer = panelOuterHeight(rows, inputBoxHeight);
+          expect(outer + inputBoxHeight + PANEL_STATUS_ROWS).toBe(rows - SCROLLBACK_SAFETY_ROWS);
+        }
+      }
     }
   });
 
-  test("partial presence: absent rows never consume a slot (no phantom grants)", () => {
-    expect(gtFooterFit(1, { block: false, strip: true, note: true })).toEqual({
-      block: false,
-      strip: true,
-      note: false,
-    });
-    expect(gtFooterFit(1, { block: false, strip: false, note: true })).toEqual({
-      block: false,
-      strip: false,
-      note: true,
-    });
-    expect(gtFooterFit(2, { block: true, strip: false, note: true })).toEqual({
-      block: true,
-      strip: false,
-      note: true,
-    });
+  test("PANEL_STATUS_ROWS counts the status group that stays mounted under a panel", () => {
+    // StatusBar marginTop(1) + 2 truncated rows + keys-legend row(1). ChildTree, busy,
+    // suggestions, and the quit-armed line are suppressed/unreachable while a panel
+    // captures keys — if one of them becomes visible under a panel, this constant (and
+    // the identity above) must absorb it.
+    expect(PANEL_STATUS_ROWS).toBe(4);
   });
 });
 

@@ -14,7 +14,7 @@ import { globTool } from "./glob.ts";
 import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { readTool } from "./read.ts";
-import { todowriteTool } from "./todowrite.ts";
+import { type TodoTask, todowriteTool } from "./todowrite.ts";
 import { webFetchTool } from "./web_fetch.ts";
 import { webSearchTool } from "./web_search.ts";
 import { writeTool } from "./write.ts";
@@ -45,6 +45,12 @@ export interface BuiltinToolsOptions {
    * always get the plain tool because the ground-truth hooks only exist on the lead agent.
    */
   groundTruth?: boolean;
+  /**
+   * Observable todo list (D3a task panel): todowrite mutates this array in place. The LEAD
+   * agent's main.ts passes one and hands the same array to the TUI; sub-agents (spawn.ts)
+   * never pass it, so their todos can't leak into the lead panel.
+   */
+  todoState?: TodoTask[];
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
@@ -59,7 +65,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     lsTool(fs),
     globTool(fs),
     grepTool(fs),
-    todowriteTool([], { groundTruth: opts.groundTruth === true }),
+    todowriteTool(opts.todoState ?? [], { groundTruth: opts.groundTruth === true }),
     webSearchTool(),
     webFetchTool(),
   ];

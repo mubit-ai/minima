@@ -508,12 +508,19 @@ describe("PlanSessionStore.toGroundTruth", () => {
         title: "Binary search library in Python",
         goal: "Implement iterative and recursive binary search over sorted lists in Python.",
         overview: "A small, dependency-free Python module with a clean public API and tests.",
-        requirements: ["Return the index of the target or -1", "Support any comparable element type"],
+        requirements: [
+          "Return the index of the target or -1",
+          "Support any comparable element type",
+        ],
         constraints: ["Language: Python 3", "No third-party dependencies"],
         decisions: [
           { topic: "Language", decision: "Python 3", rationale: "user asked for Python" },
         ],
-        approach: ["Create binary_search.py", "Implement bisect-style search", "Add pytest cases"],
+        approach: [
+          { action: "Create binary_search.py", verify: "test -f binary_search.py" },
+          { action: "Implement bisect-style search", verify: "python -c 'import binary_search'" },
+          { action: "Add pytest cases", verify: "pytest -q" },
+        ],
         risks: ["Off-by-one on the midpoint", "Unsorted input is undefined behavior"],
         successCriteria: ["All pytest cases pass"],
         openItems: [],
@@ -533,9 +540,11 @@ describe("PlanSessionStore.toGroundTruth", () => {
     expect(md).toContain("### Language");
     expect(md).toContain("**Decision:** Python 3");
     expect(md).toContain("## Implementation Plan");
-    // Ordered, numbered steps.
+    // Ordered, numbered steps, each with its verify: sub-line (the verifiable-steps contract).
     expect(md).toContain("1. Create binary_search.py");
+    expect(md).toContain("   - verify: `test -f binary_search.py`");
     expect(md).toContain("3. Add pytest cases");
+    expect(md).toContain("   - verify: `pytest -q`");
     expect(md).toContain("## Risks & Edge Cases");
     expect(md).toContain("## Success Criteria");
     // Empty sections are omitted, not rendered as "_None_".
@@ -552,15 +561,58 @@ describe("PlanSessionStore.toGroundTruth", () => {
       }),
     );
     // Synthesis provides prose but no constraints/decisions → fall back to session state.
-    const md = store.toGroundTruth(synth({ title: "T", goal: "do the thing", approach: ["step"] }));
+    const md = store.toGroundTruth(
+      synth({ title: "T", goal: "do the thing", approach: [{ action: "step", verify: "" }] }),
+    );
     expect(md).toContain("- must stay offline");
     expect(md).toContain("### Store");
     expect(md).toContain("**Decision:** SQLite");
+    // A step with no verify renders the decompose nudge (nudge/advise — not blocked).
+    expect(md).toContain("1. step");
+    expect(md).toContain("   - verify: _none — decompose or add a check_");
   });
 
   test("falls back to deterministic toMarkdown() when there is no synthesis", () => {
     const store = new PlanSessionStore("Build a widget");
     store.applyCouncilResult(emptyResult({ draft: "Do the widget." }));
     expect(store.toGroundTruth(null)).toBe(store.toMarkdown());
+  });
+});
+
+describe("MP15 — applyKeeperUpdate", () => {
+  const round = (draft: string) => ({
+    draft,
+    decisions: [],
+    findings: [],
+    faults: [],
+    questions: [],
+    facts: [],
+    constraints: [],
+    costUsd: 0,
+    aborted: false,
+  });
+
+  test("REPLACE draft, merge decisions/questions, rounds unchanged, cost accrues", () => {
+    const store = new PlanSessionStore("goal");
+    store.applyCouncilResult(round("Original draft."));
+    store.applyKeeperUpdate(
+      {
+        draft: "Freshened draft.",
+        decisions: [{ topic: "scope", decision: "defer caching", rationale: "later" }],
+        questions: [],
+      },
+      0.003,
+    );
+    expect(store.session.draft).toBe("Freshened draft.");
+    expect(store.session.decisions.some((d) => d.topic === "scope")).toBe(true);
+    expect(store.session.rounds).toBe(1);
+    expect(store.session.totalCouncilCostUsd).toBeCloseTo(0.003, 6);
+  });
+
+  test("empty plan keeps the previous draft (never clobber with nothing)", () => {
+    const store = new PlanSessionStore("goal");
+    store.applyCouncilResult(round("Original draft."));
+    store.applyKeeperUpdate({ draft: "", decisions: [], questions: [] }, 0.001);
+    expect(store.session.draft).toBe("Original draft.");
   });
 });

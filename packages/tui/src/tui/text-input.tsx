@@ -1,10 +1,22 @@
 /**
- * A minimal single-line text input built on Ink's useInput (no ink-text-input dep,
- * keeping the package lean). Handles printable chars, backspace/delete, and Enter.
+ * The prompt input built on Ink's useInput (no ink-text-input dep, keeping the package lean).
+ *
+ * A draft is { value, cursor }: printable keys insert at the cursor, ←/→ move it, and the
+ * readline core works — Ctrl+A (line start), Ctrl+U (kill to start), Ctrl+K (kill to end),
+ * Ctrl+W (kill word back). Ctrl+E stays an app-level binding (thinking cycle), and other
+ * Ctrl/Meta combos fall through to the app handlers.
+ *
+ * Paste lands here on two paths, both inserting at the cursor WITHOUT submitting:
+ *  - bracketed paste (the terminal's Cmd+V): captured whole by input-filter.ts and delivered
+ *    via setPasteCallback — embedded newlines and ESC bytes are data, never keypresses;
+ *  - Ctrl+V: reads the system clipboard directly (pbpaste / wl-paste / xclip).
+ * Multi-line drafts render as-is; the box grows via the app's wrappedLineCount reserve.
  */
 
 import { Text, useInput } from "ink";
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { readClipboard } from "./clipboard.ts";
+import { setNavCallback, setPasteCallback } from "./input-filter.ts";
 
 export interface TextInputProps {
   /** Called when the user hits Enter with a non-empty line. */
@@ -16,9 +28,41 @@ export interface TextInputProps {
   onDown?: (value: string) => string | undefined;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * U2: an overlay (ToC sidebar) owns the keyboard — stop consuming input but STAY
+   * MOUNTED, so the in-progress draft (internal state) survives. Unmounting would
+   * lose it; `disabled` alone changes the rendered text to "(busy…)".
+   */
+  suspended?: boolean;
   /** Shown instead of the value while disabled (defaults to "(busy…)"); renders as one truncated row. */
   disabledLabel?: string;
+  /**
+   * B4: seed the draft (e.g. /undo prefills the undone prompt for editing). Read once at
+   * mount — the value is internal state, so remount via `key` to apply a new prefill.
+   */
+  initialValue?: string;
   showPrefix?: boolean;
+}
+
+interface Draft {
+  value: string;
+  cursor: number; // code-unit offset into value, 0..value.length
+}
+
+/** Start of the word before `cursor` (readline Ctrl+W semantics: skip spaces, then the word). */
+function wordStartBefore(value: string, cursor: number): number {
+  let i = cursor;
+  while (i > 0 && value[i - 1] === " ") i--;
+  while (i > 0 && value[i - 1] !== " ") i--;
+  return i;
+}
+
+/** End of the word at/after `cursor` (readline forward-word: skip spaces, then the word). */
+function wordEndAfter(value: string, cursor: number): number {
+  let i = cursor;
+  while (i < value.length && value[i] === " ") i++;
+  while (i < value.length && value[i] !== " ") i++;
+  return i;
 }
 
 export function TextInput({
@@ -30,78 +74,146 @@ export function TextInput({
   onDown,
   placeholder,
   disabled,
+  suspended,
   disabledLabel,
+  initialValue,
   showPrefix = true,
 }: TextInputProps) {
-  const [value, setValue] = useState("");
+  // The REF is the source of truth; state only triggers re-render. Ink dispatches every
+  // keypress of one stdin chunk synchronously (no re-render in between), so a handler that
+  // reads draft from the render closure would apply N same-chunk keypresses to the SAME
+  // stale snapshot — two ←← would move the cursor once. Mutations go through the ref
+  // immediately; the state copy just mirrors it for the next paint.
+  // B4 prefill: initialValue seeds the draft at mount (remount via `key` applies a new one).
+  const draftRef = useRef<Draft>({
+    value: initialValue ?? "",
+    cursor: (initialValue ?? "").length,
+  });
+  const [, setPaintGen] = useState(0);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
-  const updateValue = (newValue: string) => {
-    setValue(newValue);
-    if (onChange) {
-      onChange(newValue);
-    }
-  };
+  const update = useCallback((value: string, cursor: number) => {
+    draftRef.current = { value, cursor: Math.max(0, Math.min(cursor, value.length)) };
+    onChangeRef.current?.(value);
+    setPaintGen((n) => n + 1);
+  }, []);
+
+  const insertAt = useCallback(
+    (text: string) => {
+      const d = draftRef.current;
+      update(d.value.slice(0, d.cursor) + text + d.value.slice(d.cursor), d.cursor + text.length);
+    },
+    [update],
+  );
+
+  // Bracketed pastes (input-filter.ts) insert into the draft — never submit, never leak
+  // keypresses. Registered while this input could receive text; the ToC overlay keeps the
+  // input mounted+suspended, and a paste landing in the draft then is still the right home.
+  const acceptPaste = !disabled;
+  useEffect(() => {
+    if (!acceptPaste) return;
+    setPasteCallback((text) => insertAt(text.replace(/\r\n?/g, "\n")));
+    return () => setPasteCallback(null);
+  }, [acceptPaste, insertAt]);
+
+  // Home/End arrive via the input-filter side-channel (Ink 5 swallows them — blank input,
+  // no key flag). Registered only while this input actively owns the keyboard.
+  const acceptNav = !disabled && !suspended;
+  useEffect(() => {
+    if (!acceptNav) return;
+    setNavCallback((k) => {
+      const d = draftRef.current;
+      update(d.value, k === "home" ? 0 : d.value.length);
+    });
+    return () => setNavCallback(null);
+  }, [acceptNav, update]);
 
   useInput((input, key) => {
-    if (disabled) return;
+    if (disabled || suspended) return;
+    const { value, cursor } = draftRef.current;
     // key.return fires for '\r' (standard interactive path).
     // The ICRNL PTY path: '\r' is translated to '\n' on the slave, and may arrive
     // batched with preceding text (e.g. "hello\n"). Strip the trailing '\n' and
-    // include the preceding text in the submitted value.
+    // include the preceding text in the submitted value. (A PASTED trailing newline
+    // no longer lands here — bracketed paste captures it as data.)
     const endsWithLF = !key.return && input.length > 0 && input[input.length - 1] === "\n";
     if (key.return || endsWithLF) {
       const extra = endsWithLF ? input.slice(0, -1) : "";
       const trimmed = (value + extra).trim();
       if (trimmed) {
         onSubmit(trimmed);
-        updateValue("");
+        update("", 0);
       }
       return;
     }
     if (key.upArrow) {
-      if (onUp) {
-        const recalled = onUp(value);
-        if (recalled !== undefined) {
-          updateValue(recalled);
-        }
-      }
+      const recalled = onUp?.(value);
+      if (recalled !== undefined) update(recalled, recalled.length);
       return;
     }
     if (key.downArrow) {
-      if (onDown) {
-        const recalled = onDown(value);
-        if (recalled !== undefined) {
-          updateValue(recalled);
-        }
-      }
+      const recalled = onDown?.(value);
+      if (recalled !== undefined) update(recalled, recalled.length);
+      return;
+    }
+    if (key.leftArrow) {
+      // Option/Alt+← (ESC[1;3D — kitty, Ghostty, tmux) jumps a word back.
+      update(value, key.meta ? wordStartBefore(value, cursor) : cursor - 1);
+      return;
+    }
+    if (key.rightArrow) {
+      update(value, key.meta ? wordEndAfter(value, cursor) : cursor + 1);
       return;
     }
     if (key.tab) {
       if (key.shift) {
-        if (onShiftTab) {
-          onShiftTab();
-        }
+        onShiftTab?.();
       } else {
-        if (onTab) {
-          const completed = onTab(value);
-          if (completed !== undefined) {
-            updateValue(completed);
-          }
-        }
+        const completed = onTab?.(value);
+        if (completed !== undefined) update(completed, completed.length);
       }
       return;
     }
     if (key.backspace || key.delete) {
-      updateValue(value.slice(0, -1));
+      if (cursor > 0) {
+        // Option/Alt+Backspace (ESC DEL) kills the word before the cursor, readline-style.
+        const start = key.meta ? wordStartBefore(value, cursor) : cursor - 1;
+        update(value.slice(0, start) + value.slice(cursor), start);
+      }
       return;
     }
-    // Ctrl/Meta combos are handled at the app level (quit, abort, etc.).
-    if (key.ctrl || key.meta) return;
+    if (key.ctrl) {
+      // The readline core. Ctrl+E (end-of-line in readline) is deliberately NOT bound —
+      // it cycles thinking at the app level (B2). Unhandled combos stay app-level too.
+      if (input === "a") update(value, 0);
+      else if (input === "u") update(value.slice(cursor), 0);
+      else if (input === "k") update(value.slice(0, cursor), cursor);
+      else if (input === "w") {
+        const start = wordStartBefore(value, cursor);
+        update(value.slice(0, start) + value.slice(cursor), start);
+      } else if (input === "d") {
+        // Delete-forward under the cursor; on an EMPTY draft Ctrl+D is the app-level
+        // EOF quit instead (shell parity) — see the global handler in app.tsx.
+        if (cursor < value.length) update(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
+      } else if (input === "v") {
+        const clip = readClipboard();
+        if (clip) insertAt(clip.replace(/\r\n?/g, "\n"));
+      }
+      return;
+    }
+    if (key.meta) {
+      // Option/Alt+b / Alt+f word jumps (iTerm2 sends ESC b / ESC f for Option-arrows).
+      if (input === "b") update(value, wordStartBefore(value, cursor));
+      else if (input === "f") update(value, wordEndAfter(value, cursor));
+      return;
+    }
     if (input && !key.escape) {
-      updateValue(value + input);
+      insertAt(input);
     }
   });
 
+  const { value, cursor } = draftRef.current;
   if (disabled) {
     return (
       <Text wrap="truncate">
@@ -109,10 +221,16 @@ export function TextInput({
       </Text>
     );
   }
+  // Cursor block: inverse of the char under it (a space at end-of-line). Rendering the
+  // draft in three spans keeps multi-line pastes visible as-is.
+  const before = value.slice(0, cursor);
+  const at = value[cursor] ?? "▋";
+  const after = value.slice(cursor + 1);
   return (
     <Text>
-      {showPrefix && <Text color="cyan">{"›"}</Text>} {value}
-      <Text color="gray">{"▋"}</Text>
+      {showPrefix && <Text color="cyan">{"›"}</Text>} {before}
+      {value[cursor] !== undefined ? <Text inverse>{at}</Text> : <Text color="gray">{"▋"}</Text>}
+      {after}
       {!value && placeholder ? <Text color="gray"> {placeholder}</Text> : null}
     </Text>
   );

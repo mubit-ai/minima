@@ -24,7 +24,7 @@ describe("gt_contract frozen value sets", () => {
     expect(GATE_OUTCOMES).toEqual(["verified", "failed", "unrunnable", "unchecked"]);
     expect(CONFIDENCE_TIERS).toEqual(["green", "yellow", "red"]);
     expect(VERIFIED_BY).toEqual(["deterministic", "judge", "user"]);
-    expect(GATE_KINDS).toEqual(["step_check", "milestone"]);
+    expect(GATE_KINDS).toEqual(["step_check", "milestone", "stop", "recovery"]);
     expect(BASELINES).toEqual(["red", "green", "unrunnable"]);
     expect(USER_ACTIONS).toEqual(["accept", "reject", "steer"]);
     expect(CHECK_ORIGINS).toEqual(["pre_existing", "agent_new", "user"]);
@@ -34,12 +34,22 @@ describe("gt_contract frozen value sets", () => {
 describe("gt_contract enums round-trip through the DB boundary", () => {
   test("every GateKind/GateOutcome/ConfidenceTier/VerifiedBy persists verbatim", () => {
     const d = db();
-    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+    ]);
     for (const kind of GATE_KINDS)
       for (const outcome of GATE_OUTCOMES)
         for (const confidence of CONFIDENCE_TIERS)
           for (const verifiedBy of VERIFIED_BY)
-            d.insertGate({ planId, stepId: stepIds[0]!, kind, outcome, confidence, verifiedBy, factors: { pass: true } });
+            d.insertGate({
+              planId,
+              stepId: stepIds[0]!,
+              kind,
+              outcome,
+              confidence,
+              verifiedBy,
+              factors: { pass: true },
+            });
 
     const gates = d.getGates(planId);
     expect(gates.length).toBe(
@@ -65,8 +75,15 @@ describe("gt_contract enums round-trip through the DB boundary", () => {
 
   test("every UserAction persists against a gate", () => {
     const d = db();
-    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
-    const gateId = d.insertGate({ planId, stepId: stepIds[0]!, outcome: "verified", verifiedBy: "deterministic" });
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+    ]);
+    const gateId = d.insertGate({
+      planId,
+      stepId: stepIds[0]!,
+      outcome: "verified",
+      verifiedBy: "deterministic",
+    });
     for (const action of USER_ACTIONS) d.recordUserSignal(gateId, action);
     const rows = d.db
       .query("SELECT action FROM user_signals WHERE gate_id = ? ORDER BY rowid")
@@ -95,7 +112,11 @@ describe("gt_contract enums round-trip through the DB boundary", () => {
       turns: 1,
       latencyMs: 1,
     });
-    d.attachGroundedOutcome("rec1", { outcome: "verified", verifiedBy: "deterministic", confidence: "green" });
+    d.attachGroundedOutcome("rec1", {
+      outcome: "verified",
+      verifiedBy: "deterministic",
+      confidence: "green",
+    });
     const dec = d.getRunDecisions(runId).find((r) => r.rec_id === "rec1")!;
     expect(dec.gt_outcome).toBe("verified");
     expect(dec.gt_verified_by).toBe("deterministic");

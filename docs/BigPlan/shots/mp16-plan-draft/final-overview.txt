@@ -1,0 +1,124 @@
+=== SCROLLBACK (84 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |  ⚙ setup:
+h037 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+h038 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+h039 |
+h040 |▸ you
+h041 | /plan-seed
+h042 |
+h043 |  ⚙ plan:
+h044 |Seeded council round 1 — Ctrl+G shows the draft.
+h045 |
+h046 |▸ you
+h047 | /plan finalize --force
+h048 |
+h049 |  ⚙ plan:
+h050 |# Ground Truth: Demo Widget Wiring
+h051 |
+h052 |_Compiled by the planning council — 1 round, $0.0000._
+h053 |
+h054 |## Goal
+h055 |
+h056 |Ship the demo widget through the existing footer registry seam.
+h057 |
+h058 |## Overview
+h059 |
+h060 |Scaffold the widget, register it, and pin its rendering with a regression test.
+h061 |
+h062 |## Requirements
+h063 |
+h064 |- widget renders through the registry
+h065 |- rows pinned by test
+h066 |
+h067 |## Constraints
+h068 |
+h069 |- no new dependencies
+h070 |
+h071 |## Key Decisions
+h072 |
+h073 |### registry seam
+h074 |
+h075 |**Decision:** reuse the existing factory registry
+h076 |
+h077 |**Rationale:** no new plumbing
+h078 |
+h079 |
+h080 |  … 22 more lines
+h081 |
+h082 |  ⚙ plan:
+h083 |Ground truth written: /private/tmp/mp16-draft.0t8zCv/GROUND_TRUTH.md. 2 verifiable steps seeded to the plan ledger. Plan
+=== SCREEN 120x36 (visible) ===
+ 0 | mode OFF — write access restored.
+ 1 |╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ 2 |│ plan · 1/2 — j/k · pgup/pgdn · enter opens the step card · esc closes                                              │
+ 3 |│   Demo Widget Wiring — step 1/2                                                                                    │
+ 4 |│ ❯ ⬜ 1. Scaffold demo_widget.ts with the render entry point                                                         │
+ 5 |│        — · ✓ test -f demo_widget.ts                                                                                │
+ 6 |│   ⬜ 2. Pin the rendered rows with a regression test                                                                │
+ 7 |│        — · ✓ bun test demo_widget.test.ts                                                                          │
+ 8 |│   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────… │
+ 9 |│   Σ $0.0000 realized (stamped steps)                                                                               │
+10 |│                                                                                                                    │
+11 |│                                                                                                                    │
+12 |│                                                                                                                    │
+13 |│                                                                                                                    │
+14 |│                                                                                                                    │
+15 |│                                                                                                                    │
+16 |│                                                                                                                    │
+17 |│                                                                                                                    │
+18 |│                                                                                                                    │
+19 |│                                                                                                                    │
+20 |│                                                                                                                    │
+21 |│                                                                                                                    │
+22 |│                                                                                                                    │
+23 |│                                                                                                                    │
+24 |│                                                                                                                    │
+25 |│                                                                                                                    │
+26 |╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+27 |
+28 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+29 |│  ▋                                                                                                                   │
+30 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+31 |
+32 | model: gpt-4o-mini ▸ pinned · route: auto · reason: off │ ctx 0% · ↑0 ↓0 · $0.0000 · sess ephemeral · ready
+33 |perms: r-x 0 dirs · w/e/b: ask
+34 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks ctrl+g Plan esc Abort                      ctrl+p palette
+35 |
+=== 36 visible rows; 84 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp16-plan-draft/final-overview.png ===

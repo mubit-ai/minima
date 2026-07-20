@@ -1,24 +1,20 @@
 /**
  * Pure layout math for the TUI — no React/Ink, so it is unit-testable in isolation.
  *
- * Two consumers:
- *   - The INLINE renderer prints the finalized transcript via Ink's <Static> (native scrollback) and
- *     only re-diffs a small live region; the helpers below size that region.
- *   - The FULLSCREEN renderer owns an alternate-screen viewport and windows the whole transcript
- *     itself (getScrollableMessages + computeMsgHeight), because <Static>/native scroll is gone.
+ * The renderer prints the finalized transcript via Ink's <Static> (native scrollback) and
+ * only re-diffs a small live region; the helpers below size that region.
  *
  * Helpers:
  *   - wrappedLineCount     — input-box height as the typed text wraps
  *   - tailToFit            — the last lines of a streaming reply that fit the live area
  *   - clampToolText        — bound a huge tool result so the preview can't dwarf the screen
  *   - markdownBodyHeight   — rendered rows of a markdown body, mirroring MarkdownRenderer
- *   - computeMsgHeight     — rendered rows of one MessageRow (per role), the fullscreen window's ruler
- *   - getScrollableMessages — bottom-anchored window of the transcript for the fullscreen viewport
+ *   - computeMsgHeight     — rendered rows of one MessageRow (per role)
  *
  * The cardinal rule for these estimates: they MUST be >= the real rendered rows in messages.tsx (a
- * CONSERVATIVE bias). An under-count would let content grow past the space reserved for it and desync
- * Ink's frame diff (inline) or overflow the flex-end viewport (fullscreen) — the garbled-overlap /
- * decimation class of bug this module guards against.
+ * CONSERVATIVE bias). An under-count would let content grow past the space reserved for it and
+ * desync Ink's frame diff — the garbled-overlap / decimation class of bug this module guards
+ * against (an overgrown live region reaching `rows` makes Ink clearTerminal and wipe scrollback).
  */
 
 import stringWidth from "string-width";
@@ -57,35 +53,89 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
 }
 
 /**
- * Rows a single logical line occupies when word-wrapped to `width` display columns — matching Ink's
- * wrap-ansi ({ wordWrap: true, hard: true }): greedily pack space-separated words, wrap to a new row
- * when the next word (plus a joining space) won't fit, and hard-break any single word wider than a
- * full row. A char-based ceil(width) UNDER-counts this (words don't pack tightly), which is exactly
- * what desynced Ink's diff into garbled overlap — so we replicate the real algorithm to keep the
- * estimate >= actual. Uses display columns (stringWidth) so emoji/CJK (💡🧠⚙◆▸) count as 2.
+ * The tool-truncation indicator row, CC-style (`… 214 more lines`). ONE producer for both
+ * truncation surfaces — the live transcript (MessageRow) and the D3b reader — so the
+ * committed scrollback and the panel can never show different markers. Call sites add
+ * their own indent; this string carries none.
  */
-function wrapRows(line: string, width: number): number {
+export function toolHiddenMarker(hidden: number): string {
+  return `… ${hidden} more lines`;
+}
+
+/**
+ * Word-wrap a single logical line to `width` display columns, PRODUCING the wrapped rows —
+ * matching Ink's wrap-ansi ({ trim: false, wordWrap: true, hard: true }): greedily pack
+ * space-separated words, wrap to a new row when the next word (plus a joining space) won't
+ * fit, and hard-break any single word wider than a full row (by display columns — a wide
+ * char that doesn't fit moves whole to the next row). Uses stringWidth so emoji/CJK count
+ * as 2. Because Ink wraps with trim:false, LEADING SPACES OCCUPY COLUMNS — the indent is
+ * peeled and seeded into the first row (hard-broken if wider than a row) so indented code
+ * measures and reproduces exactly; dropping it (the old `col === 0` join test) under-counted
+ * and let the live region overgrow its reservation.
+ * Known benign divergence: for an over-width token following text on the same row, wrap-ansi
+ * may pack the row's tail before hard-breaking while this always flushes first — one row
+ * MORE, never fewer (safe over-estimate).
+ * `wrapRows` is DEFINED as this function's row count, so the string producer (the D3b
+ * reader) and every height estimate in this file can never diverge.
+ */
+export function wrapLineToWidth(line: string, width: number): string[] {
   const w = Math.max(1, width);
-  if (line === "") return 1;
-  let rows = 1;
-  let col = 0;
-  for (const word of line.split(" ")) {
+  if (line === "") return [""];
+  const out: string[] = [];
+  let lead = (line.match(/^ +/) ?? [""])[0];
+  const body = line.slice(lead.length);
+  while (lead.length > w) {
+    out.push(lead.slice(0, w));
+    lead = lead.slice(w);
+  }
+  let cur = lead;
+  let col = lead.length;
+  let join = false;
+  const flush = () => {
+    out.push(cur);
+    cur = "";
+    col = 0;
+    join = false;
+  };
+  for (const word of body.split(" ")) {
     const wlen = stringWidth(word);
-    const needed = col === 0 ? wlen : col + 1 + wlen;
+    const needed = join ? col + 1 + wlen : col + wlen;
     if (needed <= w) {
+      cur = join ? `${cur} ${word}` : cur + word;
       col = needed;
+      join = true;
       continue;
     }
-    if (col !== 0) rows += 1; // this word starts a fresh row
+    if (col !== 0) flush();
     if (wlen <= w) {
+      cur = word;
       col = wlen;
-    } else {
-      // hard-break an over-long word across full rows; the remainder sits on the last row
-      rows += Math.ceil(wlen / w) - 1;
-      col = wlen % w || w;
+      join = true;
+      continue;
     }
+    let rest = word;
+    while (stringWidth(rest) > w) {
+      let take = "";
+      let tw = 0;
+      for (const ch of rest) {
+        const cw = stringWidth(ch);
+        if (tw + cw > w) break;
+        take += ch;
+        tw += cw;
+      }
+      out.push(take);
+      rest = rest.slice(take.length);
+    }
+    cur = rest;
+    col = stringWidth(rest);
+    join = true;
   }
-  return rows;
+  out.push(cur);
+  return out;
+}
+
+function wrapRows(line: string, width: number): number {
+  return wrapLineToWidth(line, width).length;
 }
 
 /**
@@ -100,27 +150,82 @@ export function wrappedLineCount(text: string, width: number): number {
 }
 
 /**
- * Rendered rows of an assistant markdown body, mirroring MarkdownRenderer in messages.tsx so the
- * live-streaming reservation in app.tsx agrees with what actually renders:
- *   - `#` heading   -> a marginTop={1} row + the wrapped heading text
- *   - `-`/`* ` list  -> body wrapped at interior-4 (marginLeft 2 + "- " bullet 2)
- *   - any other line -> wrapped at the full interior width
+ * One classified markdown line — THE shared representation consumed by all three rendering
+ * sites (MarkdownRenderer, markdownBodyHeight, sectionReaderLines), so the render, the
+ * height estimate, and the panel reader cannot classify a line differently (the divergence
+ * that garbled fenced code: delimiters hit the inline-backtick toggle, `#` code lines became
+ * headings with a phantom marginTop row, `- ` code lines became bullets).
+ *
+ * Fence rule (v1): a line whose trim starts with ``` opens a fence; the next such line
+ * closes it; EOF with an open fence leaves the trailing lines as code — which is exactly the
+ * mid-stream state, so streaming needs no special case. Tilde fences, 4-space-indent blocks,
+ * and CommonMark fence-length matching are deliberately out of scope (models emit backtick
+ * fences; each is a 2-line tweak here if ever needed).
+ * List rule: `- `/`* ` WITH the space (`-x`, `---`, `--flag` are plain text).
+ * Fence/code text is tab-expanded (4 spaces) because string-width counts \t as 0 while the
+ * terminal advances to a tab stop — the same width-lie class the thinking box guards.
+ */
+export interface MdLine {
+  kind: "heading" | "list" | "fence-open" | "fence-close" | "code" | "plain";
+  /** Heading text sans #'s; list body sans marker; tab-expanded verbatim for fence/code; raw for plain. */
+  text: string;
+  bullet?: "-" | "•";
+  /** code + fence-close: index of the opening ``` line (lets tailToFit re-anchor a mid-fence slice). */
+  openerIdx?: number;
+}
+
+export function classifyMarkdownLines(text: string): MdLine[] {
+  const out: MdLine[] = [];
+  let inFence = false;
+  let openerIdx = 0;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (inFence) {
+        inFence = false;
+        out.push({ kind: "fence-close", text: line.replaceAll("\t", "    "), openerIdx });
+      } else {
+        inFence = true;
+        openerIdx = i;
+        out.push({ kind: "fence-open", text: line.replaceAll("\t", "    ") });
+      }
+    } else if (inFence) {
+      out.push({ kind: "code", text: line.replaceAll("\t", "    "), openerIdx });
+    } else if (trimmed.startsWith("#")) {
+      const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
+      out.push({ kind: "heading", text: trimmed.slice(depth).trim() });
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      out.push({
+        kind: "list",
+        text: trimmed.slice(1).trim(),
+        bullet: trimmed.startsWith("- ") ? "-" : "•",
+      });
+    } else {
+      out.push({ kind: "plain", text: line });
+    }
+  }
+  return out;
+}
+
+/**
+ * Rendered rows of an assistant markdown body, in lockstep with MarkdownRenderer in
+ * messages.tsx via the shared classifier, so the live-streaming reservation in app.tsx
+ * agrees with what actually renders:
+ *   - heading            -> a marginTop={1} row + the wrapped heading text
+ *   - list               -> body wrapped at interior-4 (marginLeft 2 + "- " bullet 2)
+ *   - fence/code/plain   -> wrapped verbatim at the full interior width
  * `interior` is the content width (stream box interior = cols-4).
  */
 export function markdownBodyHeight(text: string, interior: number): number {
   const iw = Math.max(1, interior);
   const listw = Math.max(1, interior - 4);
   let rows = 0;
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("#")) {
-      const depth = (trimmed.match(/^#+/) ?? [""])[0].length;
-      rows += 1 + wrapRows(trimmed.slice(depth).trim(), iw);
-    } else if (trimmed.startsWith("-") || trimmed.startsWith("* ")) {
-      rows += wrapRows(trimmed.slice(1).trim(), listw);
-    } else {
-      rows += wrapRows(line, iw);
-    }
+  for (const l of classifyMarkdownLines(text)) {
+    if (l.kind === "heading") rows += 1 + wrapRows(l.text, iw);
+    else if (l.kind === "list") rows += wrapRows(l.text, listw);
+    else rows += wrapRows(l.text, iw);
   }
   return rows;
 }
@@ -134,24 +239,55 @@ export function markdownBodyHeight(text: string, interior: number): number {
 export function tailToFit(text: string, interior: number, budgetRows: number): string {
   const lines = text.split("\n");
   if (budgetRows <= 0 || lines.length === 0) return "";
+  const iw = Math.max(1, interior);
+  const listw = Math.max(1, interior - 4);
+  // Classify the FULL text once: a slice that starts mid-fence must not re-classify code
+  // as prose (a `# comment` code line would gain a phantom marginTop row -> render >
+  // estimate -> the scrollback-wiping class), so per-line heights come from the whole-text
+  // classification and mid-fence slices get their real opener line prepended.
+  const md = classifyMarkdownLines(text);
+  const lineH = (l: MdLine): number => {
+    if (l.kind === "heading") return 1 + wrapRows(l.text, iw);
+    if (l.kind === "list") return wrapRows(l.text, listw);
+    return wrapRows(l.text, iw);
+  };
   let rows = 0;
   let start = lines.length - 1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const h = markdownBodyHeight(lines[i]!, interior);
+    const h = lineH(md[i]!);
     if (i < lines.length - 1 && rows + h > budgetRows) break;
     rows += h;
     start = i;
   }
-  let out = lines.slice(start).join("\n");
+  const sliceFrom = (s: number): string => {
+    const first = md[s]!;
+    const opener =
+      (first.kind === "code" || first.kind === "fence-close") && first.openerIdx !== undefined
+        ? `${lines[first.openerIdx]}\n`
+        : "";
+    return opener + lines.slice(s).join("\n");
+  };
+  let out = sliceFrom(start);
+  // The opener prepend adds a row the accumulate loop didn't count — measure the EXACT
+  // final string with the fence-aware height and advance until it fits (estimate == render
+  // by construction; touches only O(budget) short lines).
+  while (start < lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
+    start++;
+    out = sliceFrom(start);
+  }
   // A streamed paragraph is ONE source line until the model emits "\n" — when even the
-  // final line alone exceeds the budget, hard-slice its tail. Otherwise the live region
-  // outgrows the viewport: fullscreen re-enters the overflow garble class, and inline can
-  // reach terminal height and trip Ink's scrollback-wiping clearTerminal.
+  // final line alone exceeds the budget, drop the prepended opener (budget is king; the
+  // sliced string is measured and rendered identically, so height stays exact — one
+  // pathological frame may style a code fragment as prose) and hard-slice its tail.
+  // Otherwise the live region outgrows its reservation, reaches terminal height, and trips
+  // Ink's scrollback-wiping clearTerminal.
   if (start === lines.length - 1 && markdownBodyHeight(out, interior) > budgetRows) {
-    const iw = Math.max(1, interior);
-    out = out.slice(-(budgetRows * iw));
-    while (out.length > iw && markdownBodyHeight(out, interior) > budgetRows) {
-      out = out.slice(iw);
+    out = lines[start] ?? "";
+    if (markdownBodyHeight(out, interior) > budgetRows) {
+      out = out.slice(-(budgetRows * iw));
+      while (out.length > iw && markdownBodyHeight(out, interior) > budgetRows) {
+        out = out.slice(iw);
+      }
     }
   }
   return out;
@@ -260,6 +396,17 @@ export function permHiddenMarker(hidden: number): string {
   return `… +${hidden} more lines not shown — reject if unsure`;
 }
 
+/** React key for a permission-preview row — POSITION first. Todowrite verify rows share a
+ * fixed 39-char label prefix ("     verify (runs as a shell command): "), so a content-sliced
+ * key collides whenever two verify commands start with the same character, and React may then
+ * drop or duplicate rows on the one surface whose contract is that every command is visible
+ * before approval (plus a stderr warning wall into scrollback). The preview is rebuilt
+ * wholesale per prompt and static while shown, so the index is the identity; the content tail
+ * is only a debugging aid. */
+export function permPreviewKey(index: number, line: string): string {
+  return `${index}:${line.slice(0, 24)}`;
+}
+
 /**
  * The permission-overlay preview clipped to its RENDERED-row budget: whole source lines are
  * kept while the wrapped total stays within 12 rows when everything fits, else 11 so the
@@ -295,8 +442,8 @@ export function permPreviewLines(
  * + the wrapped rows of every shown preview line + the wrapped marker row when lines are hidden
  * + one truncated hint row. Component and reservation consume the SAME helpers, so estimate ==
  * render by construction — the source-line count this replaces under-reserved whenever a preview
- * line word-wrapped at narrow widths, letting the live frame overflow its reservation (inline:
- * Ink's scrollback-wiping clearTerminal; fullscreen: a clipped footer).
+ * line word-wrapped at narrow widths, letting the live frame overflow its reservation and trip
+ * Ink's scrollback-wiping clearTerminal.
  */
 export function permOverlayHeight(
   p: { toolName: string; promptText: string; argsSummary: string; diffPreview?: string | null },
@@ -328,31 +475,9 @@ export function childTreeHeight(childCount: number, maxRows: number): number {
 }
 
 /**
- * Fit the up-to-three Ground-Truth footer rows (🔴 block prompt, plan strip, 🟡 flagged note)
- * into `budget` spare rows, granting in priority order block → strip → note (the block is the
- * approval surface for a halted step, the strip is orientation, the note is the most droppable).
- * Absent rows are never granted, so an all-absent input is all-absent out at ANY budget — the
- * default (ground-truth off) path is structurally unaffected. Display only: dropping the 🔴 row
- * changes nothing about the done-gate, which is enforced in the tool dispatcher.
- */
-export function gtFooterFit(
-  budget: number,
-  present: { block: boolean; strip: boolean; note: boolean },
-): { block: boolean; strip: boolean; note: boolean } {
-  let left = budget;
-  const grant = (want: boolean): boolean => {
-    if (!want || left <= 0) return false;
-    left -= 1;
-    return true;
-  };
-  return { block: grant(present.block), strip: grant(present.strip), note: grant(present.note) };
-}
-
-/**
- * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly, so the
- * fullscreen viewport (getScrollableMessages) can window history without overflowing the frame.
+ * Rendered rows a single message occupies, mirroring `MessageRow` in messages.tsx exactly.
  * CONSERVATIVE bias (>= actual): each role uses the accurate word-wrap helpers at the *narrowest*
- * width the real render could use, so we never under-count (an under-count would let the viewport
+ * width the real render could use, so we never under-count (an under-count would let content
  * render past its budget and desync Ink — the garble class). `cols` is the terminal width.
  */
 export function computeMsgHeight(msg: ChatMessage, cols: number): number {
@@ -361,9 +486,11 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     return 2 + wrappedLineCount(msg.text, cols - 2);
   }
   if (msg.role === "tool") {
-    // marginTop(1) + "⚙ tool:" header(1) + clamped body (rows at interior cols-4) + optional hint.
+    // marginTop(1) + "⚙ tool:" header(1) + body + optional hint. The inline MessageRow paints
+    // the body unindented at the full box width, so the ruler must wrap at `cols` — counting
+    // at an interior width over-reserves and floats the composer off the terminal bottom.
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
-    return 2 + wrappedLineCount(body, cols - 4) + (hiddenLines > 0 ? 1 : 0);
+    return 2 + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0);
   }
   if (msg.role === "thinking") {
     // marginTop(1) + single border(2) + header(1) + body wrapped at interior cols-4 (border 2 + padL 2).
@@ -373,125 +500,49 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
   return 2 + markdownBodyHeight(msg.text, cols);
 }
 
-/** A windowed view of the transcript for the fullscreen renderer. */
-export interface ScrollWindow {
-  /** Whole messages overlapping the visible window (the region clips the top fold). */
-  visible: ChatMessage[];
-  /** Total estimated rows of the whole transcript. */
-  totalHeight: number;
-  /** True when scrolled as far up as content allows. */
-  atTop: boolean;
-  /** True when pinned to the newest content (offset 0). */
-  atBottom: boolean;
+// ---------------------------------------------------------------------------
+// Panels. The docked/overlay sidebar system (U2, MUB-140) died in MP2 (MUB-145) and the
+// fullscreen renderer + rewind overlay in MP3 (MUB-146). TOC_MIN_COLS is the TUI-wide
+// readable-width floor; clipPanelLines is kept for the D3b live-region panels (guide MP7+).
+// ---------------------------------------------------------------------------
+
+/** Min readable width for full rendering; below it panel surfaces degrade to text. */
+export const TOC_MIN_COLS = 60;
+
+/**
+ * Rows of the status group that stay mounted below an expanded live-region panel:
+ * StatusBar marginTop(1) + its 2 truncated rows + the keys-legend row(1). ChildTree,
+ * the quit-armed line, busy, and suggestions are suppressed/unreachable while a panel
+ * captures keys, so they are deliberately NOT part of this constant.
+ */
+export const PANEL_STATUS_ROWS = 4;
+
+/**
+ * Outer height (border included) of an expanded live-region panel (D3b, and the MP4
+ * spike that certified it): panel + composer box + status group must total EXACTLY
+ * rows − SCROLLBACK_SAFETY_ROWS — an identity, not an estimate — so the live frame can
+ * never reach `rows` (Ink's scrollback-wiping clearTerminal). `inputBoxHeight` is the
+ * app's reserve for the composer group (marginTop + border + input rows + plan banner).
+ */
+export function panelOuterHeight(rows: number, inputBoxHeight: number): number {
+  return rows - SCROLLBACK_SAFETY_ROWS - PANEL_STATUS_ROWS - inputBoxHeight;
 }
 
 /**
- * Select the messages visible in a `maxHeight`-row viewport at `scrollOffset` (0 = newest pinned to
- * the bottom; positive = scrolled up N rows). Sums per-message heights, clamps the offset to
- * `[0, total-maxHeight]`, and returns the whole messages overlapping the window `[end-maxHeight,
- * end]` where `end = total - offset`. Renders per-message (no turn boxes); the viewport bottom-aligns
- * with overflow:"hidden", so the message straddling the top fold is clipped (oldest content first).
+ * Window `lines` to exactly `innerHeight` rows with `cursorLine` visible: scrolls down
+ * only as far as needed (cursor rides the bottom edge when moving down), clamps to the
+ * content end, and pads with "" so every panel row paints — an unpainted row would let
+ * the content underneath bleed through.
  */
-export function getScrollableMessages(
-  messages: ChatMessage[],
-  maxHeight: number,
-  scrollOffset: number,
-  cols: number,
-): ScrollWindow {
-  if (messages.length === 0) return { visible: [], totalHeight: 0, atTop: true, atBottom: true };
-
-  const heights = messages.map((m) => computeMsgHeight(m, cols));
-  const totalHeight = heights.reduce((a, b) => a + b, 0);
-
-  const maxOffset = Math.max(0, totalHeight - maxHeight);
-  const effectiveOffset = Math.min(Math.max(0, scrollOffset), maxOffset);
-  const endLine = totalHeight - effectiveOffset;
-  const startLine = Math.max(0, endLine - maxHeight);
-
-  let currentLine = 0;
-  const visible: ChatMessage[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const start = currentLine;
-    const end = currentLine + heights[i]!;
-    currentLine = end;
-    if (end <= startLine || start >= endLine) continue; // entirely outside the window
-    const dropTop = Math.max(0, startLine - start);
-    const dropBottom = Math.max(0, end - endLine);
-    if (dropTop === 0 && dropBottom === 0) {
-      visible.push(messages[i]!);
-      continue;
-    }
-    // This message straddles a fold. Clip it to the rows the window actually allots it. Clipping to a
-    // rendered HEIGHT (not a raw source-line count) is essential: MessageRow always re-adds chrome
-    // (marginTop + header + >=1 body row, and a border for thinking), so a naive text-line trim can
-    // still render TALLER than its slot and overflow the viewport — the exact cause of the scroll
-    // garble. clipMessageToHeight returns null when even the chrome floor can't fit; we then drop the
-    // message (a blank sliver at the fold, which justifyContent:"flex-end" handles cleanly).
-    const slot = Math.min(end, endLine) - Math.max(start, startLine);
-    const clipped = clipMessageToHeight(messages[i]!, slot, cols, dropTop, dropBottom);
-    if (clipped) visible.push(clipped);
-  }
-
-  // Belt-and-suspenders: guarantee the rendered stack never exceeds the viewport. The per-message
-  // clip already bounds each child to its disjoint slot (so the sum fits), but any height-parity
-  // drift between computeMsgHeight and MessageRow would otherwise re-introduce the overflow → Ink
-  // decimation. Trim/drop from the top (oldest) until the sum fits. Because computeMsgHeight >= the
-  // real render, `sum <= maxHeight` here implies the actual rendered stack is <= maxHeight too.
-  let sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
-  while (sum > maxHeight && visible.length > 0) {
-    const first = visible[0]!;
-    const firstH = computeMsgHeight(first, cols);
-    const shrunk = clipMessageToHeight(first, firstH - (sum - maxHeight), cols, 1, 0);
-    if (shrunk && computeMsgHeight(shrunk, cols) < firstH) visible[0] = shrunk;
-    else visible.shift();
-    sum = visible.reduce((n, m) => n + computeMsgHeight(m, cols), 0);
-  }
-
-  return {
-    visible,
-    totalHeight,
-    atTop: effectiveOffset >= maxOffset,
-    atBottom: effectiveOffset === 0,
-  };
-}
-
-/**
- * Clip `msg` so its rendered height (computeMsgHeight — which INCLUDES the chrome MessageRow always
- * re-adds: marginTop + header + border/padding) is `<= budget` rows, by dropping whole source lines
- * from the fold end(s): `dropTop > 0` keeps a suffix (top scrolled off), `dropBottom > 0` keeps a
- * prefix (bottom scrolled off), both keep a middle slice (a single message taller than the whole
- * viewport). Returns null when even an empty body exceeds `budget` (the role's irreducible chrome
- * floor won't fit) — the caller then leaves the slot blank, which is correct under
- * justifyContent:"flex-end" (a small gap at the fold, never an overflow).
- *
- * Height is strictly monotone as lines are trimmed (each source line renders >= 1 row and per-line
- * rows are position-independent), so every loop terminates at or before the empty body.
- */
-function clipMessageToHeight(
-  msg: ChatMessage,
-  budget: number,
-  cols: number,
-  dropTop: number,
-  dropBottom: number,
-): ChatMessage | null {
-  if (computeMsgHeight({ ...msg, text: "" }, cols) > budget) return null; // chrome floor won't fit
-  const full = computeMsgHeight(msg, cols);
-  const lines = msg.text.split("\n");
-  let lo = 0;
-  let hi = lines.length;
-  const heightOf = () => computeMsgHeight({ ...msg, text: lines.slice(lo, hi).join("\n") }, cols);
-  // Honor the top fold: drop leading lines until the remaining height reflects `dropTop` rows gone.
-  // For a top-fold-only message this trims straight to the budget; for a both-folds message it seats
-  // the top of the middle slice before the bottom trim below.
-  if (dropTop > 0) {
-    const target = full - dropTop;
-    while (lo < hi && heightOf() > target) lo++;
-  }
-  // Honor the bottom fold: drop trailing lines until it fits the budget.
-  if (dropBottom > 0) {
-    while (lo < hi && heightOf() > budget) hi--;
-  }
-  // Final safety against any residual over-count: trim from the top until it fits.
-  while (lo < hi && heightOf() > budget) lo++;
-  return { ...msg, text: lines.slice(lo, hi).join("\n") };
+export function clipPanelLines(
+  lines: string[],
+  innerHeight: number,
+  cursorLine: number,
+): { lines: string[]; top: number } {
+  const maxTop = Math.max(0, lines.length - innerHeight);
+  let top = Math.max(0, Math.min(cursorLine - innerHeight + 1, maxTop));
+  if (cursorLine < top) top = Math.min(cursorLine, maxTop);
+  const windowed = lines.slice(top, top + innerHeight);
+  while (windowed.length < innerHeight) windowed.push("");
+  return { lines: windowed, top };
 }

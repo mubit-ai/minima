@@ -10,9 +10,7 @@ import {
   parseTodos,
   pathsFromPatch,
   planProjectionFor,
-  planStripDrift,
   planStripInfo,
-  planStripLabel,
   writePathsFromArgs,
 } from "../src/minima/ground_truth.ts";
 
@@ -40,11 +38,19 @@ function step(over: Partial<PlanStepRow> & { idx: number }): PlanStepRow {
     verify: null,
     baseline: null,
     created_at: null,
+    verify_cwd: null,
+    check_origin: null,
     ...over,
   };
 }
 
-const PLAN: PlanRow = { id: "p1", session_id: "s1", title: "My Plan", status: "active", created_at: null };
+const PLAN: PlanRow = {
+  id: "p1",
+  session_id: "s1",
+  title: "My Plan",
+  status: "active",
+  created_at: null,
+};
 
 // --------------------------------------------------------------------------- parseTodos
 
@@ -61,7 +67,9 @@ describe("parseTodos", () => {
   });
 
   test("accepts an already-parsed array", () => {
-    expect(parseTodos([{ content: "A", status: "completed" }])).toEqual([{ content: "A", status: "completed" }]);
+    expect(parseTodos([{ content: "A", status: "completed" }])).toEqual([
+      { content: "A", status: "completed" },
+    ]);
   });
 
   test("returns [] on malformed JSON", () => {
@@ -93,7 +101,12 @@ describe("parseTodos", () => {
       { content: "c", status: "completed" },
       { content: "d" },
     ]);
-    expect(parseTodos(raw).map((t) => t.status)).toEqual(["pending", "in_progress", "completed", "pending"]);
+    expect(parseTodos(raw).map((t) => t.status)).toEqual([
+      "pending",
+      "in_progress",
+      "completed",
+      "pending",
+    ]);
   });
 
   test("sources verify from the todowrite payload (M3.1)", () => {
@@ -134,7 +147,12 @@ describe("pathsFromPatch", () => {
   });
 
   test("dedups repeated targets and ignores non-envelope lines", () => {
-    const patch = ["*** Update File: dup.ts", "+x", "*** Update File: dup.ts", "not a header line"].join("\n");
+    const patch = [
+      "*** Update File: dup.ts",
+      "+x",
+      "*** Update File: dup.ts",
+      "not a header line",
+    ].join("\n");
     expect(pathsFromPatch(patch)).toEqual(["dup.ts"]);
   });
 
@@ -225,9 +243,12 @@ describe("formatPlanProjection", () => {
   });
 
   test("omits the title suffix when the plan has no title", () => {
-    const out = formatPlanProjection({ ...PLAN, title: null }, [step({ idx: 0, content: "Only", status: "pending" })])!;
-    expect(out).toContain("# Current plan (step 1/1)");
-    expect(out).not.toContain("—");
+    const out = formatPlanProjection({ ...PLAN, title: null }, [
+      step({ idx: 0, content: "Only", status: "pending" }),
+    ])!;
+    const header = out.split("\n")[0]!;
+    expect(header).toBe("# Current plan (step 1/1)");
+    expect(header).not.toContain("—"); // no `— <title>` suffix in the header
   });
 
   test("renders the verify hint on steps that carry one (M3.1)", () => {
@@ -240,13 +261,28 @@ describe("formatPlanProjection", () => {
     expect(out).toContain("2. [ ] Second");
   });
 
-  test("verify-less steps render exactly as before (no verify suffix)", () => {
+  test("a not-yet-done verify-less step gets the decompose nudge (state-backed, nudge-only)", () => {
+    const out = formatPlanProjection(PLAN, [step({ idx: 0, content: "Only", status: "pending" })])!;
+    const lines = out.split("\n");
+    expect(lines[1]).toBe("1. [ ] Only — ⚠ no verify (decompose or add a check)");
+    expect(out).not.toContain("verify: `");
+  });
+
+  test("a completed verify-less step is NOT nudged (past the point of nudging)", () => {
     const out = formatPlanProjection(PLAN, [
-      step({ idx: 0, content: "Only", status: "pending" }),
+      step({ idx: 0, content: "Done", status: "completed" }),
     ])!;
     const lines = out.split("\n");
-    expect(lines[1]).toBe("1. [ ] Only");
-    expect(out).not.toContain("verify: `");
+    expect(lines[1]).toBe("1. [x] Done");
+    expect(out).not.toContain("no verify");
+  });
+
+  test("a step with a verify shows the check, not the nudge", () => {
+    const out = formatPlanProjection(PLAN, [
+      step({ idx: 0, content: "First", status: "pending", verify: "bun test" }),
+    ])!;
+    expect(out).toContain("1. [ ] First — verify: `bun test`");
+    expect(out).not.toContain("no verify");
   });
 });
 
@@ -326,7 +362,9 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
 
   test("preserves an existing verify via COALESCE when a later call omits it", () => {
     const d = db();
-    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending", verify: "npm test" }]);
+    const { planId } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "pending", verify: "npm test" },
+    ]);
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
     expect(d.getPlanSteps(planId)[0]!.verify).toBe("npm test");
   });
@@ -342,10 +380,14 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
 
   test("started reports a pending→in_progress flip with the COALESCE'd effective verify (M3.3)", () => {
     const d = db();
-    const first = d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending", verify: "npm test" }]);
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "pending", verify: "npm test" },
+    ]);
     expect(first.started).toEqual([]);
     const second = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
-    expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "npm test" }]);
+    expect(second.started).toEqual([
+      { id: first.stepIds[0]!, verify: "npm test", verify_cwd: null },
+    ]);
   });
 
   test("started excludes already-in_progress steps and steps that already have a baseline (M3.3)", () => {
@@ -354,7 +396,7 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
       { content: "A", status: "in_progress", verify: "true" },
       { content: "B", status: "pending", verify: "true" },
     ]);
-    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: "true" }]);
+    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: "true", verify_cwd: null }]);
     const again = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress" },
       { content: "B", status: "pending" },
@@ -376,8 +418,8 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
       { content: "C", status: "pending" },
     ]);
     expect(started).toEqual([
-      { id: stepIds[0]!, verify: "bun test" },
-      { id: stepIds[1]!, verify: null },
+      { id: stepIds[0]!, verify: "bun test", verify_cwd: null },
+      { id: stepIds[1]!, verify: null, verify_cwd: null },
     ]);
   });
 
@@ -398,7 +440,7 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     expect(steps[1]!.id).toBe(first.stepIds[0]!);
     expect(steps[1]!.verify).toBe("bun test parser");
     expect(steps[1]!.baseline).toBe("red");
-    expect(second.started).toEqual([{ id: second.stepIds[0]!, verify: null }]);
+    expect(second.started).toEqual([{ id: second.stepIds[0]!, verify: null, verify_cwd: null }]);
   });
 
   test("a reorder keeps identity: the new occupant of an idx never inherits a baseline", () => {
@@ -456,11 +498,11 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
   test("started reports an in_progress step gaining its first verify, once-only (M3.3)", () => {
     const d = db();
     const first = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
-    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: null }]);
+    expect(first.started).toEqual([{ id: first.stepIds[0]!, verify: null, verify_cwd: null }]);
     const second = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true" },
     ]);
-    expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "true" }]);
+    expect(second.started).toEqual([{ id: first.stepIds[0]!, verify: "true", verify_cwd: null }]);
     d.setStepBaseline(first.stepIds[0]!, "green");
     const resend = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true" },
@@ -479,7 +521,9 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     const swapped = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "exit 1" },
     ]);
-    expect(swapped.started).toEqual([{ id: first.stepIds[0]!, verify: "exit 1" }]);
+    expect(swapped.started).toEqual([
+      { id: first.stepIds[0]!, verify: "exit 1", verify_cwd: null },
+    ]);
     expect(d.getPlanSteps(first.planId)[0]!.baseline).toBeNull();
     expect(d.getPlanSteps(first.planId)[0]!.verify).toBe("exit 1");
   });
@@ -516,7 +560,9 @@ describe("MinimaDb.setStepBaseline", () => {
 
   test("records the captured baseline, readable via getPlanSteps", () => {
     const d = db();
-    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+    ]);
     d.setStepBaseline(stepIds[0]!, "red");
     expect(d.getPlanSteps(planId)[0]!.baseline).toBe("red");
   });
@@ -536,7 +582,9 @@ describe("MinimaDb.setStepBaseline", () => {
 
   test("overwrites a prior baseline on re-capture (red → green)", () => {
     const d = db();
-    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "in_progress" },
+    ]);
     d.setStepBaseline(stepIds[0]!, "red");
     d.setStepBaseline(stepIds[0]!, "green");
     expect(d.getPlanSteps(planId)[0]!.baseline).toBe("green");
@@ -544,7 +592,9 @@ describe("MinimaDb.setStepBaseline", () => {
 
   test("a captured baseline survives a later todowrite upsert of the same step (COALESCE-independent column)", () => {
     const d = db();
-    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending" }]);
+    const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
+      { content: "A", status: "pending" },
+    ]);
     d.setStepBaseline(stepIds[0]!, "red");
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
     expect(d.getPlanSteps(planId)[0]!.baseline).toBe("red");
@@ -589,7 +639,7 @@ describe("planStripInfo", () => {
     expect(planStripInfo(db(), "run1")).toBeNull();
   });
 
-  test("reports position, total, active title, and drift count", () => {
+  test("reports position, total, active title, drift, plan id, and plan-scoped cost", () => {
     const d = db();
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "Edit config.ts", status: "in_progress" },
@@ -601,72 +651,22 @@ describe("planStripInfo", () => {
     expect(info.stepTotal).toBe(2);
     expect(info.title).toBe("Edit config.ts");
     expect(info.drift).toBe(1);
-  });
-});
-
-// --------------------------------------------------------------------------- footer strip formatters (M1.3/M2.3)
-
-describe("planStripLabel / planStripDrift", () => {
-  test("label renders `▸ plan pos/total — title` from the strip facts", () => {
-    expect(planStripLabel({ stepPos: 2, stepTotal: 5, title: "Wire the router", drift: 0 })).toBe(
-      "▸ plan 2/5 — Wire the router",
-    );
+    expect(info.planId).toBe(planId);
+    // No per-step $ stamps yet → null (the D3a header hides its cost segment, not $0.0000).
+    expect(info.totalCostUsd).toBeNull();
   });
 
-  test("label is total on an empty title (no trailing text beyond the em dash)", () => {
-    expect(planStripLabel({ stepPos: 1, stepTotal: 1, title: "", drift: 0 })).toBe("▸ plan 1/1 — ");
-  });
-
-  test("drift suffix renders `⚠ N off-plan (drift)` with leading spaces when N > 0", () => {
-    expect(planStripDrift(3)).toBe("   ⚠ 3 off-plan (drift)");
-  });
-
-  test("drift suffix is empty for zero (and never negative) so the caller renders nothing", () => {
-    expect(planStripDrift(0)).toBe("");
-    expect(planStripDrift(-1)).toBe("");
-  });
-
-  test("label + drift compose exactly as the footer <Text> concatenates them", () => {
-    const info = { stepPos: 1, stepTotal: 2, title: "Edit config.ts", drift: 2 };
-    const line = planStripLabel(info) + planStripDrift(info.drift);
-    expect(line).toBe("▸ plan 1/2 — Edit config.ts   ⚠ 2 off-plan (drift)");
-  });
-
-  // The footer reserves exactly one row for the strip, but step content may carry interior
-  // newlines — the label collapses them so the strip is provably one rendered row.
-  test("label collapses interior newlines in the title to single spaces", () => {
-    const label = planStripLabel({
-      stepPos: 2,
-      stepTotal: 5,
-      title: "Wire the router\nand the judge",
-      drift: 0,
-    });
-    expect(label).toBe("▸ plan 2/5 — Wire the router and the judge");
-    expect(label).not.toContain("\n");
-  });
-
-  test("label collapses \\r\\n and newline runs with surrounding indentation", () => {
-    expect(planStripLabel({ stepPos: 1, stepTotal: 1, title: "a\r\n  b\n\nc", drift: 0 })).toBe(
-      "▸ plan 1/1 — a b c",
-    );
-  });
-
-  test("newline-free titles render byte-identically (regression pin)", () => {
-    expect(planStripLabel({ stepPos: 2, stepTotal: 5, title: "Wire the router", drift: 0 })).toBe(
-      "▸ plan 2/5 — Wire the router",
-    );
-  });
-
-  test("round-trip: the label sanitizes the projection while the DB content stays verbatim", () => {
+  // The D3a header reserves exactly one row, but step content may carry interior newlines —
+  // the projection keeps them VERBATIM in the DB; the one-rendered-row collapse now lives in
+  // task_footer.ts (tested there) since the banner formatters died in MP6.
+  test("round-trip: the DB content stays verbatim; the strip title carries the raw text", () => {
     const d = db();
     const todos = parseTodos(
       JSON.stringify([{ content: "Wire the router\nand the judge", status: "in_progress" }]),
     );
     const { planId } = d.upsertPlanFromTodos("run1", todos);
     expect(d.getPlanSteps(planId)[0]!.content).toBe("Wire the router\nand the judge");
-    const label = planStripLabel(planStripInfo(d, "run1")!);
-    expect(label).not.toContain("\n");
-    expect(label).toBe("▸ plan 1/1 — Wire the router and the judge");
+    expect(planStripInfo(d, "run1")!.title).toBe("Wire the router\nand the judge");
   });
 });
 
@@ -717,7 +717,9 @@ describe("groundTruthAfterToolCall", () => {
     );
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.verify).toBe("bun test tests/a.test.ts");
-    await sink(ctx("todowrite", { tasks: JSON.stringify([{ content: "Alpha", status: "completed" }]) }));
+    await sink(
+      ctx("todowrite", { tasks: JSON.stringify([{ content: "Alpha", status: "completed" }]) }),
+    );
     const steps = d.getPlanSteps(plan.id);
     expect(steps[0]!.status).toBe("completed");
     expect(steps[0]!.verify).toBe("bun test tests/a.test.ts");
@@ -731,9 +733,13 @@ describe("groundTruthAfterToolCall", () => {
 
   test("write on a claimed path is recorded on_plan against the in-progress step", async () => {
     const d = db();
-    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "Update config.ts loader", status: "in_progress" }]);
+    const { planId } = d.upsertPlanFromTodos("run1", [
+      { content: "Update config.ts loader", status: "in_progress" },
+    ]);
     const inProgress = d.getInProgressStep(planId)!;
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/minima/config.ts" }));
+    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+      ctx("write", { path: "src/minima/config.ts" }),
+    );
     const changes = d.getFileChanges(planId);
     expect(changes).toHaveLength(1);
     expect(changes[0]!.origin).toBe("on_plan");
@@ -745,8 +751,12 @@ describe("groundTruthAfterToolCall", () => {
 
   test("write on an unclaimed path is recorded off_plan (drift)", async () => {
     const d = db();
-    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "Update config.ts loader", status: "in_progress" }]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("edit", { path: "src/other/router.ts" }));
+    const { planId } = d.upsertPlanFromTodos("run1", [
+      { content: "Update config.ts loader", status: "in_progress" },
+    ]);
+    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+      ctx("edit", { path: "src/other/router.ts" }),
+    );
     const changes = d.getFileChanges(planId);
     expect(changes).toHaveLength(1);
     expect(changes[0]!.origin).toBe("off_plan");
@@ -756,8 +766,12 @@ describe("groundTruthAfterToolCall", () => {
 
   test("write with a plan but no in-progress step attributes off_plan with a null step", async () => {
     const d = db();
-    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "config.ts work", status: "pending" }]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
+    const { planId } = d.upsertPlanFromTodos("run1", [
+      { content: "config.ts work", status: "pending" },
+    ]);
+    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+      ctx("write", { path: "src/config.ts" }),
+    );
     const changes = d.getFileChanges(planId);
     expect(changes).toHaveLength(1);
     expect(changes[0]!.origin).toBe("off_plan");
@@ -766,7 +780,9 @@ describe("groundTruthAfterToolCall", () => {
 
   test("write with no active plan records nothing", async () => {
     const d = db();
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
+    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+      ctx("write", { path: "src/config.ts" }),
+    );
     // No plan means no plan id to query against; assert via a freshly-created plan being empty.
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "pending" }]);
     expect(d.getFileChanges(planId)).toHaveLength(0);

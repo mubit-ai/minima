@@ -43,6 +43,7 @@ import {
   defaultFactorFs,
   detectTamper,
 } from "./gt_factors.ts";
+import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 
 /**
@@ -60,8 +61,24 @@ export interface GtAgentRef {
   readonly agentId?: string | null;
 }
 
-/** Compact footer facts about the active plan (M1.3 strip + M2.3 drift). */
+/** MP18: may this verify command execute on the host RIGHT NOW? Keyed on the exact string
+ *  that would run (the execution-time command, never the approved-at-todowrite one — a
+ *  post-approval swap must re-consent). Undefined = allow (the pre-MP18 library default);
+ *  fail-closed is a WIRING decision — the TUI injects its permission-state-backed checker,
+ *  headless injects headlessVerifyConsent. */
+export type VerifyConsent = (cmd: string) => boolean;
+
+export const VERIFY_CONSENT_BLOCK =
+  "could not run (this verify command was never approved by the user — approve it in an " +
+  "interactive session, or set MINIMA_TUI_ALLOW_VERIFY=1 to opt headless runs in)";
+
+export function headlessVerifyConsent(env: NodeJS.ProcessEnv = process.env): VerifyConsent {
+  return () => env.MINIMA_TUI_ALLOW_VERIFY === "1";
+}
+
+/** Compact footer facts about the active plan (M1.3 strip + M2.3 drift; D3a since MP6). */
 export interface PlanStripInfo {
+  planId: string;
   /** 1-based position of the active step. */
   stepPos: number;
   stepTotal: number;
@@ -69,6 +86,8 @@ export interface PlanStripInfo {
   title: string;
   /** Count of off-plan (drift) file changes recorded against the plan. */
   drift: number;
+  /** Plan-scoped realized cost (Σ per-step $ stamps); null when nothing is stamped yet. */
+  totalCostUsd: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,9 +121,23 @@ export function parseTodos(raw: unknown): TodoInput[] {
     const status = normalizeStatus(rec.status);
     const verify =
       typeof rec.verify === "string" && rec.verify.trim() ? rec.verify.trim() : undefined;
-    out.push(verify ? { content, status, verify } : { content, status });
+    // A6: a per-step tool allowlist. Like verify, the key is OMITTED (never null/[]) when
+    // absent/empty so the sticky COALESCE in upsertPlanFromTodos preserves an existing allowlist —
+    // the agent can set or overwrite a step's tools but never clear them.
+    const tools = normalizeToolList(rec.tools);
+    const todo: TodoInput = { content, status };
+    if (verify) todo.verify = verify;
+    if (tools) todo.tools = tools;
+    out.push(todo);
   }
   return out;
+}
+
+/** Parse a todowrite `tools` value into a trimmed non-empty string[], or undefined when absent/empty. */
+function normalizeToolList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const clean = raw.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean);
+  return clean.length > 0 ? clean : undefined;
 }
 
 function normalizeStatus(s: unknown): string {
@@ -351,6 +384,8 @@ export const GROUND_TRUTH_SYSTEM_GUIDANCE = [
   "`bun test tests/foo.test.ts`). Do not wait until the step is done to add it.",
   "Marking a step completed runs its `verify` first; the completion is REFUSED unless the check",
   "passes, so a step whose check you cannot yet make pass is simply not done.",
+  "If you cannot name a `verify` for a step, that step is too vague — decompose it into smaller",
+  "steps each of which CAN be checked, rather than leaving it unverified.",
   "A pure-scaffolding step with no runnable check may omit `verify` — it will be flagged for review,",
   "not verified. Never write a throwaway test just to have a green check.",
 ].join("\n");
@@ -366,7 +401,14 @@ export function formatPlanProjection(plan: PlanRow, steps: PlanStepRow[]): strin
   const pos = activeStepPos(steps);
   const lines = steps.map((s, i) => {
     const mark = s.status === "completed" ? "x" : s.status === "in_progress" ? ">" : " ";
-    const verify = s.verify ? ` — verify: \`${s.verify}\`` : "";
+    // State-backed nudge (survives compaction): a not-yet-done step with no check is flagged so
+    // the model is reminded, every turn, to add a verify or decompose it. Nudge only — never a
+    // block. Completed steps are past the point of nudging.
+    const verify = s.verify
+      ? ` — verify: \`${s.verify}\``
+      : s.status === "completed"
+        ? ""
+        : " — ⚠ no verify (decompose or add a check)";
     return `${i + 1}. [${mark}] ${s.content ?? ""}${verify}`;
   });
   const header = `# Current plan (step ${pos}/${steps.length}${plan.title ? ` — ${plan.title}` : ""})`;
@@ -390,30 +432,15 @@ export function planStripInfo(db: MinimaDb | null, sessionId: string | null): Pl
   if (steps.length === 0) return null;
   const pos = activeStepPos(steps);
   const active = steps[Math.min(pos - 1, steps.length - 1)];
+  const { totalUsd } = db.stepCosts(plan.id);
   return {
+    planId: plan.id,
     stepPos: pos,
     stepTotal: steps.length,
     title: active?.content ?? plan.title ?? "",
     drift: db.countOffPlanChanges(plan.id),
+    totalCostUsd: totalUsd > 0 ? totalUsd : null,
   };
-}
-
-/**
- * M1.3: the footer plan-of-record line, e.g. `▸ plan 2/5 — Wire the router`. Interior newline
- * runs in the step content (plus surrounding indentation) collapse to a single space so the
- * strip is provably one rendered row against its one-row footer reservation — projection-only:
- * `plan_steps.content` stays verbatim in the DB.
- */
-export function planStripLabel(info: PlanStripInfo): string {
-  return `▸ plan ${info.stepPos}/${info.stepTotal} — ${info.title.replace(/\s*[\r\n]+\s*/g, " ")}`;
-}
-
-/**
- * M2.3: the drift suffix appended (in yellow) after the label when off-plan changes exist,
- * e.g. `   ⚠ 3 off-plan (drift)`. Returns "" for zero drift so the caller renders nothing.
- */
-export function planStripDrift(drift: number): string {
-  return drift > 0 ? `   ⚠ ${drift} off-plan (drift)` : "";
 }
 
 /**
@@ -545,6 +572,38 @@ export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null):
   }
 }
 
+/**
+ * A7: turn a DETERMINISTIC grounded verdict into the feedback outcome label, graded by the gate's
+ * confidence tier. The caller (runtime.feedbackSafely) only reaches this with a grounded outcome
+ * that is `verified` or `failed` (an `unrunnable` is filtered upstream — it is an environment error,
+ * not model evidence, and falls back to the judge), so this function's whole job is the verified
+ * split:
+ *
+ *   - `failed`  → `failure`  (a red check; also the recovery-ladder trigger, read separately).
+ *   - `verified` + `graded`=false → `success`  (M7.2's original binary: any passing check → success).
+ *   - `verified` + `graded`=true:
+ *       - tier `green`         → `success`  (clean ground truth: pre-existing/user check, red→green,
+ *                                            coverage — the only tier that also flips vip=true).
+ *       - tier `yellow`/`red`/null → `partial`  (a passing-but-untrustworthy check: a self-written
+ *                                            test, no red→green evidence, coverage-unknown, or an A5
+ *                                            fabrication-floor red-TIER-but-verified pass). Weaker
+ *                                            positive evidence than green, so Minima learns it as
+ *                                            partial — never a fabricated `success`, never an
+ *                                            overstated `failure` (the check DID pass).
+ *
+ * Pure. A red-tier verified pass mapping to `partial` (not `failure`) is deliberate: it must not
+ * masquerade as recovery-worthy — a stronger model can't fix a fabricated test (A5), so the ladder
+ * (which triggers on `outcome==='failed'`) correctly stays out of it.
+ */
+export function deterministicOutcomeLabel(
+  grounded: GroundedOutcome,
+  graded: boolean,
+): "success" | "partial" | "failure" {
+  if (grounded.outcome !== "verified") return "failure";
+  if (!graded) return "success";
+  return grounded.confidence === "green" ? "success" : "partial";
+}
+
 // ---------------------------------------------------------------------------
 // afterToolCall sink — persist the plan + attribute file changes.
 // ---------------------------------------------------------------------------
@@ -569,7 +628,11 @@ export const BASELINE_BUDGET_MS = 120_000;
  * Errored tool calls are ignored (nothing durable happened). All failures are swallowed —
  * ledger bookkeeping must never break a turn.
  */
-export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
+export function groundTruthAfterToolCall(
+  ref: GtAgentRef,
+  opts?: { verifyConsent?: VerifyConsent },
+): AfterToolCall {
+  const consent = opts?.verifyConsent;
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -585,12 +648,16 @@ export function groundTruthAfterToolCall(ref: GtAgentRef): AfterToolCall {
           const deadline = performance.now() + BASELINE_BUDGET_MS;
           for (const s of started) {
             if (!s.verify) continue;
+            // MP18: an unconsented verify never executes — the baseline stays NULL (signal
+            // withheld, never fabricated). Consent keys on the stored command about to run.
+            if (consent && !consent(s.verify)) continue;
             const remaining = deadline - performance.now();
             if (remaining <= 0) break;
             try {
               const result = await runCheck(s.verify, {
                 timeoutMs: Math.min(remaining, resolveCheckTimeoutMs()),
                 signal: ref.runSignal ?? undefined,
+                cwd: s.verify_cwd ?? undefined,
               });
               // A user abort is NO EVIDENCE: leave the baseline NULL (signal lost, never
               // fabricated) and stop — the whole run is being torn down anyway.
@@ -695,6 +762,51 @@ function soloCompletionReason(names: string[]): string {
 }
 
 /**
+ * M4.3 milestone gate — one plan-level rollup written exactly once, when the plan closes (every
+ * step completed). It aggregates the TERMINAL verdict per step (the latest gate row per step_id,
+ * since getGates is oldest-first): outcome is `verified` only when every step's terminal gate is
+ * verified, else `unchecked`; confidence is the WORST tier across steps (red wins); verified_by is
+ * `deterministic` only when every terminal step gate was deterministic. Because closure can only
+ * fire once all steps completed — and completion already refuses any failed/unrunnable check — the
+ * rollup is derived purely from real step verdicts (no fabricated quality). Rec-scoped like step
+ * gates so groundedOutcomeFor can factor it; conservative by construction, so it can never make a
+ * run look more verified than its steps already are. Fail-open: any error skips the milestone.
+ */
+function writeMilestoneGate(db: MinimaDb, planId: string, ref: GtAgentRef, session: string): void {
+  const stepGates = db.getGates(planId).filter((g) => g.kind === "step_check");
+  const latestByStep = new Map<string, GateRow>();
+  for (const g of stepGates) if (g.step_id) latestByStep.set(g.step_id, g); // oldest-first → last wins
+  const finals = [...latestByStep.values()];
+  if (finals.length === 0) return; // nothing verified to roll up (all steps were verify-less)
+
+  let worst: ConfidenceTier = "green";
+  let allVerified = true;
+  let allDeterministic = true;
+  for (const g of finals) {
+    const tier = gateVerdictFor(g).tier ?? "yellow";
+    if (TIER_BADNESS[tier] > TIER_BADNESS[worst]) worst = tier;
+    if (g.outcome !== "verified") allVerified = false;
+    if (g.verified_by !== "deterministic") allDeterministic = false;
+  }
+  db.insertGate({
+    planId,
+    stepId: null,
+    kind: "milestone",
+    outcome: allVerified ? "verified" : "unchecked",
+    confidence: worst,
+    verifiedBy: allVerified && allDeterministic ? "deterministic" : null,
+    factors: {
+      milestone: true,
+      steps: finals.length,
+      verified: finals.filter((g) => g.outcome === "verified").length,
+    },
+    recId: ref.currentRecId ?? null,
+    sessionId: session,
+    agentId: ref.agentId ?? null,
+  });
+}
+
+/**
  * The tool calls of the CURRENT batch: during before-hooks, loop.ts has already appended the
  * assistant message whose toolUse blocks are being dispatched, so the last AssistantMessage
  * with stop_reason "toolUse" IS the batch. Stateless — nothing to leak or wedge when a batch
@@ -751,20 +863,62 @@ export function batchToolCalls(state: unknown): { id: string; name: string }[] {
  *
  * `gateBudgetMs` is injectable for tests only; production uses GATE_BUDGET_MS.
  */
+/**
+ * A6 enforcement: does the in-progress step's tool allowlist permit this tool call? Reads the
+ * active plan's in-progress step (the same step file changes attribute to), parses its `tools`
+ * column, and returns a block decision for a mutating tool absent from a non-empty allowlist; null
+ * (allow) when there is no plan/step, the step is unrestricted, or the tool is always-allowed.
+ *
+ * Total + FAIL-OPEN: any ledger error allows the call — a broken read must never wedge a turn (the
+ * allowlist is a guardrail, not a security boundary; the done-gate remains the hard invariant).
+ */
+function enforceStepAllowlist(
+  db: MinimaDb,
+  session: string,
+  toolName: string,
+): { block: true; reason: string } | null {
+  try {
+    const plan = db.getActivePlan(session);
+    if (!plan) return null;
+    const step = db.getInProgressStep(plan.id);
+    if (!step) return null;
+    const allow = parseStepTools(step.tools);
+    const decision = stepAllowlistDecision(toolName, allow, step.content);
+    return decision.block ? { block: true, reason: decision.reason ?? "tool not permitted" } : null;
+  } catch {
+    return null; // fail-open: a broken allowlist read must never break a turn.
+  }
+}
+
 export function groundTruthHooks(
   ref: GtAgentRef,
-  opts?: { gateBudgetMs?: number; fs?: FactorFs },
+  opts?: {
+    gateBudgetMs?: number;
+    fs?: FactorFs;
+    enforceAllowlist?: boolean;
+    verifyConsent?: VerifyConsent;
+  },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
-  const sink = groundTruthAfterToolCall(ref);
+  const enforceAllowlist = opts?.enforceAllowlist ?? false;
+  const consent = opts?.verifyConsent;
+  const sink = groundTruthAfterToolCall(ref, { verifyConsent: consent });
   const pending = new Map<string, GateVerdict[]>();
 
   const before: BeforeToolCall = async (ctx) => {
     try {
       const db = ref.db;
       const session = ref.runId;
-      if (!db || !session || ctx.toolCall.name !== "todowrite") return null;
+      if (!db || !session) return null;
+      // A6: per-step tool allowlist (task permissions). Any NON-todowrite call is checked against
+      // the in-progress step's allowlist; a mutating tool absent from a non-empty list is blocked
+      // at the dispatcher. todowrite itself is never blocked here (it is how the agent updates the
+      // plan / widens the allowlist / marks a step done) — it falls through to the done-gate below.
+      if (ctx.toolCall.name !== "todowrite") {
+        if (!enforceAllowlist) return null;
+        return enforceStepAllowlist(db, session, ctx.toolCall.name);
+      }
       // Stateless batch rules over the CURRENT assistant message (nothing survives across
       // batches, so an abandoned batch can never wedge the gate): (a) only the batch's FIRST
       // todowrite may run — a second would be previewed against pre-batch DB state; (b) a
@@ -834,6 +988,25 @@ export function groundTruthHooks(
           });
           continue;
         }
+        // MP18: fail CLOSED on an unconsented verify — a completion claim without runnable
+        // evidence blocks (mirroring the unrunnable semantics), and the durable attempt row
+        // records why. Keyed on flip.verify, the EFFECTIVE execution-time command (a swap
+        // after approval re-prompts; the mutation-dodge is structurally closed).
+        if (consent && !consent(flip.verify)) {
+          failures.push({
+            flip,
+            outcome: "unrunnable",
+            why: VERIFY_CONSENT_BLOCK,
+            factors: {
+              ...uncheckedFactors(),
+              hasCheck: true,
+              tamper,
+              blind,
+              flipContent: flip.content,
+            },
+          });
+          continue;
+        }
         const remaining = deadline - performance.now();
         if (remaining <= 0) {
           failures.push({
@@ -854,13 +1027,17 @@ export function groundTruthHooks(
         const result = await runCheck(flip.verify, {
           timeoutMs: capMs,
           signal: ref.runSignal ?? undefined,
+          cwd: flip.verify_cwd ?? undefined,
         });
         const factors: GateFactors = {
           pass: result.pass,
           redToGreen: flip.baseline === "red" && result.pass,
           hasCheck: true,
           // M5.1 provenance / M5.2 coverage / M5.3 tamper — computed from this run's file_changes.
-          checkOrigin: classifyCheckOrigin(flip.verify, fileChanges),
+          // A stored check_origin (e.g. 'user' on a step seeded from an approved plan) is
+          // authoritative and overrides the gate-time classification — a user-accepted check is
+          // not agent-graded homework.
+          checkOrigin: flip.check_origin ?? classifyCheckOrigin(flip.verify, fileChanges),
           coverageHit: computeCoverageHit(flip.verify, fileChanges, fs),
           tamper,
           blind,
@@ -992,6 +1169,7 @@ export function groundTruthHooks(
       try {
         const steps = db.getPlanSteps(plan.id);
         if (steps.length > 0 && steps.every((s) => s.status === "completed")) {
+          writeMilestoneGate(db, plan.id, ref, session);
           db.setPlanStatus(plan.id, "done");
         }
       } catch {

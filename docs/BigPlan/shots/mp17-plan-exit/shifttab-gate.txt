@@ -1,0 +1,81 @@
+=== SCROLLBACK (41 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |  ⚙ setup:
+h037 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+h038 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+h039 |
+h040 |▸ you
+=== SCREEN 120x36 (visible) ===
+ 0 | EXITPLAN draft it
+ 1 |
+ 2 |  ⚙ plan:
+ 3 |## Sandbox cleanup plan
+ 4 |
+ 5 |1. Inventory the sandbox temp dirs.
+ 6 |2. Delete the stale ones and verify the count drops.
+ 7 |3. Note the retention rule in the runbook.
+ 8 |
+ 9 |  ⚙ exit_plan:
+10 |Plan approved — plan mode is OFF and full tool access is restored. Begin implementing the approved plan now.
+11 |
+12 |◆ assistant
+13 |Acknowledged — proceeding per the approval outcome. This second-phase reply exists so the tool loop terminates
+14 |deterministically.
+15 |
+16 |▸ you
+17 | EXITPLAN once more
+18 |
+19 |◆ assistant
+20 |Acknowledged — proceeding per the approval outcome. This second-phase reply exists so the tool loop terminates
+21 |deterministically.
+22 |╭─── plan ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+23 |│ Exit plan mode?                                                                                                      │
+24 |│ › Finalize & build — Approve the plan, exit plan mode, start building.                                               │
+25 |│   Revise the plan — Stay in plan mode and tell the planner what to change.                                           │
+26 |│   Cancel plan mode — Discard the plan.                                                                               │
+27 |│ ↑↓ select · ⏎ confirm · Esc dismiss                                                                                  │
+28 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+29 |
+30 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑5 ↓33 · $0.0000 · sess ephemeral · ready      [PLAN]
+31 |perms: r-x 0 dirs · w/e/b: ask · PLAN (ask)
+32 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                  ctrl+p palette
+33 |
+34 |
+35 |
+=== 36 visible rows; 41 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp17-plan-exit/shifttab-gate.png ===

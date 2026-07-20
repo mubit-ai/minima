@@ -71,4 +71,53 @@ describe("confidence", () => {
       reason: "check may not touch changes",
     });
   });
+
+  // A5 fabrication floor — agent_new AND coverageHit===false forces 🔴.
+  test("a self-written test that provably misses the change is red (fabrication floor)", () => {
+    expect(confidence({ ...GREEN, checkOrigin: "agent_new", coverageHit: false })).toEqual({
+      tier: "red",
+      reason: "unverified self-test",
+    });
+  });
+
+  test("a self-written test with unknown coverage stays yellow (not fabrication)", () => {
+    expect(confidence({ ...GREEN, checkOrigin: "agent_new", coverageHit: "unknown" })).toEqual({
+      tier: "yellow",
+      reason: "check may not touch changes",
+    });
+  });
+
+  test("a pre-existing test that misses the change stays yellow (floor needs agent_new)", () => {
+    expect(confidence({ ...GREEN, checkOrigin: "pre_existing", coverageHit: false })).toEqual({
+      tier: "yellow",
+      reason: "check may not touch changes",
+    });
+  });
+
+  test("blind evidence caps the fabrication floor at yellow (incomplete coverage read)", () => {
+    expect(
+      confidence({ ...GREEN, checkOrigin: "agent_new", coverageHit: false, blind: true }),
+    ).toEqual({
+      tier: "yellow",
+      reason: "unattributed writes this run",
+    });
+  });
+
+  test("tamper still outranks the fabrication floor", () => {
+    expect(
+      confidence({ ...GREEN, checkOrigin: "agent_new", coverageHit: false, tamper: true }),
+    ).toEqual({
+      tier: "red",
+      reason: "tests weakened",
+    });
+  });
+
+  test("a failed check still outranks the fabrication floor", () => {
+    expect(
+      confidence({ ...GREEN, checkOrigin: "agent_new", coverageHit: false, pass: false }),
+    ).toEqual({
+      tier: "red",
+      reason: "check did not pass",
+    });
+  });
 });

@@ -307,20 +307,12 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("agent.config.groundTruth === true");
   });
 
-  test("the 🟡 note and 🔴 block are rendered from the aggregate, not inline templates", () => {
-    expect(src).toContain("gtBehavior?.footerNote");
-    expect(src).toContain("gtBehavior?.block");
-    expect(src).toContain("{gtFooterNote}");
-    expect(src).toContain("{gtBlock.prompt}");
-  });
-
-  test("the note is yellow and the block prompt is red — one truncated row each", () => {
-    expect(src).toContain('<Text color="yellow" wrap="truncate-end">');
-    expect(src).toContain('<Text color="red" bold wrap="truncate-end">');
-    // Both rows are budgeted into footerHeight (via the gtFooterFit grant) so the chat window
-    // shrinks instead of clipping.
-    expect(src).toContain("const gtRows = (gtFit.note ? 1 : 0) + (gtFit.block ? 1 : 0)");
-    expect(src).toContain("+ gtRows");
+  test("tier→behavior surfaces through the D3a alert fold, not banner rows (MP6)", () => {
+    // The armed 🔴 block reaches the panel as a boolean; the alert TEXT is built in
+    // task_footer.ts (colored ASCII, no emoji — Q25). The old banner templates are gone.
+    expect(src).toContain("blocked: (gtBehavior?.block ?? null) !== null");
+    expect(src).not.toContain("{gtFooterNote}");
+    expect(src).not.toContain("{gtBlock.prompt}");
   });
 
   test("fails open to a hidden footer (setGtBehavior(null)) — never a crash", () => {
@@ -340,7 +332,9 @@ describe("tui/app.tsx wires tier→behavior", () => {
   // TextInput renders disabled, so a/r/s/v/Esc reach only the gate handler — the empty-prompt
   // heuristic (and its double-type hole: Ink dispatches every key to ALL useInput hooks) is gone.
   test("M6.3: the gate-focus modal captures a/r/s into user_signals — no empty-prompt guard", () => {
-    expect(src).toContain('answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null)');
+    expect(src).toContain(
+      'answerGate(gateFocus.gateId, input === "a" ? "accept" : "reject", null)',
+    );
     expect(src).toContain("agent.db?.recordUserSignal(gateId, action, note)");
     expect(src).not.toContain('typedText.trim() === ""');
   });
@@ -381,8 +375,12 @@ describe("tui/app.tsx wires tier→behavior", () => {
 
   test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
     const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
-    expect(input).toContain("if (disabled) return;");
-    expect(input).toContain("if (key.ctrl || key.meta) return;");
+    expect(input).toContain("if (disabled || suspended) return;");
+    // Ctrl combos are either readline edits handled locally or fall through to the app
+    // handlers — either way the branch returns before the draft-insert path, and meta
+    // combos never insert (the meta branch handles Alt+B/F word-jumps, then returns).
+    expect(input).toContain("if (key.ctrl) {");
+    expect(input).toContain("if (key.meta) {");
     // Default path unchanged: no disabledLabel still renders the busy placeholder, truncated.
     expect(input).toContain('disabledLabel ?? "(busy…)"');
     expect(input).toContain('<Text wrap="truncate">');
@@ -395,5 +393,243 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("stampGroundedOutcome(agent.db, seedRecId)");
     // Identity join: seeded gate rows must carry the rec they stamp (v6 gates.rec_id).
     expect(src).toContain("recId: seedRecId");
+  });
+});
+
+// exit_plan (plan-mode exit): the tool is registered only while a GT plan session is live,
+// the persona steers the model to it (never to slash commands), and the promptPlanner wrapper
+// re-applies the build prompt after a mid-turn exit (promptRouted's finally would otherwise
+// restore the planner persona it captured at entry — permanently).
+describe("tui/app.tsx wires exit_plan", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("persona tells the planner to call exit_plan, not to name slash commands", () => {
+    const personaIdx = src.indexOf("const PLANNER_PERSONA");
+    expect(personaIdx).toBeGreaterThan(-1);
+    // The declaration ends at the closing `";` — a bare ";" appears inside the prose.
+    const persona = src.slice(personaIdx, src.indexOf('";', personaIdx));
+    expect(persona).toContain("call the exit_plan tool");
+    expect(persona).toContain("Never tell the user to run slash commands");
+    expect(persona).not.toContain("/plan finalize");
+  });
+
+  test("registered whenever plan mode is ON (MP17 universal gate); cleanup by identity", () => {
+    const effectIdx = src.indexOf('if (mode !== "plan") return;');
+    expect(effectIdx).toBeGreaterThan(-1);
+    const effect = src.slice(effectIdx, effectIdx + 900);
+    expect(effect).toContain("exitPlanTool({");
+    expect(effect).toContain("agent.agentState.tools.push(tool)");
+    expect(effect).toContain("agent.agentState.tools.splice(i, 1)");
+    expect(effect).toContain('isActive: () => getMode() === "plan"');
+    expect(effect).toContain("requiresPlan: () => planSessionRef.current == null");
+  });
+
+  test("/plan finalize and the tool share ONE core (runPlanFinalize → finalizePlan)", () => {
+    expect(src.split("await runPlanFinalize(").length - 1).toBe(2); // exit_plan + /plan finalize
+    // MP18: the shared core awaits finalizePlan so the ok-branch can feed seededVerifies
+    // into the consent store before returning.
+    expect(src).toContain("const outcome = await finalizePlan(store, {");
+    expect(src).toContain("permStateRef.current.approvedVerifies.add(v)");
+    // The command path no longer inlines the synthesis/audit/write sequence.
+    expect(src).not.toContain("synthesizeGroundTruth(store.session");
+    expect(src).not.toContain("await Bun.write(outPath, md)");
+  });
+
+  test("promptPlanner re-applies the build prompt after a mid-turn plan exit", () => {
+    const idx = src.indexOf("const base = plannerBaseSystemPromptRef.current;");
+    expect(idx).toBeGreaterThan(-1);
+    const wrapper = src.slice(idx, idx + 400);
+    expect(wrapper).toContain("await agent.promptRouted(turn)");
+    expect(wrapper).toContain('if (getMode() !== "plan" && base != null)');
+    expect(wrapper).toContain("agent.agentState.systemPrompt = base");
+  });
+});
+
+// Panel input routing: ONE derived `panelCapture` feeds both the global-handler guard list
+// and the composer's `suspended`, so the two can never drift — the U3/B5 regression class
+// (a panel captured the global handler but left the composer live: arrows scrubbed history,
+// letters grew the draft, Enter could submit a prompt). MP2 (MUB-145) removed the docked
+// sidebars; since MP4 (MUB-147) the expanded live-region panel is the only populator.
+describe("tui/app.tsx panel key routing", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("panelCapture derives from the expanded-panel state — the only capturing panel", () => {
+    expect(src).toContain("const panelCapture = panel !== null;");
+    expect(src).not.toContain("sidebarOpen");
+    expect(src).not.toContain("sidebarFocused");
+    expect(src).not.toContain("rewindOpen");
+  });
+
+  test("the global guard list uses panelCapture — the per-panel lines are gone", () => {
+    expect(src).toContain("panelCapture // ");
+    expect(src).not.toContain("tocOpen || // U2");
+    expect(src).not.toContain("gtPanelOpen || // U3");
+  });
+
+  test("the composer suspends on the SAME expression (the leak fix)", () => {
+    expect(src).toContain("suspended={panelCapture}");
+    expect(src).not.toContain("suspended={tocOpen}");
+  });
+
+  test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
+    // Global arm: the guard keeps falling through to the gate-answer arm.
+    expect(src).toContain('input === "g" && !(gtBehavior?.block && !busy)');
+    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery.
+    const idx = src.indexOf("function handlePanelKey");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2600);
+    expect(body).toContain("if (gtBehavior?.block) {");
+    expect(body).toContain("setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false })");
+  });
+
+  test("/why opens the GT panel in the TUI; the text path survives for GT-off/narrow", () => {
+    const idx = src.indexOf('case "why": {');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 2400);
+    expect(body).toContain("gtPanelState(overview, gtRows(overview,");
+    expect(body).toContain("whyReportFor(agent.db, agent.runId)");
+  });
+});
+
+// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT
+// planning workflow — session + planner persona + exit_plan — never the badge-only half-state
+// (mode flipped, session null → prompts ran the NORMAL loop and the model executed with
+// per-call approval instead of planning; bare /plan then EXITED instead of recovering).
+describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("Shift+Tab cycles the ring EXCEPT out of plan mode, which routes the gate (MP17)", () => {
+    // Entering plan still rides the ring (auto-heal plants the GT session); LEAVING plan
+    // goes through the 3-option exit gate so approval and the ring share one surface. The
+    // sessionless-no-plan-turn fast-path keeps quick flipping (and the modes scenario)
+    // cycle-identical.
+    const handlerIdx = src.indexOf("onShiftTab={() => {");
+    expect(handlerIdx).toBeGreaterThan(-1);
+    const handler = src.slice(handlerIdx, handlerIdx + 220);
+    expect(handler).toContain('if (getMode() === "plan") void requestPlanExitGate();');
+    expect(handler).toContain("else cycleMode();");
+    expect(src).toContain("store == null && !planTurnSeenRef.current");
+    expect(src).not.toContain("toggleMode");
+  });
+
+  test("one shared ON notice: definition + auto-heal + /plan", () => {
+    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(3);
+  });
+
+  test("planSessionGen keys exit_plan registration to session identity", () => {
+    expect(src).toContain("const [planSessionGen, setPlanSessionGen] = useState(0);");
+    expect(src.split("setPlanSessionGen((g) => g + 1);").length - 1).toBe(2); // enter + exit
+    expect(src).toContain(
+      "}, [mode, agent, askUserRef, exitPlanFinalize, exitPlanCancel, planSessionGen]);",
+    );
+  });
+
+  test("auto-heal effect: plan mode without a session converges to a real one (no loop)", () => {
+    const idx = src.indexOf("planSessionRef.current != null ||");
+    expect(idx).toBeGreaterThan(-1);
+    const effect = src.slice(idx - 400, idx + 400);
+    expect(effect).toContain('mode !== "plan" ||');
+    expect(effect).toContain("agent.config.groundTruth !== true ||");
+    expect(effect).toContain("!planSpawn ||");
+    expect(effect).toContain("!planMetaModel");
+    // The no-loop invariant: the heal's deps exclude planSessionGen and messages.
+    expect(effect).toContain("}, [mode, agent, planSpawn, planMetaModel, enterPlanMode]);");
+  });
+
+  test("bare /plan in plan-mode-without-a-session RECOVERS instead of exiting", () => {
+    expect(src).toContain('sub === "off" ? false : planSessionRef.current == null');
+    // The mode-store test survives only in the GT-off branch and promptPlanner's leak guard.
+    expect(src.split('getMode() !== "plan"').length - 1).toBe(2);
+  });
+
+  test("the onSubmit fallthrough is surfaced, never silent", () => {
+    expect(src).toContain("plan mode without a live council");
+    const idx = src.indexOf('? "no plan session"');
+    expect(idx).toBeGreaterThan(-1);
+    const ternary = src.slice(idx, idx + 200);
+    expect(ternary).toContain('"no council spawn"');
+    expect(ternary).toContain('"no council model"');
+  });
+});
+
+// Finalize handoff (2026-07-15): the ledger drives the whole GT build spine — when synthesis
+// fails (truncated output was silently costing every seeded step), the user sees it and the
+// agent is told to rebuild the ledger via todowrite as its first move.
+describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the user-facing note warns when synthesis failed and nothing was seeded", () => {
+    expect(src).toContain("synthFailed: boolean");
+    expect(src).toContain("NO steps were seeded to the plan ledger");
+  });
+
+  test("the model is steered by seeding outcome: follow seeded steps, or todowrite first", () => {
+    expect(src).toContain("Follow the seeded plan steps");
+    expect(src).toContain("The plan ledger has no seeded steps — FIRST record");
+    expect(src).toContain("shell `verify` check");
+  });
+});
+
+// Optimistic prompt echo (2026-07-15): onSubmit pushes the VERBATIM prompt before recall/route
+// (and before any council round), and the loop's message_start(user) — which carries the
+// @file-expanded/replan-prefixed run content — is deduped via pendingEchoRef.
+describe("tui/app.tsx echoes the prompt optimistically", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("verbatim echo lands in onSubmit between the slash dispatch and setBusy", () => {
+    const echo = 'setMessages((m) => [...m, { role: "user", text: trimmed }]);';
+    const idx = src.indexOf(echo);
+    expect(idx).toBeGreaterThan(src.indexOf("await handleCommand(name, args);"));
+    const after = src.slice(idx, idx + 300);
+    expect(after).toContain("pendingEchoRef.current = true;");
+    expect(after).toContain("setBusy(true);");
+    expect(after.indexOf("pendingEchoRef.current = true;")).toBeLessThan(
+      after.indexOf("setBusy(true);"),
+    );
+  });
+
+  test("the loop's message_start(user) is deduped, not double-posted", () => {
+    const idx = src.indexOf('case "message_start":');
+    expect(idx).toBeGreaterThan(-1);
+    const handler = src.slice(idx, idx + 500);
+    expect(handler).toContain("if (pendingEchoRef.current) {");
+    expect(handler).toContain("pendingEchoRef.current = false;");
+    // The event echo survives for non-optimistic user messages (finalize handoff, replays).
+    expect(handler).toContain('{ role: "user", text: ev.message!.textContent }');
+  });
+
+  test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {
+    expect(src).toContain("const pendingEchoRef = useRef(false);");
+    expect(src.split("pendingEchoRef.current = true;").length - 1).toBe(1);
+    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(2);
+  });
+
+  test("the finally clear keeps a failed turn from muting a later echo", () => {
+    expect(src).toContain("} finally {\n      pendingEchoRef.current = false;");
+  });
+});
+
+// MP2 (MUB-145): the docked/overlay sidebar system is deleted. These pins keep it deleted
+// and protect the survivors (rewind overlay geometry, one-shot text blocks).
+describe("tui/app.tsx sidebar removal", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("no sidebar system: geometry, panels and auto-open are gone", () => {
+    expect(src).not.toContain("sidebarGeometry");
+    expect(src).not.toContain("sidebarPanels");
+    expect(src).not.toContain("SidebarChassis");
+    expect(src).not.toContain("contentCols");
+    expect(src).not.toContain("cols < 100");
+  });
+
+  test("Ctrl+T / Ctrl+G always print the one-shot text blocks", () => {
+    expect(src).toContain("renderTocText(buildSections(messages, buildUsageLedger()), cols - 6)");
+    expect(src).toContain("renderGtOverviewText(overview, cols - 6)");
+  });
+
+  test("/rewind is the numbered text list everywhere (the overlay died with fullscreen)", () => {
+    expect(src).toContain("renderRewindText(turns, cols - 6)");
+    expect(src).not.toContain("RewindPanel");
+    expect(src).not.toContain("overlayGeom");
   });
 });

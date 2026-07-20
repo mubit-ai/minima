@@ -44,7 +44,10 @@ function openerScript(dbPath: string): string {
   return file;
 }
 
-async function spawnOpeners(dbPath: string, n: number): Promise<{ codes: number[]; out: string[] }> {
+async function spawnOpeners(
+  dbPath: string,
+  n: number,
+): Promise<{ codes: number[]; out: string[] }> {
   const procs = Array.from({ length: n }, () =>
     Bun.spawn(["bun", openerScript(dbPath)], { stdout: "pipe", stderr: "pipe" }),
   );
@@ -119,4 +122,60 @@ describe("migration runner: concurrent opens", () => {
     expect(codes).toEqual([0, 0]);
     for (const line of out) expect(Number(line)).toBe(LATEST);
   }, 30000);
+});
+
+// Divergent-lineage schema forks: parallel branches have twice shipped DIFFERENT batches
+// under the same version index, so a DB's version stamp does not imply THIS lineage's
+// batch contents. reconcileSchema() replays every statement idempotently on open.
+describe("reconcileSchema — heals lineage-forked DBs regardless of the version stamp", () => {
+  test("the field case: version 11, check_origin present, verify_cwd + gates.rec_id missing", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("ALTER TABLE plan_steps DROP COLUMN verify_cwd");
+    raw.exec("DROP INDEX ix_gates_rec");
+    raw.exec("ALTER TABLE gates DROP COLUMN rec_id");
+    raw.close();
+
+    const db = new MinimaDb(path);
+    const stepCols = db.db.query("PRAGMA table_info(plan_steps)").all() as { name: string }[];
+    expect(stepCols.some((c) => c.name === "verify_cwd")).toBe(true);
+    const gateCols = db.db.query("PRAGMA table_info(gates)").all() as { name: string }[];
+    expect(gateCols.some((c) => c.name === "rec_id")).toBe(true);
+    // The crash path from the field report: /gt-seed → upsertPlanFromTodos → insertStep.
+    const { planId } = db.upsertPlanFromTodos(
+      "run1",
+      [{ content: "step", status: "in_progress", verify: "bun test", verify_cwd: "/tmp" }],
+      "Healed plan",
+    );
+    expect(db.getPlanSteps(planId)[0]!.verify_cwd).toBe("/tmp");
+    db.db.close();
+  });
+
+  test("a missing table is recreated even when the version stamp says fully migrated", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("DROP TABLE checkpoints");
+    raw.close();
+
+    const db = new MinimaDb(path);
+    const t = db.db
+      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
+      .get();
+    expect(t).not.toBeNull();
+    expect(db.schemaVersion).toBe(LATEST);
+    db.db.close();
+  });
+
+  test("a version stamp AHEAD of this lineage still heals (no early-out bypass)", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("ALTER TABLE plan_steps DROP COLUMN verify_cwd");
+    raw.exec("UPDATE schema_meta SET version = 99");
+    raw.close();
+
+    const db = new MinimaDb(path);
+    const cols = db.db.query("PRAGMA table_info(plan_steps)").all() as { name: string }[];
+    expect(cols.some((c) => c.name === "verify_cwd")).toBe(true);
+    db.db.close();
+  });
 });

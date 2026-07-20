@@ -119,6 +119,19 @@ export interface CouncilRoundResult {
 }
 
 /**
+ * One implementation step and the check that proves it landed. `verify` is a shell command (or
+ * observable check) that should be RED before the step and GREEN after — the verifiable-steps
+ * contract. Empty when the model could not name one (rendered as a decompose nudge); the
+ * sanitizer also accepts a bare string for backward/partial-output tolerance.
+ */
+export interface SynthPlanStep {
+  action: string;
+  verify: string;
+  /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
+  tools: string[];
+}
+
+/**
  * The LLM-distilled final ground-truth, produced on /plan finalize from the whole planning
  * conversation + accumulated council state. Rendered richly by `toGroundTruth`. Every list may
  * be empty; the renderer falls back to council state / deterministic assembly when it is.
@@ -130,10 +143,18 @@ export interface GroundTruthSynthesis {
   requirements: string[];
   constraints: string[];
   decisions: { topic: string; decision: string; rationale: string }[];
-  approach: string[];
+  approach: SynthPlanStep[];
   risks: string[];
   successCriteria: string[];
   openItems: string[];
+}
+
+/** MP15: the keeper mini-update's payload — the shape lives HERE (this module stays
+ *  zero-import pure); plan_council's runKeeperMiniUpdate produces it. */
+export interface KeeperMiniResult {
+  draft: string;
+  decisions: { topic: string; decision: string; rationale: string }[];
+  questions: SurfacedQuestion[];
 }
 
 export interface PlanSession {
@@ -262,6 +283,38 @@ export class PlanSessionStore {
 
       this.state.rounds = round;
       this.state.totalCouncilCostUsd += Number.isFinite(r.costUsd) ? r.costUsd : 0;
+      this.state.updatedAt = now();
+    } catch {
+      // planning telemetry must never break the conversation loop
+    }
+  }
+
+  /** MP15: fold a keeper mini-update (non-council turn) into the session — REPLACE draft
+   *  when non-empty (never clobber with nothing), dedup-merge decisions/questions, accrue
+   *  realized cost. Deliberately does NOT bump `rounds`: rounds counts COUNCIL rounds (the
+   *  stakes heuristic and the cost line key on it). Fail-open like applyCouncilResult. */
+  applyKeeperUpdate(u: KeeperMiniResult, costUsd: number): void {
+    try {
+      const draft = (u.draft ?? "").trim();
+      if (draft) this.state.draft = draft;
+
+      const seenTopics = new Set(this.state.decisions.map((d) => norm(d.topic)));
+      for (const d of u.decisions ?? []) {
+        const key = norm(d.topic);
+        if (!key || seenTopics.has(key)) continue;
+        seenTopics.add(key);
+        this.state.decisions.push({
+          id: newId(),
+          topic: d.topic.trim(),
+          decision: d.decision.trim(),
+          rationale: d.rationale.trim(),
+          resolvedBy: "council",
+          round: this.state.rounds,
+        });
+      }
+
+      this.addSurfacedQuestions(u.questions ?? [], this.state.rounds);
+      if (Number.isFinite(costUsd) && costUsd > 0) this.state.totalCouncilCostUsd += costUsd;
       this.state.updatedAt = now();
     } catch {
       // planning telemetry must never break the conversation loop
@@ -466,11 +519,28 @@ export class PlanSessionStore {
       }
     }
 
-    const steps = synth.approach.map((x) => x.trim()).filter(Boolean);
+    const steps = synth.approach
+      .map((st) => ({
+        action: st.action.trim(),
+        verify: st.verify.trim(),
+        tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
+      }))
+      .filter((st) => st.action.length > 0);
     out.push("## Implementation Plan", "");
     if (steps.length === 0) out.push(s.draft.trim() || "_No plan drafted._", "");
     else {
-      steps.forEach((st, i) => out.push(`${i + 1}. ${st}`));
+      // Each step names its verify — the verifiable-steps contract. A step the model could not
+      // give a check for is rendered with a decompose nudge (nudge/advise: it is not blocked).
+      // A6: a step also names its minimal tool allowlist (enforced at execution); absent = unrestricted.
+      steps.forEach((st, i) => {
+        out.push(`${i + 1}. ${st.action}`);
+        out.push(
+          st.verify
+            ? `   - verify: \`${st.verify}\``
+            : "   - verify: _none — decompose or add a check_",
+        );
+        if (st.tools.length > 0) out.push(`   - tools: ${st.tools.join(", ")}`);
+      });
       out.push("");
     }
 

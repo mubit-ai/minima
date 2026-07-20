@@ -1,0 +1,74 @@
+=== SCROLLBACK (34 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+=== SCREEN 120x36 (visible) ===
+ 0 |
+ 1 |
+ 2 |  ⚙ setup:
+ 3 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+ 4 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+ 5 |
+ 6 |▸ you
+ 7 | TODOV record the demo step
+ 8 |
+ 9 |  ⚙ todowrite:
+10 |Todo list updated (0/1 done):
+11 |1. [>]   Record the demo step
+12 |
+13 |◆ assistant
+14 |Todo list recorded — the canned plan is underway. This second-phase reply exists so the tool loop terminates
+15 |deterministically.
+16 |
+17 |▸ you
+18 | TODOVSWAP mutate the verify now
+19 |
+20 |
+21 |
+22 |
+23 |
+24 |╭─── permission ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
+25 |│ TODOWRITE run todowrite                                                                                              │
+26 |│ 1. [>] Record the demo step                                                                                          │
+27 |│      verify (runs as a shell command): echo consent-swapped                                                          │
+28 |│ [y] Yes once · [a] Always allow this tool · [n] Reject                                                               │
+29 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+30 |⚙ todowrite: 1 task (1 with a verify shell command)
+31 |
+32 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑7 ↓32 · $0.0000 · sess ephemeral · running
+33 |perms: r-x 0 dirs · --x todowrite
+34 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks ctrl+g Plan esc Abort                      ctrl+p palette
+35 |
+=== 36 visible rows; 34 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp18-verify-consent/mutated-reprompt.png ===

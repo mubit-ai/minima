@@ -1,0 +1,88 @@
+=== SCROLLBACK (60 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |▸ you
+h025 | Draft the release notes for the renderer audit (md profile)
+h026 |.
+h027 |
+h028 |◆ assistant
+h029 |
+h030 |Release notes — renderer audit
+h031 |The routing layer weighs task difficulty against the
+h032 |configured cost slider and picks the cheapest model whose
+h033 |expected quality clears the threshold; when confidence is lo
+h034 |w
+h035 |it escalates one tier and records why. The routing layer
+h036 |weighs task difficulty against the configured cost slider an
+h037 |d
+h038 |picks the cheapest model whose expected quality clears the
+h039 |threshold; when confidence is low it escalates one tier and
+h040 |records why.
+h041 |
+h042 |What changed
+h043 |  - top-level item with bold and inline code plus a tail lon
+h044 |g
+h045 |    enough to wrap at sixty columns for the narrow bookend
+h046 |  - nested sub-item two spaces deep
+h047 |  - third level, four spaces deep
+h048 |  - *italic emphasis* and ~~strikethrough~~ pass through as-
+h049 |is
+h050 |  - tight-dash line that is NOT a markdown list item
+h051 |
+h052 |Cost table
+h053 || model | cost | quality |
+h054 ||-------|------|---------|
+h055 || haiku | $0.001 | 0.71 |
+h056 || opus | $0.075 | 0.94 |
+h057 |> Blockquote: feedback must carry realized usage —
+h058 |千里之行，始于足下 🚀🧠
+h059 |The routing layer weighs task difficulty against the
+=== SCREEN 60x24 (visible) ===
+ 0 |configured cost slider and picks the cheapest model whose
+ 1 |expected quality clears the threshold; when confidence is lo
+ 2 |w
+ 3 |it escalates one tier and records why.
+ 4 |
+ 5 |  ⚙ resume:
+ 6 |Resumed run fixture-md (2 msg(s), 0 routed prompt(s), $0.000
+ 7 |0
+ 8 |recorded)
+ 9 |
+10 |
+11 |  ⚙ setup:
+12 |No model-provider API key set — set one to run models:
+13 |`/config set ANTHROPIC_API_KEY <key>` (or
+14 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+15 |
+16 |╭─── prompt ───────────────────────────────────────────────╮
+17 |│  ▋                                                       │
+18 |╰──────────────────────────────────────────────────────────╯
+19 |
+20 | model: gpt-4o-mini ▸ pinned · route: auto · reason: off │ …
+21 |perms: r-x 0 dirs · w/e/b: ask
+22 |ctrlModelctrlRoute⇧taModectrl+Reasctrl+TaskescAborctrlpalet
+23 |
+=== 24 visible rows; 60 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima-j1/docs/BigPlan/shots/mp10-render-audit/md-60.png ===
