@@ -122,6 +122,18 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
   });
 });
 
+describe("MarkdownRenderer keeps estimate == render (empty-line armor)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+
+  test("every per-line branch armors empty text — an empty <Text> collapses to 0 rows while the ruler counts 1", () => {
+    // The plain-line armor: without it a blank-line-heavy reply printed 6+ rows fewer than
+    // markdownBodyHeight booked, decaying the anchor ledger past the real print (the
+    // wide-terminal stream-commit float, docs/BigPlan/shots/anchor-ledger).
+    expect(src).toContain('{l.text ? renderInlineMarkdown(l.text) : " "}');
+    expect(src).toContain('{l.text || " "}');
+  });
+});
+
 describe("app.tsx wires the anchor ledger", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 

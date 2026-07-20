@@ -81,7 +81,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginBottom={0}
             >
               <Text bold color="cyan">
-                {l.text}
+                {l.text || " "}
               </Text>
             </Box>
           );
@@ -128,12 +128,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
           );
         }
 
+        // The " " armor mirrors the code branch: an empty <Text> collapses to ZERO rows
+        // while markdownBodyHeight counts every source line >= 1 — on a blank-line-heavy
+        // reply that over-count decayed the anchor ledger 6+ rows past the real print and
+        // floated the composer (the wide-terminal stream-commit float, before-evidence
+        // shots/anchor-ledger). Blank lines now render as the paragraph gaps they are.
         return (
           <Box
             // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
             key={idx}
           >
-            <Text>{renderInlineMarkdown(l.text)}</Text>
+            <Text>{l.text ? renderInlineMarkdown(l.text) : " "}</Text>
           </Box>
         );
       })}
