@@ -119,7 +119,8 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v6 gate identity (rec_id/session_id/agent_id + closed_at/verify_cwd/note)
     // + v7 plan_steps.check_origin + v8 plan_steps.tools (A6) + v9 routing_decisions.step_id
     // + v10 checkpoints (B3) + v11 lineage-convergence re-run of the tools ALTER
-    expect(db.schemaVersion).toBe(11);
+    // + v12 memory ledger (memories/memory_events/memory_jobs)
+    expect(db.schemaVersion).toBe(12);
     for (const t of [
       "projects",
       "runs",
@@ -133,6 +134,9 @@ describe("MinimaDb schema + lifecycle", () => {
       "file_changes",
       "gates",
       "user_signals",
+      "memories",
+      "memory_events",
+      "memory_jobs",
     ]) {
       expect(db.db.query(`SELECT count(*) AS n FROM ${t}`).get()).toEqual({ n: 0 });
     }

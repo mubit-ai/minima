@@ -29,6 +29,13 @@ export {
 export type { QualityJudge } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
 export { MinimaAgent, gradeOutcome, type BeforeRoute, type MinimaAgentOptions } from "./runtime.ts";
+export {
+  buildMemoryProjection,
+  memoryProjectionFor,
+  memoryProjectionCap,
+  MEMORY_PROJECTION_CAP_CHARS,
+  type MemoryProjection,
+} from "./memory_ledger.ts";
 export { PlanSessionStore, buildPlannerSystemPrompt } from "./plan_session.ts";
 export type {
   PlanDecision,

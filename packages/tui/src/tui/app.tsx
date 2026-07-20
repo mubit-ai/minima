@@ -308,6 +308,10 @@ const COMMANDS = [
   { name: "why", desc: "Show Ground-Truth verification (/why <n> opens the step card)" },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
+  {
+    name: "memory",
+    desc: "Curated memory: list · add <text> · pin|confirm|reject|delete <n|id>",
+  },
 ];
 
 export interface CommandPickerProps {
@@ -1272,6 +1276,8 @@ export function HarnessApp({
   // /undo walks backwards; reset on the next real prompt. Prefill remounts TextInput (nonce
   // in its key) with the undone prompt's text seeded as the draft.
   const undoCursorRef = useRef<number | null>(null);
+  // B1 /memory: ids from the latest `/memory list`, so `pin 2`-style index targets resolve.
+  const memoryListRef = useRef<string[]>([]);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
@@ -2289,6 +2295,113 @@ export function HarnessApp({
                 )
                 .join("\n");
         setMessages((m) => [...m, echo, { role: "tool", text, toolName: "ckpt" }]);
+        break;
+      }
+      case "memory": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "memory", isError }]);
+        const db = agent.db;
+        const run = db && agent.runId ? db.getRun(agent.runId) : null;
+        if (!db || !run) {
+          say("memory unavailable — no persistence for this session");
+          break;
+        }
+        const projectKey = run.project_key;
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const sub = (parts[0] ?? "list").toLowerCase();
+        const resolveTarget = (token: string | undefined) => {
+          if (!token) return null;
+          const n = Number(token);
+          if (Number.isInteger(n) && n >= 1 && n <= memoryListRef.current.length) {
+            return db.getMemory(memoryListRef.current[n - 1]!);
+          }
+          return db.findMemoryByPrefix(projectKey, token);
+        };
+        const oneLine = (s: string, max = 88) => {
+          const flat = s.replace(/\s+/g, " ").trim();
+          return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+        };
+        if (sub === "list") {
+          const rows = db.listMemories(projectKey, { limit: 50 });
+          memoryListRef.current = rows.map((r) => r.id);
+          if (rows.length === 0) {
+            say(
+              "No memories for this repo yet.\nAdd one with /memory add <text> — active entries are injected into every prompt's system context.",
+            );
+            break;
+          }
+          const icon: Record<string, string> = {
+            pinned: "📌",
+            active: "●",
+            pending: "○",
+            rejected: "✗",
+          };
+          const lines = rows.map(
+            (r, i) =>
+              `#${String(i + 1).padStart(2)} ${r.id.slice(0, 8)} ${icon[r.status] ?? "?"} ${r.status.padEnd(8)} [${r.kind}] (${r.evidence_source}/${r.origin}) ${oneLine(r.content)}`,
+          );
+          const offNote = agent.config.memoryLedger
+            ? ""
+            : "\n⚠ injection is OFF (MINIMA_TUI_MEMORY=0) — entries are kept but the model never sees them.";
+          say(
+            `${lines.join("\n")}\n\nActive + pinned entries are injected each turn (pinned > gate-cited > recent, hard-capped).\nManage: /memory pin|confirm|reject|delete <n|id> · /memory add <text>${offNote}`,
+          );
+          break;
+        }
+        if (sub === "add") {
+          const content = args.trim().slice(3).trim();
+          if (!content) {
+            say("usage: /memory add <text>", true);
+            break;
+          }
+          const id = db.insertMemory({
+            projectKey,
+            kind: "note",
+            content,
+            evidenceSource: "human",
+            origin: "user",
+            status: "active",
+            actor: "user",
+          });
+          say(`Added ${id.slice(0, 8)} (active) — it will be injected from the next prompt on.`);
+          break;
+        }
+        if (["pin", "confirm", "reject", "delete", "unpin"].includes(sub)) {
+          const target = resolveTarget(parts[1]);
+          if (!target) {
+            say(
+              `no memory matching "${parts[1] ?? ""}" — use an index or id from /memory list`,
+              true,
+            );
+            break;
+          }
+          let done: boolean;
+          let verb: string;
+          if (sub === "delete") {
+            done = db.invalidateMemory(target.id, "user");
+            verb = "deleted (invalidated — kept as an audit tombstone)";
+          } else {
+            const status = sub === "pin" ? "pinned" : sub === "reject" ? "rejected" : "active";
+            done = db.setMemoryStatus(target.id, status, "user");
+            verb =
+              sub === "pin"
+                ? "pinned (always ranked first)"
+                : sub === "reject"
+                  ? "rejected (no longer injected)"
+                  : "confirmed active";
+          }
+          say(
+            done
+              ? `${target.id.slice(0, 8)} ${verb}.`
+              : `${target.id.slice(0, 8)} unchanged (already deleted?)`,
+          );
+          break;
+        }
+        say(
+          "usage: /memory [list] · add <text> · pin|confirm|reject|delete <n|id>\nCurated cross-session memory for this repo — active + pinned entries are injected into the system prompt each turn.",
+          true,
+        );
         break;
       }
       case "rewind": {

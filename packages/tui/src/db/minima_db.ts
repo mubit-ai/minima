@@ -291,6 +291,52 @@ const MIGRATIONS: string[][] = [
   [
     "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
   ],
+  // v12 — memory ledger (B1): curated cross-session memory. `memories` holds the durable rows
+  // (bi-temporal — invalidation stamps, never DELETE); `memory_events` is the append-only audit
+  // trail (every op, including each projection injection, so "what the model saw" is replayable);
+  // `memory_jobs` is the persisted curation queue the (later) scribe drains — created now so its
+  // writers need no further migration. Only the harness/user writes these tables: the model has
+  // no memory-write tool by design (Letta split — curation is never the primary agent's job).
+  [
+    `CREATE TABLE IF NOT EXISTS memories (
+       id              TEXT PRIMARY KEY,
+       project_key     TEXT NOT NULL,
+       kind            TEXT NOT NULL,    -- note|workflow|lesson|guardrail
+       trigger         TEXT,             -- when to surface it (Devin {trigger,content} shape)
+       content         TEXT NOT NULL,
+       citations       TEXT,             -- JSON rec_ids/gate_ids/plan_ids backing the claim
+       evidence_source TEXT NOT NULL,    -- gate|judge|human|none (provenance discipline)
+       origin          TEXT NOT NULL,    -- scribe|agent|user
+       status          TEXT NOT NULL,    -- pending|active|pinned|rejected|invalidated
+       valid_at        REAL,
+       invalidated_at  REAL,             -- bi-temporal tombstone, never DELETE
+       watermark_ts    REAL,             -- newest events.ts consumed when written (freshness)
+       author_model    TEXT,
+       created REAL NOT NULL,
+       updated REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_memories_project ON memories(project_key, status, updated DESC)",
+    `CREATE TABLE IF NOT EXISTS memory_events (
+       id        TEXT PRIMARY KEY,
+       memory_id TEXT,                   -- NULL for set-level ops (inject)
+       op        TEXT NOT NULL,          -- add|update|confirm|pin|reject|invalidate|inject|noop
+       payload   TEXT,                   -- JSON
+       actor     TEXT,                   -- user|scribe|system
+       ts        REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_memory_events_memory ON memory_events(memory_id, ts)",
+    `CREATE TABLE IF NOT EXISTS memory_jobs (
+       id         TEXT PRIMARY KEY,
+       kind       TEXT NOT NULL,         -- reflect|consolidate|dream
+       session_id TEXT,
+       payload    TEXT,
+       status     TEXT NOT NULL,         -- queued|running|done|failed
+       not_before REAL,
+       created REAL NOT NULL,
+       updated REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_memory_jobs_status ON memory_jobs(status, not_before)",
+  ],
 ];
 
 export interface RunRow {
@@ -406,6 +452,38 @@ export interface UserSignalRow {
   action: UserAction | null;
   at: string | null;
   note: string | null;
+}
+
+// ---------------------------------------------------------------- memory ledger rows (B1)
+export type MemoryKind = "note" | "workflow" | "lesson" | "guardrail";
+export type MemoryStatus = "pending" | "active" | "pinned" | "rejected" | "invalidated";
+export type MemoryOrigin = "scribe" | "agent" | "user";
+
+export interface MemoryRow {
+  id: string;
+  project_key: string;
+  kind: MemoryKind;
+  trigger: string | null;
+  content: string;
+  citations: string | null;
+  evidence_source: string;
+  origin: MemoryOrigin;
+  status: MemoryStatus;
+  valid_at: number | null;
+  invalidated_at: number | null;
+  watermark_ts: number | null;
+  author_model: string | null;
+  created: number;
+  updated: number;
+}
+
+export interface MemoryEventRow {
+  id: string;
+  memory_id: string | null;
+  op: string;
+  payload: string | null;
+  actor: string | null;
+  ts: number;
 }
 
 /** One git-shadow worktree snapshot (B3, v10) — the ref ↔ run ↔ prompt ↔ step mapping. */
@@ -886,6 +964,193 @@ export class MinimaDb {
       ],
     );
     return id;
+  }
+
+  // ================================================================ memory ledger (B1)
+
+  /**
+   * Insert one curated memory + its `add` audit event in a single transaction. Only the
+   * harness/user calls this — the model has no memory-write tool (Letta split).
+   */
+  insertMemory(opts: {
+    id?: string;
+    projectKey: string;
+    kind: MemoryKind;
+    content: string;
+    trigger?: string | null;
+    citations?: string[] | null;
+    evidenceSource: "gate" | "judge" | "human" | "none";
+    origin: MemoryOrigin;
+    status?: MemoryStatus;
+    watermarkTs?: number | null;
+    authorModel?: string | null;
+    actor?: string;
+  }): string {
+    const id = opts.id ?? newId();
+    const now = Date.now() / 1000;
+    const status = opts.status ?? "pending";
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO memories (id, project_key, kind, trigger, content, citations,
+           evidence_source, origin, status, valid_at, invalidated_at, watermark_ts,
+           author_model, created, updated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+        [
+          id,
+          opts.projectKey,
+          opts.kind,
+          opts.trigger ?? null,
+          opts.content,
+          opts.citations?.length ? JSON.stringify(opts.citations) : null,
+          opts.evidenceSource,
+          opts.origin,
+          status,
+          now,
+          opts.watermarkTs ?? null,
+          opts.authorModel ?? null,
+          now,
+          now,
+        ],
+      );
+      this.writeMemoryEvent({
+        memoryId: id,
+        op: "add",
+        payload: { status, kind: opts.kind, evidence_source: opts.evidenceSource },
+        actor: opts.actor ?? opts.origin,
+      });
+    })();
+    return id;
+  }
+
+  getMemory(id: string): MemoryRow | null {
+    return (this.db.query("SELECT * FROM memories WHERE id = ?").get(id) as MemoryRow) ?? null;
+  }
+
+  /**
+   * A project's memories, newest-updated first. Invalidated rows are excluded unless asked
+   * for — they are tombstones, visible only to audits.
+   */
+  listMemories(
+    projectKey: string,
+    opts: { statuses?: MemoryStatus[]; includeInvalidated?: boolean; limit?: number } = {},
+  ): MemoryRow[] {
+    const limit = opts.limit ?? 100;
+    if (opts.statuses?.length) {
+      const marks = opts.statuses.map(() => "?").join(", ");
+      return this.db
+        .query(
+          `SELECT * FROM memories WHERE project_key = ? AND status IN (${marks})
+           AND (invalidated_at IS NULL OR ?) ORDER BY updated DESC LIMIT ?`,
+        )
+        .all(projectKey, ...opts.statuses, opts.includeInvalidated ? 1 : 0, limit) as MemoryRow[];
+    }
+    return this.db
+      .query(
+        `SELECT * FROM memories WHERE project_key = ?
+         AND (invalidated_at IS NULL OR ?) ORDER BY updated DESC LIMIT ?`,
+      )
+      .all(projectKey, opts.includeInvalidated ? 1 : 0, limit) as MemoryRow[];
+  }
+
+  /** Resolve a /memory target: exact id, then id prefix (≥ 4 chars, unique-match only). */
+  findMemoryByPrefix(projectKey: string, query: string): MemoryRow | null {
+    const exact = this.db
+      .query("SELECT * FROM memories WHERE project_key = ? AND id = ?")
+      .get(projectKey, query) as MemoryRow | null;
+    if (exact) return exact;
+    if (query.length < 4) return null;
+    const rows = this.db
+      .query("SELECT * FROM memories WHERE project_key = ? AND id LIKE ? ESCAPE '\\' LIMIT 2")
+      .all(projectKey, `${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`) as MemoryRow[];
+    return rows.length === 1 ? (rows[0] ?? null) : null;
+  }
+
+  /**
+   * Move a memory between curation states (confirm→active, pin, reject, back to pending) and
+   * audit the op. Invalidated rows are immutable tombstones — refused. Returns false when the
+   * row is missing or immutable.
+   */
+  setMemoryStatus(
+    id: string,
+    status: Exclude<MemoryStatus, "invalidated">,
+    actor: string,
+  ): boolean {
+    const opByStatus: Record<string, string> = {
+      active: "confirm",
+      pinned: "pin",
+      rejected: "reject",
+      pending: "update",
+    };
+    let changed = false;
+    this.db.transaction(() => {
+      const row = this.getMemory(id);
+      if (!row || row.status === "invalidated" || row.invalidated_at !== null) return;
+      this.db.run("UPDATE memories SET status = ?, updated = ? WHERE id = ?", [
+        status,
+        Date.now() / 1000,
+        id,
+      ]);
+      this.writeMemoryEvent({
+        memoryId: id,
+        op: opByStatus[status] ?? "update",
+        payload: { from: row.status, to: status },
+        actor,
+      });
+      changed = true;
+    })();
+    return changed;
+  }
+
+  /** Bi-temporal delete: stamp invalidated_at (never DELETE) + audit. Idempotent. */
+  invalidateMemory(id: string, actor: string): boolean {
+    let changed = false;
+    this.db.transaction(() => {
+      const row = this.getMemory(id);
+      if (!row || row.invalidated_at !== null) return;
+      this.db.run(
+        "UPDATE memories SET status = 'invalidated', invalidated_at = ?, updated = ? WHERE id = ?",
+        [Date.now() / 1000, Date.now() / 1000, id],
+      );
+      this.writeMemoryEvent({ memoryId: id, op: "invalidate", payload: null, actor });
+      changed = true;
+    })();
+    return changed;
+  }
+
+  /** Append one memory audit event (op `inject` uses memory_id NULL + the id set in payload). */
+  writeMemoryEvent(opts: {
+    id?: string;
+    memoryId?: string | null;
+    op: string;
+    payload?: unknown;
+    actor?: string | null;
+    ts?: number;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      "INSERT INTO memory_events (id, memory_id, op, payload, actor, ts) VALUES (?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.memoryId ?? null,
+        opts.op,
+        opts.payload === undefined || opts.payload === null ? null : JSON.stringify(opts.payload),
+        opts.actor ?? null,
+        opts.ts ?? Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** A memory's audit trail (or all set-level events for memoryId null), oldest first. */
+  listMemoryEvents(memoryId: string | null, limit = 100): MemoryEventRow[] {
+    if (memoryId === null) {
+      return this.db
+        .query("SELECT * FROM memory_events WHERE memory_id IS NULL ORDER BY ts, rowid LIMIT ?")
+        .all(limit) as MemoryEventRow[];
+    }
+    return this.db
+      .query("SELECT * FROM memory_events WHERE memory_id = ? ORDER BY ts, rowid LIMIT ?")
+      .all(memoryId, limit) as MemoryEventRow[];
   }
 
   /** All of a run's checkpoints, oldest first. */
