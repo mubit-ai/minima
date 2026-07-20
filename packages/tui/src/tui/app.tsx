@@ -2238,7 +2238,9 @@ export function HarnessApp({
           lines.push(`    ${perm}  ${t.padEnd(8)} ${status}`);
         }
         lines.push("");
-        lines.push(`  Plan mode: ${planMode ? "ON (write/edit/bash ask first)" : "off"}`);
+        lines.push(
+          `  Plan mode: ${planMode ? "ON (write/edit/bash/apply_patch denied — approve via exit_plan)" : "off"}`,
+        );
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name}` },
@@ -4582,9 +4584,10 @@ export function HarnessApp({
           routingOffline={agent.offlineReason !== null}
           offlineReason={agent.offlineReason}
           statusText={busyState}
-          planMode={planMode}
+          mode={mode}
           readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
           alwaysTools={[...permStateRef.current.allowAlways]}
+          bashGrants={[...permStateRef.current.bashGrants]}
           activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
           badge={footerBadge}
         />

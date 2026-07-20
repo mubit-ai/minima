@@ -6,7 +6,35 @@
 import { Box, Text } from "ink";
 import React from "react";
 
+import type { AgentMode } from "../agent/modes.ts";
 import type { FooterBadge } from "./badge_slot.ts";
+
+/**
+ * The perms row's write/exec segments, mode-aware (the old fixed "w/e/b: ask" read as
+ * broken in accept-edits, where write/edit ARE auto). `effective` states what the ACTIVE
+ * mode does with write/edit/bash; `grants` lists the user's always-allows — whole tools
+ * plus persisted bash command families as `bash[pip,git]` (a whole-tool bash grant
+ * supersedes its family list) — or null when none.
+ */
+export function permsSummary(
+  mode: AgentMode,
+  alwaysTools: string[],
+  bashGrants: string[],
+): { effective: string; grants: string | null } {
+  const effective =
+    mode === "acceptEdits"
+      ? "w/e: auto (cwd) · b: ask"
+      : mode === "bypass"
+        ? "w/e/b: auto"
+        : mode === "plan"
+          ? "PLAN (deny)"
+          : "w/e/b: ask";
+  const list = [...alwaysTools];
+  if (bashGrants.length > 0 && !alwaysTools.includes("bash")) {
+    list.push(`bash[${bashGrants.join(",")}]`);
+  }
+  return { effective, grants: list.length > 0 ? `--x ${list.join(", ")}` : null };
+}
 
 export interface StatusBarProps {
   model: string;
@@ -21,9 +49,11 @@ export interface StatusBarProps {
   routingOffline: boolean;
   offlineReason?: string | null;
   statusText: "ready" | "reasoning" | "running";
-  planMode?: boolean;
+  mode?: AgentMode;
   readDirs?: string[];
   alwaysTools?: string[];
+  /** Persisted bash command-family grants (perm_grants.ts), shown as bash[pip,git]. */
+  bashGrants?: string[];
   /** "spent/limit (mode)" budget note; null hides the segment. */
   budget?: { spentUsd: number; limitUsd: number; fraction: number; mode: string } | null;
   /** Number of sub-agents currently in flight; 0 or undefined hides the badge. */
@@ -45,13 +75,15 @@ export function StatusBar({
   routingOffline,
   offlineReason,
   statusText,
-  planMode,
+  mode = "build",
   readDirs,
   alwaysTools,
+  bashGrants,
   budget,
   activeChildren,
   badge,
 }: StatusBarProps) {
+  const perms = permsSummary(mode, alwaysTools ?? [], bashGrants ?? []);
   const budgetColor = budget
     ? budget.fraction >= 0.9
       ? "red"
@@ -138,12 +170,8 @@ export function StatusBar({
       <Text wrap="truncate">
         <Text color="gray">perms: </Text>
         <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
-        {alwaysTools && alwaysTools.length > 0 ? (
-          <Text color="yellow"> {`· --x ${alwaysTools.join(", ")}`}</Text>
-        ) : (
-          <Text color="gray"> · w/e/b: ask</Text>
-        )}
-        {planMode && <Text color="magenta"> · PLAN (ask)</Text>}
+        <Text color={mode === "plan" ? "magenta" : "gray"}> {`· ${perms.effective}`}</Text>
+        {perms.grants && <Text color="yellow"> {`· ${perms.grants}`}</Text>}
       </Text>
     </Box>
   );
