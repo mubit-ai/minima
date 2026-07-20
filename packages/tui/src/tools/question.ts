@@ -126,7 +126,10 @@ export function questionTool(ref: AskUserRef): AgentTool {
       "Ask the user a single clarifying question and wait for their answer. Use this ONLY " +
       "when you are genuinely blocked by ambiguity or need a decision/confirmation you " +
       "cannot resolve yourself — never for something you could determine by reading or " +
-      "searching the code. Put all the choices in this tool's single `options` array argument " +
+      "searching the code. NEVER use this tool to greet, chat, acknowledge, deliver your " +
+      "answer, or ask an open-ended 'what would you like?' — reply with plain text for all " +
+      "of that. If you are not offering concrete choices, you almost certainly want a plain " +
+      "reply, not this tool. Put all the choices in this tool's single `options` array argument " +
       "(do NOT call a separate tool per choice); each entry may be a short string, or an " +
       "object {label, description}. Offer 2-4 options; the user picks one or types a custom " +
       "answer. Keep `header` to a few words. Their answer is returned as the tool result; if no " +
