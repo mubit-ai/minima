@@ -1351,10 +1351,12 @@ SPEC=$(cat <<EOF
 EOF
 )
 capture margins "$SPEC"
+# Slack 1 from t=2.5 like the stream scenarios: with margins reset at boot the reserve
+# seats frame 1 exactly, so no post-commit tightening pass is needed — and a second
+# late-window invocation would hit the frames-only-on-output trap (a fast turn leaves
+# zero frames after its cutoff).
 python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 2.5 \
   --check single-prompt --check advancing --check final-nonblank \
-  --check bottom-anchor --bottom-slack 2
-python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 7.0 \
   --check bottom-anchor --bottom-slack 1
 
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
