@@ -123,6 +123,24 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
     expect(computeMsgHeight(tool(notice, "plan"), 120)).toBe(2 + wrappedLineCount(notice, 120));
     expect(wrappedLineCount(notice, 120)).toBe(2);
   });
+  test("a tab-bearing body line counts its expanded width (the width-lie class)", () => {
+    // stringWidth counts \t as 0 while the terminal advances to a tab stop — un-expanded
+    // tabs make Ink under-measure and desync log-update's erase (the garble class the
+    // fence/code classifier already guards, layout.ts MdLine). 30 + tab(4) + 8 = 42 > 40.
+    const line = `${"x".repeat(30)}\t${"y".repeat(8)}`;
+    expect(computeMsgHeight(tool(line), 40)).toBe(2 + 2);
+  });
+  test("a long MCP tool name wraps the header row — counted, not flat 1", () => {
+    const name = "mcp__server__really_long_tool_name_that_wraps";
+    const header = `  ⚙ ${name}:`;
+    const headerRows = wrappedLineCount(header, 40);
+    expect(headerRows).toBeGreaterThan(1);
+    expect(computeMsgHeight(tool("body", name), 40)).toBe(1 + headerRows + 1);
+  });
+  test("boundary: a body line exactly at cols is 1 row; one past wraps", () => {
+    expect(computeMsgHeight(tool("x".repeat(120)), 120)).toBe(3);
+    expect(computeMsgHeight(tool("x".repeat(121)), 120)).toBe(4);
+  });
   test("the irreducible chrome floor per role (empty body still renders header + margin)", () => {
     // A message can never render below this floor — the height estimate must account for it
     // or reservations under-count (the garble class). thinking is 5 (border adds 2).
@@ -134,6 +152,10 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
 });
 
 describe("clampToolText — bounds huge tool output", () => {
+  test("tab-expands so width math matches the terminal (render, ruler, reader all consume this)", () => {
+    const { text } = clampToolText("a\tb", 80);
+    expect(text).toBe("a    b");
+  });
   test("short text is unchanged, nothing hidden", () => {
     const { text, hiddenLines } = clampToolText("a\nb\nc", 80);
     expect(text).toBe("a\nb\nc");

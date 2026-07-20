@@ -38,8 +38,13 @@ export const MAX_TOOL_LINES = 30;
  * wrappedLineCount). The first source line is always kept even if it alone exceeds the budget.
  */
 export function clampToolText(text: string, cols: number): { text: string; hiddenLines: number } {
+  // Tab-expanded (4 spaces) because string-width counts \t as 0 while the terminal advances
+  // to a tab stop — the same width-lie class the fence/code classifier guards (see MdLine).
+  // This is the single choke point: MessageRow, computeMsgHeight, and the D3b reader all
+  // consume the clamped text, so render == estimate == reader stays an identity.
+  const expanded = text.replaceAll("\t", "    ");
   const w = Math.max(20, cols - 4);
-  const lines = text.split("\n");
+  const lines = expanded.split("\n");
   let rendered = 0;
   let kept = 0;
   for (const line of lines) {
@@ -48,7 +53,7 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
     rendered += r;
     kept++;
   }
-  if (kept >= lines.length) return { text, hiddenLines: 0 };
+  if (kept >= lines.length) return { text: expanded, hiddenLines: 0 };
   return { text: lines.slice(0, kept).join("\n"), hiddenLines: lines.length - kept };
 }
 
@@ -486,11 +491,15 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     return 2 + wrappedLineCount(msg.text, cols - 2);
   }
   if (msg.role === "tool") {
-    // marginTop(1) + "⚙ tool:" header(1) + body + optional hint. The inline MessageRow paints
+    // marginTop(1) + wrapped "⚙ tool:" header (a long MCP tool name can wrap at narrow
+    // cols — a flat 1 under-counted) + body + optional hint. The inline MessageRow paints
     // the body unindented at the full box width, so the ruler must wrap at `cols` — counting
     // at an interior width over-reserves and floats the composer off the terminal bottom.
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
-    return 2 + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0);
+    const header = `  ⚙ ${msg.toolName ?? "tool"}:`;
+    return (
+      1 + wrappedLineCount(header, cols) + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0)
+    );
   }
   if (msg.role === "thinking") {
     // marginTop(1) + single border(2) + header(1) + body wrapped at interior cols-4 (border 2 + padL 2).

@@ -4522,7 +4522,10 @@ export function HarnessApp({
           </Box>
         </Box>
 
-        {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
+        {/* Suppressed under the panel like the busy/currentAction rows: an ungated footer
+            row breaks the panel frame's rows−2 height identity (one extra row is the
+            difference between a clean frame and Ink's scrollback-wiping clearTerminal). */}
+        {quitArmed && !panelVisible ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
       </Box>
     </>
   );
