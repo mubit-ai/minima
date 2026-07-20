@@ -4,6 +4,66 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-07-20
+
+The Big Plan harness: the TUI's plan workflow grows verification teeth, and the
+renderer goes inline-only. A TUI/harness release — the server wire contract is
+unchanged from 0.11.0.
+
+### Changed
+- **Inline is the only renderer** — the fullscreen mode and docked sidebar are
+  deleted. Claude-Code-style inline panels replace them: hard-wrapped markdown with
+  verbatim code fences, a shared line classifier so the render, the height
+  estimate, and the panel reader can never disagree, and a stream-reseat fix so the
+  composer no longer strands mid-screen after a tall streamed reply commits.
+- **The plan workflow is enforced, not suggested** (ground truth is on by default,
+  `MINIMA_TUI_GROUND_TRUTH=0` opts out): plan steps carry `verify` shell commands;
+  a step can't be marked done while its check fails (red→green vs a captured
+  baseline); doom-loop and step-cap guards break spirals
+  (`MINIMA_TUI_STOP_STRIKES` / `MINIMA_TUI_SPIRAL_REPEATS` / `MINIMA_TUI_STEP_CAP`);
+  confidence tiers drive the UI (🟢 glide / 🟡 flag / 🔴 stop-and-ask); gate
+  verdicts are graded into outcome labels by tier (`MINIMA_TUI_GRADED_OUTCOME=0`
+  for the binary rule) while `evidence_source="gate"` stays green-tier-only.
+- **BREAKING: verify commands require consent.** Model-authored `verify` commands
+  are shown and approved before they execute — approval is session-only and a
+  mutated command re-prompts. Headless `-p` runs **fail closed** (gates go
+  unrunnable) unless `MINIMA_TUI_ALLOW_VERIFY=1` is set.
+- **Shift+Tab cycles primary agents** — Build → accept-edits → Plan; plan mode
+  asks first on write/edit/bash and blocks todowrite/task, with a universal exit
+  gate so finalized ground truth is the way out of a plan conversation.
+- The plan council convenes in parallel and only on substantive turns (follow-up
+  plan turns ~5× faster), with a live progress line and a plan-draft view.
+- Fullscreen defaults to selection-first mouse — native select/copy works out of
+  the box.
+
+### Added
+- **Named sessions and `--resume`** (by name or id), with the context status line
+  restored on resume.
+- **Git-shadow checkpoints, `/undo`, and `/rewind`** — per-run snapshots under
+  `refs/minima/ckpt/…` with byte-identical restore, rewind markers on the SQLite
+  events spine, and a turn picker with conversation/code/both restore modes.
+- **Session usage ledger** with per-turn `{model, tokens, cost}`, a
+  table-of-contents overlay (**Ctrl+T**) with per-section cost, a ground-truth plan
+  overview (**Ctrl+G**) with per-step cost and tiers, and `/why` verification views
+  backed by the same surface.
+- A mid-run tasks footer (**Ctrl+B** toggles, hide persists across sessions).
+- A PTY invariant suite (`make tui-verify`) — 18 scripted terminal scenarios
+  asserting echo latency, zero scrollback wipes, no alt-screen/mouse-capture
+  leaks, bottom-anchored composer, render budgets, and the plan/consent flows.
+
+### Fixed
+- Prompt-echo latency, scrolling and text-selection, and input-stability issues in
+  the inline TUI.
+- The permission overlay keyed preview rows by content prefix, collapsing
+  same-prefix verify commands (duplicate React keys could drop rows on the one
+  surface that must show every shell command before approval); rows are keyed by
+  position now.
+- `todowrite` accepts an unencoded array argument instead of failing on
+  `JSON.parse`.
+- The tool-body height ruler measured at the old fullscreen interior width while
+  the inline renderer paints full-width — the 1-row over-reserve floated the
+  composer off the terminal bottom when a plan-mode notice committed.
+
 ## [0.11.0] - 2026-07-16
 
 The learning-loop rework: honest labels in, fabricated ones out, and a posterior
