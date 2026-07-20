@@ -4,6 +4,48 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.1] - 2026-07-20
+
+SDK integrity + a standalone TypeScript SDK. Server wire contract unchanged; all
+changes are client-side and release-pipeline hardening.
+
+### Added
+- **`@mubit-ai/minima-sdk`** (`packages/sdk`) — a standalone TypeScript SDK: pure-fetch
+  typed `/v1/*` client with zero runtime dependencies (Node 18+/Deno/Bun/edge), full
+  surface including `policyValue()`, typed feedback options, transparent feedback
+  retries, and rate-limit-aware errors. Its schema mirror is pinned against the
+  Pydantic source of truth alongside the TUI's.
+- Python SDK: `capabilities()` and `policy_value()` (the doubly-robust
+  regret-vs-oracle report) on both clients; `recommend()` gains `incumbent_model_id`,
+  `max_candidates`, and `phase=` (rides as the `phase:<v>` tag); `feedback()` gains
+  typed named params (`quality_score`, `evidence_source`, `error_cause`,
+  `chosen_effort`, `iterations`); `x-minima-client`/`User-Agent` headers; feedback
+  retries with backoff on transient faults (safe under the reconcile replay guard —
+  recommend stays fail-fast); `MinimaRateLimited(retry_after)` and
+  `MinimaUnavailable` error subtypes.
+- OpenHands adapter closes the loop: realized cost/tokens/latency auto-reported as
+  `evidence_source="none"` telemetry off the selected LLM's metrics, fire-and-forget;
+  `minima_timeout` (default 5 s) bounds the hot-path recommend.
+
+### Fixed
+- **LiteLLM logger graded outcomes**: quality now maps by the loop thresholds
+  (≥ 0.8 success / ≥ 0.4 partial / else **failure** with `error_cause="quality"`) —
+  previously a judged-bad response could never be labeled a failure.
+- LiteLLM feedback calls run off the event loop (`asyncio.to_thread`) instead of
+  blocking the caller's async app for up to the client timeout per completion.
+- LiteLLM recommendation→completion correlation is exact under concurrent identical
+  prompts (`rec_id` carried in-band via request metadata; hash join kept as fallback).
+- `Usage` distinguishes "not measured" (`None`) from a real zero — 0 tokens / $0.00
+  are reported instead of dropped.
+- `minima-route feedback --source` defaults to `none` — scripted feedback no longer
+  claims human-asserted provenance by default.
+- The dead `allow_llm_escalation` parameter is removed from both Python clients (the
+  reasoner it fed was deleted in 0.11.0).
+- Release pipeline: the Homebrew formula now pushes directly to the tap on release
+  (formula PRs previously sat unmerged — brew served 0.10.0 while 0.11.0/0.12.0
+  shipped) with a serves-the-released-version verification step; the nightly catalog
+  snapshot fails loudly when it cannot open its refresh PR instead of reporting green.
+
 ## [0.12.0] - 2026-07-20
 
 The Big Plan harness: the TUI's plan workflow grows verification teeth, and the
