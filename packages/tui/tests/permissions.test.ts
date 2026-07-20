@@ -611,3 +611,135 @@ describe("MP18 — mode interaction with verify consent", () => {
     );
   });
 });
+
+describe("bashCommandFamilies", () => {
+  test("plain, env-prefixed, and pathed commands reduce to their leading word", async () => {
+    const { bashCommandFamilies } = await import("../src/tui/permissions.ts");
+    expect(bashCommandFamilies("pip install -r requirements.txt")).toEqual(["pip"]);
+    expect(bashCommandFamilies("FOO=1 BAR=2 pip install .")).toEqual(["pip"]);
+    expect(bashCommandFamilies("/usr/bin/pip install .")).toEqual(["pip"]);
+  });
+
+  test("compound commands yield one family per segment, deduped", async () => {
+    const { bashCommandFamilies } = await import("../src/tui/permissions.ts");
+    expect(bashCommandFamilies("pip install -e . && git add . && git commit")).toEqual([
+      "pip",
+      "git",
+    ]);
+    expect(bashCommandFamilies("cat a.txt | grep foo; echo done")).toEqual([
+      "cat",
+      "grep",
+      "echo",
+    ]);
+    expect(bashCommandFamilies("echo hi;")).toEqual(["echo"]); // trailing separator is harmless
+  });
+
+  test("command substitution is never analyzed — it could smuggle execution under a grant", async () => {
+    const { bashCommandFamilies } = await import("../src/tui/permissions.ts");
+    expect(bashCommandFamilies("pip install $(evil)")).toBeNull();
+    expect(bashCommandFamilies("echo `evil`")).toBeNull();
+    expect(bashCommandFamilies("diff <(evil) f")).toBeNull();
+    expect(bashCommandFamilies("")).toBeNull();
+    expect(bashCommandFamilies("FOO=bar")).toBeNull(); // bare assignment — nothing to key on
+  });
+});
+
+describe("persisted per-command bash grants", () => {
+  test("'always' on an analyzable bash command grants its families, not the whole tool", async () => {
+    const state = createPermissionState("/repo");
+    const res = await checkPermission("bash", { command: "pip install ." }, state, (p) => {
+      expect(p.alwaysLabel).toBe("Always allow `pip` commands");
+      p.resolve("always");
+    });
+    expect(res).toBeNull();
+    expect(state.bashGrants.has("pip")).toBe(true);
+    expect(state.allowAlways.has("bash")).toBe(false);
+
+    // Same family → silent, even with different args.
+    let prompted = false;
+    const res2 = await checkPermission("bash", { command: "pip list" }, state, () => {
+      prompted = true;
+    });
+    expect(res2).toBeNull();
+    expect(prompted).toBe(false);
+
+    // A segment outside the grant set re-prompts (deny → block).
+    const res3 = await checkPermission(
+      "bash",
+      { command: "pip install . && rm -rf /" },
+      state,
+      (p) => p.resolve("deny"),
+    );
+    expect(res3?.block).toBe(true);
+
+    // An unanalyzable command never matches a grant.
+    const res4 = await checkPermission(
+      "bash",
+      { command: "pip install $(evil)" },
+      state,
+      (p) => {
+        expect(p.alwaysLabel).toBeUndefined();
+        p.resolve("deny");
+      },
+    );
+    expect(res4?.block).toBe(true);
+  });
+
+  test("'always' on an unanalyzable command falls back to the whole-tool session grant", async () => {
+    const state = createPermissionState("/repo");
+    const res = await checkPermission("bash", { command: "echo `date`" }, state, (p) => {
+      p.resolve("always");
+    });
+    expect(res).toBeNull();
+    expect(state.allowAlways.has("bash")).toBe(true);
+    expect(state.bashGrants.size).toBe(0);
+  });
+
+  test("a mode 'ask' (forcePrompt) outranks a stored family grant", async () => {
+    const state = createPermissionState("/repo");
+    state.bashGrants.add("pip");
+    let prompted = false;
+    const res = await checkPermission(
+      "bash",
+      { command: "pip install ." },
+      state,
+      (p) => {
+        prompted = true;
+        p.resolve("allow");
+      },
+      { forcePrompt: true },
+    );
+    expect(res).toBeNull();
+    expect(prompted).toBe(true);
+  });
+
+  test("grants persist across state re-creation when a projectKey is set", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-perm-grants-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const key = "github.com/x/y";
+      const state = createPermissionState("/repo", { projectKey: key });
+      await checkPermission("bash", { command: "pip install ." }, state, (p) =>
+        p.resolve("always"),
+      );
+      const reborn = createPermissionState("/repo", { projectKey: key });
+      expect(reborn.bashGrants.has("pip")).toBe(true);
+      let prompted = false;
+      const res = await checkPermission("bash", { command: "pip list" }, reborn, () => {
+        prompted = true;
+      });
+      expect(res).toBeNull();
+      expect(prompted).toBe(false);
+      // Another project sees nothing.
+      const other = createPermissionState("/repo", { projectKey: "github.com/other/z" });
+      expect(other.bashGrants.size).toBe(0);
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
+});

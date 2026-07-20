@@ -17,6 +17,8 @@
  *            command / the same task with a MUTATED verify / a completed claim (done-gate)
  *   "WRITEFILE" → ONE write tool call (drives the permission overlay in build mode; the
  *            Shift+Tab-over-the-prompt parity scenario), TWO-PHASE like TODO
+ *   "BASHCMD" → ONE bash tool call (`echo grant-probe`) — drives the bash permission
+ *            overlay and the persisted per-command grant flow, TWO-PHASE like TODO
  *   otherwise → a short text reply
  *
  * Council answering (MP14+): plan-mode meta calls carry a role-distinct SYSTEM prompt
@@ -234,6 +236,12 @@ const WRITEFILE_DONE_REPLY =
   "File recorded — the canned write went through. This second-phase reply exists so the " +
   "tool loop terminates deterministically.";
 
+// Per-command grants (2026-07-21): "BASHCMD" → ONE bash tool call, so a scripted run can
+// grant its command family via [a] and prove the next BASHCMD turn runs with no overlay.
+const BASHCMD_DONE_REPLY =
+  "Command recorded — the canned bash run went through. This second-phase reply exists so " +
+  "the tool loop terminates deterministically.";
+
 // MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
 // GT-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
 const EXITPLAN_MD = [
@@ -296,6 +304,7 @@ Bun.serve({
       !hasToolResult;
     const wantExitPlan = council == null && prompt.includes("EXITPLAN") && !hasToolResult;
     const wantWriteFile = council == null && prompt.includes("WRITEFILE") && !hasToolResult;
+    const wantBashCmd = council == null && prompt.includes("BASHCMD") && !hasToolResult;
     const toolCall = wantPlanDemo
       ? planDemoToolCall(turnToolResults)
       : wantTodoV
@@ -318,7 +327,9 @@ Bun.serve({
                     content: "mode-cycled approval\n",
                   }),
                 }
-              : null;
+              : wantBashCmd
+                ? { name: "bash", args: JSON.stringify({ command: "echo grant-probe" }) }
+                : null;
     const { text, slow } =
       council != null
         ? { text: council, slow: false }
@@ -330,7 +341,9 @@ Bun.serve({
               ? { text: EXITPLAN_DONE_REPLY, slow: false }
               : prompt.includes("WRITEFILE")
                 ? { text: WRITEFILE_DONE_REPLY, slow: false }
-                : pickReply(prompt);
+                : prompt.includes("BASHCMD")
+                  ? { text: BASHCMD_DONE_REPLY, slow: false }
+                  : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({

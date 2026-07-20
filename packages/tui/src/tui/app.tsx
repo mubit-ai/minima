@@ -517,7 +517,7 @@ export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; 
       <Text color="gray" wrap="truncate">
         {isReadTool
           ? "[y] Yes once · [a] Always for this directory · [n] Reject"
-          : "[y] Yes once · [a] Always allow this tool · [n] Reject"}
+          : `[y] Yes once · [a] ${prompt.alwaysLabel ?? "Always allow this tool"} · [n] Reject`}
       </Text>
     </Box>
   );
@@ -932,11 +932,16 @@ export function HarnessApp({
     };
   }, [childEventRef]);
 
-  // Permission system
+  // Permission system. Lazy useState: repoIdentity spawns git and loadBashGrants reads disk,
+  // so the state must be built exactly once, not on every render.
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
-  const permStateRef = useRef<PermissionState>(
-    createPermissionState(process.cwd(), { groundTruth: agent.config.groundTruth === true }),
+  const [initialPermState] = useState(() =>
+    createPermissionState(process.cwd(), {
+      groundTruth: agent.config.groundTruth === true,
+      projectKey: repoIdentity(process.cwd()),
+    }),
   );
+  const permStateRef = useRef<PermissionState>(initialPermState);
   // MP18: swap the GT hooks' consent seam to the overlay-backed checker while the TUI is
   // mounted. Consent keys on the exact command string; bypass mode is blanket consent
   // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
@@ -2217,6 +2222,7 @@ export function HarnessApp({
         }
         lines.push("");
         lines.push("  Tool permissions:");
+        const bashFams = [...ps.bashGrants].sort();
         for (const t of ["read", "ls", "glob", "grep", "write", "edit", "bash"]) {
           const isAlways = always.includes(t);
           const isRead = t === "read" || t === "ls" || t === "glob" || t === "grep";
@@ -2224,7 +2230,11 @@ export function HarnessApp({
           if (isAlways) perm = "--x------";
           else if (isRead) perm = "r-x------";
           else perm = "---x-----";
-          const status = isAlways ? "✓ always" : isRead ? "(dir-scoped)" : "asks each time";
+          let status = isAlways ? "✓ always" : isRead ? "(dir-scoped)" : "asks each time";
+          if (t === "bash" && !isAlways && bashFams.length) {
+            perm = "--x------";
+            status = `✓ always for: ${bashFams.join(", ")} (persisted)`;
+          }
           lines.push(`    ${perm}  ${t.padEnd(8)} ${status}`);
         }
         lines.push("");

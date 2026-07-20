@@ -5,8 +5,9 @@
  *   ("always for this dir"), all future reads within that directory tree
  *   are silent. The cwd is NOT pre-approved — the user must grant access
  *   explicitly on first use in each new directory.
- * - write/edit/bash: Always prompts unless the user chose "always allow"
- *   for that specific tool.
+ * - write/edit/bash: Always prompts unless the user chose "always allow". For bash the
+ *   "always" is a per-command-family grant ("Always allow `pip` commands"), persisted per
+ *   project (perm_grants.ts); other tools keep the whole-tool, session-only grant.
  *
  * The TUI wires a BeforeToolCall hook that calls checkPermission(), which
  * returns null (allow) or { block, reason } (deny). Interactive prompts are
@@ -20,6 +21,7 @@ import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/polic
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
 import { parsePatch } from "../tools/apply_patch.ts";
+import { loadBashGrants, persistBashGrants } from "./perm_grants.ts";
 
 // Read-only tools: gated by a first-use, directory-scoped prompt (see checkPermission). glob/grep
 // scan the filesystem read-only just like read/ls, so they belong here (and the PermissionOverlay
@@ -81,7 +83,35 @@ export interface PermissionPrompt {
   /** The pending call's raw args — lets a Shift+Tab mode cycle re-evaluate the call
    *  (cwd-scoped accept-edits auto needs the real target paths, not the display summary). */
   args?: Record<string, unknown>;
+  /** Overlay label for the "[a]" option — bash offers a per-command-family grant
+   *  ("Always allow `pip` commands") instead of the whole-tool default. */
+  alwaysLabel?: string;
   resolve: (decision: PermissionDecision) => void;
+}
+
+/**
+ * The command "families" a bash call runs: the leading word of each segment of a compound
+ * command (`pip install -e . && git add .` → ["pip", "git"]), env-var prefixes skipped,
+ * paths reduced to their basename. Drives the persisted per-command grants — a stored grant
+ * silently allows a call only when EVERY segment's family is granted. Returns null (no grant
+ * offered, no grant matched) for commands we won't analyze: command substitution can smuggle
+ * arbitrary execution under a granted family. Splitting is deliberately naive — a separator
+ * hidden inside quotes over-splits into garbage families that simply won't match a grant, so
+ * the failure direction is a prompt, never a silent allow.
+ */
+export function bashCommandFamilies(cmd: string): string[] | null {
+  if (/\$\(|`|<\(/.test(cmd)) return null;
+  const families: string[] = [];
+  for (const segment of cmd.split(/&&|\|\||[;|\n]/)) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue; // empty segment (trailing `;`/`&&`) runs nothing
+    const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+    if (!head) return null; // bare env assignment — don't analyze
+    const family = head.includes("/") ? head.slice(head.lastIndexOf("/") + 1) : head;
+    if (!family) return null;
+    if (!families.includes(family)) families.push(family);
+  }
+  return families.length > 0 ? families : null;
 }
 
 /** write/edit/apply_patch — the tools whose accept-edits `auto` is cwd-scoped. */
@@ -125,24 +155,31 @@ export function editTargetsWithinCwd(
 
 export interface PermissionState {
   allowAlways: Set<string>;
+  /** Persisted per-project bash command-family grants ("pip", "git", …). */
+  bashGrants: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
   /** Ground-truth mode: todowrite `verify` commands are actually executed by the harness. */
   groundTruth: boolean;
   /** verify commands the user has already seen and approved (exact-string). */
   approvedVerifies: Set<string>;
+  /** ui-modes-style project key; when set, new bash grants persist across sessions. */
+  projectKey: string | null;
 }
 
 export function createPermissionState(
   cwd: string,
-  opts: { groundTruth?: boolean } = {},
+  opts: { groundTruth?: boolean; projectKey?: string } = {},
 ): PermissionState {
+  const projectKey = opts.projectKey ?? null;
   return {
     allowAlways: new Set<string>(),
+    bashGrants: new Set<string>(projectKey ? loadBashGrants(projectKey) : []),
     allowedDirs: new Set<string>(), // NOT pre-approved — user must grant cwd access
     cwd,
     groundTruth: opts.groundTruth === true,
     approvedVerifies: new Set<string>(),
+    projectKey,
   };
 }
 
@@ -257,6 +294,13 @@ export function checkPermission(
         verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
       if (!newVerify) return Promise.resolve(null);
     }
+
+    // Persisted per-command grants (bash only): silent when every segment family was
+    // granted before. Unanalyzable commands (null) never match — they keep the prompt.
+    if (toolName === "bash" && state.bashGrants.size > 0) {
+      const families = bashCommandFamilies(String(args.command ?? ""));
+      if (families?.every((f) => state.bashGrants.has(f))) return Promise.resolve(null);
+    }
   }
 
   // For read-only tools (read/ls/glob/grep): check directory-level access
@@ -296,6 +340,9 @@ export function checkPermission(
 
   // Sensitive tools (write/edit/bash) — or any forced prompt (plan-mode "ask"): always prompt
   const diffPreview = buildDiffPreview(toolName, args, state);
+  // Bash "always" is a per-command-family grant (persisted per project) when the command is
+  // analyzable; anything else keeps the whole-tool session grant.
+  const bashFamilies = toolName === "bash" ? bashCommandFamilies(String(args.command ?? "")) : null;
   return new Promise((resolve) => {
     promptFn({
       toolName,
@@ -303,8 +350,18 @@ export function checkPermission(
       promptText: `${opts.promptTextPrefix ?? ""}run ${toolName}`,
       diffPreview,
       args,
+      alwaysLabel: bashFamilies
+        ? `Always allow ${bashFamilies.map((f) => `\`${f}\``).join(", ")} commands`
+        : undefined,
       resolve: (decision) => {
-        if (decision === "always") state.allowAlways.add(toolName);
+        if (decision === "always") {
+          if (bashFamilies) {
+            for (const f of bashFamilies) state.bashGrants.add(f);
+            if (state.projectKey) persistBashGrants(state.projectKey, bashFamilies);
+          } else {
+            state.allowAlways.add(toolName);
+          }
+        }
         if (decision === "allow" || decision === "always") {
           // The user has now seen these verify commands — an "always" grant covers them,
           // but any future NEW verify still re-prompts (see the allowAlways exception above).

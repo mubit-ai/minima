@@ -74,7 +74,10 @@
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
 # (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), modes-busy (the badge
 # flips MID-STREAM — the global Shift+Tab arm, 2026-07-20), modes-perm (Shift+Tab over
-# the permission overlay auto-approves the pending write, Claude Code parity), shortcuts
+# the permission overlay auto-approves the pending write, Claude Code parity), bash-grants
+# (2026-07-21: the bash overlay offers "[a] Always allow `echo` commands" — a per-command-
+# family grant, persisted per project via perm_grants.ts; the next same-family bash turn
+# runs with NO overlay, and Enter on the overlay ACCEPTS), shortcuts
 # (Home/End/Alt word-jump + Ctrl+Z suspend/resume — inline signature: ?2004l+?25h down,
 # ?25l+?2004h back up, never ?1049).
 #
@@ -463,6 +466,57 @@ test -f "$TMP/permwork/perm_probe.txt" || { echo "FAIL: perm_probe.txt was not w
 grep -q "mode-cycled approval" "$TMP/permwork/perm_probe.txt" || {
   echo "FAIL: perm_probe.txt content wrong"; exit 1; }
 echo "tui_assert: PASS modes-perm file content"
+
+echo "== tui-verify: scenario bash-grants (per-command grant: [a] persists the family, next call silent) =="
+rm -rf "$TMP/grantwork" && mkdir -p "$TMP/grantwork"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$TMP/grantwork",
+  "cols": 120, "rows": 36, "duration": 16,
+  "env": {"MINIMA_DB_PATH": "$TMP/bash-grants.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-bash-grants"},
+  "frames": "$TMP/grant-frames.jsonl",
+  "steps": [
+    {"after": 3.5, "send": "BASHCMD first run"},
+    {"after": 4.0, "send": "<CR>"},
+    {"after": 6.5, "send": "a"},
+    {"after": 9.5, "send": "BASHCMD second run"},
+    {"after": 10.0, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture bash-grants "$SPEC"
+python3 - "$TMP/grant-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(screen, needle):
+    return any(needle in row for row in screen)
+def seen(needle, t0, t1=99.0):
+    return any(grid_has(f["screen"], needle) for f in frames if t0 <= f["t"] <= t1)
+# Fail loud on the mount race: a truncated prompt loses the BASHCMD marker.
+assert seen("BASHCMD first run", 4.0), (
+    "typed prompt truncated - the send raced the app mount, retime the steps")
+# The bash overlay must be up before the 'a', offering the per-FAMILY grant (not the
+# whole-tool copy) — the canned command is `echo grant-probe`, so the family is `echo`.
+assert seen("Always allow `echo` commands", 4.0, 6.5), (
+    "bash overlay missing the per-command-family [a] label before the grant")
+# After the grant, the first turn's second-phase reply lands.
+assert seen("Command recorded", 6.5, 9.5), (
+    "the first bash turn never completed after the [a] grant")
+# The second BASHCMD turn matches the persisted `echo` grant: NO overlay, straight to the
+# tool + reply. (Frames exist here because the turn itself paints.)
+assert not any(
+    grid_has(f["screen"], " permission ") for f in frames if 10.0 <= f["t"]
+), "the second same-family bash call re-prompted despite the grant"
+last = frames[-1]["screen"]
+count = sum(1 for row in last if "Command recorded" in row)
+assert count >= 2, (
+    f"expected both bash turns' replies in the settled frame, saw {count}")
+print("tui_assert: PASS bash-grants (family grant label, silent second call)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/grant-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
 
 echo "== tui-verify: scenario shortcuts (edit keys + inline Ctrl+Z suspend/resume) =="
 SPEC=$(cat <<EOF
