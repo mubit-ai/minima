@@ -4,6 +4,54 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.2] - 2026-07-20
+
+The memory spine: the SQLite ledger starts feeding decisions. Ten PRs across the
+harness and server (#175–#184) — curated cross-session memory, a background
+curator, recall track records on server memory, and the durable-execution +
+verification upgrades.
+
+### Added
+- **Memory ledger** (harness, default ON — `MINIMA_TUI_MEMORY=0` opts out; migration
+  v12): curated per-repo memories (`note`/`workflow`/`lesson`/`guardrail`) projected
+  into each turn's system prompt (hard-capped, pinned > gate-cited > recency; every
+  distinct injection audited so "what the model saw" is replayable). Managed via
+  `/memory` (list · add · dream · pin/confirm/reject/delete = bi-temporal invalidate).
+  The model has no memory-write tool (Letta split).
+- **Memory scribe**: the sole automated memory writer — signals mined from the ledger
+  (gate flips, verified failures, user corrections, judge/gate disagreements — never
+  the transcript), recurrence-gated, one extraction call routed through Minima
+  (`tags=["memory:extract"]`, spend booked like judge spend), mem0-style
+  reconciliation (rejected rows never resurrected), provenance activation (only
+  gate-cited candidates auto-activate). Runs as crash-safe persisted jobs.
+- **Memory dream** (`/memory dream`): deterministic offline consolidation — only
+  green-gated closed plans distill into `workflow` candidates (always pending, never
+  mutates existing rows). Confirmed workflows enable **replay-with-cheap**: matching
+  prompts route with `tags=["procedure:known"]` so Thompson learns the cheaper
+  frontier for known-procedure work organically.
+- **Recall track** (server, schema v5): every trusted-label feedback casts a vote on
+  the durable records recalled into that decision; bad-track records are down-weighted
+  (floor 0.25) and eventually tombstoned (`invalidated_at`, never deleted;
+  `recall_invalidated_skipped:<n>` recommend warning). `MINIMA_RECALL_VOTE_MIN_N` /
+  `MINIMA_RECALL_INVALIDATE_RATE`.
+- **Planning critic** (advisory, at `/plan` finalize) + **zero-context diff reviewer**
+  (at plan closure; an objection can yellow the plan tier, never green it).
+  `MINIMA_TUI_PLAN_CRITIC=0` / `MINIMA_TUI_DIFF_REVIEW=0` opt out.
+- **Auto-gates**: repo manifests mined for trusted-by-construction check commands at
+  `/plan` finalize — fast command (typecheck/lint) on verify-less steps, full test
+  suite on the final step. `MINIMA_TUI_AUTO_GATES=0` opts out.
+- **Version stamps + blob tier** (migration v13): decisions/gates record
+  `harness_version` + a toolset hash (resume warns on skew, never blocks); >16KB tool
+  results spill to content-addressed blob files.
+- **Resume re-verify**: resuming re-runs the in-progress step's verify against its
+  recorded baseline (consent-gated) — divergence re-baselines from reality with a 🟡
+  banner; the resumed run's provider session id is reused for prompt-cache continuity.
+- **Ladder v2**: named rung states (`retry_step`/`revise_step`/`replan`) on recovery
+  gates + feedback notes; repeated verified failures unlock full failing-check output
+  in the retry prompt.
+- **Honest meter**: KV-cache hit rate and cost-of-pass (labeled successes only, with
+  coverage disclosure) in `/cost`.
+
 ## [0.12.1] - 2026-07-20
 
 SDK integrity + a standalone TypeScript SDK. Server wire contract unchanged; all
