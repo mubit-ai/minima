@@ -24,6 +24,7 @@ to grade responses and make the outcomes teach the success posterior too.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from collections import OrderedDict
@@ -34,6 +35,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import CustomRoutingStrategyBase
 
 _CORRELATION_CAP = 512
+_META_REC_ID = "minima_rec_id"
+_META_MODEL_ID = "minima_model_id"
+
+
+def _outcome_for_quality(quality: float) -> tuple[str, str | None]:
+    """Repo thresholds: success >= 0.8, partial >= 0.4, else failure (a quality fault)."""
+    if quality >= 0.8:
+        return "success", None
+    if quality >= 0.4:
+        return "partial", None
+    return "failure", "quality"
 
 
 def _task_text(messages: list[dict[str, str]] | None, fallback: str) -> str:
@@ -90,6 +102,7 @@ class MinimaRoutingStrategy(CustomRoutingStrategyBase):
         self,
         model_group: str,
         messages: list[dict[str, str]] | None,
+        request_kwargs: dict | None,
     ) -> dict | None:
         deployments = self._deployments(model_group)
         if not deployments:
@@ -112,6 +125,15 @@ class MinimaRoutingStrategy(CustomRoutingStrategyBase):
         deployment = by_bare.get(model_id)
         if deployment is None:
             return None
+        # Primary correlation: carry the rec in-band on the request itself, so the logger
+        # joins exactly even when identical prompts run concurrently. The (group, task)
+        # LRU stays as a fallback for litellm versions that don't thread request_kwargs
+        # metadata through to callbacks.
+        if isinstance(request_kwargs, dict):
+            meta = request_kwargs.setdefault("metadata", {})
+            if isinstance(meta, dict):
+                meta[_META_REC_ID] = rec.recommendation_id
+                meta[_META_MODEL_ID] = model_id
         self._remember(_correlation_key(model_group, task), rec.recommendation_id, model_id)
         return deployment
 
@@ -123,7 +145,7 @@ class MinimaRoutingStrategy(CustomRoutingStrategyBase):
         specific_deployment: bool | None = False,
         request_kwargs: dict | None = None,
     ):
-        return self._pick(model, messages)
+        return self._pick(model, messages, request_kwargs)
 
     def get_available_deployment(
         self,
@@ -133,7 +155,7 @@ class MinimaRoutingStrategy(CustomRoutingStrategyBase):
         specific_deployment: bool | None = False,
         request_kwargs: dict | None = None,
     ):
-        return self._pick(model, messages)
+        return self._pick(model, messages, request_kwargs)
 
 
 class MinimaFeedbackLogger(CustomLogger):
@@ -152,6 +174,14 @@ class MinimaFeedbackLogger(CustomLogger):
         self._quality_fn = quality_fn
 
     def _join(self, kwargs: dict) -> tuple[str, str] | None:
+        # In-band metadata first (exact even under concurrent identical prompts) —
+        # litellm surfaces request metadata under litellm_params in callback kwargs.
+        meta = kwargs.get("litellm_params", {}).get("metadata") or kwargs.get("metadata")
+        if isinstance(meta, dict) and meta.get(_META_REC_ID) and meta.get(_META_MODEL_ID):
+            rec_id, model_id = str(meta[_META_REC_ID]), str(meta[_META_MODEL_ID])
+            group = str(kwargs.get("model", ""))
+            self._strategy.take_recommendation(group, _task_text(kwargs.get("messages"), group))
+            return rec_id, model_id
         group = str(kwargs.get("model", ""))
         task = _task_text(kwargs.get("messages"), group)
         return self._strategy.take_recommendation(group, task)
@@ -168,14 +198,23 @@ class MinimaFeedbackLogger(CustomLogger):
                 quality = self._quality_fn(response_obj)
             except Exception:  # noqa: BLE001 — a broken grader must not break the call
                 quality = None
+        if quality is None:
+            # No grader => honest telemetry, not a fabricated success label.
+            outcome, error_cause, evidence = "success", None, "none"
+        else:
+            outcome, error_cause = _outcome_for_quality(quality)
+            evidence = "judge"
         try:
-            self._minima.feedback(
+            # The sync client off the event loop: feedback may take up to the client
+            # timeout, and this callback runs inside the caller's async app.
+            await asyncio.to_thread(
+                self._minima.feedback,
                 rec_id,
                 model_id,
-                "success" if quality is None or quality >= 0.8 else "partial",
+                outcome,
                 quality_score=quality,
-                # No grader => honest telemetry, not a fabricated success label.
-                evidence_source="judge" if quality is not None else "none",
+                evidence_source=evidence,
+                error_cause=error_cause,
                 input_tokens=getattr(usage, "prompt_tokens", None),
                 output_tokens=getattr(usage, "completion_tokens", None),
                 actual_cost_usd=kwargs.get("response_cost"),
@@ -192,7 +231,8 @@ class MinimaFeedbackLogger(CustomLogger):
             return
         rec_id, model_id = joined
         try:
-            self._minima.feedback(
+            await asyncio.to_thread(
+                self._minima.feedback,
                 rec_id,
                 model_id,
                 "failure",

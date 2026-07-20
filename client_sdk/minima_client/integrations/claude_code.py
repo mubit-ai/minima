@@ -70,9 +70,9 @@ def _cmd_feedback(args: argparse.Namespace) -> int:
             args.model,
             args.outcome,
             usage=Usage(
-                input_tokens=args.input_tokens or 0,
-                output_tokens=args.output_tokens or 0,
-                cost_usd=args.cost or 0.0,
+                input_tokens=args.input_tokens,
+                output_tokens=args.output_tokens,
+                cost_usd=args.cost,
                 latency_ms=args.latency_ms,
             ),
             quality_score=args.quality,
@@ -107,9 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--quality", type=float, default=None, help="0..1 if you graded it")
     fb.add_argument(
         "--source",
-        default="human",
+        default="none",
         choices=["gate", "judge", "human", "none"],
-        help="label provenance (none = cost telemetry only)",
+        help=(
+            "label provenance; default none = cost telemetry only. Pass --source human "
+            "ONLY when a human actually verified this outcome — it counts as a real label."
+        ),
     )
     fb.set_defaults(func=_cmd_feedback)
     return parser

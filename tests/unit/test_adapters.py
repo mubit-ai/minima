@@ -142,6 +142,77 @@ def test_litellm_logger_reports_realized_cost_as_telemetry():
     assert len(minima.feedback_calls) == 1
 
 
+def test_litellm_logger_grades_outcomes_by_threshold():
+    router = _litellm_router()
+    from minima_client.integrations.litellm_router import (
+        MinimaFeedbackLogger,
+        MinimaRoutingStrategy,
+    )
+
+    start, end = datetime(2026, 1, 1), datetime(2026, 1, 1) + timedelta(seconds=1)
+    for quality, outcome, error_cause in [
+        (0.9, "success", None),
+        (0.5, "partial", None),
+        (0.1, "failure", "quality"),
+    ]:
+        minima = _MinimaStub(pick="claude-haiku-4-5")
+        strategy = MinimaRoutingStrategy(minima, router)
+        messages = [{"role": "user", "content": f"grade me {quality}"}]
+        asyncio.run(strategy.async_get_available_deployment("my-group", messages=messages))
+        logger = MinimaFeedbackLogger(minima, strategy, quality_fn=lambda _r, q=quality: q)
+        response = type("Resp", (), {"usage": None})()
+        asyncio.run(
+            logger.async_log_success_event(
+                {"model": "my-group", "messages": messages}, response, start, end
+            )
+        )
+        fb = minima.feedback_calls[0]
+        assert fb["outcome"] == outcome, quality
+        assert fb["evidence_source"] == "judge"
+        assert fb.get("error_cause") == error_cause
+
+
+def test_litellm_metadata_join_is_exact_for_concurrent_identical_prompts():
+    router = _litellm_router()
+    from minima_client.integrations.litellm_router import (
+        MinimaFeedbackLogger,
+        MinimaRoutingStrategy,
+    )
+
+    class _Counting(_MinimaStub):
+        def recommend(self, task, **kwargs):
+            self.recommend_calls.append({"task": task, **kwargs})
+            return _RecStub(f"rec-{len(self.recommend_calls)}", _RankedStub(self.pick))
+
+    minima = _Counting(pick="claude-haiku-4-5")
+    strategy = MinimaRoutingStrategy(minima, router)
+    messages = [{"role": "user", "content": "same prompt"}]
+    # Two concurrent identical requests: the (group, task) LRU alone would collide.
+    kw1: dict = {}
+    kw2: dict = {}
+    asyncio.run(
+        strategy.async_get_available_deployment("my-group", messages=messages, request_kwargs=kw1)
+    )
+    asyncio.run(
+        strategy.async_get_available_deployment("my-group", messages=messages, request_kwargs=kw2)
+    )
+    assert kw1["metadata"]["minima_rec_id"] == "rec-1"
+    assert kw2["metadata"]["minima_rec_id"] == "rec-2"
+
+    logger = MinimaFeedbackLogger(minima, strategy)
+    response = type("Resp", (), {"usage": None})()
+    start, end = datetime(2026, 1, 1), datetime(2026, 1, 1) + timedelta(seconds=1)
+    # Completions land out of order; the in-band metadata still joins each exactly.
+    for kw in (kw2, kw1):
+        event = {
+            "model": "my-group",
+            "messages": messages,
+            "litellm_params": {"metadata": kw["metadata"]},
+        }
+        asyncio.run(logger.async_log_success_event(event, response, start, end))
+    assert [fb["rec_id"] for fb in minima.feedback_calls] == ["rec-2", "rec-1"]
+
+
 # -------------------------------------------------------------- OpenHands ----
 
 

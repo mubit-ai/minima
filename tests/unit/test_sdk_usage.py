@@ -33,7 +33,16 @@ def test_explicit_kwargs_win_over_usage():
     assert req.actual_cost_usd == pytest.approx(0.002)
 
 
-def test_zero_usage_fields_stay_absent():
+def test_unmeasured_usage_fields_stay_absent():
     req = _feedback_request("rec-1", "m", "success", usage=Usage())
     assert req.input_tokens is None
     assert req.actual_cost_usd is None
+
+
+def test_explicit_zero_is_a_real_measurement():
+    req = _feedback_request(
+        "rec-1", "m", "success", usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0)
+    )
+    assert req.input_tokens == 0
+    assert req.output_tokens == 0
+    assert req.actual_cost_usd == 0.0
