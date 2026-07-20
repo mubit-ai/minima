@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     # adding extra recency factors on top is not).
     minima_evidence_half_life_days: float = 30.0
     minima_evidence_decay_floor: float = 0.1
+    # Recall-track (free quality labels): once a record has this many recall votes, its
+    # aggregation weight is scaled by its recall success rate (floored — see aggregate),
+    # and a rate below minima_recall_invalidate_rate stamps invalidated_at (bi-temporal
+    # tombstone; the record vanishes from ranking but stays readable). 0 disables both.
+    minima_recall_vote_min_n: int = 5
+    minima_recall_invalidate_rate: float = 0.2
     # Seed-vs-live weighting: seeded outcomes (source_dataset set) count at this weight,
     # decaying linearly to zero once a model has crowdout_n live outcomes in the recalled
     # set — live evidence replaces the bootstrap instead of competing with it forever.

@@ -24,6 +24,11 @@ STALE_DECAY = 0.5
 # (which applies to the record as a whole) meaningful for long histories.
 COUNTER_N_CAP = 50
 
+# Floor on the recall-track down-weight: a record whose recalls keep preceding failures
+# is discounted toward (but never to) zero — evidence gets cheaper, not censored; hard
+# removal is the invalidation stamp's job, applied at write time with its own threshold.
+RECALL_WEIGHT_FLOOR = 0.25
+
 _SECONDS_PER_DAY = 86_400.0
 
 
@@ -88,6 +93,7 @@ def aggregate_by_model(
     decay_floor: float = 0.1,
     seed_weight: float = 1.0,
     seed_crowdout_n: int = 0,
+    recall_vote_min_n: int = 0,
     now: float | None = None,
 ) -> dict[str, ModelAggregate]:
     """Group neighbors by model and accumulate weighted success statistics.
@@ -107,6 +113,10 @@ def aggregate_by_model(
         # legacy pre-v3 records whose persisted quality may have been fabricated.
         if not is_labeled(rec.evidence_source):
             continue
+        # Bi-temporal tombstone: an invalidated record (recall track record collapsed)
+        # is out of ranking entirely — still readable by audits, never by scoring.
+        if rec.invalidated_at is not None:
+            continue
         if candidate_ids is not None and rec.model_id not in candidate_ids:
             continue
         items.append((ev, rec))
@@ -122,6 +132,12 @@ def aggregate_by_model(
         weight = neighbor_weight(
             ev, half_life_days=half_life_days, decay_floor=decay_floor, now=now
         )
+        # Recall-track down-weight (experience-following countermeasure): once a record
+        # has enough recall votes, its weight scales with how often decisions it was
+        # recalled into actually succeeded — floored so bad-track evidence gets cheap,
+        # never silently censored.
+        if recall_vote_min_n > 0 and rec.recall_n >= recall_vote_min_n:
+            weight *= max(RECALL_WEIGHT_FLOOR, rec.recall_success_mass / rec.recall_n)
         if rec.source_dataset is not None and seed_weight != 1.0:
             weight *= seed_factor(
                 n_live.get(model_id, 0), seed_weight=seed_weight, crowdout_n=seed_crowdout_n

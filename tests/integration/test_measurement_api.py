@@ -270,6 +270,9 @@ class TestDurableFastPath:
     def test_recommend_path_never_dereferences(self, client, fake_memory):
         self._seed_ref_via_feedback(client, fake_memory)
         fake_memory.evidence = []
+        # Feedback itself now dereferences (recall-track read-modify-write); the
+        # invariant under test is that the RECOMMEND path never does.
+        fake_memory.dereference_calls.clear()
         _recommend(client)
         assert fake_memory.dereference_calls == []
 

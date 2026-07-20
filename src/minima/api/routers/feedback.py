@@ -24,11 +24,14 @@ from minima.memory.records import (
     EVIDENCE_HUMAN,
     EVIDENCE_JUDGE,
     EVIDENCE_NONE,
+    RECALL_VOTE_CAP,
     OutcomeRecord,
     clamp01,
+    fold_recall_vote,
     is_labeled,
     merged_outcome,
     reconcile_quality,
+    should_invalidate,
     signal_from_outcome,
 )
 from minima.recommender.decisionlog import DecisionRecord, Reconciliation
@@ -293,6 +296,24 @@ async def feedback(
             log.warning("lesson_promotion_failed", error=str(exc))
             warnings.append("lesson_promotion_failed")
 
+    # Recall-track (free quality labels): this trusted-label outcome is a quality vote on
+    # every durable record that was recalled into the decision — success reinforces their
+    # track record, failure erodes it (experience-following countermeasure). Partial
+    # outcomes abstain (neither a clean success nor a clean failure of the recalled
+    # evidence). Strictly best-effort and bounded (RECALL_VOTE_CAP writes max).
+    if req.outcome != OutcomeLabel.partial and settings.minima_recall_vote_min_n > 0:
+        await _apply_recall_votes(
+            tenant,
+            settings,
+            lane=stored.lane,
+            neighbors=neighbors,
+            current_record_id=record_id,
+            success=is_success,
+            idem=idem,
+            user_id=stored.user_id,
+            env_tags=stored.env_tags or None,
+        )
+
     reflection_triggered = False
     count = tenant.lane_counter.bump(tenant.counter_key(stored.lane))
     every = settings.minima_reflect_every_n
@@ -309,6 +330,66 @@ async def feedback(
         lesson_promoted=lesson_promoted,
         warnings=warnings,
     )
+
+
+async def _apply_recall_votes(
+    tenant: TenantContext,
+    settings: Settings,
+    *,
+    lane: str,
+    neighbors: list[tuple[str, str | None]],
+    current_record_id: str | None,
+    success: bool,
+    idem: str,
+    user_id: str | None,
+    env_tags: list[str] | None,
+) -> None:
+    """Read-modify-write recall counters onto each recalled durable record.
+
+    Same dereference→fold→upsert shape as the merged_outcome accumulation. The record
+    just upserted by THIS feedback is skipped — it received the outcome as a direct
+    observation; a recall vote on top would double-count it. A record whose track
+    record crosses the invalidation threshold gets its bi-temporal stamp here (logged
+    as memory_invalidated). Every failure is swallowed — votes are additive hygiene,
+    never worth failing feedback over.
+    """
+    for i, (eid, ref) in enumerate(neighbors[:RECALL_VOTE_CAP]):
+        # Dereference wants a durable reference id; a numeric core-plane node id is not
+        # resolvable, so such neighbors only count when they carry a reference.
+        target = ref or ("" if (eid or "").isdigit() else eid or "")
+        if not target or target == current_record_id:
+            continue
+        try:
+            ev = await tenant.memory.dereference(lane=lane, reference_id=target)
+            if ev is None or ev.record is None or ev.record.invalidated_at is not None:
+                continue
+            voted = fold_recall_vote(ev.record, success)
+            if should_invalidate(
+                voted,
+                min_n=settings.minima_recall_vote_min_n,
+                max_rate=settings.minima_recall_invalidate_rate,
+            ):
+                voted.invalidated_at = time.time()
+                log.info(
+                    "memory_invalidated",
+                    cluster=voted.task_cluster,
+                    model_id=voted.model_id,
+                    recall_n=voted.recall_n,
+                    recall_success_mass=voted.recall_success_mass,
+                )
+            await tenant.memory.remember_outcome(
+                content=ev.content,
+                record=voted,
+                lane=lane,
+                upsert_key=outcome_upsert_key(voted.task_cluster, voted.model_id),
+                idempotency_key=f"rv:{idem}:{i}",
+                user_id=user_id,
+                env_tags=env_tags,
+                importance="low",
+                source="human",
+            )
+        except Exception as exc:  # noqa: BLE001 — votes must never fail feedback
+            log.warning("recall_vote_failed", target=target, error=str(exc))
 
 
 def _reconcile_decision(

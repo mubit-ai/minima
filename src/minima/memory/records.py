@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-SCHEMA_VERSION = 4  # v4: accumulating counters + sample rings; v1-v3 records parse unchanged
+SCHEMA_VERSION = 5  # v5: recall-track counters + bi-temporal invalidation; v1-v4 parse unchanged
+
+# Cap on recall votes applied per feedback (bounds Mubit writes per request).
+RECALL_VOTE_CAP = 8
 
 # Ring caps for the per-(cluster, model) durable record's accumulators. Small on
 # purpose: the rings feed robust medians/quantiles (a dozen samples is plenty) and
@@ -125,6 +128,17 @@ class OutcomeRecord:
     output_token_samples: list[int] = field(default_factory=list)
     latency_samples: list[int] = field(default_factory=list)
     recent_rec_ids: list[str] = field(default_factory=list)  # duplicate-feedback guard
+    # --- v5 recall-track (arXiv:2505.16067 — "future task evaluations serve as free
+    # quality labels for stored memory"). Every TRUSTED-label feedback casts one vote on
+    # each record that was recalled into that decision: recall_n counts the votes,
+    # recall_success_mass sums the successful ones. Deliberately SEPARATE from
+    # n_outcomes/success_mass — recall votes are credit-assignment heuristics about the
+    # record's usefulness as evidence, never direct observations of the model.
+    recall_n: int = 0
+    recall_success_mass: float = 0.0
+    # Bi-temporal tombstone (Zep pattern): a record whose recall track record collapses
+    # is invalidated, never deleted — aggregation skips it, audits still read it.
+    invalidated_at: float | None = None
     kind: str = "outcome"
     schema_version: int = SCHEMA_VERSION
     extra: dict = field(default_factory=dict)
@@ -189,6 +203,13 @@ class OutcomeRecord:
             output_token_samples=_as_int_list(parsed.get("output_token_samples")),
             latency_samples=_as_int_list(parsed.get("latency_samples")),
             recent_rec_ids=[str(r) for r in parsed.get("recent_rec_ids") or [] if r],
+            recall_n=_as_int(parsed.get("recall_n")),
+            recall_success_mass=_as_float(parsed.get("recall_success_mass")),
+            invalidated_at=(
+                _as_float(parsed.get("invalidated_at"))
+                if parsed.get("invalidated_at")
+                else None
+            ),
         )
 
 
@@ -285,7 +306,43 @@ def merged_outcome(prev: OutcomeRecord | None, new: OutcomeRecord) -> OutcomeRec
         prev_lat, new.latency_ms if new.latency_ms else None, COST_SAMPLE_RING
     )
     new.recent_rec_ids = _ring(prev_recs, new.recommendation_id or None, REC_ID_RING)
+    # v5 recall-track state rides the same upsert: a direct outcome write must carry the
+    # record's accumulated recall votes (and any invalidation stamp) forward, or every
+    # feedback would silently reset the track record this PR exists to build.
+    if prev is not None:
+        new.recall_n = prev.recall_n
+        new.recall_success_mass = prev.recall_success_mass
+        new.invalidated_at = prev.invalidated_at
     return new
+
+
+def fold_recall_vote(prev: OutcomeRecord, success: bool) -> OutcomeRecord:
+    """Fold one recall vote into a recalled record's track record. Pure — returns a copy.
+
+    A vote says "this record was recalled into a decision whose trusted-label outcome
+    was success/failure". It never touches n_outcomes/success_mass (those are direct
+    observations of the model); it grades the record's usefulness as *evidence*.
+    """
+    return replace(
+        prev,
+        recall_n=prev.recall_n + 1,
+        recall_success_mass=prev.recall_success_mass + (1.0 if success else 0.0),
+    )
+
+
+def should_invalidate(
+    record: OutcomeRecord, *, min_n: int, max_rate: float
+) -> bool:
+    """True when the record's recall track record has collapsed below the floor.
+
+    Only fires with enough votes (min_n) and while the record is still live — the
+    caller stamps ``invalidated_at`` (bi-temporal: never delete).
+    """
+    if min_n <= 0 or record.invalidated_at is not None:
+        return False
+    if record.recall_n < min_n:
+        return False
+    return (record.recall_success_mass / record.recall_n) < max_rate
 
 
 def _as_int(value: Any, default: int = 0) -> int:
