@@ -253,6 +253,52 @@ def test_openhands_router_fails_open_to_first_llm():
     assert router.select_llm([]) == "cheap"
 
 
+def test_openhands_completion_reports_cost_telemetry():
+    pytest.importorskip("openhands.sdk")
+    import time as _time
+
+    from minima_client.integrations.openhands_router import MinimaRouterLLM
+    from openhands.sdk.llm import LLM
+
+    llms = {"cheap": LLM(model="anthropic/claude-haiku-4-5", usage_id="cheap")}
+    router = MinimaRouterLLM(model="minima-router", usage_id="router", llms_for_routing=llms)
+    minima = _MinimaStub(pick="claude-haiku-4-5")
+    router.set_minima_client(minima)
+
+    # Stub the selected LLM's completion; simulate the metrics append the real call does.
+    def _fake_completion(**kwargs):
+        llms["cheap"].metrics.add_cost(0.0031)
+        llms["cheap"].metrics.add_token_usage(
+            prompt_tokens=150,
+            completion_tokens=60,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            context_window=200000,
+            response_id="r1",
+        )
+        return type("Resp", (), {"message": None, "metrics": None, "raw_response": None})()
+
+    object.__setattr__(llms["cheap"], "completion", _fake_completion)
+
+    class _Msg:
+        role = "user"
+        content = "summarize the doc"
+
+    router.completion([_Msg()])
+    for _ in range(50):  # fire-and-forget thread — wait for the feedback to land
+        if minima.feedback_calls:
+            break
+        _time.sleep(0.02)
+    fb = minima.feedback_calls[0]
+    assert fb["rec_id"] == "rec-1"
+    assert fb["model"] == "claude-haiku-4-5"
+    assert fb["outcome"] == "success"
+    assert fb["evidence_source"] == "none"  # telemetry, never a fabricated label
+    assert fb["actual_cost_usd"] == pytest.approx(0.0031)
+    assert fb["input_tokens"] == 150
+    assert fb["output_tokens"] == 60
+
+
 # ------------------------------------------------------------ minima-route ----
 
 
