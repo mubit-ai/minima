@@ -21,7 +21,6 @@ import type { AgentEvent } from "../agent/events.ts";
 import {
   type AgentMode,
   MODE_BADGES,
-  PLAN_BUNDLE,
   bundleForMode,
   cycleMode,
   enableBypass,
@@ -121,6 +120,7 @@ import {
   type PermissionPrompt,
   type PermissionState,
   createPermissionState,
+  formatActionLabel,
   makeModeGatedBeforeToolCall,
   modeAutoApproves,
   planModeBlockReason,
@@ -1119,17 +1119,21 @@ export function HarnessApp({
     [agent, planMetaModel],
   );
   const exitPlanFinalize = useCallback(
-    async (_planMd: string | null = null) => {
+    async (_planMd: string | null = null, autoAcceptEdits = false) => {
+      // CC's ExitPlanMode approve flavors: plain approval lands on build (per-edit
+      // prompts); "auto-accept edits" lands on accept-edits (cwd-scoped auto).
+      const landing: AgentMode = autoAcceptEdits ? "acceptEdits" : "build";
+      const landingNote = autoAcceptEdits
+        ? " Your file edits inside the project are pre-approved (accept-edits mode)."
+        : "";
       // MP17: sessionless (GT-off) plan mode has no store and writes no GROUND_TRUTH.md — the
       // approved plan lives in the transcript (showPlan pushed the tool's `plan` markdown).
       // Approval here is just the mode flip back to full tool access.
       if (planSessionRef.current == null) {
-        setMode("build");
+        setMode(landing);
         return {
           ok: true,
-          message:
-            "Plan approved — plan mode is OFF and full tool access is restored. Begin " +
-            "implementing the approved plan now.",
+          message: `Plan approved — plan mode is OFF and full tool access is restored. Begin implementing the approved plan now.${landingNote}`,
         };
       }
       const outcome = await runPlanFinalize(false, agent.runSignal);
@@ -1138,6 +1142,7 @@ export function HarnessApp({
       }
       if (outcome.kind !== "ok") return { ok: false, message: outcome.message };
       exitPlanMode();
+      if (autoAcceptEdits) setMode("acceptEdits");
       setMessages((m) => [
         ...m,
         { role: "tool", text: outcome.md, toolName: "plan" },
@@ -1155,7 +1160,7 @@ export function HarnessApp({
           : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
       return {
         ok: true,
-        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${ledgerGuidance}`,
+        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
       };
     },
     [agent, runPlanFinalize, exitPlanMode],
@@ -1357,29 +1362,25 @@ export function HarnessApp({
   // permission always runs first — first block wins, and no gate check ever executes for a
   // call the user declines.
   //
-  // Plan mode composes two layers (B2 × GT):
-  //   1. Hard blocks stay for the tools an "ask" cannot make safe: task (delegated children
-  //      are hook-free — a task call is a write bypass; council research delegation stays)
-  //      and, with GT on, todowrite (approving one authorizes running each step's `verify`
-  //      as a shell command). The blocklist lives in permissions.ts (single tested source);
-  //      the tools the plan bundle converts to ask-first are subtracted from it.
-  //   2. Everything else resolves through the active mode's PolicyBundle
-  //      (plan → write/edit/bash/apply_patch ask, outranking "always" grants), then the
-  //      normal permission flow.
+  // Plan mode DENIES at the dispatcher (Claude Code parity, 2026-07-20 — supersedes the B2
+  // ask-every-time flow): the FULL planModeBlockedTools list (permissions.ts, single tested
+  // source) hard-blocks with the exit_plan-steering reason, audited as mode-deny. Everything
+  // else resolves through the active mode's PolicyBundle (accept-edits auto is cwd-scoped
+  // inside the hook), then the normal permission flow.
   useEffect(() => {
     const modeGated = makeModeGatedBeforeToolCall({
       state: permStateRef.current,
       promptFn: (prompt) => setPermPrompt(prompt),
       getBundle: () => bundleForMode(getMode()),
     });
-    const askFirst = new Set(
-      PLAN_BUNDLE.rules.filter((r) => r.action === "ask").map((r) => r.tool),
-    );
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (getMode() === "plan") {
         const gtOn = agent.config.groundTruth === true;
-        const hardBlocked = planModeBlockedTools(gtOn).filter((t) => !askFirst.has(t));
-        if (hardBlocked.includes(ctx.toolCall.name)) {
+        if (planModeBlockedTools(gtOn).includes(ctx.toolCall.name)) {
+          emitGuardEvent({
+            kind: "mode-deny",
+            detail: formatActionLabel(ctx.toolCall.name, ctx.args),
+          });
           return { block: true, reason: planModeBlockReason(ctx.toolCall.name, gtOn) };
         }
       }
@@ -1728,8 +1729,15 @@ export function HarnessApp({
       // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
       // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
       // the same mode-auto guard event the hook's no-prompt path emits); a mode that
-      // still asks leaves the prompt up.
-      if (permPrompt && modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary)) {
+      // still asks leaves the prompt up. accept-edits auto is cwd-scoped, so the pending
+      // call's raw args ride along for the same target-path check the dispatcher applies.
+      if (
+        permPrompt &&
+        modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary, {
+          args: permPrompt.args ?? null,
+          cwd: permStateRef.current.cwd,
+        })
+      ) {
         emitGuardEvent({
           kind: "mode-auto",
           detail: permPrompt.argsSummary

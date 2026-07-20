@@ -3,8 +3,15 @@
  * consumers of the Phase-0 PolicyBundle grammar:
  *
  *   build       — default: catch-all allow → normal permission flow (prompts per grants)
- *   acceptEdits — write/edit/apply_patch pre-approved (auto); bash keeps the normal flow
- *   plan        — every mutating tool is an "ask" that outranks session "always" grants
+ *   acceptEdits — write/edit/apply_patch pre-approved (auto); bash keeps the normal flow.
+ *                 The auto is cwd-SCOPED at the dispatcher (permissions.ts:
+ *                 editTargetsWithinCwd) — an edit targeting a file outside the project
+ *                 dir falls back to the normal prompt flow, Claude Code behavior.
+ *   plan        — every mutating tool is DENIED at the dispatcher (Claude Code parity,
+ *                 2026-07-20): the model is steered to the exit_plan approval instead of
+ *                 the user being prompted per call. The bundle mirrors that as `deny`
+ *                 (defense-in-depth for any non-TUI consumer); the TUI's layer-1 block in
+ *                 app.tsx fires first with the richer planModeBlockReason copy.
  *   bypass      — everything pre-approved. NOT in the Shift+Tab ring unless explicitly
  *                 enabled (--dangerously-bypass-permissions or /mode bypass); never
  *                 persisted across sessions.
@@ -37,10 +44,10 @@ export const PLAN_BUNDLE: PolicyBundle = {
   name: "plan",
   rules: [
     { tool: "*", pattern: "*", action: "allow" }, // reads/grep/glob/ls/question — catch-all first
-    { tool: "write", pattern: "*", action: "ask" }, // specifics after: last-match-wins
-    { tool: "edit", pattern: "*", action: "ask" },
-    { tool: "apply_patch", pattern: "*", action: "ask" },
-    { tool: "bash", pattern: "*", action: "ask" },
+    { tool: "write", pattern: "*", action: "deny" }, // specifics after: last-match-wins
+    { tool: "edit", pattern: "*", action: "deny" },
+    { tool: "apply_patch", pattern: "*", action: "deny" },
+    { tool: "bash", pattern: "*", action: "deny" },
   ],
 };
 
@@ -120,5 +127,5 @@ export const PLAN_ESCAPE_HATCH =
 /** Mode-conditional system-prompt append. "" for build — headless runs stay unchanged. */
 export function modeSystemAppend(mode: AgentMode): string {
   if (mode !== "plan") return "";
-  return `\n\n# Plan mode\nYou are in plan mode: prefer reading and designing before mutating — write/edit/bash will ask the user first. Draft a short plan before making changes. When the plan is ready or the user asks to proceed, call the \`exit_plan\` tool with the complete plan (markdown) in its \`plan\` argument — the user will approve, request revisions, or cancel. This is advisory, not a hard rule: ${PLAN_ESCAPE_HATCH}.`;
+  return `\n\n# Plan mode\nYou are in plan mode: read and design first — write/edit/bash/apply_patch are BLOCKED until the plan is approved. Draft a short plan instead of making changes. When the plan is ready or the user asks to proceed, call the \`exit_plan\` tool with the complete plan (markdown) in its \`plan\` argument — the user will approve (optionally auto-accepting your edits), request revisions, or cancel. The planning itself is advisory: ${PLAN_ESCAPE_HATCH}.`;
 }

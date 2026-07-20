@@ -19,6 +19,7 @@ import { type AgentMode, bundleForMode } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
+import { parsePatch } from "../tools/apply_patch.ts";
 
 // Read-only tools: gated by a first-use, directory-scoped prompt (see checkPermission). glob/grep
 // scan the filesystem read-only just like read/ls, so they belong here (and the PermissionOverlay
@@ -53,8 +54,8 @@ export function planModeBlockedTools(groundTruth: boolean): string[] {
 export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
   if (!groundTruth) {
     return toolName === "task"
-      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). Use /plan to exit."
-      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
+      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning."
+      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning.";
   }
   if (toolName === "task") {
     return (
@@ -77,7 +78,49 @@ export interface PermissionPrompt {
   argsSummary: string;
   promptText: string;
   diffPreview?: string | null;
+  /** The pending call's raw args — lets a Shift+Tab mode cycle re-evaluate the call
+   *  (cwd-scoped accept-edits auto needs the real target paths, not the display summary). */
+  args?: Record<string, unknown>;
   resolve: (decision: PermissionDecision) => void;
+}
+
+/** write/edit/apply_patch — the tools whose accept-edits `auto` is cwd-scoped. */
+const EDIT_FAMILY = new Set(["write", "edit", "apply_patch"]);
+
+/**
+ * True when EVERY file the call would touch resolves inside `cwd` (Claude Code parity:
+ * accept-edits auto-approves workspace edits only — an edit escaping the project dir keeps
+ * the normal prompt flow). write/edit contribute their single target; apply_patch parses
+ * its patch for every Add/Update/Delete path AND Move-to destination; a malformed patch or
+ * a missing path never auto-approves. Non-edit tools have no path targets to scope — true.
+ */
+export function editTargetsWithinCwd(
+  toolName: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): boolean {
+  if (!EDIT_FAMILY.has(toolName)) return true;
+  const targets: string[] = [];
+  if (toolName === "write") {
+    targets.push(String(args.path ?? args.file_path ?? ""));
+  } else if (toolName === "edit") {
+    targets.push(String(args.filePath ?? args.path ?? ""));
+  } else {
+    try {
+      for (const change of parsePatch(String(args.patch ?? ""))) {
+        targets.push(change.path);
+        if (change.moveTo) targets.push(change.moveTo);
+      }
+    } catch {
+      return false;
+    }
+    if (targets.length === 0) return false;
+  }
+  return targets.every((t) => {
+    if (!t.trim()) return false;
+    const full = expand(t);
+    return isWithin(isAbsolute(full) ? full : resolve(cwd, full), cwd);
+  });
 }
 
 export interface PermissionState {
@@ -236,6 +279,7 @@ export function checkPermission(
         toolName,
         argsSummary: formatToolArgs(toolName, args),
         promptText: `read from ${targetDir}`,
+        args,
         resolve: (decision) => {
           if (decision === "always") {
             state.allowedDirs.add(targetDir);
@@ -258,6 +302,7 @@ export function checkPermission(
       argsSummary: formatToolArgs(toolName, args),
       promptText: `${opts.promptTextPrefix ?? ""}run ${toolName}`,
       diffPreview,
+      args,
       resolve: (decision) => {
         if (decision === "always") state.allowAlways.add(toolName);
         if (decision === "allow" || decision === "always") {
@@ -287,17 +332,34 @@ function verifyCommands(args: Record<string, unknown>): string[] {
  * Shift+Tab-during-a-permission-prompt path: cycling into a mode whose bundle says "auto"
  * for the pending call (accept-edits → write/edit/apply_patch, bypass → everything)
  * resolves the on-screen prompt instead of leaving it stranded under the new mode.
+ *
+ * accept-edits auto is cwd-scoped: `editScope` carries the pending call's raw args + the
+ * project cwd so the SAME editTargetsWithinCwd check the dispatcher applies decides here
+ * too. Without args (a caller that can't supply them) the edit family fails SAFE — the
+ * prompt stays up rather than auto-approving an unverifiable target.
  */
-export function modeAutoApproves(mode: AgentMode, toolName: string, subject: string): boolean {
-  return resolvePolicy(bundleForMode(mode), { tool: toolName, subject }) === "auto";
+export function modeAutoApproves(
+  mode: AgentMode,
+  toolName: string,
+  subject: string,
+  editScope?: { args: Record<string, unknown> | null; cwd: string },
+): boolean {
+  if (resolvePolicy(bundleForMode(mode), { tool: toolName, subject }) !== "auto") return false;
+  if (mode === "acceptEdits" && EDIT_FAMILY.has(toolName)) {
+    if (!editScope?.args) return false;
+    return editTargetsWithinCwd(toolName, editScope.args, editScope.cwd);
+  }
+  return true;
 }
 
 /**
  * The app's mode-gating beforeToolCall hook (B2): resolve the active mode's PolicyBundle
  * first, then fall through to the normal permission flow.
- *   deny  → block with a policy reason (fed back to the model)
+ *   deny  → GuardEvent(mode-deny) + block with a policy reason (fed back to the model)
  *   ask   → GuardEvent(mode-ask) + forced prompt (outranks "always" grants)
- *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes)
+ *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes);
+ *           accept-edits scopes the edit family to cwd — an outside-cwd target falls back
+ *           to the normal prompt flow (Claude Code parity)
  *   allow → normal checkPermission flow (unchanged build-mode behavior)
  * `getBundle` is injected so tests can pin a bundle and the app can read the live mode.
  */
@@ -314,6 +376,7 @@ export function makeModeGatedBeforeToolCall(deps: {
       subject: formatToolArgs(toolName, ctx.args),
     });
     if (action === "deny") {
+      emitGuardEvent({ kind: "mode-deny", detail: formatActionLabel(toolName, ctx.args) });
       return {
         block: true,
         reason: `The ${toolName} call is denied by the ${bundle.name} mode policy — a user setting, not an environment restriction. Continue without it or ask the user to switch modes.`,
@@ -327,6 +390,12 @@ export function makeModeGatedBeforeToolCall(deps: {
       });
     }
     if (action === "auto") {
+      if (
+        bundle.name === "accept-edits" &&
+        !editTargetsWithinCwd(toolName, ctx.args, deps.state.cwd)
+      ) {
+        return checkPermission(toolName, ctx.args, deps.state, deps.promptFn);
+      }
       // Mode-pre-approved (accept-edits / bypass): run with no prompt; the guard event is
       // the audit trail for what the mode waved through.
       emitGuardEvent({ kind: "mode-auto", detail: formatActionLabel(toolName, ctx.args) });

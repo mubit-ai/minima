@@ -877,6 +877,20 @@ hits an unknown-tool error. The ring's plan→bypass sacrifice note above still 
 `plan-exit-gate` scenario re-pinned (tool overlay + approve; Shift+Tab = silent exit, fluid
 ring, the gate text must never appear on the chord).
 
+**Same-day amendments (user decisions, 2026-07-20) — CC permission parity across the ring:**
+(1) **Plan mode DENIES mutations** — write/edit/bash/apply_patch (+todowrite/task per the
+GT blocklist) are blocked at the dispatcher with the exit_plan-steering reason and a
+`mode-deny` guard event; the B2 ask-every-time flow is gone (PLAN_BUNDLE mirrors `deny`;
+the `ask` action stays in the policy grammar). GT-off block reasons also steer to
+exit_plan — the universal gate registers GT on or off, so "Use /plan to exit" was stale.
+(2) **The exit_plan gate is 4 options in CC's ExitPlanMode order**: Finalize &
+auto-accept edits (lands the mode on accept-edits) / Finalize & build / Revise / Cancel —
+same finalize path, only the landing mode differs. (3) **accept-edits auto is cwd-scoped**
+(`editTargetsWithinCwd`): write/edit targets and every apply_patch Add/Update/Delete/
+Move-to path must resolve inside the project dir, else the call keeps the normal prompt
+flow; the Shift+Tab-over-overlay auto-resolve applies the same check via the prompt's raw
+args (no args ⇒ fail safe, prompt stays). Bypass remains unscoped by definition.
+
 ### MP18 — Verify-command consent at first run *(M · after MP9 recommended)*
 
 **Goal:** LLM-authored `verify` shell gets bash-class scrutiny (not trust-the-gate, not

@@ -7,6 +7,7 @@ import {
   checkPermission,
   createPermissionState,
   denialReason,
+  editTargetsWithinCwd,
   formatActionLabel,
   formatToolArgs,
   planModeBlockReason,
@@ -355,24 +356,27 @@ describe("checkPermission forcePrompt (B2 plan-mode ask)", () => {
 });
 
 describe("makeModeGatedBeforeToolCall (B2)", () => {
-  test("edit in plan mode → forced prompt + mode-ask GuardEvent", async () => {
+  test("edit in plan mode → DENIED with mode-deny GuardEvent, never a prompt (CC parity)", async () => {
+    // 2026-07-20 (user decision): plan mode denies mutations like Claude Code — an
+    // "always" grant must not short-circuit, and the user is never prompted per call.
     const state = createPermissionState("/repo");
-    state.allowAlways.add("edit"); // must NOT short-circuit in plan mode
+    state.allowAlways.add("edit");
     const events: GuardEvent[] = [];
     const offGuard = onGuardEvent((e) => events.push(e));
-    let promptText = "";
+    let prompted = false;
     const hook = makeModeGatedBeforeToolCall({
       state,
-      promptFn: (p) => {
-        promptText = p.promptText;
-        p.resolve("allow");
+      promptFn: () => {
+        prompted = true;
       },
       getBundle: () => PLAN_BUNDLE,
     });
-    expect(await hook(editCtx())).toBeNull();
-    expect(promptText).toBe("plan mode — asks every time: run edit");
+    const res = await hook(editCtx());
+    expect(res?.block).toBe(true);
+    expect(res?.reason).toContain("plan mode policy");
+    expect(prompted).toBe(false);
     expect(events).toHaveLength(1);
-    expect(events[0]!.kind).toBe("mode-ask");
+    expect(events[0]!.kind).toBe("mode-deny");
     expect(events[0]!.detail).toContain("edit");
     offGuard();
   });
@@ -392,7 +396,7 @@ describe("makeModeGatedBeforeToolCall (B2)", () => {
     expect(prompted).toBe(false);
   });
 
-  test("an explicit deny rule blocks with the policy reason — no prompt, no guard event", async () => {
+  test("an explicit deny rule blocks with the policy reason + mode-deny audit event", async () => {
     const state = createPermissionState("/repo");
     const events: GuardEvent[] = [];
     const offGuard = onGuardEvent((e) => events.push(e));
@@ -411,7 +415,9 @@ describe("makeModeGatedBeforeToolCall (B2)", () => {
     expect(res?.block).toBe(true);
     expect(res?.reason).toContain("locked mode policy");
     expect(prompted).toBe(false);
-    expect(events).toHaveLength(0);
+    // Audit-trail parity with mode-ask/mode-auto: what a mode refused is recorded too.
+    expect(events).toHaveLength(1);
+    expect(events[0]!.kind).toBe("mode-deny");
     offGuard();
   });
 });
@@ -475,6 +481,62 @@ describe("makeModeGatedBeforeToolCall — auto (accept-edits / bypass)", () => {
     expect(res).toBeNull();
     expect(prompted).toBe(false);
   });
+
+  test("acceptEdits: an edit OUTSIDE cwd falls back to the normal prompt flow (CC parity)", async () => {
+    const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
+    const state = createPermissionState("/repo");
+    const events: GuardEvent[] = [];
+    const offGuard = onGuardEvent((e) => events.push(e));
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: (p) => {
+        prompted = true;
+        p.resolve("deny");
+      },
+      getBundle: () => ACCEPT_EDITS_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { type: "toolCall", id: "tc-2", name: "write", arguments: {} },
+      args: { path: "/etc/hosts", content: "x" },
+      context: {} as AgentState,
+    } as never);
+    expect(prompted).toBe(true); // NOT waved through — outside the project dir
+    expect(res?.block).toBe(true);
+    expect(events).toHaveLength(0); // no mode-auto event: the mode did not pre-approve it
+    offGuard();
+  });
+});
+
+describe("editTargetsWithinCwd (cwd-scoped accept-edits auto)", () => {
+  test("write/edit: relative + absolute inside cwd pass; escapes and absolutes outside fail", () => {
+    expect(editTargetsWithinCwd("write", { path: "src/a.ts" }, "/repo")).toBe(true);
+    expect(editTargetsWithinCwd("write", { path: "/repo/deep/b.ts" }, "/repo")).toBe(true);
+    expect(editTargetsWithinCwd("edit", { filePath: "src/a.ts" }, "/repo")).toBe(true);
+    expect(editTargetsWithinCwd("write", { path: "/etc/hosts" }, "/repo")).toBe(false);
+    expect(editTargetsWithinCwd("edit", { filePath: "../outside.ts" }, "/repo")).toBe(false);
+    expect(editTargetsWithinCwd("write", { path: "a/../../evil.ts" }, "/repo")).toBe(false);
+    expect(editTargetsWithinCwd("write", {}, "/repo")).toBe(false); // missing path: never auto
+  });
+
+  test("apply_patch: every Add/Update/Delete path and Move-to must be inside cwd", () => {
+    const inPatch =
+      "*** Begin Patch\n*** Add File: src/new.ts\n+x\n*** End Patch";
+    const outPatch =
+      "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
+    const movePatch =
+      "*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../escaped.ts\n@@\n-a\n+b\n*** End Patch";
+    expect(editTargetsWithinCwd("apply_patch", { patch: inPatch }, "/repo")).toBe(true);
+    expect(editTargetsWithinCwd("apply_patch", { patch: outPatch }, "/repo")).toBe(false);
+    expect(editTargetsWithinCwd("apply_patch", { patch: movePatch }, "/repo")).toBe(false);
+    // Malformed patches never auto-approve.
+    expect(editTargetsWithinCwd("apply_patch", { patch: "not a patch" }, "/repo")).toBe(false);
+  });
+
+  test("non-edit tools have no path targets to scope", () => {
+    expect(editTargetsWithinCwd("bash", { command: "rm -rf /" }, "/repo")).toBe(true);
+    expect(editTargetsWithinCwd("read", { path: "/etc/hosts" }, "/repo")).toBe(true);
+  });
 });
 
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
@@ -491,17 +553,18 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     expect(blocked).toContain("task");
   });
 
-  test("GT-off block reasons: historical copy for the classic four, a task-specific one", () => {
-    expect(planModeBlockReason("write", false)).toBe(
-      "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.",
+  test("GT-off block reasons steer to exit_plan (MP17: the gate registers GT on OR off)", () => {
+    expect(planModeBlockReason("write", false)).toContain(
+      "Plan mode is ON — write/edit/bash/apply_patch are blocked.",
     );
     expect(planModeBlockReason("task", false)).toContain("task is blocked");
     expect(planModeBlockReason("task", false)).toContain("unrestricted toolset");
-    // The default path stays frozen: exit_plan exists only in GT plan sessions, so GT-off
-    // reasons must never point the model at a tool it does not have.
-    expect(planModeBlockReason("write", false)).toEndWith("Use /plan to exit.");
-    expect(planModeBlockReason("task", false)).toEndWith("Use /plan to exit.");
-    expect(planModeBlockReason("write", false)).not.toContain("exit_plan");
+    // Since the MP17 universal gate, exit_plan registers in plan mode with GT on OR off —
+    // the old "Use /plan to exit" copy pointed the model at a user-only slash command.
+    for (const tool of ["write", "task"]) {
+      expect(planModeBlockReason(tool, false)).toContain("call the exit_plan tool");
+      expect(planModeBlockReason(tool, false)).not.toContain("Use /plan to exit.");
+    }
   });
 
   test("GT-on task reason explains hook-free children + council read-only delegation", () => {

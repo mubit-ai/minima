@@ -39,10 +39,11 @@
 #                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
 #                     chord to the ledger-backed GT overview (structural switch)
 #   plan-exit-gate    GT-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
-#                     markdown lands in the transcript, the 3-option overlay approves into
-#                     build (the tool is the ONLY approval surface); Shift+Tab OUT of plan
-#                     mode is a SILENT clean exit (CC parity, 2026-07-20) — the ring stays
-#                     fluid and the 3-option gate never appears on the chord
+#                     markdown lands in the transcript, the 4-option overlay (CC's
+#                     ExitPlanMode shape, auto-accept flavor first) approves into
+#                     accept-edits (the tool is the ONLY approval surface); Shift+Tab OUT
+#                     of plan mode is a SILENT clean exit (CC parity, 2026-07-20) — the
+#                     ring stays fluid and no approval gate ever appears on the chord
 #   verify-consent    MP18: first todowrite-with-verify prompts (command shown verbatim),
 #                     'a' + the same verify stays silent, a MUTATED verify re-prompts;
 #                     headless halves: -p fails CLOSED (gate unrunnable) without
@@ -983,7 +984,6 @@ SPEC=$(cat <<EOF
     {"after": 4.8, "send": "<CR>"},
     {"after": 8.0, "send": "<CR>"},
     {"after": 11.0, "send": "<SHIFTTAB>"},
-    {"after": 11.4, "send": "<SHIFTTAB>"},
     {"after": 12.0, "send": "please describe the cleanup approach once more"},
     {"after": 12.8, "send": "<CR>"},
     {"after": 16.5, "send": "<SHIFTTAB>"},
@@ -1007,30 +1007,38 @@ def win(t0, t1):
 def has(f, n):
     return any(n in row for row in f["screen"])
 # The model's exit_plan(plan) call: the plan markdown lands in the transcript and the
-# 3-option approval overlay opens; Enter approves; the PLAN badge clears (GT off, no
-# GROUND_TRUTH.md — approval is the mode flip).
+# 4-option approval overlay opens (CC's ExitPlanMode shape — auto-accept flavor FIRST);
+# Enter approves the default = auto-accept, so approval lands in accept-edits mode
+# (GT off, no GROUND_TRUTH.md — approval is the mode flip).
 tool = win(4.85, 8.0)
 assert any(has(f, "Sandbox cleanup plan") for f in tool), "plan markdown not shown before the ask"
-assert any(has(f, "Finalize & build") for f in tool), "approval overlay missing"
+assert any(has(f, "auto-accept edits") for f in tool), "approval overlay missing the auto-accept flavor"
+assert any(has(f, "Finalize & build") for f in tool), "approval overlay missing the plain-build flavor"
 approved = win(8.0, 10.5)
-assert any(has(f, "Plan approved") for f in approved), "approve did not flip to build"
+assert any(has(f, "Plan approved") for f in approved), "approve did not surface the approval message"
 # Settled-state check (frames only exist on output, and mode-flip repaints straggle
 # under load): the LAST frame before plan re-entry at t=11 is the settled post-approval
-# screen — the badge must be gone there.
+# screen — PLAN gone, ACCEPT EDITS on (the auto-accept landing).
 pre_reentry = [f for f in frames if f["t"] < 11.0]
 assert pre_reentry, "no frames before plan re-entry"
 assert not has(pre_reentry[-1], "[PLAN]"), "PLAN badge survived approval (settled frame)"
+assert has(pre_reentry[-1], "ACCEPT EDITS"), "auto-accept approval did not land in accept-edits"
+# One chord re-enters plan from accept-edits (the ring: … → acceptEdits → plan).
+assert any(has(f, "[PLAN]") for f in win(11.0, 12.8)), "chord did not re-enter plan from accept-edits"
 # Shift+Tab OUT of plan mode is a SILENT clean exit (Claude Code parity) — the ring just
 # advances, no dialog ever. 16.5 exits plan (badge gone), 18.0/18.6 ride build→accept→plan,
-# 19.4 exits again: the whole sequence must never surface the 3-option gate.
-assert not any(has(f, "Exit plan mode?") for f in win(16.5, 99.0)), (
-    "Shift+Tab opened the exit gate - it must be a silent mode cycle")
+# 19.4 exits again: no chord may ever surface the approval gate (neither the legacy
+# "Exit plan mode?" question nor the exit_plan tool's Finalize options).
+assert not any(has(f, "Exit plan mode?") for f in frames), (
+    "the deleted Shift+Tab exit gate resurfaced")
+assert not any(has(f, "Finalize &") for f in win(16.5, 99.0)), (
+    "Shift+Tab opened an approval gate - it must be a silent mode cycle")
 exited = [f for f in win(16.5, 18.0)]
 assert exited and not has(exited[-1], "[PLAN]"), "PLAN badge survived the silent exit (settled frame)"
 assert any(has(f, "ACCEPT EDITS") for f in win(18.0, 18.6)), "ring did not advance to accept-edits"
 assert any(has(f, "[PLAN]") for f in win(18.6, 19.4)), "ring did not re-enter plan mode"
 assert not has(frames[-1], "[PLAN]"), "PLAN badge survived the final silent exit (settled frame)"
-print("tui_assert: PASS plan-exit-gate (tool overlay + approve; Shift+Tab silent exit + fluid ring)")
+print("tui_assert: PASS plan-exit-gate (4-option tool gate + auto-accept landing; silent chord + fluid ring)")
 PY
 
 echo "== tui-verify: scenario verify-consent (MP18: first-run prompt, silence, mutation re-prompt) =="
