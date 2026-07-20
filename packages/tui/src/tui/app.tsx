@@ -1992,10 +1992,42 @@ export function HarnessApp({
     setOutputTokens(stats.outputTokens);
     setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
-    setMessages([
-      ...chatFromMessages(r.messages),
+    const notices: ChatMessage[] = [
       resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd : 0),
-    ]);
+    ];
+    // D1 (v13): warn-only tooling-skew banner — the resumed run was recorded under a
+    // different harness/toolset, so its history may replay imperfectly. Never blocks.
+    try {
+      const recorded = agent.db.lastRecordedStamp(runId);
+      const current = agent.db.versionStamp;
+      if (
+        recorded.toolSchemaHash &&
+        current.toolSchemaHash &&
+        recorded.toolSchemaHash !== current.toolSchemaHash
+      ) {
+        notices.push({
+          role: "tool",
+          toolName: "resume",
+          text: `🟡 This run was recorded under different tooling (harness ${recorded.harnessVersion ?? "?"} → ${current.harnessVersion ?? "?"}). Its history may replay imperfectly — verify results rather than trusting recalled tool behavior.`,
+        });
+        if (agent.runId) {
+          agent.db.appendEvent({
+            runId: agent.runId,
+            type: "tooling_mismatch",
+            payload: {
+              resumed_run: runId,
+              recorded_hash: recorded.toolSchemaHash,
+              current_hash: current.toolSchemaHash,
+              recorded_version: recorded.harnessVersion,
+              current_version: current.harnessVersion,
+            },
+          });
+        }
+      }
+    } catch {
+      // the banner is advisory bookkeeping
+    }
+    setMessages([...chatFromMessages(r.messages), ...notices]);
   }
 
   async function loadSession(store: SessionStore) {
