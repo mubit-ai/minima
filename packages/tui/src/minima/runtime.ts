@@ -545,6 +545,11 @@ export class MinimaAgent extends Agent {
             quality,
             outcome: failed ? "failure" : outcome,
             turns: turnsTaken,
+            // F1: token telemetry + label provenance (gate verdict counts even without a
+            // judge grade — quality alone under-reports gated rows).
+            cacheReadTokens: runUsage.cache_read,
+            inputTokens: runUsage.input,
+            labeled: quality !== null || grounded !== null,
           });
         }
 

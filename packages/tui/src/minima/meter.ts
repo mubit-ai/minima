@@ -18,6 +18,12 @@ export interface CostRow {
   quality: number | null;
   outcome: string;
   turns: number;
+  /** F1: prompt-cache reads vs fresh input this row (0/0 on legacy rows). */
+  cacheReadTokens: number;
+  inputTokens: number;
+  /** F1: this row's outcome came from a REAL label (gate verdict or judge grade) — the
+   * only rows cost-of-pass may count as passes. */
+  labeled: boolean;
 }
 
 export interface CostTotals {
@@ -30,9 +36,23 @@ export interface CostTotals {
   baselineCostUsd: number;
   baselineRows: number;
   successes: number;
+  /** F1 KV-cache accounting: Σ cache-read vs Σ fresh input tokens across rows. */
+  cacheReadTokens: number;
+  inputTokens: number;
+  /** F1 cost-of-pass inputs: labeled rows only (gate/judge) — never self-assessed. */
+  labeledRows: number;
+  labeledSuccesses: number;
   get savingsUsd(): number;
   get savingsPct(): number;
   get successRate(): number;
+  /** cache_read / (cache_read + input); null before any token telemetry. A 10x realized-
+   * cost lever — a harness change that breaks prefix stability shows up HERE first. */
+  get kvCacheHitRate(): number | null;
+  /** USD per LABELED success (arXiv:2504.13359) — spend is total (all rows; money is
+   * money), passes only from labeled rows. Null until a labeled success exists. */
+  get costOfPassUsd(): number | null;
+  /** Share of rows carrying a real label — the coverage disclosure cost-of-pass needs. */
+  get labelCoverage(): number;
 }
 
 export function emptyTotals(): CostTotals {
@@ -44,6 +64,10 @@ export function emptyTotals(): CostTotals {
     baselineCostUsd: 0,
     baselineRows: 0,
     successes: 0,
+    cacheReadTokens: 0,
+    inputTokens: 0,
+    labeledRows: 0,
+    labeledSuccesses: 0,
     get savingsUsd() {
       return this.baselineCostUsd - this.actualCostUsd;
     },
@@ -52,6 +76,18 @@ export function emptyTotals(): CostTotals {
     },
     get successRate() {
       return this.n ? (100 * this.successes) / this.n : 0;
+    },
+    get kvCacheHitRate() {
+      const denom = this.cacheReadTokens + this.inputTokens;
+      return denom > 0 ? this.cacheReadTokens / denom : null;
+    },
+    get costOfPassUsd() {
+      return this.labeledSuccesses > 0
+        ? (this.actualCostUsd + this.overheadUsd) / this.labeledSuccesses
+        : null;
+    },
+    get labelCoverage() {
+      return this.n ? this.labeledRows / this.n : 0;
     },
   };
 }
@@ -73,6 +109,11 @@ export class CostMeter {
     quality: number | null;
     outcome: string;
     turns?: number;
+    /** F1: this row's token telemetry (prompt-cache reads vs fresh input). */
+    cacheReadTokens?: number;
+    inputTokens?: number;
+    /** F1: a real label (gate/judge) backs this outcome. Defaults to quality-present. */
+    labeled?: boolean;
   }): CostRow {
     const { routing } = opts;
     const row: CostRow = {
@@ -85,6 +126,9 @@ export class CostMeter {
       quality: opts.quality,
       outcome: opts.outcome,
       turns: opts.turns ?? 0,
+      cacheReadTokens: opts.cacheReadTokens ?? 0,
+      inputTokens: opts.inputTokens ?? 0,
+      labeled: opts.labeled ?? opts.quality !== null,
     };
     this.rows.push(row);
     return row;
@@ -102,6 +146,12 @@ export class CostMeter {
         t.baselineRows += 1;
       }
       if (r.outcome === "success") t.successes += 1;
+      t.cacheReadTokens += r.cacheReadTokens;
+      t.inputTokens += r.inputTokens;
+      if (r.labeled) {
+        t.labeledRows += 1;
+        if (r.outcome === "success") t.labeledSuccesses += 1;
+      }
     }
     return t;
   }
@@ -152,6 +202,19 @@ export class CostMeter {
           `session total $${(t.actualCostUsd + t.overheadUsd).toFixed(6)}`,
       );
     }
+    // F1 honest metrics: KV-cache hit rate (a realized-cost lever AND a canary — a harness
+    // change that breaks prefix stability corrupts the cost basis the server learns from)
+    // and cost-of-pass with its coverage disclosure (labeled passes only, never vibes).
+    const hitRate = t.kvCacheHitRate;
+    const cop = t.costOfPassUsd;
+    const honest: string[] = [];
+    if (hitRate !== null) honest.push(`kv-cache hit ${(100 * hitRate).toFixed(1)}%`);
+    honest.push(
+      cop !== null
+        ? `cost-of-pass $${cop.toFixed(6)} (${t.labeledSuccesses} labeled pass${t.labeledSuccesses === 1 ? "" : "es"}, label coverage ${(100 * t.labelCoverage).toFixed(0)}%)`
+        : `cost-of-pass n/a (no labeled successes; label coverage ${(100 * t.labelCoverage).toFixed(0)}%)`,
+    );
+    lines.push(honest.join(" | "));
     return lines.join("\n");
   }
 }

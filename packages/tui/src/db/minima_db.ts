@@ -995,6 +995,9 @@ export class MinimaDb {
   /**
    * One row per routed prompt — idempotent on rec_id (a retried write updates in place,
    * never duplicates the hosted join key).
+   *
+   * `synced` is RESERVED (memory-spine open decision #6, resolved F1): always written 0,
+   * never read — kept for a possible future decision-upload path; do not build on it.
    */
   writeDecision(d: DecisionWrite): void {
     this.db.run(
