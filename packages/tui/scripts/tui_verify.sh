@@ -52,11 +52,19 @@
 #                     ledger + consent) → PLANDEMO executes: baseline red → done-gate
 #                     blocks → write fixes → re-check verifies → plan closes → ToC ⚠→✓ →
 #                     overview + step card → /why; perf budgets green during the run
-#   bottom-anchor     THE RULE (2026-07-16): the prompt section is mounted at the terminal
-#                     bottom — from frame 1 (startup newline reserve + minHeight/flex-end
-#                     root, app.tsx) and after content commits (asserted on the echo and
-#                     modes scenarios' settled frames; slack 3 on the stream scenarios —
-#                     MP20 notes)
+#   bottom-anchor     THE RULE (2026-07-16; anchor ledger 2026-07-20): the prompt section
+#                     is mounted at the terminal bottom — from frame 1 (startup newline
+#                     reserve, main.ts) and permanently (explicit ledger height on the live
+#                     box, app.tsx / layout.ts nextLiveFrameHeight). Slack 1 everywhere
+#                     since the ledger (was 3 on the stream scenarios pre-ledger)
+#   overlay-anchor    anchor-ledger regressions (2026-07-20, before-evidence in
+#   panel-early       docs/BigPlan/shots/anchor-ledger/): permission-overlay teardown over
+#   resize-reanchor   a saturated transcript, panel open/close on a SHORT transcript (the
+#   big-200x50        other panel scenarios ride the 500-msg fixture where the old decay
+#                     was inert), a mid-run PTY shrink (recovery bounded by SCROLLBACK_
+#                     SAFETY_ROWS, exact after the next commit), and the reporter's 200x50
+#                     geometry where the committed reply wraps to FEWER rows than the
+#                     stream-frame shrink (the float the MP20 ordering alone cannot fix)
 #
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
 # (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), modes-busy (the badge
@@ -199,13 +207,12 @@ wipes = raw.count(b"\x1b[3J")
 assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear) - Ink overflow wipe fired"
 print("tui_assert: PASS zero-wipe (single startup clear, none during the stream)")
 PY
-# bottom-anchor with slack 3 (not the default 1): after the MP20 commit-order fix the reply
-# commit lands the composer ON the bottom rows, but the busy row's teardown at turn end still
-# shrinks the frame 2 rows with the static estimate saturated — a cosmetic float, distinct
-# from the 10+-row stream-commit strand this gate exists to catch (pre-fix: lowest row 16/36).
+# Slack 1 (was 3 pre-ledger): the anchor ledger's floor absorbs the busy-row teardown as
+# in-frame padding instead of a 2-row float, so the stream scenarios hold the default slack.
+# This tightening is the acceptance proof of the structural fix (anchor-ledger, 2026-07-20).
 python3 "$TUI/scripts/tui_assert.py" "$TMP/stream-frames.jsonl" --after 2.5 \
   --check single-prompt --check advancing --check final-nonblank \
-  --check bottom-anchor --bottom-slack 3
+  --check bottom-anchor --bottom-slack 1
 perf_check "$TMP/stream-perf.jsonl" stream 4000
 python3 - "$TMP/stream-frames.jsonl" <<'PY'
 import json, sys
@@ -254,7 +261,7 @@ print(f"tui_assert: PASS stream-code-{sys.argv[3]} (zero extra wipes, fence verb
 PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/streamcode$CW-frames.jsonl" --after 2.5 \
   --check single-prompt --check advancing --check final-nonblank \
-  --check bottom-anchor --bottom-slack 3
+  --check bottom-anchor --bottom-slack 1
 perf_check "$TMP/streamcode$CW-perf.jsonl" "streamcode$CW" 4000
 done
 
@@ -880,6 +887,11 @@ cost_rows = {row.strip() for f in frames for row in f["screen"] if "council cost
 assert len(cost_rows) == 1, f"expected ONE council round summary, saw: {cost_rows}"
 print("tui_assert: PASS plan-council (line advances role-by-role; follow-up skips the council)")
 PY
+# Anchor-ledger coverage: the council children's ChildTree teardown is a live-frame shrink
+# the old design floated on. Slack 2 (settled frames, whole run): GT plan-mode transitions
+# oscillate a row; the defect class this catches floats 5+.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/plancouncil-frames.jsonl" --after 2.5 \
+  --check final-nonblank --check bottom-anchor --bottom-slack 2
 
 echo "== tui-verify: scenario panel-draft (MP16: D3b plan-draft view, round-over-round) =="
 SPEC=$(cat <<EOF
@@ -1167,12 +1179,162 @@ PY
 perf_check "$TMP/accept-perf.jsonl" accept 4000
 
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
+echo "== tui-verify: scenario overlay-anchor (ledger: perm teardown over a saturated transcript) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 23,
+  "env": {"MINIMA_DB_PATH": "$TMP/otanchor.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-otanchor",
+          "MINIMA_TUI_GROUND_TRUTH": "0"},
+  "frames": "$TMP/otanchor-frames.jsonl",
+  "raw": "$TMP/otanchor-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE saturate the transcript"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 12.0, "send": "TODO plan this work"},
+    {"after": 12.5, "send": "<CR>"},
+    {"after": 16.5, "send": "y"},
+    {"after": 19.5, "send": "y"}
+  ]
+}
+EOF
+)
+capture otanchor "$SPEC"
+python3 - "$TMP/otanchor-raw.bin" "$TMP/otanchor-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+# Liveness: the todowrite permission overlay must actually have appeared — otherwise the
+# teardown under test never ran and the anchor gate below passes vacuously. The 'y' is
+# retried (20.5, 23.0) because keys typed while busy are eaten under load (plan-council
+# precedent); a doubled 'y' post-approve just lands in the composer.
+assert any("permission" in row for f in frames for row in f["screen"]), (
+    "the todowrite permission overlay never appeared - mock too slow? bump step times")
+print("tui_assert: PASS overlay-anchor liveness (zero extra wipes, perm overlay shown)")
+PY
+# The 'y' approves the todowrite permission overlay (~10-16 rows) → its teardown is the
+# shrink under test. Pre-ledger: composer stranded 3 rows up (before-evidence shots).
+python3 "$TUI/scripts/tui_assert.py" "$TMP/otanchor-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario panel-early (ledger: Ctrl+T open/close on a SHORT transcript) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 14,
+  "env": {"MINIMA_DB_PATH": "$TMP/pearly.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-pearly"},
+  "frames": "$TMP/pearly-frames.jsonl",
+  "raw": "$TMP/pearly-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE hello"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 8.5, "send": "<CTRLT>"},
+    {"after": 9.5, "send": "j"},
+    {"after": 10.5, "send": "<ESC>"}
+  ]
+}
+EOF
+)
+capture pearly "$SPEC"
+python3 - "$TMP/pearly-raw.bin" "$TMP/pearly-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+# The panel must have actually opened (contents title) — otherwise the close shrink under
+# test never happened and the anchor assert below passes vacuously.
+assert any("contents" in row for f in frames if 8.5 <= f["t"] <= 10.5 for row in f["screen"]), (
+    "ToC panel never opened on the short transcript")
+print("tui_assert: PASS panel-early (panel opened, zero extra wipes)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/pearly-frames.jsonl" --after 2.5 \
+  --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario resize-reanchor (ledger: mid-run PTY shrink recovers) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 40, "duration": 17,
+  "env": {"MINIMA_DB_PATH": "$TMP/resizere.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-resizere"},
+  "frames": "$TMP/resizere-frames.jsonl",
+  "raw": "$TMP/resizere-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE hello"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 8.5, "resize": [120, 32]},
+    {"after": 10.5, "send": "SLOW again"},
+    {"after": 11.0, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture resizere "$SPEC"
+python3 - "$TMP/resizere-raw.bin" <<'PY'
+import sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+# <= 2, not == 1: Ink re-renders the OLD tree against the new rows on resize — if that
+# frame no longer fits, its clearTerminal is unavoidable without patching Ink. The ledger's
+# job is RECOVERY (the asserts below), not preventing this one wipe.
+assert wipes <= 2, f"{wipes} ESC[3J wipes (expect <=2: startup clear + at most Ink's resize wipe)"
+print(f"tui_assert: PASS resize-wipes ({wipes} total)")
+PY
+# Post-resize: the cap-seeded frame re-anchors within SCROLLBACK_SAFETY_ROWS (pre-ledger
+# this was a PERMANENT float — the app repainted once and never re-anchored)...
+python3 "$TUI/scripts/tui_assert.py" "$TMP/resizere-frames.jsonl" --after 8.6 --before 10.4 \
+  --check bottom-anchor --bottom-slack 2
+# ...and the next commit re-pins it exactly.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/resizere-frames.jsonl" --after 12.0 \
+  --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario big-200x50 (ledger: reporter geometry, wide-terminal stream commit) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 200, "rows": 50, "duration": 14,
+  "env": {"MINIMA_DB_PATH": "$TMP/big200.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-big200",
+          "MINIMA_TUI_PERF": "$TMP/big200-perf.jsonl"},
+  "frames": "$TMP/big200-frames.jsonl",
+  "raw": "$TMP/big200-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE render some snippets"},
+    {"after": 4.5, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture big200 "$SPEC"
+python3 - "$TMP/big200-raw.bin" <<'PY'
+import sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
+print("tui_assert: PASS zero-wipe (big-200x50)")
+PY
+# At 200 cols the committed reply wraps to FEWER rows than the stream-frame shrink it must
+# compensate — the float the MP20 commit ordering alone could not fix (before-evidence:
+# lowest row 42/50 sustained from the commit). The ledger's floor must hold slack 1 THROUGH
+# the commit, at the reporter's exact geometry.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/big200-frames.jsonl" --after 2.5 \
+  --check single-prompt --check advancing --check final-nonblank \
+  --check bottom-anchor --bottom-slack 1
+perf_check "$TMP/big200-perf.jsonl" big200 4000
+
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
-          "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin <<'PY'
+          "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \
+          "$TMP"/otanchor-raw.bin "$TMP"/pearly-raw.bin "$TMP"/resizere-raw.bin \
+          "$TMP"/big200-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

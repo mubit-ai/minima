@@ -46,6 +46,10 @@ curl -sf "http://127.0.0.1:$PORT/v1/health" >/dev/null || { echo "mock failed"; 
 
 ARGV_BASE='"bun","run","'$TUI'/src/cli/main.ts","--offline","--model","mock-model","--provider","mock","--provider-url","http://127.0.0.1:'$PORT'/v1"'
 
+# Warm the uv env once so pyte/pillow resolution never competes with a live capture for
+# CPU/network (a slow mock turn eats the later scripted keystrokes while busy).
+uv run --with pyte --with pillow python -c "import pyte, PIL" >/dev/null 2>&1 || true
+
 wipes() {
   python3 -c 'import sys; print(open(sys.argv[1],"rb").read().count(b"\x1b[3J"))' "$1"
 }
@@ -81,9 +85,9 @@ run_scenario overlay-teardown '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,
     {"after":3.0,"send":"CODE saturate one"},{"after":3.6,"send":"<CR>"},
     {"after":8.5,"send":"CODE saturate two"},{"after":9.0,"send":"<CR>"},
     {"after":13.5,"send":"TODO plan this work"},{"after":14.0,"send":"<CR>"},
-    {"after":20.5,"send":"y"}
+    {"after":20.5,"send":"y"},{"after":23.0,"send":"y"}
   ]}'
-anchor overlay-teardown --after 20.6 --before 24.5 --bottom-slack 2
+anchor overlay-teardown --after 20.6 --bottom-slack 2
 
 echo "== [$LABEL] overlay-teardown-200x50 (reporter geometry) =="
 run_scenario overlay-teardown-200x50 '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":200,"rows":50,"duration":25,
@@ -96,12 +100,11 @@ run_scenario overlay-teardown-200x50 '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","col
     {"after":3.0,"send":"CODE saturate one"},{"after":3.6,"send":"<CR>"},
     {"after":8.5,"send":"CODE saturate two"},{"after":9.0,"send":"<CR>"},
     {"after":13.5,"send":"TODO plan this work"},{"after":14.0,"send":"<CR>"},
-    {"after":20.5,"send":"y"}
+    {"after":20.5,"send":"y"},{"after":23.0,"send":"y"}
   ]}'
-echo "-- stream-commit float window (wide-terminal MP20 gap):"
-anchor overlay-teardown-200x50 --after 10.0 --before 13.0 --bottom-slack 2
-echo "-- overlay-teardown window:"
-anchor overlay-teardown-200x50 --after 20.6 --before 24.5 --bottom-slack 2
+echo "-- whole-run window (covers the wide-terminal stream commits AND the perm teardown;"
+echo "   mock commit timing varies run-to-run, so no fixed sub-window):"
+anchor overlay-teardown-200x50 --after 4.0 --bottom-slack 2
 
 echo "== [$LABEL] panel-early (120x36): idle Ctrl+T open/close on a short transcript =="
 run_scenario panel-early '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"rows":36,"duration":14,
@@ -131,17 +134,21 @@ run_scenario panel-stream '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"row
   ]}'
 anchor panel-stream --after 7.9 --bottom-slack 1
 
-echo "== [$LABEL] resize-shrink (120x40 -> 120x32): permanent float after resize =="
-run_scenario resize-shrink '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"rows":40,"duration":13,
+echo "== [$LABEL] resize-shrink (120x40 -> 120x32): float after resize, exact after a commit =="
+run_scenario resize-shrink '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"rows":40,"duration":17,
   "env":{"MINIMA_DB_PATH":"'$SCRATCH'/rs.db","MINIMA_HARNESS_DIR":"'$SCRATCH'/prefs-rs"},
   "frames":"'$OUT'/'$LABEL'-resize-shrink.frames.jsonl",
   "raw":"'$OUT'/'$LABEL'-resize-shrink.raw.bin",
   "png":"'$OUT'/'$LABEL'-resize-shrink.png",
   "steps":[
     {"after":3.0,"send":"CODE hello"},{"after":3.6,"send":"<CR>"},
-    {"after":8.5,"resize":[120,32]}
+    {"after":8.5,"resize":[120,32]},
+    {"after":10.5,"send":"SLOW again"},{"after":11.0,"send":"<CR>"}
   ]}'
-anchor resize-shrink --after 8.6 --bottom-slack 1
+echo "-- post-resize window (ledger residual bounded by SCROLLBACK_SAFETY_ROWS):"
+anchor resize-shrink --after 8.6 --before 10.4 --bottom-slack 2
+echo "-- post-commit window (exact re-anchor):"
+anchor resize-shrink --after 12.0 --bottom-slack 1
 
 echo "== [$LABEL] resize-panel-wipe (panel open, 40 -> 32 rows): Ink wipe, top-stuck =="
 run_scenario resize-panel-wipe '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120,"rows":40,"duration":13,
@@ -155,6 +162,6 @@ run_scenario resize-panel-wipe '{"cmd":['$ARGV_BASE'],"cwd":"'$ROOT'","cols":120
     {"after":9.0,"resize":[120,32]},
     {"after":10.5,"send":"<ESC>"}
   ]}'
-anchor resize-panel-wipe --after 9.2 --bottom-slack 1
+anchor resize-panel-wipe --after 9.2 --bottom-slack 2
 
 echo "== [$LABEL] anchor-ledger evidence -> $OUT =="

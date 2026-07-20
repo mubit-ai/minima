@@ -57,22 +57,44 @@ One MP at a time, in this loop:
 > (CSI 3 J) and wipes all `<Static>` scrollback. `app.tsx:3600`. Every panel height in this
 > guide is derived from this.
 
-**Prompt placement (THE RULE, added 2026-07-16)**
+**Prompt placement (THE RULE, added 2026-07-16; anchor ledger 2026-07-20)**
 
 - The prompt section (composer + status footer) is **mounted at the terminal bottom** — from
   frame 1 and permanently. Supersedes the earlier "render from the top (CC-style)" choice.
   Mechanism: a one-time `rows−1` newline reserve at startup (`main.ts`) seats the first
-  paint; a `minHeight = rows − SAFETY − Σ committed-row estimate` + `justifyContent:
-  flex-end` box around the live region keeps every later frame there until the transcript
-  outgrows the screen (then it is inert). The estimate is `computeMsgHeight` — conservative,
-  so the frame can only end at/above the bottom, never overflow toward the wipe threshold.
+  paint; the **anchor ledger** (`layout.ts nextLiveFrameHeight`, wired in `app.tsx`) keeps
+  every later frame there by giving the live box an EXPLICIT height satisfying
+  `H ≥ H_prev − K` (K = rows committed to `<Static>` this frame) and
+  `H ≤ rows − SCROLLBACK_SAFETY_ROWS`. log-update rewrites frames top-anchored, so the
+  floor keeps the frame bottom at/below the old bottom (terminal scroll re-pins it) across
+  EVERY shrink path — perm/question teardown, busy teardown, stream commits, panel close —
+  and the inequalities telescope across Ink's 32ms write throttle. The cap is structural:
+  Ink's wipe threshold reads the root's Yoga height and `<Static>` is position-absolute
+  (excluded), so our own frames can never reach `rows`. Estimate errors degrade to
+  transient flex-end padding (over-count) or a top-clip under `overflow="hidden"`
+  (under-count) — never a strand, never a wipe. Resets: a `<Static>` remount (/clear,
+  rewind, resume) seeds content-sized; a resize seeds one full-height frame that re-anchors
+  within `SCROLLBACK_SAFETY_ROWS` (exact again at the next commit) — including after Ink's
+  one unavoidable old-tree-vs-new-rows resize wipe. The pre-ledger estimate-decay
+  `minHeight` survives behind `MINIMA_TUI_ANCHOR_LEGACY=1` until the ledger has soaked.
 - **`<Static>` must never sit under a flex-end ancestor** — it is position-absolute in Ink,
   and a flex-end parent offsets it past its own render canvas: committed messages silently
-  clip to nothing. It mounts on the flex-start root, the flex-end box is its sibling.
-- Enforced (not guidance): `render-buffer.test.ts` source pins + `tui-verify`'s
-  `bottom-anchor` check (settled PTY frames must have content within 1 row of the grid
-  bottom; wired on the echo + modes scenarios). D3b's height math (`rows − footerChrome`)
-  builds on this rule.
+  clip to nothing. It mounts on the flex-start root, the ledger box is its sibling. Inside
+  the ledger box the content sits in a `flexShrink={0}` wrapper — Yoga's default shrink
+  would compress children into the fixed height instead of top-clipping them.
+- Every conditional live element must be booked in `contentRows` (pickers via colocated
+  max-row constants, banner via `BANNER_TAGLINES`, stream tail via `markdownBodyHeight`) —
+  an unbooked element top-clips. And every per-line markdown render branch armors empty
+  text (`|| " "`): Ink collapses an empty `<Text>` to ZERO rows while the ruler counts ≥1
+  per source line — that divergence alone floated the composer 6 rows on blank-line-heavy
+  replies (the wide-terminal stream-commit float).
+- Enforced (not guidance): `render-buffer.test.ts` + `anchor-ledger.test.ts` source pins,
+  the simulated log-update property test (`anchor-ledger.test.ts`), and `tui-verify`'s
+  `bottom-anchor` checks at **slack 1** (echo, modes, tasks-footer, panel-toc, both stream
+  scenarios, overlay-anchor, panel-early, big-200x50; slack 2 on plan-council and the
+  post-resize window of resize-reanchor). Before/after evidence:
+  `docs/BigPlan/shots/anchor-ledger/`. D3b's height math (`rows − footerChrome`) builds on
+  this rule.
 
 **Panel system (D3)**
 
@@ -341,9 +363,12 @@ zero extra `3J`, last grid row blank across every settled panel frame, perf medi
 `panelOuterHeight()` + `PANEL_STATUS_ROWS` in layout.ts, explicit heights + truncate rows +
 suppressed footer extras ⇒ frame ≡ rows−2. One real finding: **panel close over a long
 transcript stranded the composer at the screen top** (log-update rewrites the shrunken
-frame at the old top; bottomMountMinRows was inert). Fixed by `closePanelReseat` — closing
-moves the static-estimate basis to the current message count, so THE RULE's decay restarts
-from a fresh screen; pinned by the scenario's post-close bottom-anchor. Also learned: Ink
+frame at the old top; bottomMountMinRows was inert). Fixed at the time by
+`closePanelReseat` — closing moved the static-estimate basis so THE RULE's decay restarted
+from a fresh screen; since 2026-07-20 the anchor ledger (§2) subsumes this for free (the
+panel frame IS the rows−2 identity, so the close floor keeps a full-height frame that
+decays per commit — the basis reset survives only behind `MINIMA_TUI_ANCHOR_LEGACY=1`);
+pinned by the scenario's post-close bottom-anchor. Also learned: Ink
 delivers coalesced stdin as ONE input string — `panelReduce` iterates characters, so key
 storms and `gg` both work regardless of chunking. `tui_assert.py` gained `--before` (frame
 windows that must exclude the post-exit state).
@@ -633,13 +658,18 @@ content would be erased (not scrolled) on the next commit, corrupting scrollback
 fix is the two-line inversion: tear the live stream down FIRST, then commit — the shrink is
 erased in place and the static print scrolls the reply in above the short frame (CC's
 post-reply look; reply tail visible, composer on the bottom rows, zero-wipe intact).
-Residual, documented: at turn end the busy row's teardown (2 rows) shrinks the saturated
-frame once more, floating the frame ~2 rows — cosmetic, self-heals at the next commit, and
-generic to any saturated late shrink (not stream-specific); deferred. The stream gates
-therefore assert `bottom-anchor --bottom-slack 3` (the strand class this kills was 19 rows;
-pre-fix lowest content row 16/36). Gates: `stream-wipe-perf` + `stream-code-80/60` now carry
-bottom-anchor; evidence `shots/mp20-stream-reseat/` (capture.sh re-runs the MP10 stream shot
-and asserts) vs before `shots/mp10-render-audit/stream-code.*`.
+Residual, documented at the time: at turn end the busy row's teardown (2 rows) shrank the
+saturated frame once more — the "generic to any saturated late shrink" class this deferred.
+**Resolved 2026-07-20 by the anchor ledger** (§2): the ledger's floor absorbs every
+saturated late shrink as in-frame padding — busy teardown, perm/question teardown, and the
+wide-terminal stream commit where the reply wraps to FEWER rows than the stream-frame
+shrink (a case the commit-order inversion alone could not fix; before-evidence
+`shots/anchor-ledger/`: low row 42/50 sustained at 200×50). The MP20 ordering stays as UX
+(reply tail adjacent to the composer — the fence-verbatim gates), demoted from correctness.
+The stream gates now assert `bottom-anchor --bottom-slack 1` (were 3). Gates:
+`stream-wipe-perf` + `stream-code-80/60` + `big-200x50`; evidence
+`shots/mp20-stream-reseat/` (the MP20 state) and `shots/anchor-ledger/` (before/after the
+ledger) vs `shots/mp10-render-audit/stream-code.*` (the original strand).
 
 ---
 

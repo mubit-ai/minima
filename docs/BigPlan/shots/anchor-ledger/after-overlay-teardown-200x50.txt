@@ -1,0 +1,153 @@
+=== wrote 192 frames: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown-200x50.frames.jsonl ===
+=== wrote raw stream: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown-200x50.raw.bin ===
+=== SCROLLBACK (97 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |
+h037 |
+h038 |
+h039 |
+h040 |
+h041 |
+h042 |
+h043 |
+h044 |
+h045 |
+h046 |
+h047 |
+h048 |
+h049 |
+h050 |  ⚙ setup:
+h051 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+h052 |
+h053 |▸ you
+h054 | CODE saturate one
+h055 |
+h056 |◆ assistant
+h057 |Code-heavy baseline. First, a TypeScript block with a long line:
+h058 |
+h059 |```ts
+h060 |export function resolveWidget(registry: Map<string, WidgetFactory>, id: string, fallbacks: readonly string[] = DEFAULT_FALLBACK_CHAIN): Widget {
+h061 |  const factory = registry.get(id) ?? fallbacks.map((f) => registry.get(f)).find(Boolean);
+h062 |  if (!factory) throw new Error(`no widget factory for ${id}`);
+h063 |  return factory({ id, theme: currentTheme(), locale: navigator.language });
+h064 |}
+h065 |```
+h066 |
+h067 |Then nested Python with deep indentation:
+h068 |
+h069 |```python
+h070 |def walk(node, depth=0):
+h071 |    for child in node.children:
+h072 |        if child.kind == 'section':
+h073 |            yield from walk(child, depth + 1)
+h074 |        else:
+h075 |            yield (depth, child.title, child.span.start, child.span.end, child.checksum())
+h076 |```
+h077 |
+h078 |And a shell one-liner that exceeds a hundred and twenty columns to exercise wrapping behaviour in the transcript renderer:
+h079 |
+h080 |```bash
+h081 |rg -n 'clearTerminal|CSI 3 J' packages/tui/src/tui/app.tsx | awk -F: '{print $1":"$2}' | sort -t: -k2 -n | uniq -c | sort -rn | head -20
+h082 |```
+h083 |
+h084 |  - wrapped list item: the quick brown fox jumps over the lazy dog repeatedly until the line must wrap at the current width
+h085 |  - inline code mixed with bold and _italic_ markdown
+h086 |
+h087 |▸ you
+h088 | CODE saturate two
+h089 |
+h090 |◆ assistant
+h091 |Code-heavy baseline. First, a TypeScript block with a long line:
+h092 |
+h093 |```ts
+h094 |export function resolveWidget(registry: Map<string, WidgetFactory>, id: string, fallbacks: readonly string[] = DEFAULT_FALLBACK_CHAIN): Widget {
+h095 |  const factory = registry.get(id) ?? fallbacks.map((f) => registry.get(f)).find(Boolean);
+h096 |  if (!factory) throw new Error(`no widget factory for ${id}`);
+=== SCREEN 200x50 (visible) ===
+ 0 |  return factory({ id, theme: currentTheme(), locale: navigator.language });
+ 1 |}
+ 2 |```
+ 3 |
+ 4 |Then nested Python with deep indentation:
+ 5 |
+ 6 |```python
+ 7 |def walk(node, depth=0):
+ 8 |    for child in node.children:
+ 9 |        if child.kind == 'section':
+10 |            yield from walk(child, depth + 1)
+11 |        else:
+12 |            yield (depth, child.title, child.span.start, child.span.end, child.checksum())
+13 |```
+14 |
+15 |And a shell one-liner that exceeds a hundred and twenty columns to exercise wrapping behaviour in the transcript renderer:
+16 |
+17 |```bash
+18 |rg -n 'clearTerminal|CSI 3 J' packages/tui/src/tui/app.tsx | awk -F: '{print $1":"$2}' | sort -t: -k2 -n | uniq -c | sort -rn | head -20
+19 |```
+20 |
+21 |  - wrapped list item: the quick brown fox jumps over the lazy dog repeatedly until the line must wrap at the current width
+22 |  - inline code mixed with bold and _italic_ markdown
+23 |
+24 |▸ you
+25 | TODO plan this work
+26 |
+27 |  ⚙ todowrite:
+28 |Todo list updated (1/3 done):
+29 |1. [x] ! scaffold the parser
+30 |2. [>] ! wire the panel data
+31 |3. [ ]   write regression tests
+32 |
+33 |◆ assistant
+34 |Todo list recorded — the canned plan is underway. This second-phase reply exists so the tool loop terminates deterministically.
+35 |
+36 |
+37 |
+38 |
+39 | tasks 1/3 · ▸ wire the panel data
+40 |   next: write regression tests
+41 |
+42 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+43 |│  y▋                                                                                                                                                                                                  │
+44 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+45 |
+46 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑5 ↓32 · $0.0000 · sess ephemeral · ready
+47 |perms: r-x 0 dirs · w/e/b: ask
+48 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                                                                                                  ctrl+p palette
+49 |
+=== 50 visible rows; 97 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown-200x50.png ===

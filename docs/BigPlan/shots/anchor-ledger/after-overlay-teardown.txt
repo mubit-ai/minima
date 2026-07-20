@@ -1,0 +1,96 @@
+=== wrote 243 frames: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown.frames.jsonl ===
+=== wrote raw stream: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown.raw.bin ===
+=== SCROLLBACK (54 lines above the screen) ===
+h000 |
+h001 |
+h002 |
+h003 |
+h004 |
+h005 |
+h006 |
+h007 |
+h008 |
+h009 |
+h010 |
+h011 |
+h012 |
+h013 |
+h014 |
+h015 |
+h016 |
+h017 |
+h018 |
+h019 |
+h020 |
+h021 |
+h022 |
+h023 |
+h024 |
+h025 |
+h026 |
+h027 |
+h028 |
+h029 |
+h030 |
+h031 |
+h032 |
+h033 |
+h034 |
+h035 |
+h036 |  ⚙ setup:
+h037 |No model-provider API key set — set one to run models: `/config set ANTHROPIC_API_KEY <key>` (or
+h038 |OPENAI/GOOGLE/OPENROUTER). `/auth` configures routing only.
+h039 |
+h040 |▸ you
+h041 | CODE saturate one
+h042 |
+h043 |◆ assistant
+h044 |Code-heavy baseline. First, a TypeScript block with a long line:
+h045 |
+h046 |```ts
+h047 |export function resolveWidget(registry: Map<string, WidgetFactory>, id: string, fallbacks: readonly string[] =
+h048 |DEFAULT_FALLBACK_CHAIN): Widget {
+h049 |  const factory = registry.get(id) ?? fallbacks.map((f) => registry.get(f)).find(Boolean);
+h050 |  if (!factory) throw new Error(`no widget factory for ${id}`);
+h051 |  return factory({ id, theme: currentTheme(), locale: navigator.language });
+h052 |}
+h053 |```
+=== SCREEN 120x36 (visible) ===
+ 0 |
+ 1 |Then nested Python with deep indentation:
+ 2 |
+ 3 |```python
+ 4 |def walk(node, depth=0):
+ 5 |    for child in node.children:
+ 6 |        if child.kind == 'section':
+ 7 |            yield from walk(child, depth + 1)
+ 8 |        else:
+ 9 |            yield (depth, child.title, child.span.start, child.span.end, child.checksum())
+10 |```
+11 |
+12 |And a shell one-liner that exceeds a hundred and twenty columns to exercise wrapping behaviour in the transcript
+13 |renderer:
+14 |
+15 |```bash
+16 |rg -n 'clearTerminal|CSI 3 J' packages/tui/src/tui/app.tsx | awk -F: '{print $1":"$2}' | sort -t: -k2 -n | uniq -c |
+17 |sort -rn | head -20
+18 |```
+19 |
+20 |  - wrapped list item: the quick brown fox jumps over the lazy dog repeatedly until the line must wrap at the current
+21 |    width
+22 |  - inline code mixed with bold and _italic_ markdown
+23 |
+24 |
+25 |
+26 |
+27 |
+28 |╭─── prompt ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+29 |│  yy▋                                                                                                                 │
+30 |╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+31 |
+32 | model: mock-model ▸ pinned · route: auto · reason: off │ ctx 0% · ↑5 ↓303 · $0.0000 · sess ephemeral · ready
+33 |perms: r-x 0 dirs · w/e/b: ask
+34 |ctrl+l Model ctrl+r Route ⇧tab Mode ctrl+e Reason ctrl+b Tasks esc Abort                                  ctrl+p palette
+35 |
+=== 36 visible rows; 54 in scrollback ===
+=== wrote PNG: /Users/eldaru/Mubit/Minima/minima/docs/BigPlan/shots/anchor-ledger/after-overlay-teardown.png ===
