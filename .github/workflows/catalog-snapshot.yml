@@ -92,7 +92,10 @@ jobs:
           git checkout -B "$BRANCH"
           git add "$SNAPSHOT_PATH"
           git commit -m "chore(catalog): refresh vendored model snapshot from live /v1/models"
-          git push -u origin "$BRANCH" --force-with-lease
+          # Plain --force: this branch is automation-owned and rebuilt from main every
+          # run, and the fresh checkout has no remote-tracking ref for it, so
+          # --force-with-lease always fails with "stale info" once the branch exists.
+          git push -u origin "$BRANCH" --force
 
           gh pr create --base main --head "$BRANCH" \
             --title "chore(catalog): refresh vendored model snapshot" \
