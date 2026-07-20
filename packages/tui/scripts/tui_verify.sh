@@ -65,6 +65,10 @@
 #                     SAFETY_ROWS, exact after the next commit), and the reporter's 200x50
 #                     geometry where the committed reply wraps to FEWER rows than the
 #                     stream-frame shrink (the float the MP20 ordering alone cannot fix)
+#   stale-margins     the live-window root cause (2026-07-20): a prior CLI's leaked
+#                     DECSTBM scroll region survives 2J/3J/H and resizes, imprisons the
+#                     newline reserve (DSR said row 24 of 60), and seats the composer
+#                     mid-screen forever — boot now leads the clear with CSI r + CSI ?69l
 #
 # plus renderer-agnostic coverage ported from the fullscreen-era suite: clipboard
 # (bracketed paste + Ctrl+Y OSC 52), modes (Shift+Tab badge ring), modes-busy (the badge
@@ -1178,7 +1182,6 @@ print("tui_assert: PASS acceptance (plan -> draft -> gate -> red -> fix -> green
 PY
 perf_check "$TMP/accept-perf.jsonl" accept 4000
 
-echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 echo "== tui-verify: scenario overlay-anchor (ledger: perm teardown over a saturated transcript) =="
 SPEC=$(cat <<EOF
 {
@@ -1327,6 +1330,34 @@ python3 "$TUI/scripts/tui_assert.py" "$TMP/big200-frames.jsonl" --after 2.5 \
   --check bottom-anchor --bottom-slack 1
 perf_check "$TMP/big200-perf.jsonl" big200 4000
 
+# Root-caused live 2026-07-20: a prior CLI that pinned its UI with DECSTBM and died
+# uncleanly leaves scroll margins in the WINDOW forever (they survive 2J/3J/H and
+# resizes). The reserve then scrolls inside rows 1..24 and the composer seats mid-screen
+# with dead rows below. Boot must reset margins (CSI r + CSI ?69l) before the clear.
+echo "== tui-verify: scenario stale-margins (inherited DECSTBM region must not eat the seat) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": ["sh", "-c", "printf '\\\\033[5;24r'; exec bun run $TUI/src/cli/main.ts --offline --model mock-model --provider mock --provider-url http://127.0.0.1:$MOCK_PORT/v1"],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 12,
+  "env": {"MINIMA_DB_PATH": "$TMP/margins.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-margins"},
+  "frames": "$TMP/margins-frames.jsonl",
+  "raw": "$TMP/margins-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE render some snippets"},
+    {"after": 4.0, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture margins "$SPEC"
+python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 2.5 \
+  --check single-prompt --check advancing --check final-nonblank \
+  --check bottom-anchor --bottom-slack 2
+python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 7.0 \
+  --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
           "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
@@ -1334,7 +1365,7 @@ python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
           "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \
           "$TMP"/otanchor-raw.bin "$TMP"/pearly-raw.bin "$TMP"/resizere-raw.bin \
-          "$TMP"/big200-raw.bin <<'PY'
+          "$TMP"/big200-raw.bin "$TMP"/margins-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

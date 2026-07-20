@@ -27,4 +27,12 @@ describe("cli/main.ts wires the inline renderer", () => {
     // result in a real PTY.
     expect(src).toContain('"\\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1))');
   });
+
+  test("boot resets inherited scroll margins BEFORE the clear (the 2026-07-20 stale-DECSTBM fix)", () => {
+    // A prior CLI that pinned its UI with CSI <t>;<b>r and died uncleanly leaves the
+    // margins in the window FOREVER (they survive 2J/3J/H and resizes) — the reserve then
+    // scrolls inside the stale region and the composer seats mid-screen. CSI r + CSI ?69l
+    // must lead the clear write so the reserve always acts on a full-screen region.
+    expect(src).toContain("[r\\u001b[?69l\\u001b[2J\\u001b[3J\\u001b[H");
+  });
 });

@@ -77,6 +77,19 @@ One MP at a time, in this loop:
   within `SCROLLBACK_SAFETY_ROWS` (exact again at the next commit) — including after Ink's
   one unavoidable old-tree-vs-new-rows resize wipe. The pre-ledger estimate-decay
   `minHeight` survives behind `MINIMA_TUI_ANCHOR_LEGACY=1` until the ledger has soaked.
+- **Boot resets inherited scroll margins** (`CSI r` + `CSI ?69l` lead the clear write,
+  `main.ts`; root-caused live 2026-07-20, evidence in `shots/anchor-ledger/stale-margins/`):
+  a prior CLI that pinned its UI with DECSTBM and died uncleanly leaves the region in the
+  window forever — margins survive `2J`/`3J`/`H` and resizes, imprison the newline reserve
+  (DSR reported row 24 of 60 after 59 newlines), and seat the composer mid-screen with the
+  ledger faithfully preserving the bad seat. The mount deliberately does NOT cap-seed as a
+  defense (tried, PNG-refuted: it parks early turns at the screen top, 40+ rows from the
+  composer) — the reserve stays the seat, made trustworthy by the margin reset. PTY
+  regression: `tui_verify.sh` scenario `stale-margins`. Field diagnosis:
+  `MINIMA_TUI_DEBUG_ANCHOR=<file>` (reserve line + per-render ledger line + stdout/stderr
+  write-tap + `<file>.raw` byte dump + a DSR cursor probe) and
+  `scripts/real_term_capture.sh` (AppleScript-driven REAL iTerm2/Terminal.app captures —
+  pyte has no pending-wrap and cannot stand in for a real emulator at exact-width rows).
 - **`<Static>` must never sit under a flex-end ancestor** — it is position-absolute in Ink,
   and a flex-end parent offsets it past its own render canvas: committed messages silently
   clip to nothing. It mounts on the flex-start root, the ledger box is its sibling. Inside

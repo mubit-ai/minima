@@ -4297,7 +4297,11 @@ export function HarnessApp({
   // transcript and seats itself → content-sized frame. A resize seeds one full-height frame
   // instead: it writes past the last row and re-anchors — including after Ink's one
   // unavoidable old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst
-  // until the next commit scrolls it home).
+  // until the next commit scrolls it home). The mount deliberately does NOT cap-seed: a
+  // full-height first frame parks the early transcript at the screen TOP, 40+ rows from
+  // the composer, for several turns (tried 2026-07-20, PNG-refuted). Boot seating is the
+  // reserve's job, made trustworthy by the CSI r margin reset in main.ts — the live
+  // failure mode was a stale DECSTBM region eating the reserve, not the reserve itself.
   const anchorPrev = anchorGenRef.current;
   const anchorRemounted =
     anchorPrev === null ||

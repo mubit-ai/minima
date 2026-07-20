@@ -161,4 +161,13 @@ describe("app.tsx wires the anchor ledger", () => {
     expect(staticMount).toBeGreaterThan(0);
     expect(staticMount).toBeLessThan(mount);
   });
+
+  test("remounts (incl. the mount) seed 0; only a resize cap-seeds (adjacency preserved)", () => {
+    // A mount cap-seed was tried and PNG-refuted 2026-07-20: it parks the early transcript
+    // at the screen top, 40+ rows from the composer. Boot seating belongs to the reserve +
+    // the CSI r margin reset in main.ts.
+    expect(src).toContain(
+      "anchorRemounted\n        ? 0\n        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)",
+    );
+  });
 });

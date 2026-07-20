@@ -895,12 +895,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     installAnchorWriteTap(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
   process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
-  // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
+  // DECSTBM reset FIRST (CSI r): a previous program that pinned its UI with scroll
+  // margins and died without resetting leaves the region in the WINDOW forever — margins
+  // survive 2J/3J/H and even resizes, so every newline the reserve writes scrolls inside
+  // the stale region and the composer seats mid-screen (root-caused live 2026-07-20: a
+  // window carried margins 1–24 from an earlier CLI; DSR said row 24 after a 59-newline
+  // reserve; one CSI r restored row 60). CSI ?69l drops any leaked left/right margins
+  // (DECLRMM) the same way. Then clear like Claude Code: full clear for a clean-slate
+  // "own app" feel — erase-display(2)
   // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
   // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
   // input render from the TOP and grow downward; Ink commits finished output to native
   // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
-  process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+  process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
   // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
   // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
   // so the composer + footer sit at the bottom from frame 1 instead of under the banner at

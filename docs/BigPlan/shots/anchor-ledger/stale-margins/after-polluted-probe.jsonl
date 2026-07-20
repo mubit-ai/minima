@@ -1,0 +1,67 @@
+{"t":1784578282172,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?2004h"}
+{"t":1784578282172,"tap":"out","len":20,"nl":0,"flags":["2J","3J","H"],"head":"^[[r^[[?69l^[[2J^[[3J^[[H"}
+{"t":1784578282172,"phase":"reserve","rows":60,"cols":242,"tty":true,"term":"xterm-256color"}
+{"t":1784578282172,"tap":"out","len":59,"nl":59,"flags":[],"head":"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"}
+{"t":1784578282172,"tap":"out","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784578282173,"tap":"out","len":4,"nl":0,"flags":["6n"],"head":"^[[6n"}
+{"t":1784578282207,"phase":"dsr","row":60,"col":1}
+{"t":1784578282240,"tap":"err","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784578282240,"tap":"out","len":2927,"nl":25,"flags":[],"head":"\\n\\n\\n                                                             "}
+{"t":1784578282241,"tap":"out","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784578282251,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?1000l"}
+{"t":1784578282251,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?1006l"}
+{"t":1784578282252,"rows":60,"cols":242,"liveHeight":25,"contentRows":25,"committedRows":0,"reset":"mount","msgs":0,"busy":false,"panel":false}
+{"t":1784578282258,"tap":"out","len":3298,"nl":27,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578282260,"rows":60,"cols":242,"liveHeight":27,"contentRows":27,"committedRows":0,"reset":null,"msgs":0,"busy":false,"panel":false}
+{"t":1784578289129,"tap":"out","len":3314,"nl":27,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578289130,"rows":60,"cols":242,"liveHeight":27,"contentRows":27,"committedRows":0,"reset":null,"msgs":0,"busy":false,"panel":false}
+{"t":1784578289769,"tap":"out","len":223,"nl":0,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578289769,"tap":"out","len":53,"nl":3,"flags":[],"head":"\\n^[[32m▸ you^[[39m\\n^[[48;2;42;42;53m^[[37m hi ^[[39m^[[49m\\n"}
+{"t":1784578289769,"tap":"out","len":1440,"nl":24,"flags":[],"head":"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n^[[33m⠋ ^[[90mrouting… ^[[33m💡 /recall pulls le"}
+{"t":1784578289769,"rows":60,"cols":242,"liveHeight":24,"contentRows":12,"committedRows":3,"reset":null,"msgs":1,"busy":true,"panel":false}
+{"t":1784578289894,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290019,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290143,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290264,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290384,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290509,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290629,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290753,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290874,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578290997,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291117,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291238,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291358,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291480,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291603,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291728,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291849,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578291974,"tap":"out","len":1639,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292037,"tap":"out","len":1685,"nl":24,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292038,"rows":60,"cols":242,"liveHeight":24,"contentRows":12,"committedRows":0,"reset":null,"msgs":1,"busy":true,"panel":false}
+{"t":1784578292084,"tap":"out","len":199,"nl":0,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292085,"tap":"out","len":51,"nl":3,"flags":[],"head":"\\n^[[35m◆ assistant^[[39m\\nHow can I assist you today?\\n"}
+{"t":1784578292085,"tap":"out","len":1483,"nl":21,"flags":[],"head":"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n^[[33m⠇ ^[[90mrouting… ^[[33m💡 /recall pulls lesso"}
+{"t":1784578292085,"rows":60,"cols":242,"liveHeight":21,"contentRows":12,"committedRows":3,"reset":null,"msgs":2,"busy":true,"panel":false}
+{"t":1784578292096,"tap":"out","len":1659,"nl":21,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292097,"rows":60,"cols":242,"liveHeight":21,"contentRows":12,"committedRows":0,"reset":null,"msgs":2,"busy":true,"panel":false}
+{"t":1784578292101,"tap":"out","len":175,"nl":0,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292101,"tap":"out","len":124,"nl":3,"flags":[],"head":"\\n^[[33m  ⚙ routing:^[[39m\\nℹ routing offline: routing disabled (o"}
+{"t":1784578292101,"tap":"out","len":1481,"nl":18,"flags":[],"head":"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n^[[33m⠇ ^[[90mrouting… ^[[33m💡 /recall pulls lessons "}
+{"t":1784578292102,"rows":60,"cols":242,"liveHeight":18,"contentRows":12,"committedRows":3,"reset":null,"msgs":3,"busy":true,"panel":false}
+{"t":1784578292107,"tap":"out","len":1521,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292107,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292110,"tap":"out","len":1519,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292110,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292113,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292116,"tap":"out","len":1519,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292116,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292119,"tap":"out","len":1522,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292119,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292121,"tap":"out","len":1522,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292122,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578292125,"tap":"out","len":1522,"nl":18,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784578292126,"rows":60,"cols":242,"liveHeight":18,"contentRows":10,"committedRows":0,"reset":null,"msgs":3,"busy":false,"panel":false}
+{"t":1784578296139,"tap":"err","len":6,"nl":0,"flags":[],"head":"^[[?25h"}
+{"t":1784578296140,"tap":"out","len":6,"nl":0,"flags":[],"head":"^[[?25h"}
+{"t":1784578296140,"tap":"err","len":6,"nl":0,"flags":[],"head":"^[[?25h"}
