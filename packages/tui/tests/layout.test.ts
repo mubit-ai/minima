@@ -112,6 +112,17 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
       2 + MAX_TOOL_LINES + 1,
     );
   });
+  test("a tool body wraps at the FULL box width, like MessageRow paints it", () => {
+    // The GT plan-mode notice (239 chars): MessageRow renders the body unindented, so at
+    // 120 cols it wraps to 2 rows. Counting at an interior width (cols-4 → 3 rows) floats
+    // the composer off the terminal bottom — the tui-verify bottom-anchor regression.
+    const notice =
+      "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
+      "Talk through the plan; the design council convenes on substantive turns. " +
+      "/plan finalize writes the ground truth to the project root. /plan status · /plan cancel.";
+    expect(computeMsgHeight(tool(notice, "plan"), 120)).toBe(2 + wrappedLineCount(notice, 120));
+    expect(wrappedLineCount(notice, 120)).toBe(2);
+  });
   test("the irreducible chrome floor per role (empty body still renders header + margin)", () => {
     // A message can never render below this floor — the height estimate must account for it
     // or reservations under-count (the garble class). thinking is 5 (border adds 2).

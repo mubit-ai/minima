@@ -521,7 +521,8 @@ SPEC=$(cat <<EOF
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 14,
-  "env": {"MINIMA_DB_PATH": "$TMP/tasks.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks",
+          "MINIMA_TUI_GROUND_TRUTH": "0"},
   "frames": "$TMP/tasks-frames.jsonl",
   "raw": "$TMP/tasks-raw.bin",
   "steps": [
@@ -564,7 +565,8 @@ SPEC=$(cat <<EOF
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 13.5,
-  "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks"},
+  "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks",
+          "MINIMA_TUI_GROUND_TRUTH": "0"},
   "frames": "$TMP/tasks2-frames.jsonl",
   "steps": [
     {"after": 3.0, "send": "TODO plan this work"},
@@ -824,7 +826,8 @@ SPEC=$(cat <<EOF
   "cmd": [$INLINE_ARGV],
   "cwd": "$TMP",
   "cols": 120, "rows": 36, "duration": 24,
-  "env": {"MINIMA_DB_PATH": "$TMP/planexit.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planexit"},
+  "env": {"MINIMA_DB_PATH": "$TMP/planexit.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planexit",
+          "MINIMA_TUI_GROUND_TRUTH": "0"},
   "frames": "$TMP/planexit-frames.jsonl",
   "raw": "$TMP/planexit-raw.bin",
   "steps": [

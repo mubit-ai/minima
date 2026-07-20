@@ -486,9 +486,11 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     return 2 + wrappedLineCount(msg.text, cols - 2);
   }
   if (msg.role === "tool") {
-    // marginTop(1) + "⚙ tool:" header(1) + clamped body (rows at interior cols-4) + optional hint.
+    // marginTop(1) + "⚙ tool:" header(1) + body + optional hint. The inline MessageRow paints
+    // the body unindented at the full box width, so the ruler must wrap at `cols` — counting
+    // at an interior width over-reserves and floats the composer off the terminal bottom.
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
-    return 2 + wrappedLineCount(body, cols - 4) + (hiddenLines > 0 ? 1 : 0);
+    return 2 + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0);
   }
   if (msg.role === "thinking") {
     // marginTop(1) + single border(2) + header(1) + body wrapped at interior cols-4 (border 2 + padL 2).
