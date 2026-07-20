@@ -80,9 +80,7 @@ describe("plan critic — run wrapper", () => {
     const ac = new AbortController();
     ac.abort();
     expect(await runPlanCritic({ metaModel: null, steps, completeFn: reply("OK") })).toBeNull();
-    expect(
-      await runPlanCritic({ metaModel: META, steps: [], completeFn: reply("OK") }),
-    ).toBeNull();
+    expect(await runPlanCritic({ metaModel: META, steps: [], completeFn: reply("OK") })).toBeNull();
     expect(
       await runPlanCritic({ metaModel: META, steps, signal: ac.signal, completeFn: reply("OK") }),
     ).toBeNull();

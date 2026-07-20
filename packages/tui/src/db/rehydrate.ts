@@ -117,4 +117,18 @@ export function applyRehydratedRun(agent: MinimaAgent, r: RehydratedRun): void {
     agent.meter.rows.push(...r.meterRows);
   }
   agent.setPromptsRun(r.promptsRun);
+  // D2: reuse the resumed run's provider session id — it keys the provider-side prompt
+  // cache, so continuing under the ORIGINAL id keeps the rehydrated prefix warm instead
+  // of paying full input price on the first post-resume turn. The column existed since
+  // v1 but was never read back.
+  if (r.run.provider_session_id) {
+    agent.sessionId = r.run.provider_session_id;
+    if (agent.db && agent.runId) {
+      try {
+        agent.db.setProviderSessionId(agent.runId, r.run.provider_session_id);
+      } catch {
+        // bookkeeping is fail-open
+      }
+    }
+  }
 }

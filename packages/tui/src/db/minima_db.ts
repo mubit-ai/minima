@@ -808,6 +808,15 @@ export class MinimaDb {
     ]);
   }
 
+  /** D2: keep the run row honest after resume adopts the ORIGINAL provider session id. */
+  setProviderSessionId(runId: string, providerSessionId: string): void {
+    this.db.run("UPDATE runs SET provider_session_id = ?, updated = ? WHERE run_id = ?", [
+      providerSessionId,
+      Date.now() / 1000,
+      runId,
+    ]);
+  }
+
   setRunName(runId: string, name: string): void {
     this.db.run("UPDATE runs SET display_name = ?, updated = ? WHERE run_id = ?", [
       name,

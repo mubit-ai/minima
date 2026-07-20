@@ -108,7 +108,8 @@ function setup(
   const reg = registerFauxProvider([CHEAP, BIG]);
   const svc = opts.svc ?? ladderService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: svc.fetchLike });
-  const config = harnessConfig({ judgeSampleRate: 1,
+  const config = harnessConfig({
+    judgeSampleRate: 1,
     candidates: ["cheap-model", "big-model"],
     allowOffline: false,
     minimaApiKey: "k",

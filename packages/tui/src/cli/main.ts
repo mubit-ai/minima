@@ -35,6 +35,7 @@ import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
+import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -499,6 +500,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       initialResume = rehydrateRun(db, resumeFrom.run_id);
       applyRehydratedRun(agent, initialResume);
       db.setRunParent(runId, resumeFrom.run_id);
+      // D2: re-run the in-progress step's verify against its recorded baseline (the
+      // working tree may have moved while the session was away). Consent-gated like every
+      // verify (headless: MINIMA_TUI_ALLOW_VERIFY=1); warn-only, never blocks the resume.
+      if (config.groundTruth) {
+        const rv = await reverifyOnResume({
+          db,
+          planSessionId: resumeFrom.run_id,
+          eventRunId: runId,
+          consent: (cmd) => verifyConsentRef.current(cmd),
+        });
+        const note = reverifyNotice(rv);
+        if (note) process.stderr.write(`minima: ${note}\n`);
+      }
     }
     // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
     // sink keeps the SQLite plan of record in step with what the agent actually did (plan

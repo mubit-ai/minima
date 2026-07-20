@@ -92,9 +92,16 @@ describe("diff review — gate semantics", () => {
     expect(
       await runDiffReview({ ...base, diff: "d", completeFn: reply("hard to say really") }),
     ).toBeNull();
-    expect(await runDiffReview({ ...base, diff: "", completeFn: reply("VERDICT: approve") })).toBeNull();
     expect(
-      await runDiffReview({ ...base, metaModel: null, diff: "d", completeFn: reply("VERDICT: approve") }),
+      await runDiffReview({ ...base, diff: "", completeFn: reply("VERDICT: approve") }),
+    ).toBeNull();
+    expect(
+      await runDiffReview({
+        ...base,
+        metaModel: null,
+        diff: "d",
+        completeFn: reply("VERDICT: approve"),
+      }),
     ).toBeNull();
     const ac = new AbortController();
     ac.abort();
