@@ -93,9 +93,16 @@ TMP=$(mktemp -d)
 # the turn to the live API — observed as run-to-run scenario flakes (hung "dispatching…"
 # turns, missing replies, dirty exit tails) that vanish standalone. Blank rather than
 # unset: a defined-empty var also stops the keychain hydration from re-injecting one.
+# MUBIT_API_KEY too (2026-07-20): repo-cwd scenarios load the repo's real .env, and a live
+# key arms recall-before-route — a REAL Mubit network call before every turn's routing
+# (~5-6s stall; the pinned mock resolved at ~10-11s in A/B runs, past tasks-footer's panel
+# window). This was the confirmed root cause of the "offline routing stall from repo cwd"
+# flake class. With the key defined-empty, createMubitMemory no-ops and routing resolves
+# instantly; no scenario may hit the network.
 export ANTHROPIC_API_KEY="" ANTHROPIC_OAUTH_TOKEN="" OPENAI_API_KEY="" \
   OPENAI_COMPAT_API_KEY="" GEMINI_API_KEY="" GOOGLE_API_KEY="" GOOGLE_GENAI_API_KEY="" \
-  OPENROUTER_API_KEY="" DEEPSEEK_API_KEY="" GROQ_API_KEY="" XAI_API_KEY=""
+  OPENROUTER_API_KEY="" DEEPSEEK_API_KEY="" GROQ_API_KEY="" XAI_API_KEY="" \
+  MUBIT_API_KEY=""
 MOCK_PORT=${MOCK_PORT:-8451}
 MOCK_PID=""
 trap '[ -n "$MOCK_PID" ] && { kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null || true; }; rm -rf "$TMP"' EXIT
@@ -365,9 +372,10 @@ PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/mode-frames.jsonl" --after 2.5 --check bottom-anchor
 
 echo "== tui-verify: scenario modes-busy (Shift+Tab flips the badge while a turn streams) =="
-# Temp cwd: from $ROOT the offline router can pick up repo .env.harness credentials and
-# stall ~8s in a live recall before falling back to the pinned mock — from a bare dir the
-# route resolves immediately and the SLOW turn fits the capture window deterministically.
+# Temp cwd: belt-and-braces. The ~8s "offline routing stall from repo cwd" was root-caused
+# 2026-07-20: the repo .env's real MUBIT_API_KEY armed recall-before-route (a live Mubit
+# call per turn). The prologue now blanks MUBIT_API_KEY suite-wide, but a bare cwd also
+# keeps this scenario independent of whatever the repo's env files grow next.
 mkdir -p "$TMP/busywork"
 SPEC=$(cat <<EOF
 {
