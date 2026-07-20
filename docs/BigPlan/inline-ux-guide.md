@@ -863,6 +863,20 @@ re-issue — per-session, use fresh sessions or the Shift+Tab gate for repeats).
 gate + Esc-stays + cancel discards); behavior pins migrated to the new registration +
 handler. Shots: `shots/mp17-plan-exit/`.
 
+**AMENDMENT (user decision, 2026-07-20): Shift+Tab is a SILENT clean exit — the chord
+never opens the gate.** Claude Code parity: the ring just advances (build → accept-edits →
+plan → build, bypass when enabled), leaving plan mode discards any live council session via
+the mode-exit cleanup effect (transcript notice; the discard aborts the council — a council
+cannot outlive its session) and a PLAIN streaming turn is left to finish (non-disruptive
+switch; the chord never calls `agent.abort()`). Plan APPROVAL lives ONLY in the `exit_plan`
+tool and `/plan finalize` — the 3-option overlay on the chord, the `planTurnSeenRef`
+fast-path, and `requestPlanExitGate` are deleted. Mid-turn exits defer `exit_plan`'s
+unregistration to the turn's end (retire-list swept in the turn's `finally`; `isActive()`
+answers a late call with a graceful "not active") so a turn that advertised the tool never
+hits an unknown-tool error. The ring's plan→bypass sacrifice note above still holds. Gate:
+`plan-exit-gate` scenario re-pinned (tool overlay + approve; Shift+Tab = silent exit, fluid
+ring, the gate text must never appear on the chord).
+
 ### MP18 — Verify-command consent at first run *(M · after MP9 recommended)*
 
 **Goal:** LLM-authored `verify` shell gets bash-class scrutiny (not trust-the-gate, not
@@ -927,8 +941,9 @@ green→milestone → `/v1/feedback` captured with realized usage → `buildGtOv
 `whyText` evidence, all with the STRICT consent checker installed) and once through a real
 PTY (`tui_verify.sh` scenario `acceptance`, 42s, ordered-beat asserts + zero-wipe +
 no-mouse + perf budgets): `/plan start` → council line ticking (MP14) → planner reply →
-Ctrl+G `plan (draft)` (MP16) → Shift+Tab exit gate approves (MP17; finalize via the mock's
-RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
+Ctrl+G `plan (draft)` (MP16) → `/plan finalize` approves (amended 2026-07-20 with the
+silent-exit chord — the MP17 gate rides `exit_plan`/`/plan finalize` only; finalize via the
+mock's RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
 executes phase-scripted: in_progress todowrite (permission overlay shows the verify;
 baseline red) → completing while red → **the done-gate blocks** → `write` fixes → completing
 again → **red→green verified, plan closes** (milestone) → Ctrl+T shows the section's

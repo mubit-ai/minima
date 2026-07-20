@@ -38,17 +38,17 @@
 #   panel-draft       MP16: /plan-seed rounds show the D3b `plan (draft)` view converging
 #                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
 #                     chord to the ledger-backed GT overview (structural switch)
-#   plan-exit-gate    MP17: GT-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
+#   plan-exit-gate    GT-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
 #                     markdown lands in the transcript, the 3-option overlay approves into
-#                     build; Shift+Tab OUT of plan mode (after a plan turn) opens the same
-#                     gate — Esc stays, Cancel discards (the no-plan-turn fast path keeps
-#                     the modes badge ring cycle-identical)
+#                     build (the tool is the ONLY approval surface); Shift+Tab OUT of plan
+#                     mode is a SILENT clean exit (CC parity, 2026-07-20) — the ring stays
+#                     fluid and the 3-option gate never appears on the chord
 #   verify-consent    MP18: first todowrite-with-verify prompts (command shown verbatim),
 #                     'a' + the same verify stays silent, a MUTATED verify re-prompts;
 #                     headless halves: -p fails CLOSED (gate unrunnable) without
 #                     MINIMA_TUI_ALLOW_VERIFY=1 and verifies with it
 #   acceptance        MP19: the whole Track W story in ONE scripted run — /plan (council
-#                     line ticks) → Ctrl+G draft → Shift+Tab gate approves (finalize seeds
+#                     line ticks) → Ctrl+G draft → /plan finalize approves (seeds
 #                     ledger + consent) → PLANDEMO executes: baseline red → done-gate
 #                     blocks → write fixes → re-check verifies → plan closes → ToC ⚠→✓ →
 #                     overview + step card → /why; perf budgets green during the run
@@ -924,8 +924,8 @@ SPEC=$(cat <<EOF
     {"after": 8.8, "send": "<ESC>"},
     {"after": 9.6, "send": "/plan finalize --force"},
     {"after": 10.2, "send": "<CR>"},
-    {"after": 14.5, "send": "<CTRLG>"},
-    {"after": 16.0, "send": "<ESC>"}
+    {"after": 15.5, "send": "<CTRLG>"},
+    {"after": 17.0, "send": "<ESC>"}
   ]
 }
 EOF
@@ -952,18 +952,18 @@ assert len(cursors) >= 2, f"draft cursor never moved during nav (rows {cursors})
 assert any(has(f, "plan (draft) · round 2") for f in win(8.0, 9.0)), (
     "second seed did not show round 2 in the draft view")
 # After finalize the SAME chord opens the ledger-backed GT overview (structural switch).
-post = win(14.5, 16.0)
+post = win(15.5, 17.0)
 assert any(has(f, "plan · ") for f in post), "post-finalize Ctrl+G did not open the GT overview"
 assert not any(has(f, "plan (draft)") for f in post), "draft view survived finalize"
 print("tui_assert: PASS panel-draft (round 1 -> round 2 -> finalize flips to the GT overview)")
 PY
 
-echo "== tui-verify: scenario plan-exit-gate (MP17: universal exit gate, GT OFF) =="
+echo "== tui-verify: scenario plan-exit-gate (exit_plan tool gate; Shift+Tab is a silent exit) =="
 SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
   "cwd": "$TMP",
-  "cols": 120, "rows": 36, "duration": 24,
+  "cols": 120, "rows": 36, "duration": 22,
   "env": {"MINIMA_DB_PATH": "$TMP/planexit.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planexit",
           "MINIMA_TUI_GROUND_TRUTH": "0"},
   "frames": "$TMP/planexit-frames.jsonl",
@@ -979,11 +979,9 @@ SPEC=$(cat <<EOF
     {"after": 12.0, "send": "please describe the cleanup approach once more"},
     {"after": 12.8, "send": "<CR>"},
     {"after": 16.5, "send": "<SHIFTTAB>"},
-    {"after": 17.5, "send": "<ESC>"},
-    {"after": 18.5, "send": "<SHIFTTAB>"},
-    {"after": 19.5, "send": "<DOWN>"},
-    {"after": 19.9, "send": "<DOWN>"},
-    {"after": 20.3, "send": "<CR>"}
+    {"after": 18.0, "send": "<SHIFTTAB>"},
+    {"after": 18.6, "send": "<SHIFTTAB>"},
+    {"after": 19.4, "send": "<SHIFTTAB>"}
   ]
 }
 EOF
@@ -1014,14 +1012,17 @@ assert any(has(f, "Plan approved") for f in approved), "approve did not flip to 
 pre_reentry = [f for f in frames if f["t"] < 11.0]
 assert pre_reentry, "no frames before plan re-entry"
 assert not has(pre_reentry[-1], "[PLAN]"), "PLAN badge survived approval (settled frame)"
-# Shift+Tab OUT of plan mode (after a plan turn) opens the SAME 3-option gate; Esc stays;
-# a second gate + Cancel discards and clears the badge.
-assert any(has(f, "Exit plan mode?") for f in win(16.5, 17.5)), "Shift+Tab did not open the exit gate"
-assert any(has(f, "[PLAN]") for f in win(17.5, 18.5)), "Esc did not stay in plan mode"
-assert any(has(f, "Exit plan mode?") for f in win(18.5, 19.5)), "second Shift+Tab gate missing"
-assert any(has(f, "Plan discarded") for f in win(20.3, 23.5)), "cancel did not discard the plan"
-assert not has(frames[-1], "[PLAN]"), "PLAN badge survived cancel (settled frame)"
-print("tui_assert: PASS plan-exit-gate (tool overlay + approve; Shift+Tab gate + Esc-stays + cancel)")
+# Shift+Tab OUT of plan mode is a SILENT clean exit (Claude Code parity) — the ring just
+# advances, no dialog ever. 16.5 exits plan (badge gone), 18.0/18.6 ride build→accept→plan,
+# 19.4 exits again: the whole sequence must never surface the 3-option gate.
+assert not any(has(f, "Exit plan mode?") for f in win(16.5, 99.0)), (
+    "Shift+Tab opened the exit gate - it must be a silent mode cycle")
+exited = [f for f in win(16.5, 18.0)]
+assert exited and not has(exited[-1], "[PLAN]"), "PLAN badge survived the silent exit (settled frame)"
+assert any(has(f, "ACCEPT EDITS") for f in win(18.0, 18.6)), "ring did not advance to accept-edits"
+assert any(has(f, "[PLAN]") for f in win(18.6, 19.4)), "ring did not re-enter plan mode"
+assert not has(frames[-1], "[PLAN]"), "PLAN badge survived the final silent exit (settled frame)"
+print("tui_assert: PASS plan-exit-gate (tool overlay + approve; Shift+Tab silent exit + fluid ring)")
 PY
 
 echo "== tui-verify: scenario verify-consent (MP18: first-run prompt, silence, mutation re-prompt) =="
@@ -1121,8 +1122,8 @@ SPEC=$(cat <<EOF
     {"after": 5.2, "send": "<CR>"},
     {"after": 12.5, "send": "<CTRLG>"},
     {"after": 14.0, "send": "<ESC>"},
-    {"after": 15.0, "send": "<SHIFTTAB>"},
-    {"after": 16.5, "send": "<CR>"},
+    {"after": 15.0, "send": "/plan finalize"},
+    {"after": 15.6, "send": "<CR>"},
     {"after": 20.0, "send": "PLANDEMO build it now"},
     {"after": 20.8, "send": "<CR>"},
     {"after": 23.5, "send": "a"},
@@ -1154,14 +1155,14 @@ def first(n, t0=0.0):
         if f["t"] >= t0 and has(f, n):
             return f["t"]
     return None
-# The story, in order: council line ticks -> the draft is visible -> the Shift+Tab exit
-# gate -> approval flips to build (badge gone by the execution prompt) -> the done-gate
+# The story, in order: council line ticks -> the draft is visible -> /plan finalize
+# approves into build (badge gone by the execution prompt) -> the done-gate
 # blocks the early completion -> the fix lands -> the re-check verifies -> the ToC carries
 # the failed-then-fixed marker -> the overview + step card show the verified step -> /why.
 beats = [
     ("council line", first("council: researcher")),
     ("draft view", first("plan (draft) · round 1", 12.0)),
-    ("exit gate", first("Exit plan mode?", 14.5)),
+    ("finalize note", first("Ground truth written", 15.0)),
     ("verify in todowrite overlay", first("test -f demo_widget.ts", 20.0)),
     ("gate blocked red", first("Step not verified", 21.0)),
     ("the fix (write overlay)", first("run write", 21.0)),

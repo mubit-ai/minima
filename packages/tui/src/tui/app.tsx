@@ -30,7 +30,7 @@ import {
   subscribeMode,
 } from "../agent/modes.ts";
 import { emitGuardEvent } from "../agent/policy.ts";
-import type { BeforeToolCall } from "../agent/tools.ts";
+import type { AgentTool, BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -1174,89 +1174,36 @@ export function HarnessApp({
       },
     ]);
   }, [exitPlanMode]);
-  // MP17: Shift+Tab OUT of plan mode routes through the SAME 3-option gate as the
-  // exit_plan tool, so the plan and its approval live in one surface. Fast-path: a
-  // sessionless plan mode where no plan turn has completed has nothing to approve — the
-  // badge ring stays fluid (quick mode flipping, the modes scenario, and the GT-off A/B
-  // byte-identity are all preserved until a plan reply actually exists).
-  const planTurnSeenRef = useRef(false);
-  useEffect(() => {
-    if (mode === "plan") planTurnSeenRef.current = false;
-  }, [mode]);
-  const requestPlanExitGate = useCallback(async () => {
-    const ask = askUserRef?.current ?? null;
-    const store = planSessionRef.current;
-    if (!ask || (store == null && !planTurnSeenRef.current)) {
-      cycleMode();
-      return;
-    }
-    if (store) {
-      // Approve what you can see: the draft document lands in the transcript above the
-      // overlay (the D3b panel cannot coexist with the question overlay — panelVisible
-      // gates on !questionPrompt — so scrollback is the review surface here).
-      setMessages((m) => [...m, { role: "tool", text: store.toMarkdown(), toolName: "plan" }]);
-    }
-    const choice = await ask({
-      question: "Exit plan mode?",
-      header: "plan",
-      options: [
-        {
-          label: "Finalize & build",
-          description: store
-            ? "Write the ground truth, exit plan mode, start building."
-            : "Approve the plan, exit plan mode, start building.",
-        },
-        {
-          label: "Revise the plan",
-          description: "Stay in plan mode and tell the planner what to change.",
-        },
-        {
-          label: "Cancel plan mode",
-          description: store
-            ? "Discard the plan session — nothing is written."
-            : "Discard the plan.",
-        },
-      ],
-      allow_freetext: false,
-    });
-    if (choice === "Finalize & build") {
-      const r = await exitPlanFinalize(null);
-      // GT-on success pushes its own md + note inside runPlanFinalize's ok-branch; surface
-      // the message only for refusals and the sessionless approve.
-      if (!r.ok || store == null) {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: r.message, toolName: "plan", isError: !r.ok },
-        ]);
-      }
-      return;
-    }
-    if (choice === "Revise the plan") {
-      const note = await ask({
-        question: "What should the planner change?",
-        header: "revise",
-        options: [],
-        allow_freetext: true,
-      });
-      if (note?.trim()) void onSubmit(note.trim());
-      return;
-    }
-    if (choice === "Cancel plan mode") {
-      exitPlanCancel();
-      return;
-    }
-    // Esc / dismissed: stay in plan mode, ring untouched.
-  }, [askUserRef, exitPlanFinalize, exitPlanCancel]);
-
   // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
   // universal gate, GT on or off; sessionless plan mode requires the `plan` markdown arg,
   // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
   // ask-null guard covers any other pathless case. Its approval overlay rides the same
-  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab gate,
-  // /plan off) flips the mode and the effect cleanup unregisters it.
+  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab, /plan off)
+  // flips the mode and unregisters it. This tool and /plan finalize are the ONLY approval
+  // surfaces — Shift+Tab is a clean CC-style exit, never a gate.
+  //
+  // Mid-turn exits defer the unregistration: a turn that started in plan mode advertised
+  // exit_plan in its request, so splicing it out between loop iterations would turn a late
+  // call into an unknown-tool error. The cleanup parks the instance in retireToolsRef and
+  // the turn's `finally` sweeps it; isActive() already answers the late call gracefully
+  // ("Plan mode is not active"). Re-registration while STILL in plan (planSessionGen bump)
+  // splices immediately — exactly one exit_plan instance is ever registered.
+  const busyRef = useRef(false);
+  const retireToolsRef = useRef<AgentTool[]>([]);
+  const sweepRetiredTools = useCallback(() => {
+    for (const t of retireToolsRef.current) {
+      const i = agent.agentState.tools.indexOf(t);
+      if (i >= 0) agent.agentState.tools.splice(i, 1);
+    }
+    retireToolsRef.current = [];
+  }, [agent]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: planSessionGen keys re-registration to session IDENTITY — the session lives in a ref, so replacing it (e.g. /plan recovering while the mode is already "plan") never re-renders on its own
   useEffect(() => {
     if (mode !== "plan") return;
+    sweepRetiredTools();
     const tool = exitPlanTool({
       ask: askUserRef ?? { current: null },
       isActive: () => getMode() === "plan",
@@ -1267,6 +1214,10 @@ export function HarnessApp({
     });
     agent.agentState.tools.push(tool);
     return () => {
+      if (busyRef.current && getMode() !== "plan") {
+        retireToolsRef.current.push(tool);
+        return;
+      }
       const i = agent.agentState.tools.indexOf(tool);
       if (i >= 0) agent.agentState.tools.splice(i, 1);
     };
@@ -1609,7 +1560,6 @@ export function HarnessApp({
               ]);
             } else if (text) {
               setMessages((m) => [...m, { role: "assistant", text }]);
-              if (getMode() === "plan") planTurnSeenRef.current = true;
             }
           } else if (ev.message?.role === "toolResult") {
             setMessages((m) => [
@@ -1761,21 +1711,19 @@ export function HarnessApp({
 
     // Shift+Tab switches the permission mode from ANY state — idle, mid-run, with the
     // permission overlay up, or under the expanded panel (Claude Code parity: the switch
-    // is immediate, never queued). Modal selectors (pickers, palette, config, question
-    // overlay) keep the keyboard instead — Tab can mean something there.
+    // is immediate and SILENT, never queued and never a dialog). Leaving plan mode is
+    // CC's clean exit: the ring just advances and a streaming turn is left to FINISH
+    // (CC's non-disruptive switch — the chord never aborts). A live council still stops,
+    // but via the mode-exit cleanup effect below: discarding the session aborts its
+    // council (a council cannot outlive its session) and posts the transcript notice.
+    // A late exit_plan call from a still-streaming turn resolves gracefully — the tool's
+    // unregistration is deferred to the turn's end and isActive() answers "not active".
+    // Plan APPROVAL lives only in the exit_plan tool and /plan finalize. Modal selectors
+    // (pickers, palette, config, question overlay) keep the keyboard instead — Tab can
+    // mean something there.
     if (key.tab && key.shift) {
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
-      if (getMode() === "plan") {
-        // MP17: leaving plan mode routes the 3-option exit gate. Mid-council the
-        // in-flight plan turn stops FIRST, so finalize never interleaves a live round.
-        if (busy) {
-          councilControllerRef.current?.abort();
-          agent.abort();
-        }
-        void requestPlanExitGate();
-        return;
-      }
       const next = cycleMode();
       // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
       // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
@@ -3592,6 +3540,7 @@ export function HarnessApp({
         } finally {
           refutationControllerRef.current = null;
           setBusy(false);
+          sweepRetiredTools();
           setBusyState("ready");
         }
         break;
@@ -3960,6 +3909,9 @@ export function HarnessApp({
     } finally {
       pendingEchoRef.current = false;
       setBusy(false);
+      // The turn is over — retire any exit_plan instance whose unregistration was deferred
+      // by a mid-turn mode exit (see the registration effect).
+      sweepRetiredTools();
       setBusyState("ready");
       setCouncilPhase(null);
       setActiveActions([]);
