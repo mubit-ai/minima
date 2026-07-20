@@ -119,7 +119,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -228,7 +229,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -264,7 +266,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -306,7 +309,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -342,7 +346,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, recommendCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -385,7 +390,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     // A client whose recommend always fails.
     const failingFetch = async () => ({ status: 500, json: async () => ({ detail: "down" }) });
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: failingFetch });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: true,
       minimaApiKey: "k",
@@ -442,7 +448,8 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
       return { status: 404, json: async () => ({ detail: "nope" }) };
     };
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",

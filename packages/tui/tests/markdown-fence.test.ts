@@ -136,12 +136,7 @@ describe("sectionReaderLines — fenced code renders verbatim in the panel reade
   });
 
   test("no blank heading row injected for '#' lines inside a fence", () => {
-    const fenced = sectionReaderLines(
-      [{ role: "assistant", text: "```\n# x\n```" }],
-      0,
-      1,
-      120,
-    );
+    const fenced = sectionReaderLines([{ role: "assistant", text: "```\n# x\n```" }], 0, 1, 120);
     expect(fenced).toEqual(["◆ assistant", "```", "# x", "```"]);
   });
 });

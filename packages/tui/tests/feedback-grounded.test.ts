@@ -104,7 +104,8 @@ function setup(judge: ReturnType<typeof countingJudge>) {
   reg.setResponses([new AssistantMessage({ content: [text("answer")], stop_reason: "stop" })]);
   const { fetchLike, feedbackCalls } = mockService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-  const config = harnessConfig({ judgeSampleRate: 1,
+  const config = harnessConfig({
+    judgeSampleRate: 1,
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",

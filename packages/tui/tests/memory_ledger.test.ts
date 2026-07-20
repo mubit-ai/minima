@@ -29,10 +29,7 @@ function freshDb(): MinimaDb {
   return db;
 }
 
-function seed(
-  db: MinimaDb,
-  over: Partial<Parameters<MinimaDb["insertMemory"]>[0]> = {},
-): string {
+function seed(db: MinimaDb, over: Partial<Parameters<MinimaDb["insertMemory"]>[0]> = {}): string {
   return db.insertMemory({
     projectKey: "proj",
     kind: "lesson",

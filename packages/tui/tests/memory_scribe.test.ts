@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
+  type ScribeCandidate,
+  type ScribeSignal,
   applyRecurrenceGate,
   drainMemoryJobs,
   mineSignals,
   parseCandidates,
   runScribePass,
-  type ScribeCandidate,
-  type ScribeSignal,
 } from "../src/minima/index.ts";
 
 // B2 memory scribe: job queue lifecycle, ledger signal mining, recurrence gate, extraction
@@ -31,7 +31,13 @@ function seedPlan(db: MinimaDb, runId: string, content: string, verify?: string)
 
 function gate(
   db: MinimaDb,
-  o: { planId: string; stepId: string; runId: string; outcome: "verified" | "failed"; recId?: string },
+  o: {
+    planId: string;
+    stepId: string;
+    runId: string;
+    outcome: "verified" | "failed";
+    recId?: string;
+  },
 ): string {
   return db.insertGate({
     planId: o.planId,
@@ -84,7 +90,12 @@ describe("memory scribe — job queue", () => {
     expect(db.claimNextMemoryJob()!.id).toBe(a);
     // Only the deferred job remains queued (a is running again, b is done).
     expect(db.listMemoryJobs("queued").map((j) => j.id)).toEqual([later]);
-    expect(db.listMemoryJobs().map((j) => j.id).sort()).toEqual([a, b, later].sort());
+    expect(
+      db
+        .listMemoryJobs()
+        .map((j) => j.id)
+        .sort(),
+    ).toEqual([a, b, later].sort());
   });
 });
 
@@ -100,7 +111,7 @@ describe("memory scribe — mining + recurrence", () => {
     expect(signals).toHaveLength(1);
     const s = signals[0]!;
     expect(s.kind).toBe("gate_flip");
-    expect(s.detail).toContain('failed its check 2x, then passed');
+    expect(s.detail).toContain("failed its check 2x, then passed");
     expect(s.detail).toContain("bun test parser");
     expect(s.recIds.sort()).toEqual(["rec-1", "rec-2", "rec-3"]);
     expect(s.gateIds).toHaveLength(3);
@@ -230,8 +241,16 @@ describe("memory scribe — pass", () => {
       db,
       projectKey: "proj",
       extract: stubExtractor([
-        { kind: "lesson", content: "parser tests need the fixture reset before running", evidence: [1] },
-        { kind: "note", content: "always use tabs for indentation in this repository", evidence: [] },
+        {
+          kind: "lesson",
+          content: "parser tests need the fixture reset before running",
+          evidence: [1],
+        },
+        {
+          kind: "note",
+          content: "always use tabs for indentation in this repository",
+          evidence: [],
+        },
       ]),
     });
     expect(report.noops).toBe(2);

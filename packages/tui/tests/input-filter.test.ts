@@ -127,7 +127,7 @@ describe("processInputChunk (bracketed paste)", () => {
 
   test("a paste spanning chunks — split start marker, body, split end marker — assembles", async () => {
     const { processInputChunk } = await import("../src/tui/input-filter.ts");
-    let s = fresh();
+    const s = fresh();
     let r = processInputChunk(s, `typed${ESC}[200`); // split start marker held
     expect(r.output).toBe("typed");
     r = processInputChunk(r.state, "~line one\nline ");

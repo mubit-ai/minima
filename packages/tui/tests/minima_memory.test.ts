@@ -109,7 +109,8 @@ function buildAgent(opts: {
     ? async () => ({ status: 500, json: async () => ({ detail: "down" }) })
     : mockService().fetchLike;
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-  const config = harnessConfig({ judgeSampleRate: 1,
+  const config = harnessConfig({
+    judgeSampleRate: 1,
     candidates: ["test-faux"],
     allowOffline: opts.failing ?? false,
     minimaApiKey: "k",

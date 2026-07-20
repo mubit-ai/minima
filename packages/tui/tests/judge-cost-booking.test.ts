@@ -10,8 +10,7 @@ import {
   text,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { BudgetLedger, type BudgetEvent } from "../src/minima/budget.ts";
-import { LLMJudge } from "../src/minima/judge.ts";
+import { type BudgetEvent, BudgetLedger } from "../src/minima/budget.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -20,6 +19,7 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
+import { LLMJudge } from "../src/minima/judge.ts";
 
 // Decision (a) on the onCostUsd thread: judge spend books to the session WALLET (meter
 // overhead + BudgetLedger) but NEVER into feedback's actual_cost_usd — folding it in would
@@ -175,7 +175,8 @@ describe("judge spend: wallet yes, feedback no (decision a)", () => {
     ]);
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({ judgeSampleRate: 1,
+    const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",

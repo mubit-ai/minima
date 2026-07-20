@@ -62,6 +62,7 @@ import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
 import { detectRepo, gcCheckpoints, makeCheckpointHook, restore } from "../session/checkpoint.ts";
+import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
@@ -1981,6 +1982,23 @@ export function HarnessApp({
           }
         } catch {
           // adoption is fail-open bookkeeping
+        }
+        // D2: the working tree is co-equal state — re-run the in-progress step's verify
+        // (consent-gated, MP18) and re-baseline + banner when it diverged while away.
+        try {
+          const rv = await reverifyOnResume({
+            db: agent.db,
+            planSessionId: agent.runId,
+            eventRunId: agent.runId,
+            consent: (cmd) => verifyConsentRef?.current?.(cmd) ?? false,
+          });
+          const note = reverifyNotice(rv);
+          if (note) {
+            setMessages((m) => [...m, { role: "tool", toolName: "resume", text: note }]);
+          }
+          if (rv && !rv.skipped) setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+        } catch {
+          // re-verify is advisory — never break a resume
         }
       }
     }
