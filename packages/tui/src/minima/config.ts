@@ -93,6 +93,11 @@ export interface HarnessConfig {
    * inert on the default path (the deterministic branch never runs without a gate). Never affects
    * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
   gradedOutcome: boolean;
+  /** Memory ledger (B1, default ON): project curated cross-session memories (SQLite
+   * `memories` table, managed via /memory) into each turn's system prompt. Opt out with
+   * MINIMA_TUI_MEMORY=0 — mirrors the groundTruth flag shape. Read path only: nothing
+   * writes memories unless the user (or a later curator) does. */
+  memoryLedger: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -121,6 +126,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     toolAllowlist: true,
     backoffMs: 0,
     gradedOutcome: true,
+    memoryLedger: true,
     ...overrides,
   };
 }
@@ -135,6 +141,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(t)) cfg.timeout = t;
   }
   cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH !== "0";
+  cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);

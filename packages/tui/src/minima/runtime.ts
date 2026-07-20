@@ -52,6 +52,7 @@ import {
 import { type QualityJudge, clamp01 } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
+import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
 import { makeStopGate } from "./stop_gate.ts";
@@ -142,6 +143,9 @@ export class MinimaAgent extends Agent {
   /** True when the last promptRouted was cut short by Esc during routing (so the
    * UI shows "aborted" instead of a misleading "routing offline" note). */
   lastAborted = false;
+  /** B1: the last injected memory id-set (joined) — a changed set re-records the inject
+   * audit event; an unchanged one doesn't spam the ledger every turn. */
+  private lastMemoryInjectKey: string | null = null;
 
   /** Esc must stop BOTH phases: the in-flight route and the model run. */
   override abort(): void {
@@ -247,6 +251,38 @@ export class MinimaAgent extends Agent {
       if (planBlock) {
         const cur = this.agentState.systemPrompt;
         this.agentState.systemPrompt = cur ? `${cur}\n\n${planBlock}` : planBlock;
+      }
+    }
+    // B1 memory ledger: curated cross-session memory, projected into THIS turn's system
+    // prompt (state in the DB, projection in the context — reverted by the same `finally`).
+    // Lead only: children run quarantined with their own focused context. Each DISTINCT
+    // injected id-set is recorded once as an `inject` memory_event + a run event, so "what
+    // the model saw" is replayable without logging every turn.
+    if (this.config.memoryLedger && this.agentId === null) {
+      const proj = memoryProjectionFor(this.db, this.runId);
+      if (proj) {
+        const cur = this.agentState.systemPrompt;
+        this.agentState.systemPrompt = cur ? `${cur}\n\n${proj.text}` : proj.text;
+        const key = proj.ids.join(",");
+        if (key !== this.lastMemoryInjectKey) {
+          this.lastMemoryInjectKey = key;
+          try {
+            this.db?.writeMemoryEvent({
+              op: "inject",
+              payload: { run_id: this.runId, memory_ids: proj.ids, dropped: proj.dropped },
+              actor: "system",
+            });
+            if (this.runId) {
+              this.db?.appendEvent({
+                runId: this.runId,
+                type: "memory_inject",
+                payload: { memory_ids: proj.ids, dropped: proj.dropped },
+              });
+            }
+          } catch {
+            // bookkeeping is fail-open — a broken audit write never blocks the turn
+          }
+        }
       }
     }
     try {
