@@ -74,6 +74,12 @@ export interface RecommendRequest {
   constraints?: Constraints;
   user_id?: string;
   namespace?: string;
+  /**
+   * The model currently holding this session's context/prompt cache. Its
+   * estimate-basis input is priced partly at the cache-read rate (switching
+   * forfeits the cache) — stickiness via honest cost accounting.
+   */
+  incumbent_model_id?: string;
   max_candidates?: number;
   allow_llm_escalation?: boolean;
   explain?: boolean;
@@ -142,9 +148,21 @@ export interface FeedbackRequest {
   actual_cost_usd?: number;
   latency_ms?: number;
   iterations?: number;
+  /**
+   * Provenance of the quality signal. gate = deterministic verification (the only
+   * origin that may claim verified-in-production); judge = LLM judge; human =
+   * caller-asserted; none = unjudged — cost/latency telemetry only, never a
+   * success/reinforcement/calibration signal.
+   */
+  evidence_source?: "gate" | "judge" | "human" | "none";
+  /** infra = provider/tooling fault (429/5xx/timeout) — telemetry only, never model quality. */
+  error_cause?: "infra" | "quality";
+  /** DEPRECATED: send evidence_source="gate" instead. */
   verified_in_production?: boolean;
-  /** False = cadence-skip/abstain — server stores NULL quality instead of fabricating 0.9. */
+  /** DEPRECATED: send evidence_source instead (true→judge, false→none). */
   judged?: boolean;
+  /** Reasoning-effort tier the model ran at — raw material for (model x effort) arms. */
+  chosen_effort?: string;
   notes?: string;
   idempotency_key?: string;
 }
@@ -274,4 +292,35 @@ export interface CapabilitiesResponse {
   api_version: string;
   /** Constraint fields the engine actively filters on. */
   honored_constraints: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Policy value / regret-vs-oracle — metrics/ope.py + savings.py router
+// ---------------------------------------------------------------------------
+
+export interface PolicyEstimate {
+  policy: string;
+  n: number;
+  success_value: number;
+  cost_value: number;
+  /** Share of rows where this policy's pick equals the logged pick. */
+  matched_share: number;
+}
+
+export interface RegretReport {
+  n_trusted: number;
+  n_total_reconciled: number;
+  /** Share of trusted rows logged with a non-degenerate propensity. */
+  stochastic_share: number;
+  policies: PolicyEstimate[];
+  /** Model-based oracle success minus deployed success (honest upper bound). */
+  regret_vs_oracle: number;
+}
+
+export interface PolicyValueResponse {
+  org_id: string;
+  since: number;
+  days: number;
+  namespace?: string | null;
+  report: RegretReport;
 }

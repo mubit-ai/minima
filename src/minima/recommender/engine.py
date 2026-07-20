@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import random
 import time
 import uuid
@@ -11,18 +10,17 @@ from dataclasses import dataclass, field
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
-from minima.llm.base import CandidateView, Reasoner
 from minima.logging import get_logger
+from minima.memory import threadpool
 from minima.memory.adapter import Memory
-from minima.memory.keys import build_content, salient_signature, task_cluster, task_fingerprint
-from minima.memory.records import clamp01
+from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.records import label_score
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
-from minima.recommender.aggregate import aggregate_by_model, apply_ipw
+from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details, classify_from_neighbors_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
-from minima.recommender.propensity import Propensity, PropensityTracker
 from minima.recommender.recstore import RecStore, StoredRecommendation
 from minima.recommender.types import CandidateScore, ModelAggregate
 from minima.schemas.common import DecisionBasis, Difficulty, TaskType
@@ -72,8 +70,6 @@ class Recommender:
         memory: Memory,
         catalog_store: CatalogStore,
         recstore: RecStore,
-        reasoner: Reasoner | None = None,
-        propensity: Propensity | None = None,
         decision_log: DecisionLog | None = None,
         org_id: str = "default",
         rng: random.Random | None = None,
@@ -83,20 +79,19 @@ class Recommender:
         self._memory = memory
         self._catalog_store = catalog_store
         self._recstore = recstore
-        self._reasoner = reasoner
-        self._propensity = propensity or PropensityTracker()
         self._decision_log = decision_log
         self._org_id = org_id
         self._durable_refs = durable_refs
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
-        epsilon_orgs = {
-            o.strip() for o in settings.minima_epsilon_selection_orgs.split(",") if o.strip()
-        }
-        self._epsilon_enabled = org_id in epsilon_orgs
-        thompson_orgs = {
-            o.strip() for o in settings.minima_thompson_selection_orgs.split(",") if o.strip()
-        }
-        self._thompson_enabled = org_id in thompson_orgs
+        argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
+        self._thompson_enabled = (
+            settings.minima_selection_policy.strip().lower() == "thompson"
+            and org_id not in argmin_orgs
+        )
+        # Running exploration-share counters for the per-org deviation cap (in-process;
+        # reset on restart — the cap bounds a burst, not lifetime spend).
+        self._explore_picks = 0
+        self._total_picks = 0
         # Lazily-fit, cached calibrator (org-scoped via this Recommender's decision log).
         self._calibrators: CalibratorSet | None = None
         self._calibrators_fitted_at: float = 0.0
@@ -119,12 +114,7 @@ class Recommender:
         profile.mark("classify")
         class_profile.final_task_type = task_type
         class_profile.final_difficulty = difficulty
-        signature = (
-            salient_signature(req.task.task, settings.minima_cluster_signature_tokens)
-            if settings.minima_cluster_granularity.lower() == "fine"
-            else None
-        )
-        cluster = task_cluster(task_type, difficulty, signature)
+        cluster = task_cluster(task_type, difficulty)
         fingerprint = task_fingerprint(req.task.task)
         lane = settings.lane(req.namespace)
 
@@ -135,14 +125,24 @@ class Recommender:
             raise NoCandidatesError("no models match the supplied constraints")
         candidate_ids = {c.model_id for c in candidates}
 
-        recall, fastpath_evidence = await self._recall_with_fastpath(
-            req=req, lane=lane, cluster=cluster, candidate_ids=candidate_ids
+        recall, fastpath_evidence, lookup_degraded = await self._recall_with_fastpath(
+            req=req,
+            lane=lane,
+            cluster=cluster,
+            candidate_ids=candidate_ids,
+            task_type=task_type,
+            difficulty=difficulty,
         )
         profile.mark("recall")
         if recall.timed_out:
             warnings.append("recall_timeout")
         elif recall.error:
             warnings.append("memory_unavailable")
+        if lookup_degraded:
+            # The deterministic per-(cluster, model) evidence channel is down (timeout,
+            # transport error, or hosted policy) — the decision rests on ANN recall
+            # alone. Surfaced so degraded evidence is never silent again.
+            warnings.append("keyed_lookup_degraded")
         evidence = recall.outcome_evidence + fastpath_evidence
 
         # Neighbor-vote refinement: if the heuristic couldn't place the task, let the
@@ -168,14 +168,16 @@ class Recommender:
                     task_type = neighbor_estimate.task_type
                     class_profile.task_type_source = "neighbor_vote"
                     class_profile.final_task_type = task_type
-                cluster = task_cluster(task_type, difficulty, signature)
+                cluster = task_cluster(task_type, difficulty)
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
 
-        # Remember durable-record ids surfaced by recall so the fast path can
-        # Dereference them next time (live records only — seeds are per-row inserts,
-        # not the durable (cluster, model) upsert). Bookkeeping only: a store failure
-        # must never break the recommendation.
+        # Remember durable-record ids surfaced by recall so the fast path (and the
+        # feedback read-modify-write) can Dereference them next time. Only records
+        # carrying accumulated counters qualify — they are unambiguously the durable
+        # (cluster, model) upsert; a legacy per-row outcome or seed sharing the same
+        # (cluster, model) must never clobber the ref feedback itself stored.
+        # Bookkeeping only: a store failure must never break the recommendation.
         if self._durable_refs is not None:
             try:
                 for ev in recall.outcome_evidence:
@@ -184,6 +186,7 @@ class Recommender:
                         rec is not None
                         and rec.task_cluster == cluster
                         and rec.source_dataset is None
+                        and rec.n_outcomes > 0
                         and (ev.reference_id or ev.referenceable)
                     ):
                         self._durable_refs.upsert(
@@ -193,6 +196,10 @@ class Recommender:
                 log.warning("durable_ref_upsert_failed", error=str(exc))
         profile.mark("durable_refs")
 
+        # Refresh the calibrator OFF the event loop before scoring needs it (the lazy
+        # refit scans the decision-log window — a sync DB read that must not stall the
+        # loop). _score_candidates then reads the warm cache synchronously.
+        await threadpool.run(self._get_calibrators)
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -202,14 +209,6 @@ class Recommender:
             seed_crowdout_n=settings.minima_seed_crowdout_n,
         )
         profile.mark("aggregate")
-        if settings.minima_ipw_enabled and aggregates:
-            apply_ipw(
-                aggregates,
-                self._propensity.propensities(lane, cluster, candidate_ids),
-                settings.minima_ipw_clip_low,
-                settings.minima_ipw_clip_high,
-            )
-        profile.mark("ipw")
 
         input_tokens = req.task.expected_input_tokens or settings.minima_default_input_tokens
         output_tokens = req.task.expected_output_tokens or int(
@@ -271,47 +270,15 @@ class Recommender:
             recommended_confidence=recommended.confidence,
             ranked=ranked,
             aggregates=aggregates,
-            recommended_interval_width=score.posterior_interval_width(
-                aggregates.get(recommended.card.model_id),
-                score.capability_prior(recommended.card, task_type),
-                settings.minima_beta_pseudocount,
-            ),
-            recommended_predicted_success=recommended.predicted_success,
-            tau=tau,
-            classification_task_type=task_type,
-            classification_confidence=classification.confidence,
-            classification_easy_route=task_type
-            in {
-                TaskType.summarization,
-                TaskType.extraction,
-                TaskType.classification,
-                TaskType.translation,
-            },
         )
         profile.mark("escalation_eval")
+        # Escalation is DIAGNOSTIC only: thin/conflicting evidence is surfaced to the
+        # caller (and the decision log), whose harness owns the honest cascade — the
+        # recovery ladder re-decides after a VERIFIED failure. The old pre-decision
+        # LLM reasoner (guess-before-running) was deleted: cascade-on-evidence
+        # strictly dominates it and it shipped unreachable in the prod image anyway.
         if esc.should_escalate:
             warnings.extend(f"escalation_suggested:{reason}" for reason in esc.reasons)
-            if (
-                settings.minima_reasoner_fast_mode
-                and settings.minima_reasoner_fast_skip_low_value
-                and _is_low_value_escalation(esc.reasons)
-            ):
-                warnings.append("reasoner_skipped_low_value")
-            elif self._reasoner is not None and settings.reasoner_enabled:
-                consulted = await self._consult_reasoner(
-                    scored=scored, task_type=task_type, difficulty=difficulty, lane=lane, req=req
-                )
-                profile.mark("reasoner")
-                if consulted:
-                    recommended, fallback, ranked, opt_warnings = self._finalize(
-                        scored, tau, req.cost_quality_tradeoff
-                    )
-                    overall_basis = DecisionBasis.llm
-                    warnings.append("reasoner_consulted")
-                else:
-                    warnings.append("reasoner_failed")
-            else:
-                warnings.append("reasoner_disabled")
         warnings.extend(opt_warnings)
 
         if not evidence:
@@ -319,17 +286,18 @@ class Recommender:
         if catalog.stale:
             warnings.append("prices_stale")
 
-        # Selection policy: deterministic argmin everywhere; epsilon-softmax over the
-        # tau-ELIGIBLE set for opted-in orgs (the safety floor is eligibility itself).
-        # The propensity vector is logged either way so off-policy evaluation can tell
-        # a degenerate (deterministic) log from a stochastic one.
+        # Selection policy: calibrated Thompson sampling is THE default — sample each
+        # candidate's success from its Beta posterior, pick the cheapest clearing tau
+        # under the sample. Self-tuning exploration (well-evidenced candidates behave
+        # like argmin; uncertain ones get tried proportionally to plausibility) whose
+        # Monte-Carlo selection frequencies ARE the logged propensities, so off-policy
+        # evaluation is valid. "argmin" (per-org opt-out) keeps the deterministic
+        # cheapest-clearing-tau pick with degenerate propensities.
         selection_policy = "argmin"
         explored_pick = False
         sel_propensities: dict[str, float] = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
         sel_propensities[recommended.card.model_id] = 1.0
         if self._thompson_enabled and len(scored) >= 2:
-            # Posterior-sampling selection: sample each candidate's success, pick cheapest
-            # clearing tau under the sample. MC frequencies are the logged propensities.
             selection_policy = "thompson"
             items = [(c.card.model_id, c.alpha, c.beta, c.est_cost_usd) for c in scored]
             pick_id, pi = score.thompson_select(
@@ -338,48 +306,32 @@ class Recommender:
             sel_propensities = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
             sel_propensities.update(pi)
             if pick_id and pick_id != recommended.card.model_id:
-                sampled = next((c for c in scored if c.card.model_id == pick_id), None)
-                if sampled is not None:
-                    fallback = recommended  # the deterministic pick is the natural retry
-                    recommended = sampled
-                    overall_basis = recommended.decision_basis
-                    explored_pick = True
-                    warnings.append("thompson_pick")
-        elif self._epsilon_enabled:
-            eligible = [c for c in ranked if c.predicted_success >= tau]
-            if len(eligible) >= 2:
-                selection_policy = "epsilon_softmax"
-                argmin_id = recommended.card.model_id
-                pi = score.softmax_propensities(
-                    {c.card.model_id: c.score for c in eligible},
-                    argmin_id,
-                    settings.minima_epsilon,
-                    settings.minima_epsilon_softmax_temperature,
-                )
-                sel_propensities.update(pi)
-                sampled = self._maybe_explore(eligible, argmin_id)
-                if sampled is not None and sampled.card.model_id != argmin_id:
-                    fallback = recommended  # the deterministic pick is the natural retry
-                    recommended = sampled
-                    overall_basis = recommended.decision_basis
-                    explored_pick = True
-                    warnings.append("exploration_pick")
-
-        self._propensity.record(lane, cluster, recommended.card.model_id)
-
-        # Advisory shadow bandit: log what a UCB policy WOULD pick (never overrides).
-        shadow_pick: str | None = None
-        if settings.minima_shadow_bandit and ranked:
-            shadow_pick = _shadow_pick(
-                ranked, req.cost_quality_tradeoff, settings.minima_shadow_ucb_alpha
-            )
-            if shadow_pick is not None and shadow_pick != recommended.card.model_id:
-                warnings.append("shadow_disagree")
+                # Deviation cap: bound the running share of deliberate-exploration picks
+                # so a cold pool can't route a burst of live traffic away from argmin.
+                cap = settings.minima_explore_share_cap
+                share = self._explore_picks / max(1, self._total_picks)
+                if cap < 1.0 and share >= cap:
+                    selection_policy = "argmin"
+                    sel_propensities = dict.fromkeys(
+                        (c.card.model_id for c in ranked), 0.0
+                    )
+                    sel_propensities[recommended.card.model_id] = 1.0
+                    warnings.append("explore_budget_capped")
+                else:
+                    sampled = next((c for c in scored if c.card.model_id == pick_id), None)
+                    if sampled is not None:
+                        fallback = recommended  # the deterministic pick is the natural retry
+                        recommended = sampled
+                        overall_basis = recommended.decision_basis
+                        explored_pick = True
+                        warnings.append("thompson_pick")
+        self._total_picks += 1
+        if explored_pick:
+            self._explore_picks += 1
         profile.mark("selection")
 
         recommendation_id = uuid.uuid4().hex
-        self._recstore.put(
-            StoredRecommendation(
+        stored_rec = StoredRecommendation(
                 recommendation_id=recommendation_id,
                 lane=lane,
                 user_id=req.user_id,
@@ -394,10 +346,13 @@ class Recommender:
                     mid: [(ev.entry_id, ev.reference_id) for ev in agg.evidence]
                     for mid, agg in aggregates.items()
                 },
-            )
         )
+        # Sync store I/O (sqlite/redis/postgres backends) runs off the event loop —
+        # with --workers 1 an inline network write stalls every concurrent request.
+        await threadpool.run(self._recstore.put, stored_rec)
         profile.mark("recstore")
-        self._log_decision(
+        await threadpool.run(
+            self._log_decision,
             recommendation_id=recommendation_id,
             req=req,
             lane=lane,
@@ -415,7 +370,6 @@ class Recommender:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             est_cost_premium=est_cost_premium,
-            shadow_chosen_model_id=shadow_pick,
         )
         profile.mark("decision_log")
 
@@ -441,22 +395,6 @@ class Recommender:
             stage_latency_ms=profile.as_dict(),
         )
 
-    def _maybe_explore(
-        self, eligible: list[CandidateScore], argmin_id: str
-    ) -> CandidateScore | None:
-        """Sample the epsilon branch: softmax over eligible ranking scores.
-
-        Returns the sampled candidate (possibly the argmin itself) or None when the
-        (1 - epsilon) deterministic branch was taken.
-        """
-        settings = self._settings
-        if self._rng.random() >= settings.minima_epsilon:
-            return None
-        t = max(settings.minima_epsilon_softmax_temperature, 1e-6)
-        peak = max(c.score for c in eligible)
-        weights = [math.exp((c.score - peak) / t) for c in eligible]
-        return self._rng.choices(eligible, weights=weights, k=1)[0]
-
     async def _recall_with_fastpath(
         self,
         *,
@@ -464,19 +402,26 @@ class Recommender:
         lane: str,
         cluster: str,
         candidate_ids: set[str],
+        task_type: TaskType,
+        difficulty: Difficulty,
     ):
         """ANN recall joined by a deterministic keyed lookup for the current cluster.
 
         The lookup (POST /v2/core/lookup) fetches outcome records for all candidate
         models in this cluster straight from storage — no ANN, no flicker. Records
         already returned by ANN are deduped by entry_id so they are never double-counted.
+        Returns ``(recall, extra_evidence, lookup_degraded)``.
 
         The old dereference-based fastpath (MINIMA_DURABLE_FASTPATH=on/shadow) is
         retained for backward compatibility and runs concurrently when configured.
         """
         settings = self._settings
+        # Query with the SAME representation stored at write time (the classified
+        # "[type/difficulty] gist" built by build_content) — outcome records were
+        # embedded from that text, so querying with the raw prompt systematically
+        # depressed similarity (prefix tokens on one side, truncation on the other).
         recall_coro = self._memory.recall(
-            query=req.task.task,
+            query=build_content(task_type.value, difficulty.value, req.task.task),
             lane=lane,
             user_id=req.user_id,
             limit=settings.minima_memory_recall_limit,
@@ -493,74 +438,18 @@ class Recommender:
             ],
         )
 
-        mode = settings.minima_durable_fastpath.lower()
-        refs = (
-            self._durable_refs.refs(lane, cluster, settings.minima_durable_fastpath_max_refs)
-            if mode in ("shadow", "on") and self._durable_refs is not None
-            else []
-        )
-
-        if not refs:
-            # Fast common path: recall + lookup, no dereferences.
-            recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
-            ann_ids = {ev.entry_id for ev in recall.evidence}
-            extra = [ev for ev in lookup_evidence if ev.entry_id not in ann_ids]
-            if extra:
-                log.info(
-                    "keyed_lookup_delta",
-                    cluster=cluster,
-                    added=len(extra),
-                    models=[ev.record.model_id for ev in extra if ev.record],
-                )
-            return recall, extra
-
-        # Old dereference fastpath active: run all three concurrently, share the
-        # recall latency budget, then merge — lookup results deduped against both
-        # ANN and dereference results so no evidence is double-counted.
-        started = time.monotonic()
-        budget_s = settings.minima_memory_recall_timeout_ms / 1000.0
-        recall_task = asyncio.ensure_future(recall_coro)
-        lookup_task = asyncio.ensure_future(lookup_coro)
-        deref_tasks = [
-            asyncio.ensure_future(
-                self._memory.dereference(lane=lane, reference_id=r.reference_id or r.entry_id)
-            )
-            for r in refs
-        ]
-        recall = await recall_task
-        lookup_evidence = await lookup_task
-        remaining = max(0.05, budget_s - (time.monotonic() - started))
-        done, pending = await asyncio.wait(deref_tasks, timeout=remaining)
-        for task in pending:
-            task.cancel()
-        if pending:
-            log.warning("durable_fastpath_timeout", cluster=cluster, dropped=len(pending))
-        derefs = [
-            task.result() for task in done if not task.cancelled() and task.exception() is None
-        ]
-        fetched = [d for d in derefs if d is not None and d.record is not None]
+        recall, lookup_evidence = await asyncio.gather(recall_coro, lookup_coro)
+        lookup_degraded = lookup_evidence is None
         ann_ids = {ev.entry_id for ev in recall.evidence}
-        missed = [d for d in fetched if d.entry_id not in ann_ids]
-        if missed:
-            log.info(
-                "durable_fastpath_delta",
-                mode=mode,
-                cluster=cluster,
-                fetched=len(fetched),
-                ann_missed=len(missed),
-                missed_models=[d.record.model_id for d in missed if d.record],
-            )
-        deref_extra = missed if mode == "on" else []
-        seen_ids = ann_ids | {ev.entry_id for ev in deref_extra}
-        lookup_extra = [ev for ev in lookup_evidence if ev.entry_id not in seen_ids]
-        if lookup_extra:
+        extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
+        if extra:
             log.info(
                 "keyed_lookup_delta",
                 cluster=cluster,
-                added=len(lookup_extra),
-                models=[ev.record.model_id for ev in lookup_extra if ev.record],
+                added=len(extra),
+                models=[ev.record.model_id for ev in extra if ev.record],
             )
-        return recall, lookup_extra + deref_extra
+        return recall, extra, lookup_degraded
 
     def _log_decision(
         self,
@@ -582,12 +471,10 @@ class Recommender:
         input_tokens: int,
         output_tokens: int,
         est_cost_premium: float,
-        shadow_chosen_model_id: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
             return
-        settings = self._settings
         # Counterfactual baselines on the same cost basis as the candidate set: premium =
         # the most expensive scored candidate BEFORE constraint filters (mirrors the
         # workflow endpoint's total_est_cost_if_all_premium); declared = the caller's
@@ -621,10 +508,9 @@ class Recommender:
                     ts=time.time(),
                     tau=tau,
                     policy=selection_policy,
-                    epsilon=settings.minima_epsilon if selection_policy != "argmin" else 0.0,
+                    epsilon=0.0,
                     chosen_model_id=recommended.card.model_id,
                     escalated=esc.should_escalate,
-                    shadow_chosen_model_id=shadow_chosen_model_id,
                     explored=explored_pick,
                     escalation_reasons=list(esc.reasons),
                     candidates=[
@@ -656,81 +542,6 @@ class Recommender:
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path
             log.warning("decision_log_write_failed", error=str(exc))
 
-    async def _consult_reasoner(
-        self,
-        *,
-        scored: list[CandidateScore],
-        task_type: TaskType,
-        difficulty: Difficulty,
-        lane: str,
-        req: RecommendRequest,
-    ) -> bool:
-        settings = self._settings
-        reasoner_candidates = _reasoner_candidate_subset(
-            scored,
-            settings.minima_reasoner_fast_candidate_limit
-            if settings.minima_reasoner_fast_mode
-            else len(scored),
-        )
-        memory_block = await self._memory.get_context(
-            query=req.task.task,
-            lane=lane,
-            user_id=req.user_id,
-            max_token_budget=(
-                settings.minima_reasoner_fast_memory_token_budget
-                if settings.minima_reasoner_fast_mode
-                else 1500
-            ),
-        )
-        views = [
-            CandidateView(
-                model_id=c.card.model_id,
-                provider=c.card.provider,
-                input_cost_per_mtok=c.card.input_cost_per_mtok,
-                output_cost_per_mtok=c.card.output_cost_per_mtok,
-                context_window=c.card.context_window,
-                capability_prior=score.capability_prior(c.card, task_type),
-                est_cost_usd=c.est_cost_usd,
-                predicted_success=c.predicted_success,
-                est_latency_ms=c.est_latency_ms,
-            )
-            for c in reasoner_candidates
-        ]
-        result = await self._reasoner.rank(  # type: ignore[union-attr]
-            task=req.task.task,
-            task_type=task_type.value,
-            difficulty=difficulty.value,
-            candidates=views,
-            memory_block=memory_block,
-            cost_quality_tradeoff=req.cost_quality_tradeoff,
-        )
-        if not result or not result.rankings:
-            return False
-        settings = self._settings
-        rankings = result.by_model()
-        changed = False
-        for c in scored:
-            ranking = rankings.get(c.card.model_id)
-            if ranking is None:
-                continue
-            if settings.minima_reasoner_blend_adaptive:
-                # Evidence-mass-adaptive: a candidate backed by heavy deterministic
-                # evidence (confidence -> 1) barely moves toward the LLM's estimate; a
-                # cold candidate (confidence -> 0) leans on it. Replaces the fixed blend
-                # that weighted a 50-outcome aggregate and a guess identically.
-                raw = settings.minima_reasoner_blend_max * (1.0 - c.confidence)
-                blend = min(0.9, max(0.1, raw))
-            else:
-                blend = settings.minima_reasoner_blend
-            c.predicted_success = clamp01(
-                blend * ranking.predicted_success + (1.0 - blend) * c.predicted_success
-            )
-            c.decision_basis = DecisionBasis.llm
-            if ranking.rationale:
-                c.rationale = ranking.rationale
-            changed = True
-        return changed
-
     def _finalize(
         self, scored: list[CandidateScore], tau: float, cost_quality_tradeoff: float
     ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
@@ -739,7 +550,7 @@ class Recommender:
             c.score = score.ranking_score(
                 c.predicted_success, c.est_cost_usd / max_cost, cost_quality_tradeoff
             )
-        return _optimize(scored, tau, self._settings.minima_collapse_margin)
+        return _optimize(scored, tau)
 
 
     # --------------------------------------------------------------- calibration
@@ -813,16 +624,18 @@ class Recommender:
                 agg, prior, settings.minima_beta_pseudocount
             )
             alpha, beta = score.beta_params(agg, prior, settings.minima_beta_pseudocount)
-            # Calibrate the honest Beta mean to a truthful probability BEFORE the
-            # exploration bonus (deliberate optimism) is layered on for the tau decision.
+            # Calibrate the honest Beta mean to a truthful probability. Deliberate
+            # optimism is Thompson's job at selection time, not a score-time bonus.
             predicted = self._calibrate(task_type.value, predicted)
-            predicted = score.with_exploration_bonus(
-                predicted, confidence, settings.minima_exploration_bonus
-            )
             use_cache = req.constraints.require_prompt_caching and card.supports_prompt_caching
+            # The incumbent model keeps this session's prompt cache; a switch forfeits
+            # it. Pricing part of the incumbent's input at the cache-read rate makes
+            # stickiness fall out of honest cost accounting (estimate basis only —
+            # observed/rescaled already reflect realized caching), keeping Thompson's
+            # logged propensities valid instead of a post-hoc pick override.
             cache_fraction = (
-                settings.minima_cost_cache_input_fraction
-                if settings.minima_cost_lever_aware
+                settings.minima_incumbent_cache_fraction
+                if req.incumbent_model_id == card.model_id
                 and card.supports_prompt_caching
                 and not use_cache
                 else 0.0
@@ -897,26 +710,6 @@ class Recommender:
         return scored
 
 
-def _shadow_pick(
-    scored: list[CandidateScore], cost_quality_tradeoff: float, alpha: float
-) -> str | None:
-    """The UCB shadow policy's pick (argmax ucb_score over the scored candidates)."""
-    if not scored:
-        return None
-    max_cost = max((c.est_cost_usd for c in scored), default=0.0) or 1.0
-    best = max(
-        scored,
-        key=lambda c: score.ucb_score(
-            c.predicted_success,
-            c.interval_width,
-            c.est_cost_usd / max_cost,
-            cost_quality_tradeoff,
-            alpha,
-        ),
-    )
-    return best.card.model_id
-
-
 def _actions_for(card: ModelCard) -> list[str]:
     """Near-free cost-saving actions the caller should apply to realize the quoted cost.
 
@@ -936,21 +729,6 @@ def _overall_confidence(basis: DecisionBasis, recommended_confidence: float) -> 
     if basis == DecisionBasis.llm:
         return max(recommended_confidence, 0.5)
     return min(recommended_confidence, 0.5)
-
-
-def _reasoner_candidate_subset(scored: list[CandidateScore], limit: int) -> list[CandidateScore]:
-    if limit <= 0 or limit >= len(scored):
-        return list(scored)
-    return sorted(
-        scored, key=lambda c: (-c.predicted_success, c.est_cost_usd, -c.confidence)
-    )[:limit]
-
-
-def _is_low_value_escalation(reasons: list[str]) -> bool:
-    if not reasons:
-        return False
-    low_value = {"near_threshold", "tie"}
-    return all(reason in low_value for reason in reasons)
 
 
 def _select_candidates(
@@ -976,57 +754,25 @@ def _select_candidates(
 
 
 def _optimize(
-    scored: list[CandidateScore], tau: float, collapse_margin: float = 0.0
+    scored: list[CandidateScore], tau: float
 ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
+    """Deterministic MAP pick: cheapest candidate clearing tau, else highest-predicted.
+
+    This is the argmin limit of the Thompson policy, which handles uncertainty-driven
+    optimism natively at selection time (subsuming the old collapse-margin rescue,
+    epsilon-softmax, and exploration-bonus mechanisms this replaced).
+    """
     warnings: list[str] = []
     ranked = sorted(scored, key=lambda c: c.score, reverse=True)
     eligible = [c for c in scored if c.predicted_success >= tau]
-
-    # Tau-aware optimism: the rescue shrinks as the quality bar rises, so at a HIGH
-    # cost_quality setting (user wants quality) the guard barely fires, and at a LOW bar
-    # (cost-leaning) it rescues cheap-but-uncertain models freely. This is what keeps the
-    # guard from trading away quality exactly where the user asked for it.
-    effective_margin = collapse_margin * max(0.0, 1.0 - tau)
-
-    def _optimistic_clears(c: CandidateScore) -> bool:
-        # Upper credible-bound view: predicted + effective_margin * half-width clears tau.
-        # Only applied to candidates with ACTUAL evidence (confidence > 0) — at cold start,
-        # capability priors (not optimism over a maximal interval) decide, so the guard is inert.
-        if c.confidence <= 0.0:
-            return False
-        return c.predicted_success + effective_margin * 0.5 * c.interval_width >= tau
 
     if eligible:
         recommended = min(
             eligible, key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence)
         )
-        # Routing-collapse guard: if the cheapest model clearing tau is ITSELF the priciest
-        # candidate, prefer a cheaper candidate whose credible interval could still clear tau
-        # (the judge/escalation loop catches an over-optimistic cheap pick).
-        if collapse_margin > 0.0 and len(scored) > 1:
-            max_cost = max(c.est_cost_usd for c in scored)
-            if recommended.est_cost_usd >= max_cost - 1e-12:
-                cheaper = [
-                    c
-                    for c in scored
-                    if c.est_cost_usd < recommended.est_cost_usd and _optimistic_clears(c)
-                ]
-                if cheaper:
-                    recommended = min(
-                        cheaper,
-                        key=lambda c: (c.est_cost_usd, -c.predicted_success, -c.confidence),
-                    )
-                    warnings.append("collapse_guard_applied")
     else:
         warnings.append("no_model_meets_threshold")
-        # Don't default to the strongest (usually priciest) model: prefer the cheapest whose
-        # optimistic upper bound could still clear tau, falling back to strongest if none.
-        plausible = [c for c in scored if _optimistic_clears(c)] if collapse_margin > 0.0 else []
-        if plausible:
-            recommended = min(plausible, key=lambda c: (c.est_cost_usd, -c.predicted_success))
-            warnings.append("collapse_guard_applied")
-        else:
-            recommended = max(scored, key=lambda c: c.predicted_success)
+        recommended = max(scored, key=lambda c: c.predicted_success)
 
     others = [c for c in eligible if c.card.model_id != recommended.card.model_id]
     reliable = [c for c in others if c.predicted_success >= tau + 0.05]
@@ -1035,7 +781,6 @@ def _optimize(
     else:
         rest = [c for c in ranked if c.card.model_id != recommended.card.model_id]
         fallback = max(rest, key=lambda c: c.predicted_success) if rest else None
-
     return recommended, fallback, ranked, warnings
 
 
@@ -1048,7 +793,11 @@ def _to_ranked_model(c: CandidateScore, explain: bool) -> RankedModel:
                 model_id=ev.record.model_id if ev.record else c.card.model_id,
                 score=round(ev.score, 4),
                 knowledge_confidence=round(ev.knowledge_confidence, 4),
-                observed_success=round(ev.record.quality_score, 4) if ev.record else 0.0,
+                observed_success=(
+                    round(label_score(ev.record.outcome, ev.record.quality_score), 4)
+                    if ev.record
+                    else 0.0
+                ),
                 is_stale=ev.is_stale,
             )
             for ev in c.evidence

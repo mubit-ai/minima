@@ -31,6 +31,7 @@ def _reconciled(rec_id, predicted, outcome, *, quality=None, cost=None, task_typ
     rec.realized_quality = update.quality
     rec.realized_cost_usd = update.cost_usd
     rec.feedback_ts = update.ts
+    rec.evidence_source = "judge"
     return rec
 
 
@@ -99,7 +100,7 @@ class TestRoutingHealth:
         assert health["feedback_coverage"] == 0.5
         assert health["escalation_rate"] == 0.25
         assert health["exploration_share"] == 0.25  # actual exploration picks
-        assert health["epsilon_policy_share"] == 0.5  # rows where it was possible
+        assert health["thompson_policy_share"] == 0.0  # legacy epsilon rows are not thompson
 
     def test_empty(self):
         assert routing_health([])["recommendations"] == 0

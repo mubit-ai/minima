@@ -378,22 +378,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const tools = toolsFor(args, config.groundTruth === true, todoState);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
-  // Judge: abstains by default (honest — no fabricated quality). MINIMA_LLM_JUDGE=1 turns
-  // on real LLM grading (staged default-off: it spends money where ConstJudge spent zero).
+  // Judge: sampled LLM grading is ON by default (config.judgeSampleRate, ~15% of
+  // ungated turns) whenever the judge model's provider key is present — a small,
+  // unbiased labeled subset is what keeps the learning loop honest now that the server
+  // treats unlabeled turns as telemetry-only. MINIMA_LLM_JUDGE=0 disables entirely;
+  // =1 forces grading on every eligible turn (legacy full-grading behaviour).
   // Judge spend books to the session wallet (meter overhead + budget) but NEVER into
   // feedback's actual_cost_usd — folding it in would inflate the routed model's observed
   // $/call and poison the observed/rescaled cost basis. Late-bound: the agent (and its
   // optional budget) doesn't exist yet at judge construction.
   let bookJudgeSpend: (usd: number) => void = () => {};
   let judge: ConstJudge | LLMJudge = new ConstJudge(null);
-  if (process.env.MINIMA_LLM_JUDGE === "1") {
+  const judgeMode = process.env.MINIMA_LLM_JUDGE;
+  if (judgeMode !== "0" && config.judgeSampleRate > 0) {
     const jm = findModelById(config.judgeModel);
     if (jm && providerKeyPresent(jm.provider)) {
       judge = new LLMJudge(jm, { onCostUsd: (usd) => bookJudgeSpend(usd) });
+      const coverage =
+        config.judgeSampleRate >= 1
+          ? "every ungated turn"
+          : `~${Math.round(config.judgeSampleRate * 100)}% of ungated turns`;
       process.stderr.write(
-        `minima: LLM judge on (${jm.id}) — grading adds a small per-prompt cost (booked to /cost + budget)\n`,
+        `minima: sampled LLM judge on (${jm.id}, ${coverage}; MINIMA_LLM_JUDGE=0 disables) — spend books to /cost + budget\n`,
       );
-    } else {
+    } else if (judgeMode === "1") {
       process.stderr.write(
         `minima: MINIMA_LLM_JUDGE=1 ignored (judge model ${config.judgeModel} unavailable or key missing)\n`,
       );

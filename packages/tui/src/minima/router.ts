@@ -148,6 +148,8 @@ export class MinimaRouter {
     maxCandidates?: number;
     /** Cost-control opt-out of the server's LLM-reasoner consult. */
     allowLlmEscalation?: boolean;
+    /** Model currently holding the session's prompt cache (stickiness pricing). */
+    incumbentModelId?: string;
     /** Abort the in-flight recommend HTTP call (Esc during routing). */
     signal?: AbortSignal;
   }): Promise<RoutingResult> {
@@ -190,6 +192,7 @@ export class MinimaRouter {
       baseline_model_id: this.config.baselineModelId ?? undefined,
       max_candidates: opts.maxCandidates,
       allow_llm_escalation: opts.allowLlmEscalation,
+      incumbent_model_id: opts.incumbentModelId,
       signal: opts.signal,
     });
 
@@ -256,19 +259,22 @@ export class MinimaRouter {
     latencyMs: number;
     iterations?: number;
     /**
-     * True ONLY when the outcome was externally verified (tests passed / checks green).
-     * NEVER default this to true: the server treats verified successes as high-importance
-     * ground truth and promotes lessons from them — a fabricated flag poisons the
-     * learning loop (it substitutes quality 0.9 for null-quality successes).
+     * Provenance of the quality signal — the field the server keys ALL learning on.
+     * "gate" = deterministic green-tier verification (the only origin that may claim
+     * verified-in-production); "judge" = LLM judge graded; "none" = unlabeled — the
+     * turn is cost/latency telemetry only (no success aggregate, no reinforcement,
+     * no calibration pair). NEVER send "gate" for anything but a green gate verdict.
      */
+    evidenceSource: "gate" | "judge" | "human" | "none";
+    /** "infra" = provider/tooling fault (429/5xx/timeout) — telemetry only. */
+    errorCause?: "infra" | "quality";
+    /** DEPRECATED alias for evidenceSource="gate" (old servers). */
     verifiedInProduction: boolean;
-    /**
-     * Whether a quality judge ran on this turn. False = cadence-skip or abstain.
-     * The server uses this to store NULL quality instead of the 0.9 fabricated default,
-     * keeping calibration metrics and OPE weights honest.
-     */
+    /** DEPRECATED alias: true→judge, false→none (old servers). */
     judged: boolean;
-    /** Provenance tag, e.g. "judged=false" for cadence-skipped/abstained turns. */
+    /** Reasoning-effort tier the model ran at (raw material for model x effort arms). */
+    chosenEffort?: string;
+    /** Provenance tag, e.g. "unlabeled" for cadence-skipped/abstained turns. */
     notes?: string;
   }): Promise<FeedbackResponse> {
     return await this.client.feedback({
@@ -281,8 +287,11 @@ export class MinimaRouter {
       actual_cost_usd: Math.round(opts.usage.cost.total * 1e8) / 1e8,
       latency_ms: opts.latencyMs,
       iterations: opts.iterations,
+      evidence_source: opts.evidenceSource,
+      error_cause: opts.errorCause,
       verified_in_production: opts.verifiedInProduction,
       judged: opts.judged,
+      chosen_effort: opts.chosenEffort,
       notes: opts.notes,
     });
   }

@@ -232,63 +232,6 @@ class TestPostgresDecisionLog:
         assert got is not None
 
 
-# ── PostgreSQL: PropensityTracker ─────────────────────────────────────────────
-
-
-class TestPostgresPropensityTracker:
-    @pytest.fixture(autouse=True)
-    def tracker(self):
-        from minima.recommender.propensity import PostgresPropensityTracker
-
-        _require_postgres()
-        yield PostgresPropensityTracker(PG_URL)
-
-    @pytest.fixture
-    def cluster(self):
-        """Unique cluster name per test so DB state from prior runs never bleeds in."""
-        return _uid()
-
-    def test_laplace_shares(self, tracker, cluster):
-        for _ in range(3):
-            tracker.record("minima:default", cluster, "gemini-2.5-flash")
-        tracker.record("minima:default", cluster, "gemini-2.5-pro")
-        shares = tracker.propensities(
-            "minima:default", cluster, ["gemini-2.5-flash", "gemini-2.5-pro"]
-        )
-        # flash: (3+1)/(4+2)=4/6, pro: (1+1)/6=2/6
-        assert abs(shares["gemini-2.5-flash"] - 4 / 6) < 1e-9
-        assert abs(shares["gemini-2.5-pro"] - 2 / 6) < 1e-9
-
-    def test_unseen_model_gets_laplace_prior(self, tracker, cluster):
-        tracker.record("minima:default", cluster, "gemini-2.5-flash")
-        shares = tracker.propensities(
-            "minima:default", cluster, ["gemini-2.5-flash", "unseen-model"]
-        )
-        assert shares["unseen-model"] > 0
-
-    def test_org_isolation(self, tracker):
-        # Record flash 3× for org-a; org-b has no records.
-        # With 2 models in the query: flash (org-a) → (3+1)/(3+2)=0.8; pro → 0.2.
-        # org-b has no records → each model gets equal laplace prior (0.5 each).
-        models = ["gemini-2.5-flash", "gemini-2.5-pro"]
-        org_a_id = _uid()  # unique per test-run so prior runs don't accumulate
-        for _ in range(3):
-            tracker.record("minima:default", "code:hard:iso", "gemini-2.5-flash", org_id=org_a_id)
-        shares_a = tracker.propensities("minima:default", "code:hard:iso", models, org_id=org_a_id)
-        shares_b = tracker.propensities("minima:default", "code:hard:iso", models, org_id=_uid())
-        # org-a flash > org-b flash (org-b has no history → equal laplace 0.5/0.5)
-        assert shares_a["gemini-2.5-flash"] > shares_b["gemini-2.5-flash"]
-        assert shares_a["gemini-2.5-pro"] < shares_b["gemini-2.5-pro"]
-
-    def test_survives_reinstantiation(self):
-        from minima.recommender.propensity import PostgresPropensityTracker
-
-        lane, cluster, model = "minima:persist", "persist:test", _uid()
-        PostgresPropensityTracker(PG_URL).record(lane, cluster, model)
-        shares = PostgresPropensityTracker(PG_URL).propensities(lane, cluster, [model])
-        # After 1 record: (1+1)/(1+1) = 1.0 (only model in set)
-        assert shares[model] == pytest.approx(1.0)
-
 
 # ── PostgreSQL: DurableRefs ───────────────────────────────────────────────────
 
@@ -450,11 +393,6 @@ def test_build_factories_select_correct_backend():
         RedisDurableRefs,
         build_durable_refs,
     )
-    from minima.recommender.propensity import (
-        PostgresPropensityTracker,
-        PropensityTracker,
-        build_propensity,
-    )
     from minima.recommender.recstore import (
         PostgresRecommendationStore,
         RecommendationStore,
@@ -465,7 +403,6 @@ def test_build_factories_select_correct_backend():
     mem = Settings(mubit_api_key="t", minima_recommendation_store="memory")
     assert isinstance(build_recstore(mem), RecommendationStore)
     assert isinstance(build_decision_log(mem), MemoryDecisionLog)
-    assert isinstance(build_propensity(mem), PropensityTracker)
     assert isinstance(build_durable_refs(mem), MemoryDurableRefs)
 
     if not _port_open("localhost", 55432) or not _port_open("localhost", 6379):
@@ -478,7 +415,6 @@ def test_build_factories_select_correct_backend():
     )
     assert isinstance(build_recstore(pg), PostgresRecommendationStore)
     assert isinstance(build_decision_log(pg), PostgresDecisionLog)
-    assert isinstance(build_propensity(pg), PostgresPropensityTracker)
     assert isinstance(build_durable_refs(pg), PostgresDurableRefs)
 
     # Hybrid: cloud SQL for analytical, redis for operational
@@ -492,7 +428,6 @@ def test_build_factories_select_correct_backend():
     assert isinstance(build_recstore(hybrid), RedisRecommendationStore)
     # decision log follows RECOMMENDATION_STORE; durable refs follow RECSTORE_BACKEND below
     assert isinstance(build_decision_log(hybrid), PostgresDecisionLog)
-    assert isinstance(build_propensity(hybrid), PostgresPropensityTracker)
     assert isinstance(build_durable_refs(hybrid), RedisDurableRefs)
 
 

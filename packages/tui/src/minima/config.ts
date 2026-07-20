@@ -37,13 +37,19 @@ export interface HarnessConfig {
   judgeModel: string;
   /** Judge every Nth terminal turn (1 = every turn). 0 disables judging. */
   judgeEvery: number;
+  /** Probability a judge-eligible (ungated) turn is actually graded. Sampling keeps the
+   * default-on judge cheap while still yielding an unbiased labeled subset — enough to
+   * fit calibration and posteriors on judged rows alone. 1 = grade every eligible turn,
+   * 0 disables. MINIMA_JUDGE_SAMPLE overrides; MINIMA_LLM_JUDGE=1 forces 1 (legacy). */
+  judgeSampleRate: number;
   baselineModelId: string | null;
   timeout: number;
   allowOffline: boolean;
   cacheEnabled: boolean;
   cacheThreshold: number;
-  /** Ground-Truth ledger (staged, default OFF): persist/project the plan, attribute file
-   * changes, and record verification gates. Gated by MINIMA_TUI_GROUND_TRUTH=1. */
+  /** Ground-Truth ledger (default ON since 0.11): persist/project the plan, attribute file
+   * changes, and record verification gates — gate verdicts are the harness's honest label
+   * source. Opt out with MINIMA_TUI_GROUND_TRUTH=0. */
   groundTruth: boolean;
   /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
    * END the run while the plan has incomplete/failing steps before it stops denying and asks the
@@ -100,12 +106,13 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     costQualityTradeoff: 5.0,
     judgeModel: DEFAULT_JUDGE_MODEL,
     judgeEvery: 1,
+    judgeSampleRate: 0.15,
     baselineModelId: null,
     timeout: 30.0,
     allowOffline: true,
     cacheEnabled: false,
     cacheThreshold: 0.95,
-    groundTruth: false,
+    groundTruth: true,
     stopStrikes: 3,
     spiralRepeats: 3,
     stepCap: 30,
@@ -127,7 +134,14 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const t = Number(timeoutEnv);
     if (Number.isFinite(t)) cfg.timeout = t;
   }
-  cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH === "1";
+  cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH !== "0";
+  const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
+  if (judgeSampleEnv) {
+    const s = Number(judgeSampleEnv);
+    if (Number.isFinite(s) && s >= 0 && s <= 1) cfg.judgeSampleRate = s;
+  } else if (process.env.MINIMA_LLM_JUDGE === "1") {
+    cfg.judgeSampleRate = 1.0;
+  }
   const strikesEnv = process.env.MINIMA_TUI_STOP_STRIKES;
   if (strikesEnv !== undefined) {
     const n = Number(strikesEnv);

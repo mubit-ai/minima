@@ -88,8 +88,8 @@ jobs:
             --network=${{ env.NETWORK }} \
             --subnet=${{ env.SUBNET }} \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
-            --set-secrets="GEMINI_API_KEY=minima-prod-gemini-key:latest,ANTHROPIC_API_KEY=minima-prod-anthropic-key:latest,OPENROUTER_API_KEY=minima-prod-openrouter-key:latest,MINIMA_DATABASE_URL=minima-prod-db-url:latest,MINIMA_REDIS_URL=minima-prod-redis-url:latest" \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis" \
+            --set-secrets="OPENROUTER_API_KEY=minima-prod-openrouter-key:latest,MINIMA_DATABASE_URL=minima-prod-db-url:latest,MINIMA_REDIS_URL=minima-prod-redis-url:latest" \
             --quiet
 
       - name: Print service URL

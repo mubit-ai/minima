@@ -94,7 +94,7 @@ function mockService() {
 function agentWith(db: MinimaDb, runId: string): MinimaAgent {
   const { fetchLike } = mockService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-  const config = harnessConfig({
+  const config = harnessConfig({ judgeSampleRate: 1,
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",

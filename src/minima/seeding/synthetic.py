@@ -11,7 +11,7 @@ import random
 
 from minima.catalog.store import load_snapshot_cards
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
-from minima.memory.records import OutcomeRecord
+from minima.memory.records import EVIDENCE_DATASET, OutcomeRecord
 from minima.schemas.common import Difficulty, TaskType
 from minima.seeding.items import SeedItem
 
@@ -57,6 +57,7 @@ def generate(n: int, seed: int = 42) -> list[SeedItem]:
             cost_usd=round(cost, 6),
             quality_score=quality,
             outcome="success" if success else "failure",
+            evidence_source=EVIDENCE_DATASET,
             source_dataset="synthetic",
         )
         out.append(

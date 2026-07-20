@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # package stays `minima`. This package ships the server + client SDK only; the `minima` CLI
 # is the TypeScript binary installed via Homebrew (brew tap mubit-ai/minima).
 name = "minima-cli"
-version = "0.10.0"
+version = "0.11.0"
 description = "Minima CLI: cost-aware LLM model routing — recommend cheaper models, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,6 +47,7 @@ Repository = "https://github.com/mubit-ai/minima"
 Issues = "https://github.com/mubit-ai/minima/issues"
 
 [project.optional-dependencies]
+adapters = ["litellm>=1.60", "openhands-sdk>=1.30; python_version >= '3.12'"]
 # Run the Minima API server (operator/self-host only — hosted users don't need this).
 server = [
   "fastapi>=0.115",
@@ -54,12 +55,10 @@ server = [
   "psycopg2-binary>=2.9",
   "redis>=5.0",
 ]
-reasoner-anthropic = ["anthropic>=0.40"]
-reasoner-gemini = ["google-genai>=0.3"]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
-# dev pulls every runtime extra so the full test suite (server API tests, reasoners) runs.
+# dev pulls every runtime extra so the full test suite (server API tests) runs.
 dev = [
-  "minima-cli[server,reasoner-anthropic,reasoner-gemini]",
+  "minima-cli[server]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
@@ -68,6 +67,7 @@ dev = [
 ]
 
 [project.scripts]
+minima-route = "minima_client.integrations.claude_code:main"
 # The `minima` CLI/TUI is NOT here — it is the TypeScript binary (packages/tui) shipped via
 # Homebrew. This package only exposes the server-side operator tools.
 minima-seed = "minima.seeding.run_seed:main"

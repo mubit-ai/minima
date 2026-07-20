@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import random
 
 from minima.memory.records import clamp01
@@ -193,44 +192,11 @@ def threshold_from_slider(
     return tau
 
 
-def with_exploration_bonus(predicted: float, confidence: float, bonus: float) -> float:
-    """Optimistically inflate predicted success for under-explored candidates.
-
-    The bonus is scaled by ``(1 - confidence)`` so well-evidenced models are barely
-    touched while models with little/no recalled evidence get the full nudge — enough
-    to occasionally clear the threshold and earn a recommendation (and thus feedback).
-    ``bonus`` of 0 disables exploration entirely (pure exploitation).
-    """
-    if bonus <= 0.0:
-        return predicted
-    return clamp01(predicted + bonus * (1.0 - clamp01(confidence)))
-
-
 def ranking_score(predicted: float, normalized_cost: float, cost_quality_tradeoff: float) -> float:
     """Smooth blend used to order the returned list (distinct from the hard threshold)."""
     cq = max(0.0, min(10.0, cost_quality_tradeoff))
     lam = 0.3 + 0.07 * cq  # cq=0 -> 0.3 (cost-leaning); cq=10 -> 1.0 (quality-only)
     return lam * predicted - (1.0 - lam) * normalized_cost
-
-
-def ucb_score(
-    predicted: float,
-    interval_width: float,
-    normalized_cost: float,
-    cost_quality_tradeoff: float,
-    alpha: float,
-) -> float:
-    """Upper-confidence-bound contextual-bandit score (optimism-in-the-face-of-uncertainty).
-
-    Same cost/quality scalarization as :func:`ranking_score`, but the success term gets an
-    optimism bonus of ``alpha * half-width`` so under-explored arms are favoured for
-    exploration. Used by the SHADOW bandit policy (logged for regret comparison, never
-    overrides the deployed conjugate pick).
-    """
-    cq = max(0.0, min(10.0, cost_quality_tradeoff))
-    lam = 0.3 + 0.07 * cq
-    optimistic = clamp01(predicted + alpha * 0.5 * interval_width)
-    return lam * optimistic - (1.0 - lam) * normalized_cost
 
 
 def posterior_interval_width(
@@ -246,29 +212,6 @@ def posterior_interval_width(
     n_eff = (agg.weight_sum if agg is not None else 0.0) + max(pseudocount, 1e-9)
     width = 2.0 * 1.96 * (max(p * (1.0 - p), 1e-9) / n_eff) ** 0.5
     return min(1.0, width)
-
-
-def softmax_propensities(
-    scores: dict[str, float], argmin_id: str, epsilon: float, temperature: float
-) -> dict[str, float]:
-    """Selection propensities for the epsilon-softmax policy over the eligible set.
-
-    pi(m) = (1 - eps) * 1[m == argmin] + eps * softmax(score(m) / temperature).
-    The deterministic policy is the eps=0 special case (degenerate vector). Returned
-    propensities sum to 1 over the eligible candidates.
-    """
-    if not scores:
-        return {}
-    t = max(temperature, 1e-6)
-    peak = max(scores.values())
-    exps = {mid: math.exp((s - peak) / t) for mid, s in scores.items()}
-    total = sum(exps.values()) or 1.0
-    soft = {mid: e / total for mid, e in exps.items()}
-    eps = max(0.0, min(1.0, epsilon))
-    return {
-        mid: (1.0 - eps) * (1.0 if mid == argmin_id else 0.0) + eps * soft[mid]
-        for mid in scores
-    }
 
 
 def beta_params(

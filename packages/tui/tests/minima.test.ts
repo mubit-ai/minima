@@ -119,7 +119,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -198,6 +198,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: hangingFetch });
     const config = harnessConfig({
+      judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -227,7 +228,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -248,7 +249,43 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     // fabricated quality (0.9) for null-quality successes and treats verified ones as
     // high-importance ground truth, so an untagged/false-verified turn poisons learning.
     expect(fb.verified_in_production).toBe(false);
-    expect(fb.notes).toBe("judged=false");
+    expect(fb.notes).toBe("unlabeled");
+    expect(fb.evidence_source).toBe("none");
+    reg.unregister();
+  });
+
+  test("provider failure sends infra telemetry — no fabricated quality, no judged claim", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("")], stop_reason: "error", error_message: "429" }),
+    ]);
+
+    const { fetchLike, feedbackCalls } = mockService();
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
+    const config = harnessConfig({ judgeSampleRate: 1,
+      candidates: ["test-faux"],
+      allowOffline: false,
+      minimaApiKey: "k",
+    });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+
+    const agent = new MinimaAgent({ config, router, judge: new ConstJudge(0.9) });
+    agent.recoveryRungs = 0; // isolate feedback from the escalation ladder
+
+    await agent.promptRouted("do something");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.outcome).toBe("failure");
+    // An infra fault (429/5xx/timeout) is not a model-quality signal: quality stays
+    // absent (the old path fabricated 0.0 + judged=true) and the cause is declared so
+    // the server keeps it out of the success aggregate and reinforcement entirely.
+    expect(fb.quality_score).toBeUndefined();
+    expect(fb.error_cause).toBe("infra");
+    expect(fb.evidence_source).toBe("none");
+    expect(fb.judged).toBe(false);
+    expect(fb.verified_in_production).toBe(false);
     reg.unregister();
   });
 
@@ -269,7 +306,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, feedbackCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -305,7 +342,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
 
     const { fetchLike, recommendCalls } = mockService();
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
@@ -323,6 +360,10 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     const req = recommendCalls[0] as Record<string, any>;
     expect(req.task.difficulty).toBe("hard");
     expect(req.task.expected_input_tokens).toBeGreaterThan(0); // live-context estimate
+    // Reference-client signals: phase rides as a tag; the incumbent model (the one
+    // holding the session's prompt cache) is declared for stickiness pricing.
+    expect(req.task.tags).toEqual(["phase:interactive"]);
+    expect(req.incumbent_model_id).toBe("test-faux");
     expect(req.constraints.max_cost_per_call).toBe(0.25);
     expect(req.constraints.min_quality).toBe(0.8);
     expect(req.constraints.excluded_models).toEqual(["dead-model"]);
@@ -344,7 +385,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     // A client whose recommend always fails.
     const failingFetch = async () => ({ status: 500, json: async () => ({ detail: "down" }) });
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: failingFetch });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: true,
       minimaApiKey: "k",
@@ -401,7 +442,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
       return { status: 404, json: async () => ({ detail: "nope" }) };
     };
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-    const config = harnessConfig({
+    const config = harnessConfig({ judgeSampleRate: 1,
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",

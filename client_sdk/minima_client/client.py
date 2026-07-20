@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -45,12 +46,33 @@ def _headers(api_key: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
+@dataclass(slots=True)
+class Usage:
+    """Realized per-call usage — the single biggest accuracy lever of the loop.
+
+    Report what the provider ACTUALLY billed (never echo Minima's own est_cost_usd
+    back): these numbers are what let the cost basis climb estimate -> observed ->
+    rescaled for your org.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    latency_ms: int | None = None
+
+
 def _feedback_request(
     recommendation_id: str,
     chosen_model_id: str,
     outcome: OutcomeLabel | str,
+    usage: Usage | None = None,
     **kwargs: Any,
 ) -> FeedbackRequest:
+    if usage is not None:
+        kwargs.setdefault("input_tokens", usage.input_tokens or None)
+        kwargs.setdefault("output_tokens", usage.output_tokens or None)
+        kwargs.setdefault("actual_cost_usd", usage.cost_usd or None)
+        kwargs.setdefault("latency_ms", usage.latency_ms)
     return FeedbackRequest(
         recommendation_id=recommendation_id,
         chosen_model_id=chosen_model_id,
@@ -132,9 +154,10 @@ class MinimaClient:
         recommendation_id: str,
         chosen_model_id: str,
         outcome: OutcomeLabel | str,
+        usage: Usage | None = None,
         **kwargs: Any,
     ) -> FeedbackResponse:
-        req = _feedback_request(recommendation_id, chosen_model_id, outcome, **kwargs)
+        req = _feedback_request(recommendation_id, chosen_model_id, outcome, usage, **kwargs)
         return FeedbackResponse.model_validate(self._post("/v1/feedback", req))
 
     def models(
@@ -254,9 +277,10 @@ class AsyncMinimaClient:
         recommendation_id: str,
         chosen_model_id: str,
         outcome: OutcomeLabel | str,
+        usage: Usage | None = None,
         **kwargs: Any,
     ) -> FeedbackResponse:
-        req = _feedback_request(recommendation_id, chosen_model_id, outcome, **kwargs)
+        req = _feedback_request(recommendation_id, chosen_model_id, outcome, usage, **kwargs)
         return FeedbackResponse.model_validate(await self._post("/v1/feedback", req))
 
     async def strategies(

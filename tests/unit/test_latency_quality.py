@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from minima.memory.records import reconcile_quality
 from minima.recommender.aggregate import aggregate_by_model
-from minima.recommender.score import posterior_interval_width, softmax_propensities
+from minima.recommender.score import posterior_interval_width
 from minima.recommender.types import _weighted_quantile
 from tests.factories import make_evidence
 
@@ -82,17 +80,3 @@ class TestPosteriorIntervalWidth:
         assert w_many < w_few < 1.0
 
 
-class TestSoftmaxPropensities:
-    def test_sums_to_one_and_argmin_dominates(self):
-        pi = softmax_propensities(
-            {"a": 0.9, "b": 0.7, "c": 0.5}, argmin_id="b", epsilon=0.03, temperature=0.1
-        )
-        assert sum(pi.values()) == pytest.approx(1.0)
-        assert pi["b"] > 0.9  # (1 - eps) + its softmax share
-        assert all(p > 0 for p in pi.values())  # every eligible candidate is explorable
-
-    def test_epsilon_zero_is_degenerate(self):
-        pi = softmax_propensities(
-            {"a": 0.9, "b": 0.7}, argmin_id="a", epsilon=0.0, temperature=0.1
-        )
-        assert pi == {"a": 1.0, "b": 0.0}

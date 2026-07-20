@@ -12,8 +12,9 @@ from fastapi import APIRouter, Depends, Query
 
 from minima.api.auth import get_tenant
 from minima.metrics.calibration import routing_health
+from minima.metrics.ope import regret_report
 from minima.metrics.savings import group_rows, summarize
-from minima.schemas.savings import SavingsGroup, SavingsResponse
+from minima.schemas.savings import PolicyValueResponse, SavingsGroup, SavingsResponse
 from minima.tenancy.context import TenantContext
 
 router = APIRouter(prefix="/v1", tags=["savings"])
@@ -52,4 +53,27 @@ async def savings(
         health=health,
         group_by=group_by,
         groups=groups,
+    )
+
+
+@router.get("/policy-value", response_model=PolicyValueResponse)
+async def policy_value(
+    tenant: TenantContext = Depends(get_tenant),
+    namespace: str | None = Query(None, description="restrict to one namespace lane"),
+    days: float = Query(30.0, gt=0, le=365, description="lookback window in days"),
+) -> PolicyValueResponse:
+    """Regret-vs-oracle: DR policy values over trusted-provenance reconciled decisions."""
+    since = time.time() - days * _SECONDS_PER_DAY
+    lane = f"{tenant.lane_prefix}:{namespace}" if namespace else None
+    rows = (
+        tenant.decision_log.rows(since=since, lane=lane)
+        if tenant.decision_log is not None
+        else []
+    )
+    return PolicyValueResponse(
+        org_id=tenant.org_id,
+        since=since,
+        days=days,
+        namespace=namespace,
+        report=regret_report(rows),
     )

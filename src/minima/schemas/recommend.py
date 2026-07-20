@@ -50,6 +50,16 @@ class RecommendRequest(BaseModel):
             "The tenant boundary is your Minima API key -> your Mubit instance, not this field."
         ),
     )
+    incumbent_model_id: str | None = Field(
+        None,
+        description=(
+            "the model currently holding this session's context/prompt cache. Its "
+            "ESTIMATE-basis input cost is priced partly at the cache-read rate "
+            "(switching models forfeits the cache), so stickiness emerges from honest "
+            "cost accounting rather than a post-hoc override — logged propensities "
+            "stay valid."
+        ),
+    )
     max_candidates: int = Field(8, ge=1, le=64)
     allow_llm_escalation: bool = True
     explain: bool = True
@@ -124,7 +134,11 @@ class RecommendResponse(BaseModel):
     classification_profile: ClassificationProfile | None = None
     warnings: list[str] = Field(default_factory=list)
     selection_policy: str = Field(
-        "argmin", description='"argmin" | "epsilon_softmax" (per-org opt-in exploration)'
+        "argmin",
+        description=(
+            '"thompson" (default posterior-sampling policy) | "argmin" '
+            "(deterministic; per-org opt-out or single-candidate/capped decisions)"
+        ),
     )
     recommended_actions: list[str] = Field(
         default_factory=list,

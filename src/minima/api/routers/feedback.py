@@ -11,6 +11,7 @@ from minima.api.auth import get_tenant
 from minima.config import Settings
 from minima.deps import get_settings
 from minima.logging import get_logger
+from minima.memory import threadpool
 from minima.memory.adapter import Memory
 from minima.memory.keys import (
     build_lesson_content,
@@ -19,8 +20,14 @@ from minima.memory.keys import (
     outcome_upsert_key,
 )
 from minima.memory.records import (
+    EVIDENCE_GATE,
+    EVIDENCE_HUMAN,
+    EVIDENCE_JUDGE,
+    EVIDENCE_NONE,
     OutcomeRecord,
-    quality_from_outcome,
+    clamp01,
+    is_labeled,
+    merged_outcome,
     reconcile_quality,
     signal_from_outcome,
 )
@@ -31,6 +38,65 @@ from minima.tenancy.context import TenantContext
 
 log = get_logger("minima.feedback")
 router = APIRouter(prefix="/v1", tags=["feedback"])
+
+
+def _resolve_evidence_source(req: FeedbackRequest) -> str:
+    """Explicit evidence_source wins; else derive from the deprecated flags.
+
+    Legacy SDK clients (no judged flag at all) asserted the outcome themselves —
+    that is a human label, not an unjudged turn; a harness that explicitly says
+    judged=False is declaring the turn unlabeled.
+    """
+    if req.evidence_source:
+        return req.evidence_source
+    if req.verified_in_production:
+        return EVIDENCE_GATE
+    if req.judged:
+        return EVIDENCE_JUDGE
+    if req.judged is False:
+        return EVIDENCE_NONE
+    return EVIDENCE_HUMAN
+
+
+def _supplied_quality(req: FeedbackRequest) -> tuple[float | None, str | None]:
+    """Clamp a caller-supplied quality against the outcome label; None stays None."""
+    if req.quality_score is None:
+        return None, None
+    return reconcile_quality(req.outcome.value, clamp01(float(req.quality_score)))
+
+
+async def _previous_record(
+    tenant: TenantContext, lane: str, cluster: str, model_id: str
+) -> OutcomeRecord | None:
+    """Read the current durable (cluster, model) record so counters can accumulate.
+
+    The durable record is a last-write-wins upsert in Mubit; without this
+    read-modify-write, every feedback wiped the accumulated history and organic
+    evidence capped at n=1. Strictly fail-open: any miss/error just starts a
+    fresh history.
+    """
+    try:
+        if tenant.durable_refs is not None:
+            for ref in tenant.durable_refs.refs(lane, cluster, limit=64):
+                if ref.model_id != model_id:
+                    continue
+                ev = await tenant.memory.dereference(
+                    lane=lane, reference_id=ref.reference_id or ref.entry_id
+                )
+                if ev is not None and ev.record is not None:
+                    return ev.record
+                break
+        hits = await tenant.memory.lookup(
+            lane=lane,
+            match=[{"kind": "outcome", "task_cluster": cluster, "model_id": model_id}],
+            limit=4,
+        )
+        for ev in hits or []:
+            if ev.record is not None:
+                return ev.record
+    except Exception as exc:  # noqa: BLE001 — accumulation is additive; never fail feedback
+        log.warning("previous_record_read_failed", cluster=cluster, error=str(exc))
+    return None
 
 
 def _fire_reflect(memory: Memory, lane: str, user_id: str | None) -> None:
@@ -51,8 +117,9 @@ async def feedback(
 ) -> FeedbackResponse:
     memory = tenant.memory
     # Org-scoped store: a recommendation_id minted for another org resolves to None here,
-    # so org A cannot credit or poison org B's recommendation.
-    stored = tenant.recstore.get(req.recommendation_id)
+    # so org A cannot credit or poison org B's recommendation. Sync store reads run off
+    # the event loop (sqlite/redis/postgres backends).
+    stored = await threadpool.run(tenant.recstore.get, req.recommendation_id)
     if stored is None:
         # Degraded late-feedback path: the recstore TTL expired but the decision log
         # (longer retention) still knows the recommendation. The outcome record is still
@@ -65,10 +132,12 @@ async def feedback(
                 return await _late_feedback(req, tenant, decision)
         return FeedbackResponse(accepted=False, warnings=["unknown_recommendation"])
 
-    quality = quality_from_outcome(req.outcome.value, req.quality_score)
-    quality, mismatch = reconcile_quality(req.outcome.value, quality)
-    signal = signal_from_outcome(req.outcome.value, quality)
+    source = _resolve_evidence_source(req)
+    infra = req.error_cause == "infra"
+    labeled = is_labeled(source) and not infra
+    quality, mismatch = _supplied_quality(req)
     is_success = req.outcome == OutcomeLabel.success
+    verified = labeled and source == EVIDENCE_GATE
     warnings: list[str] = []
     if mismatch:
         warnings.append(mismatch)
@@ -81,6 +150,21 @@ async def feedback(
             cluster=stored.task_cluster,
         )
 
+    # Reconcile the decision-log row BEFORE the Mubit memory write: realized cost/outcome
+    # are local analytics facts and must survive a memory outage. (Observed live: a Mubit
+    # 503 made every feedback return early and /v1/savings showed 0 reconciled rows for a
+    # whole day of traffic.)
+    _reconcile_decision(tenant, req, quality, EVIDENCE_NONE if infra else source, late=False)
+
+    if not labeled:
+        # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
+        # model quality — it must never touch the durable (cluster, model) record,
+        # neighbor reinforcement, or lessons. Realized cost/latency live in the
+        # decision-log reconcile above.
+        warnings.append("infra_failure_telemetry_only" if infra else "unlabeled_telemetry_only")
+        return FeedbackResponse(accepted=True, warnings=warnings)
+
+    signal = signal_from_outcome(req.outcome.value, quality)
     record = OutcomeRecord(
         model_id=req.chosen_model_id,
         task_type=stored.task_type,
@@ -94,21 +178,27 @@ async def feedback(
         iterations=req.iterations,
         quality_score=quality,
         outcome=req.outcome.value,
+        evidence_source=source,
+        effort=req.chosen_effort,
         recommendation_id=req.recommendation_id,
-        verified_in_production=req.verified_in_production,
+        verified_in_production=verified,
         recorded_at=time.time(),
     )
+    # Accumulate: fold this outcome into the durable record's counters/rings so the
+    # upsert carries HISTORY, not just the latest outcome. A replayed rec_id returns
+    # the previous record unchanged — skip the write and reinforcement entirely.
+    prev = await _previous_record(
+        tenant, stored.lane, stored.task_cluster, req.chosen_model_id
+    )
+    record = merged_outcome(prev, record)
+    if record is prev:
+        warnings.append("duplicate_feedback_ignored")
+        return FeedbackResponse(accepted=True, warnings=warnings)
     upsert_key = outcome_upsert_key(stored.task_cluster, req.chosen_model_id)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
-    importance = "high" if (req.verified_in_production and is_success) else "medium"
-
-    # Reconcile the decision-log row BEFORE the Mubit memory write: realized cost/outcome
-    # are local analytics facts and must survive a memory outage. (Observed live: a Mubit
-    # 503 made every feedback return early and /v1/savings showed 0 reconciled rows for a
-    # whole day of traffic.)
-    _reconcile_decision(tenant, req, quality, late=False)
+    importance = "high" if (verified and is_success) else "medium"
 
     try:
         record_id = await memory.remember_outcome(
@@ -136,9 +226,20 @@ async def feedback(
         except Exception as exc:  # noqa: BLE001 — bookkeeping must never fail feedback
             log.warning("durable_ref_upsert_failed", error=str(exc))
 
+    # Reinforcement id spaces: entry_ids must be control-plane fact UUIDs. Keyed-lookup
+    # neighbors carry a numeric core-plane node id as entry_id — substitute their fact
+    # UUID reference when present, else the vote is unlandable and dropped. The primary
+    # reference is the durable record we just upserted (guaranteed resolvable); one bad
+    # neighbor ref must never sink the whole reinforcement call.
     neighbors = stored.neighbors_by_model.get(req.chosen_model_id, [])
-    entry_ids = [eid for (eid, _ref) in neighbors if eid]
-    primary_ref = next((ref for (_eid, ref) in neighbors if ref), None) or record_id
+    seen: set[str] = set()
+    entry_ids: list[str] = []
+    for eid, ref in neighbors:
+        candidate = (ref or "") if (eid or "").isdigit() else (eid or "")
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            entry_ids.append(candidate)
+    primary_ref = record_id or next((ref for (_eid, ref) in neighbors if ref), None)
 
     updated_confidence: float | None = None
     if primary_ref:
@@ -150,7 +251,7 @@ async def feedback(
                 signal=signal,
                 entry_ids=entry_ids or None,
                 user_id=stored.user_id,
-                verified_in_production=req.verified_in_production,
+                verified_in_production=verified,
                 idempotency_key=f"oc:{idem}",
                 rationale=f"minima feedback {req.recommendation_id}: ran {req.chosen_model_id}",
             )
@@ -166,9 +267,11 @@ async def feedback(
     lesson_promoted = False
     if (
         settings.minima_lesson_on_verified_prod
-        and req.verified_in_production
+        and verified
         and is_success
-        and quality >= settings.minima_lesson_min_quality
+        # A deterministic gate pass without a judge score is stronger evidence than
+        # any judge number; a supplied quality must still clear the bar.
+        and (quality is None or quality >= settings.minima_lesson_min_quality)
     ):
         try:
             await memory.remember_lesson(
@@ -193,7 +296,7 @@ async def feedback(
     reflection_triggered = False
     count = tenant.lane_counter.bump(tenant.counter_key(stored.lane))
     every = settings.minima_reflect_every_n
-    if (every > 0 and count % every == 0) or (req.verified_in_production and not is_success):
+    if (every > 0 and count % every == 0) or (verified and not is_success):
         _fire_reflect(memory, stored.lane, stored.user_id)
         reflection_triggered = True
 
@@ -209,28 +312,34 @@ async def feedback(
 
 
 def _reconcile_decision(
-    tenant: TenantContext, req: FeedbackRequest, quality: float, *, late: bool
+    tenant: TenantContext,
+    req: FeedbackRequest,
+    quality: float | None,
+    evidence_source: str,
+    *,
+    late: bool,
 ) -> None:
-    """Fill the decision-log row's realized columns (best-effort analytics)."""
+    """Fill the decision-log row's realized columns (best-effort analytics).
+
+    Quality is strictly what the caller supplied — a label-based default is never
+    substituted (it would corrupt calibration and OPE). evidence_source lets every
+    reader (calibration fit, ECE, CUSUM) filter to trusted labels.
+    """
     if tenant.decision_log is None:
         return
-    # When the harness explicitly says this turn was not judged (cadence-skip or
-    # LLM-judge abstain), record NULL quality in the analytics store — never
-    # substitute a label-based default (e.g. 0.9 for success), as that fabricated
-    # value corrupts calibration metrics and OPE weighting.
-    # Backwards-compat: judged=None (old clients) keeps the quality_from_outcome path.
-    reconciled_quality: float | None = None if req.judged is False else quality
     try:
         tenant.decision_log.reconcile(
             req.recommendation_id,
             Reconciliation(
                 model_id=req.chosen_model_id,
                 outcome=req.outcome.value,
-                quality=reconciled_quality,
+                quality=quality,
                 cost_usd=req.actual_cost_usd,
                 latency_ms=req.latency_ms,
                 ts=time.time(),
                 late=late,
+                evidence_source=evidence_source,
+                chosen_effort=req.chosen_effort,
             ),
         )
     except Exception as exc:  # noqa: BLE001 — analytics must never fail feedback
@@ -243,11 +352,21 @@ async def _late_feedback(
     decision: DecisionRecord,
 ) -> FeedbackResponse:
     """Accept feedback after recstore expiry: write the outcome, skip attribution."""
-    quality = quality_from_outcome(req.outcome.value, req.quality_score)
-    quality, mismatch = reconcile_quality(req.outcome.value, quality)
+    source = _resolve_evidence_source(req)
+    infra = req.error_cause == "infra"
+    labeled = is_labeled(source) and not infra
+    quality, mismatch = _supplied_quality(req)
     warnings = ["late_feedback_no_attribution"]
     if mismatch:
         warnings.append(mismatch)
+
+    # Realized analytics first — must survive a memory outage (same ordering as the
+    # main path).
+    _reconcile_decision(tenant, req, quality, EVIDENCE_NONE if infra else source, late=True)
+
+    if not labeled:
+        warnings.append("infra_failure_telemetry_only" if infra else "unlabeled_telemetry_only")
+        return FeedbackResponse(accepted=True, warnings=warnings)
 
     record = OutcomeRecord(
         model_id=req.chosen_model_id,
@@ -262,16 +381,20 @@ async def _late_feedback(
         iterations=req.iterations,
         quality_score=quality,
         outcome=req.outcome.value,
+        evidence_source=source,
+        effort=req.chosen_effort,
         recommendation_id=req.recommendation_id,
-        verified_in_production=req.verified_in_production,
+        verified_in_production=source == EVIDENCE_GATE,
         recorded_at=time.time(),
     )
+    prev = await _previous_record(tenant, decision.lane, decision.cluster, req.chosen_model_id)
+    record = merged_outcome(prev, record)
+    if record is prev:
+        warnings.append("duplicate_feedback_ignored")
+        return FeedbackResponse(accepted=True, warnings=warnings)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
-    # Realized analytics first — must survive a memory outage (same ordering as the
-    # main path).
-    _reconcile_decision(tenant, req, quality, late=True)
     try:
         record_id = await tenant.memory.remember_outcome(
             content=decision.content,

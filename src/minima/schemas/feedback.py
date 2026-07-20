@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from minima.schemas.common import OutcomeLabel
@@ -19,14 +21,42 @@ class FeedbackRequest(BaseModel):
     iterations: int | None = Field(
         None, ge=0, description="agent loop turns to resolution (token-yield signal)"
     )
-    verified_in_production: bool = False
+    evidence_source: Literal["gate", "judge", "human", "none"] | None = Field(
+        None,
+        description=(
+            "Provenance of the quality signal. gate = deterministic verification "
+            "(red->green check; the only origin that may claim verified-in-production); "
+            "judge = LLM judge; human = caller-asserted; none = unjudged — the outcome "
+            "enters cost/latency telemetry only, never the success aggregate, "
+            "reinforcement, or calibration. When omitted, derived from the legacy "
+            "judged/verified_in_production flags."
+        ),
+    )
+    error_cause: Literal["infra", "quality"] | None = Field(
+        None,
+        description=(
+            "For outcome=failure: infra = provider/tooling fault (429/5xx/timeout) — "
+            "telemetry only, never recorded as a model-quality signal; quality = the "
+            "model genuinely produced a bad result."
+        ),
+    )
+    verified_in_production: bool = Field(
+        False, description="DEPRECATED: send evidence_source='gate' instead."
+    )
     judged: bool | None = Field(
         None,
         description=(
-            "Whether the harness ran a quality judge on this turn. "
-            "False = cadence-skip or abstain — the decision log stores NULL quality "
-            "instead of a label-based default (quality_from_outcome). "
-            "None = old client, backward-compat behaviour preserved."
+            "DEPRECATED: send evidence_source instead. True maps to 'judge', "
+            "False to 'none'; omitted (old SDK clients) maps to 'human' "
+            "(caller-asserted outcome)."
+        ),
+    )
+    chosen_effort: str | None = Field(
+        None,
+        description=(
+            "reasoning-effort tier the model ran at (e.g. low/medium/high). Recorded "
+            "on the outcome record and decision log so (model x effort) arms can be "
+            "learned; not yet a routing dimension."
         ),
     )
     notes: str | None = None

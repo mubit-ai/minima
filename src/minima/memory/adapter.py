@@ -11,6 +11,7 @@ across requests, and recall over the same run finds the accumulated outcomes.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
@@ -53,59 +54,42 @@ def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
     )
 
 
+_FACT_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
     """Parse a single LookupResponse item (from POST /v2/core/lookup) into RecalledEvidence.
 
     The lookup response shape differs from recall: no ANN scores, metadata is a dict
-    (not a JSON string), and id is a numeric node ID. Score and knowledge_confidence are
-    set to 1.0 — an exact keyed match is maximally certain.
+    (not a JSON string), and id is a numeric CORE-plane node ID. Score and
+    knowledge_confidence are set to 1.0 — an exact keyed match is maximally certain.
+
+    Node IDs live in a different ID space from the control-plane fact UUIDs that
+    record_outcome reinforces — a numeric node ID is never reinforceable. Only when
+    the flattened metadata carries the fact UUID does the hit get a reference_id.
     """
     raw_id = item.get("id")
     if raw_id is None:
         return None
-    record = OutcomeRecord.from_metadata(item.get("metadata"))
+    meta = item.get("metadata")
+    record = OutcomeRecord.from_metadata(meta)
     if record is None:
         return None
     entry_id = str(raw_id)
+    fact_id = str(meta.get("id") or "") if isinstance(meta, Mapping) else ""
+    reference_id = fact_id if _FACT_UUID_RE.match(fact_id) else None
     return RecalledEvidence(
         entry_id=entry_id,
-        reference_id=entry_id,
+        reference_id=reference_id,
         score=1.0,
         knowledge_confidence=1.0,
         is_stale=False,
         content="",
         record=record,
-        referenceable=True,
+        referenceable=reference_id is not None,
     )
-
-
-def _log_explain(lane: str, raw: object) -> None:
-    """Diagnostic: per-evidence score components (server-side ExplainInfo)."""
-    if not isinstance(raw, Mapping):
-        return
-    components = []
-    for ev in raw.get("evidence") or []:
-        if not isinstance(ev, Mapping):
-            continue
-        info = ev.get("explain_info")
-        if isinstance(info, Mapping):
-            components.append(
-                {
-                    "id": str(ev.get("id", ""))[:12],
-                    "semantic": _f(info.get("semantic_score")),
-                    "lexical": _f(info.get("lexical_score")),
-                    "recency": _f(info.get("recency_score")),
-                    "decay": _f(info.get("temporal_decay_factor"), 1.0),
-                }
-            )
-    if components:
-        log.info(
-            "recall_explain",
-            lane=lane,
-            rank_by_mode=raw.get("rank_by_mode"),
-            n=len(components),
-            components=components,
-        )
 
 
 @runtime_checkable
@@ -175,7 +159,7 @@ class Memory(Protocol):
         lane: str,
         match: list[dict],
         limit: int = 256,
-    ) -> list[RecalledEvidence]: ...
+    ) -> list[RecalledEvidence] | None: ...
 
     async def dereference(
         self, *, lane: str, reference_id: str
@@ -266,6 +250,10 @@ class MubitMemory:
             "include_working_memory": False,
             "prefer_current_run": True,
             "lane_filter": lane,
+            # Skip Mubit's per-query LLM answer synthesis: Minima parses only the
+            # evidence list and discards the synthesized answer (it was most of the
+            # ~600ms recall p95). Old servers ignore the unknown field.
+            "evidence_only": True,
         }
         if user_id:
             payload["user_id"] = user_id
@@ -281,18 +269,13 @@ class MubitMemory:
             payload["min_timestamp"] = int(
                 time.time() - settings.minima_recall_max_age_days * 86_400
             )
-        if settings.minima_recall_explain:
-            payload["explain"] = True
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
                 raw = await threadpool.run_cancellable(self._client._control.query, payload)
             if scope.cancelled_caught:
                 log.warning("recall_timeout", lane=lane, budget_ms=budget_ms)
                 return RecallResult(evidence=[], degraded=True, timed_out=True)
-            result = self._parse_recall(raw)
-            if settings.minima_recall_explain:
-                _log_explain(lane, raw)
-            return result
+            return self._parse_recall(raw)
         except TransportError as exc:
             log.warning("recall_transport_error", lane=lane, code=exc.args[0] if exc.args else "")
             return RecallResult(evidence=[], degraded=True, error=str(exc))
@@ -319,25 +302,36 @@ class MubitMemory:
         lane: str,
         match: list[dict],
         limit: int = 256,
-    ) -> list[RecalledEvidence]:
+    ) -> list[RecalledEvidence] | None:
         """Deterministic keyed lookup via POST /v2/core/lookup.
 
         Returns all non-deleted outcome records for the given (lane, match) filters
         without touching ANN — results are stable across identical calls. Use for
         (cluster, model) keyed reads where recall flicker is unacceptable.
+
+        Returns ``None`` when the keyed path is DEGRADED (timeout, transport error,
+        or hosted policy rejection) so callers can tell "no records" from "channel
+        down" and surface a warning instead of silently routing on thinner evidence.
+        Shares the recall latency budget — the old unbudgeted path could stall a
+        recommend for the full 30s client timeout.
         """
+        budget_ms = self._settings.minima_memory_recall_timeout_ms
         try:
-            raw = await threadpool.run(
-                self._client.lookup,
-                session_id=lane,
-                match=match,
-                limit=limit,
-            )
+            with anyio.move_on_after(budget_ms / 1000.0) as scope:
+                raw = await threadpool.run_cancellable(
+                    self._client.lookup,
+                    session_id=lane,
+                    match=match,
+                    limit=limit,
+                )
+            if scope.cancelled_caught:
+                log.warning("lookup_timeout", lane=lane, budget_ms=budget_ms)
+                return None
         except Exception as exc:  # noqa: BLE001 — lookup is additive; must not block a recommend
             log.warning("lookup_error", lane=lane, error=str(exc))
-            return []
+            return None
         if not isinstance(raw, list):
-            return []
+            return None
         results: list[RecalledEvidence] = []
         for item in raw:
             if not isinstance(item, dict):

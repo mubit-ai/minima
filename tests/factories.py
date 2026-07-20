@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from minima.llm.base import CandidateView, ReasonerRanking, ReasonerResult
 from minima.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
-from minima.schemas.common import Difficulty, TaskType
 
 
 class FakeMemory:
@@ -39,8 +37,10 @@ class FakeMemory:
 
     async def lookup(
         self, *, lane: str, match: list[dict], limit: int = 256
-    ) -> list[RecalledEvidence]:
+    ) -> list[RecalledEvidence] | None:
         self.lookup_calls.append({"lane": lane, "match": match})
+        if self.lookup_results is None:  # simulate a degraded keyed channel
+            return None
         return list(self.lookup_results)
 
     async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
@@ -80,51 +80,6 @@ class FakeMemory:
         return {"reachable": True, "transport": "fake"}
 
 
-class FakeReasoner:
-    """Records calls; returns canned rankings/classification (or None to simulate failure)."""
-
-    def __init__(
-        self,
-        rankings: list[tuple[str, float, str]] | None = None,
-        *,
-        recommended: str | None = None,
-        fallback: str | None = None,
-        classify_result: tuple[TaskType, Difficulty] | None = None,
-        fail: bool = False,
-    ):
-        self._rankings = rankings or []
-        self._recommended = recommended
-        self._fallback = fallback
-        self._classify_result = classify_result
-        self._fail = fail
-        self.rank_calls: list[dict[str, Any]] = []
-        self.classify_calls: list[str] = []
-
-    async def rank(
-        self,
-        *,
-        task: str,
-        task_type: str,
-        difficulty: str,
-        candidates: list[CandidateView],
-        memory_block: str,
-        cost_quality_tradeoff: float,
-    ) -> ReasonerResult | None:
-        self.rank_calls.append(
-            {"task_type": task_type, "candidates": [c.model_id for c in candidates]}
-        )
-        if self._fail:
-            return None
-        return ReasonerResult(
-            rankings=[ReasonerRanking(m, p, r) for (m, p, r) in self._rankings],
-            recommended=self._recommended,
-            fallback=self._fallback,
-        )
-
-    async def classify(self, *, task: str) -> tuple[TaskType, Difficulty] | None:
-        self.classify_calls.append(task)
-        return self._classify_result
-
 
 def make_evidence(
     model_id: str,
@@ -144,6 +99,7 @@ def make_evidence(
     recorded_at: float | None = None,
     source_dataset: str | None = None,
     referenceable: bool = False,
+    evidence_source: str | None = None,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
@@ -154,6 +110,7 @@ def make_evidence(
         output_tokens=output_tokens,
         quality_score=quality,
         outcome="success" if quality >= 0.5 else "failure",
+        evidence_source=evidence_source or ("dataset" if source_dataset else "judge"),
         cost_usd=cost_usd,
         latency_ms=latency_ms,
         recorded_at=recorded_at,

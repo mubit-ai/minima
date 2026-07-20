@@ -178,18 +178,11 @@ class TestLatencyConstraint:
 
 
 class TestSelectionPolicy:
-    def test_default_is_deterministic_argmin(self, client, fake_memory):
-        fake_memory.evidence = [
-            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
-        ]
-        rec = _recommend(client)
-        assert rec["selection_policy"] == "argmin"
-
-    def test_opted_in_org_uses_epsilon_softmax(self, fake_memory):
-        # The test key's org id is "test" (mbt_test_...).
-        settings = Settings(
-            mubit_api_key="test-key", minima_epsilon_selection_orgs="test"
-        )
+    def test_default_policy_is_thompson_with_honest_propensities(self, fake_memory):
+        # Thompson is the production default: posterior sampling over the candidates,
+        # Monte-Carlo selection frequencies logged as (non-degenerate) propensities.
+        settings = Settings(mubit_api_key="test-key")
+        assert settings.minima_selection_policy == "thompson"
         app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
         fake_memory.evidence = [
             make_evidence(model, quality, entry_id=f"{model}-{i}")
@@ -198,7 +191,67 @@ class TestSelectionPolicy:
         ]
         with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
             rec = _recommend(client, cost_quality_tradeoff=0)
-            assert rec["selection_policy"] == "epsilon_softmax"
+            assert rec["selection_policy"] in ("thompson", "argmin")  # argmin = capped
+            assert rec["recommended_model"]["model_id"] in (
+                "claude-haiku-4-5",
+                "claude-opus-4-8",
+            )
+
+    def test_argmin_org_opt_out(self, fake_memory):
+        # The test key's org id is "test" (mbt_test_...).
+        settings = Settings(mubit_api_key="test-key", minima_argmin_orgs="test")
+        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
+        fake_memory.evidence = [
+            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
+        ]
+        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
+            rec = _recommend(client)
+            assert rec["selection_policy"] == "argmin"
+
+    def test_explore_share_cap_falls_back_to_argmin(self, fake_memory):
+        # A zero cap means every Thompson deviation is suppressed: the pick stays the
+        # deterministic argmin and the response says so (explore_budget_capped) —
+        # bounded deliberate-exploration spend on live traffic.
+        settings = Settings(mubit_api_key="test-key", minima_explore_share_cap=0.0)
+        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
+        fake_memory.evidence = [
+            make_evidence(model, quality, entry_id=f"{model}-{i}")
+            for model, quality in (("claude-haiku-4-5", 0.55), ("claude-opus-4-8", 0.95))
+            for i in range(2)
+        ]
+        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
+            for _ in range(10):
+                rec = _recommend(client, cost_quality_tradeoff=8)
+                if "explore_budget_capped" in rec["warnings"]:
+                    assert rec["selection_policy"] == "argmin"
+                else:
+                    assert "thompson_pick" not in rec["warnings"]
+
+
+class TestPolicyValue:
+    def test_policy_value_endpoint_shape(self, client, fake_memory):
+        fake_memory.evidence = [
+            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
+        ]
+        rec = _recommend(client)
+        client.post(
+            "/v1/feedback",
+            json={
+                "recommendation_id": rec["recommendation_id"],
+                "chosen_model_id": rec["recommended_model"]["model_id"],
+                "outcome": "success",
+                "quality_score": 0.9,
+                "evidence_source": "judge",
+                "actual_cost_usd": 0.002,
+            },
+        )
+        resp = client.get("/v1/policy-value", params={"days": 1}).json()
+        report = resp["report"]
+        assert report["n_trusted"] == 1
+        assert report["n_total_reconciled"] == 1
+        names = {p["policy"] for p in report["policies"]}
+        assert "deployed" in names and "oracle_model_based" in names
+        assert report["regret_vs_oracle"] >= 0.0
 
 
 class TestDurableFastPath:
@@ -214,27 +267,12 @@ class TestDurableFastPath:
             "claude-haiku-4-5", 0.95, entry_id="rec-fake-1", reference_id="rec-fake-1"
         )
 
-    def test_off_mode_never_dereferences(self, client, fake_memory):
+    def test_recommend_path_never_dereferences(self, client, fake_memory):
         self._seed_ref_via_feedback(client, fake_memory)
         fake_memory.evidence = []
         _recommend(client)
         assert fake_memory.dereference_calls == []
 
-    def test_on_mode_merges_ann_missed_durable_record(self, fake_memory):
-        settings = Settings(mubit_api_key="test-key", minima_durable_fastpath="on")
-        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
-        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
-            self._seed_ref_via_feedback(client, fake_memory)
-            # ANN now returns nothing — only the dereferenced durable record carries
-            # evidence, so the pick is memory-driven instead of cold-start.
-            fake_memory.evidence = []
-            rec = _recommend(client)
-            assert fake_memory.dereference_calls
-            assert "cold_start" not in rec["warnings"]
-            haiku = next(
-                m for m in rec["ranked"] if m["model_id"] == "claude-haiku-4-5"
-            )
-            assert haiku["decision_basis"] == "memory"
 
     def test_hung_dereference_never_blocks_the_recommendation(self, fake_memory):
         import asyncio
@@ -254,16 +292,6 @@ class TestDurableFastPath:
             fake_memory.evidence = []
             rec = _recommend(client)  # must return promptly via the timeout path
             assert rec["recommendation_id"]
-
-    def test_shadow_mode_fetches_but_does_not_merge(self, fake_memory):
-        settings = Settings(mubit_api_key="test-key", minima_durable_fastpath="shadow")
-        app = create_app(settings=settings, memory=fake_memory, start_refresh=False)
-        with TestClient(app, headers={"Authorization": f"Bearer {TEST_MUBIT_KEY}"}) as client:
-            self._seed_ref_via_feedback(client, fake_memory)
-            fake_memory.evidence = []
-            rec = _recommend(client)
-            assert fake_memory.dereference_calls  # fetched for the shadow delta
-            assert "cold_start" in rec["warnings"]  # but NOT merged into scoring
 
 
 class TestBackCompat:

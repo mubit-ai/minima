@@ -466,7 +466,8 @@ export class MinimaAgent extends Agent {
               attempt > 0 ? `${shortLabel(content)} (rung ${attempt + 1})` : shortLabel(content),
             routing,
             actualCostUsd: runUsage.cost.total,
-            quality: failed ? 0 : quality,
+            // A failed run has NO quality (infra fault, not a grade) — never fabricate 0.
+            quality,
             outcome: failed ? "failure" : outcome,
             turns: turnsTaken,
           });
@@ -475,8 +476,8 @@ export class MinimaAgent extends Agent {
         this.persistDecision(content, routing, {
           recId: rungRecId,
           actualCostUsd: runUsage.cost.total,
-          quality: failed ? 0 : quality,
-          judged: (failed ? 0 : quality) !== null,
+          quality,
+          judged: quality !== null,
           outcome: failed ? "failure" : outcome,
           turns: turnsTaken,
           latencyMs,
@@ -736,7 +737,9 @@ export class MinimaAgent extends Agent {
         task: taskText,
         taskType: opts.taskType ?? undefined,
         slider: opts.slider ?? undefined,
-        tags: opts.tags,
+        // Phase rides as a tag: recall boosts same-phase evidence and stored outcomes
+        // carry it, so planning/execution/sub-task work stops collapsing into one pool.
+        tags: opts.tags ?? ["phase:interactive"],
         difficulty: opts.difficulty,
         // The live context IS the input the chosen model will read — the server's cost
         // estimate is only truthful when it knows the real prompt size.
@@ -748,6 +751,9 @@ export class MinimaAgent extends Agent {
         // The server caps candidate selection at 8 by default; widen when the pool is larger.
         maxCandidates:
           effective && effective.length > 8 ? Math.min(effective.length, 16) : undefined,
+        // The current model holds this session's prompt cache; the server prices part
+        // of its input at the cache-read rate so stickiness emerges from honest cost.
+        incumbentModelId: this.agentState.model?.id,
         signal: opts.signal,
       });
       this.offlineReason = null;
@@ -808,22 +814,32 @@ export class MinimaAgent extends Agent {
     }
     let quality: number | null = null;
     let outcome: "success" | "partial" | "failure" = "success";
+    let evidenceSource: "gate" | "judge" | "none" = "none";
+    let errorCause: "infra" | undefined;
     let reinforcedEntryIds: string[] | null = null;
     let lessonPromoted: boolean | null = null;
     try {
       const last = this.lastAssistant();
       if (failed) {
-        quality = 0.0;
+        // A run/provider fault (429/5xx/timeout/stream error) is NOT a model-quality
+        // signal: no fabricated quality 0, no judged claim — the server keeps it as
+        // cost/latency telemetry only, so one rate-limit event can't poison a cluster.
+        quality = null;
         outcome = "failure";
+        errorCause = "infra";
       } else if (deterministic) {
         // M7.2: the step carried a real check — its verdict IS the outcome (no judge, no
         // fabricated quality). A7: grade the label by the gate's confidence tier when
         // config.gradedOutcome is on — 🟢 verified→success, 🟡/🔴-tier verified→partial (weaker
         // evidence), failed→failure — else the M7.2 binary verified→success. The recovery-ladder
         // trigger reads the raw grounded.outcome (`failed`), never this label, so grading is
-        // learning-signal-only and never changes what escalates.
+        // learning-signal-only and never changes what escalates. Only a GREEN-tier gate
+        // (trustworthy origin: pre-existing/user check + red→green + coverage) is an honest
+        // LABEL; a yellow (agent-authored) check is gameable by a vacuous test, so its
+        // verdict stays telemetry (evidence_source="none").
         quality = null;
         outcome = deterministicOutcomeLabel(deterministic, this.config.gradedOutcome);
+        if (deterministic.confidence === "green") evidenceSource = "gate";
       } else if (!this.shouldJudge()) {
         quality = null;
         outcome = "success";
@@ -837,6 +853,7 @@ export class MinimaAgent extends Agent {
         } else {
           quality = clamp01(graded);
           outcome = gradeOutcome(quality);
+          evidenceSource = "judge";
         }
       }
       // A4: a transient/infra failure (429/timeout/5xx/network) is not the model's fault — keep the
@@ -847,14 +864,13 @@ export class MinimaAgent extends Agent {
       }
       // Feedback truth (the learning loop is only as good as this call):
       //  - usage is the RUN TOTAL (all turns), not the last assistant message;
-      //  - a deterministic gate is the only source that flips verified_in_production, and only
-      //    when its tier is GREEN (trustworthy origin: pre-existing/user + red→green + coverage).
-      //    Yellow/agent_new stays false — a self-written test must never be claimed as ground
-      //    truth (the server promotes verified successes as high-importance, substituting 0.9);
-      //  - the judge path (no gate) never claims it, and quality is never fabricated;
-      //  - unjudged/deterministic turns are tagged so the server/analytics can discriminate them.
-      const judged = quality !== null;
-      const verifiedInProduction = deterministic?.confidence === "green";
+      //  - evidence_source is the provenance the server keys ALL learning on: only
+      //    gate/judge-labeled turns enter the success aggregate, reinforcement, and
+      //    calibration; "none" is telemetry. verified_in_production is server-derived
+      //    from source == gate — never claimable by the judge path;
+      //  - the legacy judged/verifiedInProduction flags ride along for old servers.
+      const judged = evidenceSource === "judge";
+      const verifiedInProduction = evidenceSource === "gate";
       const resp = await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
@@ -863,13 +879,16 @@ export class MinimaAgent extends Agent {
         usage: runUsage,
         latencyMs,
         iterations: turnsTaken || undefined,
+        evidenceSource,
+        errorCause,
         verifiedInProduction,
         judged,
+        chosenEffort: this.agentState.thinkingLevel ?? undefined,
         notes: deterministic
           ? `verified_by=deterministic;tier=${deterministic.confidence ?? "unknown"}`
           : judged
             ? undefined
-            : "judged=false",
+            : "unlabeled",
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
       // cites which memory entries this outcome reinforced.
@@ -906,7 +925,11 @@ export class MinimaAgent extends Agent {
   // ----------------------------------------------------------------- helpers
   private shouldJudge(): boolean {
     const every = this.config.judgeEvery;
-    return every > 0 && this.promptsRun % every === 0;
+    if (every <= 0 || this.promptsRun % every !== 0) return false;
+    // Random sampling keeps the default-on judge cheap while the judged subset stays
+    // unbiased — calibration/posteriors fit on labeled rows alone, the rest is telemetry.
+    const rate = this.config.judgeSampleRate;
+    return rate >= 1 || Math.random() < rate;
   }
 
   /** A4: is the failure-kind matcher live? Gated by groundTruth + the failureMatcher flag, so the

@@ -46,9 +46,6 @@ class Settings(BaseSettings):
     minima_recall_max_age_days: int = 0
     # Mubit search budget tier: "low" | "mid" | "high" ("" = server default).
     minima_recall_budget: str = "mid"
-    # Request per-evidence score breakdowns (ExplainInfo) and log them. Diagnostic;
-    # adds payload weight, keep off in prod unless investigating recall quality.
-    minima_recall_explain: bool = False
 
     # --- Recommender tuning ---
     minima_tau_min: float = 0.55
@@ -58,17 +55,6 @@ class Settings(BaseSettings):
     minima_escalation_n_min: int = 3
     minima_escalation_c_min: float = 0.45
     minima_escalation_tie_delta: float = 0.05
-    # Escalation trigger mode. "legacy" = the four independent heuristics. "uncertainty"
-    # replaces thin_evidence + low_confidence with a single posterior-interval-width gate
-    # on the recommended candidate (conflict stays as a hard override; tie is kept — it
-    # captures rank instability the interval doesn't). Shadow "uncertainty" before
-    # switching the default.
-    minima_escalation_mode: str = "legacy"  # legacy | uncertainty
-    minima_escalation_interval_width: float = 0.25
-    # "near_threshold" trigger: escalate when the recommended model's predicted success is
-    # within this margin above tau — a fragile pick that one more failure round would drop.
-    # 0.0 = disabled. Recommended starting value: 0.10.
-    minima_escalation_near_threshold_delta: float = 0.10
     minima_default_input_tokens: int = 1500
     minima_default_output_tokens: int = 500
     minima_reflect_every_n: int = 25
@@ -108,51 +94,10 @@ class Settings(BaseSettings):
         "expert": 2.0,
     }
 
-    # --- Cheap-LLM reasoner (recommend-only) ---
-    minima_reasoner_provider: str = "none"  # none | anthropic | gemini
-    minima_reasoner_model: str | None = None  # default per provider (anthropic -> claude-haiku-4-5)
-    # The reasoner is the explicit slow tier (only consulted on escalation): a real
-    # ranking call with structured output takes ~6-8s, so a tight budget makes it time
-    # out and silently degrade. This is per-attempt; it never touches the caller's own
-    # LLM call (Minima adds zero latency there).
-    minima_reasoner_timeout_ms: int = 15_000
-    # A hard output cap (the reasoner stops early when done). Gemini 3.x "flash" spends
-    # output tokens on internal reasoning before emitting the JSON, so a small cap
-    # truncates the structured response — keep headroom. Anthropic forced-tool-use is
-    # compact and won't approach this.
-    minima_reasoner_max_tokens: int = 4096
-    minima_reasoner_blend: float = 0.5  # weight on the LLM estimate vs the deterministic one
-    # Adaptive blend: weight the LLM estimate by how thin the deterministic evidence is
-    # (blend = blend_max * (1 - confidence), clamped to [0.1, 0.9]) instead of the fixed
-    # minima_reasoner_blend. Heavy evidence barely moves; cold candidates lean on the LLM.
-    minima_reasoner_blend_adaptive: bool = True
-    minima_reasoner_blend_max: float = 0.8
-    minima_reasoner_fast_mode: bool = False
-    minima_reasoner_fast_memory_token_budget: int = 500
-    minima_reasoner_fast_candidate_limit: int = 6
-    minima_reasoner_fast_skip_low_value: bool = True
-    minima_reasoner_skip_confident_classifications: bool = True
-    minima_reasoner_confidence_skip_threshold: float = 0.72
-    anthropic_api_key: str | None = None
-    gemini_api_key: str | None = None
-
-    # --- Selection-bias correction (inverse propensity weighting) ---
-    minima_ipw_enabled: bool = True
-    minima_ipw_clip_low: float = 0.1
-    minima_ipw_clip_high: float = 10.0
-
     # --- Learning maturity ---
-    # Cluster granularity controls the upsert grouping (one durable record per cluster+model).
-    # "coarse" = task_type:difficulty; "fine" appends a salient-keyword signature bucket so
-    # topically-distinct tasks of the same type/difficulty accumulate separately.
-    minima_cluster_granularity: str = "coarse"  # coarse | fine
-    minima_cluster_signature_tokens: int = 4
     # Promote a verified-in-production strong success to a durable Lesson (feeds reflect()).
     minima_lesson_on_verified_prod: bool = True
     minima_lesson_min_quality: float = 0.8
-    # Optimistic exploration bonus added to under-explored candidates' predicted success,
-    # scaled by their uncertainty. 0.0 = off (no exploration; pure exploitation).
-    minima_exploration_bonus: float = 0.0
 
     # --- Catalog ---
     minima_catalog_refresh_seconds: int = 21_600
@@ -162,7 +107,6 @@ class Settings(BaseSettings):
         "model_prices_and_context_window.json"
     )
     minima_openrouter_models_url: str = "https://openrouter.ai/api/v1/models"
-    openrouter_api_key: str | None = None
 
     # --- Service ---
     minima_host: str = "0.0.0.0"
@@ -196,19 +140,21 @@ class Settings(BaseSettings):
     # and reconciled with realized outcomes at feedback time. This powers /v1/savings,
     # /v1/calibration, feedback-coverage, and offline policy evaluation.
     minima_decision_log_retention_days: int = 90
-    # Orgs (comma-separated) that opt into epsilon-stochastic selection: with probability
-    # epsilon the pick is sampled from a softmax over the tau-ELIGIBLE candidates instead
-    # of the strict cheapest-eligible. Makes logged propensities non-degenerate so IPW and
-    # off-policy evaluation are valid. Default: nobody (deterministic argmin everywhere).
-    minima_epsilon_selection_orgs: str = ""
-    minima_epsilon: float = 0.03
-    minima_epsilon_softmax_temperature: float = 0.1
-    # Orgs (comma-separated) that opt into Thompson (posterior-sampling) selection instead of
-    # epsilon-softmax: each decision samples theta_m ~ Beta(alpha_m, beta_m) and picks the
-    # cheapest model clearing tau under the sample. Monte-Carlo selection frequencies are
-    # logged as propensities so IPW/OPE stay valid. Takes precedence over epsilon if both set.
-    minima_thompson_selection_orgs: str = ""
+    # Selection policy: "thompson" (default) samples theta_m ~ Beta(alpha_m, beta_m) per
+    # decision and picks the cheapest model clearing tau under the sample. Self-tuning
+    # exploration: well-evidenced candidates behave like argmin; uncertain ones get tried
+    # in proportion to how plausible it is that they're good — and the Monte-Carlo
+    # selection frequencies are the logged propensities, so off-policy evaluation is
+    # valid. "argmin" = deterministic cheapest-clearing-tau (degenerate propensities).
+    minima_selection_policy: str = "thompson"  # thompson | argmin
+    # Orgs (comma-separated) that opt OUT of Thompson back to deterministic argmin.
+    minima_argmin_orgs: str = ""
     minima_thompson_samples: int = 128
+    # Cap on the running share of decisions where Thompson deviates from the argmin pick
+    # (per org, per process). Above the cap the argmin pick is used (with degenerate
+    # propensities and an explore_budget_capped warning) — bounds deliberate-exploration
+    # spend on live traffic. 1.0 = uncapped.
+    minima_explore_share_cap: float = 0.25
 
     # --- Calibration monitoring ---
     minima_calibration_window_days: int = 30
@@ -231,26 +177,11 @@ class Settings(BaseSettings):
     minima_calibration_min_n: int = 30
     minima_calibration_refresh_seconds: int = 600
 
-    # --- Routing-collapse margin guard ---
-    # Scalar-score + cheapest-clearing-tau can collapse to the single most expensive model
-    # at high quality bars (arXiv 2602.03478). When the cheapest-eligible pick IS the
-    # priciest candidate, prefer a cheaper candidate whose success credible interval could
-    # still clear tau. The optimism is TAU-AWARE so it shrinks as the quality bar rises:
-    #   eligible_optimistic = predicted + margin * (1 - tau) * 0.5 * interval_width.
-    # margin >= 0: 0 disables the guard. The (1 - tau) factor keeps the guard gentle at high
-    # cost_quality (where the user wants quality) and active at low (cost-leaning). The judge
-    # / escalation loop is the safety net that catches an over-optimistic cheap pick.
-    minima_collapse_margin: float = 1.0
-
-    # --- Lever-aware cost (prompt caching) ---
-    # When on, the ESTIMATE cost tier prices a cache-supporting model's input at a blend of
-    # its cache-read and full rates (assuming the caller applies prompt caching, as the
-    # harness does), so ranking can favor a cache-friendly model that is cheaper in practice.
-    # Off by default (no behavior change). Observed/rescaled tiers stay evidence-based — they
-    # already reflect real caching via the realized cost in feedback, so they self-correct.
-    # recommend() also returns `recommended_actions` (e.g. enable_prompt_cache) regardless.
-    minima_cost_lever_aware: bool = False
-    minima_cost_cache_input_fraction: float = 0.5
+    # --- Cache-aware cost ---
+    # Fraction of the INCUMBENT model's input priced at its cache-read rate on the
+    # estimate basis (the session's prompt cache survives only if the model doesn't
+    # change). 0 disables incumbent stickiness.
+    minima_incumbent_cache_fraction: float = 0.7
 
     # --- Neighbor-vote classification ---
     # When the heuristic classifier returns `other`, disambiguate the task_type from the
@@ -259,30 +190,9 @@ class Settings(BaseSettings):
     # the cluster KEY semantically coherent for ambiguous prompts.
     minima_neighbor_classify: bool = True
 
-    # --- Shadow bandit (advisory only) ---
-    # When on, a UCB contextual-bandit policy computes what it WOULD pick and logs it on the
-    # decision row (shadow_chosen_model_id) alongside the deployed conjugate pick. It NEVER
-    # overrides the recommendation — it exists so we can measure agreement / regret offline
-    # before considering promotion. alpha scales the exploration optimism.
-    minima_shadow_bandit: bool = False
-    minima_shadow_ucb_alpha: float = 1.0
-
-    # --- Durable-record fast path ---
-    # Dereference the durable (cluster, model) outcome records alongside ANN recall so the
-    # highest-signal evidence is always present regardless of embedding noise.
-    #   off    — disabled entirely (no Dereference calls)
-    #   shadow — fetch and log what ANN missed, but do NOT merge into scoring
-    #   on     — merge dereferenced records into the evidence set
-    minima_durable_fastpath: str = "off"  # off | shadow | on
-    minima_durable_fastpath_max_refs: int = 8
-
     # --- Multi-tenancy (T3: hosted, per-org Mubit instance) ---
     # org id used for state partitioning (recstore / propensity) in single-key mode
     minima_default_org_id: str = "default"
-
-    @property
-    def reasoner_enabled(self) -> bool:
-        return self.minima_reasoner_provider.lower() not in ("", "none")
 
     def lane(self, namespace: str | None) -> str:
         return f"{self.minima_lane_prefix}:{namespace or 'default'}"

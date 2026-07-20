@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
-from minima.memory.records import OutcomeRecord
+from minima.memory.records import EVIDENCE_DATASET, OutcomeRecord
 from minima.seeding.items import SeedItem
 
 _REPO_ID = "withmartian/routerbench"
@@ -80,7 +80,17 @@ def load_routerbench_df(split: str = "0shot") -> Any:
     return pd.read_pickle(path)
 
 
-def load_records(limit: int, aliases: dict[str, list[str]], split: str = "0shot") -> list[SeedItem]:
+def load_records(
+    limit: int,
+    aliases: dict[str, list[str]],
+    split: str = "0shot",
+    catalog_ids: set[str] | None = None,
+) -> list[SeedItem]:
+    # Emit outcome records ONLY for dataset models that exist verbatim (or via a
+    # same-model alias) in the live catalog. Cross-generation identity transfer
+    # (crediting a 2024 model's exam results and prices to a current model id) was
+    # removed; a dataset sharing no models with the catalog fails loudly instead of
+    # seeding records no recommendation will ever count.
     df = load_routerbench_df(split)
     columns = list(df.columns)
     model_columns = detect_model_columns(columns)
@@ -91,6 +101,19 @@ def load_records(limit: int, aliases: dict[str, list[str]], split: str = "0shot"
         )
 
     reverse = _reverse_aliases(aliases)
+    if catalog_ids is not None:
+        model_columns = {
+            score_col: cost_col
+            for score_col, cost_col in model_columns.items()
+            if reverse.get(score_col, score_col) in catalog_ids
+        }
+        if not model_columns:
+            raise RuntimeError(
+                "RouterBench shares no models with the live catalog -- seeding would "
+                "write records no candidate pool ever counts. Use --dataset synthetic "
+                "(priors + your first live feedbacks are the honest cold start), or a "
+                "current-generation dataset."
+            )
     prompt_col = "prompt" if "prompt" in columns else columns[0]
     out: list[SeedItem] = []
 
@@ -112,6 +135,8 @@ def load_records(limit: int, aliases: dict[str, list[str]], split: str = "0shot"
             if quality is None:
                 continue
             model_id = reverse.get(score_col, score_col)
+            if catalog_ids is not None and model_id not in catalog_ids:
+                continue
             record = OutcomeRecord(
                 model_id=model_id,
                 task_type=task_type,
@@ -121,6 +146,7 @@ def load_records(limit: int, aliases: dict[str, list[str]], split: str = "0shot"
                 cost_usd=_to_float(rowd.get(cost_col)) or 0.0,
                 quality_score=max(0.0, min(1.0, quality)),
                 outcome="success" if quality >= 0.5 else "failure",
+                evidence_source=EVIDENCE_DATASET,
                 source_dataset="routerbench",
             )
             out.append(

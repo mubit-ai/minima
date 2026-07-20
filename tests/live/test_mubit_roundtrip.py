@@ -39,8 +39,14 @@ TASK = (
 async def test_seed_recommend_feedback_roundtrip():
     namespace = "e2e-" + uuid.uuid4().hex[:8]
     # Generous recall budget: the local CPU embedder is slow and variable; the
-    # production default (2500ms) targets a fast GPU embedder.
-    settings = Settings(minima_reflect_every_n=0, minima_memory_recall_timeout_ms=8000)
+    # production default (2500ms) targets a fast GPU embedder. Pin argmin: this test
+    # verifies seed -> recall -> feedback plumbing, and the deterministic-winner
+    # asserts below don't hold under Thompson sampling.
+    settings = Settings(
+        minima_reflect_every_n=0,
+        minima_memory_recall_timeout_ms=8000,
+        minima_selection_policy="argmin",
+    )
     memory = MubitMemory(settings)
     lane = settings.lane(namespace)
     cluster = task_cluster("code", "hard")
@@ -60,6 +66,7 @@ async def test_seed_recommend_feedback_roundtrip():
                 task_cluster=cluster,
                 quality_score=q,
                 outcome="success" if q >= 0.5 else "failure",
+                evidence_source="judge",
             ),
             env_tags=["seed:e2e"],
         )
@@ -100,6 +107,7 @@ async def test_seed_recommend_feedback_roundtrip():
             difficulty="hard",
             task_cluster=cluster,
             quality_score=0.95,
+            evidence_source="judge",
             outcome="success",
             recommendation_id=resp.recommendation_id,
         ),

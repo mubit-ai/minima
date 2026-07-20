@@ -3,10 +3,11 @@
 from minima.schemas.common import Constraints, OutcomeLabel, TaskInput
 from minima.schemas.workflow import WorkflowRequest, WorkflowStep
 from minima_client import autocapture
-from minima_client.client import AsyncMinimaClient, MinimaClient
+from minima_client.client import AsyncMinimaClient, MinimaClient, Usage
 from minima_client.errors import MinimaError
 
 __all__ = [
+    "Usage",
     "AsyncMinimaClient",
     "Constraints",
     "MinimaClient",

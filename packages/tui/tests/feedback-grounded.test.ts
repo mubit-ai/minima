@@ -104,7 +104,7 @@ function setup(judge: ReturnType<typeof countingJudge>) {
   reg.setResponses([new AssistantMessage({ content: [text("answer")], stop_reason: "stop" })]);
   const { fetchLike, feedbackCalls } = mockService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
-  const config = harnessConfig({
+  const config = harnessConfig({ judgeSampleRate: 1,
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
@@ -161,6 +161,7 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     const fb = feedbackCalls[0] as Record<string, unknown>;
     expect(fb.outcome).toBe("success");
     expect(fb.verified_in_production).toBe(true);
+    expect(fb.evidence_source).toBe("gate");
     expect(fb.quality_score).toBeUndefined(); // gate verdict → label only, never a fabricated score
     expect(fb.judged).toBe(false);
     expect(String(fb.notes)).toContain("verified_by=deterministic");
@@ -180,6 +181,7 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     // A7: a passing-but-untrustworthy check is weaker evidence than green — graded to partial.
     expect(fb.outcome).toBe("partial");
     expect(fb.verified_in_production).toBe(false); // agent-authored trust is never ground truth
+    expect(fb.evidence_source).toBe("none"); // gameable label stays telemetry
     expect(fb.quality_score).toBeUndefined(); // still no fabricated quality
     expect(String(fb.notes)).toContain("tier=yellow");
     expect(judge.calls).toBe(0); // the gate still outranks the judge
@@ -253,6 +255,7 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     expect(fb.outcome).toBe("success");
     expect(fb.quality_score).toBe(0.9); // the judge's grade, not a gate
     expect(fb.verified_in_production).toBe(false);
+    expect(fb.evidence_source).toBe("judge");
     expect(judge.calls).toBe(1); // the judge WAS consulted
     reg.unregister();
     db.close();

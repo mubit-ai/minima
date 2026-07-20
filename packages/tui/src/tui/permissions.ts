@@ -371,7 +371,7 @@ function buildDiffPreview(
         const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
         const verifyLabel = state.groundTruth
           ? "verify (runs as a shell command)"
-          : "verify (recorded only — runs only with MINIMA_TUI_GROUND_TRUTH=1)";
+          : "verify (recorded only — ground truth is disabled via MINIMA_TUI_GROUND_TRUTH=0)";
         const verify = t.verify ? `\n     ${verifyLabel}: ${t.verify}` : "";
         return `${i + 1}. [${mark}] ${t.content}${verify}`;
       });

@@ -5,11 +5,17 @@ import json
 import pytest
 
 from minima.catalog.merge import overlay_litellm
-from minima.catalog.store import CatalogStore, load_aliases, load_snapshot_cards
+from minima.catalog.store import (
+    CatalogStore,
+    apply_benchmark_priors,
+    load_aliases,
+    load_snapshot_cards,
+)
 from minima.config import Settings
 from minima.memory.records import (
     OutcomeRecord,
-    quality_from_outcome,
+    is_labeled,
+    label_score,
     signal_from_outcome,
 )
 
@@ -45,12 +51,48 @@ def test_from_metadata_rejects_non_outcome():
     assert OutcomeRecord.from_metadata(None) is None
 
 
-def test_quality_and_signal_mapping():
-    assert quality_from_outcome("success", None) == pytest.approx(0.9)
-    assert quality_from_outcome("failure", 0.3) == pytest.approx(0.3)
+def test_label_score_and_signal_mapping():
+    # Supplied quality wins; without one the outcome's Bernoulli label applies at
+    # READ time only — a default is never persisted (the old 0.9 fabrication).
+    assert label_score("success", None) == pytest.approx(1.0)
+    assert label_score("partial", None) == pytest.approx(0.5)
+    assert label_score("failure", None) == pytest.approx(0.0)
+    assert label_score("failure", 0.3) == pytest.approx(0.3)
     assert signal_from_outcome("success", 0.9) == pytest.approx(1.0)
     assert signal_from_outcome("failure", 0.0) == pytest.approx(-1.0)
+    assert signal_from_outcome("failure", None) == pytest.approx(-1.0)
     assert -1.0 <= signal_from_outcome("partial", 0.5) <= 1.0
+
+
+def test_evidence_source_labeling():
+    assert is_labeled("gate") and is_labeled("judge") and is_labeled("human")
+    assert is_labeled("dataset")
+    assert not is_labeled("none")
+
+
+def test_from_metadata_legacy_provenance_derivation():
+    base = {"kind": "outcome", "model_id": "m", "outcome": "success", "quality_score": 0.9}
+    # Legacy organic record (pre-v3, no evidence_source): quality may be fabricated —
+    # demoted to telemetry.
+    legacy = OutcomeRecord.from_metadata(json.dumps(base))
+    assert legacy is not None and legacy.evidence_source == "none"
+    # Legacy seeds are trustworthy by construction.
+    seed = OutcomeRecord.from_metadata(json.dumps({**base, "source_dataset": "routerbench"}))
+    assert seed is not None and seed.evidence_source == "dataset"
+    # Legacy gate-verified records were only ever written from green gates.
+    gated = OutcomeRecord.from_metadata(json.dumps({**base, "verified_in_production": True}))
+    assert gated is not None and gated.evidence_source == "gate"
+    # v3 records carry provenance explicitly and are not re-derived.
+    v3 = OutcomeRecord.from_metadata(json.dumps({**base, "evidence_source": "judge"}))
+    assert v3 is not None and v3.evidence_source == "judge"
+
+
+def test_from_metadata_quality_absent_stays_none():
+    meta = {"kind": "outcome", "model_id": "m", "outcome": "success", "evidence_source": "gate"}
+    rec = OutcomeRecord.from_metadata(json.dumps(meta))
+    assert rec is not None
+    assert rec.quality_score is None
+    assert label_score(rec.outcome, rec.quality_score) == pytest.approx(1.0)
 
 
 def test_snapshot_loads_and_is_stale():
@@ -91,9 +133,10 @@ def test_snapshot_json_shape_is_loader_contract():
 def test_overlay_litellm_converts_per_token_to_per_mtok():
     cards, _ = load_snapshot_cards()
     aliases = load_aliases()
-    # craft a litellm entry for one known alias of haiku
+    # craft a litellm entry for a SAME-model alias (cross-generation aliases are
+    # forbidden -- another generation's prices must never overlay a current id)
     litellm_map = {
-        "claude-3-5-haiku-20241022": {
+        "anthropic/claude-haiku-4.5": {
             "input_cost_per_token": 0.000001,  # -> 1.0 / Mtok
             "output_cost_per_token": 0.000005,  # -> 5.0 / Mtok
             "max_input_tokens": 200000,
@@ -106,3 +149,45 @@ def test_overlay_litellm_converts_per_token_to_per_mtok():
     assert haiku.output_cost_per_mtok == pytest.approx(5.0)
     assert haiku.cost_source == "litellm"
     assert haiku.cost_stale is False
+
+
+def test_benchmark_priors_overlay_stamps_provenance():
+    cards, _ = load_snapshot_cards()
+    haiku = next(c for c in cards if c.model_id == "claude-haiku-4-5")
+    # Capability beliefs come from the ONE versioned, refreshable overlay — not the
+    # hand-authored snapshot — and say so.
+    assert haiku.capability_source.startswith("benchmark-priors:")
+    assert haiku.capability_by_task_type.get("code") is not None
+
+
+def test_benchmark_priors_zero_overlap_fails_loudly():
+    from minima.schemas.models_catalog import ModelCard
+
+    stranger = ModelCard(
+        model_id="totally-unknown-model",
+        provider="acme",
+        input_cost_per_mtok=1.0,
+        output_cost_per_mtok=1.0,
+    )
+    with pytest.raises(RuntimeError, match="no model ids"):
+        apply_benchmark_priors([stranger])
+
+
+def test_routerbench_seeding_requires_catalog_overlap(monkeypatch):
+    from minima.seeding import routerbench
+
+    class _FakeDf:
+        columns = ["prompt", "eval_name", "old-model", "old-model|total_cost"]
+
+        def itertuples(self, index=False):
+            return iter([("2+2?", "gsm8k", 1.0, 0.001)])
+
+    monkeypatch.setattr(routerbench, "load_routerbench_df", lambda split="0shot": _FakeDf())
+    # Zero overlap with the catalog -> loud failure, never a silent no-op seed.
+    with pytest.raises(RuntimeError, match="no models with the live catalog"):
+        routerbench.load_records(10, {}, catalog_ids={"claude-haiku-4-5"})
+    # A dataset model present verbatim in the catalog still seeds.
+    items = routerbench.load_records(10, {}, catalog_ids={"old-model"})
+    assert len(items) == 1
+    assert items[0].record.model_id == "old-model"
+    assert items[0].record.evidence_source == "dataset"

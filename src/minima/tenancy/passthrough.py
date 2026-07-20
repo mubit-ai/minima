@@ -13,7 +13,6 @@ from threading import Lock
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
-from minima.llm.base import Reasoner
 from minima.memory.adapter import Memory, MubitMemory
 from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
 from minima.recommender.durablerefs import (
@@ -22,7 +21,6 @@ from minima.recommender.durablerefs import (
     OrgScopedDurableRefs,
 )
 from minima.recommender.engine import Recommender
-from minima.recommender.propensity import OrgScopedPropensity, Propensity
 from minima.recommender.recstore import LaneCounter, OrgScopedRecStore, RecStore
 from minima.tenancy.context import TenantContext
 
@@ -43,9 +41,7 @@ class PassthroughRuntime:
         *,
         settings: Settings,
         catalog_store: CatalogStore,
-        reasoner: Reasoner | None,
         recstore_backend: RecStore,
-        propensity_backend: Propensity,
         lane_counter: LaneCounter,
         memory_factory: Callable[[str], Memory] | None = None,
         decision_log_backend: DecisionLog | None = None,
@@ -53,9 +49,7 @@ class PassthroughRuntime:
     ):
         self._settings = settings
         self._catalog_store = catalog_store
-        self._reasoner = reasoner
         self._recstore_backend = recstore_backend
-        self._propensity_backend = propensity_backend
         self._lane_counter = lane_counter
         self._memory_factory = memory_factory
         self._decision_log_backend = decision_log_backend or MemoryDecisionLog(
@@ -85,8 +79,6 @@ class PassthroughRuntime:
             memory,
             self._catalog_store,
             scoped_recstore,
-            reasoner=self._reasoner,
-            propensity=OrgScopedPropensity(self._propensity_backend, org_id),
             decision_log=scoped_decision_log,
             org_id=org_id,
             durable_refs=scoped_durable_refs,

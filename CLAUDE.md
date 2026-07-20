@@ -58,7 +58,7 @@ bun run build     # -> dist/minima native binary (bun build --compile)
 Python (`src/minima`):
 
 - `from __future__ import annotations` at the top of every module.
-- Pydantic v2 `BaseModel` for serializable schemas; `@dataclass(slots=True)` for internal types; `StrEnum` for enums; `Protocol` for seams (`Memory`, `Reasoner`, `QualityJudge`).
+- Pydantic v2 `BaseModel` for serializable schemas; `@dataclass(slots=True)` for internal types; `StrEnum` for enums; `Protocol` for seams (`Memory`, `QualityJudge`).
 - Async-first. Bridge sync SDKs (Mubit) off the event loop via `anyio`/threadpools.
 - Logging: `structlog` via `get_logger("minima.<sub>")`.
 - ruff `line-length=100`, target `py311`, lint set `E,F,I,UP,B,C4`. **Never break the hot path**: bookkeeping/feedback failures are logged-and-swallowed.
@@ -74,7 +74,7 @@ Request flow (`api/routers/recommend.py` → `recommender/engine.py`):
 1. **classify** (`recommender/classify.py`) — derives task features/type from the prompt (regex + signal tables).
 2. **recall** (`memory/adapter.py`) — the *only* Mubit touchpoint; pulls similar past `task → model → outcome` records using Mubit's server-side embeddings (no local embedding model).
 3. **aggregate + score** (`recommender/aggregate.py`, `score.py`) — ranks candidates by *real* cost. The cost basis is one of three tiers chosen for the whole candidate set: `estimate` (catalog prices, cold start) → `observed` (median realized $/call) → `rescaled` (this request's input priced + observed output behavior).
-4. **escalation** (`recommender/escalation.py`) — when memory is thin/conflicting, optionally consult a cheap-LLM reasoner (`llm/`, off by default, `MINIMA_REASONER_PROVIDER`).
+4. **escalation** (`recommender/escalation.py`) — DIAGNOSTIC only: thin/conflicting/tied evidence is surfaced as `escalation_suggested:*` warnings + decision-log reasons. The harness owns the cascade (its recovery ladder re-decides after a VERIFIED failure); the old pre-decision LLM reasoner was deleted.
 5. **feedback** (`api/routers/feedback.py`) — writes the outcome back to Mubit, reinforcing memory.
 
 Other packages: `catalog/` (model cost + capability priors), `tenancy/` (multi-tenant runtime — many orgs, per-org Mubit, one deployment; auth is pass-through: the client's Mubit key IS the credential), `seeding/` (`minima-seed` CLI for cold-start history), `schemas/` (Pydantic request/response models — the wire source of truth; every field must also land in the TS mirror `packages/tui/src/minima/schemas.ts`).
@@ -85,7 +85,7 @@ Everything external is behind a Protocol so it can be faked in tests. The server
 
 `MinimaAgent.promptRouted(task)` = **route** (`src/minima/router.ts` → `POST /v1/recommend`) → **run** (agent loop in `src/agent/`, streams the model, executes tools, before/afterToolCall hook stacks, abort via AbortSignal) → **judge** (`src/minima/judge.ts`, abstains unless `MINIMA_LLM_JUDGE=1`) → **feed back** (`POST /v1/feedback` with realized cost). Layers: `src/ai/` (multi-provider LLM API + `faux` test provider) · `src/agent/` (loop, tools, hooks) · `src/minima/` (router, runtime, meter, budget, spawn/sub-agents, ground truth) · `src/tools/` (bash/edit/read/write/grep/todowrite/websearch…) · `src/tui/` (Ink app) · `src/db/` (SQLite spine).
 
-**Ground-Truth verification spine** (shipped 2026-07, `docs/ground-truth-build-guide.md`): behind `MINIMA_TUI_GROUND_TRUTH=1` (**off by default — the default path must behave exactly as before**). When on: plan steps carry `verify` shell commands, the harness runs them (baseline → done-gate red→green), verdicts land in the `gates` ledger (migrations v3–v5), a confidence tier drives the UI (🟢 glide / 🟡 flag / 🔴 stop), and grounded outcomes stamp `routing_decisions` for deterministic-over-judge feedback. `/plan` (planner persona + design council + `GROUND_TRUTH.md` output) is part of this gate. Anything that changes default-path behavior does NOT belong behind guidance text — gate it on `config.groundTruth`.
+**Ground-Truth verification spine** (shipped 2026-07, `docs/ground-truth-build-guide.md`): **ON by default** since Phase 0b (opt out with `MINIMA_TUI_GROUND_TRUTH=0`). Plan steps carry `verify` shell commands, the harness runs them (baseline → done-gate red→green), verdicts land in the `gates` ledger (migrations v3–v5), a confidence tier drives the UI (🟢 glide / 🟡 flag / 🔴 stop), and grounded outcomes stamp `routing_decisions` for deterministic-over-judge feedback. Green-tier gate verdicts are the harness's honest label source (`evidence_source="gate"` — the only origin that may claim verified-in-production); a sampled LLM judge (`MINIMA_JUDGE_SAMPLE`, default 15% of ungated turns, `MINIMA_LLM_JUDGE=0` disables) labels the rest; everything else is cost/latency telemetry. `/plan` (planner persona + design council + `GROUND_TRUTH.md` output) is part of this spine. Anything gated on ground truth belongs behind `config.groundTruth`, never behind prompt text.
 
 Design principles that constrain any work in this direction:
 

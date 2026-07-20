@@ -57,12 +57,12 @@ class DecisionRecord:
     fingerprint: str
     ts: float  # wall-clock epoch seconds
     tau: float
-    policy: str  # "argmin" | "epsilon_softmax"
+    policy: str  # "thompson" | "argmin" (legacy rows may carry "epsilon_softmax")
     epsilon: float
     chosen_model_id: str
     escalated: bool
-    # What the (advisory) shadow bandit would have picked; None when shadow is off. Logged
-    # for offline agreement/regret comparison — never affects the deployed decision.
+    # Legacy: what the (deleted) advisory shadow bandit would have picked. Kept only so
+    # pre-existing persisted rows deserialize; never written since the Thompson default.
     shadow_chosen_model_id: str | None = None
     # True when the epsilon branch actually changed the pick away from the argmin
     # (distinct from policy == "epsilon_softmax", which only says exploration was POSSIBLE).
@@ -86,6 +86,13 @@ class DecisionRecord:
     realized_latency_ms: int | None = None
     feedback_ts: float | None = None
     late_feedback: bool = False
+    # Provenance of the realized quality signal ("gate" | "judge" | "human" | "none").
+    # None on rows reconciled before provenance existed — treated as untrusted by every
+    # label consumer (calibration fit, ECE, CUSUM).
+    evidence_source: str | None = None
+    # Reasoning-effort tier the model actually ran at (client-reported) — the raw
+    # material for learning (model x effort) arms.
+    realized_effort: str | None = None
 
     @property
     def reconciled(self) -> bool:
@@ -112,6 +119,30 @@ class DecisionRecord:
                 return c.predicted_success
         return None
 
+    def _candidate(self, model_id: str | None) -> CandidateSnapshot | None:
+        if not model_id:
+            return None
+        return next((c for c in self.candidates if c.model_id == model_id), None)
+
+    @property
+    def predicted_success_realized(self) -> float | None:
+        """Prediction for the model that ACTUALLY ran (may differ from the pick).
+
+        Pairing the recommended model's prediction with a divergent run's label
+        corrupts calibration — the label belongs to whatever model produced it. None
+        when the realized model wasn't in the scored candidate set (unpairable)."""
+        c = self._candidate(self.realized_model_id or self.chosen_model_id)
+        return c.predicted_success if c is not None else None
+
+    @property
+    def raw_predicted_success_realized(self) -> float | None:
+        c = self._candidate(self.realized_model_id or self.chosen_model_id)
+        if c is None:
+            return None
+        if c.raw_predicted_success is not None:
+            return c.raw_predicted_success
+        return c.predicted_success
+
 
 @dataclass(slots=True)
 class Reconciliation:
@@ -119,14 +150,16 @@ class Reconciliation:
 
     model_id: str
     outcome: str
-    # None for UNJUDGED feedback (judged=False): never fabricate a quality for
-    # rows the harness didn't judge (M-J2). _apply stores it straight through to
+    # Strictly caller-supplied; None for unlabeled feedback. A label-based default is
+    # never fabricated here. _apply stores it straight through to
     # DecisionRecord.realized_quality, which is likewise `float | None` (NULL).
     quality: float | None
     cost_usd: float | None = None
     latency_ms: int | None = None
     ts: float = 0.0
     late: bool = False
+    evidence_source: str | None = None
+    chosen_effort: str | None = None
 
 
 @runtime_checkable
@@ -157,7 +190,12 @@ def _deserialize(payload: str) -> DecisionRecord:
     return DecisionRecord(**d)
 
 
-def _apply(rec: DecisionRecord, update: Reconciliation) -> None:
+def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
+    """Apply realized fields; returns False for a replay (already reconciled with the
+    same model — first write wins; a duplicate must not flip outcomes or costs). A
+    different realized model is a divergence correction and is allowed through."""
+    if rec.reconciled and rec.realized_model_id == update.model_id:
+        return False
     rec.realized_model_id = update.model_id
     rec.realized_outcome = update.outcome
     rec.realized_quality = update.quality
@@ -165,6 +203,9 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> None:
     rec.realized_latency_ms = update.latency_ms
     rec.feedback_ts = update.ts or time.time()
     rec.late_feedback = update.late
+    rec.evidence_source = update.evidence_source
+    rec.realized_effort = update.chosen_effort
+    return True
 
 
 # Retention purge runs at most this often (the log is written on EVERY recommendation;
@@ -208,8 +249,7 @@ class MemoryDecisionLog:
             rec = self._data.get(recommendation_id)
             if rec is None or (org_id is not None and rec.org_id != org_id):
                 return False
-            _apply(rec, update)
-            return True
+            return _apply(rec, update)
 
     def rows(
         self,
@@ -308,7 +348,8 @@ class SqliteDecisionLog:
             if row is None or (org_id is not None and str(row[1]) != org_id):
                 return False
             rec = _deserialize(str(row[0]))
-            _apply(rec, update)
+            if not _apply(rec, update):
+                return False
             self._conn.execute(
                 "UPDATE decisions SET payload = ? WHERE recommendation_id = ?",
                 (_serialize(rec), recommendation_id),
@@ -455,7 +496,8 @@ class PostgresDecisionLog:
             if row is None or (org_id is not None and str(row[1]) != org_id):
                 return False
             rec = _deserialize(str(row[0]))
-            _apply(rec, update)
+            if not _apply(rec, update):
+                return False
             cur.execute(
                 "UPDATE decisions SET payload = %s WHERE recommendation_id = %s",
                 (_serialize(rec), recommendation_id),

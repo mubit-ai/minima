@@ -47,6 +47,7 @@ def _reconciled_row(
     rec.realized_outcome = outcome
     rec.realized_quality = 1.0 if outcome == "success" else 0.0
     rec.feedback_ts = 1001.0
+    rec.evidence_source = "judge"
     return rec
 
 
