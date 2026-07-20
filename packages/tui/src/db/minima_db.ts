@@ -1386,6 +1386,17 @@ export class MinimaDb {
       .all(limit) as MemoryJobRow[];
   }
 
+  /** A project's closed (done) plans, newest first — the dream pass's episode source. */
+  listClosedPlans(projectKey: string, limit = 50): PlanRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM plans WHERE status = 'done'
+         AND session_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+         ORDER BY closed_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(projectKey, limit) as PlanRow[];
+  }
+
   /** Scribe UPDATE reconciliation: refresh content/citations/watermark + audit. */
   updateMemory(
     id: string,

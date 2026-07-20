@@ -51,7 +51,9 @@ import {
   buildPlanTranscript,
   buildPlannerSystemPrompt,
   finalizePlan,
+  formatDreamReport,
   runCouncilRound,
+  runDream,
   runKeeperMiniUpdate,
   runPlanTurn,
 } from "../minima/index.ts";
@@ -311,7 +313,7 @@ const COMMANDS = [
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
   {
     name: "memory",
-    desc: "Curated memory: list · add <text> · pin|confirm|reject|delete <n|id>",
+    desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
   },
 ];
 
@@ -2404,6 +2406,13 @@ export function HarnessApp({
           say(
             `${lines.join("\n")}\n\nActive + pinned entries are injected each turn (pinned > gate-cited > recent, hard-capped).\nManage: /memory pin|confirm|reject|delete <n|id> · /memory add <text>${offNote}`,
           );
+          break;
+        }
+        if (sub === "dream") {
+          // B3: offline consolidation — distill green-verified closed plans into pending
+          // workflow candidates. Deterministic (no LLM), never mutates existing rows.
+          const report = runDream(db, projectKey);
+          say(formatDreamReport(db, report));
           break;
         }
         if (sub === "add") {

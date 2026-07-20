@@ -92,6 +92,15 @@ export {
   type PlanCriticOptions,
 } from "./plan_critic.ts";
 export {
+  mineGreenEpisodes,
+  distillWorkflow,
+  runDream,
+  formatDreamReport,
+  knownProcedureFor,
+  type GreenEpisode,
+  type DreamReport,
+} from "./memory_dream.ts";
+export {
   runDiffReview,
   parseDiffReviewVerdict,
   collectRunDiff,
