@@ -36,6 +36,27 @@ export {
   MEMORY_PROJECTION_CAP_CHARS,
   type MemoryProjection,
 } from "./memory_ledger.ts";
+export {
+  mineSignals,
+  applyRecurrenceGate,
+  buildScribePrompt,
+  parseCandidates,
+  makeRoutedExtractor,
+  runScribePass,
+  sweepStaleMemories,
+  drainMemoryJobs,
+  similarity,
+  normalizePattern,
+  SCRIBE_SYSTEM,
+  SCRIBE_PASS_CAP_USD,
+  SCRIBE_BUDGET_FLOOR,
+  type ScribeSignal,
+  type ScribeSignalKind,
+  type ScribeCandidate,
+  type ScribeReport,
+  type ScribePassDeps,
+  type ExtractFn,
+} from "./memory_scribe.ts";
 export { PlanSessionStore, buildPlannerSystemPrompt } from "./plan_session.ts";
 export type {
   PlanDecision,
