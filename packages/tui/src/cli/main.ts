@@ -17,7 +17,7 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { MinimaDb, type RunRow } from "../db/minima_db.ts";
+import { MinimaDb, type RunRow, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
@@ -51,6 +51,7 @@ import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
+import { VERSION } from "../version.ts";
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
 const ENV_FILES = [".env.harness", ".env"];
@@ -647,6 +648,46 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
+
+  // D1 (v13): stamp every subsequent decision/gate with the running harness + toolset
+  // digest — set here, AFTER the toolset is final (task/question tools included). Resume
+  // compares a run's recorded stamp against this one (warn-only, never a block).
+  if (db) {
+    db.setVersionStamp({
+      harnessVersion: VERSION,
+      toolSchemaHash: toolSchemaHash(agent.agentState.tools),
+    });
+    if (initialResume) {
+      const recorded = db.lastRecordedStamp(initialResume.run.run_id);
+      const current = db.versionStamp;
+      if (
+        recorded.toolSchemaHash &&
+        current.toolSchemaHash &&
+        recorded.toolSchemaHash !== current.toolSchemaHash
+      ) {
+        process.stderr.write(
+          `minima: 🟡 resumed run was recorded under different tooling (harness ${recorded.harnessVersion ?? "?"} → ${current.harnessVersion ?? "?"}) — history may replay imperfectly\n`,
+        );
+        try {
+          if (agent.runId) {
+            db.appendEvent({
+              runId: agent.runId,
+              type: "tooling_mismatch",
+              payload: {
+                resumed_run: initialResume.run.run_id,
+                recorded_hash: recorded.toolSchemaHash,
+                current_hash: current.toolSchemaHash,
+                recorded_version: recorded.harnessVersion,
+                current_version: current.harnessVersion,
+              },
+            });
+          }
+        } catch {
+          // advisory bookkeeping
+        }
+      }
+    }
+  }
 
   // Budget following: --budget creates a session-scoped ledger (warn mode unless
   // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the

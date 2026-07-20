@@ -14,7 +14,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -337,7 +337,38 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_memory_jobs_status ON memory_jobs(status, not_before)",
   ],
+  // v13 — durable-execution stamps + blob tier (D1). Restate lesson: "your code is the
+  // manual the LLM uses to interpret its own history" — Homebrew guarantees version skew
+  // across resumes, so decisions and gates record WHICH harness + tool schema produced
+  // them (resume warns on mismatch, never blocks). tool_calls.result_ref points a >16KB
+  // result at a content-addressed blob file so WAL checkpoints stay fast as the memory
+  // features add read load; the row keeps the truncated text as before.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN harness_version TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN tool_schema_hash TEXT",
+    "ALTER TABLE gates ADD COLUMN harness_version TEXT",
+    "ALTER TABLE gates ADD COLUMN tool_schema_hash TEXT",
+    "ALTER TABLE tool_calls ADD COLUMN result_ref TEXT", // sha256 blob file, NULL = inline only
+  ],
 ];
+
+/** Tool results larger than this spill to a content-addressed blob file (v13). */
+export const BLOB_SPILL_BYTES = 16_384;
+
+/**
+ * Stable digest of the CURRENT toolset: sorted (name + parameter JSON-schema) pairs,
+ * sha256'd. Structural on purpose — the db layer never imports agent types.
+ */
+export function toolSchemaHash(
+  tools: readonly { name: string; parameters?: { jsonSchema?: unknown } }[],
+): string {
+  const entries = [...tools]
+    .map((t) => `${t.name}:${JSON.stringify(t.parameters?.jsonSchema ?? null)}`)
+    .sort();
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(entries.join("\n"));
+  return hasher.digest("hex");
+}
 
 export interface RunRow {
   run_id: string;
@@ -563,10 +594,22 @@ function serializeToolList(tools: string[] | null | undefined): string | null {
 export class MinimaDb {
   readonly db: Database;
   readonly path: string;
+  /** Where >16KB tool results spill (v13). Null (":memory:" without an override) = no spill. */
+  readonly blobDir: string | null;
+  /** v13 stamps, set once at startup (setVersionStamp); every subsequent decision/gate
+   * write carries them. Null until set — pre-stamp rows stay NULL, like historical rows. */
+  private stampHarnessVersion: string | null = null;
+  private stampToolSchemaHash: string | null = null;
 
-  constructor(path: string = defaultDbPath()) {
+  constructor(path: string = defaultDbPath(), opts: { blobDir?: string | null } = {}) {
     this.path = path;
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    this.blobDir =
+      opts.blobDir !== undefined
+        ? opts.blobDir
+        : path !== ":memory:"
+          ? join(dirname(path), "blobs")
+          : null;
     this.db = new Database(path, { create: true });
     this.db.exec("PRAGMA busy_timeout=5000");
     // The delete->WAL header flip needs a brief exclusive lock and does NOT honor the
@@ -584,8 +627,48 @@ export class MinimaDb {
       }
     }
     this.db.exec("PRAGMA foreign_keys=ON");
+    // Mark the file as a Minima harness DB ("MNMA") — file(1)-style identification.
+    this.db.exec("PRAGMA application_id=0x4D4E4D41");
     this.migrate();
     this.reconcileSchema();
+  }
+
+  /** v13: record the running harness + toolset once at startup; all later decision/gate
+   * writes carry the stamps. Resume compares against a run's recorded stamps (warn-only). */
+  setVersionStamp(stamp: { harnessVersion: string; toolSchemaHash: string }): void {
+    this.stampHarnessVersion = stamp.harnessVersion;
+    this.stampToolSchemaHash = stamp.toolSchemaHash;
+  }
+
+  get versionStamp(): { harnessVersion: string | null; toolSchemaHash: string | null } {
+    return {
+      harnessVersion: this.stampHarnessVersion,
+      toolSchemaHash: this.stampToolSchemaHash,
+    };
+  }
+
+  /** The newest recorded tooling stamp among a run's decisions and gates (v13), or nulls. */
+  lastRecordedStamp(runId: string): {
+    harnessVersion: string | null;
+    toolSchemaHash: string | null;
+  } {
+    const dec = this.db
+      .query(
+        `SELECT harness_version, tool_schema_hash FROM routing_decisions
+         WHERE run_id = ? AND tool_schema_hash IS NOT NULL ORDER BY ts DESC, rowid DESC LIMIT 1`,
+      )
+      .get(runId) as { harness_version: string | null; tool_schema_hash: string | null } | null;
+    if (dec) return { harnessVersion: dec.harness_version, toolSchemaHash: dec.tool_schema_hash };
+    const gate = this.db
+      .query(
+        `SELECT harness_version, tool_schema_hash FROM gates
+         WHERE session_id = ? AND tool_schema_hash IS NOT NULL
+         ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(runId) as { harness_version: string | null; tool_schema_hash: string | null } | null;
+    if (gate)
+      return { harnessVersion: gate.harness_version, toolSchemaHash: gate.tool_schema_hash };
+    return { harnessVersion: null, toolSchemaHash: null };
   }
 
   private migrate(): void {
@@ -847,9 +930,26 @@ export class MinimaDb {
     ts?: number;
   }): string {
     const id = opts.id ?? newId();
+    // v13 blob tier: a big result spills (content-addressed) so the row — and every WAL
+    // checkpoint over it — stays small; the row keeps the same truncated text as before.
+    // Fail-open: a blob write failure just means no ref (inline truncation still stands).
+    let resultRef: string | null = null;
+    if (this.blobDir && opts.result.length > BLOB_SPILL_BYTES) {
+      try {
+        const hasher = new Bun.CryptoHasher("sha256");
+        hasher.update(opts.result);
+        const sha = hasher.digest("hex");
+        mkdirSync(this.blobDir, { recursive: true });
+        const file = join(this.blobDir, sha);
+        if (!existsSync(file)) writeFileSync(file, opts.result, "utf8");
+        resultRef = sha;
+      } catch {
+        resultRef = null;
+      }
+    }
     this.db.run(
-      `INSERT INTO tool_calls (id, run_id, event_id, agent_id, tool_name, args, result, is_error, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tool_calls (id, run_id, event_id, agent_id, tool_name, args, result, is_error, ts, result_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         opts.runId,
@@ -860,9 +960,21 @@ export class MinimaDb {
         opts.result.slice(0, 4000),
         opts.isError ? 1 : 0,
         opts.ts ?? Date.now() / 1000,
+        resultRef,
       ],
     );
     return id;
+  }
+
+  /** Rehydrate a spilled tool result by its content hash (v13). Null when absent. */
+  readBlob(ref: string): string | null {
+    if (!this.blobDir || !/^[0-9a-f]{64}$/.test(ref)) return null;
+    try {
+      const file = join(this.blobDir, ref);
+      return existsSync(file) ? readFileSync(file, "utf8") : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Run a batch of writes in one transaction (per-turn atomicity for the sink). */
@@ -882,8 +994,9 @@ export class MinimaDb {
          chosen_model, decision_basis, selection_policy, confidence, threshold_used, ranked,
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
-         turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted,
+         harness_version, tool_schema_hash, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
@@ -925,6 +1038,8 @@ export class MinimaDb {
           : d.lessonPromoted
             ? 1
             : 0,
+        this.stampHarnessVersion,
+        this.stampToolSchemaHash,
         Date.now() / 1000,
       ],
     );
@@ -1744,6 +1859,10 @@ export class MinimaDb {
    * step gaining its first `verify` — always gated on baseline still NULL (capture is
    * once-only). Each entry carries the post-COALESCE effective `verify` (may be null —
    * filtering verify-less steps is the caller's job).
+   *
+   * Transaction note (D1): the reads here run BEFORE the deferred write transaction below —
+   * safe while this process is the DB's only writer (the WAL single-writer invariant the
+   * whole spine assumes). Revisit with BEGIN IMMEDIATE if a second writer process ever lands.
    */
   /**
    * The plan a todowrite would apply to — the active plan, else (reopen over resurrect) the
@@ -1906,7 +2025,7 @@ export class MinimaDb {
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO gates (id, plan_id, step_id, kind, outcome, confidence, verified_by, factors_json, created_at, rec_id, session_id, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO gates (id, plan_id, step_id, kind, outcome, confidence, verified_by, factors_json, created_at, rec_id, session_id, agent_id, harness_version, tool_schema_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId ?? null,
@@ -1920,6 +2039,8 @@ export class MinimaDb {
         opts.recId ?? null,
         opts.sessionId ?? null,
         opts.agentId ?? null,
+        this.stampHarnessVersion,
+        this.stampToolSchemaHash,
       ],
     );
     return id;

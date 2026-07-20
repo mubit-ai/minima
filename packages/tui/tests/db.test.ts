@@ -120,7 +120,8 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v7 plan_steps.check_origin + v8 plan_steps.tools (A6) + v9 routing_decisions.step_id
     // + v10 checkpoints (B3) + v11 lineage-convergence re-run of the tools ALTER
     // + v12 memory ledger (memories/memory_events/memory_jobs)
-    expect(db.schemaVersion).toBe(12);
+    // + v13 version stamps (harness_version/tool_schema_hash) + tool_calls.result_ref
+    expect(db.schemaVersion).toBe(13);
     for (const t of [
       "projects",
       "runs",
