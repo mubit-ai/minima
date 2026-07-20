@@ -486,6 +486,30 @@ export interface MemoryEventRow {
   ts: number;
 }
 
+export interface MemoryJobRow {
+  id: string;
+  kind: "reflect" | "consolidate" | "dream";
+  session_id: string | null;
+  payload: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  not_before: number | null;
+  created: number;
+  updated: number;
+}
+
+/** One gate row joined to its step + owning run — the scribe's mining substrate. */
+export interface GateHistoryRow extends GateRow {
+  step_content: string | null;
+  step_verify: string | null;
+  run_id: string | null;
+}
+
+/** One user override joined back to its gate's step + run — a correction signal. */
+export interface UserSignalHistoryRow extends UserSignalRow {
+  step_content: string | null;
+  run_id: string | null;
+}
+
 /** One git-shadow worktree snapshot (B3, v10) — the ref ↔ run ↔ prompt ↔ step mapping. */
 export interface CheckpointRow {
   id: string;
@@ -1151,6 +1175,208 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM memory_events WHERE memory_id = ? ORDER BY ts, rowid LIMIT ?")
       .all(memoryId, limit) as MemoryEventRow[];
+  }
+
+  // ---------------------------------------------------------------- memory jobs (B2)
+
+  /** Insert a curation job (queued). Triggers only ever enqueue; a drain loop runs them. */
+  enqueueMemoryJob(opts: {
+    id?: string;
+    kind: MemoryJobRow["kind"];
+    sessionId?: string | null;
+    payload?: unknown;
+    notBefore?: number | null;
+  }): string {
+    const id = opts.id ?? newId();
+    const now = Date.now() / 1000;
+    this.db.run(
+      `INSERT INTO memory_jobs (id, kind, session_id, payload, status, not_before, created, updated)
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`,
+      [
+        id,
+        opts.kind,
+        opts.sessionId ?? null,
+        opts.payload === undefined || opts.payload === null ? null : JSON.stringify(opts.payload),
+        opts.notBefore ?? null,
+        now,
+        now,
+      ],
+    );
+    return id;
+  }
+
+  /**
+   * Claim the oldest runnable queued job (FIFO, not_before-respecting) by flipping it to
+   * `running` inside one IMMEDIATE transaction — two concurrent drainers can never claim
+   * the same job. Null when nothing is runnable.
+   */
+  claimNextMemoryJob(now: number = Date.now() / 1000): MemoryJobRow | null {
+    let claimed: MemoryJobRow | null = null;
+    this.db
+      .transaction(() => {
+        const row = this.db
+          .query(
+            `SELECT * FROM memory_jobs WHERE status = 'queued'
+             AND (not_before IS NULL OR not_before <= ?)
+             ORDER BY created, rowid LIMIT 1`,
+          )
+          .get(now) as MemoryJobRow | null;
+        if (!row) return;
+        this.db.run("UPDATE memory_jobs SET status = 'running', updated = ? WHERE id = ?", [
+          now,
+          row.id,
+        ]);
+        claimed = { ...row, status: "running" };
+      })
+      .immediate();
+    return claimed;
+  }
+
+  finishMemoryJob(id: string, status: "done" | "failed"): void {
+    this.db.run("UPDATE memory_jobs SET status = ?, updated = ? WHERE id = ?", [
+      status,
+      Date.now() / 1000,
+      id,
+    ]);
+  }
+
+  /**
+   * Crash recovery, run once at startup: a job still `running` belongs to a process that
+   * died mid-drain — requeue it so the pass is retried, not lost (persisted-queue lesson).
+   */
+  requeueRunningMemoryJobs(): number {
+    this.db.run("UPDATE memory_jobs SET status = 'queued', updated = ? WHERE status = 'running'", [
+      Date.now() / 1000,
+    ]);
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
+  }
+
+  listMemoryJobs(status?: MemoryJobRow["status"], limit = 100): MemoryJobRow[] {
+    if (status) {
+      return this.db
+        .query("SELECT * FROM memory_jobs WHERE status = ? ORDER BY created, rowid LIMIT ?")
+        .all(status, limit) as MemoryJobRow[];
+    }
+    return this.db
+      .query("SELECT * FROM memory_jobs ORDER BY created, rowid LIMIT ?")
+      .all(limit) as MemoryJobRow[];
+  }
+
+  /** Scribe UPDATE reconciliation: refresh content/citations/watermark + audit. */
+  updateMemory(
+    id: string,
+    patch: { content?: string; citations?: string[] | null; watermarkTs?: number | null },
+    actor: string,
+  ): boolean {
+    let changed = false;
+    this.db.transaction(() => {
+      const row = this.getMemory(id);
+      if (!row || row.invalidated_at !== null) return;
+      this.db.run(
+        `UPDATE memories SET content = COALESCE(?, content),
+           citations = COALESCE(?, citations),
+           watermark_ts = COALESCE(?, watermark_ts),
+           updated = ? WHERE id = ?`,
+        [
+          patch.content ?? null,
+          patch.citations?.length ? JSON.stringify(patch.citations) : null,
+          patch.watermarkTs ?? null,
+          Date.now() / 1000,
+          id,
+        ],
+      );
+      this.writeMemoryEvent({
+        memoryId: id,
+        op: "update",
+        payload: { content: patch.content ?? null },
+        actor,
+      });
+      changed = true;
+    })();
+    return changed;
+  }
+
+  // -------------------------------------------------- scribe mining joins (B2, read-only)
+
+  /** A project's gate history joined to step content/verify + run id, oldest first. */
+  getProjectGateHistory(projectKey: string, limit = 500): GateHistoryRow[] {
+    return this.db
+      .query(
+        `SELECT g.*, ps.content AS step_content, ps.verify AS step_verify,
+                COALESCE(g.session_id, p.session_id) AS run_id
+         FROM gates g
+         LEFT JOIN plan_steps ps ON ps.id = g.step_id
+         LEFT JOIN plans p ON p.id = g.plan_id
+         WHERE COALESCE(g.session_id, p.session_id) IN
+               (SELECT run_id FROM runs WHERE project_key = ?)
+         ORDER BY g.created_at, g.rowid LIMIT ?`,
+      )
+      .all(projectKey, limit) as GateHistoryRow[];
+  }
+
+  /** A project's reject/steer overrides joined to their gate's step + run, oldest first. */
+  getProjectUserCorrections(projectKey: string, limit = 200): UserSignalHistoryRow[] {
+    return this.db
+      .query(
+        `SELECT us.*, ps.content AS step_content,
+                COALESCE(g.session_id, p.session_id) AS run_id
+         FROM user_signals us
+         JOIN gates g ON g.id = us.gate_id
+         LEFT JOIN plan_steps ps ON ps.id = g.step_id
+         LEFT JOIN plans p ON p.id = g.plan_id
+         WHERE us.action IN ('reject', 'steer')
+           AND COALESCE(g.session_id, p.session_id) IN
+               (SELECT run_id FROM runs WHERE project_key = ?)
+         ORDER BY us.at, us.rowid LIMIT ?`,
+      )
+      .all(projectKey, limit) as UserSignalHistoryRow[];
+  }
+
+  /**
+   * Judged turns whose LLM grade contradicts the deterministic gate verdict — a judge
+   * blind spot worth remembering (high grade over a failed gate, or the inverse).
+   */
+  getProjectJudgeGateDisagreements(projectKey: string, limit = 200): Record<string, unknown>[] {
+    return this.db
+      .query(
+        `SELECT rec_id, task_type, chosen_model, quality, gt_outcome, ts
+         FROM routing_decisions
+         WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+           AND judged = 1 AND quality IS NOT NULL AND gt_outcome IS NOT NULL
+           AND ((quality >= 0.8 AND gt_outcome = 'failure')
+             OR (quality < 0.4 AND gt_outcome = 'success'))
+         ORDER BY ts LIMIT ?`,
+      )
+      .all(projectKey, limit) as Record<string, unknown>[];
+  }
+
+  /** Distinct models this project's decisions actually chose (staleness-guard input). */
+  getProjectChosenModels(projectKey: string): string[] {
+    const rows = this.db
+      .query(
+        `SELECT DISTINCT chosen_model FROM routing_decisions
+         WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+           AND chosen_model IS NOT NULL`,
+      )
+      .all(projectKey) as { chosen_model: string }[];
+    return rows.map((r) => r.chosen_model);
+  }
+
+  /** Newest file_changes ts (epoch s) among toolchain manifests for a project, or null. */
+  latestToolchainChangeTs(projectKey: string): number | null {
+    const row = this.db
+      .query(
+        `SELECT MAX(fc.created_at) AS latest
+         FROM file_changes fc
+         JOIN plans p ON p.id = fc.plan_id
+         WHERE p.session_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+           AND (fc.path LIKE '%package.json' OR fc.path LIKE '%pyproject.toml'
+             OR fc.path LIKE '%bun.lock' OR fc.path LIKE '%uv.lock')`,
+      )
+      .get(projectKey) as { latest: string | null };
+    if (!row?.latest) return null;
+    const ms = Date.parse(row.latest);
+    return Number.isFinite(ms) ? ms / 1000 : null;
   }
 
   /** All of a run's checkpoints, oldest first. */

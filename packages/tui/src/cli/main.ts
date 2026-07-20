@@ -29,6 +29,7 @@ import {
 } from "../minima/ground_truth.ts";
 import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
+import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
@@ -451,6 +452,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   let sink: DbSinkHandle | null = null;
   let initialResume: RehydratedRun | null = null;
   let gtGateBefore: BeforeToolCall | null = null;
+  // B2 memory scribe: drains queued curation jobs (built once db + agent exist; reads
+  // agent.budget at call time since --budget attaches it later).
+  let scribeDrain: (() => Promise<void>) | null = null;
   const verifyConsentRef: { current: VerifyConsent } = { current: headlessVerifyConsent() };
   try {
     db = new MinimaDb();
@@ -511,6 +515,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       agent.addAfterToolCall(after);
       gtGateBefore = before;
     }
+    // B2 memory scribe: recover jobs a crashed process left `running`, build the drain
+    // (routed extraction, spend booked like judge spend), and clear prior sessions'
+    // leftovers shortly after startup — off the critical path, fail-open throughout.
+    if (config.memoryLedger) {
+      const scribeDb = db;
+      scribeDb.requeueRunningMemoryJobs();
+      scribeDrain = async () => {
+        try {
+          await drainMemoryJobs({
+            db: scribeDb,
+            extract: makeRoutedExtractor({
+              router: agent.router,
+              meter: agent.meter,
+              budget: agent.budget,
+            }),
+            budget: agent.budget,
+            modelExists: (id) => findModelById(id) !== undefined,
+            projectKeyFor: (job) =>
+              (job.session_id ? scribeDb.getRun(job.session_id)?.project_key : null) ?? projectKey,
+          });
+        } catch {
+          // curation must never break a run
+        }
+      };
+      const startupDrain = setTimeout(() => void scribeDrain?.(), 3000);
+      startupDrain.unref?.();
+    }
   } catch (exc) {
     if (args.resume) {
       process.stderr.write(`minima: cannot --resume: persistence unavailable: ${errText(exc)}\n`);
@@ -526,6 +557,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       db?.close();
     } catch {
       // shutdown must never fail on bookkeeping
+    }
+  };
+  // B2: session end enqueues one reflect job and gives the drain a bounded window; a pass
+  // that can't finish here stays queued and the next session's startup drain runs it.
+  const endScribeSafely = async (): Promise<void> => {
+    if (!db || !agent.runId || !scribeDrain) return;
+    try {
+      db.enqueueMemoryJob({ kind: "reflect", sessionId: agent.runId });
+      await Promise.race([scribeDrain(), new Promise<void>((r) => setTimeout(r, 8000))]);
+    } catch {
+      // curation is optional — never delay shutdown on an error
     }
   };
 
@@ -618,6 +660,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       rc = 1;
     } finally {
       await endSessionSafely(agent); // distil the one-shot run into durable memory
+      await endScribeSafely(); // curate the run's ledger signals into the memory ledger
       closeDb(rc === 0 ? "done" : "aborted");
     }
     return rc;
@@ -632,6 +675,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   } else {
     const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
     if (savedMode) setMode(savedMode);
+  }
+
+  // B2 quiet-timer: ~90s of tool-call silence marks a natural pause — enqueue a reflect
+  // job and drain in the background. unref'd so the timer never keeps the process alive.
+  if (scribeDrain && db) {
+    const quietDb = db;
+    let quiet: ReturnType<typeof setTimeout> | null = null;
+    agent.addAfterToolCall(async () => {
+      if (quiet) clearTimeout(quiet);
+      quiet = setTimeout(() => {
+        try {
+          if (agent.runId) quietDb.enqueueMemoryJob({ kind: "reflect", sessionId: agent.runId });
+        } catch {
+          // fail-open
+        }
+        void scribeDrain?.();
+      }, 90_000);
+      quiet.unref?.();
+      return null;
+    });
   }
 
   // One renderer — inline (like Claude Code's REPL): main buffer + Ink <Static> commits finished
@@ -680,6 +743,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
+  await endScribeSafely(); // curate the run's ledger signals into the memory ledger
   closeDb("done");
   return 0;
 }
