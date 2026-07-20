@@ -103,6 +103,11 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
       quality: d.quality === null ? null : Number(d.quality),
       outcome: String(d.outcome ?? "success"),
       turns: Number(d.turns ?? 0),
+      // F1: per-row token telemetry is not persisted — a rehydrated row honestly reports
+      // none (kvCacheHitRate stays null over these rows rather than faking 100% misses).
+      cacheReadTokens: 0,
+      inputTokens: 0,
+      labeled: Boolean(d.judged) || d.gt_outcome !== null,
     });
   }
 
