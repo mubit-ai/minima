@@ -1154,86 +1154,13 @@ export function HarnessApp({
       },
     ]);
   }, [exitPlanMode]);
-  // MP17: Shift+Tab OUT of plan mode routes through the SAME 3-option gate as the
-  // exit_plan tool, so the plan and its approval live in one surface. Fast-path: a
-  // sessionless plan mode where no plan turn has completed has nothing to approve — the
-  // badge ring stays fluid (quick mode flipping, the modes scenario, and the GT-off A/B
-  // byte-identity are all preserved until a plan reply actually exists).
-  const planTurnSeenRef = useRef(false);
-  useEffect(() => {
-    if (mode === "plan") planTurnSeenRef.current = false;
-  }, [mode]);
-  const requestPlanExitGate = useCallback(async () => {
-    const ask = askUserRef?.current ?? null;
-    const store = planSessionRef.current;
-    if (!ask || (store == null && !planTurnSeenRef.current)) {
-      cycleMode();
-      return;
-    }
-    if (store) {
-      // Approve what you can see: the draft document lands in the transcript above the
-      // overlay (the D3b panel cannot coexist with the question overlay — panelVisible
-      // gates on !questionPrompt — so scrollback is the review surface here).
-      setMessages((m) => [...m, { role: "tool", text: store.toMarkdown(), toolName: "plan" }]);
-    }
-    const choice = await ask({
-      question: "Exit plan mode?",
-      header: "plan",
-      options: [
-        {
-          label: "Finalize & build",
-          description: store
-            ? "Write the ground truth, exit plan mode, start building."
-            : "Approve the plan, exit plan mode, start building.",
-        },
-        {
-          label: "Revise the plan",
-          description: "Stay in plan mode and tell the planner what to change.",
-        },
-        {
-          label: "Cancel plan mode",
-          description: store
-            ? "Discard the plan session — nothing is written."
-            : "Discard the plan.",
-        },
-      ],
-      allow_freetext: false,
-    });
-    if (choice === "Finalize & build") {
-      const r = await exitPlanFinalize(null);
-      // GT-on success pushes its own md + note inside runPlanFinalize's ok-branch; surface
-      // the message only for refusals and the sessionless approve.
-      if (!r.ok || store == null) {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: r.message, toolName: "plan", isError: !r.ok },
-        ]);
-      }
-      return;
-    }
-    if (choice === "Revise the plan") {
-      const note = await ask({
-        question: "What should the planner change?",
-        header: "revise",
-        options: [],
-        allow_freetext: true,
-      });
-      if (note?.trim()) void onSubmit(note.trim());
-      return;
-    }
-    if (choice === "Cancel plan mode") {
-      exitPlanCancel();
-      return;
-    }
-    // Esc / dismissed: stay in plan mode, ring untouched.
-  }, [askUserRef, exitPlanFinalize, exitPlanCancel]);
-
   // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
   // universal gate, GT on or off; sessionless plan mode requires the `plan` markdown arg,
   // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
   // ask-null guard covers any other pathless case. Its approval overlay rides the same
-  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab gate,
-  // /plan off) flips the mode and the effect cleanup unregisters it.
+  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab, /plan off)
+  // flips the mode and the effect cleanup unregisters it. This tool and /plan finalize
+  // are the ONLY approval surfaces — Shift+Tab is a clean CC-style exit, never a gate.
   // biome-ignore lint/correctness/useExhaustiveDependencies: planSessionGen keys re-registration to session IDENTITY — the session lives in a ref, so replacing it (e.g. /plan recovering while the mode is already "plan") never re-renders on its own
   useEffect(() => {
     if (mode !== "plan") return;
@@ -1577,7 +1504,6 @@ export function HarnessApp({
               ]);
             } else if (text) {
               setMessages((m) => [...m, { role: "assistant", text }]);
-              if (getMode() === "plan") planTurnSeenRef.current = true;
             }
           } else if (ev.message?.role === "toolResult") {
             setMessages((m) => [
@@ -1729,20 +1655,19 @@ export function HarnessApp({
 
     // Shift+Tab switches the permission mode from ANY state — idle, mid-run, with the
     // permission overlay up, or under the expanded panel (Claude Code parity: the switch
-    // is immediate, never queued). Modal selectors (pickers, palette, config, question
-    // overlay) keep the keyboard instead — Tab can mean something there.
+    // is immediate and SILENT, never queued and never a dialog). Leaving plan mode is
+    // CC's clean exit: the ring just advances and the mode-exit cleanup effect discards
+    // any live council session with a transcript notice — plan APPROVAL lives only in
+    // the exit_plan tool and /plan finalize. Modal selectors (pickers, palette, config,
+    // question overlay) keep the keyboard instead — Tab can mean something there.
     if (key.tab && key.shift) {
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
-      if (getMode() === "plan") {
-        // MP17: leaving plan mode routes the 3-option exit gate. Mid-council the
-        // in-flight plan turn stops FIRST, so finalize never interleaves a live round.
-        if (busy) {
-          councilControllerRef.current?.abort();
-          agent.abort();
-        }
-        void requestPlanExitGate();
-        return;
+      if (getMode() === "plan" && busy) {
+        // A mid-council exit stops the in-flight plan turn first, so the discarded
+        // planner persona never keeps streaming into build mode.
+        councilControllerRef.current?.abort();
+        agent.abort();
       }
       const next = cycleMode();
       // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass

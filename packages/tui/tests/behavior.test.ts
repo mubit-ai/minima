@@ -499,23 +499,24 @@ describe("tui/app.tsx panel key routing", () => {
 describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("Shift+Tab cycles the ring EXCEPT out of plan mode, which routes the gate (MP17)", () => {
-    // Entering plan still rides the ring (auto-heal plants the GT session); LEAVING plan
-    // goes through the 3-option exit gate so approval and the ring share one surface. The
-    // sessionless-no-plan-turn fast-path keeps quick flipping (and the modes scenario)
-    // cycle-identical. Since the global-arm move the chord lives in app.tsx's useInput
-    // ABOVE the overlay/busy guards (Claude Code parity: works mid-run and over the
-    // permission overlay) — the composer no longer knows about Shift+Tab at all.
+  test("Shift+Tab ALWAYS just cycles the ring — silent CC-style exit, never a dialog", () => {
+    // Claude Code parity: the chord lives in app.tsx's global useInput ABOVE the
+    // overlay/busy guards (works mid-run and over the permission overlay — the composer
+    // no longer knows about Shift+Tab), and leaving plan mode is a clean exit: the ring
+    // advances, the mode-exit cleanup effect discards any live session with a notice.
+    // Plan APPROVAL lives only in the exit_plan tool and /plan finalize; the old MP17
+    // Shift+Tab 3-option gate is gone. A mid-council exit aborts the plan turn first.
     const handlerIdx = src.indexOf("if (key.tab && key.shift) {");
     expect(handlerIdx).toBeGreaterThan(-1);
     const handler = src.slice(handlerIdx, handlerIdx + 1600);
-    expect(handler).toContain('if (getMode() === "plan") {');
-    expect(handler).toContain("void requestPlanExitGate();");
+    expect(handler).toContain('if (getMode() === "plan" && busy) {');
     expect(handler).toContain("const next = cycleMode();");
+    expect(handler).not.toContain("ask(");
     // The arm sits BEFORE the modal early-return and the busy guard — mid-run parity.
     expect(handlerIdx).toBeLessThan(src.indexOf("panelCapture // the expanded panel owns"));
     expect(handlerIdx).toBeLessThan(src.indexOf("if (busy && (key.escape ||"));
-    expect(src).toContain("store == null && !planTurnSeenRef.current");
+    expect(src).not.toContain("requestPlanExitGate");
+    expect(src).not.toContain("planTurnSeenRef");
     expect(src).not.toContain("toggleMode");
     expect(src).not.toContain("onShiftTab");
     const composer = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
