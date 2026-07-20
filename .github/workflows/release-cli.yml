@@ -1,8 +1,8 @@
 name: Release — CLI binaries + Homebrew
 
 # On a published release, cross-compile the TypeScript/Bun CLI for macOS + Linux,
-# ad-hoc codesign the macOS arches, attach the tarballs to the release, and open
-# a PR to the Homebrew tap (mubit-ai/homebrew-minima) bumping the binary formula.
+# ad-hoc codesign the macOS arches, attach the tarballs to the release, and push
+# the bumped binary formula straight to the Homebrew tap (mubit-ai/homebrew-minima).
 # PyPI publishing of the Python `minima-cli` (SDK + server tooling) stays in prod.yml.
 on:
   release:
@@ -92,7 +92,7 @@ jobs:
           path: packages/tui/dist/minima-*.tar.gz
 
   publish-and-bump:
-    name: Attach assets + open tap PR
+    name: Attach assets + push tap formula
     needs: [build-macos, build-linux]
     runs-on: ubuntu-latest
     steps:
@@ -116,7 +116,12 @@ jobs:
           VER="${RELEASE_TAG#v}"
           python3 packaging/homebrew/render_formula.py --version "$VER" --dist dist --out minima.rb
           echo "----- rendered formula -----"; cat minima.rb
-      - name: Open Homebrew tap PR
+      # Direct push, not a PR: the formula PRs sat unmerged (0.11.0 AND 0.12.0 —
+      # brew served 0.10.0 until 2026-07-20), so a published release silently never
+      # reached users. The sha256s come from the just-built release artifacts, so
+      # there is nothing for a reviewer to judge that the release itself didn't
+      # already gate.
+      - name: Push formula to the tap
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -126,15 +131,18 @@ jobs:
           cd tap
           git config user.name "mubit-release-bot"
           git config user.email "release-bot@mubit.ai"
-          branch="bump-minima-${VER}"
-          git checkout -b "$branch"
           if git diff --quiet Formula/minima.rb; then
             echo "formula already up to date for ${VER}; nothing to do"; exit 0
           fi
           git add Formula/minima.rb
           git commit -m "minima ${VER} (prebuilt binary)"
-          git push -u origin "$branch" --force-with-lease
-          gh pr create --repo mubit-ai/homebrew-minima --base main --head "$branch" \
-            --title "minima ${VER}" \
-            --body "Automated bump to the prebuilt TypeScript/Bun binary for \`${RELEASE_TAG}\`. Replaces the Python virtualenv formula. \`brew test-bot\` validates install + \`test do\` on macOS + Linux before merge." \
-            || echo "PR already exists for ${branch}"
+          git push origin HEAD:main
+      - name: Verify the tap serves the released version
+        run: |
+          VER="${RELEASE_TAG#v}"
+          served=$(curl -fsSL "https://raw.githubusercontent.com/mubit-ai/homebrew-minima/main/Formula/minima.rb" | sed -n 's/^ *version "\(.*\)"/\1/p' | head -1)
+          if [ "$served" != "$VER" ]; then
+            echo "::error::tap serves ${served:-nothing} but the release is ${VER}"
+            exit 1
+          fi
+          echo "tap serves ${served}"

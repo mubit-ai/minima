@@ -58,4 +58,9 @@ was removed in v0.7.0.
 ## 9. Post-publish verification
 - [ ] Install the *published* artifact in a clean venv (not the local wheel) and re-run the step-6 smoke tests.
 - [ ] Confirm the SDK works against the hosted Minima (`MINIMA_URL=https://api.minima.sh`) end to end.
+- [ ] `api.minima.sh/v1/health` reports the released version (prod deploy landed).
+- [ ] The Homebrew tap serves the released version (the release workflow pushes and
+      verifies this, but check when in doubt — 0.11.0 and 0.12.0 both once sat in
+      unmerged formula PRs while brew kept serving 0.10.0):
+      `curl -fsSL https://raw.githubusercontent.com/mubit-ai/homebrew-minima/main/Formula/minima.rb | grep version`
 - [ ] Announce / update any install docs with the new version + the config-first setup flow.
