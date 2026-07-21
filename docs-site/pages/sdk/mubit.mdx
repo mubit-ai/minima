@@ -1,0 +1,64 @@
+---
+title: How Minima uses Mubit
+description: The memory substrate under the hood — recall, reinforcement, drift signals, failure lessons, and what your Mubit key actually does.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# How Minima uses Mubit
+
+Minima's recommender is **non-parametric**: it doesn't train a model on your traffic, it *remembers* your traffic. [Mubit](https://mubit.ai) is the memory substrate that makes that work — and it is the **only external dependency** of the core recommender. Every capability below is hosted; you operate none of it.
+
+## Your Mubit key is the whole story
+
+Minima uses **pass-through auth**: the `Authorization: Bearer mbt_…` key you send *is* your Mubit data-plane key. Minima forwards it to read and write your `task → model → outcome` history in **your** Mubit instance — there is no separate Minima account, and your instance is your data boundary. Within it, `namespace` maps to an isolated memory lane (`minima:<namespace>`), so teams, projects, and environments learn independently.
+
+## Recall — where recommendations come from
+
+When you call `POST /v1/recommend`, Minima sends your task text to Mubit, which embeds it **server-side** (you never run an embedding model) and returns the most similar past outcome records from your lane. That recall is tuned for routing:
+
+- **Evidence-only retrieval** — only durable, outcome-bearing records are recalled, keeping the hot path fast (it's a large share of Minima's p95).
+- **Weighted aggregation** — each recalled neighbor is weighted by `similarity × reliability × staleness_decay`. The reliability term is Mubit's per-entry `knowledge_confidence`, a Bayesian estimate that grows as an entry keeps being right and shrinks when it's contradicted.
+- **Version-aware recall** — `tags` on your task (e.g. `lang:python`) propagate to Mubit `env_tags`, so evidence from the wrong stack doesn't vote.
+- **Freshness vs. relevance** — recall ranking balances semantic similarity, lexical match, and recency with temporal decay; stale or superseded entries are penalized and flagged (`is_stale` on the evidence refs you see with `explain=true`).
+
+The evidence behind every ranked model is surfaced to you: each `RankedModel.evidence[]` entry carries the Mubit entry id, its similarity score, its `knowledge_confidence`, and the recorded outcome — the recommendation is auditable down to the individual memories that drove it.
+
+## Reinforcement — what feedback actually does
+
+`POST /v1/feedback` is not a log line; it's a memory write with attribution:
+
+1. The `recommendation_id` resolves to the exact neighbors that were recalled at decision time. (It's account-scoped — another account's id resolves to nothing, so accounts can't credit or poison each other.)
+2. A durable **outcome record** is upserted per `(task cluster, model)` carrying your realized `cost_usd`, tokens, and quality — this is what powers the observed and rescaled [cost-basis tiers](/sdk/concepts#cost-basis-tiers-estimate--observed--rescaled).
+3. The recalled neighbors that drove the pick are **credited**: their reinforcement counters and `knowledge_confidence` rise (you see this as `reinforced_entry_ids` and `updated_confidence` in the response). Memories that keep producing good picks gain influence; ones that don't, fade.
+4. On strong verified-in-production results, Mubit's **reflection** promotes a durable **lesson**; accumulated lessons surface back to you as [`GET /v1/strategies`](/api-reference/endpoints#get-v1strategies) — the "why" behind your routing patterns.
+5. Outcomes are written **bi-temporally**: the record carries both when the work actually happened and when it was recorded, so late feedback doesn't masquerade as fresh evidence.
+
+<Note>
+Feedback labels keep their provenance all the way into memory: an outcome verified by a deterministic check (`evidence_source: "gate"`) teaches the success posterior with full weight, a judge label is judge-weighted, and unlabeled telemetry never touches quality at all. Honest inputs are what keep the recalled evidence trustworthy.
+</Note>
+
+## Drift signals — memory watching itself
+
+Every Mubit recall also returns **drift signals** about the neighborhood it just searched: whether the same evidence keeps being recalled without new outcomes arriving (`stagnant`), or the same task keeps repeating (`repeated`). Minima surfaces these as `memory_drift:*` warnings on the recommendation and feeds low recall confidence into its escalation logic — thin or aging evidence is a reason to double-check, and you see it in `warnings[]` rather than it being silently absorbed.
+
+## Failure lessons — memory for the error path
+
+Two endpoints expose Mubit's failure-side memory directly:
+
+- [`POST /v1/diagnose`](/api-reference/endpoints#post-v1diagnose) matches an error text against **failure lessons** in your lane — "here's how this failed before". The [Minima CLI's recovery ladder](/harness/architecture#the-recovery-ladder) calls this automatically when a verified failure triggers a replan, so the retry starts briefed by memory.
+- [`GET /v1/memory/health`](/api-reference/endpoints#get-v1memoryhealth) reports your lane's hygiene: entry counts, stale entries, contradictions, low-confidence entries, and promotion candidates — a diagnostics view of the memory your routing runs on.
+
+## Degradation — memory is an accelerant, not a crutch
+
+Minima keeps serving when Mubit is slow or unreachable: recall has a hard timeout, and on timeout or error the recommendation falls back to catalog priors with an explicit warning (`recall_timeout`, `memory_unavailable`). The insight endpoints degrade the same way — an outage returns an empty result plus a warning, never a 500. See [Degradation behavior](/sdk/concepts#degradation-behavior).
+
+## The CLI's extra touchpoints
+
+The [Minima CLI](/harness/overview) leans on the same substrate a little harder: `minima auth` provisions a **Mubit project per repo** (so each codebase learns in its own lane), its traces land in a dedicated lane partition, and its [recovery ladder](/harness/architecture#the-recovery-ladder) consumes `diagnose` automatically. The Python SDK's [`autocapture`](/sdk/client-sdk#zero-code-intake-autocapture) helper writes traces into the same lane Minima recalls from, enriching the memory block Mubit builds for the escalation reasoner.
+
+<Tip>
+The compounding loop, end to end: your feedback becomes outcome records → records become recalled evidence → evidence drives cheaper picks → picks generate more feedback. Every piece of that loop lives in **your** Mubit instance, inspectable via `explain=true`, `/v1/strategies`, and `/v1/memory/health`.
+</Tip>

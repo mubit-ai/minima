@@ -63,6 +63,7 @@ Recommend a model for a single task.
 | `allow_llm_escalation` | bool | `true` | Allow the cheap-LLM reasoner when evidence is thin. |
 | `explain` | bool | `true` | Include `evidence[]` refs on each ranked model. |
 | `baseline_model_id` | string \| null | `null` | The model you would have used without Minima. Powers the honest `vs_declared` baseline in [`GET /v1/savings`](#get-v1savings). |
+| `incumbent_model_id` | string \| null | `null` | The model currently holding a warm prompt cache for this conversation. Lets Minima price cache stickiness honestly instead of naively switching away from cached context. |
 
 #### `TaskInput`
 
@@ -106,6 +107,7 @@ Recommend a model for a single task.
 | `latency_ms` | int | Minima-side recommendation latency. |
 | `warnings` | string[] | See **Warnings** below. |
 | `selection_policy` | enum | `argmin` (deterministic cheapest-eligible, the default) \| `epsilon_softmax` (account opted into bounded exploration within the eligible set). |
+| `recommended_actions` | string[] | Near-free cost-saving actions to apply (e.g. `enable_prompt_cache`). |
 
 #### `RankedModel`
 
@@ -124,6 +126,9 @@ Recommend a model for a single task.
 | `context_window` | int | |
 | `est_latency_ms` | float \| null | Observed latency percentile from similar past outcomes; `null` without latency history. |
 | `latency_basis` | string | e.g. `observed_p75`; empty without latency history. |
+| `est_cost_low` / `est_cost_high` | float \| null | Cost uncertainty band around `est_cost_usd`. |
+| `cost_band_basis` | string | How the band was derived; empty when no band is available. |
+| `success_interval_width` | float | Width of the credible interval on `predicted_success` — how settled the evidence is. |
 
 #### `EvidenceRef`
 
@@ -148,7 +153,9 @@ Recommend a model for a single task.
 | `no_model_meets_threshold` | No candidate cleared `τ`; recommended the highest-success one. |
 | `no_model_within_cost_budget` | `max_cost_per_call` eliminated all; constraint relaxed for ranking. |
 | `no_model_within_latency_budget` | `max_latency_ms` eliminated every candidate with latency history; constraint relaxed for ranking. |
-| `escalation_suggested:<reason>` | Escalation criteria met (`thin_evidence`, `low_confidence`, `tie`, `conflict`, `wide_interval`). |
+| `escalation_suggested:<reason>` | Escalation criteria met (`thin_evidence`, `low_confidence`, `tie`, `conflict`, `wide_interval`, `low_recall_confidence`). |
+| `memory_drift:repeated` | Mubit's drift signals flag this task as a repeating pattern with no new outcomes arriving. |
+| `memory_drift:stagnant` | The recalled evidence neighborhood is stagnating — same entries recalled, nothing fresh reinforcing them. |
 | `exploration_pick` | The opt-in exploration policy sampled a different eligible model than the deterministic pick. |
 | `reasoner_consulted` | The cheap-LLM reasoner was consulted and changed scores. |
 | `reasoner_failed` | The reasoner errored or returned unusable output; deterministic result used. |
@@ -226,16 +233,33 @@ Report an outcome and close the learning loop. This reinforces the memories that
 | `recommendation_id` | string | required | From a prior `/recommend` (or a workflow step). |
 | `chosen_model_id` | string | required | The model you **actually ran** (may differ from the recommendation). |
 | `outcome` | enum | required | `success` \| `partial` \| `failure`. |
-| `quality_score` | float `0–1` \| null | `null` | Caller-supplied; no LLM judge. Defaults applied per outcome if omitted (0.9 / 0.5 / 0.1). A score that flatly contradicts the outcome label (e.g. `failure` at `0.95`) is clamped into a consistent band with a `quality_outcome_mismatch` warning. |
+| `quality_score` | float `0–1` \| null | `null` | Caller-supplied judge/eval score. A score that flatly contradicts the outcome label (e.g. `failure` at `0.95`) is clamped into a consistent band with a `quality_outcome_mismatch` warning. |
+| `evidence_source` | enum \| null | `null` | Where the outcome label came from: `gate` (a deterministic check passed — the only origin that may claim verified-in-production) \| `judge` (an LLM judge scored it) \| `human` (a person asserted it) \| `none` (no real label — the outcome is cost/latency **telemetry only** and never teaches the success posterior). |
+| `error_cause` | enum \| null | `null` | For `outcome=failure`: `infra` (provider/tooling fault — 429/5xx/timeout; never learned as model quality) \| `quality` (the model's output was wrong). |
 | `input_tokens` | int ≥ 0 \| null | `null` | Realized input tokens — **populate this** to enable the rescaled cost tier. |
 | `output_tokens` | int ≥ 0 \| null | `null` | Realized output tokens (captures reasoning/thinking) — **populate this** for the rescaled tier. |
 | `actual_cost_usd` | float ≥ 0 \| null | `null` | Realized $/call — enables the observed cost tier. |
 | `latency_ms` | int ≥ 0 \| null | `null` | |
 | `iterations` | int ≥ 0 \| null | `null` | Agent-loop turns to resolution — a token-yield signal recorded on the outcome. |
-| `verified_in_production` | bool | `false` | Marks a real production outcome; gates lesson promotion. |
-| `judged` | bool \| null | `null` | Whether a quality judge actually ran on this outcome. `false` = quality was **not measured** (cadence-skip or judge abstain) — the decision log reconciles quality as `NULL` instead of a label-based default, so calibration and savings metrics never trust a fabricated score. Omitted (`null`) preserves the old-client behavior (per-outcome defaults). |
+| `chosen_effort` | string \| null | `null` | The reasoning-effort level actually used, if your stack varies it. |
+| `step_outcomes` | `StepOutcome[]` | `[]` | Per-step verdicts for multi-step work (see below). Capped at 32 per call. |
+| `verified_in_production` | bool | `false` | **Deprecated** — send `evidence_source: "gate"` instead. |
+| `judged` | bool \| null | `null` | **Deprecated** — send `evidence_source` instead (`judged: false` ≙ `evidence_source: "none"`). |
 | `notes` | string \| null | `null` | |
 | `idempotency_key` | string \| null | `null` | Dedupe key; derived from `recommendation_id + model` if omitted. |
+
+#### `StepOutcome`
+
+Process-level rewards: when a task ran as verifiable steps (e.g. the [Minima CLI's gate-checked plan steps](/harness/architecture#ground-truth-verification)), each step's verdict can ride along with the turn-level feedback, teaching the recommender *which parts* of a task the model handled.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `step_id` | string | required — caller-defined step identity. |
+| `step_name` | string \| null | Human-readable label. |
+| `outcome` | enum | `success` \| `partial` \| `failure`. |
+| `signal` | float `-1–1` \| null | Optional scalar reward; derived from the outcome if omitted. |
+| `rationale` | string \| null | Why — e.g. which check verified it. |
+| `directive_hint` | string \| null | A forward-looking hint for future recall. |
 
 ### Response — `FeedbackResponse`
 
@@ -247,7 +271,8 @@ Report an outcome and close the learning loop. This reinforces the memories that
 | `updated_confidence` | float \| null | Mubit's updated `knowledge_confidence` for the primary entry. |
 | `reflection_triggered` | bool | Whether reflection fired this call. |
 | `lesson_promoted` | bool | Whether a durable lesson was promoted. |
-| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`. |
+| `step_outcomes_recorded` | int | How many `step_outcomes` were actually relayed to memory. |
+| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`, `step_outcomes_capped:<n>`, `step_outcomes_partial`. |
 
 <Note>
 **How late can feedback arrive?** A `recommendation_id` accepts fully-attributed feedback for **7 days**. After that the outcome is still accepted and still teaches the recommender (the durable outcome record is written), but the specific recalled neighbors can no longer be credited — the response carries a `late_feedback_no_attribution` warning.
@@ -263,8 +288,11 @@ curl -s https://api.minima.sh/v1/feedback \
   "chosen_model_id": "claude-haiku-4-5",
   "outcome": "success",
   "quality_score": 0.95,
+  "evidence_source": "gate",
   "input_tokens": 180, "output_tokens": 640, "actual_cost_usd": 0.0034,
-  "verified_in_production": true
+  "step_outcomes": [
+    {"step_id": "tests-pass", "outcome": "success", "rationale": "step_check/deterministic/green"}
+  ]
 }' | jq
 ```
 
@@ -373,6 +401,86 @@ curl -s "https://api.minima.sh/v1/calibration?days=30" \
 
 ---
 
+## `GET /v1/policy-value`
+
+<Badge text="measurement" variant="tip" />
+
+Regret-vs-oracle: doubly-robust off-policy estimates of what alternative routing policies would have been worth on your own traffic, computed over trusted-provenance reconciled decisions. The counterfactual numbers are only as good as the log's stochasticity and label trust — both are surfaced so the estimate can never quietly overclaim.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string | — | Restrict to one namespace. |
+| `days` | float `>0–365` | `30` | Lookback window. |
+
+### Response
+
+`{ org_id, since, days, namespace, report }`, where `report` is a `RegretReport`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `n_trusted` | int | Reconciled decisions with trusted labels (gate/human provenance) the estimate rests on. |
+| `n_total_reconciled` | int | All reconciled decisions in the window. |
+| `stochastic_share` | float | Share of trusted rows logged with a non-degenerate propensity — the fraction of the log that is genuinely counterfactual-capable. |
+| `policies` | `PolicyEstimate[]` | Per policy (e.g. `deployed`, cheapest-eligible, always-premium): estimated success, cost, and matched share. |
+| `regret_vs_oracle` | float | Model-based oracle success minus the deployed policy's empirical success — how much quality was left on the table. |
+
+---
+
+## `POST /v1/diagnose`
+
+<Badge text="memory" variant="note" />
+
+Failure lessons matching an error — "here's how this failed before", straight from your [Mubit memory lane](/sdk/mubit#failure-lessons--memory-for-the-error-path). The [Minima CLI's recovery ladder](/harness/architecture#the-recovery-ladder) calls this on a verified failure so the retry is briefed by memory. Degrades like the recommend hot path: a Mubit outage returns an empty list plus a `memory_unavailable` warning, never a 500.
+
+### Request — `DiagnoseRequest`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `error_text` | string | required | The error/failure output to match. |
+| `error_type` | string \| null | `null` | Optional classifier hint. |
+| `limit` | int `1–25` | `5` | Max lessons returned. |
+| `namespace` | string \| null | `null` | Resolves to lane `minima:<namespace>`. |
+| `user_id` | string \| null | `null` | |
+
+### Response — `DiagnoseResponse`
+
+`{ namespace, lane, failure_lessons: FailureLesson[], summary, total_failure_lessons, warnings[] }`, where each `FailureLesson` carries `lesson_id`, `content`, `lesson_type`, `importance`, `confidence`.
+
+```bash
+curl -s https://api.minima.sh/v1/diagnose \
+  -H "authorization: Bearer $MUBIT_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"error_text": "TypeError: cannot read properties of undefined (reading map)", "limit": 3}' | jq
+```
+
+---
+
+## `GET /v1/memory/health`
+
+<Badge text="memory" variant="note" />
+
+Per-namespace memory hygiene: entry counts, stale entries, contradictions, low-confidence entries, and promotion candidates — a diagnostics view of the [memory your routing runs on](/sdk/mubit). Same graceful degradation as `/v1/diagnose`.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string \| null | — | Resolves to lane `minima:<namespace>`. |
+| `stale_threshold_days` | int `1–365` | `30` | Age beyond which an entry counts as stale. |
+
+### Response — `MemoryHealthResponse`
+
+`{ namespace, lane, entry_counts: {type: count}, stale_entries, contradictions, low_confidence_count, promotion_candidates, section_health, warnings[] }`.
+
+```bash
+curl -s "https://api.minima.sh/v1/memory/health?stale_threshold_days=30" \
+  -H "authorization: Bearer $MUBIT_API_KEY" | jq
+```
+
+---
+
 ## `GET /v1/capabilities`
 
 Server feature handshake: which optional endpoints and constraint fields the running server honors. Read it once at startup and cache it per session — gate optional features (like workflow routing) on what the server actually supports instead of guessing. No auth required — this is structural metadata, not account-scoped data.
@@ -394,7 +502,7 @@ curl -s https://api.minima.sh/v1/capabilities | jq
 {
   "plan": false,
   "workflow": true,
-  "api_version": "0.7.0",
+  "api_version": "0.13.0",
   "honored_constraints": ["candidate_models", "excluded_models", "max_cost_per_call",
     "min_quality", "require_prompt_caching", "max_latency_ms",
     "require_context_window", "allowed_providers"]
@@ -414,7 +522,7 @@ Always returns `200`; reports degraded state in the body. Doesn't require a key 
   "auth": "passthrough",
   "catalog": {"version": "…", "cost_source": "litellm", "stale": false, "models": 42},
   "reasoner": {"provider": "gemini", "configured": true},
-  "version": "0.7.0"
+  "version": "0.13.0"
 }
 ```
 

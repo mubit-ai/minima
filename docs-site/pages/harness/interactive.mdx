@@ -1,6 +1,6 @@
 ---
 title: Interactive TUI
-description: The default terminal UI — status bar, keybindings, and slash commands.
+description: The default terminal UI — status bar, keybindings, permission modes, and slash commands.
 ---
 
 import { PageHeader, Note, Tip } from '@components'
@@ -18,65 +18,100 @@ The bar along the bottom shows, at a glance:
 - **Model** — the pinned model, or `auto` when Minima is routing.
 - **Cost** — running total from the cost meter for this session.
 - **Context** — percentage of the model's context window used, plus token counts.
-- **State** — whether a turn is in flight.
+- **State** — whether a turn is in flight, plus plan/verification state when [ground truth](/harness/architecture#ground-truth-verification) is active.
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
 | <kbd>Enter</kbd> | Send the current prompt |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Cycle input history (at the prompt) · navigate items (in a picker) |
+| <kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> | Jump by word (also <kbd>Alt</kbd>+<kbd>B</kbd>/<kbd>F</kbd>) |
+| <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Home</kbd>·<kbd>End</kbd> | Line start / start·end |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> | Kill to end / to start of line |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | Kill the previous word (also <kbd>Alt</kbd>+<kbd>Backspace</kbd>) |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd> | Paste clipboard (terminal paste also works) |
+| <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Copy the last assistant reply |
+| <kbd>Esc</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd> | Abort the in-flight run (<kbd>Ctrl</kbd>+<kbd>C</kbd> twice at the prompt quits) |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Suspend to the shell (`fg` returns) |
+| <kbd>Shift</kbd>+<kbd>Tab</kbd> | Cycle permission modes (build → accept → plan → bypass) |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Open the model picker |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Open the command palette (slash commands) |
 | <kbd>Ctrl</kbd>+<kbd>R</kbd> | Toggle route mode (auto ↔ confirm) |
-| <kbd>Esc</kbd> | Abort the in-flight run |
-| <kbd>Ctrl</kbd>+<kbd>C</kbd> | Abort a running turn; press again at the prompt to quit |
-| <kbd>PageUp</kbd> / <kbd>PageDown</kbd> | Scroll the conversation |
-| <kbd>Shift</kbd>+<kbd>Space</kbd> | Scroll down |
-| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Jump to the top of the chat |
-| <kbd>Ctrl</kbd>+<kbd>E</kbd> | Jump to the bottom of the chat |
+| <kbd>Ctrl</kbd>+<kbd>E</kbd> | Toggle thinking display |
+| <kbd>Ctrl</kbd>+<kbd>T</kbd> | Table of contents |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Plan overview |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> | Toggle the task panel |
 | <kbd>Tab</kbd> | Auto-complete a slash command |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Cycle input history (at the prompt) · navigate items (in a picker) |
 
 <Note>
-In the model picker, command palette, and session picker, use <kbd>↑</kbd>/<kbd>↓</kbd> to move, <kbd>Enter</kbd> to choose, and <kbd>Esc</kbd> to dismiss.
+Scrolling, text selection, and copy are native to your terminal (wheel/trackpad) — the TUI doesn't capture the mouse. In pickers, use <kbd>↑</kbd>/<kbd>↓</kbd> to move, <kbd>Enter</kbd> to choose, <kbd>Esc</kbd> to dismiss.
 </Note>
 
 ## Slash commands
 
 Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a command:
 
+### Routing & cost
+
 | Command | What it does |
 |---------|--------------|
 | `/model` | Select or pin a model (or `auto` to unpin and let Minima route) |
-| `/clear` | Clear chat messages |
+| `/cost` | Show cost-meter totals |
+| `/budget` | Show/set the session budget (`/budget set <usd>` · `/budget mode warn\|enforce`) |
+| `/judge [on\|off]` | Toggle LLM quality judging |
+| `/reconnect` | Reconnect the routing client |
+
+### Planning & verification
+
+| Command | What it does |
+|---------|--------------|
+| `/plan` | Plan mode (<kbd>Shift</kbd>+<kbd>Tab</kbd>) + the planning council (`start` · `status` · `finalize` · `cancel`) — drafts a plan whose steps carry verify checks |
+| `/mode` | Show/set the permission mode: `build` \| `accept` \| `plan` \| `bypass` |
+| `/gt` | Show the Ground-Truth ledger status |
+| `/why [n]` | Show the verification evidence behind the plan (or open step `n`'s card) |
+| `/verify` | Adversarial whole-plan verification pass (refutation sub-agent) |
+| `/audit` | Lint the active plan — non-discriminative checks, missing allowlists, vague steps |
+| `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + GT plan |
+| `/tree` | Toggle the live [sub-agent tree panel](/harness/tools#sub-agents-the-task-tool) |
+
+### Memory
+
+| Command | What it does |
+|---------|--------------|
+| `/memory` | Curated memory: `list` · `add <text>` · `pin`/`confirm`/`reject`/`delete <n\|id>` · `dream` — see [the memory ledger](/harness/architecture#the-memory-ledger) |
+
+### History & recovery
+
+| Command | What it does |
+|---------|--------------|
+| `/undo` | Undo the last change — checkpoint restore + re-prompt (stacks) |
+| `/rewind [n]` | Rewind to an earlier prompt (picker, or `/rewind <n> [convo\|code\|both]`) |
+| `/ckpt` | List git-shadow checkpoints (`/ckpt gc` prunes old runs' refs) |
+| `/new` · `/resume [id]` | Start fresh · resume a previous session |
+| `/name <label>` / `/rename` | Name this session (persisted) |
+| `/session` | Show session info |
+| `/compact` | Summarize old turns to free context |
+
+### Setup & misc
+
+| Command | What it does |
+|---------|--------------|
 | `/auth` | Sign in to Mubit & provision this repo's project |
 | `/config` | Show/set API keys (`MUBIT`, `GEMINI`, `ANTHROPIC`, …) |
-| `/help` | Show the available commands |
-| `/cost` | Show cost-meter totals |
-| `/budget` | Show or set the session budget (`/budget set <usd>` · `/budget mode shadow\|warn\|enforce`) |
-| `/reconnect` | Reconnect the routing client |
-| `/new` | Start a fresh session |
-| `/name <label>` | Set the session display name |
-| `/session` | Show session info |
-| `/tree` | Toggle the live [sub-agent tree panel](/harness/tools#sub-agents-the-task-tool) — one row per child with status and spend |
-| `/fork <entry-id>` | Fork a new session from an entry id |
-| `/clone` | Clone the current session |
-| `/resume [id]` | Resume a previous session (optionally by id) |
-| `/judge [on\|off]` | Toggle LLM quality judging |
-| `/thoughts [on\|off]` | Toggle streaming the model's thinking |
-| `/mouse [on\|off]` | Toggle mouse capture (scroll vs. select/copy) |
 | `/perms` | Show current tool permission grants |
-| `/undo` | Undo the last AI change (`git checkout`) |
-| `/compact` | Summarize old turns to free context |
-| `/plan` | Toggle plan mode (read-only) |
+| `/thoughts [on\|off]` | Toggle streaming the model's thinking |
+| `/copy` | Copy the last assistant reply (<kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
+| `/clear` · `/help` · `/tip` | Clear chat · list commands · show a tip |
 | `/quit`, `/exit` | Exit the application |
 
 <Tip>
-`/model auto` hands routing back to Minima after you've pinned a model. `/plan` is handy when you want the agent to think and read without touching files — it blocks `write`, `edit`, and `bash`. See [Tools & permissions](/harness/tools).
+`/model auto` hands routing back to Minima after you've pinned a model. <kbd>Shift</kbd>+<kbd>Tab</kbd> cycles the permission modes — `plan` lets the agent read and design without touching files, `accept` auto-approves edits, `bypass` skips prompts entirely (trusted repos only).
 </Tip>
 
 ## Related
 
+- [Under the hood](/harness/architecture) — what plans, gates, budgets, and memory do internally.
 - [Model routing](/harness/routing) — auto routing, pinning, and the feedback loop.
-- [Sessions](/harness/sessions) — `/new`, `/resume`, `/fork`, `/clone`, `/compact`.
+- [Sessions](/harness/sessions) — `/new`, `/resume`, `/compact`.
 - [Tools & permissions](/harness/tools) — what the agent can do and how grants work.

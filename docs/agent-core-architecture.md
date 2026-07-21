@@ -13,6 +13,10 @@ poisoning stop (client hardcodes verified_in_production + null-quality successes
 
 # Minima Next-Gen Agent Core — Definitive Architecture
 
+> **Historical proposal (2026-07-02).** Much of this has since shipped, evolved, or been
+> superseded (ground-truth spine, memory ledger, recovery ladder). For the architecture
+> as actually implemented, see [harness-architecture.md](harness-architecture.md).
+
 Status: implementation-ready. Branch: `tui-rewrite`. All seams below verified against source at `/Users/shankhadutta/code/costit/packages/tui/src`. Every "already exists" claim that the adversarial reviews contradicted has been corrected in place; where a design asserted a no-op that is actually a real API change, it is flagged as **[API CHANGE]**.
 
 ---

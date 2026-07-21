@@ -49,7 +49,7 @@ Minima **only recommends**. It does not proxy your call, execute a model, rewrit
 ## Key properties
 
 - **Recommend-only.** No proxy, no prompt rewriting, no caching. Sits beside your calls, adds zero latency to them.
-- **Memory-driven.** Backed by [Mubit](https://mubit.ai) — semantic k-NN recall, per-entry reinforcement, and lesson promotion.
+- **Memory-driven.** Backed by [Mubit](https://mubit.ai) — semantic k-NN recall, per-entry reinforcement, drift signals, failure lessons, and lesson promotion. See [How Minima uses Mubit](/sdk/mubit).
 - **Accurate cost ranking.** Three cost-basis tiers (rescaled → observed → estimate) correctly rank reasoning-heavy models that look cheap on paper but spend output tokens thinking.
 - **Works cold.** Prior-only fallback + benchmark seeding means useful picks from day one.
 - **Provable.** `GET /v1/savings` reports estimated *and realized* savings against honest baselines, and `GET /v1/calibration` shows whether `predicted_success` matches your real outcomes.
