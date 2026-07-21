@@ -39,9 +39,10 @@ See the full provider → environment-variable table in [Configuration](/harness
 ## A tool won't run
 
 - Writes and `bash` prompt for approval every time unless you grant "always". Check active grants with `/perms`.
-- If you're in **plan mode**, `write`/`edit`/`bash` are blocked — toggle it off with `/plan`.
+- If you're in **plan mode**, `write`/`edit`/`bash` are blocked — cycle back to `build` with <kbd>Shift</kbd>+<kbd>Tab</kbd> or `/mode build`.
+- If the agent "refuses to mark a step done", that's [ground-truth verification](/harness/architecture#ground-truth-verification) working as intended — the step's verify check hasn't passed. `/why` shows the evidence.
 - If you launched with `-t`/`-xt`/`-nt`, the toolset is restricted by those flags. See [Tools & permissions](/harness/tools).
-- Undo an unwanted change with `/undo` (`git checkout` of the last AI edit).
+- Undo an unwanted change with `/undo` (checkpoint restore; stacks), or `/rewind` to an earlier prompt.
 
 ## Running out of context
 
@@ -52,5 +53,5 @@ When the context percentage in the [status bar](/harness/interactive#the-status-
 On the compiled binary, `keytar` isn't available, so credentials fall back to `~/.minima-harness/config.env` (mode `0600`). That's expected — `minima config set` reports `file` as the backend in that case. See the note in [Configuration](/harness/configuration#managing-credentials).
 
 <Tip>
-Mouse selection not working for copy/paste? Toggle `/mouse off` to release mouse capture back to your terminal (then `/mouse on` to re-enable in-app scrolling).
+Scroll, select, and copy are native to your terminal — the TUI deliberately doesn't capture the mouse, so wheel/trackpad scrolling and text selection always work.
 </Tip>

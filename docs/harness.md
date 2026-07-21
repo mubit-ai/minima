@@ -14,7 +14,9 @@ brew tap mubit-ai/minima
 brew install minima
 ```
 
-See [`packages/tui/README.md`](../packages/tui/README.md) for architecture and usage.
+See [Harness Architecture](harness-architecture.md) for the internal agentic structure
+(turn lifecycle, hooks, sub-agents, ground-truth spine, memory ledger, DB spine) and
+[`packages/tui/README.md`](../packages/tui/README.md) for usage.
 The `minima-cli` PyPI package now contains only the Minima server (`minima`) and the
 Python client SDK (`minima_client`).
 

@@ -101,34 +101,51 @@ print(wf.total_est_cost_usd, "vs", wf.total_est_cost_if_all_premium)
 
 ## `feedback(recommendation_id, chosen_model_id, outcome, **kwargs)`
 
-Returns a `FeedbackResponse`. `outcome` is `"success"` | `"partial"` | `"failure"`. Pass realized numbers to power the observed/rescaled cost tiers:
+Returns a `FeedbackResponse`. `outcome` is `"success"` | `"partial"` | `"failure"`. Pass realized numbers to power the observed/rescaled cost tiers, and declare where the label came from with `evidence_source`:
 
 ```python
+from minima_client import Usage
+
 minima.feedback(
     rec.recommendation_id,
     rec.recommended_model.model_id,
     "success",
-    quality_score=0.95,
-    input_tokens=180,
-    output_tokens=640,
-    actual_cost_usd=0.0034,
-    latency_ms=2100,
-    verified_in_production=True,
-    idempotency_key="…",  # optional
+    usage=Usage(input_tokens=180, output_tokens=640, cost_usd=0.0034, latency_ms=2100),
+    quality_score=0.95,          # your judge/eval score, if you have one
+    evidence_source="gate",      # gate | judge | human | none — label provenance
+    idempotency_key="…",         # optional
 )
 ```
 
-## `models(...)`, `strategies(...)`, `health()`
+Label honesty matters: `evidence_source="none"` (no real label) makes the outcome cost/latency **telemetry only** — it never teaches the success posterior. An outcome you asserted yourself is `"human"`; a deterministic check that passed is `"gate"` — the only origin that may claim verified-in-production. For provider/infra faults pass `error_cause="infra"` so a rate limit never reads as model quality. Per-step results for multi-step work ride as `step_outcomes=[...]`.
+
+The feedback call retries transient faults automatically (3 attempts, exponential backoff); the server dedupes via the idempotency key.
+
+## `models(...)`, `strategies(...)`, `capabilities()`, `health()`
 
 ```python
 catalog = minima.models(provider="anthropic", max_cost=10.0)      # ModelsResponse
 strat   = minima.strategies(namespace="team-payments", max_strategies=5)
-status  = minima.health()                                          # dict
+caps    = minima.capabilities()   # feature handshake — gate optional features on this
+status  = minima.health()         # dict
 ```
 
-## `savings(...)` and `calibration(...)`
+## `diagnose(...)` and `memory_health(...)`
 
-The measurement layer: what Minima saved you, and whether `predicted_success` is calibrated against your reported outcomes. Both report on your account's decision ledger (see the [API reference](/api-reference/endpoints#get-v1savings) for every field).
+The [memory insight layer](/sdk/mubit#failure-lessons--memory-for-the-error-path): failure lessons matching an error, and your namespace's memory hygiene. Both degrade gracefully — a Mubit outage returns an empty result plus a `memory_unavailable` warning, never an exception:
+
+```python
+diag = minima.diagnose("TypeError: cannot read properties of undefined", limit=3)
+for lesson in diag.failure_lessons:
+    print(lesson.content, lesson.confidence)
+
+mh = minima.memory_health(namespace="team-payments", stale_threshold_days=30)
+print(mh.entry_counts, mh.stale_entries, mh.contradictions, mh.promotion_candidates)
+```
+
+## `savings(...)`, `calibration(...)`, and `policy_value(...)`
+
+The measurement layer: what Minima saved you, whether `predicted_success` is calibrated against your reported outcomes, and what alternative routing policies would have been worth (`policy_value(...)` — doubly-robust regret-vs-oracle). All report on your account's decision ledger (see the [API reference](/api-reference/endpoints#get-v1savings) for every field).
 
 ```python
 report = minima.savings(namespace="team-payments", days=30, group_by="task_type")

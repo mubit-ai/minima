@@ -1,0 +1,90 @@
+---
+title: SDK architecture
+description: How the TypeScript and Python SDKs encode the loop — the wire contract, retry discipline, label honesty, and the differences between the two.
+---
+
+import { PageHeader, Note, Tip } from '@components'
+
+<PageHeader />
+
+# SDK architecture
+
+Minima ships two official SDKs over the same `/v1/*` HTTP contract:
+
+- **`@mubit-ai/minima-sdk`** — TypeScript. Pure `fetch`, **zero runtime dependencies**, works in Node/Bun/Deno/edge runtimes. `npm add @mubit-ai/minima-sdk`.
+- **`minima_client`** — Python (sync + async), shipped in the [`minima-cli`](https://pypi.org/project/minima-cli/) package. See [Python Client SDK](/sdk/client-sdk).
+
+Both encode the same workflow and the same honesty rules; this page is about *how*.
+
+## One wire contract
+
+The server's schemas are the single source of truth. The Python SDK imports them directly (it cannot drift); the TypeScript SDK hand-mirrors them in `schemas.ts`, and a mechanical test in CI pins every field of the mirror against the server models. Whatever language you're in, the field names and semantics on the wire are identical — the [API reference](/api-reference/endpoints) describes both.
+
+## The loop, made hard to get wrong
+
+```
+recommend  →  run the model yourself  →  judge quality  →  feedback
+```
+
+The SDKs bake in the operational asymmetry between the loop's two calls:
+
+- **`recommend` fails fast and never retries.** Routing advice sits in front of your real work, so the SDK surfaces an error immediately — the intended pattern is to catch it and *fail open* to your default model. Your LLM call must never block on Minima.
+- **`feedback` retries transparently.** Closing the loop is bookkeeping that should survive a blip: both SDKs retry transient faults (transport errors, 502/503/504) up to 3 attempts — TypeScript with fixed delays, Python with exponential backoff — and the server dedupes via idempotency keys. Client errors (4xx, including 429) surface immediately.
+
+Both SDKs raise a typed error ladder: `MinimaRateLimited` (with the server's `retry-after`), `MinimaUnavailable` (5xx gateway states), and `MinimaError` (everything else, carrying the problem+json detail).
+
+## Label honesty is in the types
+
+The feedback surface is designed so dishonest labels are hard to send by accident:
+
+- `usage` fields are **realized** numbers (`input_tokens`, `output_tokens`, `actual_cost_usd`, `latency_ms`) — what the provider actually billed, never Minima's own estimate echoed back. An explicit `0` counts as a real measurement; an omitted field claims nothing.
+- `evidence_source` declares label provenance: `"gate"` (a deterministic check passed — the only origin that may claim verified-in-production), `"judge"` (an LLM judge scored it), `"human"` (you asserted it), or `"none"` (no label — the outcome rides as cost/latency telemetry and never touches quality learning).
+- `error_cause: "infra"` marks provider faults so a rate limit is never learned as model quality.
+- `step_outcomes[]` carries per-step verdicts for multi-step work (each with its own `step_id`, outcome, and optional signal in `[-1, 1]`) — the TypeScript SDK types these first-class.
+
+<Note>
+The quality thresholds the ecosystem uses for mapping scores to outcomes: `success ≥ 0.8`, `partial ≥ 0.4`, else `failure`.
+</Note>
+
+## Surface parity
+
+Both SDKs expose the full endpoint surface — `recommend`, `recommendWorkflow`/`recommend_workflow`, `feedback`, `savings`, `calibration`, `policyValue`/`policy_value`, `strategies`, `diagnose`, `memoryHealth`/`memory_health`, `models`, `capabilities`, `health`. Use `capabilities()` once at startup to gate optional features on what the server actually supports.
+
+## TypeScript quickstart
+
+```ts
+import { MinimaClient } from "@mubit-ai/minima-sdk";
+
+const minima = new MinimaClient({
+  baseUrl: "https://api.minima.sh",
+  apiKey: process.env.MUBIT_API_KEY,
+});
+
+const rec = await minima.recommend("refactor the auth module", {
+  constraints: { candidate_models: ["claude-haiku-4-5", "claude-sonnet-4-6"] },
+});
+
+// run rec.recommended_model.model_id yourself, measuring real usage…
+
+await minima.feedback(rec.recommendation_id, rec.recommended_model.model_id, "success", {
+  usage: { inputTokens: 1800, outputTokens: 600, costUsd: 0.0042, latencyMs: 9000 },
+  evidenceSource: "gate",   // only because a real check passed
+});
+```
+
+The client takes an injectable `fetch` (hermetic tests, custom transports) and per-call `AbortSignal`s; the ergonomic `feedback()` maps camelCase to the wire, while `feedbackRaw()` accepts a full wire-shaped request for advanced fields like `step_outcomes`.
+
+## What differs between the two
+
+| Area | TypeScript | Python |
+|---|---|---|
+| Timeout | per-call `AbortSignal` | `timeout=10.0` constructor default |
+| `recommend` defaults | `explain` / `max_candidates` unset | `explain=True`, `max_candidates=8` |
+| Async | promise-based | separate `AsyncMinimaClient` |
+| `step_outcomes` | typed `StepOutcome[]` + `feedbackRaw` | passed via `**kwargs` |
+| Extras | client only | `autocapture`, LiteLLM + OpenHands adapters, `minima-route` CLI |
+| Feedback retry | fixed `[500ms, 2000ms]` | exponential 0.5s→4s |
+
+<Tip>
+Building an agent harness rather than a single integration? The [Minima CLI](/harness/architecture) is the reference consumer of this contract — gate-verified labels, per-step outcomes, budget-aware routing — and everything it does goes through these same SDK surfaces.
+</Tip>

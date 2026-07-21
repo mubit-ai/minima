@@ -16,19 +16,19 @@ Every conversation is persisted as an **append-only session** — a JSONL log of
 | Command | What it does |
 |---------|--------------|
 | `/new` | Start a fresh session |
-| `/name <label>` | Set the current session's display name |
+| `/name <label>` / `/rename` | Set the current session's display name (persisted) |
 | `/session` | Show info about the current session |
 | `/resume [id]` | Resume a previous session — opens a picker, or jumps straight to `id` |
-| `/fork <entry-id>` | Start a new session branched from a specific entry |
-| `/clone` | Clone the current session into a new one |
 | `/compact` | Summarize older turns to free up context |
 
-## Branching
+(`/fork` and `/clone` are reserved for planned session branching but not implemented yet — use `/resume` or `/new` for now.)
 
-Because the log is append-only, `/fork <entry-id>` lets you rewind to an earlier point and take the conversation in a different direction without discarding what came after — the original branch is still there. `/clone` duplicates the whole current session so you can experiment safely.
+## Rewind and checkpoints
+
+Within a session, you don't need branching to change your mind: every mutating tool call is preceded by a **git-shadow checkpoint**, so `/undo` restores the pre-change state (and stacks), and `/rewind` jumps back to any earlier prompt — restoring the conversation, the code, or both. `/ckpt` lists the checkpoints. Resuming a session **re-runs its verification checks**, so a stale "green" from a previous run never carries over unexamined — see [Under the hood](/harness/architecture#local-persistence).
 
 <Tip>
-Entry ids are recorded in the session's JSONL log under `~/.minima-harness/sessions/` — grab one there, then `/fork <entry-id>` to explore an alternative from that point. (`/tree` shows the live [sub-agent panel](/harness/tools#sub-agents-the-task-tool), not the session tree.)
+`/tree` shows the live [sub-agent panel](/harness/tools#sub-agents-the-task-tool), not the session tree.
 </Tip>
 
 ## Managing context

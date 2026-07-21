@@ -213,12 +213,18 @@ rescaled cost-basis tiers.
 | `recommendation_id` | string | required | From a prior `/recommend` (or a step). |
 | `chosen_model_id` | string | required | The model you **actually ran** (may differ from the recommendation; the right model's neighbors are credited). |
 | `outcome` | enum | required | `success` \| `partial` \| `failure`. |
-| `quality_score` | float `0–1` \| null | `null` | Caller-supplied; there is no LLM judge. Defaults applied per outcome if omitted (0.9 / 0.5 / 0.1). |
+| `quality_score` | float `0–1` \| null | `null` | Caller-supplied judge/eval score. Omitted stays `null` (no fabricated default). A score contradicting the outcome label is clamped with a `quality_outcome_mismatch` warning. |
+| `evidence_source` | enum \| null | `null` | Label provenance: `gate` (deterministic check — the only origin that may claim verified-in-production) \| `judge` \| `human` \| `none` (telemetry only; never teaches the success posterior). |
+| `error_cause` | enum \| null | `null` | For failures: `infra` (429/5xx/timeout — never learned as model quality) \| `quality`. |
 | `input_tokens` | int ≥ 0 \| null | `null` | Realized input tokens — **populate this** to enable the rescaled cost tier. |
 | `output_tokens` | int ≥ 0 \| null | `null` | Realized output tokens (captures reasoning/thinking) — **populate this** for the rescaled tier. |
 | `actual_cost_usd` | float ≥ 0 \| null | `null` | Realized $/call — enables the observed cost tier. |
 | `latency_ms` | int ≥ 0 \| null | `null` | |
-| `verified_in_production` | bool | `false` | Marks a real production outcome; gates lesson promotion. |
+| `iterations` | int ≥ 0 \| null | `null` | Agent-loop turns to resolution. |
+| `chosen_effort` | string \| null | `null` | Reasoning-effort level actually used, if varied. |
+| `step_outcomes` | `StepOutcome[]` | `[]` | Per-step verdicts for multi-step work (cap 32/call): `{step_id, step_name?, outcome, signal? [-1,1], rationale?, directive_hint?}`. |
+| `verified_in_production` | bool | `false` | DEPRECATED — send `evidence_source="gate"` instead. |
+| `judged` | bool \| null | `null` | DEPRECATED — send `evidence_source` instead. |
 | `notes` | string \| null | `null` | |
 | `idempotency_key` | string \| null | `null` | Dedupe key; derived from `recommendation_id + model` if omitted. |
 
@@ -232,7 +238,8 @@ rescaled cost-basis tiers.
 | `updated_confidence` | float \| null | Mubit's updated `knowledge_confidence` for the primary entry. |
 | `reflection_triggered` | bool | Whether reflection fired this call. |
 | `lesson_promoted` | bool | Whether a durable lesson was promoted. |
-| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`. |
+| `step_outcomes_recorded` | int | How many `step_outcomes` were relayed to memory. |
+| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`, `step_outcomes_capped:<n>`, `step_outcomes_partial`. |
 
 ### Example
 
@@ -242,8 +249,8 @@ curl -s http://localhost:8080/v1/feedback -H 'content-type: application/json' -d
   "chosen_model_id": "claude-haiku-4-5",
   "outcome": "success",
   "quality_score": 0.95,
-  "input_tokens": 180, "output_tokens": 640, "actual_cost_usd": 0.0034,
-  "verified_in_production": true
+  "evidence_source": "gate",
+  "input_tokens": 180, "output_tokens": 640, "actual_cost_usd": 0.0034
 }' | jq
 ```
 
@@ -306,6 +313,22 @@ Surfaces the rules Mubit has promoted for a namespace — the "why" behind routi
 `{ namespace, lane, strategies: Strategy[], count }`, where each `Strategy` has
 `strategy_id, description, supporting_lesson_count, avg_confidence, avg_reinforcement,
 dominant_lesson_type, dominant_scope, lesson_ids[]`.
+
+---
+
+## `GET /v1/savings` · `GET /v1/calibration` · `GET /v1/policy-value`
+
+The measurement layer over your account's decision ledger:
+
+- **`/v1/savings`** (`namespace?`, `days=30`, `group_by=cluster|task_type|lane`) — estimated **and** realized savings against two explicit baselines: `vs premium` (most expensive scored candidate; generous) and `vs declared` (your `baseline_model_id`; honest). `health.feedback_coverage` tells you how much weight the realized figures can bear.
+- **`/v1/calibration`** (`namespace?`, `days=30`) — per-task-type expected calibration error (`ece`, `ece_shrunk`) of `predicted_success` vs realized outcomes, plus sustained drift flags per `(cluster, model)`.
+- **`/v1/policy-value`** (`namespace?`, `days=30`) — doubly-robust off-policy estimates (`RegretReport`): per-policy value, `regret_vs_oracle`, with `stochastic_share` and `n_trusted` surfaced so the number can't overclaim.
+
+---
+
+## `GET /v1/capabilities`
+
+Feature handshake (no auth): `{ plan, workflow, api_version, honored_constraints[] }`. Read once at startup and gate optional features on what the server actually supports.
 
 ---
 

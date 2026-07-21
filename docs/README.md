@@ -22,6 +22,12 @@ your real LLM call.
   guidance.
 - **[Python Client SDK](client-sdk.md)** — the `minima_client` package: sync/async clients
   and the zero-code `autocapture` intake.
+- **[SDK Architecture](sdk-architecture.md)** — how both SDKs (TypeScript + Python) encode
+  the loop: wire-contract mirroring, retry/error discipline, label honesty, and the
+  known asymmetries between the two.
+- **[Harness Architecture](harness-architecture.md)** — the internal agentic structure of
+  the `minima` CLI (`packages/tui`): the turn lifecycle, hook stacks, sub-agent DAG,
+  budget ledger, recovery ladder, ground-truth spine, memory ledger, and DB spine.
 
 ## Guides
 
