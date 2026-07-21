@@ -1,7 +1,7 @@
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
-import { confidence } from "./confidence.ts";
 import { CHECK_ORIGINS } from "./big_plan_contract.ts";
 import type { CheckOrigin, ConfidenceTier, Factors } from "./big_plan_contract.ts";
+import { confidence } from "./confidence.ts";
 
 const TIER_GLYPHS: Record<ConfidenceTier, string> = {
   green: "🟢",

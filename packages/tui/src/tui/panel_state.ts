@@ -1,3 +1,4 @@
+import type { ChatMessage } from "./messages.tsx";
 /**
  * Pure state machine for the expanded live-region panel (D3b — certified by the MP4
  * spike, whose throwaway view died in MP7). No React, no Ink — app.tsx owns the single
@@ -10,7 +11,6 @@
  * cursor is ALWAYS a valid line index — with stops present it is always ON a stop.
  */
 import type { PlanOverview, PlanOverviewPanelRow } from "./plan_overview.ts";
-import type { ChatMessage } from "./messages.tsx";
 import type { TocRow, TocSection } from "./toc.ts";
 
 export interface PanelViewBase {

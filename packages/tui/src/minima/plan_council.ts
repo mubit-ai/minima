@@ -24,8 +24,8 @@ import { Message, type Model } from "../ai/types.ts";
 import { type ChildResult, type Delegation, type SpawnFn, executeDag } from "../tools/task.ts";
 import { midTruncate } from "./judge.ts";
 import {
-  type CouncilRoundResult,
   type BigPlanSynthesis,
+  type CouncilRoundResult,
   type KeeperMiniResult,
   type OpenQuestion,
   type PlanSession,

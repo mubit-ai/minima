@@ -1,6 +1,6 @@
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
-import { confidence } from "./confidence.ts";
 import type { ConfidenceTier, Factors } from "./big_plan_contract.ts";
+import { confidence } from "./confidence.ts";
 import { gateVerdictFor } from "./why.ts";
 
 /**

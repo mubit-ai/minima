@@ -35,7 +35,7 @@ function unrunnableReason(id: string): string {
  */
 /**
  * Routing opts for a plan-MODE turn that runs the NORMAL loop — mode "plan" with no live
- * council (ground truth off, or session setup failed). Same premium hard pool + phase tag
+ * council (Big Plan off, or session setup failed). Same premium hard pool + phase tag
  * as the council's planner turn, so the plan-mode agent never widens back to the cheap
  * general pool just because the council isn't running. Throws (via resolvePlanModels)
  * when the policy is active but no premium model is runnable — the hard constraint stays

@@ -34,7 +34,6 @@ import type {
   PlanStepRow,
   TodoInput,
 } from "../db/minima_db.ts";
-import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
 import type { ConfidenceTier, Factors, GateOutcome, VerifiedBy } from "./big_plan_contract.ts";
 import {
   type FactorFs,
@@ -43,6 +42,7 @@ import {
   defaultFactorFs,
   detectTamper,
 } from "./big_plan_factors.ts";
+import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
 import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 

@@ -21,9 +21,9 @@ import { MinimaDb, type RunRow, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
-import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import {
   CostMeter,
   type HarnessConfig,

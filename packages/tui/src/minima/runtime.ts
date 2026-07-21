@@ -30,6 +30,14 @@ import {
   ringCapacityForRepeats,
   toolCallFailed,
 } from "./anti_spiral.ts";
+import {
+  BIG_PLAN_SYSTEM_GUIDANCE,
+  type VerifiedOutcome,
+  deterministicOutcomeLabel,
+  planProjectionFor,
+  stampVerifiedOutcome,
+  verifiedOutcomeFor,
+} from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
@@ -42,14 +50,6 @@ import {
   writeExhaustionGate,
   writeRecoveryGate,
 } from "./failure_kind.ts";
-import {
-  BIG_PLAN_SYSTEM_GUIDANCE,
-  type VerifiedOutcome,
-  deterministicOutcomeLabel,
-  verifiedOutcomeFor,
-  planProjectionFor,
-  stampVerifiedOutcome,
-} from "./big_plan.ts";
 import { type QualityJudge, clamp01, midTruncate } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";

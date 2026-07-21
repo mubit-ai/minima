@@ -38,14 +38,14 @@ import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
-import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
-import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
   type PlanStripInfo,
   type VerifyConsent,
   planStripInfo,
   stampVerifiedOutcome,
 } from "../minima/big_plan.ts";
+import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
+import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
   PlanSessionStore,
   type RoutingResult,
@@ -87,12 +87,6 @@ import { type ActiveAction, currentActionLine, reduceActiveActions } from "./cur
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import { footerStatsFromMessages } from "./footer.ts";
 import {
-  buildPlanOverview,
-  planOverviewRows,
-  renderPlanOverviewText,
-  stepCardLines,
-} from "./plan_overview.ts";
-import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
   childTreeHeight,
@@ -117,8 +111,8 @@ import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
   type PanelState,
-  planOverviewPanelState,
   panelReduce,
+  planOverviewPanelState,
   readerView,
   tocPanelState,
 } from "./panel_state.ts";
@@ -134,6 +128,12 @@ import {
   planModeBlockedTools,
 } from "./permissions.ts";
 import { draftPanelState } from "./plan_draft_view.ts";
+import {
+  buildPlanOverview,
+  planOverviewRows,
+  renderPlanOverviewText,
+  stepCardLines,
+} from "./plan_overview.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
