@@ -17,7 +17,7 @@ export {
   PREMIUM_CANDIDATES,
   type HarnessConfig,
 } from "./config.ts";
-export { resolvePlanModels, type ResolvedPlanModels } from "./premium.ts";
+export { planModeRoutingOpts, resolvePlanModels, type ResolvedPlanModels } from "./premium.ts";
 export { ModelMapping, syncCatalog } from "./mapping.ts";
 export { CostMeter, emptyTotals, type CostRow, type CostTotals } from "./meter.ts";
 export {

@@ -40,3 +40,4 @@ context_window.json
 # generated plan artifacts — never commit
 BigPlan.md
 GROUND_TRUTH.md
+docs-site/bun.lock

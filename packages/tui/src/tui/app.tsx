@@ -53,6 +53,7 @@ import {
   buildPlannerSystemPrompt,
   finalizePlan,
   formatDreamReport,
+  planModeRoutingOpts,
   resolvePlanModels,
   runCouncilRound,
   runDream,
@@ -3940,24 +3941,29 @@ export function HarnessApp({
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
         await handlePlanTurn(text);
       } else {
+        // Plan mode without a council still gets the premium hard pool + phase tag — the
+        // plan-DECIDING pool restriction is a property of the MODE, not of the council. A
+        // throw here IS the hard constraint's loud failure (same as handlePlanTurn's).
+        const planOpts = getMode() === "plan" ? planModeRoutingOpts(agent.config) : undefined;
         if (getMode() === "plan" && agent.config.bigPlan === true) {
           const why = !planSessionRef.current
             ? "no plan session"
             : !planSpawn
               ? "no council spawn"
               : "no council model";
+          const pool = planOpts?.candidates ? " (premium plan pool still applies)" : "";
           setMessages((m) => [
             ...m,
             {
               role: "tool",
               toolName: "plan",
-              text: `⚠ plan mode without a live council (${why}) — this turn runs the normal loop.`,
+              text: `⚠ plan mode without a live council (${why}) — this turn runs the normal loop${pool}.`,
               isError: true,
             },
           ]);
         }
         const expanded = expandAtFiles(text, process.cwd());
-        const routing = await agent.promptRouted(expanded);
+        const routing = await agent.promptRouted(expanded, planOpts);
         surfaceRouting(routing);
       }
     } catch (exc) {
