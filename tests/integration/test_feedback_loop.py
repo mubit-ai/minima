@@ -860,3 +860,88 @@ def test_corrective_human_feedback_updates_decision_log(client, fake_memory):
     assert "decision_corrected" not in fb3["warnings"]
     row = tenant.decision_log.get(rec_id)
     assert row.realized_outcome == "failure"
+
+
+def test_feedback_signals_accepted_and_stored_on_record(client, fake_memory):
+    """D2: implicit signals ride the wire onto the OutcomeRecord — label-model input
+    only, never provenance."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "signals": {"retried": True, "user_corrected": False, "session_continued": True},
+        },
+    ).json()
+    assert fb["accepted"] is True
+    written = fake_memory.remembered[0]["record"]
+    assert written.signals == {
+        "retried": True,
+        "user_corrected": False,
+        "session_continued": True,
+    }
+    assert written.evidence_source == "judge"  # provenance untouched by signals
+
+
+def test_feedback_signals_key_regex_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {"Bad-Key": True},
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_signals_key_cap_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {f"key_{chr(ord('a') + i)}": True for i in range(17)},
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_signals_at_cap_and_long_key_accepted(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    signals = {f"key_{chr(ord('a') + i)}": True for i in range(15)}
+    signals["a" * 32] = False  # exactly the 32-char key limit
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "signals": signals,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+
+def test_feedback_signals_key_too_long_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {"a" * 33: True},
+        },
+    )
+    assert resp.status_code == 422

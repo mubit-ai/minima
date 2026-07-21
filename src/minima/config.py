@@ -209,6 +209,19 @@ class Settings(BaseSettings):
     minima_calibration_min_n: int = 30
     minima_calibration_refresh_seconds: int = 600
 
+    # --- Label coverage (D1/D3, default OFF) ---
+    # Weak-supervision label model: a per-lane Dawid-Skene EM over binary label sources
+    # (gate anchor, corrected judge, implicit feedback signals, step outcomes) whose
+    # per-row p_success replaces the raw outcome label in success aggregation for
+    # NON-GATE rows only. Never touches evidence provenance. Fits over the calibration
+    # window, cached on the calibration refresh cadence.
+    minima_label_model: bool = False
+    # Surrogate index: a telemetry-features logistic regression trained on the lane's
+    # trusted-labeled rows (disabled below 50 rows) whose clamped prediction enters the
+    # label model as ONE MORE SOURCE — never aggregation or provenance directly.
+    # Requires minima_label_model.
+    minima_surrogate_index: bool = False
+
     # --- Cache-aware cost ---
     # Fraction of the INCUMBENT model's input priced at its cache-read rate on the
     # estimate basis (the session's prompt cache survives only if the model doesn't

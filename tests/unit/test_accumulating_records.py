@@ -95,6 +95,20 @@ def test_v4_counters_roundtrip_through_metadata():
     assert parsed.recent_rec_ids == ["r1", "r2"]
 
 
+def test_signals_roundtrip_through_metadata():
+    import json
+
+    rec = _outcome("r1", quality=0.9)
+    rec.signals = {"retried": True, "session_continued": False}
+    parsed = OutcomeRecord.from_metadata(json.dumps(rec.to_metadata()))
+    assert parsed is not None
+    assert parsed.signals == {"retried": True, "session_continued": False}
+
+    bare = OutcomeRecord.from_metadata(json.dumps(_outcome("r2", quality=0.9).to_metadata()))
+    assert bare is not None
+    assert bare.signals is None
+
+
 def test_aggregation_uses_counters_as_evidence_mass():
     ev = make_evidence("claude-haiku-4-5", 0.9, entry_id="e1", score=1.0,
                        knowledge_confidence=1.0)
