@@ -14,8 +14,8 @@ from minima.logging import get_logger
 from minima.memory import threadpool
 from minima.memory.adapter import Memory
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
-from minima.memory.records import label_score
-from minima.metrics.calibration import CalibratorSet, fit_calibrators
+from minima.memory.records import RecalledEvidence, label_score
+from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details
@@ -23,6 +23,7 @@ from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, Decis
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.pairs import PairStore, pair_prior_adjustment
 from minima.recommender.recstore import RecStore, StoredRecommendation
+from minima.recommender.resets import CAUSE_CUSUM, ResetRegistry
 from minima.recommender.types import CandidateScore, ModelAggregate
 from minima.schemas.common import DecisionBasis, Difficulty, TaskType
 from minima.schemas.models_catalog import ModelCard
@@ -38,6 +39,9 @@ log = get_logger("minima.recommender")
 # Any positive recalled-outcome mass makes a candidate's prediction "memory-driven";
 # the confidence field separately conveys how strong that evidence is.
 MEMORY_WEIGHT_MIN = 0.0
+# Half-life forced onto the "discounted" shadow challenger when the org has the
+# production discount disabled (mirrors the minima_aggregate_half_life_days default).
+_SHADOW_DISCOUNT_HALF_LIFE_DAYS = 45.0
 # Max neighbors echoed back per candidate in the explained response.
 MAX_EVIDENCE_PER_CANDIDATE = 5
 
@@ -76,6 +80,7 @@ class Recommender:
         rng: random.Random | None = None,
         durable_refs: DurableRefs | None = None,
         pair_store: PairStore | None = None,
+        resets: ResetRegistry | None = None,
     ):
         self._settings = settings
         self._memory = memory
@@ -85,6 +90,7 @@ class Recommender:
         self._org_id = org_id
         self._durable_refs = durable_refs
         self._pair_store = pair_store
+        self._resets = resets
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
         argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
         self._thompson_enabled = (
@@ -229,6 +235,13 @@ class Recommender:
         )
         if n_invalidated:
             warnings.append(f"recall_invalidated_skipped:{n_invalidated}")
+        reset_epochs: dict[str, float] | None = None
+        if self._resets is not None:
+            reset_epochs = {
+                mid: epoch
+                for mid in candidate_ids
+                if (epoch := self._resets.epoch_for(mid, lane, cluster)) is not None
+            } or None
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -238,6 +251,8 @@ class Recommender:
             seed_crowdout_n=settings.minima_seed_crowdout_n,
             recall_vote_min_n=settings.minima_recall_vote_min_n,
             human_weight=settings.minima_human_evidence_weight,
+            discount_half_life_days=settings.minima_aggregate_half_life_days,
+            reset_epochs=reset_epochs,
         )
         profile.mark("aggregate")
 
@@ -292,6 +307,9 @@ class Recommender:
         )
         profile.mark("finalize")
         overall_basis = recommended.decision_basis
+        # The deterministic cheapest-clearing-tau pick BEFORE any Thompson override —
+        # logged as the "raw_argmin" shadow challenger.
+        raw_argmin_id = recommended.card.model_id
 
         esc = escalation.evaluate(
             settings=settings,
@@ -370,6 +388,20 @@ class Recommender:
             self._explore_picks += 1
         profile.mark("selection")
 
+        shadow_choices = self._shadow_choices(
+            evidence,
+            candidate_ids,
+            [c.card for c in scored],
+            task_type,
+            input_tokens,
+            output_tokens,
+            req,
+            cluster,
+            tau,
+            reset_epochs,
+            raw_argmin_id,
+        )
+
         recommendation_id = uuid.uuid4().hex
         stored_rec = StoredRecommendation(
                 recommendation_id=recommendation_id,
@@ -411,6 +443,7 @@ class Recommender:
             output_tokens=output_tokens,
             est_cost_premium=est_cost_premium,
             task_type_source=class_profile.task_type_source,
+            shadow_choices=shadow_choices,
         )
         profile.mark("decision_log")
 
@@ -513,6 +546,7 @@ class Recommender:
         output_tokens: int,
         est_cost_premium: float,
         task_type_source: str | None = None,
+        shadow_choices: dict[str, str] | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
@@ -581,10 +615,58 @@ class Recommender:
                     content=build_content(task_type.value, difficulty.value, req.task.task),
                     task_type_source=task_type_source,
                     task_type_confidence=req.task.task_type_confidence,
+                    shadow_choices=shadow_choices,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path
             log.warning("decision_log_write_failed", error=str(exc))
+
+    def _shadow_choices(
+        self,
+        evidence: list[RecalledEvidence],
+        candidate_ids: set[str],
+        cards: list[ModelCard],
+        task_type: TaskType,
+        input_tokens: int,
+        output_tokens: int,
+        req: RecommendRequest,
+        cluster: str,
+        tau: float,
+        reset_epochs: dict[str, float] | None,
+        raw_argmin_id: str,
+    ) -> dict[str, str]:
+        """Would-have-chosen model ids for the shadow challenger policies.
+
+        "raw_argmin" = the deterministic cheapest-clearing-tau pick (no Thompson).
+        "discounted" = the same pick under scoring with the C2 discount forced on;
+        when the discount is already active in production the two coincide, so the
+        re-scoring pass only runs for orgs that disabled it. Pure CPU, best-effort."""
+        settings = self._settings
+        choices = {"raw_argmin": raw_argmin_id}
+        if settings.minima_aggregate_half_life_days > 0.0:
+            choices["discounted"] = raw_argmin_id
+            return choices
+        try:
+            aggs = aggregate_by_model(
+                evidence,
+                candidate_ids,
+                half_life_days=settings.minima_evidence_half_life_days,
+                decay_floor=settings.minima_evidence_decay_floor,
+                seed_weight=settings.minima_seed_weight,
+                seed_crowdout_n=settings.minima_seed_crowdout_n,
+                recall_vote_min_n=settings.minima_recall_vote_min_n,
+                human_weight=settings.minima_human_evidence_weight,
+                discount_half_life_days=_SHADOW_DISCOUNT_HALF_LIFE_DAYS,
+                reset_epochs=reset_epochs,
+            )
+            scored = self._score_candidates(
+                cards, aggs, task_type, input_tokens, output_tokens, req, cluster
+            )
+            pick, _, _, _ = _optimize(scored, tau)
+            choices["discounted"] = pick.card.model_id
+        except Exception as exc:  # noqa: BLE001 — shadow bookkeeping never breaks the pick
+            log.warning("shadow_choice_failed", error=str(exc))
+        return choices
 
     def _finalize(
         self, scored: list[CandidateScore], tau: float, cost_quality_tradeoff: float
@@ -632,6 +714,17 @@ class Recommender:
                 shrinkage_k=settings.minima_calibration_shrinkage_k,
                 now=time.time(),
             )
+            # Piggyback drift detection on the same window scan: a CUSUM flag stamps a
+            # posterior reset epoch for that (cluster, model). First stamp wins — the
+            # flag persists across refits (it is computed over the same rows), and a
+            # moving epoch would zero evidence forever.
+            if self._resets is not None:
+                for flag in cusum_flags(
+                    rows, k=settings.minima_cusum_k, h=settings.minima_cusum_h
+                ):
+                    self._resets.stamp(
+                        flag.model_id, cluster=flag.cluster, cause=CAUSE_CUSUM
+                    )
         except Exception as exc:  # noqa: BLE001 — calibration must never break a recommendation
             log.warning("calibrator_refit_failed", error=str(exc))
 

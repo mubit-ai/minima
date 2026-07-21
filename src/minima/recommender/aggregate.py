@@ -96,6 +96,8 @@ def aggregate_by_model(
     seed_crowdout_n: int = 0,
     recall_vote_min_n: int = 0,
     human_weight: float = 1.0,
+    discount_half_life_days: float = 0.0,
+    reset_epochs: dict[str, float] | None = None,
     now: float | None = None,
 ) -> dict[str, ModelAggregate]:
     """Group neighbors by model and accumulate weighted success statistics.
@@ -106,6 +108,7 @@ def aggregate_by_model(
     relative to gate/judge evidence — bounded trust for the one gameable source.
     Defaults preserve legacy behavior (no age decay, seeds at full weight).
     """
+    ref_now = now if now is not None else time.time()
     items: list[tuple[RecalledEvidence, OutcomeRecord]] = []
     n_live: dict[str, int] = {}
     for ev in evidence:
@@ -123,6 +126,13 @@ def aggregate_by_model(
             continue
         if candidate_ids is not None and rec.model_id not in candidate_ids:
             continue
+        # Posterior reset epoch: a record observed before the model's reset (CUSUM
+        # drift or provider snapshot change) describes a dead regime — zero weight.
+        # A record with no timestamp cannot prove it post-dates the reset; excluded.
+        if reset_epochs:
+            epoch = reset_epochs.get(rec.model_id)
+            if epoch is not None and (rec.recorded_at is None or rec.recorded_at < epoch):
+                continue
         items.append((ev, rec))
         if rec.source_dataset is None:
             n_live[rec.model_id] = n_live.get(rec.model_id, 0) + 1
@@ -136,6 +146,11 @@ def aggregate_by_model(
         weight = neighbor_weight(
             ev, half_life_days=half_life_days, decay_floor=decay_floor, now=now
         )
+        # Non-stationarity discount (unfloored, unlike the decay inside neighbor_weight):
+        # halves per half-life of observation age so the posterior can actually forget.
+        if discount_half_life_days > 0.0 and rec.recorded_at is not None and rec.recorded_at > 0:
+            age_days = max(0.0, ref_now - rec.recorded_at) / _SECONDS_PER_DAY
+            weight *= 0.5 ** (age_days / discount_half_life_days)
         # Recall-track down-weight (experience-following countermeasure): once a record
         # has enough recall votes, its weight scales with how often decisions it was
         # recalled into actually succeeded — floored so bad-track evidence gets cheap,

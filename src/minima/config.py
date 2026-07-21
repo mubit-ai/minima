@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     # adding extra recency factors on top is not).
     minima_evidence_half_life_days: float = 30.0
     minima_evidence_decay_floor: float = 0.1
+    # Non-stationarity discount: every recalled record's weight is ADDITIONALLY halved per
+    # half-life of observation age, with no floor — unlike the floored decay above, this
+    # lets a posterior actually forget a dead regime. 0 disables.
+    minima_aggregate_half_life_days: float = 45.0
     # Recall-track (free quality labels): once a record has this many recall votes, its
     # aggregation weight is scaled by its recall success rate (floored — see aggregate),
     # and a rate below minima_recall_invalidate_rate stamps invalidated_at (bi-temporal
@@ -186,6 +190,10 @@ class Settings(BaseSettings):
     # Smaller values flag every healthy stream.
     minima_cusum_k: float = 0.25
     minima_cusum_h: float = 2.0
+    # Delayed labels: an unreconciled decision younger than this is PENDING, not missing —
+    # excluded from feedback-coverage denominators (occurrence-time windowing only; no
+    # delay model). 0 restores the legacy "every unreconciled row is unlabeled" view.
+    minima_label_maturity_hours: float = 24.0
 
     # --- Calibration APPLY (remap predicted_success before the tau decision) ---
     # The monitoring above MEASURES calibration; these control whether a fitted isotonic

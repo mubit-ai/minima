@@ -10,6 +10,7 @@ from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.engine import Recommender
 from minima.recommender.pairs import PairStore
 from minima.recommender.recstore import LaneCounter, RecStore
+from minima.recommender.resets import ResetRegistry
 
 
 @dataclass(slots=True)
@@ -28,6 +29,7 @@ class TenantContext:
     decision_log: DecisionLog | None = None
     durable_refs: DurableRefs | None = None
     pair_store: PairStore | None = None
+    resets: ResetRegistry | None = None
 
     def lane(self, namespace: str | None) -> str:
         """Intra-org sub-scope lane. The ORG boundary is the Mubit instance/key, not this

@@ -215,6 +215,7 @@ async def feedback(
     _record_preference_pair(
         tenant, req, stored.task_cluster, EVIDENCE_NONE if infra else source
     )
+    _note_provider_snapshot(tenant, req)
 
     if not labeled:
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
@@ -472,6 +473,23 @@ async def _apply_recall_votes(
             log.warning("recall_vote_failed", target=target, error=str(exc))
 
 
+def _note_provider_snapshot(tenant: TenantContext, req: FeedbackRequest) -> None:
+    """Track the provider-reported model snapshot; a change stamps a posterior reset
+    (version churn: evidence gathered against the old snapshot no longer describes
+    the deployed model). Best-effort bookkeeping — never fails feedback."""
+    if tenant.resets is None or not req.provider_model_snapshot:
+        return
+    try:
+        if tenant.resets.note_snapshot(req.chosen_model_id, req.provider_model_snapshot):
+            log.info(
+                "posterior_reset_snapshot_change",
+                model_id=req.chosen_model_id,
+                snapshot=req.provider_model_snapshot,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("snapshot_note_failed", error=str(exc))
+
+
 def _reconcile_decision(
     tenant: TenantContext,
     req: FeedbackRequest,
@@ -574,6 +592,7 @@ async def _late_feedback(
     if corrected:
         warnings.append("decision_corrected")
     _record_preference_pair(tenant, req, decision.cluster, EVIDENCE_NONE if infra else source)
+    _note_provider_snapshot(tenant, req)
 
     if not labeled:
         steps_recorded = await _relay_step_outcomes(

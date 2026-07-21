@@ -9,7 +9,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from minima.metrics.calibration import CalibrationReport, CusumFlag
-from minima.metrics.ope import RegretReport
+from minima.metrics.ope import ChallengerEstimate, RegretReport
 from minima.metrics.savings import SavingsSummary
 
 
@@ -53,3 +53,6 @@ class PolicyValueResponse(BaseModel):
     days: float
     namespace: str | None = None
     report: RegretReport
+    # Replay-matched values of the logged shadow challenger policies.
+    challengers: list[ChallengerEstimate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

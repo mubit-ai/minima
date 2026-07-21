@@ -111,6 +111,10 @@ class DecisionRecord:
     # P(this turn was selected for labeling); 1.0 for gate labels. NULL on legacy rows
     # and unlabeled turns — consumers must treat NULL as "uniform-era row".
     label_propensity: float | None = None
+    # Shadow replay: what each challenger policy would have chosen at decision time
+    # (policy name -> model_id). The raw material for replay-matched off-policy value
+    # estimates. None on rows logged before challengers existed.
+    shadow_choices: dict[str, str] | None = None
 
     @property
     def reconciled(self) -> bool:

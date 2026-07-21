@@ -52,7 +52,10 @@ class TestSavingsAndCalibration:
         assert data["summary"]["estimated"]["n_declared"] == 1
         assert data["summary"]["estimated"]["savings_vs_premium_usd"] > 0
         assert data["summary"]["realized"]["n_reconciled"] == 1
-        assert data["health"]["feedback_coverage"] == 0.5
+        # The unreconciled recommendation is minutes old — younger than the label
+        # maturity window, so it is PENDING and leaves the coverage denominator.
+        assert data["health"]["pending_labels"] == 1
+        assert data["health"]["feedback_coverage"] == 1.0
 
     def test_savings_group_by_task_type(self, client, fake_memory):
         fake_memory.evidence = [
@@ -252,6 +255,37 @@ class TestPolicyValue:
         names = {p["policy"] for p in report["policies"]}
         assert "deployed" in names and "oracle_model_based" in names
         assert report["regret_vs_oracle"] >= 0.0
+        # Estimator suite rides every policy block; DR stays the headline number.
+        for policy in report["policies"]:
+            assert set(policy["estimates"]) == {"dr", "snips", "switch", "dr_shrunk"}
+            assert policy["estimates"]["dr"] == policy["success_value"]
+        assert report["estimator_disagreement"] is False
+        assert resp["warnings"] == []
+        # The decision carried shadow choices, the feedback a trusted label, and the
+        # logged pick a usable propensity — the challenger block must materialize.
+        assert {c["policy"] for c in resp["challengers"]} <= {"discounted", "raw_argmin"}
+        for challenger in resp["challengers"]:
+            assert challenger["n"] >= 1
+            assert 0.0 <= challenger["success_value"] <= 1.0
+
+    def test_snapshot_change_surfaces_posterior_reset(self, client, fake_memory):
+        fake_memory.evidence = [
+            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
+        ]
+        for snapshot in ("claude-haiku-4-5-20260101", "claude-haiku-4-5-20260601"):
+            rec = _recommend(client)
+            _feedback(
+                client,
+                rec,
+                chosen_model_id="claude-haiku-4-5",
+                provider_model_snapshot=snapshot,
+            )
+        data = client.get("/v1/memory/health").json()
+        resets = data["posterior_resets"]
+        assert len(resets) == 1
+        assert resets[0]["model"] == "claude-haiku-4-5"
+        assert resets[0]["cause"] == "snapshot_change"
+        assert resets[0]["lane"] is None and resets[0]["cluster"] is None
 
 
 class TestDurableFastPath:

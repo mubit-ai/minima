@@ -12,6 +12,7 @@ decision time against that label (success=1 primary; quality-weighted alongside)
 from __future__ import annotations
 
 import bisect
+import time
 from dataclasses import dataclass, field
 
 from minima.memory.records import TRUSTED_LABEL_SOURCES, clamp01
@@ -215,17 +216,25 @@ def cusum_flags(
     return flags
 
 
-def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
+def routing_health(
+    rows: list[DecisionRecord],
+    *,
+    now: float | None = None,
+    label_maturity_hours: float = 0.0,
+) -> dict[str, float | int]:
     """Decision-stream health rates; the fitness gates for everything analytical.
 
     feedback_coverage is the share of recommendations that ever got feedback — the
     statistic that decides whether calibration/MNAR machinery is fit for purpose.
+    Unreconciled rows younger than ``label_maturity_hours`` are PENDING, not missing
+    (labels arrive late by design), and leave the coverage denominator.
     """
     n = len(rows)
     if n == 0:
         return {
             "recommendations": 0,
             "feedback_coverage": 0.0,
+            "pending_labels": 0,
             "late_feedback_share": 0.0,
             "escalation_rate": 0.0,
             "exploration_share": 0.0,
@@ -236,6 +245,12 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
             "cost_position": 0.0,
         }
     reconciled = sum(1 for r in rows if r.reconciled)
+    pending = 0
+    if label_maturity_hours > 0.0:
+        ref_now = now if now is not None else time.time()
+        horizon = label_maturity_hours * 3600.0
+        pending = sum(1 for r in rows if not r.reconciled and ref_now - r.ts < horizon)
+    mature = n - pending
     late = sum(1 for r in rows if r.late_feedback)
     escalated = sum(1 for r in rows if r.escalated)
     successes = sum(1 for r in rows if r.realized_outcome == "success")
@@ -246,7 +261,8 @@ def routing_health(rows: list[DecisionRecord]) -> dict[str, float | int]:
     top_share, cheapest_share, cost_position = _cost_metrics(rows)
     return {
         "recommendations": n,
-        "feedback_coverage": round(reconciled / n, 4),
+        "feedback_coverage": round(reconciled / mature, 4) if mature else 0.0,
+        "pending_labels": pending,
         "late_feedback_share": round(late / reconciled, 4) if reconciled else 0.0,
         "escalation_rate": round(escalated / n, 4),
         "exploration_share": round(explored / n, 4),
