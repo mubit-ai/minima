@@ -39,7 +39,7 @@ Minima is a hosted API. There is nothing to install or run — you call the serv
     Minima hands back the pick — it never proxies, executes, or rewrites. Run the recommended model in your own stack with your own provider credentials. Keep the `recommendation_id`; you'll quote it back in the next step.
   </Step>
   <Step title="Close the loop">
-    Tell Minima how it went. This is what makes the next recommendation sharper — and it populates the realized cost/token history that powers accurate cost ranking.
+    Tell Minima how it went. This is what makes the next recommendation sharper — and it populates the realized cost/token history that powers accurate cost ranking. `evidence_source` declares where the label came from (`gate` for a deterministic check, `judge` for an LLM judge, `human` for your own assertion, `none` for unlabeled telemetry).
 
     ```bash
     curl -s https://api.minima.sh/v1/feedback \
@@ -53,7 +53,7 @@ Minima is a hosted API. There is nothing to install or run — you call the serv
             "input_tokens": 1180,
             "output_tokens": 320,
             "actual_cost_usd": 0.0028,
-            "verified_in_production": true
+            "evidence_source": "human"
           }' | jq
     ```
   </Step>

@@ -28,11 +28,17 @@ The harness talks to the Minima recommender service over the same `/v1/*` HTTP c
   <Card title="Built-in tools" icon="folder-tree" href="/harness/tools">
     `read`, `write`, `edit`, `bash`, `ls`, `glob`, `grep`, `web_fetch`, and `todowrite` — gated by a permission system — plus `task`, which delegates subtasks to parallel, cost-routed sub-agents (watch them live with `/tree`).
   </Card>
-  <Card title="Per-repo memory" icon="brain" href="/harness/configuration">
-    `minima auth` provisions a Mubit project scoped to the current repo, so each project's `task → model → outcome` history stays isolated.
+  <Card title="Verified, not vibes" icon="circle-check" href="/harness/architecture">
+    Ground-truth verification: plan steps carry shell checks that must go red→green before the agent may call them done, a confidence tier (🟢/🟡/🔴) on every verdict, and a recovery ladder that re-routes or replans on verified failure.
   </Card>
-  <Card title="Sessions you can branch" icon="folder-tree" href="/harness/sessions">
-    An append-only session tree — fork, clone, and resume past conversations, and compact old turns to free context.
+  <Card title="Budgets that hold" icon="wallet" href="/harness/architecture#the-budget-ledger">
+    `--budget 5` reserves before every turn, reconciles to realized cost, warns at 50/75/90/100%, and in enforce mode actually stops the run.
+  </Card>
+  <Card title="Per-repo memory" icon="brain" href="/sdk/mubit">
+    `minima auth` provisions a Mubit project scoped to the current repo, so each project's `task → model → outcome` history stays isolated — plus a curated local memory (`/memory`) projected into every turn.
+  </Card>
+  <Card title="Sessions & time travel" icon="folder-tree" href="/harness/sessions">
+    Append-only sessions with `/resume`, `/compact`, git-shadow checkpoints, `/undo`, and `/rewind`.
   </Card>
 </CardGroup>
 
@@ -47,3 +53,4 @@ The harness talks to the Minima recommender service over the same `/v1/*` HTTP c
 - [Install the harness](/harness/installation) and run `minima auth`.
 - [Configure credentials](/harness/configuration) and pick your providers.
 - Learn the [interactive TUI](/harness/interactive) — keybindings and slash commands.
+- Curious how it works inside? [Under the hood](/harness/architecture) — the turn lifecycle, verification gates, budgets, and memory.

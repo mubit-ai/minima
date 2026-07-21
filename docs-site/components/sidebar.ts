@@ -34,6 +34,13 @@ export const sidebar: Record<string, SidebarGroup[]> = {
       ],
     },
     {
+      text: 'Under the hood',
+      items: [
+        { text: 'How Minima uses Mubit', link: '/sdk/mubit' },
+        { text: 'SDK architecture', link: '/sdk/architecture' },
+      ],
+    },
+    {
       text: 'Reference',
       items: [{ text: 'Python Client SDK', link: '/sdk/client-sdk' }],
     },
@@ -59,6 +66,7 @@ export const sidebar: Record<string, SidebarGroup[]> = {
         { text: 'Tools & permissions', link: '/harness/tools' },
         { text: 'Model routing', link: '/harness/routing' },
         { text: 'Sessions', link: '/harness/sessions' },
+        { text: 'Under the hood', link: '/harness/architecture' },
       ],
     },
     {

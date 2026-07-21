@@ -37,7 +37,7 @@ Minima **only recommends**. It does not proxy your call, execute a model, rewrit
 
 ## Why memory
 
-The recommendation engine is **non-parametric k-NN over history**: recall similar past records, aggregate per-model success, pick the cheapest model clearing a threshold. Minima is backed by [Mubit](https://mubit.ai), which provides that substrate — semantic recall over server-side embeddings, per-entry reinforcement with a Bayesian reliability estimate, lesson promotion, and strategy surfacing for explainability. You don't operate any of it; it's part of the hosted service.
+The recommendation engine is **non-parametric k-NN over history**: recall similar past records, aggregate per-model success, pick the cheapest model clearing a threshold. Minima is backed by [Mubit](https://mubit.ai), which provides that substrate — semantic recall over server-side embeddings, per-entry reinforcement with a Bayesian reliability estimate, lesson promotion, and strategy surfacing for explainability. You don't operate any of it; it's part of the hosted service. **[How Minima uses Mubit](/sdk/mubit)** walks through the whole memory layer — recall, reinforcement, drift signals, and failure lessons.
 
 ## The recommendation algorithm
 
@@ -113,6 +113,7 @@ Every recommendation is logged with its counterfactual cost baselines and reconc
 
 - **Did it save money?** [`GET /v1/savings`](/api-reference/endpoints#get-v1savings) reports estimated and realized savings against two explicitly-labeled baselines: the most expensive scored candidate (generous) and your own declared default (`baseline_model_id` — honest). It also reports `feedback_coverage`, the share of recommendations that ever received feedback — the number that tells you how much weight the realized figures can bear.
 - **Are the predictions honest?** [`GET /v1/calibration`](/api-reference/endpoints#get-v1calibration) compares `predicted_success` at decision time against realized outcomes (expected calibration error per task type) and flags sustained drift per `(cluster, model)` — the early-warning signal for a provider silently changing a model.
+- **Was the policy itself right?** [`GET /v1/policy-value`](/api-reference/endpoints#get-v1policy-value) runs doubly-robust off-policy estimates over your own decision log — what alternative routing policies would have been worth, and the regret vs. an oracle — with the log's stochasticity and label trust surfaced so the number can't overclaim.
 
 Accounts can additionally opt into a small amount of bounded **exploration** (`selection_policy: epsilon_softmax`): a few percent of picks sample from the *eligible* set (never below your quality bar) instead of always taking the cheapest eligible model, which keeps evidence flowing for under-tried cheap models and makes the logged history statistically sound for off-policy analysis. Default is off — deterministic picks everywhere.
 
@@ -123,8 +124,11 @@ When `POST /v1/feedback` is called:
 1. Resolve the `recommendation_id` → the recalled neighbors, cluster, and scope. (Account-scoped: an id from another account resolves to nothing, so accounts can't credit or poison each other.)
 2. Upsert one durable **outcome record** per `(task cluster, model)`, carrying `cost_usd`, `input_tokens`, `output_tokens`, and `quality_score`.
 3. Credit the exact recalled neighbors that drove the pick, bumping their reinforcement counters and reliability.
-4. On a verified-in-production strong success, promote a durable **lesson** that feeds rule promotion.
-5. Periodically reflect (after a number of feedbacks, or on any verified-prod failure) to promote run → session → account-level lessons.
+4. Record any `step_outcomes[]` as **per-step process rewards** — for multi-step work, the recommender learns which parts of a task the model handled, not just the overall result.
+5. On a gate-verified strong success (`evidence_source: "gate"`), promote a durable **lesson** that feeds rule promotion. Label provenance is preserved throughout: an outcome with `evidence_source: "none"` is cost/latency telemetry and never teaches the success posterior.
+6. Periodically reflect (after a number of feedbacks, or on any verified-prod failure) to promote run → session → account-level lessons.
+
+Memory also watches itself: recall responses carry **drift signals**, surfaced as `memory_drift:*` warnings on recommendations when the evidence neighborhood is repeating or stagnating, and [`POST /v1/diagnose`](/api-reference/endpoints#post-v1diagnose) / [`GET /v1/memory/health`](/api-reference/endpoints#get-v1memoryhealth) expose the failure-lesson and hygiene views directly.
 
 ## Degradation behavior
 

@@ -1,0 +1,95 @@
+---
+title: Under the hood
+description: The harness's internal agentic structure — the routed turn lifecycle, ground-truth verification, the recovery ladder, budgets, memory, and feedback truth.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# Under the hood
+
+This page explains how the `minima` agent actually works internally — what happens between you pressing <kbd>Enter</kbd> and the next recommendation getting sharper. You don't need any of it to use the CLI, but it's the mental model behind the slash commands, the confidence badges, and the cost figures you see.
+
+Four design principles shape everything below:
+
+- **State lives in a local ledger, the model sees projections.** Anything that must survive scroll, compaction, restart — or a model that misremembers — is stored in a local SQLite database. Each turn, the harness re-injects a compact projection (the plan of record, curated memories) into the model's context.
+- **Enforcement in the harness, guidance in the prompt.** Permission gates, plan completion, and budget stops are enforced by harness code at tool-dispatch time — never by prompt text, which a model can ignore.
+- **Feedback truth.** Only realized cost and honestly-labeled outcomes are reported to Minima. A deterministic check outranks an LLM judge; an unjudged turn is telemetry, never a fabricated score.
+- **The server only recommends.** All execution state — plans, budgets, checkpoints — is local. Minima's server never holds your plan or your code.
+
+## The life of a routed turn
+
+Every prompt runs the Minima loop with retries built in:
+
+1. **Assemble context.** The harness recalls similar past work from [Mubit](/sdk/mubit), injects the active plan's current state, and projects your curated [memories](#the-memory-ledger) into the system prompt.
+2. **Route.** The turn goes to `POST /v1/recommend`; the candidate set is pre-filtered to providers you have keys for. A pinned model (`/model`) skips this entirely.
+3. **Reserve budget.** Before any spend, a padded estimate is held against the session [budget](#the-budget-ledger).
+4. **Run.** The chosen model streams, tools execute behind the permission gate, and stop-conditions watch the turn: a budget cutoff, a doom-loop detector (same failing action repeating), and a stall detector (repeated turns with no progress).
+5. **Settle.** Realized cost replaces the budget hold; latency, tokens, and turn counts are recorded.
+6. **Judge and feed back.** The outcome is labeled by the strictest available evidence (see [Feedback truth](#feedback-truth-what-gets-reported)) and reported to `POST /v1/feedback` with realized usage.
+7. **Recover if needed.** If the turn verifiably failed and retries remain, the [recovery ladder](#the-recovery-ladder) re-decides — possibly with a stronger model — after rolling the transcript back to a clean state.
+
+## Ground-truth verification
+
+The harness doesn't take the model's word for "done". With ground truth on (the default), work is organized around **verifiable plan steps**:
+
+- **Plans carry checks.** `/plan` drafts a plan where each step has a `verify` shell command — a test, a build, a grep — and records its **baseline**: the check must be *red before the work* (a check that already passed proves nothing).
+- **Completion is gated.** The harness refuses to let the model mark a step complete unless its verify command actually passes. This is enforced at tool dispatch, so the model cannot talk its way past it.
+- **Verdicts are tiered.** Every check run lands in a local **gates ledger** with a confidence tier: 🟢 a trusted check passed · 🟡 no discriminative check, or verified only by an LLM · 🔴 a check failed or looks fabricated. The tier shows in the TUI and decides what may be reported as verified.
+- **Fresh eyes at the end.** A cheap **planning critic** reviews the plan at finalize (are the checks discriminative?), and a **zero-context diff reviewer** re-reads the run's whole diff when a plan closes — with no session context, so it can't be talked into agreement. An objection can flag a plan, never green-light it.
+- `/verify` runs an adversarial re-verification pass over the whole plan; `/why` shows the evidence behind any step's verdict; `/gt` shows ledger status; `/audit` lints the active plan.
+
+<Note>
+Sub-agents never inherit ground-truth authority: a child agent can't write gate verdicts against the lead's plan, and only checks that originate from your repo, CI, or you (not ones the agent just wrote) can claim production-grade verification.
+</Note>
+
+## The recovery ladder
+
+When a turn fails — a check goes red, the judge scores below threshold, or the model errors — the harness classifies the failure and picks the cheapest intervention that could fix it:
+
+| What happened | What the harness does |
+|---|---|
+| A verify check failed for the first time | **Escalate** — exclude the failed model and re-route to a stronger one |
+| The check keeps failing across retries | **Replan** — keep the model, revise the approach; the retry is briefed with the check's full failure output *and* matching failure lessons recalled from memory (`POST /v1/diagnose`) |
+| A provider fault (rate limit, 5xx, timeout) | **Back off and retry** — same model; the fault is reported as infrastructure, never as model quality |
+
+Each retry rolls the conversation back to the pre-attempt state, so failed attempts don't pollute the context. When retries are exhausted, the failure is recorded honestly in the gates ledger.
+
+## Feedback truth — what gets reported
+
+Every outcome reported to Minima carries an **evidence source**, and the harness applies a strict hierarchy:
+
+1. **A green-tier deterministic check** (your test passing) labels the outcome `gate` — the strongest evidence, and the only kind that can claim verified-in-production.
+2. **A sampled LLM judge** grades ~15% of unchecked turns (`/judge` toggles it) and labels them `judge`.
+3. **Everything else is telemetry** — realized cost and latency ride to the server with *no* quality claim attached, rather than a made-up score.
+
+Verified plan steps also ride along individually: each gate-checked step becomes a per-step outcome in the same feedback call, so the recommender learns *which parts* of a task a model handled, not just the overall result. Provider faults are tagged as infrastructure errors so a rate-limited model doesn't look like a low-quality one.
+
+<Tip>
+This is why harness-driven routing sharpens fast: real tests, real costs, honest labels — at a cadence no manual integration matches.
+</Tip>
+
+## The budget ledger
+
+`--budget <usd>` (or `/budget set`) opens a persistent budget scope. Every routed turn **reserves** a padded estimate up front, runs, then **reconciles** the hold down to realized cost — including harness overhead like judge calls, which is booked too. Graduated warnings fire once each at 50/75/90/100%. Three modes: `shadow` (track only), `warn` (default), `enforce` (refuse new turns when exhausted, stop a running turn that crosses the limit, and tell the recommender the remaining headroom so it picks affordable models).
+
+## The memory ledger
+
+Beyond Mubit's server-side memory, the harness keeps a **local curated memory**: durable notes, lessons, and guardrails that project into the system prompt each turn (pinned entries first, then gate-cited, then recent — under a hard size cap). Manage it with `/memory` (list · add · pin · confirm · reject · delete).
+
+The model **cannot write its own memories** — there is no memory-write tool. The only automated writer is a background **scribe** that mines the run's ledgers (verified failures, checks that flipped, your corrections — never the raw transcript) for recurring patterns. A pattern must recur before it earns one cheap extraction call; only candidates backed by a verified check auto-activate, the rest wait for your `/memory confirm`. Deleting a memory invalidates it (with full history) rather than erasing it, and every injection is audited — you can always replay exactly what the model saw.
+
+## Sub-agents
+
+The `task` tool fans work out to child agents, each **routed independently** through Minima — cost-aware routing applies per worker, not just to the lead. Delegations form a validated DAG (no cycles, no dangling dependencies) executed concurrently under a semaphore; each child gets its own budget slice, scoped tools, optional git-worktree isolation, and effort-scaled time limits, and the parent's abort fans out to all children. See [Tools & permissions](/harness/tools#sub-agents-the-task-tool).
+
+## Local persistence
+
+Everything above is backed by one local SQLite database (`~/.minima-harness/minima.db`): an append-only event log plus derived tables for routing decisions (keyed by the server's `recommendation_id` — the join key across harness, server, and memory), gates, plans, file changes, budgets, checkpoints, and memories. Pre-mutation **git-shadow checkpoints** power `/undo` and `/rewind` without touching your real git history. Database writes fail open: a persistence problem degrades bookkeeping, never your turn.
+
+## Related
+
+- [Model routing](/harness/routing) — auto vs. pinned, offline mode, judging.
+- [How Minima uses Mubit](/sdk/mubit) — what recall and reinforcement do server-side.
+- [Tools & permissions](/harness/tools) — the permission gate and the `task` tool.
