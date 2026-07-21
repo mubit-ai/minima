@@ -57,6 +57,7 @@ import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
+import type { StepOutcome } from "./schemas.ts";
 import { makeStopGate } from "./stop_gate.ts";
 
 /** Inspect/override a recommendation before the model runs. Return a result to override;
@@ -96,6 +97,36 @@ export function buildFeedbackNotes(
   }
   if (recoveryRung) parts.push(`recovery=${recoveryRung}`);
   return parts.length > 0 ? parts.join(";") : undefined;
+}
+
+/** Map this rung's gate rows to wire step outcomes (Mubit process rewards).
+ *
+ * Feedback truth applies per step exactly as per turn: only deterministic/user
+ * verdicts count (a judge gate is model self-assessment — excluded), and only
+ * verified/failed are evidence (unrunnable/unchecked are environmental). Multiple
+ * gates on one step collapse to the LAST verdict (rows arrive in created_at order),
+ * mirroring the red→green flip semantics of groundedOutcomeFor. */
+export function stepOutcomesFromGates(
+  gates: readonly {
+    step_id: string | null;
+    kind: string | null;
+    outcome: string | null;
+    confidence: string | null;
+    verified_by: string | null;
+  }[],
+): StepOutcome[] {
+  const finals = new Map<string, StepOutcome>();
+  for (const g of gates) {
+    if (!g.step_id) continue;
+    if (g.verified_by !== "deterministic" && g.verified_by !== "user") continue;
+    if (g.outcome !== "verified" && g.outcome !== "failed") continue;
+    finals.set(g.step_id, {
+      step_id: g.step_id,
+      outcome: g.outcome === "verified" ? "success" : "failure",
+      rationale: `${g.kind ?? "gate"}/${g.verified_by}${g.confidence ? `/${g.confidence}` : ""}`,
+    });
+  }
+  return [...finals.values()].slice(0, 32);
 }
 
 export function gradeOutcome(quality: number): "success" | "partial" | "failure" {
@@ -985,6 +1016,17 @@ export class MinimaAgent extends Agent {
       //  - the legacy judged/verifiedInProduction flags ride along for old servers.
       const judged = evidenceSource === "judge";
       const verifiedInProduction = evidenceSource === "gate";
+      // Per-step process rewards: this rung's deterministic/user gate verdicts, keyed
+      // by the same rec_id identity join as the grounded outcome. Fail-open — a DB
+      // read must never sink feedback.
+      let stepOutcomes: StepOutcome[] | undefined;
+      try {
+        const gateRows = this.db?.getGatesForRec(routing.recommendationId) ?? [];
+        const collected = stepOutcomesFromGates(gateRows);
+        stepOutcomes = collected.length > 0 ? collected : undefined;
+      } catch {
+        stepOutcomes = undefined;
+      }
       const resp = await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
@@ -999,6 +1041,7 @@ export class MinimaAgent extends Agent {
         judged,
         chosenEffort: this.agentState.thinkingLevel ?? undefined,
         notes: buildFeedbackNotes(deterministic, judged, recoveryRung),
+        stepOutcomes,
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
       // cites which memory entries this outcome reinforced.

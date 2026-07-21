@@ -102,6 +102,55 @@ async def _previous_record(
     return None
 
 
+# Bound on relayed per-turn step outcomes (a plan rarely has more; a runaway
+# harness must not turn one feedback into hundreds of Mubit writes).
+STEP_OUTCOME_CAP = 32
+
+
+async def _relay_step_outcomes(
+    req: FeedbackRequest,
+    memory: Memory,
+    *,
+    lane: str,
+    user_id: str | None,
+    warnings: list[str],
+) -> int:
+    """Relay per-step verdicts as Mubit process rewards. Strictly best-effort.
+
+    Steps carry their own (gate) provenance, so they are relayed even when the
+    turn-level outcome is unlabeled — a turn can be telemetry-only while its plan
+    steps were deterministically verified.
+    """
+    if not req.step_outcomes:
+        return 0
+    dropped = len(req.step_outcomes) - STEP_OUTCOME_CAP
+    if dropped > 0:
+        warnings.append(f"step_outcomes_capped:{dropped}")
+    recorded = 0
+    for step in req.step_outcomes[:STEP_OUTCOME_CAP]:
+        signal = step.signal if step.signal is not None else signal_from_outcome(
+            step.outcome.value, None
+        )
+        try:
+            await memory.record_step_outcome(
+                lane=lane,
+                step_id=step.step_id,
+                outcome=step.outcome.value,
+                signal=signal,
+                step_name=step.step_name,
+                rationale=step.rationale or f"minima feedback {req.recommendation_id}",
+                directive_hint=step.directive_hint,
+                user_id=user_id,
+                metadata={"recommendation_id": req.recommendation_id},
+            )
+            recorded += 1
+        except Exception as exc:  # noqa: BLE001 — process rewards must never fail feedback
+            log.warning("step_outcome_failed", step_id=step.step_id, error=str(exc))
+    if recorded < len(req.step_outcomes[:STEP_OUTCOME_CAP]):
+        warnings.append("step_outcomes_partial")
+    return recorded
+
+
 def _fire_reflect(memory: Memory, lane: str, user_id: str | None) -> None:
     async def _run() -> None:
         try:
@@ -163,9 +212,15 @@ async def feedback(
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
         # model quality — it must never touch the durable (cluster, model) record,
         # neighbor reinforcement, or lessons. Realized cost/latency live in the
-        # decision-log reconcile above.
+        # decision-log reconcile above. Step outcomes still relay: they carry their own
+        # deterministic (gate) provenance independent of the turn label.
+        steps_recorded = await _relay_step_outcomes(
+            req, memory, lane=stored.lane, user_id=stored.user_id, warnings=warnings
+        )
         warnings.append("infra_failure_telemetry_only" if infra else "unlabeled_telemetry_only")
-        return FeedbackResponse(accepted=True, warnings=warnings)
+        return FeedbackResponse(
+            accepted=True, step_outcomes_recorded=steps_recorded, warnings=warnings
+        )
 
     signal = signal_from_outcome(req.outcome.value, quality)
     record = OutcomeRecord(
@@ -195,8 +250,14 @@ async def feedback(
     )
     record = merged_outcome(prev, record)
     if record is prev:
+        # Replayed rec_id: the step outcomes were already relayed on first delivery
+        # (record_step_outcome has no idempotency key on the wire — skipping here is
+        # the dedup).
         warnings.append("duplicate_feedback_ignored")
         return FeedbackResponse(accepted=True, warnings=warnings)
+    steps_recorded = await _relay_step_outcomes(
+        req, memory, lane=stored.lane, user_id=stored.user_id, warnings=warnings
+    )
     upsert_key = outcome_upsert_key(stored.task_cluster, req.chosen_model_id)
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
@@ -338,6 +399,7 @@ async def feedback(
         updated_confidence=updated_confidence,
         reflection_triggered=reflection_triggered,
         lesson_promoted=lesson_promoted,
+        step_outcomes_recorded=steps_recorded,
         warnings=warnings,
     )
 
@@ -456,8 +518,13 @@ async def _late_feedback(
     _reconcile_decision(tenant, req, quality, EVIDENCE_NONE if infra else source, late=True)
 
     if not labeled:
+        steps_recorded = await _relay_step_outcomes(
+            req, tenant.memory, lane=decision.lane, user_id=decision.user_id, warnings=warnings
+        )
         warnings.append("infra_failure_telemetry_only" if infra else "unlabeled_telemetry_only")
-        return FeedbackResponse(accepted=True, warnings=warnings)
+        return FeedbackResponse(
+            accepted=True, step_outcomes_recorded=steps_recorded, warnings=warnings
+        )
 
     record = OutcomeRecord(
         model_id=req.chosen_model_id,
@@ -483,6 +550,9 @@ async def _late_feedback(
     if record is prev:
         warnings.append("duplicate_feedback_ignored")
         return FeedbackResponse(accepted=True, warnings=warnings)
+    steps_recorded = await _relay_step_outcomes(
+        req, tenant.memory, lane=decision.lane, user_id=decision.user_id, warnings=warnings
+    )
     idem = req.idempotency_key or outcome_idempotency_key(
         req.recommendation_id, req.chosen_model_id
     )
@@ -508,4 +578,9 @@ async def _late_feedback(
         )
         return FeedbackResponse(accepted=False, warnings=[warning, *warnings])
 
-    return FeedbackResponse(accepted=True, record_id=record_id, warnings=warnings)
+    return FeedbackResponse(
+        accepted=True,
+        record_id=record_id,
+        step_outcomes_recorded=steps_recorded,
+        warnings=warnings,
+    )

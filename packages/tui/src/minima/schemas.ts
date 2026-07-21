@@ -138,6 +138,22 @@ export interface RecommendResponse {
 // Feedback — feedback.py
 // ---------------------------------------------------------------------------
 
+/**
+ * One plan step's objective verdict, relayed to Mubit as a process reward.
+ * Send only deterministic verdicts (red->green gate results) — never model
+ * self-assessment.
+ */
+export interface StepOutcome {
+  step_id: string;
+  step_name?: string;
+  outcome: OutcomeLabel;
+  /** Reinforcement signal in [-1, 1]; derived from outcome when omitted. */
+  signal?: number;
+  rationale?: string;
+  /** Corrective directive for future attempts at this step. */
+  directive_hint?: string;
+}
+
 export interface FeedbackRequest {
   recommendation_id: string;
   chosen_model_id: string;
@@ -165,6 +181,11 @@ export interface FeedbackRequest {
   chosen_effort?: string;
   notes?: string;
   idempotency_key?: string;
+  /**
+   * Per-step objective verdicts (gate results) relayed as process rewards.
+   * Independent of the turn label: recorded even when the turn is unlabeled.
+   */
+  step_outcomes?: StepOutcome[];
 }
 
 export interface FeedbackResponse {
@@ -174,6 +195,7 @@ export interface FeedbackResponse {
   updated_confidence?: number;
   reflection_triggered?: boolean;
   lesson_promoted?: boolean;
+  step_outcomes_recorded?: number;
   warnings?: string[];
 }
 

@@ -581,3 +581,104 @@ def test_invalidated_evidence_is_skipped_and_warned_at_recommend(client, fake_me
     opus = basis["claude-opus-4-8"]["predicted_success"]
     haiku = basis["claude-haiku-4-5"]["predicted_success"]
     assert opus >= haiku
+
+
+def test_step_outcomes_relay_as_process_rewards(client, fake_memory):
+    """Per-step gate verdicts ride feedback into Mubit as step outcomes."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "actual_cost_usd": 0.002,
+            "step_outcomes": [
+                {"step_id": "s1", "outcome": "success"},
+                {"step_id": "s2", "outcome": "failure", "signal": -0.9, "rationale": "gate red"},
+            ],
+        },
+    ).json()
+    assert fb["accepted"] is True
+    assert fb["step_outcomes_recorded"] == 2
+    assert len(fake_memory.step_outcomes) == 2
+    derived, explicit = fake_memory.step_outcomes
+    assert derived["step_id"] == "s1"
+    assert derived["signal"] == 1.0  # derived from the outcome when omitted
+    assert derived["metadata"]["recommendation_id"] == rec["recommendation_id"]
+    assert explicit["signal"] == -0.9  # caller-supplied signal wins
+    assert explicit["rationale"] == "gate red"
+
+
+def test_step_outcomes_relay_even_when_turn_unlabeled(client, fake_memory):
+    """Steps carry their own gate provenance — relayed even on telemetry-only turns."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "evidence_source": "none",
+            "actual_cost_usd": 0.002,
+            "step_outcomes": [{"step_id": "s1", "outcome": "success"}],
+        },
+    ).json()
+    assert fb["accepted"] is True
+    assert "unlabeled_telemetry_only" in fb["warnings"]
+    assert fb["step_outcomes_recorded"] == 1
+    assert len(fake_memory.step_outcomes) == 1
+    assert len(fake_memory.remembered) == 0  # the turn itself stayed telemetry-only
+
+
+def test_step_outcomes_capped(client, fake_memory):
+    """A runaway harness cannot turn one feedback into hundreds of Mubit writes."""
+    rec = _recommend_haiku(client, fake_memory)
+    steps = [{"step_id": f"s{i}", "outcome": "success"} for i in range(40)]
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "step_outcomes": steps,
+        },
+    ).json()
+    assert fb["step_outcomes_recorded"] == 32
+    assert "step_outcomes_capped:8" in fb["warnings"]
+    assert len(fake_memory.step_outcomes) == 32
+
+
+def test_duplicate_feedback_skips_step_outcome_replay(client, fake_memory):
+    """record_step_outcome has no wire idempotency — the duplicate check is the dedup."""
+    rec = _recommend_haiku(client, fake_memory)
+    body = {
+        "recommendation_id": rec["recommendation_id"],
+        "chosen_model_id": "claude-haiku-4-5",
+        "outcome": "success",
+        "quality_score": 0.9,
+        "evidence_source": "judge",
+        "step_outcomes": [{"step_id": "s1", "outcome": "success"}],
+    }
+    fb1 = client.post("/v1/feedback", json=body).json()
+    assert fb1["step_outcomes_recorded"] == 1
+    written = fake_memory.remembered[0]["record"]
+    from minima.memory.records import RecalledEvidence
+
+    fake_memory.deref_results[fb1["record_id"]] = RecalledEvidence(
+        entry_id=fb1["record_id"],
+        reference_id=fb1["record_id"],
+        score=1.0,
+        knowledge_confidence=1.0,
+        is_stale=False,
+        content="",
+        record=written,
+    )
+    fb2 = client.post("/v1/feedback", json=body).json()
+    assert "duplicate_feedback_ignored" in fb2["warnings"]
+    assert fb2["step_outcomes_recorded"] == 0
+    assert len(fake_memory.step_outcomes) == 1  # no replay
