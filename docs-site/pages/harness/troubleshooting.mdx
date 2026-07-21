@@ -40,7 +40,7 @@ See the full provider → environment-variable table in [Configuration](/harness
 
 - Writes and `bash` prompt for approval every time unless you grant "always". Check active grants with `/perms`.
 - If you're in **plan mode**, `write`/`edit`/`bash` are blocked — cycle back to `build` with <kbd>Shift</kbd>+<kbd>Tab</kbd> or `/mode build`.
-- If the agent "refuses to mark a step done", that's [ground-truth verification](/harness/architecture#ground-truth-verification) working as intended — the step's verify check hasn't passed. `/why` shows the evidence.
+- If the agent "refuses to mark a step done", that's [Big Plan verification](/harness/architecture#big-plan-verification) working as intended — the step's verify check hasn't passed. `/why` shows the evidence.
 - If you launched with `-t`/`-xt`/`-nt`, the toolset is restricted by those flags. See [Tools & permissions](/harness/tools).
 - Undo an unwanted change with `/undo` (checkpoint restore; stacks), or `/rewind` to an earlier prompt.
 
