@@ -31,6 +31,10 @@ class FakeMemory:
         self._strategies = list(strategies or [])
         self.next_record_id = "rec-fake-1"
         self.recall_result_overrides: dict[str, Any] = {}
+        self.diagnose_calls: list[dict[str, Any]] = []
+        self.diagnose_result: dict[str, Any] = {"failure_lessons": [], "summary": ""}
+        self.memory_health_calls: list[dict[str, Any]] = []
+        self.memory_health_result: dict[str, Any] = {}
 
     async def recall(self, **kwargs: Any) -> RecallResult:
         self.recall_calls.append(kwargs)
@@ -76,6 +80,14 @@ class FakeMemory:
 
     async def surface_strategies(self, **_kwargs: Any) -> dict:
         return {"strategies": list(self._strategies)}
+
+    async def diagnose(self, **kwargs: Any) -> dict:
+        self.diagnose_calls.append(kwargs)
+        return dict(self.diagnose_result)
+
+    async def memory_health(self, **kwargs: Any) -> dict:
+        self.memory_health_calls.append(kwargs)
+        return dict(self.memory_health_result)
 
     async def health(self) -> dict:
         return {"reachable": True, "transport": "fake"}

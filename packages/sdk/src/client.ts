@@ -12,8 +12,11 @@ import type {
   CalibrationResponse,
   CapabilitiesResponse,
   Constraints,
+  DiagnoseRequest,
+  DiagnoseResponse,
   FeedbackRequest,
   FeedbackResponse,
+  MemoryHealthResponse,
   ModelsResponse,
   OutcomeLabel,
   PolicyValueResponse,
@@ -275,6 +278,18 @@ export class MinimaClient {
     opts: { namespace?: string; max_strategies?: number; lesson_types?: string[] } = {},
   ): Promise<StrategiesResponse> {
     return this.get<StrategiesResponse>("/v1/strategies", dropUndefined(opts));
+  }
+
+  /** Failure lessons matching an error — "here's how this failed before". */
+  diagnose(req: DiagnoseRequest): Promise<DiagnoseResponse> {
+    return this.post<DiagnoseResponse>("/v1/diagnose", req);
+  }
+
+  /** Per-namespace memory hygiene: staleness, contradictions, promotion candidates. */
+  memoryHealth(
+    opts: { namespace?: string; stale_threshold_days?: number } = {},
+  ): Promise<MemoryHealthResponse> {
+    return this.get<MemoryHealthResponse>("/v1/memory/health", dropUndefined(opts));
   }
 
   models(

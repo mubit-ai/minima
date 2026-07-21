@@ -14,6 +14,7 @@ from minima.api.routers import (
     capabilities,
     feedback,
     health,
+    insight,
     models,
     recommend,
     savings,
@@ -109,6 +110,7 @@ def create_app(
     app.include_router(feedback.router)
     app.include_router(models.router)
     app.include_router(strategies.router)
+    app.include_router(insight.router)
     app.include_router(savings.router)
     app.include_router(calibration.router)
     app.include_router(health.router)
