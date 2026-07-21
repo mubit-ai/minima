@@ -302,6 +302,47 @@ export interface Strategy {
 }
 
 // ---------------------------------------------------------------------------
+// Memory insight — insight.py
+// ---------------------------------------------------------------------------
+
+export interface DiagnoseRequest {
+  error_text: string;
+  error_type?: string;
+  limit?: number;
+  namespace?: string;
+  user_id?: string;
+}
+
+export interface FailureLesson {
+  lesson_id?: string;
+  content?: string;
+  lesson_type?: string;
+  importance?: string;
+  confidence?: number;
+}
+
+export interface DiagnoseResponse {
+  namespace?: string;
+  lane: string;
+  failure_lessons?: FailureLesson[];
+  summary?: string;
+  total_failure_lessons?: number;
+  warnings?: string[];
+}
+
+export interface MemoryHealthResponse {
+  namespace?: string;
+  lane: string;
+  entry_counts?: Record<string, number>;
+  stale_entries?: number;
+  contradictions?: number;
+  low_confidence_count?: number;
+  promotion_candidates?: number;
+  section_health?: Record<string, unknown>;
+  warnings?: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Capabilities — capabilities.py
 // ---------------------------------------------------------------------------
 

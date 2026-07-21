@@ -309,6 +309,50 @@ dominant_lesson_type, dominant_scope, lesson_ids[]`.
 
 ---
 
+## `POST /v1/diagnose`
+
+Failure lessons matching an error — "here's how this failed before". The harness recovery
+ladder calls this at a verified failure so the retry is briefed by memory. Degrades like
+the recommend hot path (a Mubit outage returns an empty list + `memory_unavailable`, never
+a 500).
+
+### Request — `DiagnoseRequest`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `error_text` | string (required) | — | The error/failure output to match. |
+| `error_type` | string | — | Optional classifier hint. |
+| `limit` | int `1–25` | `5` | |
+| `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
+| `user_id` | string | — | |
+
+### Response — `DiagnoseResponse`
+
+`{ namespace, lane, failure_lessons: FailureLesson[], summary, total_failure_lessons,
+warnings[] }`, where each `FailureLesson` has `lesson_id, content, lesson_type,
+importance, confidence`.
+
+---
+
+## `GET /v1/memory/health`
+
+Per-namespace memory hygiene: entry counts, stale entries, contradictions, low-confidence
+counts, promotion candidates. Same graceful degradation as `/v1/diagnose`.
+
+### Query parameters
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
+| `stale_threshold_days` | int `1–365` | `30` | |
+
+### Response — `MemoryHealthResponse`
+
+`{ namespace, lane, entry_counts: {type: count}, stale_entries, contradictions,
+low_confidence_count, promotion_candidates, section_health, warnings[] }`.
+
+---
+
 ## `GET /v1/health`
 
 Always returns `200`; reports degraded state in the body. Never requires auth (in
