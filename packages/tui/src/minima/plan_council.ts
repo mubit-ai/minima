@@ -7,11 +7,14 @@
  * in a bounded self-improve loop, and a synth stage distils everything into a structured
  * CouncilRoundResult the PlanSessionStore merges.
  *
- * Every meta call (deriveScopes / keeper post-check / reviser / synth) and the Critic run
- * complete() on a FIXED cheap metaModel — deliberately off routing (like LLMJudge) so they
- * never corrupt routing propensities. Only researchers route. Every meta call parses
- * defensively (completeJson / completeText) and returns a safe fallback instead of throwing,
- * so a flaky model degrades the round rather than breaking the conversation.
+ * Meta calls run complete() on FIXED models — deliberately off routing (like LLMJudge) so
+ * they never corrupt routing propensities. Two tiers: plan-SHAPING calls (draft / revise /
+ * critic attack / synth) run on `planModel` when supplied (the premium plan model), while
+ * keeper bookkeeping (deriveScopes / post-check / mini-update) stays on the cheap
+ * `metaModel`; absent `planModel`, everything runs on `metaModel` (legacy / premium-off).
+ * Only researchers route. Every meta call parses defensively (completeJson / completeText)
+ * and returns a safe fallback instead of throwing, so a flaky model degrades the round
+ * rather than breaking the conversation.
  *
  * No database, no persistence layer: a planning session is purely in-memory.
  */
@@ -42,6 +45,9 @@ export interface CouncilOptions {
   parent: MinimaAgent;
   /** Fixed cheap model for keeper/critic/synth complete() calls — off the routing loop. */
   metaModel: Model;
+  /** Premium model for plan-SHAPING calls (draft / revise / critic attack / synth).
+   * Absent → metaModel (legacy behavior, and the MINIMA_TUI_PLAN_PREMIUM=0 path). */
+  planModel?: Model;
   signal?: AbortSignal | null;
   workdir?: string;
   maxResearchers?: number;
@@ -58,6 +64,9 @@ export interface CouncilOptions {
   onEvent?: (e: CouncilEvent) => void;
   onChildEvent?: (e: ChildEvent) => void;
 }
+
+/** Model for plan-SHAPING calls: premium planModel when supplied, else the cheap metaModel. */
+const shapeModel = (o: CouncilOptions): Model => o.planModel ?? o.metaModel;
 
 type Severity = "info" | "concern" | "blocker";
 type Fault = { summary: string; severity: Severity };
@@ -520,7 +529,7 @@ async function draftPlan(
       ? `Critic faults to address (resolve or explicitly acknowledge each):\n<faults>\n${faults.map((f) => `- (${f.severity}) ${fenceUntrusted(f.summary)}`).join("\n")}\n</faults>\n\n`
       : ""
   }Write the plan.`;
-  return completeText(opts.metaModel, DRAFT_SYSTEM, user, session.draft || "", {
+  return completeText(shapeModel(opts), DRAFT_SYSTEM, user, session.draft || "", {
     apiKey: opts.apiKey,
     signal: opts.signal,
     onCostUsd: opts.onCostUsd,
@@ -536,7 +545,7 @@ async function reviseDraft(
   opts: CouncilOptions,
 ): Promise<string> {
   const user = `<goal>\n${midTruncate(goal || "(none)", 2000)}\n</goal>\n\n<approach>\n${fenced(draft, 6000)}\n</approach>\n\n<findings>\n${fenced(digest, 4000)}\n</findings>\n\nCritic faults to address:\n<faults>\n${faults.map((f) => `- (${f.severity}) ${fenceUntrusted(f.summary)}`).join("\n")}\n</faults>\n\nRevise the plan.`;
-  return completeText(opts.metaModel, REVISE_SYSTEM, user, draft, {
+  return completeText(shapeModel(opts), REVISE_SYSTEM, user, draft, {
     apiKey: opts.apiKey,
     signal: opts.signal,
     onCostUsd: opts.onCostUsd,
@@ -574,7 +583,7 @@ async function synthesize(
       : ""
   }Produce the round result.`;
   const raw = await completeJson<Record<string, unknown>>(
-    opts.metaModel,
+    shapeModel(opts),
     SYNTH_SYSTEM,
     user,
     {},
@@ -1040,7 +1049,10 @@ export async function runCouncilRound(
     // draft (round 1) — the fresh-draft pass below covers it. Both branches are
     // never-reject so one failing cannot leave the other dangling; the shared signal
     // settles both on abort.
-    const critic = new Critic(opts.metaModel, { apiKey: opts.apiKey, onCostUsd: mopts.onCostUsd });
+    const critic = new Critic(shapeModel(opts), {
+      apiKey: opts.apiKey,
+      onCostUsd: mopts.onCostUsd,
+    });
     const maxPasses = Math.max(0, opts.maxCriticPasses ?? 3);
     const standing = session.draft.trim();
     const criticP: Promise<Fault[] | null> =

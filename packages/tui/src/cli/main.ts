@@ -28,7 +28,13 @@ import {
   groundTruthHooks,
   headlessVerifyConsent,
 } from "../minima/ground_truth.ts";
-import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
+import {
+  CostMeter,
+  type HarnessConfig,
+  MinimaAgent,
+  configFromEnv,
+  resolvePlanModels,
+} from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
@@ -226,7 +232,7 @@ const SEED_MODELS: Model[] = [
     provider: "anthropic",
     api: "anthropic-messages",
     name: "Claude Opus 4.8",
-    cost: { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 },
+    cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
     context_window: 200_000,
     max_tokens: 16384,
     reasoning: true,
@@ -712,6 +718,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
   const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();
+
+  // Plan-premium startup advisory: the hard failure fires at plan usage (resolved per turn
+  // so /auth mid-session counts); this just tells the user at launch instead of first /plan.
+  if (config.planPremium && !config.pinned) {
+    try {
+      resolvePlanModels(config);
+    } catch (exc) {
+      process.stderr.write(`minima: plan-premium warning — ${errText(exc)}\n`);
+    }
+  }
 
   // E1 zero-context diff reviewer: when a plan closes with every step completed, review
   // the run's whole diff with fresh eyes (one cheap completion — no plan, no transcript).

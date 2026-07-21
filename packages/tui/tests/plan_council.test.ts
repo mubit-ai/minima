@@ -952,3 +952,48 @@ describe("MP15 — runKeeperMiniUpdate", () => {
     expect(costUsd).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("two-tier council models (plan-premium)", () => {
+  const PLAN_MODEL: Model = { ...META_MODEL, id: "plan-faux", name: "Plan Faux" };
+
+  const roundResponses = () => [
+    json([{ focus: "x", boundaries: "read only", output_format: "notes", difficulty: "easy" }]),
+    json([]), // keeper post-check
+    msg("Draft."),
+    json([]), // attack#0: clean → no revise call
+    json({ plan: "Final plan." }), // synth
+  ];
+
+  test("plan-shaping calls run on planModel; keeper calls stay on metaModel", async () => {
+    reg.setResponses(roundResponses());
+    await runCouncilRound(
+      sessionFor("goal"),
+      "A substantive turn requiring real deliberation here",
+      makeOpts({ spawn: spawnWith({}), planModel: PLAN_MODEL }),
+    );
+    expect(reg.state.requests.map((r) => r.model)).toEqual([
+      "meta-faux", // deriveScopes
+      "meta-faux", // keeperPostCheck
+      "plan-faux", // draftPlan
+      "plan-faux", // critic attack
+      "plan-faux", // synthesize
+    ]);
+  });
+
+  test("absent planModel → every meta call on metaModel (legacy behavior)", async () => {
+    reg.setResponses(roundResponses());
+    await runCouncilRound(
+      sessionFor("goal"),
+      "A substantive turn requiring real deliberation here",
+      makeOpts({ spawn: spawnWith({}) }),
+    );
+    expect(reg.state.requests.every((r) => r.model === "meta-faux")).toBe(true);
+  });
+
+  test("runKeeperMiniUpdate always uses its metaModel (bookkeeping stays cheap)", async () => {
+    reg.setResponses([json({ plan: "Updated." })]);
+    const store = new PlanSessionStore("goal");
+    await runKeeperMiniUpdate(store.session, "turn", "reply", { metaModel: META_MODEL });
+    expect(reg.state.requests[0]!.model).toBe("meta-faux");
+  });
+});

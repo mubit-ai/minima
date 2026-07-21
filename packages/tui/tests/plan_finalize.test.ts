@@ -188,6 +188,83 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
   });
 });
 
+describe("plan-premium finalize (two-tier models)", () => {
+  const PLAN: Model = { ...META, id: "plan-model", name: "Plan" };
+
+  test("planModel feeds question-resolution + synthesis; the critic stays on metaModel", async () => {
+    const store = new PlanSessionStore("g");
+    const seen: Record<string, string> = {};
+    const booked: number[] = [];
+    const { base } = deps({
+      metaModel: META,
+      planModel: PLAN,
+      onMetaCostUsd: (usd) => booked.push(usd),
+      answerQuestions: async (_s, o) => {
+        seen.answer = o.metaModel.id;
+        o.onCostUsd?.(0.01);
+        return [];
+      },
+      synthesize: async (_s, _t, o) => {
+        seen.synth = o.metaModel.id;
+        o.onCostUsd?.(0.02);
+        return synth();
+      },
+      critic: async (o) => {
+        seen.critic = o.metaModel.id;
+        return [];
+      },
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(seen).toEqual({ answer: "plan-model", synth: "plan-model", critic: "meta-model" });
+    expect(booked).toEqual([0.01, 0.02]);
+  });
+
+  test("absent planModel → all three calls on metaModel (legacy behavior)", async () => {
+    const store = new PlanSessionStore("g");
+    const seen: string[] = [];
+    const { base } = deps({
+      metaModel: META,
+      answerQuestions: async (_s, o) => {
+        seen.push(o.metaModel.id);
+        return [];
+      },
+      synthesize: async (_s, _t, o) => {
+        seen.push(o.metaModel.id);
+        return synth();
+      },
+      critic: async (o) => {
+        seen.push(o.metaModel.id);
+        return [];
+      },
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(seen).toEqual(["meta-model", "meta-model", "meta-model"]);
+  });
+
+  test("planModel without metaModel: synthesis runs on planModel, critic is skipped", async () => {
+    const store = new PlanSessionStore("g");
+    const seen: string[] = [];
+    const { base } = deps({
+      metaModel: null,
+      planModel: PLAN,
+      synthesize: async (_s, _t, o) => {
+        seen.push(o.metaModel.id);
+        return synth();
+      },
+      critic: async () => {
+        throw new Error("critic must not run without a metaModel");
+      },
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(seen).toEqual(["plan-model"]);
+    expect(out.criticFlags).toBeNull();
+    expect(out.synthFailed).toBe(false);
+  });
+});
+
 describe("buildPlanTranscript", () => {
   test("keeps user/assistant turns only, labels them User/Planner, drops empties", () => {
     const messages = [

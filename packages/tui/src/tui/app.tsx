@@ -53,6 +53,7 @@ import {
   buildPlannerSystemPrompt,
   finalizePlan,
   formatDreamReport,
+  resolvePlanModels,
   runCouncilRound,
   runDream,
   runKeeperMiniUpdate,
@@ -1094,8 +1095,22 @@ export function HarnessApp({
     async (force: boolean, signal: AbortSignal | null) => {
       const store = planSessionRef.current;
       if (!store) return { kind: "no-session" } as const;
+      // Plan-premium: the finalize synthesis is a plan-shaping call. Resolution failure is
+      // returned (not thrown) — the exit_plan tool and /plan finalize both surface non-ok
+      // kinds and keep plan mode ON.
+      let premiumPlanModel: Model | null = null;
+      try {
+        premiumPlanModel = resolvePlanModels(agent.config)?.planModel ?? null;
+      } catch (exc) {
+        return { kind: "blocked", message: errText(exc) } as const;
+      }
       const outcome = await finalizePlan(store, {
         metaModel: planMetaModel ?? null,
+        planModel: premiumPlanModel,
+        onMetaCostUsd: (usd) => {
+          agent.meter?.addOverhead(usd);
+          agent.budget?.bookSpend(usd, "plan-finalize");
+        },
         signal,
         force,
         transcript: buildPlanTranscript(agent.agentState.messages),
@@ -3803,11 +3818,16 @@ export function HarnessApp({
   async function handlePlanTurn(text: string) {
     const store = planSessionRef.current;
     if (!store || !planSpawn || !planMetaModel) return;
+    // Plan-premium, resolved per turn (never snapshotted — /auth mid-session must count).
+    // A throw here IS the hard constraint's loud failure: it propagates to onSubmit's catch
+    // and lands in the transcript with the actionable fix lines.
+    const premium = resolvePlanModels(agent.config);
     await runPlanTurn(store, text, {
       runRound: (session, turn, o) =>
         runCouncilRound(session, turn, {
           parent: agent,
           metaModel: planMetaModel,
+          planModel: premium?.planModel,
           spawn: planSpawn,
           signal: o.signal,
           roundBudgetUsd: o.roundBudgetUsd,
@@ -3831,7 +3851,12 @@ export function HarnessApp({
         // build prompt would be stomped by that finally; re-apply it after the turn.
         const base = plannerBaseSystemPromptRef.current;
         agent.agentState.systemPrompt = systemPrompt;
-        const routing = await agent.promptRouted(turn);
+        // Premium hard pin (constraints.candidate_models) + the plan phase tag — the tag
+        // rides regardless of the premium flag so plan-turn outcomes cluster server-side.
+        const routing = await agent.promptRouted(turn, {
+          candidates: premium?.candidates,
+          tags: ["phase:plan"],
+        });
         if (getMode() !== "plan" && base != null) {
           agent.agentState.systemPrompt = base;
         }

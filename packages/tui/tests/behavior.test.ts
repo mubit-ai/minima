@@ -438,8 +438,9 @@ describe("tui/app.tsx wires exit_plan", () => {
   test("promptPlanner re-applies the build prompt after a mid-turn plan exit", () => {
     const idx = src.indexOf("const base = plannerBaseSystemPromptRef.current;");
     expect(idx).toBeGreaterThan(-1);
-    const wrapper = src.slice(idx, idx + 400);
-    expect(wrapper).toContain("await agent.promptRouted(turn)");
+    const wrapper = src.slice(idx, idx + 600);
+    expect(wrapper).toContain("await agent.promptRouted(turn, {");
+    expect(wrapper).toContain("candidates: premium?.candidates");
     expect(wrapper).toContain('if (getMode() !== "plan" && base != null)');
     expect(wrapper).toContain("agent.agentState.systemPrompt = base");
   });
