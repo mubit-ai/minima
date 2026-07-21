@@ -1,0 +1,41 @@
+diff --git a/index.js b/index.js
+index 36736419cc112fffca7a86dcb2be0738b82e94d9..a1c6474d783acbbcaa60303b0b642b5bd5388a76 100644
+--- a/index.js
++++ b/index.js
+@@ -1,6 +1,18 @@
+ import sliceAnsi from 'slice-ansi';
+ import stringWidth from 'string-width';
+ 
++// slice-ansi rounds UP when a fullwidth character straddles the end boundary, so a
++// slice requested at N cells can come back N+1 wide. Re-slice until it actually fits —
++// a too-wide truncation overflows the terminal row and breaks inline renderers.
++function sliceWithin(text, begin, end) {
++	let out = sliceAnsi(text, begin, end);
++	while (end > begin && stringWidth(out) > end - begin) {
++		end -= 1;
++		out = sliceAnsi(text, begin, end);
++	}
++	return out;
++}
++
+ function getIndexOfNearestSpace(string, wantedIndex, shouldSearchRight) {
+ 	if (string.charAt(wantedIndex) === ' ') {
+ 		return wantedIndex;
+@@ -76,7 +88,7 @@ export default function cliTruncate(text, columns, options = {}) {
+ 		}
+ 
+ 		return (
+-			sliceAnsi(text, 0, half)
++			sliceWithin(text, 0, half)
+ 				+ truncationCharacter
+ 				+ sliceAnsi(text, length - (columns - half) + stringWidth(truncationCharacter), length)
+ 		);
+@@ -92,7 +104,7 @@ export default function cliTruncate(text, columns, options = {}) {
+ 			truncationCharacter = ` ${truncationCharacter}`;
+ 		}
+ 
+-		return sliceAnsi(text, 0, columns - stringWidth(truncationCharacter)) + truncationCharacter;
++		return sliceWithin(text, 0, columns - stringWidth(truncationCharacter)) + truncationCharacter;
+ 	}
+ 
+ 	throw new Error(`Expected \`options.position\` to be either \`start\`, \`middle\` or \`end\`, got ${position}`);
