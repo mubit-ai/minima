@@ -7,7 +7,7 @@
       "dependencies": {
         "@anthropic-ai/sdk": "^0.40.0",
         "@google/genai": "^0.3.0",
-        "@mubit-ai/sdk": "^0.10.0",
+        "@mubit-ai/sdk": "^0.13.0",
         "ink": "^5.0.0",
         "react": "^18.3.0",
         "string-width": "^7.2.0",
@@ -58,7 +58,7 @@
 
     "@js-sdsl/ordered-map": ["@js-sdsl/ordered-map@4.4.2", "", {}, "sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw=="],
 
-    "@mubit-ai/sdk": ["@mubit-ai/sdk@0.10.0", "", { "dependencies": { "@grpc/grpc-js": "^1.14.1", "@grpc/proto-loader": "^0.8.0" } }, "sha512-DxVm0Slv6ezMQaSC8+gMcOW65+otUs8GC/nPI9wThzdf6IonfR9LzJfJY9gm7nVlvv5oVI3hOJk/2G36I201BA=="],
+    "@mubit-ai/sdk": ["@mubit-ai/sdk@0.13.0", "", { "dependencies": { "@grpc/grpc-js": "^1.14.1", "@grpc/proto-loader": "^0.8.0" } }, "sha512-lKh/k6Q94gMgJAEkl2wqFagN5ml6KVOyZwruCK1JVildM/+9OzReIigvY2IjlJTyY3CgX+VSEiMD/AkhYblrlA=="],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 

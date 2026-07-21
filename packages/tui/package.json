@@ -31,7 +31,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
     "@google/genai": "^0.3.0",
-    "@mubit-ai/sdk": "^0.10.0",
+    "@mubit-ai/sdk": "^0.13.0",
     "ink": "^5.0.0",
     "react": "^18.3.0",
     "string-width": "^7.2.0"

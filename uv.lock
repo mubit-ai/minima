@@ -1916,7 +1916,7 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'seed'", specifier = ">=0.24" },
     { name = "litellm", marker = "extra == 'adapters'", specifier = ">=1.60" },
     { name = "minima-cli", extras = ["server"], marker = "extra == 'dev'" },
-    { name = "mubit-sdk", specifier = ">=0.10.0" },
+    { name = "mubit-sdk", specifier = ">=0.13.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "openhands-sdk", marker = "python_full_version >= '3.12' and extra == 'adapters'", specifier = ">=1.30" },
     { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },
@@ -1944,7 +1944,7 @@ wheels = [
 
 [[package]]
 name = "mubit-sdk"
-version = "0.10.0"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -1952,9 +1952,9 @@ dependencies = [
     { name = "protobuf", version = "7.35.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/3d/ee6f95060e8715913c554a9b532ea05a3a0ae6fa89c069ff1e4b2db68d9f/mubit_sdk-0.10.0.tar.gz", hash = "sha256:b66d59e8d1a4df01181ee8927c3431080d7d14273bae700880fc4ce963cfe869", size = 109876, upload-time = "2026-06-05T13:26:44.908Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/56/ffd7249a2bdd92bd01ff91e1530203d2e6b640e9624c777cc6db5776018a/mubit_sdk-0.13.0.tar.gz", hash = "sha256:64cf0a037fe73e2b633fa5e6f59c7098bf03f7259293cdda5dc64e595ed75ba3", size = 115022, upload-time = "2026-07-21T11:11:27.786Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/e3/abfa5afd066fed654598210170ecbb70e8bfbd25ddb3e5211afa96f56b7e/mubit_sdk-0.10.0-py3-none-any.whl", hash = "sha256:69778ea8456a2d9efbff8bb73d69b7fa524d9871d17202db06c50919272485f3", size = 124467, upload-time = "2026-06-05T13:26:43.772Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/70/5c515e45cdb412888f364ee430e7e5d71eaf40615a88762ae0dd01ee4dad/mubit_sdk-0.13.0-py3-none-any.whl", hash = "sha256:bb3a438dab0d3817ff6a8e5700dbfa725dcbb86384a43a1cea7548ad0f6258ed", size = 129647, upload-time = "2026-07-21T11:11:26.499Z" },
 ]
 
 [[package]]
