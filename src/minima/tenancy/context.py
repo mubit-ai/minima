@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from minima.memory.adapter import Memory
+from minima.memory.recall_utility import RecallUtilityStore
+from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import DecisionLog
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.engine import Recommender
@@ -30,6 +32,9 @@ class TenantContext:
     durable_refs: DurableRefs | None = None
     pair_store: PairStore | None = None
     resets: ResetRegistry | None = None
+    # F1/F3 structural-bet stores: built only when their flags are on (None = feature off).
+    contextual: ContextualStore | None = None
+    recall_utility: RecallUtilityStore | None = None
 
     def lane(self, namespace: str | None) -> str:
         """Intra-org sub-scope lane. The ORG boundary is the Mubit instance/key, not this

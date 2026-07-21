@@ -8,17 +8,20 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from minima.catalog import probe
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
 from minima.logging import get_logger
 from minima.memory import threadpool
 from minima.memory.adapter import Memory
 from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.recall_utility import RecallUtilityStore, apply_recall_utility
 from minima.memory.records import RecalledEvidence, label_score
 from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
-from minima.recommender import escalation, score
+from minima.recommender import contextual, escalation, score
 from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details
+from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.labelmodel import (
@@ -86,6 +89,8 @@ class Recommender:
         durable_refs: DurableRefs | None = None,
         pair_store: PairStore | None = None,
         resets: ResetRegistry | None = None,
+        contextual: ContextualStore | None = None,
+        recall_utility: RecallUtilityStore | None = None,
     ):
         self._settings = settings
         self._memory = memory
@@ -96,6 +101,8 @@ class Recommender:
         self._durable_refs = durable_refs
         self._pair_store = pair_store
         self._resets = resets
+        self._contextual = contextual
+        self._recall_utility = recall_utility
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
         argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
         self._thompson_enabled = (
@@ -264,6 +271,12 @@ class Recommender:
         # how an org measures the counterfactual before enabling. Reset stamping (CUSUM,
         # provider snapshots) continues regardless — history is ready when the flag flips.
         discounting = settings.minima_posterior_discounting
+        # F3 (flag-gated): learned per-entry utility re-weights each evidence row's
+        # similarity BEFORE aggregation — evidence-level, never a candidate re-rank.
+        # In-place mutation, so the shadow challengers aggregate the SAME re-weighted
+        # evidence and differ from production only by the discount.
+        if settings.minima_recall_utility and self._recall_utility is not None and evidence:
+            apply_recall_utility(evidence, lane, self._recall_utility)
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -380,12 +393,49 @@ class Recommender:
         explored_pick = False
         sel_propensities: dict[str, float] = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
         sel_propensities[recommended.card.model_id] = 1.0
+        # F1 (flag-gated): deterministic request-time context vector for the neural-linear
+        # heads. Built from classifier outputs — recall evidence carries no embedding.
+        context_x: list[float] | None = None
+        if settings.minima_contextual_bandit and self._contextual is not None:
+            context_x = contextual.context_vector(
+                task_type,
+                difficulty,
+                input_tokens,
+                output_tokens,
+                class_profile.extracted_features,
+                bool(req.task.tags),
+            )
         if self._thompson_enabled and len(scored) >= 2:
             selection_policy = "thompson"
-            items = [(c.card.model_id, c.alpha, c.beta, c.est_cost_usd) for c in scored]
-            pick_id, pi = score.thompson_select(
-                items, tau, self._rng, settings.minima_thompson_samples
-            )
+            if context_x is not None and self._contextual is not None:
+                # Blended contextual Thompson: the sampled propensities of the BLENDED
+                # draw are what gets logged — same honesty contract as thompson_select.
+                cx_items = []
+                for c in scored:
+                    agg = aggregates.get(c.card.model_id)
+                    n_cell = agg.weight_sum if agg is not None else 0.0
+                    head_mean, head_std, _n = self._contextual.head_stats(
+                        lane, c.card.model_id, context_x
+                    )
+                    cx_items.append(
+                        (
+                            c.card.model_id,
+                            c.alpha,
+                            c.beta,
+                            c.est_cost_usd,
+                            head_mean,
+                            head_std,
+                            contextual.blend_weight(n_cell),
+                        )
+                    )
+                pick_id, pi = contextual.contextual_thompson_select(
+                    cx_items, tau, self._rng, settings.minima_thompson_samples
+                )
+            else:
+                items = [(c.card.model_id, c.alpha, c.beta, c.est_cost_usd) for c in scored]
+                pick_id, pi = score.thompson_select(
+                    items, tau, self._rng, settings.minima_thompson_samples
+                )
             sel_propensities = dict.fromkeys((c.card.model_id for c in ranked), 0.0)
             sel_propensities.update(pi)
             if pick_id and pick_id != recommended.card.model_id:
@@ -449,6 +499,11 @@ class Recommender:
         # with --workers 1 an inline network write stalls every concurrent request.
         await threadpool.run(self._recstore.put, stored_rec)
         profile.mark("recstore")
+        if context_x is not None and self._contextual is not None:
+            try:
+                self._contextual.note_context(recommendation_id, lane, context_x)
+            except Exception as exc:  # noqa: BLE001 — bookkeeping must never break the hot path
+                log.warning("contextual_note_failed", error=str(exc))
         await threadpool.run(
             self._log_decision,
             recommendation_id=recommendation_id,
@@ -857,9 +912,17 @@ class Recommender:
             min_cost_n,
         )
         pair_rates = self._pair_win_rates(cluster)
+        # F2 (flag-gated): the full catalog is the neighbor pool for probe cold start.
+        probe_catalog = (
+            self._catalog_store.get().cards if settings.minima_probe_cold_start else None
+        )
         for card in candidates:
             agg = aggregates.get(card.model_id)
             prior = score.capability_prior(card, task_type)
+            if probe_catalog is not None and card.capability_by_task_type.get(task_type) is None:
+                cold = probe.cold_start_prior(card, task_type, probe_catalog)
+                if cold is not None:
+                    prior = cold
             if pair_rates:
                 prior = pair_prior_adjustment(
                     prior,

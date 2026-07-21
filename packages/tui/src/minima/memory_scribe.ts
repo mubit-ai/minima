@@ -41,7 +41,17 @@ export type ScribeSignalKind =
   | "verified_failure"
   | "user_correction"
   | "judge_gate_disagreement"
-  | "observer_flag";
+  | "observer_flag"
+  | "contrast_pair"
+  | "workflow_pattern";
+
+/** F5 structural-bet signals, each individually droppable and DEFAULT OFF. */
+export interface MineOptions {
+  /** F5a: green-vs-red deterministic-gate contrast within one task_type. */
+  contrastPairs?: boolean;
+  /** F5b: recurring all-verified plan-step sequences (procedural memory, guidance only). */
+  workflowPatterns?: boolean;
+}
 
 export interface ScribeSignal {
   kind: ScribeSignalKind;
@@ -72,7 +82,11 @@ function gateTs(createdAt: string | null): number {
  * Mine the project's ledger for curation-worthy signals. Pure reads; the whole history is
  * re-derived each pass (state lives in the ledger — reconciliation dedups downstream).
  */
-export function mineSignals(db: MinimaDb, projectKey: string): ScribeSignal[] {
+export function mineSignals(
+  db: MinimaDb,
+  projectKey: string,
+  opts: MineOptions = {},
+): ScribeSignal[] {
   const out: ScribeSignal[] = [];
 
   // Red→green flips and unresolved verified failures, per step.
@@ -170,7 +184,105 @@ export function mineSignals(db: MinimaDb, projectKey: string): ScribeSignal[] {
     });
   }
 
+  if (opts.contrastPairs) out.push(...mineContrastPairs(db, projectKey));
+  if (opts.workflowPatterns) out.push(...mineWorkflowPatterns(db, projectKey));
+
   return out.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * F5a contrast pairs: within one task_type, a rec whose deterministic gate went green
+ * against a rec whose deterministic gate went red — the raw material for a DIFFERENTIAL
+ * lesson. One signal per task_type (latest green vs latest red, distinct recs); its
+ * weight is how many green/red pairings the window supports, so a single one-off
+ * contrast stays behind the recurrence gate until the pattern recurs.
+ */
+function mineContrastPairs(db: MinimaDb, projectKey: string): ScribeSignal[] {
+  const out: ScribeSignal[] = [];
+  const byType = new Map<
+    string,
+    {
+      greens: ReturnType<MinimaDb["getProjectGateLabeledDecisions"]>;
+      reds: ReturnType<MinimaDb["getProjectGateLabeledDecisions"]>;
+    }
+  >();
+  for (const row of db.getProjectGateLabeledDecisions(projectKey)) {
+    const taskType = row.task_type;
+    if (!taskType) continue;
+    const bucket = byType.get(taskType) ?? { greens: [], reds: [] };
+    if (row.gate_outcome === "verified" && (row.gate_confidence ?? "green") === "green") {
+      bucket.greens.push(row);
+    } else if (row.gate_outcome === "failed") {
+      bucket.reds.push(row);
+    }
+    byType.set(taskType, bucket);
+  }
+  for (const [taskType, { greens, reds }] of byType) {
+    const green = greens[greens.length - 1];
+    const red = reds.filter((r) => r.rec_id !== green?.rec_id).pop();
+    if (!green || !red) continue;
+    const step = (row: (typeof greens)[number]) =>
+      row.step_content ? ` on step "${row.step_content}"` : "";
+    out.push({
+      kind: "contrast_pair",
+      pattern: normalizePattern(`contrast ${taskType}`),
+      detail:
+        `same task type "${taskType}": ${green.chosen_model ?? "?"}${step(green)} passed its ` +
+        `deterministic check while ${red.chosen_model ?? "?"}${step(red)} failed its check`,
+      recIds: [green.rec_id, red.rec_id],
+      gateIds: [green.gate_id, red.gate_id],
+      ts: Math.max(gateTs(green.created_at), gateTs(red.created_at)),
+      immediate: false,
+      weight: Math.min(greens.length, reds.length),
+    });
+  }
+  return out;
+}
+
+/**
+ * F5b workflow induction: a plan whose >=2 steps ALL carry a latest gate verdict of
+ * `verified` contributes its normalized step-name sequence; a sequence recurring across
+ * >=2 runs becomes a procedural `workflow` candidate (guidance only — the memory ledger
+ * enforces nothing anywhere).
+ */
+function mineWorkflowPatterns(db: MinimaDb, projectKey: string): ScribeSignal[] {
+  const byPlan = new Map<string, ReturnType<MinimaDb["getProjectPlanStepVerdicts"]>>();
+  for (const row of db.getProjectPlanStepVerdicts(projectKey)) {
+    const rows = byPlan.get(row.plan_id) ?? [];
+    rows.push(row);
+    byPlan.set(row.plan_id, rows);
+  }
+  const bySequence = new Map<
+    string,
+    { names: string[]; runs: Set<string>; gateIds: string[]; ts: number }
+  >();
+  for (const rows of byPlan.values()) {
+    if (rows.length < 2) continue;
+    if (!rows.every((r) => r.last_outcome === "verified")) continue;
+    const names = rows.map((r) => normalizePattern(r.content));
+    if (names.some((n) => !n)) continue;
+    const key = names.join(" -> ");
+    const entry = bySequence.get(key) ?? { names, runs: new Set<string>(), gateIds: [], ts: 0 };
+    if (rows[0]?.run_id) entry.runs.add(rows[0].run_id);
+    for (const r of rows) if (r.last_gate_id) entry.gateIds.push(r.last_gate_id);
+    entry.ts = Math.max(entry.ts, ...rows.map((r) => gateTs(r.created_at)));
+    bySequence.set(key, entry);
+  }
+  const out: ScribeSignal[] = [];
+  for (const [key, entry] of bySequence) {
+    if (entry.runs.size < 2) continue;
+    out.push({
+      kind: "workflow_pattern",
+      pattern: normalizePattern(key),
+      detail: `recurring verified workflow (${entry.runs.size} runs, every step's check green): ${entry.names.join(" → ")}`,
+      recIds: [],
+      gateIds: [...new Set(entry.gateIds)],
+      ts: entry.ts,
+      immediate: false,
+      weight: entry.runs.size,
+    });
+  }
+  return out;
 }
 
 /** RecMem-shaped recurrence gate: keep signals whose pattern recurs (weights sum across
@@ -211,7 +323,20 @@ export const SCRIBE_SYSTEM =
 
 export function buildScribePrompt(signals: ScribeSignal[]): string {
   const lines = signals.map((s, i) => `${i + 1}. [${s.kind}] ${s.detail}`);
-  return `Evidence from this repository's ledger (chronological):\n${lines.join("\n")}`;
+  const guidance: string[] = [];
+  if (signals.some((s) => s.kind === "contrast_pair")) {
+    guidance.push(
+      "For [contrast_pair] evidence, distill the DIFFERENTIAL lesson: what did the run " +
+        "that passed its check do that the failing run did not.",
+    );
+  }
+  if (signals.some((s) => s.kind === "workflow_pattern")) {
+    guidance.push(
+      'For [workflow_pattern] evidence, write a kind:"workflow" candidate describing the ' +
+        "repeatable step sequence as guidance for future sessions (never a mandate).",
+    );
+  }
+  return `Evidence from this repository's ledger (chronological):\n${lines.join("\n")}${guidance.length ? `\n\n${guidance.join("\n")}` : ""}`;
 }
 
 /** Parse the extractor's reply: first [...] block, validated + capped. Null = unusable. */
@@ -365,6 +490,10 @@ export interface ScribePassDeps {
   /** Staleness guard: does this model id still resolve? (model registry seam). */
   modelExists?: (id: string) => boolean;
   recurrenceMin?: number;
+  /** F5a flag (default off): env MINIMA_TUI_SCRIBE_CONTRAST=1 when unset. */
+  contrastPairs?: boolean;
+  /** F5b flag (default off): env MINIMA_TUI_SCRIBE_WORKFLOW=1 when unset. */
+  workflowPatterns?: boolean;
 }
 
 /** Skip curation entirely when less than this share of the session budget remains. */
@@ -389,7 +518,10 @@ export async function runScribePass(deps: ScribePassDeps): Promise<ScribeReport>
 
   report.invalidated = sweepStaleMemories(deps);
 
-  const signals = mineSignals(db, projectKey);
+  const signals = mineSignals(db, projectKey, {
+    contrastPairs: deps.contrastPairs ?? process.env.MINIMA_TUI_SCRIBE_CONTRAST === "1",
+    workflowPatterns: deps.workflowPatterns ?? process.env.MINIMA_TUI_SCRIBE_WORKFLOW === "1",
+  });
   report.signals = signals.length;
   const gated = applyRecurrenceGate(signals, deps.recurrenceMin ?? 2);
   report.gated = gated.length;
@@ -431,7 +563,11 @@ export async function runScribePass(deps: ScribePassDeps): Promise<ScribeReport>
       .map((i) => gated[i - 1])
       .filter((s): s is ScribeSignal => Boolean(s));
     const citations = [...new Set(cited.flatMap((s) => [...s.recIds, ...s.gateIds]))];
-    const gateCited = cited.some((s) => s.kind === "gate_flip" && s.gateIds.length > 0);
+    const gateCited = cited.some(
+      (s) =>
+        (s.kind === "gate_flip" || s.kind === "contrast_pair" || s.kind === "workflow_pattern") &&
+        s.gateIds.length > 0,
+    );
     const humanCited = cited.some((s) => s.kind === "user_correction");
 
     if (best && bestSim >= NOOP_SIMILARITY) {

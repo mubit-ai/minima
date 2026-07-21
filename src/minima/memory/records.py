@@ -335,17 +335,22 @@ def merged_outcome(prev: OutcomeRecord | None, new: OutcomeRecord) -> OutcomeRec
     return new
 
 
-def fold_recall_vote(prev: OutcomeRecord, success: bool) -> OutcomeRecord:
+def fold_recall_vote(prev: OutcomeRecord, success: bool, weight: float = 1.0) -> OutcomeRecord:
     """Fold one recall vote into a recalled record's track record. Pure — returns a copy.
 
     A vote says "this record was recalled into a decision whose trusted-label outcome
     was success/failure". It never touches n_outcomes/success_mass (those are direct
     observations of the model); it grades the record's usefulness as *evidence*.
+
+    ``weight`` scales the vote's mass (severity weighting): the default 1.0 is exactly
+    the legacy single vote; a failure cast at weight 2.0 counts as two failure votes.
+    ``recall_n`` stays an integer for schema compatibility.
     """
+    votes = max(1, round(weight))
     return replace(
         prev,
-        recall_n=prev.recall_n + 1,
-        recall_success_mass=prev.recall_success_mass + (1.0 if success else 0.0),
+        recall_n=prev.recall_n + votes,
+        recall_success_mass=prev.recall_success_mass + (float(votes) if success else 0.0),
     )
 
 

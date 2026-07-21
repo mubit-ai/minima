@@ -37,6 +37,25 @@ def test_fold_recall_vote_accumulates_and_is_pure():
     assert (rec.recall_n, rec.recall_success_mass) == (0, 0.0)  # input untouched
 
 
+def test_fold_recall_vote_weight_default_is_legacy_single_vote():
+    rec = fold_recall_vote(_record(), False)
+    weighted_default = fold_recall_vote(_record(), False, 1.0)
+    assert (rec.recall_n, rec.recall_success_mass) == (1, 0.0)
+    assert (weighted_default.recall_n, weighted_default.recall_success_mass) == (1, 0.0)
+
+
+def test_fold_recall_vote_severity_weight_counts_double():
+    rec = fold_recall_vote(_record(), False, 2.0)
+    assert (rec.recall_n, rec.recall_success_mass) == (2, 0.0)
+    up = fold_recall_vote(rec, True, 2.0)
+    assert (up.recall_n, up.recall_success_mass) == (4, 2.0)
+
+
+def test_fold_recall_vote_weight_floors_at_one_vote():
+    rec = fold_recall_vote(_record(), False, 0.1)
+    assert rec.recall_n == 1
+
+
 def test_v4_metadata_upcasts_with_empty_recall_track():
     meta = _record().to_metadata()
     for key in ("recall_n", "recall_success_mass", "invalidated_at"):

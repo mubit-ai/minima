@@ -4,6 +4,7 @@ import {
   type ScribeCandidate,
   type ScribeSignal,
   applyRecurrenceGate,
+  buildScribePrompt,
   drainMemoryJobs,
   mineSignals,
   parseCandidates,
@@ -419,5 +420,239 @@ describe("memory scribe — drain", () => {
     const statuses = db.listMemoryJobs().map((j) => j.status);
     expect(statuses.filter((s) => s === "done")).toHaveLength(1);
     expect(statuses.filter((s) => s === "failed")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------- F5 structural bets
+
+function decision(db: MinimaDb, runId: string, recId: string, model: string, taskType = "code") {
+  db.writeDecision({
+    recId,
+    runId,
+    taskLabel: "t",
+    taskType,
+    chosenModel: model,
+    decisionBasis: "memory",
+    confidence: 0.5,
+    thresholdUsed: 0.5,
+    ranked: [],
+    estCostUsd: 0,
+    actualCostUsd: 0,
+    quality: null,
+    judged: false,
+    outcome: "success",
+    turns: 1,
+    latencyMs: 1,
+  });
+}
+
+function deterministicGate(
+  db: MinimaDb,
+  o: { runId: string; recId: string; outcome: "verified" | "failed"; stepId?: string },
+): string {
+  return db.insertGate({
+    stepId: o.stepId ?? null,
+    kind: "step_check",
+    outcome: o.outcome,
+    verifiedBy: "deterministic",
+    sessionId: o.runId,
+    recId: o.recId,
+  });
+}
+
+/** Two green and two red deterministic-gate recs in one task_type (recurring contrast). */
+function contrastRepo() {
+  const { db, runId } = freshDb();
+  decision(db, runId, "rec-g1", "cheap-model");
+  decision(db, runId, "rec-g2", "cheap-model");
+  decision(db, runId, "rec-r1", "flaky-model");
+  decision(db, runId, "rec-r2", "flaky-model");
+  deterministicGate(db, { runId, recId: "rec-g1", outcome: "verified" });
+  deterministicGate(db, { runId, recId: "rec-g2", outcome: "verified" });
+  deterministicGate(db, { runId, recId: "rec-r1", outcome: "failed" });
+  deterministicGate(db, { runId, recId: "rec-r2", outcome: "failed" });
+  return { db, runId };
+}
+
+/** The same two-step plan, every step's latest gate verified, across two runs. */
+function workflowRepo() {
+  const { db, runId } = freshDb();
+  const runs = [runId, db.startRun({ projectKey: "proj" })];
+  for (const run of runs) {
+    db.upsertPlanFromTodos(run, [
+      { content: "Install deps", status: "completed" },
+      { content: "Run the tests", status: "completed" },
+    ]);
+    const plan = db.getActivePlan(run)!;
+    for (const step of db.getPlanSteps(plan.id)) {
+      db.insertGate({
+        planId: plan.id,
+        stepId: step.id,
+        kind: "step_check",
+        outcome: "verified",
+        verifiedBy: "deterministic",
+        sessionId: run,
+      });
+    }
+  }
+  return { db, runs };
+}
+
+describe("memory scribe — contrast pairs (F5a)", () => {
+  test("default off: mineSignals without opts never emits contrast signals", () => {
+    const { db } = contrastRepo();
+    expect(mineSignals(db, "proj").some((s) => s.kind === "contrast_pair")).toBe(false);
+  });
+
+  test("mines one pair per task_type with recurrence weight and both citations", () => {
+    const { db } = contrastRepo();
+    const signals = mineSignals(db, "proj", { contrastPairs: true });
+    const pairs = signals.filter((s) => s.kind === "contrast_pair");
+    expect(pairs).toHaveLength(1);
+    const pair = pairs[0]!;
+    expect(pair.weight).toBe(2); // min(2 greens, 2 reds) — passes the recurrence gate
+    expect(pair.recIds).toHaveLength(2);
+    expect(pair.gateIds).toHaveLength(2);
+    expect(pair.detail).toContain("cheap-model");
+    expect(pair.detail).toContain("flaky-model");
+    expect(applyRecurrenceGate(pairs)).toHaveLength(1);
+  });
+
+  test("a single one-off pair stays behind the recurrence gate", () => {
+    const { db, runId } = freshDb();
+    decision(db, runId, "rec-g1", "cheap-model");
+    decision(db, runId, "rec-r1", "flaky-model");
+    deterministicGate(db, { runId, recId: "rec-g1", outcome: "verified" });
+    deterministicGate(db, { runId, recId: "rec-r1", outcome: "failed" });
+    const pairs = mineSignals(db, "proj", { contrastPairs: true }).filter(
+      (s) => s.kind === "contrast_pair",
+    );
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.weight).toBe(1);
+    expect(applyRecurrenceGate(pairs)).toHaveLength(0);
+  });
+
+  test("different task_types never pair", () => {
+    const { db, runId } = freshDb();
+    decision(db, runId, "rec-g1", "cheap-model", "code");
+    decision(db, runId, "rec-r1", "flaky-model", "qa");
+    deterministicGate(db, { runId, recId: "rec-g1", outcome: "verified" });
+    deterministicGate(db, { runId, recId: "rec-r1", outcome: "failed" });
+    const pairs = mineSignals(db, "proj", { contrastPairs: true }).filter(
+      (s) => s.kind === "contrast_pair",
+    );
+    expect(pairs).toHaveLength(0);
+  });
+
+  test("prompt carries the differential-lesson instruction", () => {
+    const { db } = contrastRepo();
+    const signals = mineSignals(db, "proj", { contrastPairs: true });
+    const prompt = buildScribePrompt(signals);
+    expect(prompt).toContain("DIFFERENTIAL");
+    expect(prompt).toContain("[contrast_pair]");
+  });
+
+  test("pass activates a gate-cited contrast lesson", async () => {
+    const { db } = contrastRepo();
+    const report = await runScribePass({
+      db,
+      projectKey: "proj",
+      contrastPairs: true,
+      extract: stubExtractor([
+        { kind: "lesson", content: "cheap-model passes code checks that flaky-model fails", evidence: [1] },
+      ]),
+    });
+    expect(report.added).toBe(1);
+    const rows = db.listMemories("proj");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("active"); // gate-cited → auto-activate
+    expect(rows[0]!.evidence_source).toBe("gate");
+  });
+});
+
+describe("memory scribe — workflow induction (F5b)", () => {
+  test("default off: mineSignals without opts never emits workflow signals", () => {
+    const { db } = workflowRepo();
+    expect(mineSignals(db, "proj").some((s) => s.kind === "workflow_pattern")).toBe(false);
+  });
+
+  test("a sequence verified across two runs becomes one recurrence-passing signal", () => {
+    const { db } = workflowRepo();
+    const signals = mineSignals(db, "proj", { workflowPatterns: true });
+    const flows = signals.filter((s) => s.kind === "workflow_pattern");
+    expect(flows).toHaveLength(1);
+    const flow = flows[0]!;
+    expect(flow.weight).toBe(2);
+    expect(flow.detail).toContain("install deps");
+    expect(flow.detail).toContain("run the tests");
+    expect(flow.gateIds.length).toBeGreaterThan(0);
+    expect(applyRecurrenceGate(flows)).toHaveLength(1);
+  });
+
+  test("a single-run sequence is not a workflow", () => {
+    const { db, runId } = freshDb();
+    db.upsertPlanFromTodos(runId, [
+      { content: "Install deps", status: "completed" },
+      { content: "Run the tests", status: "completed" },
+    ]);
+    const plan = db.getActivePlan(runId)!;
+    for (const step of db.getPlanSteps(plan.id)) {
+      db.insertGate({
+        planId: plan.id,
+        stepId: step.id,
+        kind: "step_check",
+        outcome: "verified",
+        verifiedBy: "deterministic",
+        sessionId: runId,
+      });
+    }
+    const flows = mineSignals(db, "proj", { workflowPatterns: true }).filter(
+      (s) => s.kind === "workflow_pattern",
+    );
+    expect(flows).toHaveLength(0);
+  });
+
+  test("one red step disqualifies the plan's sequence", () => {
+    const { db, runs } = workflowRepo();
+    const plan = db.getActivePlan(runs[1]!)!;
+    const lastStep = db.getPlanSteps(plan.id)[1]!;
+    db.insertGate({
+      planId: plan.id,
+      stepId: lastStep.id,
+      kind: "step_check",
+      outcome: "failed",
+      verifiedBy: "deterministic",
+      sessionId: runs[1]!,
+    });
+    const flows = mineSignals(db, "proj", { workflowPatterns: true }).filter(
+      (s) => s.kind === "workflow_pattern",
+    );
+    expect(flows).toHaveLength(0); // latest verdict on that step is red
+  });
+
+  test("pass stores a procedural workflow candidate (guidance only)", async () => {
+    const { db } = workflowRepo();
+    const prompts: string[] = [];
+    const report = await runScribePass({
+      db,
+      projectKey: "proj",
+      workflowPatterns: true,
+      extract: stubExtractor(
+        [
+          {
+            kind: "workflow",
+            content: "Install deps, then run the tests — both checks stay green",
+            evidence: [1],
+          },
+        ],
+        prompts,
+      ),
+    });
+    expect(report.added).toBe(1);
+    expect(prompts[0]).toContain("[workflow_pattern]");
+    expect(prompts[0]).toContain("repeatable step sequence");
+    const rows = db.listMemories("proj");
+    expect(rows[0]!.kind).toBe("workflow");
+    expect(rows[0]!.status).toBe("active"); // gate-cited sequence → auto-activate
   });
 });

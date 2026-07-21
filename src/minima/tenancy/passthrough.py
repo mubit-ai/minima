@@ -14,6 +14,8 @@ from threading import Lock
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
 from minima.memory.adapter import Memory, MubitMemory
+from minima.memory.recall_utility import RecallUtilityStore
+from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
 from minima.recommender.durablerefs import (
     DurableRefs,
@@ -84,6 +86,8 @@ class PassthroughRuntime:
         scoped_pair_store = OrgScopedPairStore(self._pair_store_backend, org_id)
         with self._lock:
             resets = self._resets_by_org.setdefault(org_id, ResetRegistry())
+        contextual = ContextualStore() if self._settings.minima_contextual_bandit else None
+        recall_utility = RecallUtilityStore() if self._settings.minima_recall_utility else None
         recommender = Recommender(
             self._settings,
             memory,
@@ -94,6 +98,8 @@ class PassthroughRuntime:
             durable_refs=scoped_durable_refs,
             pair_store=scoped_pair_store,
             resets=resets,
+            contextual=contextual,
+            recall_utility=recall_utility,
         )
         ctx = TenantContext(
             org_id=org_id,
@@ -107,6 +113,8 @@ class PassthroughRuntime:
             durable_refs=scoped_durable_refs,
             pair_store=scoped_pair_store,
             resets=resets,
+            contextual=contextual,
+            recall_utility=recall_utility,
         )
         with self._lock:
             existing = self._cache.get(key_hash)
