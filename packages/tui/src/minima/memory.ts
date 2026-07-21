@@ -21,6 +21,17 @@ const RECALL_ENTRY_TYPES = ["lesson", "rule", "observation"];
 const MAX_SNIPPETS = 5;
 const MAX_SNIPPET_CHARS = 240;
 
+/**
+ * Write-side lane partition. Two structurally incompatible writers share one Mubit
+ * backend: the Minima SERVER writes typed OutcomeRecord JSON (intent=observation,
+ * lane=minima:<namespace>, its own run ids) and this HARNESS writes free-text traces.
+ * Stamping every harness write with its own lane keeps the two deliberately
+ * partitioned at the source, whatever run ids are in play. Recall is deliberately
+ * NOT lane-filtered yet — pre-partition entries have no lane and would vanish from
+ * recall; filter once unlaned data has aged out.
+ */
+const HARNESS_LANE = "harness";
+
 export interface OutcomeRecord {
   task: string;
   recommendationId: string;
@@ -145,6 +156,7 @@ export class MubitHarnessMemory implements HarnessMemory {
         session_id: this.sessionId,
         agent_id: this.agentId,
         idempotency_key: record.recommendationId,
+        lane: HARNESS_LANE,
       });
       // Close the loop with a real outcome score tied to the recommendation. Never
       // fabricate — a judge abstention (quality === null) records the trace but no score.
