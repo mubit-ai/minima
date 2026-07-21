@@ -36,25 +36,25 @@ export type PermissionDecision = "allow" | "always" | "deny";
 
 /**
  * Tools the plan-mode beforeToolCall hook blocks at the LEAD's dispatcher (enforcement in
- * the dispatcher, never prompt text). groundTruth=false is the HISTORICAL list — the
- * default path must not change. groundTruth=true additionally blocks todowrite (approving
+ * the dispatcher, never prompt text). bigPlan=false is the HISTORICAL list — the
+ * default path must not change. bigPlan=true additionally blocks todowrite (approving
  * one authorizes running each task's `verify` as a shell command) and task (delegated
  * children are built hook-free with their own unrestricted toolset, so a task call is a
  * write-access bypass; the plan council's researchers delegate read-only WITHOUT the task
  * tool, so read-only research delegation stays available).
  */
-export function planModeBlockedTools(groundTruth: boolean): string[] {
+export function planModeBlockedTools(bigPlan: boolean): string[] {
   // `task` is blocked in BOTH modes: a delegated child gets its own unrestricted toolset
   // (write/edit/bash) with no permission hooks, so plan mode's read-only promise was
   // trivially bypassable by delegating the write.
-  return groundTruth
+  return bigPlan
     ? ["write", "edit", "bash", "apply_patch", "todowrite", "task"]
     : ["write", "edit", "bash", "apply_patch", "task"];
 }
 
 /** The block reason handed back to the model for a plan-mode-blocked tool call. */
-export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
-  if (!groundTruth) {
+export function planModeBlockReason(toolName: string, bigPlan: boolean): string {
+  if (!bigPlan) {
     return toolName === "task"
       ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning."
       : "Plan mode is ON — write/edit/bash/apply_patch are blocked. When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning.";
@@ -159,8 +159,8 @@ export interface PermissionState {
   bashGrants: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
-  /** Ground-truth mode: todowrite `verify` commands are actually executed by the harness. */
-  groundTruth: boolean;
+  /** Big Plan mode: todowrite `verify` commands are actually executed by the harness. */
+  bigPlan: boolean;
   /** verify commands the user has already seen and approved (exact-string). */
   approvedVerifies: Set<string>;
   /** ui-modes-style project key; when set, new bash grants persist across sessions. */
@@ -169,7 +169,7 @@ export interface PermissionState {
 
 export function createPermissionState(
   cwd: string,
-  opts: { groundTruth?: boolean; projectKey?: string } = {},
+  opts: { bigPlan?: boolean; projectKey?: string } = {},
 ): PermissionState {
   const projectKey = opts.projectKey ?? null;
   return {
@@ -177,7 +177,7 @@ export function createPermissionState(
     bashGrants: new Set<string>(projectKey ? loadBashGrants(projectKey) : []),
     allowedDirs: new Set<string>(), // NOT pre-approved — user must grant cwd access
     cwd,
-    groundTruth: opts.groundTruth === true,
+    bigPlan: opts.bigPlan === true,
     approvedVerifies: new Set<string>(),
     projectKey,
   };
@@ -283,14 +283,14 @@ export function checkPermission(
     // Zero-side-effect UI tools (e.g. question): never prompt.
     if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
 
-    // Tool globally allowed (write/edit/bash with "always"). Exception: with ground truth on,
+    // Tool globally allowed (write/edit/bash with "always"). Exception: with Big Plan on,
     // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
     // command (baseline capture + done-gate), so a stored "always" only covers verify commands
     // the user has already seen — a call carrying a new or changed verify re-prompts.
     if (state.allowAlways.has(toolName)) {
       const newVerify =
         toolName === "todowrite" &&
-        state.groundTruth &&
+        state.bigPlan &&
         verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
       if (!newVerify) return Promise.resolve(null);
     }
@@ -499,16 +499,16 @@ function buildDiffPreview(
       return `--- ${filePath} (old)\n+++ ${filePath} (new, first 8 lines)\n${preview}`;
     }
     if (toolName === "todowrite") {
-      // With ground truth on, approving a todowrite authorizes running each task's `verify`
+      // With Big Plan on, approving a todowrite authorizes running each task's `verify`
       // as a shell command (done-gate + baseline capture) — the user must SEE those commands,
       // not a truncated JSON blob, before granting that.
       const tasks = parseTodowriteTasks(args);
       if (!tasks || tasks.length === 0) return null;
       const lines = tasks.map((t, i) => {
         const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
-        const verifyLabel = state.groundTruth
+        const verifyLabel = state.bigPlan
           ? "verify (runs as a shell command)"
-          : "verify (recorded only — ground truth is disabled via MINIMA_TUI_GROUND_TRUTH=0)";
+          : "verify (recorded only — Big Plan is disabled via MINIMA_TUI_BIG_PLAN=0)";
         const verify = t.verify ? `\n     ${verifyLabel}: ${t.verify}` : "";
         return `${i + 1}. [${mark}] ${t.content}${verify}`;
       });

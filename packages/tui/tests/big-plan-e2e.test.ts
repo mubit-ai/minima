@@ -21,11 +21,11 @@ import {
   redPrompt,
 } from "../src/minima/behavior.ts";
 import {
-  groundTruthHooks,
+  bigPlanHooks,
   planStripInfo,
-  stampGroundedOutcome,
-} from "../src/minima/ground_truth.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+  stampVerifiedOutcome,
+} from "../src/minima/big_plan.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 import {
   ConstJudge,
   CostMeter,
@@ -37,8 +37,8 @@ import {
 } from "../src/minima/index.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
 
-// M8.2 — the ground-truth spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
-// /gt-seed / seedPlan pattern) to pin the full footer snapshot — tiers, drift, and the M7.1 stamp —
+// M8.2 — the big-plan spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
+// /bp-seed / seedPlan pattern) to pin the full footer snapshot — tiers, drift, and the M7.1 stamp —
 // in one glance. Test 2 is the live-gate join: the hooks are REGISTERED on the agent and every gate
 // row is minted during real tool dispatch inside a routed rung, so it carries that rung's rec_id
 // (the v6 identity join), while the M7.2/M7.3 route→run→feedback→escalation loop runs against an
@@ -55,8 +55,8 @@ const GREEN: Factors = {
 const YELLOW: Factors = { ...GREEN, checkOrigin: "agent_new" };
 const RED: Factors = { ...GREEN, pass: false };
 
-describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
-  test("seeded plan renders the full footer snapshot (🟢🟡🔴 + drift) and stamps a grounded outcome", () => {
+describe("Big Plan spine — end-to-end demo (M8.2)", () => {
+  test("seeded plan renders the full footer snapshot (🟢🟡🔴 + drift) and stamps a verified outcome", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const runId = db.startRun({ projectKey: "p" });
@@ -129,7 +129,7 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(db.getGates(planId).map((g) => g.confidence)).toEqual(["green", "yellow", "red"]);
     expect(db.countOffPlanChanges(planId)).toBe(1);
 
-    // --- M7.1 grounded stamp onto a routing decision ---
+    // --- M7.1 verified stamp onto a routing decision ---
     db.writeDecision({
       recId: "seed-rec",
       runId,
@@ -147,15 +147,15 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       turns: 1,
       latencyMs: 1,
     });
-    stampGroundedOutcome(db, "seed-rec");
+    stampVerifiedOutcome(db, "seed-rec");
     const dec = db.getRunDecisions(runId).find((r) => r.rec_id === "seed-rec")!;
-    expect(dec.gt_outcome).toBe("failed"); // identity join over the rec's gates — the red wins
-    expect(dec.gt_verified_by).toBe("deterministic");
-    expect(dec.gt_confidence).toBe("red");
+    expect(dec.big_plan_outcome).toBe("failed"); // identity join over the rec's gates — the red wins
+    expect(dec.big_plan_verified_by).toBe("deterministic");
+    expect(dec.big_plan_confidence).toBe("red");
     db.close();
   });
 
-  test("live loop: a red check escalates, the recovered rung verifies, and both rungs carry grounded outcomes", async () => {
+  test("live loop: a red check escalates, the recovered rung verifies, and both rungs carry verified outcomes", async () => {
     const CHEAP: Model = {
       id: "cheap-model",
       provider: "faux",
@@ -239,7 +239,7 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       candidates: ["cheap-model", "big-model"],
       allowOffline: false,
       minimaApiKey: "k",
-      groundTruth: true,
+      bigPlan: true,
       // This live-loop test scripts the done-gate + escalation ladder, not the A2 run-level
       // stop-gate; disable the latter so it can't force-continue past the scripted responses.
       stopStrikes: 0,
@@ -250,17 +250,17 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
       router,
       judge: new ConstJudge(0.9),
       meter: new CostMeter(),
-      tools: [todowriteTool([], { groundTruth: true })],
+      tools: [todowriteTool([], { bigPlan: true })],
     });
     agent.db = db;
     agent.runId = db.startRun({ projectKey: "p" });
 
-    // M8.2 live-gate join — nothing below is seeded. The flag file IS the ground truth: the
+    // M8.2 live-gate join — nothing below is seeded. The flag file IS the Big Plan: the
     // step's check (`test -f`) is red until the "work" creates it. The flag name avoids
     // test/spec so the factor heuristics read it as a pre-existing check with unknown coverage.
-    const dir = mkdtempSync(join(tmpdir(), "gt-e2e-"));
+    const dir = mkdtempSync(join(tmpdir(), "big-plan-e2e-"));
     const flag = join(dir, "done.flag");
-    const { before: beforeGate, after: afterGate } = groundTruthHooks(agent);
+    const { before: beforeGate, after: afterGate } = bigPlanHooks(agent);
     agent.addBeforeToolCall(beforeGate);
     agent.addAfterToolCall(afterGate);
     const start = [
@@ -328,8 +328,8 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(milestones[0]!.step_id).toBeNull();
     expect(milestones[0]!.rec_id).toBe("rec-2");
 
-    // DB dump: two routing rows, per model, each with a grounded outcome stamped (M7.1) and the
-    // grounded loss/win recorded (M7.3), chained by parent_rec_id. Live tiers are honest: the
+    // DB dump: two routing rows, per model, each with a verified outcome stamped (M7.1) and the
+    // verified loss/win recorded (M7.3), chained by parent_rec_id. Live tiers are honest: the
     // failed attempt derives red; the pass derives yellow, not green — no file_changes were
     // recorded, so coverage is unknown and the ladder withholds green (the seeded test above
     // pins the full green story).
@@ -337,12 +337,12 @@ describe("Ground-Truth spine — end-to-end demo (M8.2)", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]!.chosen_model).toBe("cheap-model");
     expect(rows[0]!.outcome).toBe("failure");
-    expect(rows[0]!.gt_outcome).toBe("failed");
-    expect(rows[0]!.gt_confidence).toBe("red");
+    expect(rows[0]!.big_plan_outcome).toBe("failed");
+    expect(rows[0]!.big_plan_confidence).toBe("red");
     expect(rows[1]!.chosen_model).toBe("big-model");
     expect(rows[1]!.outcome).toBe("partial"); // A7: yellow verified → partial (weaker than green)
-    expect(rows[1]!.gt_outcome).toBe("verified"); // the raw gate verdict stamp is unchanged
-    expect(rows[1]!.gt_confidence).toBe("yellow");
+    expect(rows[1]!.big_plan_outcome).toBe("verified"); // the raw gate verdict stamp is unchanged
+    expect(rows[1]!.big_plan_confidence).toBe("yellow");
     expect(rows[1]!.parent_rec_id).toBe(String(rows[0]!.rec_id));
     reg.unregister();
     rmSync(dir, { recursive: true, force: true });

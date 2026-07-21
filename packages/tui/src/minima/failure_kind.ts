@@ -10,13 +10,13 @@
  *     failed (a 429 is not evidence of low quality). An optional bounded delay (config.backoffMs)
  *     paces the retry.
  *   - CAPABILITY: the model produced a low-quality answer (judge < τ), or a non-transient provider
- *     error, or a FIRST grounded 🔴 check-fail. A stronger model plausibly helps → ESCALATE:
+ *     error, or a FIRST deterministic 🔴 check-fail. A stronger model plausibly helps → ESCALATE:
  *     exclude the failed model and re-route to the next server rung (the ladder's classic move).
- *   - STRUCTURAL: a grounded 🔴 that KEEPS failing across rungs — escalating to a stronger model
+ *   - STRUCTURAL: a deterministic 🔴 that KEEPS failing across rungs — escalating to a stronger model
  *     didn't fix it, so the APPROACH is wrong, not the model → REPLAN: keep the model, inject a
  *     plan-revision steer, and let the agent rethink its steps/verify commands.
  *
- * The 🟢/🟡/🔴 vocabulary (gt_contract's ConfidenceTier) grades how concerning each recovery is —
+ * The 🟢/🟡/🔴 vocabulary (big_plan_contract's ConfidenceTier) grades how concerning each recovery is —
  * backoff/escalate are 🟡 (recoverable), replan is 🔴 (the plan itself is suspect). Recovery
  * decisions leave an audit-only `recovery` gate (rec_id NULL → invisible to the feedback join, like
  * A2/A3's stop rows), never a model-facing verdict.
@@ -26,13 +26,13 @@
  * field survives the ai layer); the OpenAI-compat path emits a literal `HTTP <status>`, Anthropic /
  * Google pass through SDK phrasing ("rate limit", "overloaded", "timed out", …).
  *
- * Pure + fail-open. Gated by `config.groundTruth && config.failureMatcher` at the call site; inert
+ * Pure + fail-open. Gated by `config.bigPlan && config.failureMatcher` at the call site; inert
  * otherwise, so the default path keeps the classic always-escalate ladder unchanged.
  */
 
 import { Message, text } from "../ai/types.ts";
 import type { MinimaDb } from "../db/minima_db.ts";
-import type { ConfidenceTier } from "./gt_contract.ts";
+import type { ConfidenceTier } from "./big_plan_contract.ts";
 
 /** Why a rung failed. */
 export type FailureKind = "transient" | "capability" | "structural";
@@ -40,8 +40,8 @@ export type FailureKind = "transient" | "capability" | "structural";
 export type Intervention = "backoff" | "escalate" | "replan";
 
 /**
- * A grounded 🔴 becomes STRUCTURAL (→ replan) only after this many consecutive gate-failing rungs.
- * The FIRST grounded fail still escalates (a stronger model may write correct code); only when
+ * A deterministic 🔴 becomes STRUCTURAL (→ replan) only after this many consecutive gate-failing rungs.
+ * The FIRST deterministic fail still escalates (a stronger model may write correct code); only when
  * escalation demonstrably didn't help do we conclude the plan — not the model — is wrong.
  */
 const REPLAN_AFTER_GATE_FAILS = 2;

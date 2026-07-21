@@ -3,10 +3,10 @@
  * says to proceed). The decision stays with the USER: the tool surfaces an approval prompt
  * through the same AskUserRef seam as `question` — finalize (auto-accept or build) /
  * revise / cancel — so enforcement lives in the overlay + dispatcher, never in prompt
- * text. Interactive: registered whenever plan mode is on (MP17 — GT on OR off), disposed
+ * text. Interactive: registered whenever plan mode is on (MP17 — Big Plan on OR off), disposed
  * on exit; headless runs get the ask-null guard.
  *
- * MP17 (universal gate): without a GT plan session there is no store to finalize from, so
+ * MP17 (universal gate): without a Big Plan session there is no store to finalize from, so
  * the tool REQUIRES the complete plan as a markdown argument (CC's ExitPlanMode contract) —
  * `showPlan` pushes it into the transcript first, so the user approves exactly what they
  * can see. With a session, the store/finalize path is authoritative and the argument is
@@ -31,7 +31,7 @@ const CANCEL = "Cancel plan mode";
 
 export interface ExitPlanDeps {
   ask: AskUserRef;
-  /** Shared finalize path. planMd is the tool's `plan` argument on the sessionless (GT-off)
+  /** Shared finalize path. planMd is the tool's `plan` argument on the sessionless (Big Plan-off)
    *  path, null on the store path; ok=false (audit blocker, write failure) stays in plan mode.
    *  autoAcceptEdits lands the post-approval mode on accept-edits instead of build. */
   finalize: (
@@ -42,7 +42,7 @@ export interface ExitPlanDeps {
   cancel: () => void;
   /** Guards a second call in the same batch after plan mode already ended. */
   isActive: () => boolean;
-  /** True when no GT plan session exists — the `plan` argument becomes REQUIRED. */
+  /** True when no Big Plan session exists — the `plan` argument becomes REQUIRED. */
   requiresPlan: () => boolean;
   /** Surface the plan markdown (transcript push) before the approval ask. */
   showPlan?: (planMd: string) => void;
@@ -60,7 +60,7 @@ const parameters: ToolSchema = {
       plan: {
         type: "string",
         description:
-          "The complete plan as markdown. REQUIRED when no ground-truth plan session is " +
+          "The complete plan as markdown. REQUIRED when no Big Plan session is " +
           "active — it is exactly what the user reviews and approves.",
         default: "",
       },
@@ -195,7 +195,7 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
         return {
           content: [
             text(
-              "The user canceled plan mode: the plan session was discarded, no ground-truth " +
+              "The user canceled plan mode: the plan session was discarded, no big-plan " +
                 "document was written, and the plan is NOT approved. Do not implement it. " +
                 "Stop and wait for the user's next message.",
             ),

@@ -14,7 +14,7 @@ import {
   toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb, type PlanRow } from "../src/db/minima_db.ts";
-import { groundTruthHooks } from "../src/minima/ground_truth.ts";
+import { bigPlanHooks } from "../src/minima/big_plan.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -25,13 +25,13 @@ import {
 } from "../src/minima/index.ts";
 import { type PlanFinalizeOutcome, finalizePlan } from "../src/minima/plan_finalize.ts";
 import { SEED_ROUND_1 } from "../src/minima/plan_seed.ts";
-import { type GroundTruthSynthesis, PlanSessionStore } from "../src/minima/plan_session.ts";
+import { type BigPlanSynthesis, PlanSessionStore } from "../src/minima/plan_session.ts";
 import { whyReportFor } from "../src/minima/why.ts";
 import { exitPlanTool } from "../src/tools/exit_plan.ts";
 import type { QuestionParams } from "../src/tools/question.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
 import { writeTool } from "../src/tools/write.ts";
-import { buildGtOverview, stepCardLines } from "../src/tui/gt_overview.ts";
+import { buildPlanOverview, stepCardLines } from "../src/tui/plan_overview.ts";
 import { draftPanelState, draftRows } from "../src/tui/plan_draft_view.ts";
 
 // MP19 — the Track W acceptance story, in-process and hermetic. ONE run that: (1) PLANS — a
@@ -43,7 +43,7 @@ import { draftPanelState, draftRows } from "../src/tui/plan_draft_view.ts";
 // milestone; (4) LEARNS — the captured /v1/feedback carries realized usage and the A7
 // deterministic outcome mapping; (5) shows EVIDENCE — the Ctrl+G overview and /why report tell
 // the red→green story. Composes the proven harnesses of plan-loop-audit.test.ts (finalize
-// seeding + scripted rung), gt-e2e.test.ts (flag-file done-gate), and verify-consent.test.ts.
+// seeding + scripted rung), big-plan-e2e.test.ts (flag-file done-gate), and verify-consent.test.ts.
 
 const WORKER: Model = {
   id: "worker-model",
@@ -66,7 +66,7 @@ const META: Model = {
 
 const ACTION = "Create the demo flag file";
 
-const cannedSynth = (verify: string): GroundTruthSynthesis => ({
+const cannedSynth = (verify: string): BigPlanSynthesis => ({
   title: "Demo Widget Wiring",
   goal: "ship the demo widget behind a verifiable flag-file gate",
   overview: "",
@@ -163,7 +163,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
             signal: null,
             force: false,
             transcript: "User: ship the demo widget\n\nPlanner: one flag-gated step",
-            outPath: join(dir, "GROUND_TRUTH.md"),
+            outPath: join(dir, "BigPlan.md"),
             db,
             runId,
             write: async (path, content) => {
@@ -200,7 +200,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(fin.synthFailed).toBe(false);
       expect(written).toHaveLength(1);
       expect(written[0]!.content).toContain(`verify: \`${verify}\``);
-      expect(existsSync(join(dir, "GROUND_TRUTH.md"))).toBe(false); // memory-only writer
+      expect(existsSync(join(dir, "BigPlan.md"))).toBe(false); // memory-only writer
 
       const plans = db.db.query("SELECT * FROM plans WHERE session_id = ?").all(runId) as PlanRow[];
       expect(plans).toHaveLength(1);
@@ -235,7 +235,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
         candidates: ["worker-model"],
         allowOffline: false,
         minimaApiKey: "k",
-        groundTruth: true,
+        bigPlan: true,
         stopStrikes: 0, // this test scripts the done-gate, not the A2 stop-gate
       });
       const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
@@ -243,7 +243,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
         config,
         router,
         meter: new CostMeter(),
-        tools: [todowriteTool([], { groundTruth: true }), writeTool()],
+        tools: [todowriteTool([], { bigPlan: true }), writeTool()],
       });
       agent.db = db;
       agent.runId = runId;
@@ -251,7 +251,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       // Judge stays OFF (default abstain) — every grade below comes from gates. The consent
       // checker admits ONLY the plan-approved string; the gate's before-hook is wrapped just to
       // capture the block verdict the refused todowrite carries.
-      const { before: beforeGate, after: afterGate } = groundTruthHooks(agent, {
+      const { before: beforeGate, after: afterGate } = bigPlanHooks(agent, {
         verifyConsent: (cmd) => consented.has(cmd),
       });
       const blocks: { tool: string; reason: string }[] = [];
@@ -368,7 +368,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(passFactors.coverageHit).toBe("unknown"); // `test -f` names no test file → never green
       expect(gates[2]!.confidence).toBe("yellow"); // the milestone rolls up the worst step tier
 
-      // --- 4. LEARN: one routed rung, grounded stamp, feedback with realized usage only ---
+      // --- 4. LEARN: one routed rung, verified stamp, feedback with realized usage only ---
       const rows = db.getRunDecisions(runId);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.rec_id).toBe("rec-1");
@@ -378,9 +378,9 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(rows[0]!.outcome).toBe("partial");
       expect(rows[0]!.quality).toBeNull(); // gate verdict → label only, no fabricated quality
       expect(rows[0]!.judged).toBe(0);
-      expect(rows[0]!.gt_outcome).toBe("verified");
-      expect(rows[0]!.gt_verified_by).toBe("deterministic");
-      expect(rows[0]!.gt_confidence).toBe("yellow");
+      expect(rows[0]!.big_plan_outcome).toBe("verified");
+      expect(rows[0]!.big_plan_verified_by).toBe("deterministic");
+      expect(rows[0]!.big_plan_confidence).toBe("yellow");
       expect(rows[0]!.step_id).toBeNull(); // plan closure precedes persistDecision
       expect(rows[0]!.actual_cost_usd as number).toBeGreaterThan(0);
 
@@ -402,7 +402,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(fb.latency_ms).toBe(rows[0]!.latency_ms);
 
       // --- 5. EVIDENCE: the overview and /why retell the story from the ledger alone ---
-      const overview = buildGtOverview(db, runId);
+      const overview = buildPlanOverview(db, runId);
       expect(overview).not.toBeNull();
       expect(overview!.title).toBe("Demo Widget Wiring");
       expect(overview!.stepTotal).toBe(1);
@@ -419,7 +419,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(card).toContain("red→green vs the captured baseline");
 
       const why = whyReportFor(db, runId);
-      expect(why).toContain("Ground-Truth verification - Demo Widget Wiring");
+      expect(why).toContain("Big Plan verification - Demo Widget Wiring");
       expect(why).toContain("✓ step 1");
       expect(why).toContain(`check: ${verify}`);
       expect(why).toContain("milestone");

@@ -4,8 +4,8 @@
 > well, what should Minima's harness adopt, in what order, and where does it plug into the
 > existing codebase?**
 >
-> Audience: someone editing `packages/tui/` or extending the GT contract in
-> `docs/PLAN/ground-truth-plan.md`. Read this *before* opening a Linear ticket.
+> Audience: someone editing `packages/tui/` or extending the Big Plan contract. Read this
+> *before* opening a Linear ticket.
 >
 > **Execution status:** the plan this guide fed — [`PLAN-retired.md`](PLAN-retired.md) —
 > has been executed and retired (2026-07-16). The current execution source of truth is
@@ -23,14 +23,14 @@ Minima's TUI harness (`packages/tui/README.md`) already has the load-bearing bon
 | Agent loop with **before/afterToolCall hooks** | ✅ | `src/agent/` (agentLoop, hooks) |
 | **`max_turns`** cap | ✅ | agent core |
 | Parallel tool execution + steering | ✅ | agent core |
-| **Plan persistence + projection + DRIFT footer** | ✅ | GT stages 0–2 |
+| **Plan persistence + projection + DRIFT footer** | ✅ | Big Plan stages 0–2 |
 | SQLite ledger (plans · plan_steps · file_changes · gates · user_signals) | ✅ | `src/db/minima_db.ts` (schema v5) |
-| **Frozen verification contract** (red→green check) | ✅ (contract) | `src/minima/gt_contract.ts` |
+| **Frozen verification contract** (red→green check) | ✅ (contract) | `src/minima/big_plan_contract.ts` |
 | Append-only JSONL session tree | ✅ | `src/session/` |
 | Tools: read/write/edit/apply_patch/bash/ls/glob/grep/todowrite/task/question/web_fetch/web_search | ✅ | `src/tools/` |
 | 3 providers (openai-compat, anthropic, google) + faux | ✅ | `src/ai/` |
 
-What's **not** there yet — from `docs/PLAN/ground-truth-plan.md` status table:
+At the time of the retired build plan, these stages were still open:
 - Verification wiring (Stage 3 — `runCheck`, capture baseline)
 - Block-on-fail (Stage 4)
 - Provenance + tamper detection (Stage 5)
@@ -54,7 +54,7 @@ it plugs in. ★ = highest-leverage borrow.
 
 | | |
 |---|---|
-| Done | Frozen contract (`gt_contract.ts`); `plan_steps.verify` column; red→green requirement. |
+| Done | Frozen contract (`big_plan_contract.ts`); `plan_steps.verify` column; red→green requirement. |
 | Gap | Stage 3 not wired — `runCheck(cmd)` primitive, baseline capture-on-start. |
 | **Borrow** | **Claude Code's Stop hook with N-strike override.** ([harness-research §1]) |
 | Plug into | M3.2 `runCheck` (MUB-112), M4.1 block-`done`-on-fail (MUB-114). |
@@ -62,7 +62,7 @@ it plugs in. ★ = highest-leverage borrow.
 **Specific recommendation:** implement the Stop hook exactly as Claude Code does it — a
 deterministic shell-out that **blocks step-done until `verify` passes**, but **overrides
 after N consecutive blocks** (Claude Code uses 8; Minima should make this configurable per
-step, defaulting to 3 because GT steps are smaller than CC turns). The override triggers the
+step, defaulting to 3 because Big Plan steps are smaller than CC turns). The override triggers the
 §7 escalation path (🟡 flag or 🔴 stop), not silent success. This is the bridge between §1
 and §7.
 
@@ -132,14 +132,14 @@ Add the **Claude Code two-corrections rule** as advisory content in `AGENTS.md` 
 summarize what you learned and stop." This is advisory, not deterministic — but it's the
 *single most useful* advisory rule for cost-control on a routed model.
 
-Per-step token/tool-call accounting is already possible through the step id attribution (GT
+Per-step token/tool-call accounting is already possible through the step id attribution (Big Plan
 stage 2). Surface it in the footer like Claude Code's custom status line.
 
 ### §4 — Persistent + visible ★★
 
 | | |
 |---|---|
-| Done | Plan persisted + projected + DRIFT footer (GT stage 0–2). JSONL sessions. |
+| Done | Plan persisted + projected + DRIFT footer (Big Plan stage 0–2). JSONL sessions. |
 | Gap | No checkpoints (`/rewind`); no named sessions; no live status line for context %. |
 | **Borrow** | **Claude Code's `/rewind` checkpoints + named sessions.** ([harness-research §4]) |
 | Plug into | `src/session/` (extend the JSONL tree) + `src/tui/` (commands + status). |
@@ -147,7 +147,7 @@ stage 2). Surface it in the footer like Claude Code's custom status line.
 **Specific recommendation:** the JSONL session tree already has the structure for this —
 every assistant turn is an append. Add a **`/rewind <turn-id>`** command that:
 1. Restores conversation to that point (drop later JSONL entries — or mark them reverted).
-2. Optionally restores the file tree (snapshot on each `write`/`edit` — GT already attributes
+2. Optionally restores the file tree (snapshot on each `write`/`edit` — Big Plan already attributes
    file writes to steps, so the snapshot key is the step id).
 
 **Decided (PLAN.md B3): checkpoints are git-shadow snapshots.** `git add -A` under a
@@ -189,7 +189,7 @@ task; formalize the **two-session review** as a documented workflow (Stage 8 can
 
 | | |
 |---|---|
-| Done | Thirteen tools (read/write/edit/apply_patch/bash/ls/glob/grep/todowrite/task/question/web_fetch/web_search); per-step tool attribution via GT. |
+| Done | Thirteen tools (read/write/edit/apply_patch/bash/ls/glob/grep/todowrite/task/question/web_fetch/web_search); per-step tool attribution via Big Plan. |
 | Gap | No permission grammar; no per-step tool allowlist; no task delegation control. |
 | **Borrow** | **OpenCode's glob permission grammar + `task` permissions.** ([harness-research §6]) |
 | Plug into | `src/tools/` permission wrapper + step schema. |
@@ -207,7 +207,7 @@ type Step = {
 // in the beforeToolCall hook:
 if (step.tools && !matchesAnyPattern(currentCall, step.tools)) {
   return { decision: 'deny', reason: 'off-plan tool for this step' };
-  // ↑ also surfaces as DRIFT — already a known concept in GT
+  // ↑ also surfaces as DRIFT — already a known Big Plan concept
 }
 ```
 
@@ -241,7 +241,7 @@ it absolute — same fix Claude Code made.)
    first with an interim "stop turn + ask" escalation, then upgrades to 🟡/🔴 tier routing.
 
 2. **Stop hook with N-strike override** (cross-references §1). The verify-check blocks
-   step-done until red→green; cap blocks at N (default 3 for GT, configurable per step); on
+   step-done until red→green; cap blocks at N (default 3 for Big Plan, configurable per step); on
    cap-hit, trigger escalation, **not** silent success.
 
 3. **Per-failure-kind handling** à la Claude Code's `StopFailure` matcher. The agent core
@@ -303,7 +303,7 @@ approve-or-deny the next iteration.
 
 **How to wire in Minima:** keep a ring buffer of the last 3 tool-call hashes
 (`tool_name + sorted_args_hash`) in the agent core. On a 3-match, fire the same code path as
-a 🔴 confidence tier. Because GT already attributes calls to steps, you also get to record
+a 🔴 confidence tier. Because Big Plan already attributes calls to steps, you also get to record
 this in the `gates` table — which means **Minima's routing layer learns** that this
 (model, step-kind) combination tends to spiral.
 
@@ -371,17 +371,17 @@ OpenCode's `Ctrl+X B`):**
   per-section price under each title; footer = cumulative $ + total tokens. ↑/↓ + Enter jumps
   the transcript to the section; Esc/`Ctrl+T` closes. Fullscreen renderer only in v1 — inline
   prints a one-shot text block on the same shortcut.
-- **`Ctrl+G` — GT Plan Overview sidebar**: same chassis; live ledger view — `step X/N`,
+- **`Ctrl+G` — Plan Overview panel**: same chassis; live ledger view — `step X/N`,
   per-step status + confidence tier, `verify` cmd, DRIFT, per-step cost, plan total. Enter
   opens the step detail card (the shared component that becomes `/why`). Gated by
-  `MINIMA_TUI_GROUND_TRUTH`.
+  `MINIMA_TUI_BIG_PLAN`.
 
 ---
 
 ## Part 6 — One-screen summary
 
 ```
-Minima's harness today:  advisory layer ✓   deterministic layer ⬜ (in flight, GT stage 3-8)
+Minima's harness today:  advisory layer ✓   deterministic layer ⬜ (in flight, Big Plan stage 3-8)
 
 Borrow the three highest-leverage mechanisms from production harnesses:
 

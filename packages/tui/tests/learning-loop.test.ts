@@ -11,9 +11,9 @@ import {
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { writeExhaustionGate } from "../src/minima/failure_kind.ts";
-import type { GroundedOutcome } from "../src/minima/ground_truth.ts";
-import { deterministicOutcomeLabel } from "../src/minima/ground_truth.ts";
-import type { ConfidenceTier, GateOutcome } from "../src/minima/gt_contract.ts";
+import type { VerifiedOutcome } from "../src/minima/big_plan.ts";
+import { deterministicOutcomeLabel } from "../src/minima/big_plan.ts";
+import type { ConfidenceTier, GateOutcome } from "../src/minima/big_plan_contract.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -26,7 +26,7 @@ import {
 // A7 — the learning-loop hardening pass over Stage 7:
 //   1. the deterministic feedback label is GRADED by the gate's confidence tier (🟢→success,
 //      🟡/🔴-tier-but-verified→partial, failed→failure) instead of collapsing every verified pass to
-//      `success` — so Minima learns weaker positive evidence distinctly from clean ground truth;
+//      `success` — so Minima learns weaker positive evidence distinctly from verified evidence;
 //   2. an exhausted recovery ladder (every rung spent, still failing) leaves ONE terminal audit
 //      `recovery` gate + bumps `ladderExhausted`, instead of a silent return.
 // A real check still OUTRANKS the LLM judge on a genuine CONTRADICTION (not just when they agree),
@@ -36,39 +36,39 @@ import {
 // 1. the pure grading function (deterministicOutcomeLabel)
 // ---------------------------------------------------------------------------
 
-function grounded(outcome: GateOutcome, confidence: ConfidenceTier | null): GroundedOutcome {
+function verifiedOutcome(outcome: GateOutcome, confidence: ConfidenceTier | null): VerifiedOutcome {
   return { gateId: "g1", outcome, verifiedBy: "deterministic", confidence };
 }
 
 describe("deterministicOutcomeLabel (A7 tier grading, pure)", () => {
   test("graded on: 🟢 verified → success", () => {
-    expect(deterministicOutcomeLabel(grounded("verified", "green"), true)).toBe("success");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "green"), true)).toBe("success");
   });
 
   test("graded on: 🟡 verified (self-written / no red→green / coverage-unknown) → partial", () => {
-    expect(deterministicOutcomeLabel(grounded("verified", "yellow"), true)).toBe("partial");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "yellow"), true)).toBe("partial");
   });
 
   test("graded on: 🔴-TIER but outcome-verified (A5 fabrication floor) → partial, never failure", () => {
     // A5 forces the tier to red on a fabricated green while the gate outcome stays `verified` — it
     // passed a check, just an untrustworthy one. It must not read as recovery-worthy failure (a
     // stronger model can't fix a fabricated test), nor as a clean success.
-    expect(deterministicOutcomeLabel(grounded("verified", "red"), true)).toBe("partial");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "red"), true)).toBe("partial");
   });
 
   test("graded on: a null tier is treated as non-green → partial", () => {
-    expect(deterministicOutcomeLabel(grounded("verified", null), true)).toBe("partial");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", null), true)).toBe("partial");
   });
 
   test("failed → failure regardless of grading", () => {
-    expect(deterministicOutcomeLabel(grounded("failed", "red"), true)).toBe("failure");
-    expect(deterministicOutcomeLabel(grounded("failed", "red"), false)).toBe("failure");
+    expect(deterministicOutcomeLabel(verifiedOutcome("failed", "red"), true)).toBe("failure");
+    expect(deterministicOutcomeLabel(verifiedOutcome("failed", "red"), false)).toBe("failure");
   });
 
   test("graded OFF: any verified pass → success (M7.2 binary), tier ignored", () => {
-    expect(deterministicOutcomeLabel(grounded("verified", "green"), false)).toBe("success");
-    expect(deterministicOutcomeLabel(grounded("verified", "yellow"), false)).toBe("success");
-    expect(deterministicOutcomeLabel(grounded("verified", "red"), false)).toBe("success");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "green"), false)).toBe("success");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "yellow"), false)).toBe("success");
+    expect(deterministicOutcomeLabel(verifiedOutcome("verified", "red"), false)).toBe("success");
   });
 });
 
@@ -156,7 +156,7 @@ function setup(judge: ReturnType<typeof countingJudge>, gradedOutcome = true) {
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: true,
+    bigPlan: true,
     gradedOutcome,
     stopStrikes: 0,
   });
@@ -235,7 +235,7 @@ describe("A7 graded feedback: deterministic gate outranks the judge on DISAGREEM
     // The single most load-bearing A7 claim, driven end-to-end (not just the pure fn): a check that
     // PASSED but whose tier A5 forced to red (a fabricated green) is graded `partial` — never a
     // fabricated `success`, never a `failure` — and because the recovery trigger keys on
-    // grounded.outcome==='failed' (NOT confidence==='red'), a stronger model is never summoned for it.
+    // verifiedOutcome.outcome==='failed' (NOT confidence==='red'), a stronger model is never summoned for it.
     const judge = countingJudge(0.9);
     const { agent, reg, feedbackCalls, db, runId } = setup(judge); // recoveryRungs defaults to 2
     seedGate(db, runId, "verified", "red");
@@ -244,7 +244,7 @@ describe("A7 graded feedback: deterministic gate outranks the judge on DISAGREEM
 
     const fb = feedbackCalls[0] as Record<string, unknown>;
     expect(fb.outcome).toBe("partial");
-    expect(fb.verified_in_production).toBe(false); // a fabricated pass is never ground truth
+    expect(fb.verified_in_production).toBe(false); // a fabricated pass is never verified evidence
     expect(fb.quality_score).toBeUndefined();
     expect(agent.ladderEscalations).toBe(0); // NOT recovery-worthy — the trigger reads `failed`, not tier
     expect(agent.ladderExhausted).toBe(0);

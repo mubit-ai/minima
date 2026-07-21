@@ -15,7 +15,7 @@
 import { complete } from "../ai/stream.ts";
 import { Message, type Model } from "../ai/types.ts";
 import type { MinimaDb } from "../db/minima_db.ts";
-import { stampGroundedOutcome } from "./ground_truth.ts";
+import { stampVerifiedOutcome } from "./big_plan.ts";
 import { midTruncate } from "./judge.ts";
 
 export const DIFF_REVIEW_SYSTEM =
@@ -124,7 +124,7 @@ export async function runDiffReview(opts: DiffReviewOptions): Promise<DiffReview
 
   // Objection → a judge-verified yellow milestone gate. Worst-tier resolution yellows
   // the plan; outcome stays "verified" (the work stands — concerns, not a refutation),
-  // so the recovery ladder and gt_outcome labels never flip to failure on advisory input.
+  // so the recovery ladder and big_plan_outcome labels never flip to failure on advisory input.
   const decisions = opts.db.getRunDecisions(opts.sessionId);
   const recId = (decisions.at(-1)?.rec_id as string | undefined) ?? null;
   const gateId = opts.db.insertGate({
@@ -142,6 +142,6 @@ export async function runDiffReview(opts: DiffReviewOptions): Promise<DiffReview
     recId,
     sessionId: opts.sessionId,
   });
-  if (recId) stampGroundedOutcome(opts.db, recId);
+  if (recId) stampVerifiedOutcome(opts.db, recId);
   return { verdict, gateId };
 }

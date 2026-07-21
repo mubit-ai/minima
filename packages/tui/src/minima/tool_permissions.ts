@@ -9,7 +9,7 @@
  * declares `["edit"]` can never `bash rm -rf` or delegate a `task`.
  *
  * PURE + total: every function is safe on malformed input. The DB seam is threaded by the caller
- * (ground_truth.ts reads the in-progress step); this module only decides.
+ * (big_plan.ts reads the in-progress step); this module only decides.
  *
  * Design rules:
  *  - NULL / "[]" allowlist → UNRESTRICTED (the historical behavior — a step with no authored

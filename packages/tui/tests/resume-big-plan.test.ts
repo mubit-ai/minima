@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { planStripInfo } from "../src/minima/ground_truth.ts";
+import { planStripInfo } from "../src/minima/big_plan.ts";
 import { whyReportFor } from "../src/minima/why.ts";
 
 // GT101-F4: resuming a run must re-key the old run's still-active plan onto the resuming run

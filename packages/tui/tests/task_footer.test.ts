@@ -8,7 +8,7 @@ function task(content: string, status: TodoTask["status"]): TodoTask {
   return { content, status, priority: "medium" };
 }
 
-const GT = {
+const BIG_PLAN_FIXTURE = {
   stepPos: 2,
   stepTotal: 5,
   title: "Wire the router",
@@ -17,7 +17,7 @@ const GT = {
   totalCostUsd: null,
 };
 
-describe("taskFooterRows — the D3a row builder (CC parity, GT never the gate)", () => {
+describe("taskFooterRows — the D3a row builder (CC parity, Big Plan never the gate)", () => {
   test("empty list is ZERO rows — auto-show IS the empty state", () => {
     expect(taskFooterRows([])).toEqual([]);
     expect(taskFooterRows([], null)).toEqual([]);
@@ -60,22 +60,22 @@ describe("taskFooterRows — the D3a row builder (CC parity, GT never the gate)"
   });
 });
 
-describe("taskFooterRows — GT enrichment (MP6: ONE plan surface)", () => {
-  test("a GT plan upgrades the header to the ledger projection, even with no session todos", () => {
-    const rows = taskFooterRows([], GT);
+describe("taskFooterRows — Big Plan enrichment (MP6: ONE plan surface)", () => {
+  test("a Big Plan upgrades the header to the ledger projection, even with no session todos", () => {
+    const rows = taskFooterRows([], BIG_PLAN_FIXTURE);
     expect(rows.length).toBe(1);
     expect(rows[0]!.text).toBe(" plan 2/5 · ▸ Wire the router");
     expect(rows[0]!.kind).toBe("header");
   });
 
   test("plan-scoped cost trails the header; null cost hides the segment (never $0.0000)", () => {
-    const rows = taskFooterRows([], { ...GT, totalCostUsd: 0.0123 });
+    const rows = taskFooterRows([], { ...BIG_PLAN_FIXTURE, totalCostUsd: 0.0123 });
     expect(rows[0]!.text).toBe(" plan 2/5 · ▸ Wire the router · $0.0123");
-    expect(taskFooterRows([], GT)[0]!.text).not.toContain("$");
+    expect(taskFooterRows([], BIG_PLAN_FIXTURE)[0]!.text).not.toContain("$");
   });
 
   test("an armed 🔴 block renders the ASCII alert row routing to ^G (no emoji — Q25)", () => {
-    const rows = taskFooterRows([], { ...GT, blocked: true });
+    const rows = taskFooterRows([], { ...BIG_PLAN_FIXTURE, blocked: true });
     expect(rows.length).toBe(2);
     expect(rows[1]!).toMatchObject({ kind: "alert", color: "red", bold: true });
     expect(rows[1]!.text).toBe(" !! gate blocked — ^G");
@@ -83,15 +83,22 @@ describe("taskFooterRows — GT enrichment (MP6: ONE plan surface)", () => {
   });
 
   test("drift renders the yellow alert only when no block is armed (block wins)", () => {
-    expect(taskFooterRows([], { ...GT, drift: 2 })[1]!.text).toBe(" drift: 2 files off-plan");
-    expect(taskFooterRows([], { ...GT, drift: 1 })[1]!.text).toBe(" drift: 1 file off-plan");
-    const both = taskFooterRows([], { ...GT, drift: 2, blocked: true });
+    expect(taskFooterRows([], { ...BIG_PLAN_FIXTURE, drift: 2 })[1]!.text).toBe(
+      " drift: 2 files off-plan",
+    );
+    expect(taskFooterRows([], { ...BIG_PLAN_FIXTURE, drift: 1 })[1]!.text).toBe(
+      " drift: 1 file off-plan",
+    );
+    const both = taskFooterRows([], { ...BIG_PLAN_FIXTURE, drift: 2, blocked: true });
     expect(both.filter((r) => r.kind === "alert").length).toBe(1);
     expect(both[1]!.text).toBe(" !! gate blocked — ^G");
   });
 
   test("interior newlines in step content collapse — the header is provably ONE row", () => {
-    const rows = taskFooterRows([], { ...GT, title: "Wire the router\r\n  and the judge" });
+    const rows = taskFooterRows([], {
+      ...BIG_PLAN_FIXTURE,
+      title: "Wire the router\r\n  and the judge",
+    });
     expect(rows[0]!.text).toBe(" plan 2/5 · ▸ Wire the router and the judge");
     expect(rows[0]!.text).not.toContain("\n");
   });
@@ -132,7 +139,7 @@ describe("todoState threading — sub-agents stay isolated", () => {
   test("main.ts hands ONE array to both the toolset and the TUI", () => {
     const main = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
     expect(main).toContain("const todoState: TodoTask[] = [];");
-    expect(main).toContain("toolsFor(args, config.groundTruth === true, todoState)");
+    expect(main).toContain("toolsFor(args, config.bigPlan === true, todoState)");
     expect(main).toContain("todos: todoState,");
   });
 });
@@ -218,14 +225,14 @@ describe("cancelled plans stay dead (the ledger side of /tasks cancel)", () => {
 
   test("display surfaces never resurrect a cancelled plan; the upsert path still sees it", async () => {
     const { MinimaDb } = await import("../src/db/minima_db.ts");
-    const { buildGtOverview } = await import("../src/tui/gt_overview.ts");
+    const { buildPlanOverview } = await import("../src/tui/plan_overview.ts");
     const { whyReportFor } = await import("../src/minima/why.ts");
     const db = new MinimaDb(":memory:");
     db.upsertPlanFromTodos("run1", [{ content: "a", status: "in_progress" }], "Rejected plan");
     db.cancelActivePlans("run1");
-    // Ctrl+G and /why: the "GT still holds" report — both must come back empty.
-    expect(buildGtOverview(db, "run1")).toBeNull();
-    expect(whyReportFor(db, "run1")).toContain("No Ground-Truth plan recorded");
+    // Ctrl+G and /why: the "Big Plan still holds" report — both must come back empty.
+    expect(buildPlanOverview(db, "run1")).toBeNull();
+    expect(whyReportFor(db, "run1")).toContain("No Big Plan recorded");
     // The todo-upsert path keeps the DEFAULT view so it starts fresh, never resurrects.
     expect(db.getLatestPlan("run1")!.status).toBe("cancelled");
     expect(db.getLatestPlan("run1", { excludeCancelled: true })).toBeNull();

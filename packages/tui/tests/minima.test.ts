@@ -155,7 +155,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     expect(fb.quality_score).toBe(0.9);
     expect(fb.latency_ms).toBeGreaterThanOrEqual(0);
     // NEVER claimed unless tests actually verified the outcome — a fabricated true makes
-    // the server treat this as high-importance ground truth (poisons the learning loop).
+    // the server treat this as high-importance verified evidence (poisons the learning loop).
     expect(fb.verified_in_production).toBe(false);
     // Judged turn (quality present) → no unjudged tag.
     expect(fb.notes).toBeUndefined();
@@ -249,7 +249,7 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     expect(fb.quality_score).toBeUndefined();
     // Unjudged turns are tagged, never claimed verified — the server substitutes a
     // fabricated quality (0.9) for null-quality successes and treats verified ones as
-    // high-importance ground truth, so an untagged/false-verified turn poisons learning.
+    // high-importance verified evidence, so an untagged/false-verified turn poisons learning.
     expect(fb.verified_in_production).toBe(false);
     expect(fb.notes).toBe("unlabeled");
     expect(fb.evidence_source).toBe("none");

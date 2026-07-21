@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 import {
   REFUTATION_STEP_ID,
   buildRefutationDelegation,
@@ -115,8 +115,8 @@ describe("parseRefutationVerdict (fail-closed)", () => {
   });
 });
 
-describe("runPlanRefutation (J1.2 gate + gt_outcome feed)", () => {
-  test("confirmed → judge-verified 🟡 milestone gate on the latest rec; gt_outcome stamped", async () => {
+describe("runPlanRefutation (J1.2 gate + big_plan_outcome feed)", () => {
+  test("confirmed → judge-verified 🟡 milestone gate on the latest rec; big_plan_outcome stamped", async () => {
     const { db, runId, planId } = seeded();
     const outcome = await runPlanRefutation({
       db,
@@ -136,9 +136,9 @@ describe("runPlanRefutation (J1.2 gate + gt_outcome feed)", () => {
     expect(gate.rec_id).toBe("rec-last");
 
     const dec = db.getRunDecisions(runId).at(-1)!;
-    expect(dec.gt_outcome).toBe("verified");
-    expect(dec.gt_verified_by).toBe("judge");
-    expect(dec.gt_confidence).toBe("yellow");
+    expect(dec.big_plan_outcome).toBe("verified");
+    expect(dec.big_plan_verified_by).toBe("judge");
+    expect(dec.big_plan_confidence).toBe("yellow");
 
     // J1.1: the plan-level gate is visible in /why.
     const report = whyReportFor(db, runId);
@@ -157,7 +157,7 @@ describe("runPlanRefutation (J1.2 gate + gt_outcome feed)", () => {
     const gate = db.getGates(planId).find((g) => g.id === outcome.gateId)!;
     expect(gate.outcome).toBe("failed");
     expect(gate.confidence).toBe("red");
-    expect(db.getRunDecisions(runId).at(-1)!.gt_outcome).toBe("failed");
+    expect(db.getRunDecisions(runId).at(-1)!.big_plan_outcome).toBe("failed");
     expect(whyReportFor(db, runId)).toContain("step 2 has no check at all");
   });
 
@@ -179,8 +179,8 @@ describe("runPlanRefutation (J1.2 gate + gt_outcome feed)", () => {
       spawn: spawnReplying("VERDICT: confirmed\nREASONS:\n- looked fine"),
     });
     const dec = db.getRunDecisions(runId).at(-1)!;
-    expect(dec.gt_outcome).toBe("failed"); // red wins the identity join
-    expect(dec.gt_confidence).toBe("red");
+    expect(dec.big_plan_outcome).toBe("failed"); // red wins the identity join
+    expect(dec.big_plan_confidence).toBe("red");
   });
 
   test("aborted child → null, no gate row (never a fabricated verdict)", async () => {

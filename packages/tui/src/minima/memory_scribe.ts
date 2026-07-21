@@ -143,7 +143,7 @@ export function mineSignals(db: MinimaDb, projectKey: string): ScribeSignal[] {
     out.push({
       kind: "judge_gate_disagreement",
       pattern: normalizePattern(`${taskType} ${model} judge-gate`),
-      detail: `judge graded ${Number(d.quality).toFixed(2)} but the gate said ${String(d.gt_outcome)} (${taskType} on ${model})`,
+      detail: `judge graded ${Number(d.quality).toFixed(2)} but the gate said ${String(d.big_plan_outcome)} (${taskType} on ${model})`,
       recIds: [String(d.rec_id)],
       gateIds: [],
       ts: Number(d.ts) || 0,

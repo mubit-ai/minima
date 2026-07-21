@@ -6,7 +6,7 @@ import type { AfterToolCallContext, BeforeToolCallContext } from "../src/agent/t
 import { AssistantMessage, toolCall } from "../src/ai/index.ts";
 import type { GateRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { groundTruthHooks } from "../src/minima/ground_truth.ts";
+import { bigPlanHooks } from "../src/minima/big_plan.ts";
 
 // Stage 4 — the done-gate (M4.1 block-on-fail, M4.2 red→green, M4.3 durable gate rows).
 // The before-hook previews which steps a todowrite would flip to completed, runs each flip's
@@ -235,7 +235,7 @@ describe("MinimaDb.completionsForTodos", () => {
 describe("done-gate before-hook (M4.1)", () => {
   test("a failing verify blocks: reason names the step + output tail, status unchanged, failed row written", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "Fix the parser", status: "in_progress", verify: "echo boom; exit 3" },
     ]);
@@ -262,7 +262,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("a passing verify allows the call and the after-hook writes a verified row", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos))).toBeNull();
@@ -284,7 +284,7 @@ describe("done-gate before-hook (M4.1)", () => {
     const flag = join(dir, "flag");
     try {
       const d = db();
-      const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+      const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
       const verify = `test -f ${flag}`;
       // in_progress with a verify → the sink captures the baseline (flag absent → red).
       await after(actx([{ content: "A", status: "in_progress", verify }], "tc0"));
@@ -305,7 +305,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("green baseline: a passing check is verified but redToGreen stays false", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "tc0"));
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
@@ -319,7 +319,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("unrunnable (timeout under a tiny injected budget) blocks with an unrunnable row", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { gateBudgetMs: 50 });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { gateBudgetMs: 50 });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "sleep 5" }]);
     const decision = await before(bctx([{ content: "A", status: "completed" }]));
     expect(decision?.block).toBe(true);
@@ -334,7 +334,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("unrunnable (budget exhausted before the check could start) blocks", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { gateBudgetMs: 0 });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { gateBudgetMs: 0 });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const decision = await before(bctx([{ content: "A", status: "completed" }]));
     expect(decision?.block).toBe(true);
@@ -346,7 +346,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("verify-less completion is allowed and records an unchecked row with NULL verified_by (M4.3)", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos))).toBeNull();
@@ -363,7 +363,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("mixed batch: one failure blocks the WHOLE call — no statuses change, no verified/unchecked rows", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "Bad", status: "in_progress", verify: "exit 1" },
       { content: "Good", status: "in_progress", verify: "true" },
@@ -390,7 +390,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("multiple failures: the reason names every failing step", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [
       { content: "One", status: "in_progress", verify: "exit 1" },
       { content: "Two", status: "in_progress", verify: "exit 2" },
@@ -409,7 +409,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("a brand-new todo inserted directly as completed with a failing verify is blocked (no plan yet)", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     const decision = await before(
       bctx([{ content: "New", status: "completed", verify: "exit 1" }]),
     );
@@ -424,7 +424,7 @@ describe("done-gate before-hook (M4.1)", () => {
 
   test("non-todowrite calls and todowrites with no completion flips pass through untouched", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "pending", verify: "exit 1" }]);
     expect(
       await before({
@@ -442,16 +442,16 @@ describe("done-gate before-hook (M4.1)", () => {
         throw new Error("boom");
       },
     } as unknown as MinimaDb;
-    const { before } = groundTruthHooks({ db: throwing, runId: "run1" });
+    const { before } = bigPlanHooks({ db: throwing, runId: "run1" });
     await expect(
       before(bctx([{ content: "A", status: "completed", verify: "exit 1" }])),
     ).resolves.toBeNull();
   });
 
   test("fail-open: missing db or runId allows the call", async () => {
-    const { before } = groundTruthHooks({ db: null, runId: "run1" });
+    const { before } = bigPlanHooks({ db: null, runId: "run1" });
     expect(await before(bctx([{ content: "A", status: "completed" }]))).toBeNull();
-    const { before: b2 } = groundTruthHooks({ db: db(), runId: null });
+    const { before: b2 } = bigPlanHooks({ db: db(), runId: null });
     expect(await b2(bctx([{ content: "A", status: "completed" }]))).toBeNull();
   });
 
@@ -465,7 +465,7 @@ describe("done-gate before-hook (M4.1)", () => {
         throw new Error("boom");
       },
     } as unknown as MinimaDb;
-    const { before } = groundTruthHooks({ db: faked, runId: "run1" });
+    const { before } = bigPlanHooks({ db: faked, runId: "run1" });
     const decision = await before(bctx([{ content: "A", status: "completed" }]));
     expect(decision?.block).toBe(true);
   });
@@ -474,7 +474,7 @@ describe("done-gate before-hook (M4.1)", () => {
     const dir = mkdtempSync(join(tmpdir(), "minima-gate-"));
     const prev = process.cwd();
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true" },
     ]);
@@ -506,7 +506,7 @@ describe("done-gate same-batch guard", () => {
 
   test("an in_progress+completed pair in one batch cannot sneak a red step past the gate", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     // A was verified earlier but its check has since regressed to red.
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "completed", verify: "exit 1" },
@@ -535,7 +535,7 @@ describe("done-gate same-batch guard", () => {
 
   test("two same-batch completions of one step cannot double-write gate rows", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     const batch = batchOf([
@@ -552,7 +552,7 @@ describe("done-gate same-batch guard", () => {
 
   test("an abandoned batch's parked verdict never wedges or leaks into a later batch", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     // t1 is previewed (verdict parked) but its batch dies — its after-hook never fires.
@@ -566,7 +566,7 @@ describe("done-gate same-batch guard", () => {
 
   test("solo-completion: a completing todowrite is refused when a mutating sibling shares the batch", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     const batch = batchOf([
@@ -581,7 +581,7 @@ describe("done-gate same-batch guard", () => {
 
   test("solo-completion: in_progress-only todowrite and read-only siblings never trip it", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [
       { content: "A", status: "pending", verify: "true" },
       { content: "B", status: "completed", verify: "true" },
@@ -611,7 +611,7 @@ describe("done-gate same-batch guard", () => {
 
   test("sequential before/after pairs across messages never trip the guard", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true" },
       { content: "B", status: "pending", verify: "true" },
@@ -639,7 +639,7 @@ describe("done-gate abort (runSignal)", () => {
     const d = db();
     const ac = new AbortController();
     ac.abort();
-    const { before } = groundTruthHooks({ db: d, runId: "run1", runSignal: ac.signal });
+    const { before } = bigPlanHooks({ db: d, runId: "run1", runSignal: ac.signal });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const decision = await before(bctx([{ content: "A", status: "completed" }]));
     expect(decision?.block).toBe(true);
@@ -652,7 +652,7 @@ describe("done-gate abort (runSignal)", () => {
   test("abort mid-check cancels a slow verify instead of pinning the turn", async () => {
     const d = db();
     const ac = new AbortController();
-    const { before } = groundTruthHooks({ db: d, runId: "run1", runSignal: ac.signal });
+    const { before } = bigPlanHooks({ db: d, runId: "run1", runSignal: ac.signal });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "sleep 5" }]);
     setTimeout(() => ac.abort(), 50);
     const start = performance.now();
@@ -666,7 +666,7 @@ describe("done-gate abort (runSignal)", () => {
     const d = db();
     const ac = new AbortController();
     ac.abort();
-    const { after } = groundTruthHooks({ db: d, runId: "run1", runSignal: ac.signal });
+    const { after } = bigPlanHooks({ db: d, runId: "run1", runSignal: ac.signal });
     await after(actx([{ content: "A", status: "in_progress", verify: "exit 1" }]));
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
@@ -678,7 +678,7 @@ describe("done-gate abort (runSignal)", () => {
 describe("done-gate step attribution (duplicate contents)", () => {
   test("two same-content steps flipped in one call each get their own gate row", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [
       { content: "fix flaky test", status: "in_progress", verify: "true" },
       { content: "fix flaky test", status: "in_progress", verify: "true" },
@@ -697,7 +697,7 @@ describe("done-gate step attribution (duplicate contents)", () => {
 
   test("with an already-completed twin, the row lands on the step that actually flipped", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     const { stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "completed" },
       { content: "A", status: "pending", verify: "true" },
@@ -722,7 +722,7 @@ describe("done-gate step attribution (duplicate contents)", () => {
 describe("done-gate after-hook (M4.3)", () => {
   test("exactly one gate row per completion flip; a resend of completed steps adds none", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos, "tc1"))).toBeNull();
@@ -736,7 +736,7 @@ describe("done-gate after-hook (M4.3)", () => {
 
   test("reopen + complete again is a new verification cycle with a second row", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const done = [{ content: "A", status: "completed" }];
     await before(bctx(done, "tc1"));
@@ -753,7 +753,7 @@ describe("done-gate after-hook (M4.3)", () => {
 
   test("an errored todowrite consumes its parked verdicts without writing rows (pending cleanup)", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress", verify: "true" }]);
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos, "tc1"))).toBeNull();
@@ -766,7 +766,7 @@ describe("done-gate after-hook (M4.3)", () => {
 
   test("mixed verified + unchecked verdicts each get their own row with the right stepId", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     d.upsertPlanFromTodos("run1", [
       { content: "Checked", status: "in_progress", verify: "true" },
       { content: "Plain", status: "in_progress" },
@@ -790,7 +790,7 @@ describe("done-gate after-hook (M4.3)", () => {
 
   test("a brand-new step completed in one shot resolves its stepId from the fresh upsert", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     const todos = [{ content: "New", status: "completed", verify: "true" }];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
@@ -822,7 +822,7 @@ describe("done-gate after-hook (M4.3)", () => {
         return real.insertGate(...args);
       },
     } as unknown as MinimaDb;
-    const { before, after } = groundTruthHooks({ db: faked, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: faked, runId: "run1" });
     const todos = [
       { content: "A", status: "completed" },
       { content: "B", status: "completed" },
@@ -850,7 +850,7 @@ describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
   test("agent_new + coverageHit + no tamper: agent wrote the test, and it references the change", async () => {
     const d = db();
     const fs = fsFrom({ "src/foo.test.ts": 'import { foo } from "./foo";' });
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" }, { fs });
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true src/foo.test.ts" },
     ]);
@@ -871,7 +871,7 @@ describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
   test("pre_existing + coverage false: an untouched test that doesn't reference the change", async () => {
     const d = db();
     const fs = fsFrom({ "src/foo.test.ts": 'import { other } from "./other";' });
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" }, { fs });
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true src/foo.test.ts" },
     ]);
@@ -888,7 +888,7 @@ describe("done-gate Stage 5 factors (M5.1/M5.2/M5.3)", () => {
   test("tamper true: a test file the agent touched now carries a skip marker", async () => {
     const d = db();
     const fs = fsFrom({ "src/foo.test.ts": "it.skip('x', () => {})" });
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" }, { fs });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" }, { fs });
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress", verify: "true" },
     ]);
@@ -974,7 +974,7 @@ describe("MinimaDb.seedPlanFromSteps (planner→ledger bridge)", () => {
 
   test("a seeded user-origin check yields checkOrigin=user at the gate (not agent_new)", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     // A step whose verify names a test the agent also 'wrote' this run would normally classify
     // agent_new; because the check came from the approved plan (check_origin='user'), it does not.
     d.seedPlanFromSteps("run1", "T", [{ content: "A", verify: "true" }]);
@@ -996,7 +996,7 @@ describe("MinimaDb.seedPlanFromSteps (planner→ledger bridge)", () => {
 describe("done-gate milestone rollup (M4.3)", () => {
   test("closing an all-verified plan writes one milestone gate (verified/deterministic)", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos, "t1"))).toBeNull();
@@ -1011,7 +1011,7 @@ describe("done-gate milestone rollup (M4.3)", () => {
 
   test("a plan closed with an unchecked step rolls up to unchecked (not verified)", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     // One checked step, one verify-less step; complete both so the plan closes.
     await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
     const todos = [
@@ -1027,7 +1027,7 @@ describe("done-gate milestone rollup (M4.3)", () => {
 
   test("a plan that never fully completes writes no milestone gate", async () => {
     const d = db();
-    const { before, after } = groundTruthHooks({ db: d, runId: "run1" });
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
     await after(actx([{ content: "A", status: "in_progress", verify: "true" }], "t0"));
     // Never mark A completed → plan stays active → no closure, no milestone.
     expect(milestoneGates(d)).toHaveLength(0);

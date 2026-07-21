@@ -27,7 +27,8 @@ alias mtui='bun run src/cli/main.ts'
 - ▢ **Live session** (spends real money — keep it to one or two turns):
   `set -a; source .env.harness; set +a` from the repo root, then
   `mtui --offline --model claude-haiku-4-5 --provider anthropic`.
-- ▢ **Ground-Truth sweep** (§7): prefix any of the above with `MINIMA_TUI_GROUND_TRUTH=1`.
+- ▢ **Big Plan sweep** (§7): Big Plan is on by default; use `MINIMA_TUI_BIG_PLAN=0` only
+  for the explicit off-path checks.
 - ▢ Run every sweep once in a **git repo** cwd and once in a **non-git** dir (checkpoint
   degrade paths differ — §6).
 
@@ -66,7 +67,7 @@ alias mtui='bun run src/cli/main.ts'
 
 1. ▢ Press `Shift+Tab` — **Expect:** prompt border turns magenta, label `plan mode`,
    footer badge `[PLAN]` on the right; `Shift+Tab` again returns to build (badge clears).
-2. ▢ `/plan` — **Expect:** same toggle as Shift+Tab (GT off: simple mode toggle with the
+2. ▢ `/plan` — **Expect:** same toggle as Shift+Tab (Big Plan off: simple mode toggle with the
    "write/edit/bash/apply_patch ask first" notice).
 3. ▢ In plan mode (mock provider), ask for a file edit — **Expect:** the permission overlay
    asks with prefix `plan mode — asks every time:`; answering `a` (always) still re-asks on
@@ -122,17 +123,17 @@ create `demo.txt`, commit, then start the mock-provider TUI here.
    not a git repository"; `/undo` and `/rewind <n> code` degrade with clear notices;
    `/rewind <n> convo` still works.
 
-## 7. Ground Truth (prefix `MINIMA_TUI_GROUND_TRUTH=1`)
+## 7. Big Plan (on by default)
 
-1. ▢ `/gt` — **Expect:** "Ground-Truth: ON" with the run id. Without the flag — the OFF
-   notice, and `Ctrl+G` prints "Ground-Truth is OFF…".
-2. ▢ `/gt-seed` — **Expect:** seeded 3-step plan; footer plan strip `▸ plan 3/3 …` +
+1. ▢ `/bp` — **Expect:** "Big Plan: ON" with the run id. With `MINIMA_TUI_BIG_PLAN=0` —
+   the OFF notice, and `Ctrl+G` prints "Big Plan is OFF…".
+2. ▢ `/bp-seed` — **Expect:** seeded 3-step plan; footer plan strip `▸ plan 3/3 …` +
    `⚠ 1 off-plan (drift)` + `🟡 1 step flagged` + 🔴 prompt row; the composer is captured by
    the gate modal (`[a]ccept · [r]eject · [s]teer · [v]iew · esc to type`).
 3. ▢ Gate modal: `v` — **Expect:** /why detail appears, modal stays armed. `Esc` — modal
    dismissed, typing works, `ctrl+g to answer` hint shows; `Ctrl+G` re-arms. `a` — records
    the signal, 🔴 row clears.
-4. ▢ `Ctrl+G` (no armed gate) — **Expect:** GT Plan Overview sidebar: title + `step X/N`,
+4. ▢ `Ctrl+G` (no armed gate) — **Expect:** Plan Overview panel: title + `step X/N`,
    per-step ⬜/🟦/✅ + 🟢/🟡/🔴, verify cmds, drift, Σ realized $; `Enter` opens the step
    card (baseline, check origin, gate history, evidence); `Esc` back, `Esc` close.
 5. ▢ `/why` — **Expect:** per-step report + `plan gates:` section. `/why 1` — **Expect:**
@@ -141,10 +142,10 @@ create `demo.txt`, commit, then start the mock-provider TUI here.
 7. ▢ `/verify` (mock or live provider) — **Expect:** "Refutation pass started…" busy state;
    verdict message (🟡 not refuted / 🔴 REFUTED with reasons); `/why` afterwards shows the
    judge milestone in `plan gates:`. `Esc` during the pass aborts it (nothing recorded).
-8. ▢ Plan council: `/plan` in GT mode — **Expect:** council subcommands
+8. ▢ Plan council: `/plan` with Big Plan on — **Expect:** council subcommands
    (start·status·finalize·cancel) per the /plan help; leaving plan mode via Shift+Tab tears
    the council session down with the "Plan session discarded" notice.
-9. ▢ In plan mode with GT on, ask the model to call `todowrite`/`task` — **Expect:** hard
+9. ▢ In plan mode with Big Plan on, ask the model to call `todowrite`/`task` — **Expect:** hard
    block with the explanatory reason (an "ask" can't make those safe).
 
 ## 8. Permissions
@@ -154,7 +155,7 @@ create `demo.txt`, commit, then start the mock-provider TUI here.
    grants always (`/perms` shows it).
 2. ▢ `read`/`ls` outside granted dirs — **Expect:** prompt lists the directory; approving
    adds a dir grant shown in the footer `r-x N dirs`.
-3. ▢ With GT on, a `todowrite` carrying a NEW `verify` command — **Expect:** re-prompts even
+3. ▢ With Big Plan on, a `todowrite` carrying a NEW `verify` command — **Expect:** re-prompts even
    with an "always" grant (approving a verify authorizes running it as shell).
 
 ## 9. Budget & routing surface
@@ -194,7 +195,7 @@ the pty_capture docstring.
 |---|---|
 | `MINIMA_DB_PATH` | SQLite spine location (use a scratch path for testing) |
 | `MINIMA_TUI_INLINE=1` / `--no-fullscreen` | inline renderer (native scrollback) |
-| `MINIMA_TUI_GROUND_TRUTH=1` | GT spine: plan ledger, gates, tiers, /why, /verify, Ctrl+G |
+| `MINIMA_TUI_BIG_PLAN=0` | disable the default-on Big Plan spine for compatibility testing |
 | `MINIMA_LLM_JUDGE=1` | real LLM judging (spends money; judge abstains by default) |
 | `--provider-url URL` | OpenAI-compatible base URL for a custom `--provider` |
 | `--resume NAME\|ID` | rehydrate a session before first render |

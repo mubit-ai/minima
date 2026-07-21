@@ -8,9 +8,9 @@ import {
   GATE_OUTCOMES,
   USER_ACTIONS,
   VERIFIED_BY,
-} from "../src/minima/gt_contract.ts";
+} from "../src/minima/big_plan_contract.ts";
 
-// The Ground-Truth contract (docs §5b Step 0) is the frozen seam between the two build tracks.
+// The Big Plan contract (docs §5b Step 0) is the frozen seam between the two build tracks.
 // These tests lock the enum spellings (a rename breaks a test) and prove every value survives
 // a verbatim round-trip through the DB boundary in db/minima_db.ts — so producer, consumer,
 // and schema can never silently disagree.
@@ -19,7 +19,7 @@ function db(): MinimaDb {
   return new MinimaDb(":memory:");
 }
 
-describe("gt_contract frozen value sets", () => {
+describe("big_plan_contract frozen value sets", () => {
   test("enum spellings are frozen (regression guard)", () => {
     expect(GATE_OUTCOMES).toEqual(["verified", "failed", "unrunnable", "unchecked"]);
     expect(CONFIDENCE_TIERS).toEqual(["green", "yellow", "red"]);
@@ -31,7 +31,7 @@ describe("gt_contract frozen value sets", () => {
   });
 });
 
-describe("gt_contract enums round-trip through the DB boundary", () => {
+describe("big_plan_contract enums round-trip through the DB boundary", () => {
   test("every GateKind/GateOutcome/ConfidenceTier/VerifiedBy persists verbatim", () => {
     const d = db();
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
@@ -91,7 +91,7 @@ describe("gt_contract enums round-trip through the DB boundary", () => {
     expect(rows.map((r) => r.action)).toEqual([...USER_ACTIONS]);
   });
 
-  test("grounded-outcome enums stamp onto the routing decision (gt_* columns)", () => {
+  test("verified-outcome enums stamp onto the routing decision (big_plan_* columns)", () => {
     const d = db();
     d.ensureProject("proj");
     const runId = d.startRun({ runId: "run1", projectKey: "proj" });
@@ -112,14 +112,14 @@ describe("gt_contract enums round-trip through the DB boundary", () => {
       turns: 1,
       latencyMs: 1,
     });
-    d.attachGroundedOutcome("rec1", {
+    d.attachBigPlanOutcome("rec1", {
       outcome: "verified",
       verifiedBy: "deterministic",
       confidence: "green",
     });
     const dec = d.getRunDecisions(runId).find((r) => r.rec_id === "rec1")!;
-    expect(dec.gt_outcome).toBe("verified");
-    expect(dec.gt_verified_by).toBe("deterministic");
-    expect(dec.gt_confidence).toBe("green");
+    expect(dec.big_plan_outcome).toBe("verified");
+    expect(dec.big_plan_verified_by).toBe("deterministic");
+    expect(dec.big_plan_confidence).toBe("green");
   });
 });

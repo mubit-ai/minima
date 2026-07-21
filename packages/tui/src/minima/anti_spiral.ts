@@ -27,7 +27,7 @@
  * soft step cap is the backstop for that case. Wiring rejected calls into the ring needs a new loop
  * seam and is left as a follow-up.
  *
- * Enforcement at a turn boundary, not prompt text. Gated by `config.groundTruth` +
+ * Enforcement at a turn boundary, not prompt text. Gated by `config.bigPlan` +
  * (`spiralRepeats > 0` || `stepCap > 0`) at the call site (runtime.ts); inert otherwise. Fail-open:
  * the audit-gate write is best-effort and never throws into the loop.
  */
@@ -124,7 +124,7 @@ export class DoomLoopRing {
   }
 }
 
-/** Plan progress, when a ground-truth plan exists — enriches the wrap-up summary. Fail-open → null. */
+/** Plan progress, when a Big Plan exists — enriches the wrap-up summary. Fail-open → null. */
 function planProgress(db: MinimaDb | null, sessionId: string | null): string | null {
   if (!db || !sessionId) return null;
   try {

@@ -9,7 +9,7 @@ import {
   redPrompt,
   tierBehavior,
 } from "../src/minima/behavior.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 
 // Factors that land on each confidence tier (see confidence.ts):
 //   GREEN  → trusted check passed
@@ -296,36 +296,48 @@ describe("ledgerBehavior", () => {
 
 // Guards the M6.2 tier→behavior wiring in tui/app.tsx that a pure test can't reach: the aggregate
 // is refreshed alongside the plan strip, the 🟡 note and 🔴 block each cost one truncated footer
-// row, and /gt-seed exercises all three tiers so the three snapshots (quiet / note / prompt) exist.
+// row, and /bp-seed exercises all three tiers so the three snapshots (quiet / note / prompt) exist.
 describe("tui/app.tsx wires tier→behavior", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("refreshes gtBehavior from the same helper on mount and tool_execution_end", () => {
-    const refreshes = src.split("setGtBehavior(ledgerBehavior(agent.db, agent.runId))").length - 1;
+  test("refreshes bigPlanBehavior from the same helper on mount and tool_execution_end", () => {
+    const refreshes =
+      src.split("setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId))").length - 1;
     expect(refreshes).toBeGreaterThanOrEqual(2);
-    // Refresh is gated on Ground-Truth being on, like the plan strip.
-    expect(src).toContain("agent.config.groundTruth === true");
+    // Refresh is gated on Big Plan being on, like the plan strip.
+    expect(src).toContain("agent.config.bigPlan === true");
   });
 
   test("tier→behavior surfaces through the D3a alert fold, not banner rows (MP6)", () => {
     // The armed 🔴 block reaches the panel as a boolean; the alert TEXT is built in
     // task_footer.ts (colored ASCII, no emoji — Q25). The old banner templates are gone.
-    expect(src).toContain("blocked: (gtBehavior?.block ?? null) !== null");
-    expect(src).not.toContain("{gtFooterNote}");
-    expect(src).not.toContain("{gtBlock.prompt}");
+    expect(src).toContain("blocked: (bigPlanBehavior?.block ?? null) !== null");
+    expect(src).not.toContain("{bigPlanFooterNote}");
+    expect(src).not.toContain("{bigPlanBlock.prompt}");
   });
 
-  test("fails open to a hidden footer (setGtBehavior(null)) — never a crash", () => {
-    expect(src).toContain("setGtBehavior(null)");
+  test("fails open to a hidden footer (setBigPlanBehavior(null)) — never a crash", () => {
+    expect(src).toContain("setBigPlanBehavior(null)");
   });
 
-  test("/gt-seed seeds all three tiers so every behavior path has a demo", () => {
+  test("/bp-seed seeds all three tiers so every behavior path has a demo", () => {
     expect(src).toContain("Seed trusted verification");
     expect(src).toContain("Seed flagged verification");
     expect(src).toContain("Seed blocked verification");
     // The stored confidence is the ladder's own verdict, not a hardcoded string.
     expect(src).toContain("confidence: gateConfidence(green)");
     expect(src).toContain("confidence: gateConfidence(red)");
+  });
+
+  test("/bp commands are public while deprecated /gt aliases stay hidden and warn", () => {
+    expect(src).toContain('{ name: "bp", desc: "Show Plan Overview status');
+    expect(src).toContain('{ name: "bp-seed", desc: "Seed a demo Big Plan');
+    expect(src).not.toContain('{ name: "gt", desc:');
+    expect(src).not.toContain('{ name: "gt-seed", desc:');
+    expect(src).toContain('case "gt":');
+    expect(src).toContain('case "gt-seed":');
+    expect(src).toContain("Deprecated: /gt; use /bp.");
+    expect(src).toContain("Deprecated: /gt-seed; use /bp-seed.");
   });
 
   // M6.3: the 🔴 block captures the override through the gate-focus modal. While armed, the
@@ -339,16 +351,16 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).not.toContain('typedText.trim() === ""');
   });
 
-  test("gateFocus can only arm when gtBehavior.block exists (default path inert)", () => {
-    const armIdx = src.indexOf("const gtBlockId = gtBehavior?.block?.gateId ?? null");
+  test("gateFocus can only arm when bigPlanBehavior.block exists (default path inert)", () => {
+    const armIdx = src.indexOf("const bigPlanBlockId = bigPlanBehavior?.block?.gateId ?? null");
     expect(armIdx).toBeGreaterThan(-1);
     const effect = src.slice(armIdx, armIdx + 500);
     // A null block always DISARMS; arming requires the non-null gateId (and an idle prompt).
-    expect(effect).toContain("if (gtBlockId === null) {");
+    expect(effect).toContain("if (bigPlanBlockId === null) {");
     expect(effect).toContain("setGateFocus(null)");
-    expect(effect).toContain("if (busy || gtBlockId === dismissedGateRef.current) return;");
+    expect(effect).toContain("if (busy || bigPlanBlockId === dismissedGateRef.current) return;");
     // The ctrl+g re-arm is likewise gated on a live block.
-    expect(src).toContain('if (key.ctrl && input === "g" && gtBehavior?.block) {');
+    expect(src).toContain('if (key.ctrl && input === "g" && bigPlanBehavior?.block) {');
   });
 
   test("while armed the prompt input is disabled and shows the answer-key hint", () => {
@@ -357,7 +369,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
   });
 
   test("Esc while armed dismisses without recording; steer switches to note entry", () => {
-    const gateIdx = src.indexOf("if (gateFocus && gtDb && !key.ctrl && !key.meta) {");
+    const gateIdx = src.indexOf("if (gateFocus && bigPlanDb && !key.ctrl && !key.meta) {");
     expect(gateIdx).toBeGreaterThan(-1);
     const branch = src.slice(gateIdx, src.indexOf("if (key.ctrl && input ===", gateIdx));
     // Esc: remember the dismissal and clear focus — no signal write in that path.
@@ -386,17 +398,17 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(input).toContain('<Text wrap="truncate">');
   });
 
-  // M7.1: /gt-seed gives the run a routing decision then stamps the grounded outcome onto it, so
-  // the DB query in the issue's "see it work" shows gt_* attached to the model.
-  test("M7.1: /gt-seed writes a routing decision and stamps the grounded outcome", () => {
+  // M7.1: /bp-seed gives the run a routing decision then stamps the verified outcome onto it, so
+  // the DB query in the issue's "see it work" shows big_plan_* attached to the model.
+  test("M7.1: /bp-seed writes a routing decision and stamps the verified outcome", () => {
     expect(src).toContain("agent.db.writeDecision({");
-    expect(src).toContain("stampGroundedOutcome(agent.db, seedRecId)");
+    expect(src).toContain("stampVerifiedOutcome(agent.db, seedRecId)");
     // Identity join: seeded gate rows must carry the rec they stamp (v6 gates.rec_id).
     expect(src).toContain("recId: seedRecId");
   });
 });
 
-// exit_plan (plan-mode exit): the tool is registered only while a GT plan session is live,
+// exit_plan (plan-mode exit): the tool is registered only while a Big Plan session is live,
 // the persona steers the model to it (never to slash commands), and the promptPlanner wrapper
 // re-applies the build prompt after a mid-turn exit (promptRouted's finally would otherwise
 // restore the planner persona it captured at entry — permanently).
@@ -431,7 +443,7 @@ describe("tui/app.tsx wires exit_plan", () => {
     expect(src).toContain("const outcome = await finalizePlan(store, {");
     expect(src).toContain("permStateRef.current.approvedVerifies.add(v)");
     // The command path no longer inlines the synthesis/audit/write sequence.
-    expect(src).not.toContain("synthesizeGroundTruth(store.session");
+    expect(src).not.toContain("synthesizeBigPlan(store.session");
     expect(src).not.toContain("await Bun.write(outPath, md)");
   });
 
@@ -464,7 +476,7 @@ describe("tui/app.tsx panel key routing", () => {
   test("the global guard list uses panelCapture — the per-panel lines are gone", () => {
     expect(src).toContain("panelCapture // ");
     expect(src).not.toContain("tocOpen || // U2");
-    expect(src).not.toContain("gtPanelOpen || // U3");
+    expect(src).not.toContain("bigPlanPanelOpen || // U3");
   });
 
   test("the composer suspends on the SAME expression (the leak fix)", () => {
@@ -474,26 +486,29 @@ describe("tui/app.tsx panel key routing", () => {
 
   test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
     // Global arm: the guard keeps falling through to the gate-answer arm.
-    expect(src).toContain('input === "g" && !(gtBehavior?.block && !busy)');
+    expect(src).toContain('input === "g" && !(bigPlanBehavior?.block && !busy)');
     // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery — but
     // only idle, since the modal is idle-only (a busy chord swaps views, never arms dead).
     const idx = src.indexOf("function handlePanelKey");
     expect(idx).toBeGreaterThan(-1);
     const body = src.slice(idx, idx + 2600);
-    expect(body).toContain("if (gtBehavior?.block && !busy) {");
-    expect(body).toContain("setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false })");
+    expect(body).toContain("if (bigPlanBehavior?.block && !busy) {");
+    expect(body).toContain(
+      "setGateFocus({ gateId: bigPlanBehavior.block.gateId, noteEntry: false })",
+    );
   });
 
-  test("/why opens the GT panel in the TUI; the text path survives for GT-off/narrow", () => {
+  test("/why opens the Big Plan panel in the TUI; the text path survives for Big Plan-off/narrow", () => {
     const idx = src.indexOf('case "why": {');
     expect(idx).toBeGreaterThan(-1);
     const body = src.slice(idx, idx + 2400);
-    expect(body).toContain("gtPanelState(overview, gtRows(overview,");
+    expect(body).toContain("planOverviewPanelState(");
+    expect(body).toContain("planOverviewRows(overview,");
     expect(body).toContain("whyReportFor(agent.db, agent.runId)");
   });
 });
 
-// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL GT
+// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL Big Plan
 // planning workflow — session + planner persona + exit_plan — never the badge-only half-state
 // (mode flipped, session null → prompts ran the NORMAL loop and the model executed with
 // per-call approval instead of planning; bare /plan then EXITED instead of recovering).
@@ -592,7 +607,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(idx).toBeGreaterThan(-1);
     const effect = src.slice(idx - 400, idx + 400);
     expect(effect).toContain('mode !== "plan" ||');
-    expect(effect).toContain("agent.config.groundTruth !== true ||");
+    expect(effect).toContain("agent.config.bigPlan !== true ||");
     expect(effect).toContain("!planSpawn ||");
     expect(effect).toContain("!planMetaModel");
     // The no-loop invariant: the heal's deps exclude planSessionGen and messages.
@@ -601,7 +616,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
 
   test("bare /plan in plan-mode-without-a-session RECOVERS instead of exiting", () => {
     expect(src).toContain('sub === "off" ? false : planSessionRef.current == null');
-    // The mode-store test survives only in the GT-off branch, promptPlanner's leak guard,
+    // The mode-store test survives only in the Big Plan-off branch, promptPlanner's leak guard,
     // and the exit_plan retire-deferral cleanup (mid-turn mode exit).
     expect(src.split('getMode() !== "plan"').length - 1).toBe(3);
   });
@@ -616,7 +631,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   });
 });
 
-// Finalize handoff (2026-07-15): the ledger drives the whole GT build spine — when synthesis
+// Finalize handoff (2026-07-15): the ledger drives the whole Big Plan build spine — when synthesis
 // fails (truncated output was silently costing every seeded step), the user sees it and the
 // agent is told to rebuild the ledger via todowrite as its first move.
 describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
@@ -631,6 +646,12 @@ describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
     expect(src).toContain("Follow the seeded plan steps");
     expect(src).toContain("The plan ledger has no seeded steps — FIRST record");
     expect(src).toContain("shell `verify` check");
+  });
+
+  test("finalization writes only the canonical BigPlan.md artifact", () => {
+    const retiredArtifact = ["GROUND", "TRUTH.md"].join("_");
+    expect(src).toContain("outPath: `${process.cwd()}/BigPlan.md`");
+    expect(src).not.toContain(retiredArtifact);
   });
 });
 
@@ -688,7 +709,7 @@ describe("tui/app.tsx sidebar removal", () => {
 
   test("Ctrl+T / Ctrl+G always print the one-shot text blocks", () => {
     expect(src).toContain("renderTocText(buildSections(messages, buildUsageLedger()), cols - 6)");
-    expect(src).toContain("renderGtOverviewText(overview, cols - 6)");
+    expect(src).toContain("renderPlanOverviewText(overview, cols - 6)");
   });
 
   test("/rewind is the numbered text list everywhere (the overlay died with fullscreen)", () => {

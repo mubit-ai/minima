@@ -1,5 +1,5 @@
 /**
- * GT Plan Overview content model (U3, MUB-141) — pure, no React. The ledger is the source:
+ * Plan Overview content model (U3, MUB-141) — pure, no React. The ledger is the source:
  * plans/plan_steps/gates/file_changes read at open time, per-step realized $ from the v8
  * routing_decisions.step_id stamp (stepCosts). A step's tier reduces through the same
  * gateVerdictFor as /why, so the sidebar and the report can never disagree about a gate.
@@ -9,7 +9,7 @@
 import stringWidth from "string-width";
 
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
-import type { ConfidenceTier } from "../minima/gt_contract.ts";
+import type { ConfidenceTier } from "../minima/big_plan_contract.ts";
 import { gateVerdictFor, parseFactors } from "../minima/why.ts";
 
 const TIER_GLYPHS: Record<ConfidenceTier, string> = {
@@ -24,7 +24,7 @@ const STATUS_GLYPHS: Record<string, string> = {
   completed: "✅",
 };
 
-export interface GtStepRow {
+export interface PlanOverviewStepRow {
   stepId: string;
   idx: number;
   content: string;
@@ -42,13 +42,13 @@ export interface GtStepRow {
   costUsd: number | null;
 }
 
-export interface GtOverview {
+export interface PlanOverview {
   planId: string;
   title: string;
   /** 1-based position of the active step (first in_progress, else first pending), 0 = none. */
   stepPos: number;
   stepTotal: number;
-  steps: GtStepRow[];
+  steps: PlanOverviewStepRow[];
   driftCount: number;
   totalCostUsd: number;
   /** Latest gate rows per step, newest last — the detail card's evidence list. */
@@ -56,7 +56,7 @@ export interface GtOverview {
 }
 
 /** Read the active (else latest) plan into the overview model; null = no plan recorded. */
-export function buildGtOverview(db: MinimaDb, sessionId: string): GtOverview | null {
+export function buildPlanOverview(db: MinimaDb, sessionId: string): PlanOverview | null {
   const plan =
     db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) return null;
@@ -82,7 +82,7 @@ export function buildGtOverview(db: MinimaDb, sessionId: string): GtOverview | n
     driftByStep.set(change.step_id, paths);
   }
 
-  const rows: GtStepRow[] = steps.map((step) => {
+  const rows: PlanOverviewStepRow[] = steps.map((step) => {
     const gates = gatesByStep.get(step.id) ?? [];
     const verdict = gateVerdictFor(gates[gates.length - 1]);
     return {
@@ -142,7 +142,7 @@ export function padDisplay(text: string, width: number): string {
   return text + " ".repeat(Math.max(0, width - stringWidth(text)));
 }
 
-export interface GtPanelRow {
+export interface PlanOverviewPanelRow {
   text: string;
   /** Index into overview.steps; title rows are the cursor stops. */
   stepIdx: number | null;
@@ -150,8 +150,11 @@ export interface GtPanelRow {
 }
 
 /** Flatten the overview into panel rows: header · per-step title/check/drift · Σ footer. */
-export function gtRows(overview: GtOverview, innerWidth: number): GtPanelRow[] {
-  const rows: GtPanelRow[] = [];
+export function planOverviewRows(
+  overview: PlanOverview,
+  innerWidth: number,
+): PlanOverviewPanelRow[] {
+  const rows: PlanOverviewPanelRow[] = [];
   rows.push({
     text: fit(`${overview.title} — step ${overview.stepPos}/${overview.stepTotal}`, innerWidth),
     stepIdx: null,
@@ -197,7 +200,7 @@ export function gtRows(overview: GtOverview, innerWidth: number): GtPanelRow[] {
  * Per-step detail card (Enter on a step) — the shared component J1's /why per-step view
  * reuses: check + provenance, gate history (outcome · tier · reason), drift, realized $.
  */
-export function stepCardLines(row: GtStepRow, gates: GateRow[]): string[] {
+export function stepCardLines(row: PlanOverviewStepRow, gates: GateRow[]): string[] {
   const lines: string[] = [];
   lines.push(`${row.statusGlyph} step ${row.idx + 1} — ${row.content}`);
   lines.push(`check: ${row.verify ?? "(none)"}`);
@@ -234,9 +237,11 @@ function redGreenEvidence(gate: GateRow): string | null {
 }
 
 /** One-shot text overview — the Ctrl+G output. */
-export function renderGtOverviewText(overview: GtOverview | null, width: number): string {
-  if (!overview) return "No Ground-Truth plan recorded for this run.";
-  const lines = [`GT plan — ${overview.title} (step ${overview.stepPos}/${overview.stepTotal})`];
+export function renderPlanOverviewText(overview: PlanOverview | null, width: number): string {
+  if (!overview) return "No Big Plan recorded for this run.";
+  const lines = [
+    `Plan Overview — ${overview.title} (step ${overview.stepPos}/${overview.stepTotal})`,
+  ];
   if (overview.driftCount > 0) lines.push(`⚠ ${overview.driftCount} off-plan change(s) (DRIFT)`);
   for (const s of overview.steps) {
     const tier = s.tierGlyph ? ` ${s.tierGlyph}` : "";

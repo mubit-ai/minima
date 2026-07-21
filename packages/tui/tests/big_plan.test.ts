@@ -4,7 +4,7 @@ import type { PlanRow, PlanStepRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
   formatPlanProjection,
-  groundTruthAfterToolCall,
+  bigPlanAfterToolCall,
   isGateBlockReason,
   isPathClaimed,
   kindForTool,
@@ -13,7 +13,7 @@ import {
   planProjectionFor,
   planStripInfo,
   writePathsFromArgs,
-} from "../src/minima/ground_truth.ts";
+} from "../src/minima/big_plan.ts";
 
 // --------------------------------------------------------------------------- helpers
 
@@ -671,21 +671,21 @@ describe("planStripInfo", () => {
   });
 });
 
-// --------------------------------------------------------------------------- groundTruthAfterToolCall (sink)
+// --------------------------------------------------------------------------- bigPlanAfterToolCall (sink)
 
-describe("groundTruthAfterToolCall", () => {
+describe("bigPlanAfterToolCall", () => {
   test("no-ops when db or runId is missing", async () => {
     await expect(
-      groundTruthAfterToolCall({ db: null, runId: "run1" })(ctx("todowrite", { tasks: "[]" })),
+      bigPlanAfterToolCall({ db: null, runId: "run1" })(ctx("todowrite", { tasks: "[]" })),
     ).resolves.toBeNull();
     await expect(
-      groundTruthAfterToolCall({ db: db(), runId: null })(ctx("todowrite", { tasks: "[]" })),
+      bigPlanAfterToolCall({ db: db(), runId: null })(ctx("todowrite", { tasks: "[]" })),
     ).resolves.toBeNull();
   });
 
   test("ignores errored tool calls", async () => {
     const d = db();
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("todowrite", { tasks: JSON.stringify([{ content: "A", status: "pending" }]) }, true),
     );
     expect(d.getActivePlan("run1")).toBeNull();
@@ -693,7 +693,7 @@ describe("groundTruthAfterToolCall", () => {
 
   test("todowrite upserts the plan of record", async () => {
     const d = db();
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("todowrite", {
         tasks: JSON.stringify([
           { content: "Alpha", status: "in_progress" },
@@ -708,7 +708,7 @@ describe("groundTruthAfterToolCall", () => {
 
   test("round-trips verify: todowrite → ledger, preserved when a later call omits it (M3.1)", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await sink(
       ctx("todowrite", {
         tasks: JSON.stringify([
@@ -728,7 +728,7 @@ describe("groundTruthAfterToolCall", () => {
 
   test("todowrite with no valid todos creates no plan", async () => {
     const d = db();
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("todowrite", { tasks: "[]" }));
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("todowrite", { tasks: "[]" }));
     expect(d.getActivePlan("run1")).toBeNull();
   });
 
@@ -738,7 +738,7 @@ describe("groundTruthAfterToolCall", () => {
       { content: "Update config.ts loader", status: "in_progress" },
     ]);
     const inProgress = d.getInProgressStep(planId)!;
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("write", { path: "src/minima/config.ts" }),
     );
     const changes = d.getFileChanges(planId);
@@ -755,7 +755,7 @@ describe("groundTruthAfterToolCall", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "Update config.ts loader", status: "in_progress" },
     ]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("edit", { path: "src/other/router.ts" }),
     );
     const changes = d.getFileChanges(planId);
@@ -770,7 +770,7 @@ describe("groundTruthAfterToolCall", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "config.ts work", status: "pending" },
     ]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("write", { path: "src/config.ts" }),
     );
     const changes = d.getFileChanges(planId);
@@ -781,7 +781,7 @@ describe("groundTruthAfterToolCall", () => {
 
   test("write with no active plan records nothing", async () => {
     const d = db();
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
       ctx("write", { path: "src/config.ts" }),
     );
     // No plan means no plan id to query against; assert via a freshly-created plan being empty.
@@ -792,7 +792,7 @@ describe("groundTruthAfterToolCall", () => {
   test("non-write tools record no file changes", async () => {
     const d = db();
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "in_progress" }]);
-    await groundTruthAfterToolCall({ db: d, runId: "run1" })(ctx("bash", { command: "ls" }));
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("bash", { command: "ls" }));
     expect(d.getFileChanges(planId)).toHaveLength(0);
   });
 
@@ -805,7 +805,7 @@ describe("groundTruthAfterToolCall", () => {
         throw new Error("boom");
       },
     } as unknown as MinimaDb;
-    const sink = groundTruthAfterToolCall({ db: throwingDb, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: throwingDb, runId: "run1" });
     await expect(
       sink(ctx("todowrite", { tasks: JSON.stringify([{ content: "A", status: "pending" }]) })),
     ).resolves.toBeNull();
@@ -817,12 +817,12 @@ describe("groundTruthAfterToolCall", () => {
 
 describe("baseline capture (M3.3)", () => {
   /** Send a todo list through the sink as a todowrite call. */
-  const send = (sink: ReturnType<typeof groundTruthAfterToolCall>, todos: unknown[]) =>
+  const send = (sink: ReturnType<typeof bigPlanAfterToolCall>, todos: unknown[]) =>
     sink(ctx("todowrite", { tasks: JSON.stringify(todos) }));
 
   test("pending→in_progress flip runs the verify: failing check records red", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "pending", verify: "exit 1" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
@@ -832,7 +832,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("pending→in_progress flip with a passing check records green", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "pending", verify: "true" }]);
     await send(sink, [{ content: "A", status: "in_progress" }]);
     const plan = d.getActivePlan("run1")!;
@@ -841,7 +841,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("a new step inserted directly as in_progress gets its baseline captured", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "in_progress", verify: "true" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("green");
@@ -849,7 +849,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("baseline is captured once-only for the SAME verify; a resend never re-runs", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
@@ -860,7 +860,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("a CHANGED verify recaptures the baseline against the new check", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "in_progress", verify: "exit 1" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBe("red");
@@ -870,7 +870,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("a verify-less flip leaves the baseline null (no check to run)", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "pending" }]);
     await send(sink, [{ content: "A", status: "in_progress" }]);
     const plan = d.getActivePlan("run1")!;
@@ -885,7 +885,7 @@ describe("baseline capture (M3.3)", () => {
         throw new Error("boom");
       },
     } as unknown as MinimaDb;
-    const sink = groundTruthAfterToolCall({ db: faked, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: faked, runId: "run1" });
     await expect(
       send(sink, [{ content: "A", status: "in_progress", verify: "true" }]),
     ).resolves.toBeNull();
@@ -895,7 +895,7 @@ describe("baseline capture (M3.3)", () => {
 
   test("attaching a verify to an already-in_progress step still captures its baseline", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" });
     await send(sink, [{ content: "A", status: "in_progress" }]);
     const plan = d.getActivePlan("run1")!;
     expect(d.getPlanSteps(plan.id)[0]!.baseline).toBeNull();
@@ -914,7 +914,7 @@ describe("baseline capture (M3.3)", () => {
         real.setStepBaseline(...args);
       },
     } as unknown as MinimaDb;
-    const sink = groundTruthAfterToolCall({ db: faked, runId: "run1" });
+    const sink = bigPlanAfterToolCall({ db: faked, runId: "run1" });
     await expect(
       send(sink, [
         { content: "A", status: "in_progress", verify: "true" },

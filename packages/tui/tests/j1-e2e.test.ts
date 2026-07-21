@@ -16,7 +16,7 @@ import {
   toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { groundTruthHooks } from "../src/minima/ground_truth.ts";
+import { bigPlanHooks } from "../src/minima/big_plan.ts";
 import {
   ConstJudge,
   CostMeter,
@@ -32,12 +32,12 @@ import { bashTool } from "../src/tools/bash.ts";
 import { readTool } from "../src/tools/read.ts";
 import type { ChildResult, Delegation, SpawnFn } from "../src/tools/task.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
-import { buildGtOverview, stepCardLines } from "../src/tui/gt_overview.ts";
+import { buildPlanOverview, stepCardLines } from "../src/tui/plan_overview.ts";
 
 // J1.3 (M8.2 acceptance): the WHOLE journey in one scripted run, pinned as a regression —
 //   plan → done blocked while red → doom-loop flail (identical failing read ×3) → anti-spiral
 //   nudge then stop → fix → red→green → verified gate → plan closes → /why → whole-plan
-//   refutation subagent (J1.2) → grounded outcomes stamped on every rung.
+//   refutation subagent (J1.2) → verified outcomes stamped on every rung.
 // Nothing is seeded: every gate row is minted by the hooks during real tool dispatch.
 
 describe("J1 — end-to-end acceptance demo", () => {
@@ -107,7 +107,7 @@ describe("J1 — end-to-end acceptance demo", () => {
       candidates: ["demo-model"],
       allowOffline: false,
       minimaApiKey: "k",
-      groundTruth: true,
+      bigPlan: true,
       stopStrikes: 0, // the A2 stop-gate would force-continue past the scripted responses
       spiralRepeats: 2, // 2 identical failures → nudge; failing again after the nudge → stop
       stepCap: 0,
@@ -121,7 +121,7 @@ describe("J1 — end-to-end acceptance demo", () => {
       judge: new ConstJudge(0.9),
       meter: new CostMeter(),
       tools: [
-        todowriteTool([], { groundTruth: true }),
+        todowriteTool([], { bigPlan: true }),
         bashTool({ workdir: dir }),
         readTool({ workdir: dir }),
       ],
@@ -129,7 +129,7 @@ describe("J1 — end-to-end acceptance demo", () => {
     });
     agent.db = db;
     agent.runId = db.startRun({ projectKey: "p" });
-    const { before: beforeGate, after: afterGate } = groundTruthHooks(agent);
+    const { before: beforeGate, after: afterGate } = bigPlanHooks(agent);
     agent.addBeforeToolCall(beforeGate);
     agent.addAfterToolCall(afterGate);
 
@@ -221,7 +221,7 @@ describe("J1 — end-to-end acceptance demo", () => {
     const report = whyReportFor(db, agent.runId);
     expect(report).toContain("✓ step 1");
     expect(report).toContain("plan gates:"); // closure milestone now visible at plan level
-    const overview = buildGtOverview(db, agent.runId);
+    const overview = buildPlanOverview(db, agent.runId);
     if (!overview) throw new Error("expected overview");
     const card = stepCardLines(overview.steps[0]!, overview.gatesByStep.get(step.id) ?? []);
     expect(card.some((l) => l.includes("red→green vs the captured baseline"))).toBe(true);
@@ -257,14 +257,14 @@ describe("J1 — end-to-end acceptance demo", () => {
     expect(milestones.every((g) => g.outcome === "verified")).toBe(true);
     expect(milestones.every((g) => g.confidence === "yellow")).toBe(true); // judge caps at 🟡
 
-    // ---- DB dump: both rungs carry grounded outcomes; red rung red, recovered rung yellow.
+    // ---- DB dump: both rungs carry verified outcomes; red rung red, recovered rung yellow.
     const rows = db.getRunDecisions(agent.runId);
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.gt_outcome).toBe("failed");
-    expect(rows[0]!.gt_confidence).toBe("red");
+    expect(rows[0]!.big_plan_outcome).toBe("failed");
+    expect(rows[0]!.big_plan_confidence).toBe("red");
     expect(rows[0]!.outcome).toBe("failure");
-    expect(rows[1]!.gt_outcome).toBe("verified");
-    expect(rows[1]!.gt_confidence).toBe("yellow");
+    expect(rows[1]!.big_plan_outcome).toBe("verified");
+    expect(rows[1]!.big_plan_confidence).toBe("yellow");
     expect(feedbackCalls.length).toBe(2);
 
     // The refutation verdict is visible in the /why plan-gates section.

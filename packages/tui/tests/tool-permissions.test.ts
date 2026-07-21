@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { BeforeToolCallContext } from "../src/agent/tools.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { groundTruthHooks } from "../src/minima/ground_truth.ts";
+import { bigPlanHooks } from "../src/minima/big_plan.ts";
 import {
   ALWAYS_ALLOWED,
   GATED_TOOLS,
@@ -11,7 +11,7 @@ import {
 } from "../src/minima/tool_permissions.ts";
 
 // A6 — per-step tool allowlist (task permissions). Pure decisions + the dispatcher enforcement
-// folded into groundTruthHooks.before for non-todowrite calls.
+// folded into bigPlanHooks.before for non-todowrite calls.
 
 describe("parseStepTools", () => {
   test("null / empty / '[]' are unrestricted (null)", () => {
@@ -65,7 +65,7 @@ describe("stepAllowlistDecision", () => {
   });
 });
 
-// --- dispatcher enforcement through groundTruthHooks.before ---------------------------------
+// --- dispatcher enforcement through bigPlanHooks.before ---------------------------------
 
 function db(): MinimaDb {
   return new MinimaDb(":memory:");
@@ -88,11 +88,11 @@ function seedInProgress(d: MinimaDb, tools: string[] | null): void {
   d.setStepStatus(stepIds[0]!, "in_progress");
 }
 
-describe("groundTruthHooks allowlist enforcement", () => {
+describe("bigPlanHooks allowlist enforcement", () => {
   test("blocks a mutating tool not on the in-progress step's allowlist", async () => {
     const d = db();
     seedInProgress(d, ["edit"]);
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     const decision = await before(toolCtx("write"));
     expect(decision).not.toBeNull();
     expect(decision!.block).toBe(true);
@@ -102,7 +102,7 @@ describe("groundTruthHooks allowlist enforcement", () => {
   test("allows a listed tool and always-allowed read tools", async () => {
     const d = db();
     seedInProgress(d, ["edit"]);
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     expect(await before(toolCtx("edit"))).toBeNull();
     expect(await before(toolCtx("read"))).toBeNull();
     expect(await before(toolCtx("grep"))).toBeNull();
@@ -111,20 +111,20 @@ describe("groundTruthHooks allowlist enforcement", () => {
   test("an unrestricted step (no tools) allows anything", async () => {
     const d = db();
     seedInProgress(d, null);
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     expect(await before(toolCtx("bash"))).toBeNull();
   });
 
   test("no active plan / no in-progress step is allow (fail-open)", async () => {
     const d = db();
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     expect(await before(toolCtx("bash"))).toBeNull(); // no plan at all
   });
 
   test("enforcement OFF: the allowlist is advisory only", async () => {
     const d = db();
     seedInProgress(d, ["edit"]);
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: false });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: false });
     expect(await before(toolCtx("write"))).toBeNull();
   });
 
@@ -136,7 +136,7 @@ describe("groundTruthHooks allowlist enforcement", () => {
     d.seedPlanFromSteps("run1", "T", [
       { content: "Edit the router", verify: "bun test x", tools: ["edit"] },
     ]);
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     expect(await before(toolCtx("write"))).toBeNull();
   });
 
@@ -148,7 +148,7 @@ describe("groundTruthHooks allowlist enforcement", () => {
     ]);
     d.setStepStatus(stepIds[0]!, "completed");
     d.setStepStatus(stepIds[1]!, "in_progress");
-    const { before } = groundTruthHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { enforceAllowlist: true });
     // The allowlist read must follow the plan to step 1 (["bash"]), not linger on the completed
     // step 0 (["edit"]): write is on neither list, bash is on step 1's.
     const blocked = await before(toolCtx("write"));

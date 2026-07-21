@@ -20,7 +20,8 @@
   ],
   "scripts": {
     "test": "bun test",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && bun run check:terminology",
+    "check:terminology": "bun run scripts/check-terminology.ts",
     "lint": "biome check src",
     "format": "biome format --write src",
     "build": "bun run scripts/build.ts",

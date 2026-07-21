@@ -25,7 +25,7 @@ import type {
   GateOutcome,
   UserAction,
   VerifiedBy,
-} from "../minima/gt_contract.ts";
+} from "../minima/big_plan_contract.ts";
 
 export function defaultDbPath(): string {
   return process.env.MINIMA_DB_PATH?.trim() || join(homedir(), ".minima-harness", "minima.db");
@@ -157,7 +157,7 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN reinforced_entry_ids TEXT",
     "ALTER TABLE routing_decisions ADD COLUMN lesson_promoted INTEGER",
   ],
-  // v3 — Ground-Truth ledger: the plan + its steps (behind MINIMA_TUI_GROUND_TRUTH).
+  // v3 — Big Plan ledger: the plan + its steps.
   // `verify` (M3.1) and `baseline` (M3.3) are carried from the start so the red→green
   // machinery can fill them without another migration.
   [
@@ -195,8 +195,8 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_file_changes_plan ON file_changes(plan_id, created_at)",
   ],
-  // v5 — verification records: gate rows, user overrides, and the grounded outcome stamped
-  // back onto the routing decision (distinct GT columns so they never clobber the
+  // v5 — verification records: gate rows, user overrides, and the verified outcome stamped
+  // back onto the routing decision (distinct legacy columns so they never clobber the
   // judge/feedback `outcome`/`confidence`).
   [
     `CREATE TABLE IF NOT EXISTS gates (
@@ -256,7 +256,7 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
   ],
   // v9 — per-step cost attribution (U3): the in-progress plan step at routing time, stamped by
-  // the DecisionRecord writer when ground truth is on. This is provenance for reporting (U3
+  // the DecisionRecord writer when Big Plan is on. This is provenance for reporting (U3
   // sidebar / J1 /why), never a feedback input. NULL = pre-v8 row or no step in progress.
   [
     "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
@@ -350,6 +350,20 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE gates ADD COLUMN tool_schema_hash TEXT",
     "ALTER TABLE tool_calls ADD COLUMN result_ref TEXT", // sha256 blob file, NULL = inline only
   ],
+  // v14 — canonical Big Plan outcome columns. Legacy gt_* columns remain populated for one
+  // compatibility release so older binaries can still read decisions written by this version.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN big_plan_outcome TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN big_plan_verified_by TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN big_plan_confidence TEXT",
+    `UPDATE routing_decisions
+       SET big_plan_outcome = gt_outcome,
+           big_plan_verified_by = gt_verified_by,
+           big_plan_confidence = gt_confidence
+       WHERE big_plan_outcome IS NULL
+         AND big_plan_verified_by IS NULL
+         AND big_plan_confidence IS NULL`,
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -422,11 +436,11 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
-  /** In-progress GT plan step at routing time (v9) — reporting provenance, not feedback. */
+  /** In-progress Big Plan step at routing time (v9) — reporting provenance, not feedback. */
   stepId?: string | null;
 }
 
-// ---------------------------------------------------------------- ground-truth rows
+// ---------------------------------------------------------------- Big Plan rows
 export interface PlanRow {
   id: string;
   session_id: string | null;
@@ -1477,12 +1491,12 @@ export class MinimaDb {
   getProjectJudgeGateDisagreements(projectKey: string, limit = 200): Record<string, unknown>[] {
     return this.db
       .query(
-        `SELECT rec_id, task_type, chosen_model, quality, gt_outcome, ts
+        `SELECT rec_id, task_type, chosen_model, quality, big_plan_outcome, ts
          FROM routing_decisions
          WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)
-           AND judged = 1 AND quality IS NOT NULL AND gt_outcome IS NOT NULL
-           AND ((quality >= 0.8 AND gt_outcome = 'failure')
-             OR (quality < 0.4 AND gt_outcome = 'success'))
+           AND judged = 1 AND quality IS NOT NULL AND big_plan_outcome IS NOT NULL
+           AND ((quality >= 0.8 AND big_plan_outcome = 'failure')
+             OR (quality < 0.4 AND big_plan_outcome = 'success'))
          ORDER BY ts LIMIT ?`,
       )
       .all(projectKey, limit) as Record<string, unknown>[];
@@ -1591,8 +1605,8 @@ export class MinimaDb {
     return row.n;
   }
 
-  // ================================================================ ground-truth ledger
-  // Writers/readers behind MINIMA_TUI_GROUND_TRUTH. Fail-open at the call site (a broken
+  // ================================================================ Big Plan ledger
+  // Writers/readers are fail-open at the call site (a broken
   // write must never break a turn); these throw only on genuine DB errors.
 
   /** M0.2: create a plan row. Returns its id. */
@@ -1617,7 +1631,7 @@ export class MinimaDb {
   }
 
   /**
-   * Seed a fresh active plan + its steps from an APPROVED ground-truth plan (the planner→ledger
+   * Seed a fresh active plan + its steps from an APPROVED Big Plan (the planner→ledger
    * bridge). Each step is inserted `pending` with its verify; a step that carries a check is
    * stamped `check_origin='user'` — the user accepted this plan at /plan finalize, so its checks
    * are user-trusted, not agent-graded homework. Once seeded this becomes the session's active
@@ -1685,7 +1699,7 @@ export class MinimaDb {
   /**
    * /tasks cancel: close EVERY active plan for the session — adoption on resume and
    * repeated seeding can pile up several, and getActivePlan(LIMIT 1) would let the
-   * next-newest surface right back ("GT still holds"). Returns how many were cancelled.
+   * next-newest surface right back ("Big Plan still holds"). Returns how many were cancelled.
    */
   cancelActivePlans(sessionId: string): number {
     this.db.run(
@@ -1842,7 +1856,7 @@ export class MinimaDb {
    * post-COALESCE effective verify and the matched step's baseline so the gate can run the
    * right check and score red→green. The preview is only valid against the CURRENT rows:
    * it cannot see other todowrites queued in the same batch, which is why the done-gate
-   * enforces one todowrite per assistant message (ground_truth.ts same-batch guard).
+   * enforces one todowrite per assistant message (big_plan.ts same-batch guard).
    */
   completionsForTodos(sessionId: string, tasks: TodoInput[]): CompletionFlip[] {
     const plan = this.planForTodos(sessionId, tasks);
@@ -1874,7 +1888,7 @@ export class MinimaDb {
    * follow the logical step across inserts and reorders instead of binding to whatever row
    * happens to sit at each idx. Rows whose content no longer appears in the list (removed or
    * reworded steps) are dropped, detaching their file_changes/gates first; a reworded step
-   * therefore re-enters fresh with NULL verify/baseline — ground truth is lost, never
+   * therefore re-enters fresh with NULL verify/baseline — Big Plan evidence is lost, never
    * misattributed. A matched step's `verify` is preserved unless a new value is supplied.
    *
    * M3.3: `started` reports the steps whose pre-work baseline should be captured now — a step
@@ -2130,16 +2144,35 @@ export class MinimaDb {
       .all(gateId) as UserSignalRow[];
   }
 
-  // ---------------------------------------------------------------- grounded outcome (M7.1)
+  // ---------------------------------------------------------------- Big Plan outcome (M7.1)
   /** Stamp the step's real (deterministic) result onto its routing decision. */
-  attachGroundedOutcome(
+  attachBigPlanOutcome(
     recId: string,
     o: { outcome: GateOutcome; verifiedBy: VerifiedBy; confidence?: ConfidenceTier | null },
   ): void {
     this.db.run(
-      "UPDATE routing_decisions SET gt_outcome = ?, gt_verified_by = ?, gt_confidence = ? WHERE rec_id = ?",
-      [o.outcome, o.verifiedBy, o.confidence ?? null, recId],
+      `UPDATE routing_decisions
+       SET big_plan_outcome = ?, big_plan_verified_by = ?, big_plan_confidence = ?,
+           gt_outcome = ?, gt_verified_by = ?, gt_confidence = ?
+       WHERE rec_id = ?`,
+      [
+        o.outcome,
+        o.verifiedBy,
+        o.confidence ?? null,
+        o.outcome,
+        o.verifiedBy,
+        o.confidence ?? null,
+        recId,
+      ],
     );
+  }
+
+  /** @deprecated Use attachBigPlanOutcome. */
+  attachGroundedOutcome(
+    recId: string,
+    o: { outcome: GateOutcome; verifiedBy: VerifiedBy; confidence?: ConfidenceTier | null },
+  ): void {
+    this.attachBigPlanOutcome(recId, o);
   }
 
   close(): void {

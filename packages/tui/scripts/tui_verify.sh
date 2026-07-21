@@ -27,7 +27,7 @@
 #   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
 #                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
 #                     session on the same prefs dir honors the persisted hide
-#   panel-gt          MP9 (D3b GT view): an unanswered 🔴 gate WINS the Ctrl+G chord (no
+#   panel-plan-overview          MP9 (D3b Big Plan view): an unanswered 🔴 gate WINS the Ctrl+G chord (no
 #                     panel); answering it lets Ctrl+G open the overview; Enter opens the
 #                     step card; /why re-opens the panel — same zero-wipe byte gates
 #   plan-council      MP14: during a /plan turn the busy row shows the council progress
@@ -37,8 +37,8 @@
 #                     a substantive follow-up turn skips the council (one round summary)
 #   panel-draft       MP16: /plan-seed rounds show the D3b `plan (draft)` view converging
 #                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
-#                     chord to the ledger-backed GT overview (structural switch)
-#   plan-exit-gate    GT-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
+#                     chord to the ledger-backed Plan Overview (structural switch)
+#   plan-exit-gate    Big Plan-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
 #                     markdown lands in the transcript, the 4-option overlay (CC's
 #                     ExitPlanMode shape, auto-accept flavor first) approves into
 #                     accept-edits (the tool is the ONLY approval surface); Shift+Tab OUT
@@ -718,7 +718,7 @@ SPEC=$(cat <<EOF
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 14,
   "env": {"MINIMA_DB_PATH": "$TMP/tasks.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks",
-          "MINIMA_TUI_GROUND_TRUTH": "0"},
+          "MINIMA_TUI_BIG_PLAN": "0"},
   "frames": "$TMP/tasks-frames.jsonl",
   "raw": "$TMP/tasks-raw.bin",
   "steps": [
@@ -762,7 +762,7 @@ SPEC=$(cat <<EOF
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 13.5,
   "env": {"MINIMA_DB_PATH": "$TMP/tasks2.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-tasks",
-          "MINIMA_TUI_GROUND_TRUTH": "0"},
+          "MINIMA_TUI_BIG_PLAN": "0"},
   "frames": "$TMP/tasks2-frames.jsonl",
   "steps": [
     {"after": 3.0, "send": "TODO plan this work"},
@@ -789,18 +789,18 @@ assert any("Cancelled: 3 task(s) cleared" in row
 print("tui_assert: PASS tasks-footer-restart (hide persisted; /tasks cancel rejects the list)")
 PY
 
-echo "== tui-verify: scenario panel-gt (MP9: gate wins the chord, overview, step card, /why) =="
+echo "== tui-verify: scenario panel-plan-overview (MP9: gate wins the chord, overview, step card, /why) =="
 SPEC=$(cat <<EOF
 {
   "cmd": [$INLINE_ARGV],
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 18,
-  "env": {"MINIMA_DB_PATH": "$TMP/gtpanel.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-gtpanel",
-          "MINIMA_TUI_GROUND_TRUTH": "1"},
-  "frames": "$TMP/gtpanel-frames.jsonl",
-  "raw": "$TMP/gtpanel-raw.bin",
+  "env": {"MINIMA_DB_PATH": "$TMP/planoverview.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planoverview",
+          "MINIMA_TUI_BIG_PLAN": "1"},
+  "frames": "$TMP/planoverview-frames.jsonl",
+  "raw": "$TMP/planoverview-raw.bin",
   "steps": [
-    {"after": 3.0, "send": "/gt-seed"},
+    {"after": 3.0, "send": "/bp-seed"},
     {"after": 4.5, "send": "<CR>"},
     {"after": 6.0, "send": "<CTRLG>"},
     {"after": 7.0, "send": "a"},
@@ -819,11 +819,11 @@ SPEC=$(cat <<EOF
 }
 EOF
 )
-capture gtpanel "$SPEC"
-python3 - "$TMP/gtpanel-raw.bin" "$TMP/gtpanel-frames.jsonl" <<'PY'
+capture planoverview "$SPEC"
+python3 - "$TMP/planoverview-raw.bin" "$TMP/planoverview-frames.jsonl" <<'PY'
 import json, sys
 raw = open(sys.argv[1], "rb").read()
-assert b"\x1b[?1049" not in raw, "alt-screen sequence during GT panel ops"
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during Big Plan panel ops"
 wipes = raw.count(b"\x1b[3J")
 assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
 frames = [json.loads(l) for l in open(sys.argv[2])]
@@ -832,40 +832,40 @@ def frames_between(t0, t1):
 def grid_has(f, needle):
     return any(needle in row for row in f["screen"])
 
-GTCRUMB = "plan · "
+PLAN_OVERVIEW_CRUMB = "plan · "
 CARD = "plan ▸ step"
 # The armed 🔴 gate WINS the chord: from the seed until the answer, Ctrl+G (pressed at
 # 6.0) must NOT open the panel — the gate-focus keys own the composer instead. (The
 # gate-focus arms at seed time and Ctrl+G re-arms the SAME state, so the window spans
 # the whole blocked period: the re-arm may not produce a fresh frame.)
 block_win = frames_between(4.5, 7.0)
-assert not any(grid_has(f, GTCRUMB) for f in block_win), "panel opened over an unanswered 🔴 gate"
+assert not any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in block_win), "panel opened over an unanswered 🔴 gate"
 assert any(grid_has(f, "[a]ccept") for f in block_win), "gate-focus keys not on the composer"
 # Answered → Ctrl+G opens the overview with the full tiered rows.
-opened = [f for f in frames_between(8.0, 9.0) if grid_has(f, GTCRUMB)]
-assert opened, "Ctrl+G did not open the GT overview after the gate was answered"
+opened = [f for f in frames_between(8.0, 9.0) if grid_has(f, PLAN_OVERVIEW_CRUMB)]
+assert opened, "Ctrl+G did not open the Plan Overview after the gate was answered"
 assert any(grid_has(f, "Seed blocked verification") for f in opened), "seeded step titles missing"
 # Enter → the step card (shared stepCardLines surface).
 assert any(grid_has(f, CARD) for f in frames_between(9.0, 10.0)), "Enter did not open the step card"
 # Esc pops card → overview, Esc closes.
-assert any(grid_has(f, GTCRUMB) and not grid_has(f, CARD) for f in frames_between(10.0, 10.6)), (
+assert any(grid_has(f, PLAN_OVERVIEW_CRUMB) and not grid_has(f, CARD) for f in frames_between(10.0, 10.6)), (
     "Esc did not pop the card back to the overview")
-closed = [f for f in frames_between(10.6, 11.2) if not grid_has(f, GTCRUMB)]
+closed = [f for f in frames_between(10.6, 11.2) if not grid_has(f, PLAN_OVERVIEW_CRUMB)]
 assert closed, "Esc did not close the overview"
 # /why re-opens the panel (the primary /why surface in a TTY).
-assert any(grid_has(f, GTCRUMB) for f in frames_between(12.0, 13.2)), "/why did not open the GT panel"
+assert any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in frames_between(12.0, 13.2)), "/why did not open the Big Plan panel"
 # /tasks cancel is a REAL reject: the plan closes and NOTHING resurrects it — the D3a
 # header disappears and Ctrl+G reports no plan instead of showing the cancelled one.
-assert any(grid_has(f, "Ground-Truth plan closed") for f in frames_between(14.4, 15.2)), (
-    "/tasks cancel did not report closing the GT plan")
+assert any(grid_has(f, "Big Plan closed") for f in frames_between(14.4, 15.2)), (
+    "/tasks cancel did not report closing the Big Plan")
 post = frames_between(15.2, 16.2)
-assert any(grid_has(f, "No Ground-Truth plan recorded") for f in post), (
+assert any(grid_has(f, "No Big Plan recorded") for f in post), (
     "Ctrl+G after cancel did not report an empty ledger")
-assert not any(grid_has(f, GTCRUMB) for f in post), "GT panel resurrected a cancelled plan"
+assert not any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in post), "Big Plan panel resurrected a cancelled plan"
 assert not any(grid_has(f, " plan 3/3 · ▸") for f in post), "D3a header still shows the cancelled plan"
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone after exit"
-print("tui_assert: PASS panel-gt (gate wins, overview, step card, /why, cancel kills GT)")
+print("tui_assert: PASS panel-plan-overview (gate wins, overview, step card, /why, cancel kills Big Plan)")
 PY
 
 echo "== tui-verify: scenario plan-council (MP14: busy-row council progress line) =="
@@ -875,7 +875,7 @@ SPEC=$(cat <<EOF
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 32,
   "env": {"MINIMA_DB_PATH": "$TMP/plancouncil.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-plancouncil",
-          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "MINIMA_TUI_BIG_PLAN": "1", "MINIMA_JUDGE_MODEL": "mock-model",
           "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
           "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
           "OPENROUTER_API_KEY": "", "DEEPSEEK_API_KEY": "", "GROQ_API_KEY": "", "XAI_API_KEY": ""},
@@ -955,7 +955,7 @@ assert len(cost_rows) == 1, f"expected ONE council round summary, saw: {cost_row
 print("tui_assert: PASS plan-council (line advances role-by-role; follow-up skips the council)")
 PY
 # Anchor-ledger coverage: the council children's ChildTree teardown is a live-frame shrink
-# the old design floated on. Slack 2 (settled frames, whole run): GT plan-mode transitions
+# the old design floated on. Slack 2 (settled frames, whole run): Big Plan mode transitions
 # oscillate a row; the defect class this catches floats 5+.
 python3 "$TUI/scripts/tui_assert.py" "$TMP/plancouncil-frames.jsonl" --after 2.5 \
   --check final-nonblank --check bottom-anchor --bottom-slack 2
@@ -967,7 +967,7 @@ SPEC=$(cat <<EOF
   "cwd": "$TMP",
   "cols": 120, "rows": 36, "duration": 18,
   "env": {"MINIMA_DB_PATH": "$TMP/plandraft.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-plandraft",
-          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "MINIMA_TUI_BIG_PLAN": "1", "MINIMA_JUDGE_MODEL": "mock-model",
           "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
           "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
           "OPENROUTER_API_KEY": "", "DEEPSEEK_API_KEY": "", "GROQ_API_KEY": "", "XAI_API_KEY": ""},
@@ -1014,11 +1014,11 @@ assert len(cursors) >= 2, f"draft cursor never moved during nav (rows {cursors})
 # Round 2: same chord, richer snapshot.
 assert any(has(f, "plan (draft) · round 2") for f in win(8.0, 9.0)), (
     "second seed did not show round 2 in the draft view")
-# After finalize the SAME chord opens the ledger-backed GT overview (structural switch).
+# After finalize the SAME chord opens the ledger-backed Plan Overview (structural switch).
 post = win(15.5, 17.0)
-assert any(has(f, "plan · ") for f in post), "post-finalize Ctrl+G did not open the GT overview"
+assert any(has(f, "plan · ") for f in post), "post-finalize Ctrl+G did not open the Plan Overview"
 assert not any(has(f, "plan (draft)") for f in post), "draft view survived finalize"
-print("tui_assert: PASS panel-draft (round 1 -> round 2 -> finalize flips to the GT overview)")
+print("tui_assert: PASS panel-draft (round 1 -> round 2 -> finalize flips to the Plan Overview)")
 PY
 
 echo "== tui-verify: scenario plan-exit-gate (exit_plan tool gate; Shift+Tab is a silent exit) =="
@@ -1028,7 +1028,7 @@ SPEC=$(cat <<EOF
   "cwd": "$TMP",
   "cols": 120, "rows": 36, "duration": 22,
   "env": {"MINIMA_DB_PATH": "$TMP/planexit.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-planexit",
-          "MINIMA_TUI_GROUND_TRUTH": "0"},
+          "MINIMA_TUI_BIG_PLAN": "0"},
   "frames": "$TMP/planexit-frames.jsonl",
   "raw": "$TMP/planexit-raw.bin",
   "steps": [
@@ -1063,7 +1063,7 @@ def has(f, n):
 # The model's exit_plan(plan) call: the plan markdown lands in the transcript and the
 # 4-option approval overlay opens (CC's ExitPlanMode shape — auto-accept flavor FIRST);
 # Enter approves the default = auto-accept, so approval lands in accept-edits mode
-# (GT off, no GROUND_TRUTH.md — approval is the mode flip).
+# (Big Plan off, no BigPlan.md — approval is the mode flip).
 tool = win(4.85, 8.0)
 assert any(has(f, "Sandbox cleanup plan") for f in tool), "plan markdown not shown before the ask"
 assert any(has(f, "auto-accept edits") for f in tool), "approval overlay missing the auto-accept flavor"
@@ -1102,7 +1102,7 @@ SPEC=$(cat <<EOF
   "cwd": "$TMP",
   "cols": 120, "rows": 36, "duration": 22,
   "env": {"MINIMA_DB_PATH": "$TMP/vconsent.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-vconsent",
-          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_TUI_STOP_STRIKES": "0"},
+          "MINIMA_TUI_BIG_PLAN": "1", "MINIMA_TUI_STOP_STRIKES": "0"},
   "frames": "$TMP/vconsent-frames.jsonl",
   "raw": "$TMP/vconsent-raw.bin",
   "steps": [
@@ -1149,7 +1149,7 @@ PY
 
 echo "== tui-verify: scenario headless-verify-consent (MP18: -p fails closed without opt-in) =="
 rm -f "$TMP/hconsent.db" "$TMP/hconsent.db-wal" "$TMP/hconsent.db-shm"
-MINIMA_DB_PATH="$TMP/hconsent.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent" MINIMA_TUI_GROUND_TRUTH=1 \
+MINIMA_DB_PATH="$TMP/hconsent.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent" MINIMA_TUI_BIG_PLAN=1 \
   bun run "$TUI/src/cli/main.ts" --offline --model mock-model --provider mock \
   --provider-url "http://127.0.0.1:$MOCK_PORT/v1" -p "TODOVDONE claim the step is done" > "$TMP/hconsent.out" 2>&1 || true
 python3 - "$TMP/hconsent.db" <<'PY'
@@ -1161,7 +1161,7 @@ assert rows and all(r[0] == "unrunnable" for r in rows), (
 print("tui_assert: PASS headless fail-closed (gate unrunnable, verify never ran)")
 PY
 rm -f "$TMP/hconsent2.db" "$TMP/hconsent2.db-wal" "$TMP/hconsent2.db-shm"
-MINIMA_DB_PATH="$TMP/hconsent2.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent2" MINIMA_TUI_GROUND_TRUTH=1 \
+MINIMA_DB_PATH="$TMP/hconsent2.db" MINIMA_HARNESS_DIR="$TMP/prefs-hconsent2" MINIMA_TUI_BIG_PLAN=1 \
   MINIMA_TUI_ALLOW_VERIFY=1 \
   bun run "$TUI/src/cli/main.ts" --offline --model mock-model --provider mock \
   --provider-url "http://127.0.0.1:$MOCK_PORT/v1" -p "TODOVDONE claim the step is done" > "$TMP/hconsent2.out" 2>&1 || true
@@ -1181,7 +1181,7 @@ SPEC=$(cat <<EOF
   "cwd": "$TMP",
   "cols": 120, "rows": 40, "duration": 42,
   "env": {"MINIMA_DB_PATH": "$TMP/accept.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-accept",
-          "MINIMA_TUI_GROUND_TRUTH": "1", "MINIMA_JUDGE_MODEL": "mock-model",
+          "MINIMA_TUI_BIG_PLAN": "1", "MINIMA_JUDGE_MODEL": "mock-model",
           "MINIMA_TUI_PERF": "$TMP/accept-perf.jsonl",
           "ANTHROPIC_API_KEY": "", "ANTHROPIC_OAUTH_TOKEN": "", "OPENAI_API_KEY": "",
           "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_GENAI_API_KEY": "",
@@ -1235,7 +1235,7 @@ def first(n, t0=0.0):
 beats = [
     ("council line", first("council: researcher")),
     ("draft view", first("plan (draft) · round 1", 12.0)),
-    ("finalize note", first("Ground truth written", 15.0)),
+    ("finalize note", first("Big Plan written", 15.0)),
     ("verify in todowrite overlay", first("test -f demo_widget.ts", 20.0)),
     ("gate blocked red", first("Step not verified", 21.0)),
     ("the fix (write overlay)", first("run write", 21.0)),
@@ -1263,7 +1263,7 @@ SPEC=$(cat <<EOF
   "cwd": "$ROOT",
   "cols": 120, "rows": 36, "duration": 23,
   "env": {"MINIMA_DB_PATH": "$TMP/otanchor.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-otanchor",
-          "MINIMA_TUI_GROUND_TRUTH": "0"},
+          "MINIMA_TUI_BIG_PLAN": "0"},
   "frames": "$TMP/otanchor-frames.jsonl",
   "raw": "$TMP/otanchor-raw.bin",
   "steps": [
@@ -1443,7 +1443,7 @@ python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 2.5 \
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/clip-raw.bin "$TMP"/keys-raw.bin "$TMP"/spike-raw.bin \
-          "$TMP"/tasks-raw.bin "$TMP"/gtpanel-raw.bin \
+          "$TMP"/tasks-raw.bin "$TMP"/planoverview-raw.bin \
           "$TMP"/streamcode80-raw.bin "$TMP"/streamcode60-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
           "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \

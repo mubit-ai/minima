@@ -223,7 +223,7 @@ describe("memory dream — procedure:known replay", () => {
       candidates: ["test-faux"],
       allowOffline: false,
       minimaApiKey: "k",
-      groundTruth: false,
+      bigPlan: false,
     });
     const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });

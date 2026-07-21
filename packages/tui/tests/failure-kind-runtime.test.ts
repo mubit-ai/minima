@@ -106,7 +106,7 @@ function setup(db: MinimaDb, over: Record<string, unknown> = {}) {
     candidates: ["cheap-model", "big-model"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: true,
+    bigPlan: true,
     stopStrikes: 0, // isolate the ladder from the A2 stop-gate
     spiralRepeats: 0, // and from A3
     stepCap: 0,
@@ -171,7 +171,7 @@ describe("A4 failure-kind matcher — live loop", () => {
     db.close();
   });
 
-  test("persistent grounded 🔴 → REPLAN: the plan-revision steer reaches the model on the retry", async () => {
+  test("persistent deterministic 🔴 → REPLAN: the plan-revision steer reaches the model on the retry", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const { agent, reg, svc } = setup(db);
@@ -215,7 +215,7 @@ describe("A4 failure-kind matcher — live loop", () => {
     db.close();
   });
 
-  test("kill-switch: groundTruth ON but failureMatcher OFF → classic always-escalate ladder", async () => {
+  test("kill-switch: bigPlan ON but failureMatcher OFF → classic always-escalate ladder", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const { agent, reg, svc } = setup(db, { failureMatcher: false });
