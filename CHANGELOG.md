@@ -4,6 +4,60 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-07-21
+
+The Mubit reinforcement train: mubit-sdk 0.13.0 adopted end to end, every free
+signal on the memory wire put to work, and the ground-truth spine's per-step gate
+verdicts start feeding Mubit as process rewards (PRs #192–#197).
+
+### Added
+- **Per-step process rewards** (server + harness, #195): the harness's red→green
+  gate verdicts now ride `POST /v1/feedback` as `step_outcomes[]` and relay to
+  Mubit's `record_step_outcome` — finer-grained reflection attribution and the raw
+  material for server-side workflow induction (procedural memory). Feedback truth
+  applies per step: deterministic/user verdicts only (judge gates excluded),
+  verified/failed only, relayed even on unlabeled turns (steps carry their own
+  provenance), capped at 32, duplicate-feedback check doubles as replay dedup.
+  Response gains `step_outcomes_recorded`.
+- **`POST /v1/diagnose` + `GET /v1/memory/health`** (server, #196): Mubit
+  introspection relays — failure lessons matching an error, and a per-namespace
+  memory-hygiene report (stale entries, contradictions, low-confidence counts,
+  promotion candidates). Both degrade to `memory_unavailable` instead of 500ing.
+  Full client parity (Python sync/async, TS SDK, TUI).
+- **Recovery-ladder memory brief** (TUI, #196): the replan rung asks `/v1/diagnose`
+  for "here's how this failed before" and injects matched lessons into the retry
+  preamble, next to the E2 local diagnostics. Fail-open.
+- **Drift + retrieval signals surfaced** (server, #193): Mubit DriftMonitor flags
+  riding every recall now emit `memory_drift:repeated` / `memory_drift:stagnant`
+  diagnostics, and the server's recall confidence feeds escalation as
+  `low_recall_confidence` (only when reported — absence is not a signal).
+- **Sampled retrieval observability** (server, #194): `MINIMA_RECALL_EXPLAIN_SAMPLE`
+  requests Mubit's per-evidence fusion-score breakdown on a sampled fraction of
+  recalls and logs it as `recall_explain` — the "why did memory rank this" tool.
+
+### Fixed
+- **Dereference now shares the recall budget** (server, #193): it was the one read
+  path with no timeout budget — a hung Mubit could stall a recommend for the full
+  30s client timeout.
+- **Supersession folds into staleness** (server, #193): a `superseded_by` entry is
+  treated as stale even when the `is_stale` flag lags the supersession write.
+
+### Changed
+- **mubit-sdk ≥ 0.13.0** (#192): the v0.12.3 keyed-lookup transport shim is deleted
+  in favor of the now-public `Client.lookup`; the TUI's `@mubit-ai/sdk` moves to
+  `^0.13.0` (transport retries now real). All remaining private `_control` handle
+  uses replaced with the typed surface (#194) — recall knobs and `record_outcome`
+  idempotency are first-class SDK parameters now.
+- **Bi-temporal outcome writes** (server, #194): `remember_outcome` passes
+  `occurrence_time` (observation time, not async-ingest landing time). Seeds are
+  deliberately NOT backdated — the seed-vs-live weighting design stands.
+- **Harness memory lane partition** (TUI, #197): harness trace writes stamp
+  `lane=harness`, keeping them explicitly partitioned from the server's typed
+  outcome records. Recall stays unfiltered until unlaned data ages out.
+- Dead `MubitMemory.get_context` surface removed (#193); recall-precision knobs
+  (`entry_types`, `rank_by`, `budget`, `max_age_days`, `explain_sample`) documented
+  in `docs/configuration.md` (#194).
+
 ## [0.12.4] - 2026-07-21
 
 ### Fixed
