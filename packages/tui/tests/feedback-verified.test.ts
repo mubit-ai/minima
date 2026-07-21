@@ -10,7 +10,7 @@ import {
   text,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import type { ConfidenceTier, GateOutcome } from "../src/minima/gt_contract.ts";
+import type { ConfidenceTier, GateOutcome } from "../src/minima/big_plan_contract.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -110,7 +110,7 @@ function setup(judge: ReturnType<typeof countingJudge>) {
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: true,
+    bigPlan: true,
     // These tests seed an in_progress step purely as a feedback-path fixture; they are not about
     // the A2 stop-gate, so disable it (its default would force-continue the single-response mock).
     stopStrikes: 0,
@@ -182,7 +182,7 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     const fb = feedbackCalls[0] as Record<string, unknown>;
     // A7: a passing-but-untrustworthy check is weaker evidence than green — graded to partial.
     expect(fb.outcome).toBe("partial");
-    expect(fb.verified_in_production).toBe(false); // agent-authored trust is never ground truth
+    expect(fb.verified_in_production).toBe(false); // agent-authored trust is never verified evidence
     expect(fb.evidence_source).toBe("none"); // gameable label stays telemetry
     expect(fb.quality_score).toBeUndefined(); // still no fabricated quality
     expect(String(fb.notes)).toContain("tier=yellow");
@@ -248,7 +248,7 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
 
   test("no gate → falls back to the judge (verified_in_production=false)", async () => {
     const { agent, reg, feedbackCalls, db, runId } = setup(judge);
-    // Active plan but no gate → no grounded verdict → judge path unchanged.
+    // Active plan but no gate → no verified verdict → judge path unchanged.
     db.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress" }]);
 
     await agent.promptRouted("do the thing");

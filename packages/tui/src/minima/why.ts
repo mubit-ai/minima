@@ -1,7 +1,7 @@
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
+import { CHECK_ORIGINS } from "./big_plan_contract.ts";
+import type { CheckOrigin, ConfidenceTier, Factors } from "./big_plan_contract.ts";
 import { confidence } from "./confidence.ts";
-import { CHECK_ORIGINS } from "./gt_contract.ts";
-import type { CheckOrigin, ConfidenceTier, Factors } from "./gt_contract.ts";
 
 const TIER_GLYPHS: Record<ConfidenceTier, string> = {
   green: "🟢",
@@ -21,13 +21,13 @@ export interface GateVerdict {
 }
 
 export function whyReportFor(db: MinimaDb | null, sessionId: string | null): string {
-  if (!db || !sessionId) return "No Ground-Truth ledger available.";
+  if (!db || !sessionId) return "No Big Plan ledger available.";
   const plan = db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) {
     const orphans = orphanLines(db, sessionId);
     return orphans.length > 0
-      ? ["No Ground-Truth plan recorded for this run.", ...orphans].join("\n")
-      : "No Ground-Truth plan recorded for this run.";
+      ? ["No Big Plan recorded for this run.", ...orphans].join("\n")
+      : "No Big Plan recorded for this run.";
   }
 
   const steps = db.getPlanSteps(plan.id);
@@ -49,7 +49,7 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
     driftByStep.set(change.step_id, paths);
   }
 
-  const lines = [`Ground-Truth verification - ${plan.title?.trim() || plan.id}`];
+  const lines = [`Big Plan verification - ${plan.title?.trim() || plan.id}`];
   if (steps.length === 0) lines.push("No plan steps recorded.");
   for (const step of steps) {
     const gate = latestGateByStep.get(step.id);

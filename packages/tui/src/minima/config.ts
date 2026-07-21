@@ -51,39 +51,41 @@ export interface HarnessConfig {
   allowOffline: boolean;
   cacheEnabled: boolean;
   cacheThreshold: number;
-  /** Ground-Truth ledger (default ON since 0.11): persist/project the plan, attribute file
+  /** Big Plan ledger (default ON since 0.11): persist/project the plan, attribute file
    * changes, and record verification gates — gate verdicts are the harness's honest label
-   * source. Opt out with MINIMA_TUI_GROUND_TRUTH=0. */
-  groundTruth: boolean;
+   * source. Opt out with MINIMA_TUI_BIG_PLAN=0. */
+  bigPlan: boolean;
+  /** @deprecated Use `bigPlan`. Retained as a synchronized read/input alias for one release. */
+  groundTruth?: boolean;
   /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
    * END the run while the plan has incomplete/failing steps before it stops denying and asks the
    * user. `MINIMA_TUI_STOP_STRIKES`, default 3; 0 disables the stop-gate entirely (pure-nudge
-   * behavior). Only consulted when `groundTruth` is on — inert on the default path. */
+   * behavior). Only consulted when `bigPlan` is on — inert on the default path. */
   stopStrikes: number;
   /** Anti-spiral (A3): the doom-loop ring-buffer trigger — how many times the SAME failing tool
    * call (tool+args) may repeat within the window before the harness injects a summary and steers
    * the model off the loop. `MINIMA_TUI_SPIRAL_REPEATS`, default 3; 0 disables the detector. Only
-   * consulted when `groundTruth` is on. */
+   * consulted when `bigPlan` is on. */
   spiralRepeats: number;
   /** Anti-spiral (A3): soft turn cap — after this many turns the harness injects a wrap-up summary
    * and stops gracefully (distinct from the hard `maxTurns` ceiling). `MINIMA_TUI_STEP_CAP`,
-   * default 30; 0 disables the cap. Only consulted when `groundTruth` is on. */
+   * default 30; 0 disables the cap. Only consulted when `bigPlan` is on. */
   stepCap: number;
   /** Soft USD cap per plan-mode council round (MINIMA_PLAN_ROUND_BUDGET_USD). Read only by
-   * the groundTruth /plan workflow — inert on the default path. Defaults to 0.25, bumped to
+   * the bigPlan /plan workflow — inert on the default path. Defaults to 0.25, bumped to
    * 1.00 when `planPremium` is on and the env var is unset — premium meta spend reconciles
    * into the round, so the base reservation chronically under-reserves. */
   planRoundBudgetUsd: number;
   /** Plan-premium (default ON): while plan mode is active, the plan-DECIDING calls — the
    * routed lead-planner turn (hard `constraints.candidate_models` pin, pre-request candidate
    * assembly) and the council's plan-shaping meta calls (draft/revise/critic-attack/synth +
-   * finalize question-resolution and ground-truth synthesis) — are restricted to the premium
-   * allowlist. The sessionless plan-mode fallback (GT off / no live council) is pinned to
-   * the same pool — the restriction is a property of the MODE, not of the council. Keeper
+   * finalize question-resolution and big-plan synthesis) — are restricted to the premium
+   * allowlist. The sessionless plan-mode fallback (Big Plan off / no live council) is pinned
+   * to the same pool — the restriction is a property of the MODE, not of the council. Keeper
    * bookkeeping, researchers, the E1 critic, and the diff reviewer keep their cheap/normal
    * models. Hard constraint: no
    * runnable premium model fails loudly (an explicit /model pin wins over the policy). Opt
-   * out with MINIMA_TUI_PLAN_PREMIUM=0 — mirrors the groundTruth flag shape. */
+   * out with MINIMA_TUI_PLAN_PREMIUM=0 — mirrors the bigPlan flag shape. */
   planPremium: boolean;
   /** Premium model ids for plan mode (MINIMA_PLAN_PREMIUM_MODELS, comma-separated).
    * Order = preference order; the first runnable entry becomes the plan-shaping model. */
@@ -94,36 +96,37 @@ export interface HarnessConfig {
   /** Failure-kind matchers (A4): classify WHY a recovery rung failed and pick the fitting
    * intervention (backoff transient / escalate capability / replan structural) instead of the
    * ladder's blunt always-escalate. `MINIMA_TUI_FAILURE_MATCHER`, default on (`0` disables →
-   * classic escalate-only ladder). Only consulted when `groundTruth` is on — inert on the default
+   * classic escalate-only ladder). Only consulted when `bigPlan` is on — inert on the default
    * path. */
   failureMatcher: boolean;
   /** Per-step tool allowlist (A6): hard-block, at the dispatcher, any mutating tool a plan step did
    * not list in its `tools` allowlist while that step is in progress. `MINIMA_TUI_TOOL_ALLOWLIST`,
    * default on (`0` disables → no enforcement, steps' allowlists become advisory metadata only).
-   * Only consulted when `groundTruth` is on — inert on the default path; a step with no authored
+   * Only consulted when `bigPlan` is on — inert on the default path; a step with no authored
    * allowlist is unrestricted, so this never changes behavior for plans that don't use it. */
   toolAllowlist: boolean;
   /** Failure-kind matchers (A4): bounded delay (ms) before a `backoff` retry of the SAME model on a
    * transient/infra error. `MINIMA_TUI_BACKOFF_MS`, default **0** (no delay — hermetic tests); set
    * a small value (e.g. 500) in prod to space out a rate-limited retry. */
   backoffMs: number;
-  /** Graded grounded outcome (A7): grade the DETERMINISTIC feedback label by the gate's confidence
+  /** Graded verified outcome (A7): grade the DETERMINISTIC feedback label by the gate's confidence
    * tier instead of collapsing every verified pass to `success`. On: a 🟢 verified pass →
    * `success`, a 🟡/🔴-tier-but-verified pass (self-written test, no red→green evidence, or an A5
    * fabrication-floor red) → `partial`, a failed check → `failure` — so Minima learns weaker
-   * positive evidence distinctly from clean ground truth. `MINIMA_TUI_GRADED_OUTCOME`, default on
-   * (`0` disables → the M7.2 binary verified→success). Only consulted when `groundTruth` is on —
+   * positive evidence distinctly from verified evidence. `MINIMA_TUI_GRADED_OUTCOME`, default on
+   * (`0` disables → the M7.2 binary verified→success). Only consulted when `bigPlan` is on —
    * inert on the default path (the deterministic branch never runs without a gate). Never affects
    * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
   gradedOutcome: boolean;
   /** Memory ledger (B1, default ON): project curated cross-session memories (SQLite
    * `memories` table, managed via /memory) into each turn's system prompt. Opt out with
-   * MINIMA_TUI_MEMORY=0 — mirrors the groundTruth flag shape. Read path only: nothing
+   * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
    * writes memories unless the user (or a later curator) does. */
   memoryLedger: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
+  const bigPlan = overrides.bigPlan ?? overrides.groundTruth ?? true;
   return {
     minimaUrl: DEFAULT_MINIMA_URL,
     minimaApiKey: null,
@@ -140,7 +143,6 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     allowOffline: true,
     cacheEnabled: false,
     cacheThreshold: 0.95,
-    groundTruth: true,
     stopStrikes: 3,
     spiralRepeats: 3,
     stepCap: 30,
@@ -154,6 +156,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     gradedOutcome: true,
     memoryLedger: true,
     ...overrides,
+    bigPlan,
+    groundTruth: bigPlan,
   };
 }
 
@@ -166,7 +170,15 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const t = Number(timeoutEnv);
     if (Number.isFinite(t)) cfg.timeout = t;
   }
-  cfg.groundTruth = process.env.MINIMA_TUI_GROUND_TRUTH !== "0";
+  const bigPlanEnv = process.env.MINIMA_TUI_BIG_PLAN;
+  const legacyBigPlanEnv = process.env.MINIMA_TUI_GROUND_TRUTH;
+  cfg.bigPlan =
+    bigPlanEnv !== undefined
+      ? bigPlanEnv !== "0"
+      : legacyBigPlanEnv !== undefined
+        ? legacyBigPlanEnv !== "0"
+        : true;
+  cfg.groundTruth = cfg.bigPlan;
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
@@ -212,7 +224,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (planModelEnv) cfg.planModel = planModelEnv;
   if (cfg.planPremium && !roundBudgetFromEnv) cfg.planRoundBudgetUsd = 1.0;
   // MINIMA_JUDGE_MODEL repoints the judge AND the plan-council meta model (keeper/critic/
-  // synth + ground-truth synthesis) — without it, a missing/limited key for the default
+  // synth + big-plan synthesis) — without it, a missing/limited key for the default
   // model silently degrades the whole planning pipeline with no way to choose another.
   const judgeEnv = process.env.MINIMA_JUDGE_MODEL?.trim();
   if (judgeEnv) cfg.judgeModel = judgeEnv;
@@ -224,7 +236,8 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(backoffEnv);
     if (Number.isInteger(n) && n >= 0) cfg.backoffMs = n;
   }
-  return { ...cfg, ...overrides };
+  const bigPlan = overrides.bigPlan ?? overrides.groundTruth ?? cfg.bigPlan;
+  return { ...cfg, ...overrides, bigPlan, groundTruth: bigPlan };
 }
 
 /** Re-read the Minima endpoint + routing auth from the environment, in place. */

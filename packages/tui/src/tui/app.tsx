@@ -38,14 +38,14 @@ import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
-import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
-import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
   type PlanStripInfo,
   type VerifyConsent,
   planStripInfo,
-  stampGroundedOutcome,
-} from "../minima/ground_truth.ts";
+  stampVerifiedOutcome,
+} from "../minima/big_plan.ts";
+import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
+import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
   PlanSessionStore,
   type RoutingResult,
@@ -86,7 +86,6 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import { footerStatsFromMessages } from "./footer.ts";
-import { buildGtOverview, gtRows, renderGtOverviewText, stepCardLines } from "./gt_overview.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -112,8 +111,8 @@ import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
   type PanelState,
-  gtPanelState,
   panelReduce,
+  planOverviewPanelState,
   readerView,
   tocPanelState,
 } from "./panel_state.ts";
@@ -129,6 +128,12 @@ import {
   planModeBlockedTools,
 } from "./permissions.ts";
 import { draftPanelState } from "./plan_draft_view.ts";
+import {
+  buildPlanOverview,
+  planOverviewRows,
+  renderPlanOverviewText,
+  stepCardLines,
+} from "./plan_overview.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
@@ -164,13 +169,13 @@ export interface AppProps {
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
   /**
-   * Ground-Truth done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_GROUND_TRUTH.
+   * Big Plan done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_BIG_PLAN.
    * Registered HERE, after the permission hook, so permission always runs first (first block
    * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
    */
-  gtGateBefore?: BeforeToolCall | null;
+  bigPlanGateBefore?: BeforeToolCall | null;
   /**
-   * MP18: the verify-consent seam main.ts wired into the GT hooks. Defaults to the headless
+   * MP18: the verify-consent seam main.ts wired into the Big Plan hooks. Defaults to the headless
    * fail-closed checker; this component swaps in the permission-state-backed one on mount
    * (approvedVerifies — exact command strings the user allowed via the overlay; bypass mode
    * is the user's blanket consent) and restores the headless checker on unmount.
@@ -180,12 +185,12 @@ export interface AppProps {
    * The LEAD agent's live todo list (D3a task panel): the same array main.ts handed to
    * todowriteTool, mutated in place by the tool. Re-reads are driven by tool_execution_end
    * (the event carries no toolName, so every tool end bumps the cheap re-read — the same
-   * unfiltered pattern the GT strip refresh uses).
+   * unfiltered pattern the Big Plan strip refresh uses).
    */
   todos?: TodoTask[];
 }
 
-/** Persona the lead adopts in plan mode; the council's ground-truth snapshot is appended each turn. */
+/** Persona the lead adopts in plan mode; the council's big-plan snapshot is appended each turn. */
 const PLANNER_PERSONA =
   "You are the planning lead in an interactive, read-only plan-mode session: you cannot edit " +
   "files, run bash, or write anything. Converse with the user to shape a concrete, well-reasoned " +
@@ -202,11 +207,11 @@ function anyProviderKeyPresent(): boolean {
   return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
 }
 
-/** GT-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
+/** Big Plan-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
 const PLAN_ON_NOTICE =
   "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
   "Talk through the plan; the design council convenes on substantive turns. " +
-  "/plan finalize writes the ground truth to the project root. /plan status · /plan cancel.";
+  "/plan finalize writes the Big Plan to the project root. /plan status · /plan cancel.";
 
 /** The finalize success note, shared by /plan finalize and the exit_plan tool. */
 function finalizeSuccessNote(o: {
@@ -222,7 +227,7 @@ function finalizeSuccessNote(o: {
   const synthNote = o.synthFailed
     ? "\n\n⚠ Plan synthesis failed (model output truncated or unavailable) — the doc is the deterministic assembly and NO steps were seeded to the plan ledger. The agent was told to record them with todowrite."
     : "";
-  return `Ground truth written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
+  return `Big Plan written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
 }
 
 /** Suggested `/config set` hint for a provider (or a generic one). */
@@ -294,7 +299,7 @@ const COMMANDS = [
   { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + GT plan" },
+  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + Big Plan" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
@@ -312,10 +317,10 @@ const COMMANDS = [
   },
   { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
-  { name: "gt", desc: "Show Ground-Truth ledger status (MINIMA_TUI_GROUND_TRUTH)" },
-  { name: "gt-seed", desc: "Seed a demo GT plan + gates for this run (GT on only)" },
-  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (GT on only)" },
-  { name: "why", desc: "Show Ground-Truth verification (/why <n> opens the step card)" },
+  { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
+  { name: "bp-seed", desc: "Seed a demo Big Plan with gates for this run (Big Plan on only)" },
+  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (Big Plan on only)" },
+  { name: "why", desc: "Show Big Plan verification (/why <n> opens the step card)" },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
   {
@@ -804,7 +809,7 @@ export function HarnessApp({
   initialResume = null,
   planSpawn,
   planMetaModel,
-  gtGateBefore,
+  bigPlanGateBefore,
   verifyConsentRef,
   todos,
 }: AppProps) {
@@ -939,12 +944,12 @@ export function HarnessApp({
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
   const [initialPermState] = useState(() =>
     createPermissionState(process.cwd(), {
-      groundTruth: agent.config.groundTruth === true,
+      bigPlan: agent.config.bigPlan === true,
       projectKey: repoIdentity(process.cwd()),
     }),
   );
   const permStateRef = useRef<PermissionState>(initialPermState);
-  // MP18: swap the GT hooks' consent seam to the overlay-backed checker while the TUI is
+  // MP18: swap the Big Plan hooks' consent seam to the overlay-backed checker while the TUI is
   // mounted. Consent keys on the exact command string; bypass mode is blanket consent
   // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
   // still prompt). Unmount restores the headless fail-closed default.
@@ -978,22 +983,22 @@ export function HarnessApp({
   const planMode = mode === "plan";
   // Phase-0 footer badge slot (MUB-129): external store so guards/modes outside React set it.
   const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
-  // Ground-Truth plan-of-record footer strip (M1.3/M2.3). Null when GT is off or there is no
+  // Big Plan footer strip (M1.3/M2.3). Null when Big Plan is off or there is no
   // plan yet; refreshed from the DB on each tool_execution_end (todowrite → step, write → drift).
   const [planStrip, setPlanStrip] = useState<PlanStripInfo | null>(null);
-  // GT tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
+  // Big Plan tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
   // and the earliest 🔴 block. Refreshed alongside planStrip; fails open to null (no note/block).
-  const [gtBehavior, setGtBehavior] = useState<LedgerBehavior | null>(null);
+  const [bigPlanBehavior, setBigPlanBehavior] = useState<LedgerBehavior | null>(null);
   // M6.3 gate-focus modal: while a 🔴 block owns the keyboard the prompt input is disabled, so
   // a/r/s/v/Esc reach ONLY the gate handler (Ink dispatches every keypress to ALL useInput hooks —
   // mutual exclusion must come from state, not dispatch order). `noteEntry` is the steer sub-state,
-  // where the input is re-enabled to capture one line of guidance. Arms only when gtBehavior.block
-  // exists, which itself requires groundTruth on — structurally inert on the default path.
+  // where the input is re-enabled to capture one line of guidance. Arms only when bigPlanBehavior.block
+  // exists, which itself requires bigPlan on — structurally inert on the default path.
   const [gateFocus, setGateFocus] = useState<{ gateId: string; noteEntry: boolean } | null>(null);
   /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
   const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
-  // ground-truth .md written to the project root on /plan finalize.
+  // big-plan .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
   // Session-identity counter (transcriptGen pattern): the session lives in a ref, so effects
   // that must re-run when it is replaced (exit_plan registration) key on this instead. The
@@ -1027,7 +1032,7 @@ export function HarnessApp({
     persistMode(projectKeyRef.current, mode);
   }, [mode]);
 
-  // GT plan-council session lifecycle (shared by /plan and the mode-exit cleanup below).
+  // planning council session lifecycle (shared by /plan and the mode-exit cleanup below).
   const enterPlanMode = useCallback(
     (goal: string) => {
       setMode("plan");
@@ -1054,7 +1059,7 @@ export function HarnessApp({
       plannerBaseSystemPromptRef.current = null;
     }
   }, [agent]);
-  // Any store writer (Shift+Tab, a bare /plan) can leave plan mode while a GT council
+  // Any store writer (Shift+Tab, a bare /plan) can leave plan mode while a Big Plan council
   // session is live — tear the session down exactly like /plan off, so build mode never
   // runs with the planner persona as its system prompt. The notice keeps the discard visible.
   useEffect(() => {
@@ -1069,18 +1074,18 @@ export function HarnessApp({
       },
     ]);
   }, [mode, exitPlanMode]);
-  // Mirror of the cleanup above, and the PRIMARY door into the GT planning workflow: ANY
+  // Mirror of the cleanup above, and the PRIMARY door into the Big Plan workflow: ANY
   // store writer that lands the mode on "plan" (the Shift+Tab ring, a persisted-mode
   // restore at startup, a future /mode) gets a real session — persona + council + exit_plan
   // — so plan mode is never a badge-only half-state (prompts would route through the normal
   // loop and the model could execute with per-call approval, never planning). /plan and
-  // /plan start call enterPlanMode directly, so this no-ops for them; with GT off or no
+  // /plan start call enterPlanMode directly, so this no-ops for them; with Big Plan off or no
   // council deps it leaves the bare B2 policy flip alone (the onSubmit fallthrough warning
   // surfaces the latter).
   useEffect(() => {
     if (
       mode !== "plan" ||
-      agent.config.groundTruth !== true ||
+      agent.config.bigPlan !== true ||
       planSessionRef.current != null ||
       !planSpawn ||
       !planMetaModel
@@ -1115,7 +1120,7 @@ export function HarnessApp({
         signal,
         force,
         transcript: buildPlanTranscript(agent.agentState.messages),
-        outPath: `${process.cwd()}/GROUND_TRUTH.md`,
+        outPath: `${process.cwd()}/BigPlan.md`,
         db: agent.db,
         runId: agent.runId,
         // E3 auto-gates: mine this repo's own check commands into verify-less steps.
@@ -1147,7 +1152,7 @@ export function HarnessApp({
       const landingNote = autoAcceptEdits
         ? " Your file edits inside the project are pre-approved (accept-edits mode)."
         : "";
-      // MP17: sessionless (GT-off) plan mode has no store and writes no GROUND_TRUTH.md — the
+      // MP17: sessionless (Big Plan-off) plan mode has no store and writes no BigPlan.md — the
       // approved plan lives in the transcript (showPlan pushed the tool's `plan` markdown).
       // Approval here is just the mode flip back to full tool access.
       if (planSessionRef.current == null) {
@@ -1173,7 +1178,7 @@ export function HarnessApp({
         outcome.seededCount > 0
           ? `; ${outcome.seededCount} verifiable step${outcome.seededCount === 1 ? "" : "s"} seeded to the plan ledger`
           : "";
-      // The ledger drives the whole GT build spine (plan strip, Ctrl+G overview, done-gates) —
+      // The ledger drives the whole Big Plan build spine (plan strip, Ctrl+G overview, done-gates) —
       // when finalize could not seed it, the agent must recreate it as its FIRST move.
       const ledgerGuidance =
         outcome.seededCount > 0
@@ -1181,7 +1186,7 @@ export function HarnessApp({
           : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
       return {
         ok: true,
-        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
+        message: `Plan approved and finalized. Big Plan written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
       };
     },
     [agent, runPlanFinalize, exitPlanMode],
@@ -1201,7 +1206,7 @@ export function HarnessApp({
     ]);
   }, [exitPlanMode]);
   // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
-  // universal gate, GT on or off; sessionless plan mode requires the `plan` markdown arg,
+  // universal gate, Big Plan on or off; sessionless plan mode requires the `plan` markdown arg,
   // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
   // ask-null guard covers any other pathless case. Its approval overlay rides the same
   // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab, /plan off)
@@ -1379,7 +1384,7 @@ export function HarnessApp({
     };
   }, []);
 
-  // Wire the beforeToolCall permission hook, then the Ground-Truth done-gate (when on) so
+  // Wire the beforeToolCall permission hook, then the Big Plan done-gate (when on) so
   // permission always runs first — first block wins, and no gate check ever executes for a
   // call the user declines.
   //
@@ -1396,19 +1401,19 @@ export function HarnessApp({
     });
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (getMode() === "plan") {
-        const gtOn = agent.config.groundTruth === true;
-        if (planModeBlockedTools(gtOn).includes(ctx.toolCall.name)) {
+        const bigPlanOn = agent.config.bigPlan === true;
+        if (planModeBlockedTools(bigPlanOn).includes(ctx.toolCall.name)) {
           emitGuardEvent({
             kind: "mode-deny",
             detail: formatActionLabel(ctx.toolCall.name, ctx.args),
           });
-          return { block: true, reason: planModeBlockReason(ctx.toolCall.name, gtOn) };
+          return { block: true, reason: planModeBlockReason(ctx.toolCall.name, bigPlanOn) };
         }
       }
       return modeGated(ctx);
     });
     // B3: checkpoint snapshot rides between the permission gate (a denied call must not
-    // snapshot) and the GT done-gate (a gt-block after a snapshot is harmless — deduped by
+    // snapshot) and the Big Plan done-gate (a big-plan-block after a snapshot is harmless — deduped by
     // tree). Same effect as its neighbors: a separate effect with different deps would lose
     // the relative order on re-registration.
     const ckpt = makeCheckpointHook({
@@ -1416,7 +1421,7 @@ export function HarnessApp({
       db: agent.db ?? null,
       getRunId: () => agent.runId,
       getStepId: () => {
-        if (agent.config.groundTruth !== true || !agent.db || !agent.runId) return null;
+        if (agent.config.bigPlan !== true || !agent.db || !agent.runId) return null;
         const plan = agent.db.getActivePlan(agent.runId);
         return plan ? (agent.db.getInProgressStep(plan.id)?.id ?? null) : null;
       },
@@ -1425,14 +1430,14 @@ export function HarnessApp({
     });
     checkpointArmRef.current = ckpt.arm;
     const disposeCkpt = agent.addBeforeToolCall(ckpt.hook);
-    const disposeGate = gtGateBefore ? agent.addBeforeToolCall(gtGateBefore) : null;
+    const disposeGate = bigPlanGateBefore ? agent.addBeforeToolCall(bigPlanGateBefore) : null;
     return () => {
       disposeGate?.();
       disposeCkpt();
       checkpointArmRef.current = null;
       disposePermission();
     };
-  }, [agent, gtGateBefore, repoTop]);
+  }, [agent, bigPlanGateBefore, repoTop]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
@@ -1603,17 +1608,17 @@ export function HarnessApp({
           setActiveActions((a) => reduceActiveActions(a, ev));
           // D3a: todowrite mutates the `todos` array in place — bump the gen so the memo
           // re-reads it (the event carries no toolName; an unconditional bump is the
-          // established pattern, same as the GT refresh below).
+          // established pattern, same as the Big Plan refresh below).
           setTodoGen((g) => g + 1);
-          // Keep the GT footer strip in step with the ledger the afterToolCall sink just wrote:
+          // Keep the Big Plan footer strip in step with the ledger the afterToolCall sink just wrote:
           // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
-          if (agent.config.groundTruth === true) {
+          if (agent.config.bigPlan === true) {
             try {
               setPlanStrip(planStripInfo(agent.db, agent.runId));
-              setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+              setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
             } catch {
               setPlanStrip(null);
-              setGtBehavior(null);
+              setBigPlanBehavior(null);
             }
           }
           break;
@@ -1622,42 +1627,44 @@ export function HarnessApp({
     return unsub;
   }, [agent]);
 
-  // GT footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
+  // Big Plan footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
   // already has a plan shows it immediately; tool_execution_end keeps it current thereafter.
   useEffect(() => {
-    if (agent.config.groundTruth !== true) return;
+    if (agent.config.bigPlan !== true) return;
     try {
       setPlanStrip(planStripInfo(agent.db, agent.runId));
-      setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+      setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
     } catch {
       setPlanStrip(null);
-      setGtBehavior(null);
+      setBigPlanBehavior(null);
     }
   }, [agent]);
 
   // Arm the gate-focus modal whenever an unanswered 🔴 block surfaces at an idle prompt; disarm
   // when the block clears. An answered/superseded gate re-arms automatically because
   // ledgerBehavior surfaces the next unanswered red under a new gateId.
-  const gtBlockId = gtBehavior?.block?.gateId ?? null;
+  const bigPlanBlockId = bigPlanBehavior?.block?.gateId ?? null;
   useEffect(() => {
-    if (gtBlockId === null) {
+    if (bigPlanBlockId === null) {
       setGateFocus(null);
       return;
     }
-    if (busy || gtBlockId === dismissedGateRef.current) return;
-    setGateFocus((g) => (g?.gateId === gtBlockId ? g : { gateId: gtBlockId, noteEntry: false }));
-  }, [gtBlockId, busy]);
+    if (busy || bigPlanBlockId === dismissedGateRef.current) return;
+    setGateFocus((g) =>
+      g?.gateId === bigPlanBlockId ? g : { gateId: bigPlanBlockId, noteEntry: false },
+    );
+  }, [bigPlanBlockId, busy]);
 
   /** M6.3: record a gate answer into user_signals and release the modal. Fail-open like every
-   * other GT touchpoint — a ledger error must not crash the TUI from inside Ink's input
+   * other Big Plan touchpoint — a ledger error must not crash the TUI from inside Ink's input
    * dispatch; on failure the modal stays armed so the keys still answer. */
   function answerGate(gateId: string, action: "accept" | "reject" | "steer", note: string | null) {
     try {
       agent.db?.recordUserSignal(gateId, action, note);
-      setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+      setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
       setMessages((m) => [
         ...m,
-        { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "gt" },
+        { role: "tool", text: `🔴 gate ${action}ed — recorded.`, toolName: "bp" },
       ]);
       setGateFocus(null);
       setTypedText("");
@@ -1666,7 +1673,7 @@ export function HarnessApp({
         ...m,
         {
           role: "tool",
-          toolName: "gt",
+          toolName: "bp",
           text: `⚠ gate signal not recorded: ${errText(exc)}`,
           isError: true,
         },
@@ -1695,30 +1702,30 @@ export function HarnessApp({
       },
     ]);
   };
-  // Ctrl+G: GT off → one-line notice (the flag-off contract); on → one-shot overview block.
-  const requestGtSidebar = () => {
+  // Ctrl+G: Big Plan off → one-line notice (the flag-off contract); on → one-shot overview block.
+  const requestPlanOverview = () => {
     // MP16: a live plan session's cannot-render fallback is a terse draft summary —
-    // "No Ground-Truth plan recorded" would be misleading mid-drafting.
+    // "No Big Plan recorded" would be misleading mid-drafting.
     const draftStore = planSessionRef.current;
     if (getMode() === "plan" && draftStore) {
       setMessages((m) => [...m, { role: "tool", text: draftStore.summary(), toolName: "plan" }]);
       return;
     }
-    if (agent.config.groundTruth !== true) {
+    if (agent.config.bigPlan !== true) {
       setMessages((m) => [
         ...m,
         {
           role: "tool",
-          text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to see the plan overview.",
-          toolName: "gt",
+          text: "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to see the plan overview.",
+          toolName: "bp",
         },
       ]);
       return;
     }
-    const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+    const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
     setMessages((m) => [
       ...m,
-      { role: "tool", text: renderGtOverviewText(overview, cols - 6), toolName: "gt" },
+      { role: "tool", text: renderPlanOverviewText(overview, cols - 6), toolName: "bp" },
     ]);
   };
 
@@ -1840,13 +1847,13 @@ export function HarnessApp({
       return;
     }
 
-    // U3 (MUB-141): GT Plan Overview on Ctrl+G — the panel in EVERY situation (always-
+    // U3 (MUB-141): Plan Overview on Ctrl+G — the panel in EVERY situation (always-
     // panel, 2026-07-20). Shared chord, gate wins: with a 🔴 block armed and not busy this
     // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
-    // states stay one-line chat notices (GT off / no plan yet — nothing to page); the
+    // states stay one-line chat notices (Big Plan off / no plan yet — nothing to page); the
     // text path otherwise survives only below the cannot-render floor.
-    if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
-      if (agent.config.groundTruth === true && panelCanRender()) {
+    if (key.ctrl && input === "g" && !(bigPlanBehavior?.block && !busy)) {
+      if (agent.config.bigPlan === true && panelCanRender()) {
         // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
         // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
         // falls through to the normal overview: the before/after switch is structural).
@@ -1855,13 +1862,15 @@ export function HarnessApp({
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
         if (overview) {
-          setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
+          setPanel(
+            planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),
+          );
           return;
         }
       }
-      requestGtSidebar();
+      requestPlanOverview();
       return;
     }
 
@@ -1876,8 +1885,8 @@ export function HarnessApp({
     // quit/palette/picker keep working; other printable keys are inert while the input is
     // disabled. Enforcement never moves: the done-gate stays in the tool dispatcher — this is
     // signal-capture UI only.
-    const gtDb = agent.db;
-    if (gateFocus && gtDb && !key.ctrl && !key.meta) {
+    const bigPlanDb = agent.db;
+    if (gateFocus && bigPlanDb && !key.ctrl && !key.meta) {
       if (gateFocus.noteEntry) {
         // Steer-note entry: the input is live and Enter-with-text records through onSubmit.
         // Here only Esc (skip the note) and Enter at an empty line record the bare steer.
@@ -1897,7 +1906,7 @@ export function HarnessApp({
         if (input === "v") {
           let report: string;
           try {
-            report = whyReportFor(gtDb, agent.runId);
+            report = whyReportFor(bigPlanDb, agent.runId);
           } catch (exc) {
             report = `⚠ /why unavailable: ${errText(exc)}`;
           }
@@ -1911,9 +1920,9 @@ export function HarnessApp({
         }
       }
     }
-    if (key.ctrl && input === "g" && gtBehavior?.block) {
+    if (key.ctrl && input === "g" && bigPlanBehavior?.block) {
       dismissedGateRef.current = null;
-      setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
+      setGateFocus({ gateId: bigPlanBehavior.block.gateId, noteEntry: false });
       return;
     }
 
@@ -2024,15 +2033,15 @@ export function HarnessApp({
       } catch {
         // lineage is best-effort
       }
-      // GT resume: re-key the old run's still-active plan onto this run so sticky
+      // Big Plan resume: re-key the old run's still-active plan onto this run so sticky
       // verify/baselines, the projection, and the done-gate survive the resume; without
       // this the old plan stays 'active' under a dead run forever and the gate is
       // silently bypassed. Old-run session-keyed gates are deliberately not adopted.
-      if (agent.config.groundTruth) {
+      if (agent.config.bigPlan) {
         try {
           if (agent.db.adoptActivePlans(runId, agent.runId) > 0) {
             setPlanStrip(planStripInfo(agent.db, agent.runId));
-            setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+            setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
           }
         } catch {
           // adoption is fail-open bookkeeping
@@ -2050,7 +2059,7 @@ export function HarnessApp({
           if (note) {
             setMessages((m) => [...m, { role: "tool", toolName: "resume", text: note }]);
           }
-          if (rv && !rv.skipped) setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+          if (rv && !rv.skipped) setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
         } catch {
           // re-verify is advisory — never break a resume
         }
@@ -2745,10 +2754,10 @@ export function HarnessApp({
             { role: "user", text: `/${name} ${args}`.trim() },
             { role: "tool", text, toolName: "plan", isError },
           ]);
-        // The planning workflow (planner persona + design council + GROUND_TRUTH.md) ships
-        // behind MINIMA_TUI_GROUND_TRUTH=1. Without it /plan stays the B2 mode toggle —
+        // The planning workflow (planner persona + design council + BigPlan.md) ships
+        // behind MINIMA_TUI_BIG_PLAN=1. Without it /plan stays the B2 mode toggle —
         // no prompt swap, no LLM spend, no file writes.
-        if (agent.config.groundTruth !== true) {
+        if (agent.config.bigPlan !== true) {
           if (sub === "" || sub === "on" || sub === "off" || sub === "toggle") {
             const next = sub === "on" ? true : sub === "off" ? false : getMode() !== "plan";
             setMode(next ? "plan" : "build");
@@ -2759,7 +2768,7 @@ export function HarnessApp({
             );
           } else {
             pushPlan(
-              `/plan ${sub} is part of the ground-truth planning workflow (on by default; currently disabled via MINIMA_TUI_GROUND_TRUTH=0). Without it, /plan is a mode toggle.`,
+              `/plan ${sub} is part of the Big Plan workflow (on by default; currently disabled via MINIMA_TUI_BIG_PLAN=0). Without it, /plan is a mode toggle.`,
               true,
             );
           }
@@ -3138,26 +3147,26 @@ export function HarnessApp({
         ]);
         break;
       case "tasks": {
-        // `/tasks cancel` — the CC-style plan reject, applied to todowrite + GT: clear the
+        // `/tasks cancel` — the CC-style plan reject, applied to todowrite + Big Plan: clear the
         // observable todo list, close the ledger plan, and TELL THE MODEL (mandatory —
         // clearing state alone is meaningless: the next todowrite re-seeds a fresh active
-        // plan, ground_truth.ts upsert path). Cancelled plans stay dead: planForTodos only
+        // plan, big_plan.ts upsert path). Cancelled plans stay dead: planForTodos only
         // reopens 'done' plans.
         if (args.trim().toLowerCase() === "cancel") {
           const clearedCount = todos?.length ?? 0;
           if (todos) todos.length = 0;
           setTodoGen((g) => g + 1);
           let planCancelled = false;
-          if (agent.config.groundTruth === true && agent.db && agent.runId) {
+          if (agent.config.bigPlan === true && agent.db && agent.runId) {
             try {
               // ALL active plans, not LIMIT 1 — adoption/reseeding can pile up several,
               // and the next-newest would surface right back.
               planCancelled = agent.db.cancelActivePlans(agent.runId) > 0;
               setPlanStrip(planStripInfo(agent.db, agent.runId));
-              setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+              setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
             } catch {
               setPlanStrip(null);
-              setGtBehavior(null);
+              setBigPlanBehavior(null);
             }
             setGateFocus(null);
             dismissedGateRef.current = null;
@@ -3176,7 +3185,7 @@ export function HarnessApp({
           }
           // The model-facing rejection notice (the exit_plan CANCEL / denialReason
           // precedent): rides the next prompt as a user turn, the /rewind pattern.
-          const scope = planCancelled ? "task list and its Ground-Truth plan" : "task list";
+          const scope = planCancelled ? "task list and its Big Plan" : "task list";
           agent.agentState.messages.push(
             new AgentMessage({
               role: "user",
@@ -3188,7 +3197,7 @@ export function HarnessApp({
             { role: "user", text: `/${name} ${args}`.trim() },
             {
               role: "tool",
-              text: `Cancelled: ${clearedCount} task(s) cleared${planCancelled ? " and the Ground-Truth plan closed" : ""}. The model has been told not to re-create them.`,
+              text: `Cancelled: ${clearedCount} task(s) cleared${planCancelled ? " and the Big Plan closed" : ""}. The model has been told not to re-create them.`,
               toolName: "tasks",
             },
           ]);
@@ -3436,35 +3445,42 @@ export function HarnessApp({
         }
         break;
       }
-      case "gt": {
-        const on = agent.config.groundTruth === true;
+      case "gt":
+      case "bp": {
+        const on = agent.config.bigPlan === true;
+        const deprecated = name === "gt" ? "Deprecated: /gt; use /bp.\n" : "";
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
           {
             role: "tool",
-            text: on
-              ? `Ground-Truth: ON (default) — run ${agent.runId ?? "?"}`
-              : "Ground-Truth: OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset to re-enable",
-            toolName: "gt",
+            text: `${deprecated}${
+              on
+                ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
+                : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)"
+            }`,
+            toolName: "bp",
           },
         ]);
         break;
       }
       case "why": {
-        // J1.1 + MP9: in the TUI, `/why` opens the D3b GT overview panel and `/why <n>`
+        // J1.1 + MP9: in the TUI, `/why` opens the D3b Plan Overview panel and `/why <n>`
         // opens it with step n's card pushed (the shared stepCardLines surface). The text
-        // path stays for GT-off, narrow terminals, and out-of-range steps — and is the
+        // path stays for Big Plan-off, narrow terminals, and out-of-range steps — and is the
         // only path headless runs ever had (no slash commands there).
         const overview =
-          agent.config.groundTruth === true && agent.db && agent.runId
-            ? buildGtOverview(agent.db, agent.runId)
+          agent.config.bigPlan === true && agent.db && agent.runId
+            ? buildPlanOverview(agent.db, agent.runId)
             : null;
         if (overview && cols >= TOC_MIN_COLS) {
           const wantStep = /^\d+$/.test(args.trim()) ? Number(args.trim()) : null;
           const step = wantStep !== null ? overview.steps[wantStep - 1] : undefined;
           if (wantStep === null || step) {
-            const base = gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6)));
+            const base = planOverviewPanelState(
+              overview,
+              planOverviewRows(overview, Math.max(20, cols - 6)),
+            );
             setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
             setPanel(
               step
@@ -3484,13 +3500,13 @@ export function HarnessApp({
           }
         }
         let text: string;
-        if (agent.config.groundTruth !== true) {
-          text = "Ground-Truth is OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset to inspect verification.";
+        if (agent.config.bigPlan !== true) {
+          text = "Big Plan is OFF (MINIMA_TUI_BIG_PLAN=0) — unset to inspect verification.";
         } else if (/^\d+$/.test(args.trim())) {
           const n = Number(args.trim());
           const row = overview?.steps[n - 1];
           text = !overview
-            ? "No Ground-Truth plan recorded for this run."
+            ? "No Big Plan recorded for this run."
             : !row
               ? `No step ${n} — the plan has ${overview.steps.length} step(s).`
               : stepCardLines(row, overview.gatesByStep.get(row.stepId) ?? []).join("\n");
@@ -3507,15 +3523,15 @@ export function HarnessApp({
       case "verify": {
         // J1.2: whole-plan refutation pass — a read-only subagent tries to DISPROVE the
         // plan's completion; its verdict lands as a judge-verified milestone gate (🟡 cap,
-        // 🔴 when refuted) and stamps the run's latest rec (gt_outcome feed).
+        // 🔴 when refuted) and stamps the run's latest rec (big_plan_outcome feed).
         const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
-        if (agent.config.groundTruth !== true) {
+        if (agent.config.bigPlan !== true) {
           setMessages((m) => [
             ...m,
             echo,
             {
               role: "tool",
-              text: "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to verify a plan.",
+              text: "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to verify a plan.",
               toolName: "verify",
             },
           ]);
@@ -3556,13 +3572,13 @@ export function HarnessApp({
             signal: controller.signal,
           });
           const text = !outcome
-            ? "Nothing to verify — no Ground-Truth plan with steps (or the pass was aborted)."
+            ? "Nothing to verify — no Big Plan with steps (or the pass was aborted)."
             : outcome.verdict.refuted
               ? `🔴 REFUTED — the plan did not survive verification:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}\nRecorded as a red milestone gate; run /why for the full picture.`
               : `🟡 not refuted — the subagent re-ran the checks and found no holes${outcome.verdict.reasons.length ? `:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}` : "."}\n(Judge-verified caps at 🟡 — only deterministic red→green checks earn 🟢.)`;
           setMessages((m) => [...m, { role: "tool", text, toolName: "verify" }]);
           setPlanStrip(planStripInfo(agent.db, agent.runId));
-          setGtBehavior(ledgerBehavior(agent.db, agent.runId));
+          setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
         } catch (exc) {
           setMessages((m) => [
             ...m,
@@ -3585,8 +3601,8 @@ export function HarnessApp({
         // Poka-yoke: statically lint the active plan's steps (the same rules the /plan finalize
         // gate uses) on demand — a read-only report, never a block.
         let text: string;
-        if (agent.config.groundTruth !== true) {
-          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 to audit plans.";
+        if (agent.config.bigPlan !== true) {
+          text = "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to audit plans.";
         } else {
           const plan = agent.db && agent.runId ? agent.db.getActivePlan(agent.runId) : null;
           if (!plan || !agent.db) {
@@ -3604,13 +3620,13 @@ export function HarnessApp({
         break;
       }
       case "plan-seed": {
-        // MP16 demo/evidence path (precedent /gt-seed): each invocation applies one canned
+        // MP16 demo/evidence path (precedent /bp-seed): each invocation applies one canned
         // council round to a live plan session — entering plan mode first if needed — so a
         // scripted capture can show the draft view converging round-over-round with zero
         // model calls. Purely in-memory; the ledger is untouched until finalize.
         let text: string;
-        if (agent.config.groundTruth !== true) {
-          text = "Ground-Truth is OFF — set MINIMA_TUI_GROUND_TRUTH=1 before seeding.";
+        if (agent.config.bigPlan !== true) {
+          text = "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 before seeding.";
         } else if (!planSpawn || !planMetaModel) {
           text = "Plan session deps unavailable — cannot seed a draft.";
         } else {
@@ -3632,10 +3648,12 @@ export function HarnessApp({
         ]);
         break;
       }
-      case "gt-seed": {
+      case "gt-seed":
+      case "bp-seed": {
+        const deprecated = name === "gt-seed" ? "Deprecated: /gt-seed; use /bp-seed.\n" : "";
         let text: string;
-        if (agent.config.groundTruth !== true) {
-          text = "Ground-Truth is OFF (MINIMA_TUI_GROUND_TRUTH=0) — unset before seeding.";
+        if (agent.config.bigPlan !== true) {
+          text = "Big Plan is OFF (MINIMA_TUI_BIG_PLAN=0) — unset before seeding.";
         } else if (!agent.db || !agent.runId) {
           text = "No DB / run available to seed.";
         } else {
@@ -3658,7 +3676,7 @@ export function HarnessApp({
                 verify: "bun test packages/tui/tests/behavior.test.ts",
               },
             ],
-            "Ground-Truth seed plan",
+            "Big Plan seed plan",
           );
           const seedRecId = `seed-rec-${agent.runId}`;
           if (agent.db.getGates(planId).length === 0) {
@@ -3714,13 +3732,13 @@ export function HarnessApp({
               origin: "off_plan",
             });
           }
-          // M7.1 demo: give the run a routing decision, then stamp the grounded outcome onto it so
-          // `SELECT chosen_model, gt_outcome, gt_verified_by FROM routing_decisions` shows the real
+          // M7.1 demo: give the run a routing decision, then stamp the verified outcome onto it so
+          // `SELECT chosen_model, big_plan_outcome, big_plan_verified_by FROM routing_decisions` shows the real
           // verdict attached to the model. Deterministic rec_id → re-seeding upserts (never dupes).
           agent.db.writeDecision({
             recId: seedRecId,
             runId: agent.runId,
-            taskLabel: "Ground-Truth seed",
+            taskLabel: "Big Plan seed",
             chosenModel: "anthropic/claude-sonnet-5",
             decisionBasis: "seed",
             confidence: 0,
@@ -3735,17 +3753,18 @@ export function HarnessApp({
             latencyMs: 0,
             routed: "server",
           });
-          stampGroundedOutcome(agent.db, seedRecId);
+          stampVerifiedOutcome(agent.db, seedRecId);
           // Reflect the seeded plan + gates in the footer immediately (a real run refreshes on
           // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
           setPlanStrip(planStripInfo(agent.db, agent.runId));
-          setGtBehavior(ledgerBehavior(agent.db, agent.runId));
-          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped grounded outcome onto ${seedRecId}. Run /why to inspect it.`;
+          setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
+          text = `Seeded Big Plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped verified outcome onto ${seedRecId}. Run /why to inspect it.`;
         }
+        text = `${deprecated}${text}`;
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
-          { role: "tool", text, toolName: "gt" },
+          { role: "tool", text, toolName: "bp" },
         ]);
         break;
       }
@@ -3815,7 +3834,7 @@ export function HarnessApp({
   // ONE AbortController (stashed in councilControllerRef) covers the whole turn, council spend
   // books through the BudgetLedger + lead CostMeter, and an Esc mid-council ends the turn with
   // the partial result merged — no question overlay, no fresh planner call. This wrapper only
-  // wires the deps; it is reachable only when config.groundTruth planted a PlanSessionStore.
+  // wires the deps; it is reachable only when config.bigPlan planted a PlanSessionStore.
   async function handlePlanTurn(text: string) {
     const store = planSessionRef.current;
     if (!store || !planSpawn || !planMetaModel) return;
@@ -3926,7 +3945,7 @@ export function HarnessApp({
         // plan-DECIDING pool restriction is a property of the MODE, not of the council. A
         // throw here IS the hard constraint's loud failure (same as handlePlanTurn's).
         const planOpts = getMode() === "plan" ? planModeRoutingOpts(agent.config) : undefined;
-        if (getMode() === "plan" && agent.config.groundTruth === true) {
+        if (getMode() === "plan" && agent.config.bigPlan === true) {
           const why = !planSessionRef.current
             ? "no plan session"
             : !planSpawn
@@ -4021,7 +4040,7 @@ export function HarnessApp({
   // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
   // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
   // PANEL_STATUS_ROWS = rows − SCROLLBACK_SAFETY_ROWS. Not an estimate: the panel box has
-  // an explicit height, every row truncates, and suggestions/busy-indicator/GT-rows/
+  // an explicit height, every row truncates, and suggestions/busy-indicator/Plan Overview rows/
   // ChildTree/currentAction are suppressed while it is visible (gates below all AND on
   // !panelVisible), so nothing can stack the frame toward Ink's scrollback-wiping
   // clearTerminal. Busy is allowed (always-panel, 2026-07-20): the panel replaces the
@@ -4032,18 +4051,20 @@ export function HarnessApp({
   const panelOuter = panelOuterHeight(rows, inputBoxHeight);
   const panelTop = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
   const panelVisible = panelTop !== null && !permPrompt && !questionPrompt && panelOuter >= 5;
-  // D3a task panel rows (MP5; GT enrichment MP6 — ONE plan surface, the old planStrip
+  // D3a task panel rows (MP5; Big Plan enrichment MP6 — ONE plan surface, the old planStrip
   // banner + note/block rows are gone). Read from the in-place-mutated todos array
-  // (todoGen forces the re-read after every tool end); with a GT plan the ledger
+  // (todoGen forces the re-read after every tool end); with a Big Plan the ledger
   // projection upgrades the header and arms the alert row. A dropped alert row is
   // display-only — the gate stays enforced in the dispatcher and answerable via the
   // gate-focus modal's input-box hint. Reservation (footerHeight) and render consume the
-  // SAME granted rows (the fit-grant discipline the old GT banner used).
+  // SAME granted rows (the fit-grant discipline the old Big Plan banner used).
   const taskRows = useMemo(() => {
     void todoGen;
-    const gt = planStrip ? { ...planStrip, blocked: (gtBehavior?.block ?? null) !== null } : null;
-    return taskFooterRows(todos ?? [], gt);
-  }, [todos, todoGen, planStrip, gtBehavior]);
+    const bigPlan = planStrip
+      ? { ...planStrip, blocked: (bigPlanBehavior?.block ?? null) !== null }
+      : null;
+    return taskFooterRows(todos ?? [], bigPlan);
+  }, [todos, todoGen, planStrip, bigPlanBehavior]);
   const taskVisible =
     taskRows.length > 0 &&
     !taskPanelHidden &&
@@ -4075,7 +4096,7 @@ export function HarnessApp({
       return;
     }
     if (key.ctrl && input === "t") {
-      // Ctrl+T toggles the ToC family closed; from the GT view it SWAPS to a fresh ToC.
+      // Ctrl+T toggles the ToC family closed; from the Big Plan view it SWAPS to a fresh ToC.
       if (!top || top.kind === "toc" || top.kind === "reader") {
         closePanelReseat();
         return;
@@ -4088,30 +4109,32 @@ export function HarnessApp({
       // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
       // keyboard to the gate-focus modal (the same arm the global handler uses). The
       // modal is idle-only, so a busy chord swaps views instead of arming it dead.
-      if (gtBehavior?.block && !busy) {
+      if (bigPlanBehavior?.block && !busy) {
         closePanelReseat();
         dismissedGateRef.current = null;
-        setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
+        setGateFocus({ gateId: bigPlanBehavior.block.gateId, noteEntry: false });
         return;
       }
-      if (top?.kind === "gt" || top?.kind === "draft") {
+      if (top?.kind === "plan_overview" || top?.kind === "draft") {
         closePanelReseat();
         return;
       }
-      if (agent.config.groundTruth === true) {
+      if (agent.config.bigPlan === true) {
         const draftStore = planSessionRef.current;
         if (getMode() === "plan" && draftStore) {
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildGtOverview(agent.db, agent.runId) : null;
+        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
         if (overview) {
-          setPanel(gtPanelState(overview, gtRows(overview, Math.max(20, cols - 6))));
+          setPanel(
+            planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),
+          );
           return;
         }
       }
       closePanelReseat();
-      requestGtSidebar();
+      requestPlanOverview();
       return;
     }
     if (key.ctrl) return;
@@ -4145,7 +4168,7 @@ export function HarnessApp({
             pendingG: false,
           };
         }
-        if (t.kind === "gt") {
+        if (t.kind === "plan_overview") {
           const row = t.rows[t.cursor];
           if (!row || row.stepIdx === null) return prev;
           const step = t.overview.steps[row.stepIdx];
@@ -4637,7 +4660,7 @@ export function HarnessApp({
             <Text color="gray">Reason </Text>
             <Text color="yellow">ctrl+b </Text>
             <Text color="gray">Tasks </Text>
-            {agent.config.groundTruth === true ? (
+            {agent.config.bigPlan === true ? (
               <>
                 <Text color="yellow">ctrl+g </Text>
                 <Text color="gray">Plan </Text>
@@ -4687,7 +4710,7 @@ export function HarnessApp({
               title={
                 panelTop.kind === "toc"
                   ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
-                  : panelTop.kind === "gt"
+                  : panelTop.kind === "plan_overview"
                     ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
                     : panelTop.kind === "draft"
                       ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`

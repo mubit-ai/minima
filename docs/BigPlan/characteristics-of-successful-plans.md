@@ -38,10 +38,10 @@ an emitted file, a command's exit code, a diff that compiles. The plan names *wh
 not just *what to do*.
 
 ### Why it works
-LLMs hallucinate completion. Without ground truth, "I did the step" and "the step is actually
+LLMs hallucinate completion. Without verified evidence, "I did the step" and "the step is actually
 done" diverge fast, and the divergence compounds — step 4 builds on a step 3 the agent *thinks*
 it finished. Verifiability breaks that compounding. The Anthropic SWE-bench agent loops on
-test results as feedback precisely because test output is **ground truth from the environment**
+test results as feedback precisely because test output is **evidence from the environment**
 — not the model's self-report ([anthropic-agents]).
 
 ### The failure mode when it's missing
@@ -53,9 +53,8 @@ test results as feedback precisely because test output is **ground truth from th
 - Anthropic's two canonical coding-agent success criteria: code is **verifiable through
   automated tests**, and the agent **iterates on solutions using test results as feedback**
   ([anthropic-agents], Appendix 1B).
-- Minima's own GT contract freezes this exact idea: a step is verified only if a check went
-  **red→green because of this step's code**, not a fake test the agent quietly wrote
-  (`docs/PLAN/ground-truth-plan.md` §5b).
+- Minima's own Big Plan contract freezes this exact idea: a step is verified only if a check
+  went **red→green because of this step's code**, not a fake test the agent quietly wrote.
 
 ### What to write into the plan
 For each step, one line: `verify: <command or observable check>`. If you can't fill it in,
@@ -159,9 +158,9 @@ plan" ([anthropic-multi-agent], process diagram caption). When the plan lives on
 context, one truncation silently amputates the strategy. Persistence makes the plan
 re-loadable; visibility makes drift a visible event instead of a silent one.
 
-The Minima ground-truth build is built around this exact principle: the plan is persisted
+The Minima Big Plan implementation is built around this exact principle: the plan is persisted
 (stage 1, M1.1) and projected back each turn (M1.2), with a step X/N footer (M1.3) and a
-DRIFT indicator when work goes off-plan (M2.3). See `docs/PLAN/ground-truth-plan.md`.
+DRIFT indicator when work goes off-plan (M2.3).
 
 ### The failure mode when it's missing
 - Context fills up, plan gets truncated, agent forgets what it was doing and free-associates.
@@ -171,8 +170,7 @@ DRIFT indicator when work goes off-plan (M2.3). See `docs/PLAN/ground-truth-plan
 ### Evidence
 - Anthropic Research lead agent's first action is to save the plan to memory
   ([anthropic-multi-agent]).
-- Minima GT stages 1–2 are entirely about persistence and visibility of the plan
-  (`docs/PLAN/ground-truth-plan.md`).
+- Big Plan stages 1–2 are entirely about persistence and visibility of the plan.
 - Anthropic's three core agent principles: simplicity, **transparency** (explicitly showing
   planning steps), ACI ([anthropic-agents], Summary).
 
@@ -285,8 +283,7 @@ the autonomous nature of agents means **compounding errors** and runaway cost �
 systems already use ~15× the tokens of chat, and a spiral multiplies that further
 ([anthropic-multi-agent]).
 
-Minima's GT confidence tiers (🟢/🟡/🔴) are exactly this: 🟢 glide, 🟡 flag, 🔴 stop and ask
-(`docs/PLAN/ground-truth-plan.md` §1).
+Minima's Big Plan confidence tiers (🟢/🟡/🔴) are exactly this: 🟢 glide, 🟡 flag, 🔴 stop and ask.
 
 ### The failure mode when it's missing
 - Agent loops forever, burning tokens, when one "I don't know, ask the human" would have

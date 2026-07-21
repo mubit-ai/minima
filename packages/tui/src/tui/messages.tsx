@@ -11,7 +11,7 @@
 
 import { Box, Text } from "ink";
 import { type ReactNode, memo } from "react";
-import { isGateBlockReason } from "../minima/ground_truth.ts";
+import { isGateBlockReason } from "../minima/big_plan.ts";
 import {
   type ChatMessage,
   clampToolText,

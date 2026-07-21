@@ -23,7 +23,7 @@
  *
  * Council answering (MP14+): plan-mode meta calls carry a role-distinct SYSTEM prompt
  * (plan_council.ts — scopeSystem / KEEPER_CHECK_SYSTEM / DRAFT_SYSTEM / REVISE_SYSTEM /
- * CRITIC_SYSTEM / SYNTH_SYSTEM / RESOLVE_SYSTEM / GROUND_TRUTH_SYSTEM). Requests whose
+ * CRITIC_SYSTEM / SYNTH_SYSTEM / RESOLVE_SYSTEM / BIG_PLAN_SYSTEM). Requests whose
  * system message matches a role phrase get that role's canned reply, each delayed
  * MOCK_COUNCIL_STAGE_MS so the busy-row progress line visibly dwells per phase. The
  * researcher sub-agent's request has no council system prompt, so it falls through to the
@@ -122,7 +122,7 @@ const COUNCIL_SYNTH = JSON.stringify({
 // the action string must match the PLANDEMO todowrite content EXACTLY (step identity).
 const DEMO_STEP = "Scaffold demo_widget.ts with the render entry point";
 const DEMO_VERIFY = "test -f demo_widget.ts";
-const COUNCIL_GT = JSON.stringify({
+const COUNCIL_BIG_PLAN = JSON.stringify({
   title: "Demo Widget Wiring",
   goal: "Ship the demo widget through the existing footer registry seam.",
   overview: "Scaffold the widget, register it, and pin its rendering with a regression test.",
@@ -204,7 +204,7 @@ function councilReply(system: string): string | null {
   if (system.includes("adversarial CRITIC")) return "[]";
   if (system.includes("RECORDER of a planning council. Turn the plan")) return COUNCIL_SYNTH;
   if (system.includes("RECORDER of a planning council finalizing")) return "[]";
-  if (system.includes("RECORDER of a planning council writing the FINAL")) return COUNCIL_GT;
+  if (system.includes("RECORDER of a planning council writing the FINAL")) return COUNCIL_BIG_PLAN;
   return null;
 }
 
@@ -243,7 +243,7 @@ const BASHCMD_DONE_REPLY =
   "the tool loop terminates deterministically.";
 
 // MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
-// GT-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
+// Big Plan-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
 const EXITPLAN_MD = [
   "## Sandbox cleanup plan",
   "",

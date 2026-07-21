@@ -7,10 +7,10 @@ import type { GateRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
   VERIFY_CONSENT_BLOCK,
-  groundTruthAfterToolCall,
-  groundTruthHooks,
+  bigPlanAfterToolCall,
+  bigPlanHooks,
   headlessVerifyConsent,
-} from "../src/minima/ground_truth.ts";
+} from "../src/minima/big_plan.ts";
 
 // MP18 — verify-command consent at EXECUTION time. The TUI's todowrite permission overlay
 // already gathers exact-string consent (approvedVerifies); these tests pin the enforcement
@@ -55,7 +55,7 @@ describe("baseline capture consent (after-hook)", () => {
     try {
       const d = db();
       const leak = join(dir, "consent-leak");
-      const sink = groundTruthAfterToolCall(
+      const sink = bigPlanAfterToolCall(
         { db: d, runId: "run1" },
         { verifyConsent: () => false },
       );
@@ -72,7 +72,7 @@ describe("baseline capture consent (after-hook)", () => {
 
   test("a consented verify still captures the baseline", async () => {
     const d = db();
-    const sink = groundTruthAfterToolCall({ db: d, runId: "run1" }, { verifyConsent: () => true });
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" }, { verifyConsent: () => true });
     await sink(actx([{ content: "S", status: "in_progress", verify: "true" }]));
     const step = d.db.query("SELECT baseline FROM plan_steps").get() as {
       baseline: string | null;
@@ -87,7 +87,7 @@ describe("done-gate consent (before-hook)", () => {
     try {
       const d = db();
       const leak = join(dir, "gate-leak");
-      const hooks = groundTruthHooks({ db: d, runId: "run1" }, { verifyConsent: () => false });
+      const hooks = bigPlanHooks({ db: d, runId: "run1" }, { verifyConsent: () => false });
       const behavior = await hooks.before(
         bctx([{ content: "S", status: "completed", verify: `touch ${leak}` }]),
       );
@@ -105,7 +105,7 @@ describe("done-gate consent (before-hook)", () => {
   test("consent keys on the EXECUTION-TIME verify — a mutation cannot dodge", async () => {
     const d = db();
     const consented = new Set(["true"]);
-    const hooks = groundTruthHooks(
+    const hooks = bigPlanHooks(
       { db: d, runId: "run1" },
       { verifyConsent: (cmd) => consented.has(cmd) },
     );
@@ -131,7 +131,7 @@ describe("done-gate consent (before-hook)", () => {
 
   test("undefined consent = pre-MP18 behavior (library default: allow)", async () => {
     const d = db();
-    const hooks = groundTruthHooks({ db: d, runId: "run1" });
+    const hooks = bigPlanHooks({ db: d, runId: "run1" });
     const behavior = await hooks.before(
       bctx([{ content: "S", status: "completed", verify: "true" }]),
     );

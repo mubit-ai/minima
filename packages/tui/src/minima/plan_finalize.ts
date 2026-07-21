@@ -1,8 +1,8 @@
 /**
  * finalizePlan — the /plan finalize core, extracted from the TUI closure so the exit_plan
  * tool and the slash command share ONE path: resolve open questions (fail-open), distil the
- * planning conversation into a ground-truth synthesis (fail-open), run the A6 poka-yoke
- * audit (blockers refuse unless force), write GROUND_TRUTH.md DIRECTLY (not via the agent
+ * planning conversation into a big-plan synthesis (fail-open), run the A6 poka-yoke
+ * audit (blockers refuse unless force), write BigPlan.md DIRECTLY (not via the agent
  * tool loop — plan mode's read-only block must not apply to the harness's own artifact),
  * and seed the check-engine ledger. Mode exit and message pushes stay with the callers.
  */
@@ -10,10 +10,10 @@
 import type { Message } from "../ai/types.ts";
 import type { Model } from "../ai/types.ts";
 import { errText } from "../errtext.ts";
-import { answerOpenQuestions, synthesizeGroundTruth } from "./plan_council.ts";
+import { answerOpenQuestions, synthesizeBigPlan } from "./plan_council.ts";
 import { formatCriticNote, runPlanCritic } from "./plan_critic.ts";
 import { formatFindings, hasBlockers, synthAuditFindings } from "./plan_lint.ts";
-import type { GroundTruthSynthesis, PlanSessionStore } from "./plan_session.ts";
+import type { BigPlanSynthesis, PlanSessionStore } from "./plan_session.ts";
 import { attachAutoGates, formatAutoGateNote, mineRepoGates } from "./repo_gates.ts";
 
 export interface PlanFinalizeDb {
@@ -25,9 +25,9 @@ export interface PlanFinalizeDb {
 }
 
 export interface PlanFinalizeDeps {
-  /** null → skip question-resolution and synthesis (deterministic toGroundTruth(null)). */
+  /** null → skip question-resolution and synthesis (deterministic toBigPlan(null)). */
   metaModel: Model | null;
-  /** Premium plan-shaping model for question-resolution + ground-truth synthesis;
+  /** Premium plan-shaping model for question-resolution + big-plan synthesis;
    * absent/null → metaModel. The E1 critic ALWAYS uses metaModel (advisory, cheap). */
   planModel?: Model | null;
   /** Books question-resolution + synthesis realized spend (meter + budget) — at premium
@@ -41,7 +41,7 @@ export interface PlanFinalizeDeps {
   runId: string | null;
   write?: (path: string, content: string) => Promise<unknown>;
   answerQuestions?: typeof answerOpenQuestions;
-  synthesize?: typeof synthesizeGroundTruth;
+  synthesize?: typeof synthesizeBigPlan;
   /** E1 Planning Critic seam (injectable for tests). Runs on the synthesized steps. */
   critic?: typeof runPlanCritic;
   /** Books the critic call's realized spend (meter + budget), like judge spend. */
@@ -92,7 +92,7 @@ export async function finalizePlan(
 ): Promise<PlanFinalizeOutcome> {
   const write = deps.write ?? ((path, content) => Bun.write(path, content));
   const answerQuestions = deps.answerQuestions ?? answerOpenQuestions;
-  const synthesize = deps.synthesize ?? synthesizeGroundTruth;
+  const synthesize = deps.synthesize ?? synthesizeBigPlan;
 
   // Auto-resolve any lingering open questions with a reasonable default so the ground
   // truth is complete and decisive. Fail-open: a flaky model just leaves them unanswered.
@@ -113,9 +113,9 @@ export async function finalizePlan(
   }
 
   // Distil the WHOLE planning conversation (not just accumulated council state) into a
-  // detailed, structured ground truth. Fail-open: on any error the deterministic assembly
-  // (toGroundTruth(null) → toMarkdown()) is used instead so finalize always writes a doc.
-  let synth: GroundTruthSynthesis | null = null;
+  // detailed, structured Big Plan. Fail-open: on any error the deterministic assembly
+  // (toBigPlan(null) → toMarkdown()) is used instead so finalize always writes a doc.
+  let synth: BigPlanSynthesis | null = null;
   if (shaper) {
     try {
       synth = await synthesize(store.session, deps.transcript, {
@@ -133,7 +133,7 @@ export async function finalizePlan(
     return {
       kind: "blocked",
       message:
-        "Finalize aborted before the ground truth was written — plan mode stays ON. " +
+        "Finalize aborted before the Big Plan was written — plan mode stays ON. " +
         "Run /plan finalize (or approve exit_plan again) to retry.",
     };
   }
@@ -182,7 +182,7 @@ export async function finalizePlan(
     };
   }
 
-  const md = store.toGroundTruth(synth);
+  const md = store.toBigPlan(synth);
   try {
     await write(deps.outPath, md);
   } catch (exc) {

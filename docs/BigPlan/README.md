@@ -2,8 +2,7 @@
 
 > Research synthesis + playbook on the characteristics of plans that **execute successfully**
 > for LLM agents. Built from the canonical literature (Anthropic engineering, ACL/NeurIPS/ICLR
-> papers) and cross-checked against Minima's own ground-truth build
-> (`docs/PLAN/ground-truth-plan.md`).
+> papers) and cross-checked against Minima's own Big Plan implementation.
 
 ---
 
@@ -12,8 +11,7 @@
 Plans fail for predictable reasons. The plans that **execute** share a small set of properties:
 
 1. **Verifiable steps** — every step produces a checkable artifact (test, file, command exit
-   code). The harness can tell *red* from *green*. (`docs/PLAN/ground-truth-plan.md` lives by
-   this.)
+   code). The harness can tell *red* from *green*. The Big Plan implementation lives by this.
 2. **Right-sized decomposition** — subtasks are small enough to be unambiguous, big enough to
    mean something. Neither "fix the bug" nor "type a character".
 3. **Effort scales to complexity** — a 1-step lookup and a 10-step investigation are *different
@@ -48,19 +46,19 @@ Where each claim came from: **[`sources.md`](./sources.md)**
 | `characteristics-of-successful-plans.md` | The 7 properties, why each works, failure modes, evidence | you want to understand the theory |
 | `playbook.md` | Step-by-step checklist + a plan template + scoring rubric | you're about to write a plan and want it to be good |
 | `harness-research.md` | How Claude Code / Codex / OpenCode actually satisfy the 7 properties | you want to learn from production harnesses |
-| `minima-harness-application-guide.md` | Gap analysis + prioritized roadmap for Minima's TUI harness | you're editing `packages/tui/` or the GT contract |
-| `workflow-diagrams.md` | Visual reference for the Minima GT loop (ledger, gates, confidence tiers) | you want to see the in-production flow |
+| `minima-harness-application-guide.md` | Gap analysis + prioritized roadmap for Minima's TUI harness | you're editing `packages/tui/` or the Big Plan contract |
+| `workflow-diagrams.md` | Visual reference for the Big Plan loop (ledger, gates, confidence tiers) | you want to see the in-production flow |
 | `sources.md` | Annotated bibliography with the key takeaway per source | you want to verify a claim or go deeper |
 
 ---
 
 ## How this connects to Minima
 
-Minima's ground-truth build (`docs/PLAN/ground-truth-plan.md`) is **the empirical version of
-this research**: the agent writes a plan, the harness verifies each step went **red→green
+Minima's Big Plan implementation is **the empirical version of this research**: the agent
+writes a plan, the harness verifies each step went **red→green
 because of this step's code**, and the verdict feeds back into routing. The properties here are
 why that architecture is shaped the way it is — particularly **(1) verifiable steps**, **(4)
 persistence/visibility**, and **(5) replan capability**.
 
-If you change the GT contract, re-read `characteristics-of-successful-plans.md` §1, §4, §5
+If you change the Big Plan contract, re-read `characteristics-of-successful-plans.md` §1, §4, §5
 first.

@@ -14,7 +14,7 @@ import {
   toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb, type PlanRow } from "../src/db/minima_db.ts";
-import { groundTruthHooks } from "../src/minima/ground_truth.ts";
+import { bigPlanHooks } from "../src/minima/big_plan.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -26,13 +26,13 @@ import {
 import { finalizePlan } from "../src/minima/plan_finalize.ts";
 import {
   type CouncilRoundResult,
-  type GroundTruthSynthesis,
+  type BigPlanSynthesis,
   PlanSessionStore,
 } from "../src/minima/plan_session.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
 import { writeTool } from "../src/tools/write.ts";
 
-// MP13 — the plan-loop audit: one scripted GT run driving plan→execute→verify→learn against the
+// MP13 — the plan-loop audit: one scripted Big Plan run driving plan→execute→verify→learn against the
 // faux provider, asserting EVERY ledger row the spine writes. Test 1 pins the /plan finalize →
 // seedPlanFromSteps bridge (user-origin checks, pending steps). Test 2 executes the seeded plan
 // through the real done-gate (baseline red → blocked completion → escalation → red→green pass →
@@ -89,7 +89,7 @@ const cannedRound = (): CouncilRoundResult => ({
   aborted: false,
 });
 
-const cannedSynth = (verify: string): GroundTruthSynthesis => ({
+const cannedSynth = (verify: string): BigPlanSynthesis => ({
   title: "Audit Loop",
   goal: "drive the seeded plan through the verified loop",
   overview: "",
@@ -117,7 +117,7 @@ async function seedViaFinalize(db: MinimaDb, runId: string, dir: string, verify:
     signal: null,
     force: false,
     transcript: "User: audit goal\n\nPlanner: two verifiable steps",
-    outPath: join(dir, "GROUND_TRUTH.md"),
+    outPath: join(dir, "BigPlan.md"),
     db,
     runId,
     write: async (path, content) => {
@@ -129,7 +129,7 @@ async function seedViaFinalize(db: MinimaDb, runId: string, dir: string, verify:
   return { outcome, written };
 }
 
-/** gt-e2e-style gated mock service: routes cheap→big once cheap is excluded, captures payloads. */
+/** big-plan-e2e-style gated mock service: routes cheap→big once cheap is excluded, captures payloads. */
 function gatedService(onEscalationRung: () => Promise<void>) {
   const recommendCalls: Record<string, unknown>[] = [];
   const feedbackCalls: Record<string, unknown>[] = [];
@@ -193,9 +193,9 @@ describe("plan-loop audit (MP13)", () => {
     expect(outcome.seededCount).toBe(2);
     expect(outcome.synthFailed).toBe(false);
     expect(written).toHaveLength(1);
-    expect(written[0]!.path).toBe(join(dir, "GROUND_TRUTH.md"));
+    expect(written[0]!.path).toBe(join(dir, "BigPlan.md"));
     expect(written[0]!.content).toContain(`verify: \`${verify}\``);
-    expect(existsSync(join(dir, "GROUND_TRUTH.md"))).toBe(false); // memory-only writer
+    expect(existsSync(join(dir, "BigPlan.md"))).toBe(false); // memory-only writer
 
     const plans = db.db.query("SELECT * FROM plans WHERE session_id = ?").all(runId) as PlanRow[];
     expect(plans).toHaveLength(1);
@@ -260,7 +260,7 @@ describe("plan-loop audit (MP13)", () => {
       candidates: ["cheap-model", "big-model"],
       allowOffline: false,
       minimaApiKey: "k",
-      groundTruth: true,
+      bigPlan: true,
       stopStrikes: 0, // this test scripts the done-gate ladder, not the A2 stop-gate
     });
     const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
@@ -268,14 +268,14 @@ describe("plan-loop audit (MP13)", () => {
       config,
       router,
       meter: new CostMeter(),
-      tools: [todowriteTool([], { groundTruth: true }), writeTool()],
+      tools: [todowriteTool([], { bigPlan: true }), writeTool()],
     });
     agent.db = db;
     agent.runId = runId;
 
     // Judge stays OFF (default abstain) — every grade below must come from gates. The gate's
     // before-hook is wrapped only to capture the block verdict the tool result carries.
-    const { before: beforeGate, after: afterGate } = groundTruthHooks(agent);
+    const { before: beforeGate, after: afterGate } = bigPlanHooks(agent);
     const blocks: { tool: string; reason: string }[] = [];
     agent.addBeforeToolCall(async (ctx) => {
       const decision = await beforeGate(ctx);
@@ -443,7 +443,7 @@ describe("plan-loop audit (MP13)", () => {
     expect(passFactors.checkOrigin).toBe("user");
     expect(passFactors.coverageHit).toBe("unknown"); // `test -f` names no test file → never green
 
-    // --- routing_decisions: two rungs, grounded stamps, the escalation chain ---
+    // --- routing_decisions: two rungs, verified stamps, the escalation chain ---
     const rows = db.getRunDecisions(runId);
     expect(rows).toHaveLength(2);
     expect(rows[0]!.rec_id).toBe("rec-1");
@@ -451,9 +451,9 @@ describe("plan-loop audit (MP13)", () => {
     expect(rows[0]!.outcome).toBe("failure");
     expect(rows[0]!.quality).toBeNull(); // gate verdict → label only, no fabricated quality
     expect(rows[0]!.judged).toBe(0);
-    expect(rows[0]!.gt_outcome).toBe("failed");
-    expect(rows[0]!.gt_verified_by).toBe("deterministic");
-    expect(rows[0]!.gt_confidence).toBe("red");
+    expect(rows[0]!.big_plan_outcome).toBe("failed");
+    expect(rows[0]!.big_plan_verified_by).toBe("deterministic");
+    expect(rows[0]!.big_plan_confidence).toBe("red");
     expect(rows[0]!.parent_rec_id).toBeNull();
     expect(rows[0]!.step_id).toBe(stepIds[0]!); // the in-progress step at persist time
     expect(rows[1]!.rec_id).toBe("rec-2");
@@ -463,9 +463,9 @@ describe("plan-loop audit (MP13)", () => {
     expect(rows[1]!.outcome).toBe("partial");
     expect(rows[1]!.quality).toBeNull();
     expect(rows[1]!.judged).toBe(0);
-    expect(rows[1]!.gt_outcome).toBe("verified");
-    expect(rows[1]!.gt_verified_by).toBe("deterministic");
-    expect(rows[1]!.gt_confidence).toBe("yellow");
+    expect(rows[1]!.big_plan_outcome).toBe("verified");
+    expect(rows[1]!.big_plan_verified_by).toBe("deterministic");
+    expect(rows[1]!.big_plan_confidence).toBe("yellow");
     expect(rows[1]!.parent_rec_id).toBe("rec-1"); // the ladder chained rung 2 → rung 1
     // Plan closure precedes persistDecision, so the closing rung's row loses its step stamp.
     expect(rows[1]!.step_id).toBeNull();
@@ -521,7 +521,7 @@ describe("plan-loop audit (MP13)", () => {
       candidates: ["cheap-model"],
       allowOffline: false,
       minimaApiKey: "k",
-      groundTruth: true,
+      bigPlan: true,
       stopStrikes: 0,
     });
 
@@ -589,11 +589,11 @@ describe("plan-loop audit (MP13)", () => {
         config,
         router,
         meter: new CostMeter(),
-        tools: [todowriteTool([], { groundTruth: true })],
+        tools: [todowriteTool([], { bigPlan: true })],
       });
       agent.db = db;
       agent.runId = runId;
-      const { before, after } = groundTruthHooks(agent, {
+      const { before, after } = bigPlanHooks(agent, {
         enforceAllowlist: config.toolAllowlist, // main.ts:485 builds the hooks exactly so
       });
       agent.addAfterToolCall(after);

@@ -156,8 +156,8 @@ describe("exit_plan tool (model-callable plan-mode exit)", () => {
   });
 });
 
-describe("MP17 — universal exit gate (GT-off plan argument)", () => {
-  test("GT-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
+describe("MP17 — universal exit gate (Big Plan-off plan argument)", () => {
+  test("Big Plan-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => true });
     const r = await h.tool.execute("t1", { summary: "s" }, null, null);
     expect(r.details?.error).toBe(true);
@@ -166,7 +166,7 @@ describe("MP17 — universal exit gate (GT-off plan argument)", () => {
     expect(h.finalized).toHaveLength(0);
   });
 
-  test("GT-off: the plan markdown is SHOWN before the ask and reaches finalize", async () => {
+  test("Big Plan-off: the plan markdown is SHOWN before the ask and reaches finalize", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => true });
     const md = "## The plan\n\n1. do the thing\n2. verify it";
     const r = await h.tool.execute("t1", { plan: md }, null, null);
@@ -176,14 +176,14 @@ describe("MP17 — universal exit gate (GT-off plan argument)", () => {
     expect(r.details?.choice).toBe("finalize");
   });
 
-  test("GT-on: the plan argument is ignored — finalize receives null (store path)", async () => {
+  test("Big Plan-on: the plan argument is ignored — finalize receives null (store path)", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => false });
     await h.tool.execute("t1", { plan: "## ignored" }, null, null);
     expect(h.finalized).toEqual([{ planMd: null, autoAcceptEdits: false }]);
     expect(h.shown).toHaveLength(0);
   });
 
-  test("GT-off cancel still terminates with the not-approved text", async () => {
+  test("Big Plan-off cancel still terminates with the not-approved text", async () => {
     const h = harness(["Cancel plan mode"], { requiresPlan: () => true });
     const r = await h.tool.execute("t1", { plan: "## p" }, null, null);
     expect(h.canceled()).toBe(1);

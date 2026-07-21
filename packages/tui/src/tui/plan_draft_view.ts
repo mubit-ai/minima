@@ -1,6 +1,6 @@
 /**
  * plan_draft_view — the D3b `plan (draft)` view (MP16): the evolving plan visible WHILE it
- * is being drafted, not only after /plan finalize writes GROUND_TRUTH.md. Pure builders
+ * is being drafted, not only after /plan finalize writes BigPlan.md. Pure builders
  * (no React) over the in-memory PlanSessionStore: `toMarkdown()` is flattened through the
  * SAME classifyMarkdownLines + wrapLineToWidth pair the transcript renderer and height
  * math use (MP11 lockstep), so every emitted row renders exactly one terminal row — the

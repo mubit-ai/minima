@@ -12,7 +12,7 @@
  * Council spend is booked by THIS caller: a BudgetLedger reserve/reconcile pair per round
  * (note "plan council rN", rec_id NULL — researcher rec_ids already land in
  * routing_decisions) and one lead CostMeter row so /cost shows it. Reachable only when
- * config.groundTruth planted a PlanSessionStore — the default path never gets here.
+ * config.bigPlan planted a PlanSessionStore — the default path never gets here.
  */
 
 import { errText } from "../errtext.ts";

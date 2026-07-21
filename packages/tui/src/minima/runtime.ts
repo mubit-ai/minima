@@ -30,6 +30,14 @@ import {
   ringCapacityForRepeats,
   toolCallFailed,
 } from "./anti_spiral.ts";
+import {
+  BIG_PLAN_SYSTEM_GUIDANCE,
+  type VerifiedOutcome,
+  deterministicOutcomeLabel,
+  planProjectionFor,
+  stampVerifiedOutcome,
+  verifiedOutcomeFor,
+} from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
@@ -42,14 +50,6 @@ import {
   writeExhaustionGate,
   writeRecoveryGate,
 } from "./failure_kind.ts";
-import {
-  GROUND_TRUTH_SYSTEM_GUIDANCE,
-  type GroundedOutcome,
-  deterministicOutcomeLabel,
-  groundedOutcomeFor,
-  planProjectionFor,
-  stampGroundedOutcome,
-} from "./ground_truth.ts";
 import { type QualityJudge, clamp01, midTruncate } from "./judge.ts";
 import { ModelMapping } from "./mapping.ts";
 import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memory.ts";
@@ -189,7 +189,7 @@ export class MinimaAgent extends Agent {
    * controller only covers the run phase. Set for the lifetime of promptRouted. */
   private routeController: AbortController | null = null;
   /** The routed rung currently executing (set around super.prompt) — gate rows minted during
-   * tool dispatch carry it as their identity (GtAgentRef.currentRecId). Null when idle. */
+   * tool dispatch carry it as their identity (BigPlanAgentRef.currentRecId). Null when idle. */
   currentRecId: string | null = null;
   /** True when the last promptRouted was cut short by Esc during routing (so the
    * UI shows "aborted" instead of a misleading "routing offline" note). */
@@ -292,18 +292,18 @@ export class MinimaAgent extends Agent {
     if (modeBlock) {
       this.agentState.systemPrompt = (this.agentState.systemPrompt ?? "") + modeBlock;
     }
-    // Ground-Truth: inject the verify contract + the plan of record into THIS turn's system
-    // prompt (appended after recall, reverted together in `finally`). Off unless groundTruth is set.
-    //   1. The static contract (GROUND_TRUTH_SYSTEM_GUIDANCE) goes in EVERY groundTruth turn,
+    // Big Plan: inject the verify contract + the plan of record into THIS turn's system
+    // prompt (appended after recall, reverted together in `finally`). Off unless bigPlan is set.
+    //   1. The static contract (BIG_PLAN_SYSTEM_GUIDANCE) goes in EVERY bigPlan turn,
     //      including the first — before any plan exists — so the model learns to attach a `verify`
     //      to each checkable step WHEN IT AUTHORS THE PLAN, not one turn late.
     //   2. The plan projection (M1.2) then shows the current numbered plan with its active step;
     //      planProjectionFor returns null until the first todowrite has created a plan.
-    if (this.config.groundTruth) {
+    if (this.config.bigPlan) {
       const withGuidance = this.agentState.systemPrompt;
       this.agentState.systemPrompt = withGuidance
-        ? `${withGuidance}\n\n${GROUND_TRUTH_SYSTEM_GUIDANCE}`
-        : GROUND_TRUTH_SYSTEM_GUIDANCE;
+        ? `${withGuidance}\n\n${BIG_PLAN_SYSTEM_GUIDANCE}`
+        : BIG_PLAN_SYSTEM_GUIDANCE;
       const planBlock = planProjectionFor(this.db, this.runId);
       if (planBlock) {
         const cur = this.agentState.systemPrompt;
@@ -368,7 +368,7 @@ export class MinimaAgent extends Agent {
       let lastError: unknown = null;
       let lastRouting: RoutingResult | null = null;
       // A4: one failure-kind matcher per prompt (its gate-fail streak spans rungs), consulted after
-      // each rung to pick backoff / escalate / replan. Null (inert) unless groundTruth +
+      // each rung to pick backoff / escalate / replan. Null (inert) unless bigPlan +
       // failureMatcher — the default path then keeps the classic always-escalate ladder.
       const failureMatcher = this.failureMatcherActive() ? makeFailureMatcher() : null;
       // A pending `replan` steer to prepend to the NEXT rung's prompt (null = none). Steering drains
@@ -440,7 +440,7 @@ export class MinimaAgent extends Agent {
             throw new Error(r.reason);
           }
         }
-        // Per-turn stop seam (single slot): compose the budget cutoff and the ground-truth
+        // Per-turn stop seam (single slot): compose the budget cutoff and the big-plan
         // stop-gate into one function so neither clobbers the other. Budget wins first (finish the
         // CURRENT turn on cross, stop gracefully — no partial-tool corruption); the stop-gate then
         // decides whether an END-of-run with unfinished/failing steps is allowed (A2). Rebuilt per
@@ -456,8 +456,8 @@ export class MinimaAgent extends Agent {
             return enforce && runSpend >= limitLeft;
           };
         }
-        const gtStop =
-          this.config.groundTruth && this.config.stopStrikes > 0
+        const bigPlanStop =
+          this.config.bigPlan && this.config.stopStrikes > 0
             ? makeStopGate({
                 db: this.db,
                 sessionId: this.runId,
@@ -471,7 +471,7 @@ export class MinimaAgent extends Agent {
         // over A2's "the plan isn't done, keep going" — looping forever is worse than stopping with
         // unfinished work. Fresh ring + counters per rung (like the other stop closures).
         let antiSpiral: AntiSpiralGate | null = null;
-        if (this.config.groundTruth && (this.config.spiralRepeats > 0 || this.config.stepCap > 0)) {
+        if (this.config.bigPlan && (this.config.spiralRepeats > 0 || this.config.stepCap > 0)) {
           const ring = new DoomLoopRing(ringCapacityForRepeats(this.config.spiralRepeats));
           disposeSpiralFeed = this.addAfterToolCall(async (ctx) => {
             ring.push(
@@ -493,7 +493,7 @@ export class MinimaAgent extends Agent {
         // Install ONLY when we have something to install. If nothing applies, leave the slot
         // untouched — a sub-agent's per-node budget cutoff arrives as a CONSTRUCTOR-provided
         // shouldStopAfterTurn (spawn.ts), and clobbering it here would silently disable it.
-        const installedStop = Boolean(budgetStop || gtStop || antiSpiral);
+        const installedStop = Boolean(budgetStop || bigPlanStop || antiSpiral);
         if (installedStop) {
           this.setShouldStopAfterTurn(async (assistant, results, state, messages) => {
             if (budgetStop?.(assistant)) return true;
@@ -502,7 +502,7 @@ export class MinimaAgent extends Agent {
               if (v === "stop") return true;
               if (v === "handled") return false; // injected a steer; skip A2 this turn
             }
-            return gtStop ? gtStop(assistant, results, state, messages) : false;
+            return bigPlanStop ? bigPlanStop(assistant, results, state, messages) : false;
           });
         }
         // Everything appended from here belongs to THIS rung (for rung-total usage). The
@@ -540,11 +540,11 @@ export class MinimaAgent extends Agent {
           : runError !== null
             ? errText(runError)
             : (last?.error_message ?? null);
-        // A4: the grounded (deterministic) verdict THIS rung minted — read up front so a real
+        // A4: the verifiedOutcome (deterministic) verdict THIS rung minted — read up front so a real
         // check-fail can never be masked by a coincidental transient error. M7.2/M7.3 identity join:
         // only gates under this rung's rec_id count. Passed into feedbackSafely (single read).
-        const grounded = this.config.groundTruth ? groundedOutcomeFor(this.db, rungRecId) : null;
-        const gateFailed = grounded !== null && grounded.outcome === "failed";
+        const verifiedOutcome = this.config.bigPlan ? verifiedOutcomeFor(this.db, rungRecId) : null;
+        const gateFailed = verifiedOutcome !== null && verifiedOutcome.outcome === "failed";
         // A transient/infra blip (429 / timeout / 5xx / network) is not the model's fault: suppress
         // the failure feedback so it never teaches Minima this model is low-quality. But a real
         // deterministic check-fail OUTRANKS an incidental blip — never suppress on `gateFailed`.
@@ -569,7 +569,7 @@ export class MinimaAgent extends Agent {
           failed,
           turnsTaken,
           transient,
-          grounded,
+          verifiedOutcome,
           lastRungName,
         );
 
@@ -587,7 +587,7 @@ export class MinimaAgent extends Agent {
             // judge grade — quality alone under-reports gated rows).
             cacheReadTokens: runUsage.cache_read,
             inputTokens: runUsage.input,
-            labeled: quality !== null || grounded !== null,
+            labeled: quality !== null || verifiedOutcome !== null,
           });
         }
 
@@ -607,7 +607,7 @@ export class MinimaAgent extends Agent {
         });
 
         // Recover? Only with a rung left, a routed (non-pinned) decision to learn from, and a REAL
-        // trigger: provider failure, a non-null judge grade below τ, or a grounded check that FAILED
+        // trigger: provider failure, a non-null judge grade below τ, or a verifiedOutcome check that FAILED
         // this rung. M7.3: a red gate outranks the judge as a trigger — but only `failed` (the check
         // ran and said no); `unrunnable` is an environment error and must not roll back work, exclude
         // an innocent model, or burn paid rungs. A4 then classifies WHICH recovery move to make.
@@ -731,7 +731,7 @@ export class MinimaAgent extends Agent {
         routing === null ? "offline" : routing.recommendationId === null ? "pinned" : "server";
       const recId = o.recId;
       let stepId: string | null = null;
-      if (this.config.groundTruth === true) {
+      if (this.config.bigPlan === true) {
         const plan = this.db.getActivePlan(this.runId);
         stepId = plan ? (this.db.getInProgressStep(plan.id)?.id ?? null) : null;
       }
@@ -781,11 +781,11 @@ export class MinimaAgent extends Agent {
         reinforcedEntryIds: o.reinforcedEntryIds ?? null,
         lessonPromoted: o.lessonPromoted ?? null,
       });
-      // M7.1: once the decision row exists, stamp the grounded (deterministic) verdict of the
-      // gates THIS rung minted onto gt_* — a real check outranks the judge. Identity join:
+      // M7.1: once the decision row exists, stamp the verifiedOutcome (deterministic) verdict of the
+      // gates THIS rung minted onto big_plan_* — a real check outranks the judge. Identity join:
       // gates from other rungs can never stamp this row. Fail-open inside the helper.
-      if (this.config.groundTruth) {
-        stampGroundedOutcome(this.db, recId);
+      if (this.config.bigPlan) {
+        stampVerifiedOutcome(this.db, recId);
       }
     } catch {
       try {
@@ -932,9 +932,9 @@ export class MinimaAgent extends Agent {
     /** A4: this rung failed on a transient/infra error — record locally but send NO feedback (a
      * 429/timeout is not evidence the model is low-quality). */
     transient = false,
-    /** M7.2/M7.3: the grounded (deterministic) verdict THIS rung minted, read once by the caller
+    /** M7.2/M7.3: the verifiedOutcome (deterministic) verdict THIS rung minted, read once by the caller
      * (A4 reads it before feedback so a transient error can't mask a real check-fail). */
-    grounded: GroundedOutcome | null = null,
+    verifiedOutcome: VerifiedOutcome | null = null,
     /** E2: the named rung state (retry_step/revise_step/replan) whose intervention produced
      * THIS rung — richer failure attribution for the server; null on the first attempt. */
     recoveryRung: string | null = null,
@@ -950,8 +950,8 @@ export class MinimaAgent extends Agent {
     // model: it never outranks the judge and never sends failure feedback — the judge path
     // proceeds and the red stays visible in the UI only.
     const deterministic =
-      grounded?.verifiedBy === "deterministic" && grounded.outcome !== "unrunnable"
-        ? grounded
+      verifiedOutcome?.verifiedBy === "deterministic" && verifiedOutcome.outcome !== "unrunnable"
+        ? verifiedOutcome
         : null;
     if (!routing || routing.recommendationId === null || routing.chosenModelId === null) {
       return {
@@ -981,7 +981,7 @@ export class MinimaAgent extends Agent {
         // fabricated quality). A7: grade the label by the gate's confidence tier when
         // config.gradedOutcome is on — 🟢 verified→success, 🟡/🔴-tier verified→partial (weaker
         // evidence), failed→failure — else the M7.2 binary verified→success. The recovery-ladder
-        // trigger reads the raw grounded.outcome (`failed`), never this label, so grading is
+        // trigger reads the raw verifiedOutcome.outcome (`failed`), never this label, so grading is
         // learning-signal-only and never changes what escalates. Only a GREEN-tier gate
         // (trustworthy origin: pre-existing/user check + red→green + coverage) is an honest
         // LABEL; a yellow (agent-authored) check is gameable by a vacuous test, so its
@@ -1089,10 +1089,10 @@ export class MinimaAgent extends Agent {
     return rate >= 1 || Math.random() < rate;
   }
 
-  /** A4: is the failure-kind matcher live? Gated by groundTruth + the failureMatcher flag, so the
+  /** A4: is the failure-kind matcher live? Gated by bigPlan + the failureMatcher flag, so the
    * default path keeps the classic escalate-only ladder. */
   private failureMatcherActive(): boolean {
-    return this.config.groundTruth && this.config.failureMatcher;
+    return this.config.bigPlan && this.config.failureMatcher;
   }
 
   /** A4: provenance for a recovery (backoff/replan) audit gate. */
@@ -1108,10 +1108,10 @@ export class MinimaAgent extends Agent {
    * E2 diagnostics unlock: re-run the in-progress step's verify with FULL output for the
    * replan retry prompt. The command is the exact string the done-gate just consented to
    * and executed — no new consent surface. Null when there is nothing to diagnose
-   * (no plan / no in-progress verify / GT off) or the re-run itself breaks.
+   * (no plan / no in-progress verify / Big Plan off) or the re-run itself breaks.
    */
   private async collectFailureDiagnostics(): Promise<string | null> {
-    if (!this.config.groundTruth || !this.db || !this.runId) return null;
+    if (!this.config.bigPlan || !this.db || !this.runId) return null;
     try {
       const plan = this.db.getActivePlan(this.runId);
       if (!plan) return null;

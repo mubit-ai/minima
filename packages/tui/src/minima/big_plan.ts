@@ -1,7 +1,7 @@
 /**
- * Ground-Truth ledger — pure projection/attribution helpers + the afterToolCall sink that
+ * Big Plan ledger — pure projection/attribution helpers + the afterToolCall sink that
  * keeps the SQLite plan of record in step with what the agent actually did. Everything here
- * is gated by MINIMA_TUI_GROUND_TRUTH at the wiring sites (main.ts / runtime.ts); this module
+ * is gated by MINIMA_TUI_BIG_PLAN at the wiring sites (main.ts / runtime.ts); this module
  * itself is inert until a caller invokes it.
  *
  * M3.3: the todowrite branch of the sink also captures a pre-work baseline — when a step
@@ -9,13 +9,13 @@
  * in_progress), its check is run once and the result (red|green|unrunnable) is recorded on
  * the step, so post-work gates can tell "I fixed it" from "it was already green".
  *
- * M4.1–M4.3: groundTruthHooks adds the done-gate — a beforeToolCall that refuses any
+ * M4.1–M4.3: bigPlanHooks adds the done-gate — a beforeToolCall that refuses any
  * todowrite completing a step whose `verify` does not pass (enforcement in the dispatcher,
  * not the prompt), and gate rows recording every verification verdict, including the blocked
  * attempts (Stage 7's attempts signal). It also enforces ONE todowrite per assistant message:
  * all before-hooks in a batch run before any tool executes, so a second todowrite would be
  * previewed against stale (pre-batch) plan state — a gate bypass. Checks are cancellable by
- * the run's AbortSignal (GtAgentRef.runSignal); an aborted check is never evidence.
+ * the run's AbortSignal (BigPlanAgentRef.runSignal); an aborted check is never evidence.
  *
  * Fail-open is a hard rule for BOOKKEEPING: a broken ledger write must never break a turn.
  * The afterToolCall factory swallows its own errors, and the pure helpers are total (never
@@ -34,15 +34,15 @@ import type {
   PlanStepRow,
   TodoInput,
 } from "../db/minima_db.ts";
-import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
-import type { ConfidenceTier, Factors, GateOutcome, VerifiedBy } from "./gt_contract.ts";
+import type { ConfidenceTier, Factors, GateOutcome, VerifiedBy } from "./big_plan_contract.ts";
 import {
   type FactorFs,
   classifyCheckOrigin,
   computeCoverageHit,
   defaultFactorFs,
   detectTamper,
-} from "./gt_factors.ts";
+} from "./big_plan_factors.ts";
+import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
 import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 
@@ -52,7 +52,7 @@ import { gateVerdictFor } from "./why.ts";
  * cancellable by the same abort() that stops the run; optional so tests can pass a bare
  * {db, runId} pair.
  */
-export interface GtAgentRef {
+export interface BigPlanAgentRef {
   db: MinimaDb | null;
   runId: string | null;
   readonly runSignal?: AbortSignal | null;
@@ -336,9 +336,9 @@ export function recordOpaqueMarker(
  * The SUB-AGENT attribution sink: file_changes writes ONLY. It hard-skips todowrite (a child
  * todowrite reaching upsertPlanFromTodos would DELETE the lead's steps via the prune) and
  * never touches gates/baselines/plans — the done-gate stays lead-only by design. Registered
- * by createSpawn under parent.config.groundTruth.
+ * by createSpawn under parent.config.bigPlan.
  */
-export function groundTruthAttributionSink(ref: GtAgentRef, childId: string): AfterToolCall {
+export function bigPlanAttributionSink(ref: BigPlanAgentRef, childId: string): AfterToolCall {
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -368,7 +368,7 @@ export function isPathClaimed(stepContent: string | null | undefined, path: stri
 }
 
 /**
- * The always-on Ground-Truth contract, injected into the system prompt whenever `groundTruth` is
+ * The always-on Big Plan contract, injected into the system prompt whenever `bigPlan` is
  * on — INDEPENDENT of whether a plan exists yet. This is the fix for the plan-authoring gap: the
  * plan projection ({@link formatPlanProjection}) carries the "attach a verify" nudge but is inert
  * until the first todowrite has already created the plan, so without this block the model authors
@@ -376,8 +376,8 @@ export function isPathClaimed(stepContent: string | null | undefined, path: stri
  * uncheckable scaffolding steps may omit `verify` (they stay flagged, not verified); the model must
  * not fabricate throwaway checks to dodge the gate.
  */
-export const GROUND_TRUTH_SYSTEM_GUIDANCE = [
-  "# Ground-Truth verification is ON",
+export const BIG_PLAN_SYSTEM_GUIDANCE = [
+  "# Big Plan verification is ON",
   "You plan with the todowrite tool and the harness verifies each step against a real command.",
   "When you FIRST create a step that produces something a command can check — a feature, a fix, a",
   "test — attach a `verify` shell command that proves it (a real test/build command, e.g.",
@@ -456,11 +456,11 @@ function activeStepPos(steps: PlanStepRow[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// M7.1/M7.2/M7.3 grounded outcome — the run's most recent verified step's verdict.
+// M7.1/M7.2/M7.3 verified outcome — the run's most recent verified step's verdict.
 // ---------------------------------------------------------------------------
 
-/** The grounded verdict of the step verified under a prompt (M7.1 stamp, M7.2 feedback, M7.3 ladder). */
-export interface GroundedOutcome {
+/** The verified verdict of the step checked under a prompt (M7.1 stamp, M7.2 feedback, M7.3 ladder). */
+export interface VerifiedOutcome {
   gateId: string;
   outcome: GateOutcome; // verified | failed | unrunnable
   verifiedBy: VerifiedBy; // deterministic | judge | user
@@ -491,7 +491,7 @@ function flipKeyFor(gate: GateRow): string {
 const TIER_BADNESS: Record<ConfidenceTier, number> = { green: 0, yellow: 1, red: 2 };
 
 /**
- * Read the grounded verdict of the gates minted under ONE routed rung (`recId`) — identity join,
+ * Read the verified verdict of the gates minted under ONE routed rung (`recId`) — identity join,
  * never recency. The single seam three milestones share: M7.1 stamps it onto
  * `routing_decisions.gt_*`, M7.2 prefers it over the LLM judge in feedback, M7.3 escalates on a
  * failed one. Rows with NULL rec_id (pre-v6 history, manual seeds) match no rung and are invisible
@@ -508,10 +508,10 @@ const TIER_BADNESS: Record<ConfidenceTier, number> = { green: 0, yellow: 1, red:
  * Total + fail-open: null db/recId, no rows, or nothing with an outcome+verifier returns `null`
  * (never throws into the feedback path).
  */
-export function groundedOutcomeFor(
+export function verifiedOutcomeFor(
   db: MinimaDb | null,
   recId: string | null,
-): GroundedOutcome | null {
+): VerifiedOutcome | null {
   if (!db || !recId) return null;
   try {
     const gates = db.getGatesForRec(recId); // oldest-first; later rows supersede per flip
@@ -550,31 +550,31 @@ export function groundedOutcomeFor(
 }
 
 /**
- * M7.1: stamp the grounded (deterministic) outcome of the gates minted under `recId` onto the
+ * M7.1: stamp the deterministic outcome of the gates minted under `recId` onto the
  * routing decision that picked the model — so Minima learns "the test passed" instead of "the
  * judge guessed 0.7". Called from the runtime feedback seam once a prompt's decision row exists
  * (see runtime.persistDecision). Identity-scoped: only this rung's own gates can stamp it.
  *
- * Total + fail-open: a null db/recId or no grounded gate is a silent no-op.
+ * Total + fail-open: a null db/recId or no verified gate is a silent no-op.
  */
-export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null): void {
+export function stampVerifiedOutcome(db: MinimaDb | null, recId: string | null): void {
   if (!db || !recId) return;
-  const grounded = groundedOutcomeFor(db, recId);
-  if (!grounded) return;
+  const verifiedOutcome = verifiedOutcomeFor(db, recId);
+  if (!verifiedOutcome) return;
   try {
-    db.attachGroundedOutcome(recId, {
-      outcome: grounded.outcome,
-      verifiedBy: grounded.verifiedBy,
-      confidence: grounded.confidence,
+    db.attachBigPlanOutcome(recId, {
+      outcome: verifiedOutcome.outcome,
+      verifiedBy: verifiedOutcome.verifiedBy,
+      confidence: verifiedOutcome.confidence,
     });
   } catch {
-    // fail-open: grounded stamping must never break the feedback path.
+    // fail-open: verified-outcome stamping must never break the feedback path.
   }
 }
 
 /**
- * A7: turn a DETERMINISTIC grounded verdict into the feedback outcome label, graded by the gate's
- * confidence tier. The caller (runtime.feedbackSafely) only reaches this with a grounded outcome
+ * A7: turn a deterministic verified verdict into the feedback outcome label, graded by the gate's
+ * confidence tier. The caller (runtime.feedbackSafely) only reaches this with a verified outcome
  * that is `verified` or `failed` (an `unrunnable` is filtered upstream — it is an environment error,
  * not model evidence, and falls back to the judge), so this function's whole job is the verified
  * split:
@@ -582,7 +582,7 @@ export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null):
  *   - `failed`  → `failure`  (a red check; also the recovery-ladder trigger, read separately).
  *   - `verified` + `graded`=false → `success`  (M7.2's original binary: any passing check → success).
  *   - `verified` + `graded`=true:
- *       - tier `green`         → `success`  (clean ground truth: pre-existing/user check, red→green,
+ *       - tier `green`         → `success`  (verified evidence: pre-existing/user check, red→green,
  *                                            coverage — the only tier that also flips vip=true).
  *       - tier `yellow`/`red`/null → `partial`  (a passing-but-untrustworthy check: a self-written
  *                                            test, no red→green evidence, coverage-unknown, or an A5
@@ -596,12 +596,12 @@ export function stampGroundedOutcome(db: MinimaDb | null, recId: string | null):
  * (which triggers on `outcome==='failed'`) correctly stays out of it.
  */
 export function deterministicOutcomeLabel(
-  grounded: GroundedOutcome,
+  verifiedOutcome: VerifiedOutcome,
   graded: boolean,
 ): "success" | "partial" | "failure" {
-  if (grounded.outcome !== "verified") return "failure";
+  if (verifiedOutcome.outcome !== "verified") return "failure";
   if (!graded) return "success";
-  return grounded.confidence === "green" ? "success" : "partial";
+  return verifiedOutcome.confidence === "green" ? "success" : "partial";
 }
 
 // ---------------------------------------------------------------------------
@@ -628,8 +628,8 @@ export const BASELINE_BUDGET_MS = 120_000;
  * Errored tool calls are ignored (nothing durable happened). All failures are swallowed —
  * ledger bookkeeping must never break a turn.
  */
-export function groundTruthAfterToolCall(
-  ref: GtAgentRef,
+export function bigPlanAfterToolCall(
+  ref: BigPlanAgentRef,
   opts?: { verifyConsent?: VerifyConsent },
 ): AfterToolCall {
   const consent = opts?.verifyConsent;
@@ -789,10 +789,15 @@ export function isGateBlockReason(reason: string): boolean {
  * `deterministic` only when every terminal step gate was deterministic. Because closure can only
  * fire once all steps completed — and completion already refuses any failed/unrunnable check — the
  * rollup is derived purely from real step verdicts (no fabricated quality). Rec-scoped like step
- * gates so groundedOutcomeFor can factor it; conservative by construction, so it can never make a
+ * gates so verifiedOutcomeFor can factor it; conservative by construction, so it can never make a
  * run look more verified than its steps already are. Fail-open: any error skips the milestone.
  */
-function writeMilestoneGate(db: MinimaDb, planId: string, ref: GtAgentRef, session: string): void {
+function writeMilestoneGate(
+  db: MinimaDb,
+  planId: string,
+  ref: BigPlanAgentRef,
+  session: string,
+): void {
   const stepGates = db.getGates(planId).filter((g) => g.kind === "step_check");
   const latestByStep = new Map<string, GateRow>();
   for (const g of stepGates) if (g.step_id) latestByStep.set(g.step_id, g); // oldest-first → last wins
@@ -851,8 +856,8 @@ export function batchToolCalls(state: unknown): { id: string; name: string }[] {
 }
 
 /**
- * M4.1–M4.3: the Ground-Truth hook pair. `after` is the existing ledger sink
- * (groundTruthAfterToolCall: plan upsert, baseline capture, file_change attribution) plus the
+ * M4.1–M4.3: the Big Plan hook pair. `after` is the existing ledger sink
+ * (bigPlanAfterToolCall: plan upsert, baseline capture, file_change attribution) plus the
  * gate-row writer; `before` is the done-gate. Register BOTH on the agent's hook stacks, after
  * the permission hook where one exists (permission first, gate second; first block wins).
  *
@@ -910,8 +915,8 @@ function enforceStepAllowlist(
   }
 }
 
-export function groundTruthHooks(
-  ref: GtAgentRef,
+export function bigPlanHooks(
+  ref: BigPlanAgentRef,
   opts?: {
     gateBudgetMs?: number;
     fs?: FactorFs;
@@ -926,7 +931,7 @@ export function groundTruthHooks(
   const fs = opts?.fs ?? defaultFactorFs;
   const enforceAllowlist = opts?.enforceAllowlist ?? false;
   const consent = opts?.verifyConsent;
-  const sink = groundTruthAfterToolCall(ref, { verifyConsent: consent });
+  const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent });
   const pending = new Map<string, GateVerdict[]>();
 
   const before: BeforeToolCall = async (ctx) => {
@@ -1216,3 +1221,20 @@ export function groundTruthHooks(
 }
 
 export type { FileChangeRow };
+
+/** @deprecated Use `BigPlanAgentRef`. */
+export type GtAgentRef = BigPlanAgentRef;
+/** @deprecated Use `VerifiedOutcome`. */
+export type GroundedOutcome = VerifiedOutcome;
+/** @deprecated Use `BIG_PLAN_SYSTEM_GUIDANCE`. */
+export const GROUND_TRUTH_SYSTEM_GUIDANCE = BIG_PLAN_SYSTEM_GUIDANCE;
+/** @deprecated Use `bigPlanAttributionSink`. */
+export const groundTruthAttributionSink = bigPlanAttributionSink;
+/** @deprecated Use `verifiedOutcomeFor`. */
+export const groundedOutcomeFor = verifiedOutcomeFor;
+/** @deprecated Use `stampVerifiedOutcome`. */
+export const stampGroundedOutcome = stampVerifiedOutcome;
+/** @deprecated Use `bigPlanAfterToolCall`. */
+export const groundTruthAfterToolCall = bigPlanAfterToolCall;
+/** @deprecated Use `bigPlanHooks`. */
+export const groundTruthHooks = bigPlanHooks;

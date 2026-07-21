@@ -1,15 +1,15 @@
 /**
- * D3a — the compact footer task panel (guide §8 MP5, GT enrichment MP6). Pure row
- * builder: CC-parity, fed straight from todowrite's observable state; with a GT plan the
+ * D3a — the compact footer task panel (guide §8 MP5, Big Plan enrichment MP6). Pure row
+ * builder: CC-parity, fed straight from todowrite's observable state; with a Big Plan the
  * header upgrades to the ledger projection (position/step/drift/plan-scoped cost) and a
  * conditional alert row appears — colored ASCII, no emoji (Q25; the full tiered view is
- * Ctrl+G's job). ONE plan surface: this replaces the old GT planStrip banner + note/block
+ * Ctrl+G's job). ONE plan surface: this replaces the old Big PlanStrip banner + note/block
  * footer rows. Zero rows when there is nothing to show — auto-show IS the empty state.
  * Rows render with wrap="truncate", so no width math lives here.
  */
 import type { TodoTask } from "../tools/todowrite.ts";
 
-export interface TaskFooterGt {
+export interface TaskFooterBigPlan {
   stepPos: number;
   stepTotal: number;
   title: string;
@@ -31,22 +31,25 @@ function oneLine(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, " ");
 }
 
-export function taskFooterRows(todos: TodoTask[], gt?: TaskFooterGt | null): TaskFooterRow[] {
+export function taskFooterRows(
+  todos: TodoTask[],
+  bigPlan?: TaskFooterBigPlan | null,
+): TaskFooterRow[] {
   const rows: TaskFooterRow[] = [];
-  if (gt) {
-    const cost = gt.totalCostUsd !== null ? ` · $${gt.totalCostUsd.toFixed(4)}` : "";
+  if (bigPlan) {
+    const cost = bigPlan.totalCostUsd !== null ? ` · $${bigPlan.totalCostUsd.toFixed(4)}` : "";
     rows.push({
       kind: "header",
-      text: ` plan ${gt.stepPos}/${gt.stepTotal} · ▸ ${oneLine(gt.title)}${cost}`,
+      text: ` plan ${bigPlan.stepPos}/${bigPlan.stepTotal} · ▸ ${oneLine(bigPlan.title)}${cost}`,
       color: "cyan",
       bold: true,
     });
-    if (gt.blocked) {
+    if (bigPlan.blocked) {
       rows.push({ kind: "alert", text: " !! gate blocked — ^G", color: "red", bold: true });
-    } else if (gt.drift > 0) {
+    } else if (bigPlan.drift > 0) {
       rows.push({
         kind: "alert",
-        text: ` drift: ${gt.drift} file${gt.drift === 1 ? "" : "s"} off-plan`,
+        text: ` drift: ${bigPlan.drift} file${bigPlan.drift === 1 ? "" : "s"} off-plan`,
         color: "yellow",
       });
     }
@@ -79,7 +82,7 @@ export function taskFooterRows(todos: TodoTask[], gt?: TaskFooterGt | null): Tas
 
 /**
  * Collapse the row set into a tight budget: alert wins, then the header, then the next
- * row (the gtFooterFit discipline — reservation and render must consume the SAME result).
+ * row (the bigPlanFooterFit discipline — reservation and render must consume the SAME result).
  * Display order is preserved.
  */
 export function grantTaskRows(rows: TaskFooterRow[], budget: number): TaskFooterRow[] {

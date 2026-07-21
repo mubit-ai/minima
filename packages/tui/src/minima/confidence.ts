@@ -1,4 +1,4 @@
-import type { ConfidenceVerdict, Factors } from "./gt_contract.ts";
+import type { ConfidenceVerdict, Factors } from "./big_plan_contract.ts";
 
 export function confidence(factors: Factors): ConfidenceVerdict {
   if (factors.tamper) return { tier: "red", reason: "tests weakened" };

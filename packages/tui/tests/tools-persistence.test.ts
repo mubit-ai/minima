@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { parseTodos } from "../src/minima/ground_truth.ts";
+import { parseTodos } from "../src/minima/big_plan.ts";
 import { parseStepTools } from "../src/minima/tool_permissions.ts";
 
 // A6 — plan_steps.tools persistence: seeded, authored via todowrite, and sticky like verify.

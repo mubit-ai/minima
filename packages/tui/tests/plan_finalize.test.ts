@@ -6,7 +6,7 @@ import {
   buildPlanTranscript,
   finalizePlan,
 } from "../src/minima/plan_finalize.ts";
-import { type GroundTruthSynthesis, PlanSessionStore } from "../src/minima/plan_session.ts";
+import { type BigPlanSynthesis, PlanSessionStore } from "../src/minima/plan_session.ts";
 
 const META: Model = {
   id: "meta-model",
@@ -18,7 +18,7 @@ const META: Model = {
   max_tokens: 1024,
 };
 
-const synth = (over: Partial<GroundTruthSynthesis> = {}): GroundTruthSynthesis => ({
+const synth = (over: Partial<BigPlanSynthesis> = {}): BigPlanSynthesis => ({
   title: "Ship it",
   goal: "ship",
   overview: "",
@@ -39,7 +39,7 @@ function deps(over: Partial<PlanFinalizeDeps> = {}) {
     signal: null,
     force: false,
     transcript: "",
-    outPath: "/fake/GROUND_TRUTH.md",
+    outPath: "/fake/BigPlan.md",
     db: null,
     runId: null,
     write: async (path, content) => {
@@ -52,14 +52,14 @@ function deps(over: Partial<PlanFinalizeDeps> = {}) {
 }
 
 describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
-  test("null metaModel → deterministic toGroundTruth(null) written, no audit, ok", async () => {
+  test("null metaModel → deterministic toBigPlan(null) written, no audit, ok", async () => {
     const store = new PlanSessionStore("ship the endpoint");
     const { base, written } = deps();
     const out = await finalizePlan(store, base);
     if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
     expect(written).toHaveLength(1);
-    expect(written[0]!.path).toBe("/fake/GROUND_TRUTH.md");
-    expect(written[0]!.content).toBe(store.toGroundTruth(null));
+    expect(written[0]!.path).toBe("/fake/BigPlan.md");
+    expect(written[0]!.content).toBe(store.toBigPlan(null));
     expect(out.seededCount).toBe(0);
     expect(out.auditNote).toBe("");
   });
@@ -101,7 +101,7 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     const out = await finalizePlan(store, base);
     expect(out.kind).toBe("write-failed");
     if (out.kind !== "write-failed") throw new Error("unreachable");
-    expect(out.message).toContain("/fake/GROUND_TRUTH.md");
+    expect(out.message).toContain("/fake/BigPlan.md");
     expect(out.message).toContain("disk full");
   });
 
@@ -141,7 +141,7 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
     expect(out.synthFailed).toBe(true);
     expect(out.seededCount).toBe(0);
-    expect(written[0]!.content).toBe(store.toGroundTruth(null));
+    expect(written[0]!.content).toBe(store.toBigPlan(null));
 
     // Deterministic-by-design (no metaModel) is NOT a failure; a working synth isn't either.
     const { base: noMeta } = deps();
@@ -184,7 +184,7 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     });
     const out = await finalizePlan(store, base);
     if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
-    expect(written[0]!.content).toBe(store.toGroundTruth(null));
+    expect(written[0]!.content).toBe(store.toBigPlan(null));
   });
 });
 

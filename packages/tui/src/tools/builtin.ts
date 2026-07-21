@@ -40,11 +40,11 @@ export interface BuiltinToolsOptions {
    */
   workdir?: string;
   /**
-   * Ground-truth mode (MINIMA_TUI_GROUND_TRUTH=1): todowrite advertises + enforces per-task
+   * Big Plan mode (MINIMA_TUI_BIG_PLAN=1): todowrite advertises + enforces per-task
    * `verify` commands and runs sequentially. Leave unset for the plain task list — sub-agents
-   * always get the plain tool because the ground-truth hooks only exist on the lead agent.
+   * always get the plain tool because the big-plan hooks only exist on the lead agent.
    */
-  groundTruth?: boolean;
+  bigPlan?: boolean;
   /**
    * Observable todo list (D3a task panel): todowrite mutates this array in place. The LEAD
    * agent's main.ts passes one and hands the same array to the TUI; sub-agents (spawn.ts)
@@ -65,7 +65,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     lsTool(fs),
     globTool(fs),
     grepTool(fs),
-    todowriteTool(opts.todoState ?? [], { groundTruth: opts.groundTruth === true }),
+    todowriteTool(opts.todoState ?? [], { bigPlan: opts.bigPlan === true }),
     webSearchTool(),
     webFetchTool(),
   ];

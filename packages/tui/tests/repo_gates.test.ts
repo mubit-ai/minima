@@ -118,7 +118,7 @@ describe("finalize integration", () => {
       signal: null,
       force: true,
       transcript: "",
-      outPath: join(dir(), "GT.md"),
+      outPath: join(dir(), "Big Plan.md"),
       db,
       runId: "run-1",
       synthesize,

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { bashTool } from "../src/tools/bash.ts";
 
 // Default-path fix: a timed-out bash command only signaled the bash LEADER, so its
-// grandchildren survived and ran unbounded — the same orphan bug the GT check runner had.
+// grandchildren survived and ran unbounded — the same orphan bug the Big Plan check runner had.
 // Clean exits are untouched (deliberately started daemons live).
 
 function alive(pid: number): boolean {

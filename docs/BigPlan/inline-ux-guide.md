@@ -22,7 +22,7 @@ One MP at a time, in this loop:
    Each MP section is written to be a self-contained agent brief.
 4. **Verification first — mandatory.** The agent's first commit-worthy artifact is the
    *check*, not the code: a failing bun test, a PTY spec, or a baseline shot the change must
-   visibly diff against. Red before green — the same discipline GT imposes on the agent.
+   visibly diff against. Red before green — the same discipline Big Plan imposes on the agent.
 5. **Agent proves with PNG.** Every MP with visible UX ends with `pty_capture.py` shots
    (PNG + frames JSONL where timing matters) committed under `docs/BigPlan/shots/<mp>-*.png`.
    Fresh `MINIMA_HARNESS_DIR` per scenario (mode-ring persistence carries over otherwise).
@@ -113,30 +113,30 @@ One MP at a time, in this loop:
 
 - **D3a** = compact footer task panel, CC-parity: renders whenever todos exist, read straight
   from `todowrite` state (the `state` param seam, `src/tools/todowrite.ts` — "Pass `state` to
-  observe the list from outside (e.g. a TUI panel)"). GT is an *enrichment*, never the gate.
+  observe the list from outside (e.g. a TUI panel)"). Big Plan is an *enrichment*, never the gate.
 - D3a: fixed cap ~3 rows (progress + current step, + next only if it fits) + conditional
   alert row + trailing cost-so-far. Zero rows when empty. On by default, auto-shows on first
   todo; **Ctrl+B** toggle + `/tasks` command; explicit override persisted per-project in
   `ui-modes.json` (`mode_prefs.ts`). Alerts (🔴 live block, DRIFT>0) as **colored ASCII text**,
   no emoji in D3a; full tier icons are Ctrl+G's job.
-- D3a **replaces** the GT planStrip banner + drift rows (`app.tsx:4174`) — one plan surface.
+- D3a **replaces** the previous Big Plan banner + drift rows (`app.tsx:4174`) — one plan surface.
   The `gateFocus` answer modal (`app.tsx:942`) coexists (triggered interaction, not a surface);
   D3a's 🔴 alert routes to it.
 - D3a sits at the **top** of the footer stack; busy + suggestions move to hug the input.
 - **The user can REJECT the task list** (added 2026-07-17, CC's plan-reject parity):
-  `/tasks cancel` clears the todowrite list, closes the active GT plan
+  `/tasks cancel` clears the todowrite list, closes the active Big Plan
   (`status='cancelled'` — never resurrected, unlike `done`), disarms the gate modal, and
   pushes a model-facing user turn ("do not re-create these tasks…") that rides the next
   prompt — the notice is load-bearing: clearing state alone just gets re-seeded by the
   model's next todowrite.
-- **D3b** = the same panel expanded (Ctrl+T = ToC, Ctrl+G = GT overview) filling
+- **D3b** = the same panel expanded (Ctrl+T = ToC, Ctrl+G = Plan Overview) filling
   `rows − (input + status bar)`; suggestions/busy suppressed, D3a hidden while open.
   **Snapshot at open** (re-read on reopen); stale/refresh = v1.5; live-subscribe = v2.
   **Auto-closes when a stream starts** (Q17a) — the streaming path is never shared.
 - D3b keys: j/k, ↑/↓, PgUp/PgDn, gg/G → one cursor primitive. **Inline never captures the
   mouse.** The wheel scrolls the terminal's scrollback — that's the feature.
 - **Enter = read in panel** (Q27b): ToC Enter opens the section's messages *inside* the panel
-  (jump-as-scroll is impossible inline). GT Enter opens the step card (U3 model). No Ctrl+J —
+  (jump-as-scroll is impossible inline). Plan Overview Enter opens the step card (U3 model). No Ctrl+J —
   jump-to-message is folded into D3b's reader.
 - Chords keep U2/U3 semantics: Ctrl+T toggle, Ctrl+G swap, Esc → composer (draft survives via
   the `suspended` TextInput); an unanswered 🔴 gate wins the Ctrl+G chord.
@@ -156,14 +156,14 @@ One MP at a time, in this loop:
 
 - Council: **streamline, don't remove** — stream per-role progress, run researcher + critic
   concurrently (synth last), convene the full council only on plan-stakes turns.
-- **Universal approve/revise/cancel gate** on plan-mode exit, GT on or off (lift the GT-only
+- **Universal approve/revise/cancel gate** on plan-mode exit, Big Plan on or off (lift the Big Plan-only
   `exit_plan` registration, `src/tools/exit_plan.ts` + `plan_finalize.ts`). v1 = 3 options,
   no inline step editing.
 - **Verify commands get per-command consent at first run** via the existing permission overlay,
   keyed to the *exact command string* (sticky-but-overwriteable `verify`, `todowrite.ts` —
   a changed string re-prompts). Commands also listed in D3b at plan approval. Not
   trust-the-gate; not once-at-approval.
-- D3b GT panel is the **primary `/why` surface** (text `/why` stays for headless).
+- The D3b Plan Overview panel is the **primary `/why` surface** (text `/why` stays for headless).
 - Per-step cost + model port into D3b **as-is** (U3's v8 stamp work).
 
 **Scope guard**
@@ -199,7 +199,7 @@ harness forever (automated); outcome/feel gets **one live iTerm2 pass per MP** (
 ```
 Stage 0        Stage 1 (align tests → delete)     Stage 2      Track P (panels)
 [MP0]──────────[MP1]──[MP2]──[MP3]────────────────[MP4]────────[MP5]─[MP6]─[MP7]─[MP8]─[MP9]
- baseline       verify  sidebar fullscreen          spike        D3a   D3a+GT D3b   reader D3b-GT
+ baseline       verify  sidebar fullscreen          spike        D3a   D3a+BP D3b   reader overview
                 inline  delete  delete              gate                                 │
 Track D (after MP3):   [MP10 audit]──[MP11 code-wrap]──[MP12 tool-truncate]             │
 Track W:  [MP13 loop audit]──[MP14 council stream]──[MP15 council parallel]             │
@@ -231,7 +231,7 @@ perf numbers — the reference every later MP diffs against.
   This retires the D1 question (shipped in PR #133) with evidence, and becomes the ≤1-frame
   echo budget scenario.
 - Baseline shots (inline, no flags) at 120×36 and 60×24 + one tmux-narrow: plain chat,
-  code-heavy reply, tool-heavy turn, GT run (plan banner as it exists today), Ctrl+T/Ctrl+G
+  code-heavy reply, tool-heavy turn, Big Plan run (plan banner as it exists today), Ctrl+T/Ctrl+G
   one-shot text blocks. Commit to `docs/BigPlan/shots/inline-baseline/` with a README + the
   capture specs.
 - Record `MINIMA_TUI_PERF` numbers + cold-start time into the README (frame-cost baseline).
@@ -242,8 +242,8 @@ eyeball each baseline shot against your live terminal.
 **Gate:** §1.7 + shots committed. No product code changes in this MP.
 **Execution notes (landed):** live replies come from the committed mock
 `packages/tui/scripts/mock_openai_sse.ts` (:8399; `SLOW`/`CODE` prompt markers — the faux
-provider is tests-only and unreachable from the CLI); the GT-banner/overview shots seed via
-the in-app `/gt-seed` (run-scoped, no DB surgery); evidence + warts live in
+provider is tests-only and unreachable from the CLI); the Big Plan banner/overview shots seed via
+the in-app `/bp-seed` (run-scoped, no DB surgery); evidence + warts live in
 `shots/inline-baseline/README.md`.
 
 ---
@@ -286,14 +286,14 @@ rule when D3b lands. Echo budget wired at ≤0.35s (observed 0.01s). Run log:
 **Goal:** delete the fullscreen dock/overlay sidebar wholesale (Q2 = d).
 
 **Build:**
-- Delete `src/tui/sidebar-chassis.tsx`, `toc-panel.tsx`, `gt-panel.tsx`; remove
+- Delete `src/tui/sidebar-chassis.tsx`, `toc-panel.tsx`, and the former plan-overview panel; remove
   `sidebarGeometry`/`sidebarOverlayGeometry`/`SIDEBAR_*` from `layout.ts:571+`.
-  **Keep** `toc.ts` + `gt_overview.ts` (pure content builders — D3b reuses them),
+  **Keep** `toc.ts` + `plan_overview.ts` (pure content builders — D3b reuses them),
   `clipPanelLines` (`layout.ts:634` — D3b's windowing), `TOC_MIN_COLS`, and
   `tocPanelGeometry`/`PanelGeometry` (rewind overlay still uses them until MP3).
 - `app.tsx`: remove sidebarGeom/docked/overlaid branching (`contentCols` → `cols`), the
   two-column fullscreen root, the ≥100-cols auto-open effect, `sidebarPanels`.
-  `requestTocSidebar` (`:1628`) / `requestGtSidebar` (`:1644`) now always take the one-shot
+  `requestTocSidebar` (`:1628`) / `requestPlanOverview` (`:1644`) now always take the one-shot
   text-block path (today's inline behavior) — the interim UX until MP7/MP9.
 - Tests: delete sidebar pins (behavior two-column describe, layout sidebar/overlay tests,
   `sidebar-chassis.test.ts`); `string-width`/`padDisplay` go if now unused.
@@ -303,7 +303,7 @@ rule when D3b lands. Echo budget wired at ≤0.35s (observed 0.01s). Run log:
 **Gate:** §1.7 + baseline diff clean.
 **Execution notes (landed):** the byte-identical gate runs via `docs/BigPlan/shots/ab/`
 (`ab_capture.sh` → frames per scenario, `ab_compare.py` → final-grid diff); the only masked
-rows are `/gt-seed`'s random UUIDs (`Seeded plan |seed-rec-`), proven volatile by a two-run
+rows are `/bp-seed`'s random UUIDs (`Seeded plan |seed-rec-`), proven volatile by a two-run
 control at the same commit. That control also surfaced a hermeticity wart: tips rotation
 state writes to the real `~/.minima-harness` regardless of `MINIMA_HARNESS_DIR`
 (`tips.ts` — `setTipsStateDir` exists but is never wired), so capture scripts must isolate
@@ -409,13 +409,13 @@ windows that must exclude the post-exit state).
 
 **Agent proof:** scripted mock run where the agent todowrites → shots: panel appears, updates
 on status change, Ctrl+B hides, restart honors the persisted hide.
-**Manual test:** real GT-off run with todos; toggle; restart; check the footer order feels
+**Manual test:** real Big Plan-off run with todos; toggle; restart; check the footer order feels
 stable (nothing jumps when busy/suggestions appear).
 **Gate:** §1.7 + budgets (footer restack must not move frame cost).
 **Execution notes (landed):** data thread = the `todoState` array seam (`builtin.ts` →
 `toolsFor` → `todos` AppProp; `spawn.ts` untouched, so sub-agent todos can't leak).
 `tool_execution_end` carries **no toolName** — the re-read is an unconditional gen bump,
-same pattern as the GT strip refresh. Persistence = a SUFFIXED key
+same pattern as the Big Plan strip refresh. Persistence = a SUFFIXED key
 (`<projectKey>::task-panel`) in the existing flat `ui-modes.json` — invisible to old
 readers; only the explicit hide persists. The mock gained a `TODO` marker that emits a
 real `tool_calls` stream (two-phase: a transcript containing a tool result gets plain
@@ -424,34 +424,34 @@ prompt AFTER it appears (~2.1s post-submit — the "a" step sits at 8.0s). A/B v
 the only no-todos diff is the intended `ctrl+b Tasks` keys-legend hint (one row, every
 scenario); `tasks-footer` + `tasks-footer-restart` joined tui-verify permanently.
 
-### MP6 — D3a GT enrichment — replace the plan banner *(M)*
+### MP6 — D3a Big Plan enrichment — replace the plan banner *(M)*
 
-**Goal:** one plan surface. The GT planStrip banner + drift rows fold into D3a.
+**Goal:** one plan surface. The previous Big Plan banner + drift rows fold into D3a.
 
 **Build:**
-- GT on: D3a's rows enrich — current step from the ledger projection (`planStripInfo`,
+- Big Plan on: D3a's rows enrich — current step from the ledger projection (`planStripInfo`,
   `app.tsx:933/:1560`), progress x/N, trailing compact `cost-so-far` (Minima is cost-focused;
   status bar only has per-turn cost — discovery: pull run total from the meter/ledger).
 - Conditional alert row (only when active): 🔴 live block / DRIFT>0 as **colored ASCII text**
   (`!! gate blocked — ^G` / `drift: 2 files`), no emoji, no per-row width risk. The 🔴 alert
   routes to the existing `gateFocus` modal (`app.tsx:942`) — which stays as-is.
-- Delete the old planStrip banner rows (`app.tsx:4174` region) + their fit bookkeeping
-  (`gtFit.strip`). Excluded from D3a by decision: model name (status bar has it), per-step
+- Delete the old planStrip banner rows (`app.tsx:4174` region) + their fit bookkeeping.
+  Excluded from D3a by decision: model name (status bar has it), per-step
   tier icons (Ctrl+G's job).
 
 **Agent proof:** seeded-ledger shots: enriched rows, alert row on a fixture 🔴, banner gone.
-**Manual test:** `MINIMA_TUI_GROUND_TRUTH=1` run: watch a step go in-progress → done; trigger
+**Manual test:** default `MINIMA_TUI_BIG_PLAN=1` run: watch a step go in-progress → done; trigger
 a gate block; confirm ^G answers it.
-**Gate:** §1.7 + GT-off path unchanged vs MP5 shots.
-**Execution notes (landed):** the A/B gate came out ideal — all four GT-off scenarios
-byte-IDENTICAL vs MP5, and the `gt` scenario's diff is exactly the three-row swap (D3a
+**Gate:** §1.7 + Big Plan-off path unchanged vs MP5 shots.
+**Execution notes (landed):** the A/B gate came out ideal — all four Big Plan-off scenarios
+byte-IDENTICAL vs MP5, and the Big Plan scenario's diff is exactly the three-row swap (D3a
 header replaces the `▸ plan …` banner row; `drift: 1 file off-plan` replaces the inline
 ⚠ suffix; the 🟡 note row folds away — full tiers are Ctrl+G's per Q25). `PlanStripInfo`
 gained `planId` + `totalCostUsd` (null hides the cost segment — never `$0.0000`);
 `planStripLabel`/`planStripDrift` were deleted (app-orphaned once the banner died — the
 one-rendered-row newline collapse now lives in `task_footer.oneLine`, tested there).
 `grantTaskRows` grants alert → header → next, display order preserved. The 🟡 note text
-(`gtBehavior.footerNote`) intentionally has no D3a row; `gt-footer.test.ts` was rewritten
+(`bigPlanBehavior.footerNote`) intentionally has no D3a row; `big-plan-footer.test.ts` was rewritten
 in the same commit onto the successor invariants (banner strings ABSENT, taskShown
 lockstep, taskBudget constants, refresh cadence, fail-open).
 
@@ -514,30 +514,30 @@ headers (`▸ you` / `◆ assistant` / `⚙ tool:` / `🧠`), clamps tool bodies
 rule (inert on the top-level list). The panel-toc scenario grew the reader leg
 (Enter → `contents ▸` breadcrumb → h back → Esc close, all inside the same byte gates).
 
-### MP9 — D3b GT overview + step cards *(M)*
+### MP9 — D3b Plan Overview + step cards *(M)*
 
-**Goal:** Ctrl+G = the GT plan overview in the same panel; primary `/why` surface.
+**Goal:** Ctrl+G = Plan Overview in the same panel; primary `/why` surface.
 
 **Build:**
-- Ctrl+G opens (or swaps to) GT view: `gt_overview.ts` snapshot — plan title, step X/N,
+- Ctrl+G opens (or swaps to) Plan Overview: `plan_overview.ts` snapshot — plan title, step X/N,
   per-step ⬜🟦✅ + 🟢🟡🔴 tier icons (there's room here — this is where the full tiered view
   lives), verify cmd per step, DRIFT, per-step cost + model **as-is** (v8 stamp work).
 - Enter → step card (`stepCardLines`) in-panel; Esc back. Unanswered 🔴 gate wins the Ctrl+G
   chord (existing rule, `app.tsx:1771`); answering hands the chord back.
 - `/why` in a TTY opens this panel on the step (text output stays for headless/`-p`).
-- GT off: Ctrl+G shows the one-line "Ground-Truth is OFF" notice (existing behavior).
+- Big Plan off: Ctrl+G shows the one-line "Big Plan is OFF" notice (existing behavior).
 
 **Agent proof:** seeded-ledger shots: overview, step card, gate-wins-chord, /why-opens-panel.
-**Manual test:** full GT run; use only Ctrl+G to follow execution; `/why` after a gate.
+**Manual test:** full Big Plan run; use only Ctrl+G to follow execution; `/why` after a gate.
 **Gate:** §1.7. **Track P complete — Ctrl+T/Ctrl+G one-shot text blocks retire here** (the
 <60-col degrade keeps the text-snapshot path; the busy path also keeps them — Q17a's
 sibling decision, 2026-07-17).
-**Execution notes (landed):** the `gt` view rides the same lines+stops primitive; step
+**Execution notes (landed):** the Plan Overview rides the same lines+stops primitive; step
 cards reuse `readerView` (breadcrumb `plan ▸ step N`, 1-based). Gate-wins is enforced at
 BOTH chord sites — the global guard falls through to the gate-answer arm, and the
 in-panel Ctrl+G closes + arms the SAME `gateFocus`. `/why` opens the panel (with `/why
-<n>` pushing the card); the text path survives for GT-off/narrow/out-of-range — headless
-never had slash commands. **Two real defects the panel-gt scenario caught:** (1)
+<n>` pushing the card); the text path survives for Big Plan-off/narrow/out-of-range — headless
+never had slash commands. **Two real defects the Plan Overview scenario caught:** (1)
 `stepCardLines` entries can carry embedded newlines — every panel view now FLATTENS its
 lines (a multi-row line breaks the height identity: log-update desyncs, a ghost row leaks
 into scrollback permanently, one more row would wipe); (2) terminals and Ink disagree by
@@ -693,10 +693,10 @@ ledger) vs `shots/mp10-render-audit/stream-code.*` (the original strand).
 **Goal:** validate the whole plan → execute → verify → learn pipeline *as built* — your Q51
 ask — before polishing its UX.
 
-**Build:** scripted GT run against the faux provider driving the full loop: `/plan` council →
+**Build:** scripted Big Plan run against the faux provider driving the full loop: `/plan` council →
 draft → finalize → todowrite w/ verify → baseline red → execute → red→green → gate 🟢 →
 `attachGroundedOutcome` → feedback (mock captures the realized-usage payload). Assert every
-ledger row (plans, plan_steps, gates, file_changes, `routing_decisions.step_id`, gt_outcome
+ledger row (plans, plan_steps, gates, file_changes, `routing_decisions.step_id`, `big_plan_outcome`
 stamps) in bun tests, not prose. Then the *judgment* deliverable:
 `docs/BigPlan/plan-loop-audit.md` — a narrative walkthrough with the actual rows, flagging
 anything that doesn't make sense end-to-end (dead columns, double-writes, feedback-truth
@@ -799,10 +799,10 @@ point the CHILD at the mock, not just the meta model.
 ### MP16 — Plan-draft visibility *(M · needs MP7+MP9)*
 
 **Goal:** the plan is visible **while it's being drafted** — not only after `/plan finalize`
-writes GROUND_TRUTH.md (pain #2: "you can't tell whether the plan is converging").
+writes `BigPlan.md` (pain #2: "you can't tell whether the plan is converging").
 
 **Build:** the evolving draft (planner's current step list + rationale, accumulated in the
-plan session store — discovery: where the draft lives pre-finalize) becomes a D3b GT-view
+plan session store — discovery: where the draft lives pre-finalize) becomes a D3b Plan Overview
 mode: during plan mode, Ctrl+G shows `plan (draft)` — steps so far, open questions, council
 verdicts; snapshot-at-open semantics. After finalize it's the normal overview.
 **Agent proof:** shots mid-council: draft view after turn 1, richer after turn 2, final after
@@ -819,42 +819,42 @@ terminal row, the panel frame-height identity), heading first-rows = cursor stop
 inert; `draftPanelState` titles the view `plan (draft) · round N` — the round count IS the
 convergence signal. Wiring: in plan mode with a live session, Ctrl+G (global + in-panel)
 opens the draft; after finalize the session is nulled and the SAME chord falls through to
-`buildGtOverview` — the before/after switch is structural, no flag. Busy/narrow fallback:
-`requestGtSidebar` pushes a terse `store.summary()` instead of the misleading "No
-Ground-Truth plan recorded". Hermetic evidence path: `/plan-seed` (precedent `/gt-seed`)
+`buildPlanOverview` — the before/after switch is structural, no flag. Busy/narrow fallback:
+`requestPlanOverview` pushes a terse `store.summary()` instead of the misleading "No
+Big Plan recorded". Hermetic evidence path: `/plan-seed` (precedent `/bp-seed`)
 applies canned `SEED_ROUND_1/2` council rounds — zero model calls. Gate: `panel-draft`
 scenario (round 1 → nav (cursor moves) → round 2 → `/plan finalize --force` flips the chord
-to the GT overview; zero-wipe; no-mouse sweep; cwd sandboxed so finalize's GROUND_TRUTH.md
+to Plan Overview; zero-wipe; no-mouse sweep; cwd sandboxed so finalize's `BigPlan.md`
 lands in scratch). Shots: `shots/mp16-plan-draft/` (draft-round1, draft-round2,
 final-overview). v1 wart (accepted): the panel is a plain-text surface — `**bold**`/`_em_`
 in the doc render raw, like the reader.
 
 ### MP17 — Universal plan-exit gate: approve / revise / cancel *(M · needs MP16)*
 
-**Goal:** CC-ExitPlanMode-style explicit exit, GT on or off — the plan and its approval in
+**Goal:** CC-ExitPlanMode-style explicit exit, Big Plan on or off — the plan and its approval in
 one surface.
 
-**Build:** lift the GT-only registration of `exitPlanTool` (`src/tools/exit_plan.ts`,
+**Build:** lift the Big Plan-only registration of `exitPlanTool` (`src/tools/exit_plan.ts`,
 `plan_finalize.ts`) so plan-mode exit always fires the 3-option overlay; approving from the
 overlay opens/uses the D3b draft view (MP16) so you approve what you can see. v1 = three
 options only (inline step-editing = v2). Shift+Tab exit routes through the same gate.
-**Agent proof:** scripted shots: GT-off plan → exit → 3-option gate → approve → build mode;
+**Agent proof:** scripted shots: Big Plan-off plan → exit → 3-option gate → approve → build mode;
 revise loops back to planning; cancel discards.
-**Manual test:** both GT-on and GT-off plan sessions.
+**Manual test:** both Big Plan-on and Big Plan-off plan sessions.
 **Gate:** §1.7.
 
 **Execution notes (landed 2026-07-17):** the tool now registers whenever `mode === "plan"`
-(GT on or off). GT-off contract (user decision, CC's ExitPlanMode shape): `exit_plan` gains
-a `plan` markdown argument — REQUIRED when no GT session exists (missing → an error asking
+(Big Plan on or off). Big Plan-off contract (user decision, CC's ExitPlanMode shape): `exit_plan` gains
+a `plan` markdown argument — REQUIRED when no Big Plan session exists (missing → an error asking
 the model to resend); `showPlan` pushes it into the transcript so the user approves exactly
 what they can see (the D3b panel cannot coexist with the question overlay — scrollback is
-the review surface); approve = the mode flip back to build, no GROUND_TRUTH.md. GT-on keeps
+the review surface); approve = the mode flip back to build, no `BigPlan.md`. Big Plan-on keeps
 the store/finalize path and ignores the argument. **Ring semantics (recorded):** Shift+Tab
 OUT of plan mode routes through the same 3-option gate — approve and cancel both land on
 build, Esc stays in plan; the fast path (sessionless AND no completed plan turn,
-`planTurnSeenRef`) keeps quick flipping, the modes scenario, and GT-off A/B byte-identity
+`planTurnSeenRef`) keeps quick flipping, the modes scenario, and Big Plan-off A/B byte-identity
 cycle-identical; with bypass enabled the ring's plan→bypass hop is sacrificed (bypass stays
-reachable via the next lap or /mode). GT-on Shift+Tab shows the draft doc in the transcript
+reachable via the next lap or /mode). Big Plan-on Shift+Tab shows the draft doc in the transcript
 before the ask. The plan-mode system append now instructs calling `exit_plan` with the
 `plan` argument (PLAN_ESCAPE_HATCH sentence untouched, pinned). Mock: `EXITPLAN` marker →
 a two-phase exit_plan(plan) tool call (cross-turn note: any prior tool result suppresses
@@ -879,10 +879,10 @@ ring, the gate text must never appear on the chord).
 
 **Same-day amendments (user decisions, 2026-07-20) — CC permission parity across the ring:**
 (1) **Plan mode DENIES mutations** — write/edit/bash/apply_patch (+todowrite/task per the
-GT blocklist) are blocked at the dispatcher with the exit_plan-steering reason and a
+Big Plan blocklist) are blocked at the dispatcher with the exit_plan-steering reason and a
 `mode-deny` guard event; the B2 ask-every-time flow is gone (PLAN_BUNDLE mirrors `deny`;
-the `ask` action stays in the policy grammar). GT-off block reasons also steer to
-exit_plan — the universal gate registers GT on or off, so "Use /plan to exit" was stale.
+the `ask` action stays in the policy grammar). Big Plan-off block reasons also steer to
+exit_plan — the universal gate registers Big Plan on or off, so "Use /plan to exit" was stale.
 (2) **The exit_plan gate is 4 options in CC's ExitPlanMode order**: Finalize &
 auto-accept edits (lands the mode on accept-edits) / Finalize & build / Revise / Cancel —
 same finalize path, only the landing mode differs. (3) **accept-edits auto is cwd-scoped**
@@ -904,7 +904,7 @@ list each step's verify command so approval is informed. Headless `-p`: unconsen
 fail-closed with a clear error.
 **Agent proof:** scripted run: first verify prompts → allow-always → silent thereafter →
 agent mutates the verify → re-prompt. Shots of each.
-**Manual test:** GT run; confirm the prompts feel right and don't nag.
+**Manual test:** Big Plan run; confirm the prompts feel right and don't nag.
 **Gate:** §1.7 + a test that the gate cannot be bypassed by verify mutation.
 
 **Execution notes (landed 2026-07-17):** **AMENDMENT (user decision): consent is
@@ -940,7 +940,7 @@ runCheck sites, mutation-dodge, library default, env checker). Shots:
 CC-parity ring. (a) **Gate blocks render as `⊘ verify gate — completion blocked, statuses
 unchanged:`** (yellow, body uncolored) instead of the red `⚙ todowrite:` error styling — an
 approved-then-gate-blocked todowrite read as "Enter cancelled my todowrite" when it was the
-done-gate refusing unverified completion flips; `isGateBlockReason` (ground_truth.ts,
+done-gate refusing unverified completion flips; `isGateBlockReason` (`big_plan.ts`,
 prefix-keyed on the three block families) is the renderer's signature, so replayed sessions
 get the same treatment. (b) **Enter on the permission overlay is pinned as ACCEPT** ("Yes
 once") — it always was; now `behavior.test.ts` pins return-in-the-allow-branch and the
@@ -969,13 +969,13 @@ green during the run.
 **Execution notes (landed 2026-07-17):** the story runs TWICE — once in-process
 (`tests/acceptance-e2e.test.ts`: canned council round → MP16 draft rows → `exit_plan`
 approve → finalize seeds ledger + MP18 consent → the REAL done-gate loop red→block→fix→
-green→milestone → `/v1/feedback` captured with realized usage → `buildGtOverview` +
+green→milestone → `/v1/feedback` captured with realized usage → `buildPlanOverview` +
 `whyText` evidence, all with the STRICT consent checker installed) and once through a real
 PTY (`tui_verify.sh` scenario `acceptance`, 42s, ordered-beat asserts + zero-wipe +
 no-mouse + perf budgets): `/plan start` → council line ticking (MP14) → planner reply →
 Ctrl+G `plan (draft)` (MP16) → `/plan finalize` approves (amended 2026-07-20 with the
 silent-exit chord — the MP17 gate rides `exit_plan`/`/plan finalize` only; finalize via the
-mock's RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
+mock's resolve/Big Plan answers seed the single-step plan + its verify consent, MP18) → `PLANDEMO`
 executes phase-scripted: in_progress todowrite (permission overlay shows the verify;
 baseline red) → completing while red → **the done-gate blocks** → `write` fixes → completing
 again → **red→green verified, plan closes** (milestone) → Ctrl+T shows the section's
@@ -984,7 +984,7 @@ errored mid-section but the LAST tool event was clean and a result exists; an ER
 todowrite now falls through to generic tool tracking — previously the todowrite branch
 swallowed it and no gate block could ever flag a section — and a clean todowrite clears the
 strike) → Ctrl+G overview (✅ step, honest tier) → step card → `/why`. Mock additions:
-single-step `COUNCIL_GT` (a one-step plan can CLOSE, exercising the milestone) and the
+single-step `COUNCIL_BIG_PLAN` (a one-step plan can CLOSE, exercising the milestone) and the
 `PLANDEMO` phase-counter script (phase = tool results this turn). Observed honesty note:
 the verified step's tier lands 🟡 (coverage "unknown" on a `test -f` check) — the tier
 ladder's strictness, already documented in the MP13 audit; the demo asserts reality.

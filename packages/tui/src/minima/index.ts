@@ -74,6 +74,7 @@ export type {
   PlanFact,
   SurfacedQuestion,
   CouncilRoundResult,
+  BigPlanSynthesis,
   GroundTruthSynthesis,
   PlanSession,
 } from "./plan_session.ts";
@@ -81,6 +82,7 @@ export {
   runCouncilRound,
   runKeeperMiniUpdate,
   answerOpenQuestions,
+  synthesizeBigPlan,
   synthesizeGroundTruth,
   Critic,
   shouldConveneCouncil,

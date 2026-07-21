@@ -111,7 +111,7 @@ function setup(over: Partial<ReturnType<typeof harnessConfig>> = {}) {
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: true,
+    bigPlan: true,
     stopStrikes: 0, // isolate anti-spiral from the A2 stop-gate
     stepCap: 0, // isolate the doom-loop detector from the turn cap
     spiralRepeats: 3,
@@ -129,7 +129,7 @@ function setup(over: Partial<ReturnType<typeof harnessConfig>> = {}) {
   });
   agent.db = db;
   agent.runId = runId;
-  // A ground-truth plan exists (as in real use); the audit stop gate attaches to it. A2 is off
+  // A Big Plan exists (as in real use); the audit stop gate attaches to it. A2 is off
   // (stopStrikes:0), so the in_progress step does not itself force continuation.
   db.upsertPlanFromTodos(runId, [{ content: "work", status: "in_progress" }]);
   return { agent, reg, db, runId, recommendCalls };
