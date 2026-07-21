@@ -29,11 +29,11 @@ class FakeMemory:
         self.lookup_results: list[RecalledEvidence] = []
         self._strategies = list(strategies or [])
         self.next_record_id = "rec-fake-1"
-        self.get_context_calls: list[dict[str, Any]] = []
+        self.recall_result_overrides: dict[str, Any] = {}
 
     async def recall(self, **kwargs: Any) -> RecallResult:
         self.recall_calls.append(kwargs)
-        return RecallResult(evidence=list(self.evidence))
+        return RecallResult(evidence=list(self.evidence), **self.recall_result_overrides)
 
     async def lookup(
         self, *, lane: str, match: list[dict], limit: int = 256
@@ -64,10 +64,6 @@ class FakeMemory:
     ) -> dict:
         self.batches.append((run_id, items))
         return {"count": len(items), "success": True}
-
-    async def get_context(self, **_kwargs: Any) -> str:
-        self.get_context_calls.append(_kwargs)
-        return ""
 
     async def reflect(self, **kwargs: Any) -> dict:
         self.reflects.append(kwargs)
