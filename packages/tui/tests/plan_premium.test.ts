@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Model, registerModel, resetModelRegistry } from "../src/ai/index.ts";
 import { harnessConfig } from "../src/minima/config.ts";
-import { resolvePlanModels } from "../src/minima/premium.ts";
+import { planModeRoutingOpts, resolvePlanModels } from "../src/minima/premium.ts";
 
 const base: Model = {
   id: "opus-x",
@@ -89,6 +89,30 @@ describe("resolvePlanModels — runnable filtering", () => {
     expect(() => resolvePlanModels(cfg({ planPremiumModels: ["ghost-model"] }))).toThrow(
       /not in the model registry/,
     );
+  });
+});
+
+describe("planModeRoutingOpts — the sessionless plan-mode fallback pool", () => {
+  test("premium active → the runnable hard pool plus the plan phase tag", () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    const opts = planModeRoutingOpts(cfg());
+    expect(opts.candidates).toEqual(["opus-x"]);
+    expect(opts.tags).toEqual(["phase:plan"]);
+  });
+
+  test("flag off → no pool restriction, but the phase tag still rides", () => {
+    const opts = planModeRoutingOpts(cfg({ planPremium: false }));
+    expect(opts.candidates).toBeUndefined();
+    expect(opts.tags).toEqual(["phase:plan"]);
+  });
+
+  test("an explicit /model pin beats the policy: no pool, no throw", () => {
+    const opts = planModeRoutingOpts(cfg({ pinned: true }));
+    expect(opts.candidates).toBeUndefined();
+  });
+
+  test("premium active but nothing runnable → the loud actionable throw propagates", () => {
+    expect(() => planModeRoutingOpts(cfg())).toThrow(/MINIMA_TUI_PLAN_PREMIUM=0/);
   });
 });
 

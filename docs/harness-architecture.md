@@ -307,7 +307,7 @@ behind `config.groundTruth` (code), never behind prompt text.
 | `MINIMA_JUDGE_SAMPLE` / `MINIMA_LLM_JUDGE=1` / `MINIMA_JUDGE_MODEL` | judge sample rate (0 disables) / force every turn / model | 0.15 / off / `claude-haiku-4-5` |
 | `MINIMA_TUI_STOP_STRIKES` / `MINIMA_TUI_SPIRAL_REPEATS` / `MINIMA_TUI_STEP_CAP` | stall + doom-loop detectors | 3 / 3 / 30 |
 | `MINIMA_TUI_FAILURE_MATCHER` / `MINIMA_TUI_BACKOFF_MS` | recovery-ladder matcher / backoff | on / 0 |
-| `MINIMA_TUI_PLAN_PREMIUM` / `MINIMA_PLAN_PREMIUM_MODELS` | premium routing for `/plan` | on |
+| `MINIMA_TUI_PLAN_PREMIUM` / `MINIMA_PLAN_PREMIUM_MODELS` | premium pool for all plan-mode turns (council or not) | on |
 | `MINIMA_TUI_PLAN_CRITIC` / `MINIMA_TUI_DIFF_REVIEW` / `MINIMA_TUI_AUTO_GATES` | verification extras | on |
 | `MINIMA_TUI_ALLOW_VERIFY` | headless verify consent (fail-closed) | off |
 | `MINIMA_AUTO_EFFORT` | difficulty → thinking effort | off |
