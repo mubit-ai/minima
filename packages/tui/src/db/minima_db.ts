@@ -397,6 +397,32 @@ const MIGRATIONS: string[][] = [
   [
     "ALTER TABLE plan_steps ADD COLUMN candidates TEXT", // JSON string[] (NULL = inherit the session pool)
   ],
+  // v17 — observer ledger (PR-E): `observer_verdicts` stores the observer agent's advisory
+  // findings (deterministic tripwires + the sampled adversarial pass); `observer_events` is
+  // the append-only audit trail mirroring memory_events. Advisory by construction: there is
+  // deliberately NO rec_id column, so verdicts can never join the feedback path — they
+  // surface only through /why, steers, and (elsewhere) at most one yellow milestone gate.
+  [
+    `CREATE TABLE IF NOT EXISTS observer_verdicts (
+       id           TEXT PRIMARY KEY,
+       run_id       TEXT NOT NULL,
+       turn         INTEGER NOT NULL,
+       kind         TEXT NOT NULL,    -- tripwire/pass kind (test_edit|done_claim|...)
+       claim        TEXT NOT NULL,    -- the actor claim (or behavior) being called out
+       evidence_ref TEXT,             -- compact pointer at the evidence (paths, step ids)
+       severity     TEXT NOT NULL,    -- info|warn (warn+ may earn an audit gate)
+       created_at   REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_observer_verdicts_run ON observer_verdicts(run_id, created_at)",
+    `CREATE TABLE IF NOT EXISTS observer_events (
+       id         TEXT PRIMARY KEY,
+       verdict_id TEXT,               -- NULL for run-level ops (pass_skipped etc.)
+       event      TEXT NOT NULL,      -- fired|steer|steer_capped|refuted|escalated|...
+       detail     TEXT,               -- JSON
+       at         REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_observer_events_verdict ON observer_events(verdict_id, at)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -618,6 +644,28 @@ export interface RoutingProfilePatch {
   maxCostPerCall?: number | null;
   candidates?: string[] | null;
   perTaskType?: Record<string, PerTaskTypePool> | null;
+}
+
+// ---------------------------------------------------------------- observer rows (PR-E)
+export type ObserverSeverity = "info" | "warn";
+
+export interface ObserverVerdictRow {
+  id: string;
+  run_id: string;
+  turn: number;
+  kind: string;
+  claim: string;
+  evidence_ref: string | null;
+  severity: ObserverSeverity;
+  created_at: number;
+}
+
+export interface ObserverEventRow {
+  id: string;
+  verdict_id: string | null;
+  event: string;
+  detail: string | null;
+  at: number;
 }
 
 /** One gate row joined to its step + owning run — the scribe's mining substrate. */
@@ -2375,6 +2423,90 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM user_signals WHERE gate_id = ? ORDER BY at, rowid")
       .all(gateId) as UserSignalRow[];
+  }
+
+  // ---------------------------------------------------------------- observer ledger (PR-E)
+  /** Persist one observer finding. Advisory-only: the table has no rec_id on purpose. */
+  insertObserverVerdict(opts: {
+    id?: string;
+    runId: string;
+    turn: number;
+    kind: string;
+    claim: string;
+    evidenceRef?: string | null;
+    severity: ObserverSeverity;
+    ts?: number;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      `INSERT INTO observer_verdicts (id, run_id, turn, kind, claim, evidence_ref, severity, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        opts.runId,
+        opts.turn,
+        opts.kind,
+        opts.claim,
+        opts.evidenceRef ?? null,
+        opts.severity,
+        opts.ts ?? Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** Append one observer audit event (verdict_id NULL for run-level ops). */
+  insertObserverEvent(opts: {
+    id?: string;
+    verdictId?: string | null;
+    event: string;
+    detail?: unknown;
+    ts?: number;
+  }): string {
+    const id = opts.id ?? newId();
+    this.db.run(
+      "INSERT INTO observer_events (id, verdict_id, event, detail, at) VALUES (?, ?, ?, ?, ?)",
+      [
+        id,
+        opts.verdictId ?? null,
+        opts.event,
+        opts.detail === undefined || opts.detail === null ? null : JSON.stringify(opts.detail),
+        opts.ts ?? Date.now() / 1000,
+      ],
+    );
+    return id;
+  }
+
+  /** A run's observer verdicts, oldest first — the /why surfacing + escalation input. */
+  getObserverVerdicts(runId: string): ObserverVerdictRow[] {
+    return this.db
+      .query("SELECT * FROM observer_verdicts WHERE run_id = ? ORDER BY created_at, rowid")
+      .all(runId) as ObserverVerdictRow[];
+  }
+
+  /** A verdict's audit trail (or run-level events for verdictId null), oldest first. */
+  listObserverEvents(verdictId: string | null, limit = 100): ObserverEventRow[] {
+    if (verdictId === null) {
+      return this.db
+        .query("SELECT * FROM observer_events WHERE verdict_id IS NULL ORDER BY at, rowid LIMIT ?")
+        .all(limit) as ObserverEventRow[];
+    }
+    return this.db
+      .query("SELECT * FROM observer_events WHERE verdict_id = ? ORDER BY at, rowid LIMIT ?")
+      .all(verdictId, limit) as ObserverEventRow[];
+  }
+
+  /** A project's warn-severity observer verdicts, oldest first — the scribe's
+   * observer_flag mining substrate (recurrence-gated downstream like every signal). */
+  getProjectObserverFlags(projectKey: string, limit = 500): ObserverVerdictRow[] {
+    return this.db
+      .query(
+        `SELECT ov.* FROM observer_verdicts ov
+         JOIN runs r ON r.run_id = ov.run_id
+         WHERE r.project_key = ? AND ov.severity = 'warn'
+         ORDER BY ov.created_at, ov.rowid LIMIT ?`,
+      )
+      .all(projectKey, limit) as ObserverVerdictRow[];
   }
 
   // ---------------------------------------------------------------- Big Plan outcome (M7.1)

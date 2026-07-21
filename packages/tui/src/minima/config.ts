@@ -155,6 +155,13 @@ export interface HarnessConfig {
    * profile slider one hill-climb step (±1.5 clamped to [2, 8]; ≤1 probe per session;
    * 7-day cooldown via profile_events). Question-asking features ship opt-in. */
   tuner: boolean;
+  /** Observer agent (PR-E, default OFF): a non-blocking watcher fed by the agent event
+   * stream that flags suspect trajectories (test edits mid-step, done-claims over
+   * unchecked steps, off-plan bursts, stubbed implementations) via advisory steers,
+   * audit-only verdicts, and — after repeated ignored call-outs — at most one yellow
+   * milestone gate. Never blocks a tool, never feeds a feedback label. Opt IN with
+   * MINIMA_TUI_OBSERVER=1 ("1" → on, anything else → off). */
+  observer: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -192,6 +199,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     classifyModel: null,
     interview: false,
     tuner: false,
+    observer: false,
     ...overrides,
   };
 }
@@ -225,6 +233,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
+  cfg.observer = process.env.MINIMA_TUI_OBSERVER === "1";
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);

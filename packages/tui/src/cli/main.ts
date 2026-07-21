@@ -36,6 +36,7 @@ import {
 import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
+import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
@@ -956,6 +957,36 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     };
   }
 
+  // PR-E observer: a non-blocking watcher over the event stream — deterministic tripwires
+  // + a sampled adversarial pass, surfacing only as steers / audit rows / at most one
+  // yellow milestone gate. Opt-in (MINIMA_TUI_OBSERVER=1); the default path attaches
+  // nothing — no listener, no drain, zero DB writes. Spend books like judge spend.
+  let observerHandle: ObserverHandle | null = null;
+  if (db && agent.runId) {
+    observerHandle = maybeAttachObserver(config, {
+      agent,
+      db,
+      runId: agent.runId,
+      metaModel: providerKeyPresent(planMetaModel.provider) ? planMetaModel : null,
+      recId: () => agent.currentRecId,
+      budget: () => agent.budget,
+      onCostUsd: (usd) => {
+        agent.meter?.addOverhead(usd);
+        agent.budget?.bookSpend(usd, "observer");
+      },
+    });
+  }
+  // The observer's drain gets a bounded window at exit to land its verdicts; anything it
+  // can't finish is simply dropped (advisory — a lost verdict never degrades anything).
+  const endObserverSafely = async (): Promise<void> => {
+    if (!observerHandle) return;
+    try {
+      await Promise.race([observerHandle.stop(), new Promise<void>((r) => setTimeout(r, 5000))]);
+    } catch {
+      // advisory — never delay shutdown on an error
+    }
+  };
+
   // The `question` tool lets the model ask the user a structured clarifying question mid-run.
   // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
   // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
@@ -1068,6 +1099,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
       process.stderr.write("minima: --print/--mode json requires a prompt\n");
+      await endObserverSafely();
       closeDb("aborted");
       return 2;
     }
@@ -1081,6 +1113,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       rc = 1;
     } finally {
       await endSessionSafely(agent); // distil the one-shot run into durable memory
+      await endObserverSafely(); // let the observer drain land its remaining verdicts
       await endScribeSafely(); // curate the run's ledger signals into the memory ledger
       await settleDiffReview(); // let an in-flight closure review land its gate
       closeDb(rc === 0 ? "done" : "aborted");
@@ -1196,6 +1229,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory
+  await endObserverSafely(); // let the observer drain land its remaining verdicts
   await endScribeSafely(); // curate the run's ledger signals into the memory ledger
   await settleDiffReview(); // let an in-flight closure review land its gate
   closeDb("done");
