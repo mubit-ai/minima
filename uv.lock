@@ -1868,7 +1868,7 @@ wheels = [
 
 [[package]]
 name = "minima-cli"
-version = "0.12.4"
+version = "0.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
