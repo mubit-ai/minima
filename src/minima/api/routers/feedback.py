@@ -12,7 +12,7 @@ from minima.config import Settings
 from minima.deps import get_settings
 from minima.logging import get_logger
 from minima.memory import threadpool
-from minima.memory.adapter import Memory
+from minima.memory.adapter import Memory, classify_memory_error
 from minima.memory.keys import (
     build_lesson_content,
     lesson_upsert_key,
@@ -216,8 +216,18 @@ async def feedback(
             source="human",
         )
     except Exception as exc:  # noqa: BLE001
-        log.warning("remember_outcome_failed", error=str(exc))
-        return FeedbackResponse(accepted=False, warnings=["memory_write_failed"])
+        # Honest, class-specific label: an outage, an expired key, a rejected payload, and a
+        # bug in our own write path are distinct — don't flatten them all to one string.
+        # A non-Mubit exception is our bug (memory_write_bug), NOT an outage; error_type keeps
+        # the disguise visible in the log.
+        warning = classify_memory_error(exc) or "memory_write_bug"
+        log.warning(
+            "remember_outcome_failed",
+            warning=warning,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return FeedbackResponse(accepted=False, warnings=[warning])
 
     # The upserted (cluster, model) record's id is stable across feedbacks and
     # dereferenceable — remember it for the exact-match recall fast path.
@@ -489,7 +499,13 @@ async def _late_feedback(
             source="human",
         )
     except Exception as exc:  # noqa: BLE001
-        log.warning("late_remember_outcome_failed", error=str(exc))
-        return FeedbackResponse(accepted=False, warnings=["memory_write_failed", *warnings])
+        warning = classify_memory_error(exc) or "memory_write_bug"
+        log.warning(
+            "late_remember_outcome_failed",
+            warning=warning,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return FeedbackResponse(accepted=False, warnings=[warning, *warnings])
 
     return FeedbackResponse(accepted=True, record_id=record_id, warnings=warnings)

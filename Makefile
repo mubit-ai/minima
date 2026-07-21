@@ -1,4 +1,4 @@
-.PHONY: install run test lint fmt live eval seed refresh-catalog tui-install tui-test tui-check tui-build tui tui-dev tui-shot
+.PHONY: install run test lint fmt live eval seed refresh-catalog verify-venv tui-install tui-test tui-check tui-build tui tui-dev tui-shot
 
 install:
 	uv sync --extra dev   # dev pulls server + reasoner extras for the full test suite
@@ -6,8 +6,11 @@ install:
 run:
 	uv run --extra server uvicorn minima.main:app --reload --host $${MINIMA_HOST:-0.0.0.0} --port $${MINIMA_PORT:-8080}
 
-test:
+test: verify-venv
 	uv run pytest -m "not live and not eval" -q
+
+verify-venv:
+	uv run python scripts/verify_venv_integrity.py
 
 lint:
 	uv run ruff check src client_sdk tests

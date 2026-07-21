@@ -18,7 +18,14 @@ from typing import Any, Protocol, runtime_checkable
 
 import anyio
 import httpx
-from mubit import Client, TransportError
+from mubit import (
+    AuthError,
+    Client,
+    ServerError,
+    TransportError,
+    UnsupportedFeatureError,
+    ValidationError,
+)
 
 from minima.config import Settings
 from minima.logging import get_logger
@@ -26,6 +33,32 @@ from minima.memory import threadpool
 from minima.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
 
 log = get_logger("minima.memory")
+
+
+def classify_memory_error(exc: BaseException) -> str | None:
+    """Map a memory-layer exception to an honest, class-specific warning label.
+
+    The Mubit SDK raises a precise error taxonomy (see mubit.client._map_http_error):
+    auth (401/403), validation (400/404/422), unsupported (501), server (other 5xx), and
+    transport (network unreachable / deadline). A bare `except Exception` that collapses all
+    of these — plus any *local* bug (a KeyError in payload construction, a serialization
+    error) — into one label makes an expired API key or a schema mismatch look identical to
+    a Mubit outage. This keeps them distinct.
+
+    Returns None for anything that is NOT a known Mubit error: that is a bug on our own side
+    of the wire, and the caller labels it as such (never as an outage).
+    """
+    if isinstance(exc, AuthError):
+        return "memory_auth_failed"
+    if isinstance(exc, ValidationError):  # AlreadyExistsError (409) subclasses this too
+        return "memory_rejected_payload"
+    if isinstance(exc, UnsupportedFeatureError):
+        return "memory_unsupported"
+    if isinstance(exc, ServerError):
+        return "memory_server_error"
+    if isinstance(exc, TransportError):
+        return "memory_unreachable"
+    return None
 
 # Lowercase LTM entry-type tags for Mubit's query filter. Recall deliberately does
 # NOT filter by type (seeds land as "fact", feedback as "observation"); Minima outcomes
@@ -89,6 +122,35 @@ def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
         content="",
         record=record,
         referenceable=reference_id is not None,
+    )
+
+
+_LOOKUP_OP = {
+    "key": "core.lookup",
+    "http": {"method": "POST", "path": "/v2/core/lookup"},
+    "grpc": {},
+    "run_id_field": "run_id",
+}
+
+
+def _client_lookup(client: Any, *, session_id: str, match: list[dict], limit: int) -> Any:
+    """Invoke POST /v2/core/lookup, tolerating SDKs without ``Client.lookup``.
+
+    The keyed-lookup endpoint is deliberately not part of the public SDK
+    surface, so released builds (``mubit-sdk`` <= 0.12.x) have no
+    ``Client.lookup`` — calling it raised ``AttributeError`` before any request
+    was made, silently degrading the keyed evidence channel on every recommend
+    in prod. Prefer a native method when one exists; otherwise go through the
+    SDK's transport engine, which handles endpoint/key/error mapping the same
+    way every generated client method does.
+    """
+    native = getattr(client, "lookup", None)
+    if native is not None:
+        return native(session_id=session_id, match=match, limit=limit)
+    return client._transport.invoke(  # noqa: SLF001 — released SDKs expose no public handle
+        _LOOKUP_OP,
+        {"run_id": session_id, "match": match or [], "limit": limit},
+        transport="http",
     )
 
 
@@ -276,12 +338,21 @@ class MubitMemory:
                 log.warning("recall_timeout", lane=lane, budget_ms=budget_ms)
                 return RecallResult(evidence=[], degraded=True, timed_out=True)
             return self._parse_recall(raw)
-        except TransportError as exc:
-            log.warning("recall_transport_error", lane=lane, code=exc.args[0] if exc.args else "")
-            return RecallResult(evidence=[], degraded=True, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — recall must never break a recommendation
-            log.warning("recall_error", lane=lane, error=str(exc))
-            return RecallResult(evidence=[], degraded=True, error=str(exc))
+            # Classify honestly: a Mubit outage, an auth failure, a rejected payload, and a
+            # bug in our own recall path are distinct failures — do not conflate them all as
+            # "memory_unavailable". Non-Mubit exceptions are our bug (memory_recall_bug), not
+            # an outage. error_type makes the disguise visible without re-deriving it.
+            warning = classify_memory_error(exc) or "memory_recall_bug"
+            log.warning(
+                "recall_error",
+                lane=lane,
+                warning=warning,
+                error_type=type(exc).__name__,
+                code=getattr(exc, "code", None),
+                error=str(exc),
+            )
+            return RecallResult(evidence=[], degraded=True, error=str(exc), warning=warning)
 
     def _parse_recall(self, raw: object) -> RecallResult:
         data: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
@@ -319,7 +390,8 @@ class MubitMemory:
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
                 raw = await threadpool.run_cancellable(
-                    self._client.lookup,
+                    _client_lookup,
+                    self._client,
                     session_id=lane,
                     match=match,
                     limit=limit,

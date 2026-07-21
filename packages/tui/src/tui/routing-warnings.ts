@@ -4,7 +4,9 @@
  * The server (src/minima/recommender/engine.py) emits ~18 `warnings` strings, and they are
  * ALL benign/informational on a recommend response — they describe successful selection or
  * graceful degradation (thompson_pick, exploration_pick, no_model_meets_threshold,
- * collapse_guard_applied, prices_stale, memory_unavailable, no_model_within_*_budget, …).
+ * collapse_guard_applied, prices_stale, no_model_within_*_budget, and the class-specific
+ * memory-degradation labels memory_unreachable / memory_auth_failed / memory_rejected_payload /
+ * memory_server_error / memory_recall_bug, …).
  * None is a hard failure. The old TUI used a 4-item DENYLIST and rendered everything else as
  * a red error, so any diagnostic not in the list (and any NEW server diagnostic) looked like
  * a failure. We invert that: recommend-path warnings are shown as a MUTED info note, never a

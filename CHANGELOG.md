@@ -4,6 +4,60 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.4] - 2026-07-21
+
+### Fixed
+- **Inline render stability — the anchor ledger** (TUI, #187): the composer stays
+  bottom-anchored and Ink can no longer strand or wipe rows. An explicit capped
+  live-frame height makes strand + wipe structurally impossible; inherited scroll
+  margins (a leaked DECSTBM region surviving clear/resize) are reset at boot; empty
+  markdown lines no longer collapse to zero rows. Backed by new PTY regression gates
+  (anchor-ledger repro matrix, mid-run resize, stale-margin asserts).
+- **PTY-suite hermeticity** (#187): a blank `MUBIT_API_KEY` kills a live
+  recall-before-route stall inside the "hermetic" suite — root cause of the historic
+  ~50%/run flake.
+
+### Added
+- **Shift+Tab mode ring with Claude Code permission parity** (TUI, #187): a silent,
+  global mode cycle (build → accept-edits → plan) that works mid-run and over the
+  permission overlay. Plan mode denies write/edit/bash at the dispatcher (new
+  `mode-deny` guard event), the exit-plan gate gains a 4-option landing, accept-edits
+  auto-approval is cwd-scoped, and `[a]` on a bash prompt becomes a persisted
+  per-command-family grant. Mode-aware permissions footer; gate blocks render as
+  `⊘ verify gate` instead of a red denial.
+- **Premium plan routing** (TUI, #187): plan mode decides on premium models only — a
+  hard pre-request candidate pin (`constraints.candidate_models` + `phase:plan` tag)
+  that never silently widens; premium finalize/turn cost is booked like any other.
+- **Honest Mubit-error taxonomy** (server, #132): the memory layer's bare
+  `except Exception` no longer collapses every failure into `memory_unavailable` /
+  `memory_write_failed`. Mubit SDK errors map to class-specific warnings
+  (`memory_auth_failed`, `memory_rejected_payload`, `memory_unsupported`,
+  `memory_server_error`, `memory_unreachable`), and non-Mubit exceptions are labeled
+  `memory_write_bug` / `memory_recall_bug` so a local bug is never disguised as an
+  outage. Logs carry `error_type` alongside the label.
+
+### Changed
+- `uv.lock` refreshed to record the current project version (#190) — the 0.12.2/0.12.3
+  bumps had left it stale at 0.12.1.
+
+## [0.12.3] - 2026-07-21
+
+### Fixed
+- **Keyed lookup no longer depends on an unreleased SDK method** (server): every prod
+  recommend logged `keyed_lookup_degraded` because the adapter called
+  `self._client.lookup`, which does not exist in released `mubit-sdk` (0.10.0) — the
+  deterministic per-(cluster, model) evidence channel never left the process. A new
+  `_client_lookup` shim prefers a native `Client.lookup` when present and otherwise
+  drives the `core.lookup` op through the SDK's transport engine (same endpoint, key,
+  and error handling as generated methods). Verified against a pristine 0.10.0 install
+  and live against a dev Mubit instance.
+
+### Added
+- **Venv integrity check**: `scripts/verify_venv_integrity.py` re-hashes every installed
+  file against its wheel RECORD and fails on mismatch; runs first in `make test` and as
+  a CI step. Guards against hand-patched site-packages masking prod-only failures —
+  exactly how the keyed-lookup bug stayed invisible locally.
+
 ## [0.12.2] - 2026-07-20
 
 The memory spine: the SQLite ledger starts feeding decisions. Ten PRs across the
