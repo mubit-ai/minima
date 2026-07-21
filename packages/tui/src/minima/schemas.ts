@@ -190,6 +190,13 @@ export interface FeedbackRequest {
   provider_model_snapshot?: string;
   /** P(this turn was selected for labeling); 1.0 for gate labels. */
   label_propensity?: number;
+  /**
+   * Free-form boolean implicit-signal map (max 16 keys; each key 1-32 chars of a-z or
+   * underscore), consumed only by the server's opt-in weak-supervision label model —
+   * never by evidence provenance. Reserved keys: retried, user_corrected,
+   * diff_reverted, session_continued, observer_flagged.
+   */
+  signals?: Record<string, boolean>;
   notes?: string;
   idempotency_key?: string;
   /**

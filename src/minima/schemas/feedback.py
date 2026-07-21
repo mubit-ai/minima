@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from minima.schemas.common import OutcomeLabel
+
+MAX_SIGNAL_KEYS = 16
+_SIGNAL_KEY_RE = re.compile(r"^[a-z_]{1,32}$")
 
 
 class StepOutcome(BaseModel):
@@ -115,6 +119,18 @@ class FeedbackRequest(BaseModel):
             "OPE/calibration once labeling is non-uniform."
         ),
     )
+    signals: dict[str, bool] | None = Field(
+        None,
+        description=(
+            "Free-form boolean implicit-signal map (max 16 keys, keys ^[a-z_]{1,32}$), "
+            "stored on the outcome record and consumed only by the (opt-in) "
+            "weak-supervision label model — never by evidence provenance. Reserved keys: "
+            "retried (the recovery ladder re-attempted this prompt), user_corrected (the "
+            "user rejected/steered a gate this turn), diff_reverted (the turn's diff was "
+            "later reverted), session_continued (the user kept prompting after this turn), "
+            "observer_flagged (an observer agent flagged the turn)."
+        ),
+    )
     notes: str | None = None
     idempotency_key: str | None = None
     step_outcomes: list[StepOutcome] = Field(
@@ -125,6 +141,18 @@ class FeedbackRequest(BaseModel):
             "own provenance, so they are recorded even when the turn is unlabeled."
         ),
     )
+
+    @field_validator("signals")
+    @classmethod
+    def _validate_signals(cls, v: dict[str, bool] | None) -> dict[str, bool] | None:
+        if v is None:
+            return v
+        if len(v) > MAX_SIGNAL_KEYS:
+            raise ValueError(f"signals: at most {MAX_SIGNAL_KEYS} keys allowed")
+        for key in v:
+            if not _SIGNAL_KEY_RE.match(key):
+                raise ValueError(f"signals: invalid key {key!r} (must match ^[a-z_]{{1,32}}$)")
+        return v
 
 
 class FeedbackResponse(BaseModel):
