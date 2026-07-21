@@ -13,6 +13,9 @@
  * red error, and the noisiest purely-internal signals are hidden entirely.
  */
 
+import type { RouteConfirmInfo } from "../minima/runtime.ts";
+import { fmtUsd } from "./status.tsx";
+
 // Purely-internal signals with no user value — hidden completely.
 const HIDDEN_PREFIXES = [
   "cold_start",
@@ -34,4 +37,29 @@ const HIDDEN_PREFIXES = [
 /** Info-level warnings worth a muted one-liner (everything not hidden). Never errors. */
 export function routingInfoWarnings(warnings: readonly string[]): string[] {
   return warnings.filter((w) => !HIDDEN_PREFIXES.some((p) => w.startsWith(p)));
+}
+
+/** The route-confirm overlay's question line: model, basis, est cost, filtered warnings. */
+export function formatRouteConfirm(info: RouteConfirmInfo): string {
+  if (info.decisionBasis === "offline") {
+    return `route: offline — ${info.offlineReason ?? "Minima unreachable"} — would run ${
+      info.modelId ?? "the current model"
+    } unrouted`;
+  }
+  const cost =
+    info.estCostUsd !== null
+      ? info.estCostHigh !== null
+        ? ` · est ${fmtUsd(info.estCostUsd)}–${fmtUsd(info.estCostHigh)}`
+        : ` · est ${fmtUsd(info.estCostUsd)}`
+      : "";
+  const warn = routingInfoWarnings(info.warnings);
+  const warnLine = warn.length ? ` · ⚠ ${warn.join(", ")}` : "";
+  return `route: ${info.modelId ?? "?"} ▸ ${info.decisionBasis}${cost}${warnLine}`;
+}
+
+/** The Run option's description in the route-confirm overlay. */
+export function runOptionDesc(info: RouteConfirmInfo): string {
+  if (info.decisionBasis === "offline") return "run unrouted on the current model";
+  if (info.decisionBasis === "pinned") return `run pinned ${info.modelId ?? "model"}`;
+  return `run ${info.modelId ?? "the routed model"}`;
 }

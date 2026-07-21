@@ -65,6 +65,29 @@ import { makeStopGate } from "./stop_gate.ts";
  * null to accept as-is; a result with recommendationId=null to veto (no feedback attribution). */
 export type BeforeRoute = (routing: RoutingResult, task: string) => Promise<RoutingResult | null>;
 
+/** A cancelled route-confirm (Ctrl+R "confirm" mode): the turn never ran, nothing was
+ * spent, no feedback was sent. The TUI catches this to restore the composer draft. */
+export class RouteCancelledError extends Error {
+  constructor(message = "route cancelled by user") {
+    super(message);
+    this.name = "RouteCancelledError";
+  }
+}
+
+/** What the route-confirm consent surface gets to show before the model runs. */
+export interface RouteConfirmInfo {
+  modelId: string | null;
+  /** "pinned" | "offline" | the server basis (prior/memory/posterior/…). */
+  decisionBasis: string;
+  estCostUsd: number | null;
+  estCostHigh: number | null;
+  warnings: string[];
+  /** Non-null on the offline-fallback path (the turn would run unrouted). */
+  offlineReason: string | null;
+}
+
+export type ConfirmRun = (info: RouteConfirmInfo) => Promise<boolean>;
+
 export interface MinimaAgentOptions extends Omit<AgentOptions, "model"> {
   config: HarnessConfig;
   router?: MinimaRouter;
@@ -173,6 +196,11 @@ export class MinimaAgent extends Agent {
    * headless. Read at run-stop so the stop-gate can raise the "keep going / accept / steer"
    * overlay once its strikes are spent. */
   askUser: AskUserRef | null = null;
+  /** Late-bound route-confirm consent surface (Ctrl+R "confirm" mode). Assigned by the TUI
+   * when confirm mode is on; null = no gate. Called once per prompt at the turn boundary
+   * (after routing, before any reservation or model call) for routed, pinned, AND
+   * offline-fallback turns; resolve false to cancel (throws RouteCancelledError). */
+  confirmRun: ConfirmRun | null = null;
   /** Budget following (optional): reserve-after-route / reconcile-after-run, graduated
    * warnings, and (enforce mode) refusal once exhausted. */
   budget: BudgetLedger | null = null;
@@ -396,6 +424,7 @@ export class MinimaAgent extends Agent {
             `budget exhausted: $${s.spentUsd.toFixed(4)} spent of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
           );
         }
+        const prevModel = this.agentState.model;
         let routing: RoutingResult | null;
         try {
           routing = await this.route(content, {
@@ -430,6 +459,33 @@ export class MinimaAgent extends Agent {
         }
         lastRouting = routing;
         if (firstRecId === null) firstRecId = routing?.recommendationId ?? null;
+
+        // Route-confirm gate (Ctrl+R "confirm"): a consent surface the TUI late-binds,
+        // called at the turn boundary for routed, pinned, and offline turns alike. First
+        // rung only — recovery re-routes belong to the already-confirmed turn. Sits
+        // BEFORE the reserve so a cancel has nothing to release, and outside route()'s
+        // try so the offline-degradation catch can never swallow the cancel.
+        if (attempt === 0 && this.confirmRun) {
+          let proceed = false;
+          try {
+            proceed = await this.confirmRun({
+              modelId: routing?.chosenModelId ?? this.agentState.model?.id ?? null,
+              decisionBasis: routing?.decisionBasis ?? "offline",
+              estCostUsd: routing?.estCostUsd ?? null,
+              estCostHigh: routing?.estCostHigh ?? null,
+              warnings: routing?.warnings ?? [],
+              offlineReason: routing === null ? this.offlineReason : null,
+            });
+          } catch {
+            proceed = false;
+          }
+          if (!proceed) {
+            // Undo route()'s incumbent swap or the cancelled model would poison the next
+            // turn's incumbentModelId stickiness signal (and the status bar).
+            this.agentState.model = prevModel;
+            throw new RouteCancelledError();
+          }
+        }
 
         // Effort routing Phase A: the second decision axis. The server's classified
         // difficulty picks THIS prompt's thinking level (restored after the prompt).

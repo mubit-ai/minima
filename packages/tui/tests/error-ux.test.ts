@@ -2,7 +2,59 @@ import { describe, expect, test } from "bun:test";
 import type { Model } from "../src/ai/types.ts";
 import { errText } from "../src/errtext.ts";
 import { matches } from "../src/tui/model-picker.tsx";
-import { routingInfoWarnings } from "../src/tui/routing-warnings.ts";
+import {
+  formatRouteConfirm,
+  routingInfoWarnings,
+  runOptionDesc,
+} from "../src/tui/routing-warnings.ts";
+
+describe("formatRouteConfirm (route-confirm overlay copy)", () => {
+  test("routed: model, basis, est cost band, filtered warnings", () => {
+    const line = formatRouteConfirm({
+      modelId: "gemini-2.5-flash",
+      decisionBasis: "memory",
+      estCostUsd: 0.002,
+      estCostHigh: 0.004,
+      warnings: ["no_model_meets_threshold", "thompson_pick"],
+      offlineReason: null,
+    });
+    expect(line).toContain("gemini-2.5-flash ▸ memory");
+    expect(line).toContain("est $0.002–$0.004");
+    expect(line).toContain("no_model_meets_threshold");
+    expect(line).not.toContain("thompson_pick"); // hidden internal signal stays hidden
+  });
+
+  test("offline: says what would run unrouted and why", () => {
+    const line = formatRouteConfirm({
+      modelId: "faux-a",
+      decisionBasis: "offline",
+      estCostUsd: null,
+      estCostHigh: null,
+      warnings: [],
+      offlineReason: "minima is down",
+    });
+    expect(line).toContain("offline");
+    expect(line).toContain("minima is down");
+    expect(line).toContain("faux-a");
+    expect(line).toContain("unrouted");
+  });
+
+  test("run-option descriptions name the basis", () => {
+    const base = {
+      estCostUsd: null,
+      estCostHigh: null,
+      warnings: [],
+      offlineReason: null,
+    };
+    expect(
+      runOptionDesc({ ...base, modelId: "m", decisionBasis: "pinned" }),
+    ).toBe("run pinned m");
+    expect(
+      runOptionDesc({ ...base, modelId: "m", decisionBasis: "offline" }),
+    ).toContain("unrouted");
+    expect(runOptionDesc({ ...base, modelId: "m", decisionBasis: "memory" })).toBe("run m");
+  });
+});
 
 describe("errText", () => {
   test("returns an Error's message without the class-name prefix (no 'Error: Error:')", () => {

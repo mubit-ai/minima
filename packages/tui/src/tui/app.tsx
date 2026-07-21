@@ -48,6 +48,7 @@ import {
 } from "../minima/ground_truth.ts";
 import {
   PlanSessionStore,
+  RouteCancelledError,
   type RoutingResult,
   applyJudgeCommand,
   buildPlanTranscript,
@@ -139,7 +140,7 @@ import {
   parseRewindArgs,
   renderRewindText,
 } from "./rewind_picker.ts";
-import { routingInfoWarnings } from "./routing-warnings.ts";
+import { formatRouteConfirm, routingInfoWarnings, runOptionDesc } from "./routing-warnings.ts";
 import { StatusBar, fmtUsd } from "./status.tsx";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
@@ -1443,6 +1444,32 @@ export function HarnessApp({
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
   // The session's startup sample rate — what bare /judge toggles back ON to.
   const defaultJudgeSampleRef = useRef(agent.config.judgeSampleRate);
+
+  // Ctrl+R "confirm" consumer: late-bind the runtime's route-confirm gate onto the same
+  // QuestionOverlay channel (its anchor-ledger rows, input hiding, and Esc precedence are
+  // already wired). Registered only while confirm mode is on, so `auto` costs nothing.
+  useEffect(() => {
+    if (routeMode !== "confirm") {
+      agent.confirmRun = null;
+      return;
+    }
+    agent.confirmRun = (info) =>
+      new Promise<boolean>((resolve) => {
+        setQuestionPrompt({
+          question: formatRouteConfirm(info),
+          header: "route",
+          options: [
+            { label: "Run", description: runOptionDesc(info) },
+            { label: "Cancel", description: "skip this turn — nothing runs, nothing is spent" },
+          ],
+          allow_freetext: false,
+          resolve: (answer) => resolve(answer === "Run"),
+        });
+      });
+    return () => {
+      agent.confirmRun = null;
+    };
+  }, [agent, routeMode]);
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
   const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
   const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
@@ -3978,15 +4005,30 @@ export function HarnessApp({
         surfaceRouting(routing);
       }
     } catch (exc) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          toolName: "error",
-          text: `⚠ ${actionableError(errText(exc), agent.agentState.model?.provider)}`,
-          isError: true,
-        },
-      ]);
+      if (exc instanceof RouteCancelledError) {
+        // The user declined the route-confirm overlay: nothing ran, nothing was spent.
+        // Muted note + the draft back in the composer — not a red error.
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            toolName: "routing",
+            text: "ℹ routing cancelled — nothing ran, nothing was spent",
+            isError: false,
+          },
+        ]);
+        setPrefill({ text, nonce: Date.now() });
+      } else {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            toolName: "error",
+            text: `⚠ ${actionableError(errText(exc), agent.agentState.model?.provider)}`,
+            isError: true,
+          },
+        ]);
+      }
     } finally {
       pendingEchoRef.current = false;
       setBusy(false);

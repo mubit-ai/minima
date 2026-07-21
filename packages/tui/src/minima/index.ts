@@ -33,10 +33,13 @@ export type { QualityJudge, JudgeToggleState } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
 export {
   MinimaAgent,
+  RouteCancelledError,
   gradeOutcome,
   stepOutcomesFromGates,
   type BeforeRoute,
+  type ConfirmRun,
   type MinimaAgentOptions,
+  type RouteConfirmInfo,
 } from "./runtime.ts";
 export {
   buildMemoryProjection,
