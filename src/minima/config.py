@@ -203,6 +203,20 @@ class Settings(BaseSettings):
     # change). 0 disables incumbent stickiness.
     minima_incumbent_cache_fraction: float = 0.7
 
+    # --- Preference pairs (recovery-chain learning) ---
+    # Assemble failed-parent -> succeeding-child preference pairs from feedback carrying
+    # parent_rec_id, and (when enabled) nudge the capability PRIOR by the observed win
+    # rate — a bounded score-time input, never a post-hoc re-rank.
+    minima_pairs_enabled: bool = False
+    minima_pairs_min_n: int = 3
+    minima_pairs_weight: float = 0.2
+    minima_pairs_retention: int = 512  # per-org in-memory cap
+    # Calibrated deferral diagnostics: warn `escalation_rate_high:<cluster>` when the
+    # share of reconciled decisions in a cluster that arrived as recovery re-routes
+    # (escalation_reason set) exceeds the rate, given at least min_chains chains.
+    minima_deferral_warn_rate: float = 0.3
+    minima_deferral_min_chains: int = 5
+
     # --- Neighbor-vote classification ---
     # When the heuristic classifier returns `other`, disambiguate the task_type from the
     # ANN-recalled semantic neighbors' types (free + semantic) instead of (or before) a paid

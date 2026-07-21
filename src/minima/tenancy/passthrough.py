@@ -21,6 +21,7 @@ from minima.recommender.durablerefs import (
     OrgScopedDurableRefs,
 )
 from minima.recommender.engine import Recommender
+from minima.recommender.pairs import MemoryPairStore, OrgScopedPairStore
 from minima.recommender.recstore import LaneCounter, OrgScopedRecStore, RecStore
 from minima.tenancy.context import TenantContext
 
@@ -46,6 +47,7 @@ class PassthroughRuntime:
         memory_factory: Callable[[str], Memory] | None = None,
         decision_log_backend: DecisionLog | None = None,
         durable_refs_backend: DurableRefs | None = None,
+        pair_store_backend: MemoryPairStore | None = None,
     ):
         self._settings = settings
         self._catalog_store = catalog_store
@@ -56,6 +58,9 @@ class PassthroughRuntime:
             settings.minima_decision_log_retention_days
         )
         self._durable_refs_backend = durable_refs_backend or MemoryDurableRefs()
+        self._pair_store_backend = pair_store_backend or MemoryPairStore(
+            settings.minima_pairs_retention
+        )
         self._cache: dict[str, TenantContext] = {}
         self._lock = Lock()
 
@@ -74,6 +79,7 @@ class PassthroughRuntime:
         scoped_recstore = OrgScopedRecStore(self._recstore_backend, org_id)
         scoped_decision_log = OrgScopedDecisionLog(self._decision_log_backend, org_id)
         scoped_durable_refs = OrgScopedDurableRefs(self._durable_refs_backend, org_id)
+        scoped_pair_store = OrgScopedPairStore(self._pair_store_backend, org_id)
         recommender = Recommender(
             self._settings,
             memory,
@@ -82,6 +88,7 @@ class PassthroughRuntime:
             decision_log=scoped_decision_log,
             org_id=org_id,
             durable_refs=scoped_durable_refs,
+            pair_store=scoped_pair_store,
         )
         ctx = TenantContext(
             org_id=org_id,
@@ -93,6 +100,7 @@ class PassthroughRuntime:
             mubit_endpoint=self._settings.mubit_endpoint,
             decision_log=scoped_decision_log,
             durable_refs=scoped_durable_refs,
+            pair_store=scoped_pair_store,
         )
         with self._lock:
             existing = self._cache.get(key_hash)

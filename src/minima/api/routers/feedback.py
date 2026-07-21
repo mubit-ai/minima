@@ -35,6 +35,7 @@ from minima.memory.records import (
     signal_from_outcome,
 )
 from minima.recommender.decisionlog import DecisionRecord, Reconciliation
+from minima.recommender.pairs import assemble_pair
 from minima.schemas.common import OutcomeLabel
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
 from minima.tenancy.context import TenantContext
@@ -211,6 +212,9 @@ async def feedback(
     )
     if corrected:
         warnings.append("decision_corrected")
+    _record_preference_pair(
+        tenant, req, stored.task_cluster, EVIDENCE_NONE if infra else source
+    )
 
     if not labeled:
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
@@ -519,6 +523,35 @@ def _reconcile_decision(
         return False
 
 
+def _record_preference_pair(
+    tenant: TenantContext,
+    req: FeedbackRequest,
+    child_cluster: str,
+    evidence_source: str,
+) -> None:
+    """Assemble a recovery-chain preference pair (best-effort, never fails feedback)."""
+    if req.parent_rec_id is None or tenant.pair_store is None or tenant.decision_log is None:
+        return
+    try:
+        parent = tenant.decision_log.get(req.parent_rec_id)
+        if parent is None:
+            return
+        pair = assemble_pair(
+            parent, req, child_cluster=child_cluster, child_evidence_source=evidence_source
+        )
+        if pair is not None:
+            tenant.pair_store.put(pair)
+            log.info(
+                "preference_pair_recorded",
+                cluster=pair.cluster,
+                winner=pair.winner_model_id,
+                loser=pair.loser_model_id,
+                evidence=pair.evidence,
+            )
+    except Exception as exc:  # noqa: BLE001 — pair assembly must never fail feedback
+        log.warning("preference_pair_failed", parent_rec_id=req.parent_rec_id, error=str(exc))
+
+
 async def _late_feedback(
     req: FeedbackRequest,
     tenant: TenantContext,
@@ -540,6 +573,7 @@ async def _late_feedback(
     )
     if corrected:
         warnings.append("decision_corrected")
+    _record_preference_pair(tenant, req, decision.cluster, EVIDENCE_NONE if infra else source)
 
     if not labeled:
         steps_recorded = await _relay_step_outcomes(

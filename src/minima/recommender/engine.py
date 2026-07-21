@@ -21,6 +21,7 @@ from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
+from minima.recommender.pairs import PairStore, pair_prior_adjustment
 from minima.recommender.recstore import RecStore, StoredRecommendation
 from minima.recommender.types import CandidateScore, ModelAggregate
 from minima.schemas.common import DecisionBasis, Difficulty, TaskType
@@ -74,6 +75,7 @@ class Recommender:
         org_id: str = "default",
         rng: random.Random | None = None,
         durable_refs: DurableRefs | None = None,
+        pair_store: PairStore | None = None,
     ):
         self._settings = settings
         self._memory = memory
@@ -82,6 +84,7 @@ class Recommender:
         self._decision_log = decision_log
         self._org_id = org_id
         self._durable_refs = durable_refs
+        self._pair_store = pair_store
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
         argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
         self._thompson_enabled = (
@@ -95,6 +98,10 @@ class Recommender:
         # Lazily-fit, cached calibrator (org-scoped via this Recommender's decision log).
         self._calibrators: CalibratorSet | None = None
         self._calibrators_fitted_at: float = 0.0
+        # Lazily-computed, cached per-cluster deferral stats (same refresh cadence as
+        # the calibrator — both are windowed scans over this org's decision rows).
+        self._deferral_stats: dict[str, tuple[int, int]] = {}
+        self._deferral_fitted_at: float = 0.0
 
     async def recommend(self, req: RecommendRequest) -> RecommendResponse:
         started = time.monotonic()
@@ -240,7 +247,7 @@ class Recommender:
             * settings.minima_difficulty_output_multipliers.get(difficulty.value, 1.0)
         )
         scored = self._score_candidates(
-            candidates, aggregates, task_type, input_tokens, output_tokens, req
+            candidates, aggregates, task_type, input_tokens, output_tokens, req, cluster
         )
         profile.mark("score")
         # Premium counterfactual baseline, captured BEFORE the cost/latency filters
@@ -304,6 +311,14 @@ class Recommender:
         # strictly dominates it and it shipped unreachable in the prod image anyway.
         if esc.should_escalate:
             warnings.extend(f"escalation_suggested:{reason}" for reason in esc.reasons)
+        deferral = escalation.deferral_warning(
+            await threadpool.run(self._get_deferral_stats),
+            cluster,
+            warn_rate=settings.minima_deferral_warn_rate,
+            min_chains=settings.minima_deferral_min_chains,
+        )
+        if deferral:
+            warnings.append(deferral)
         warnings.extend(opt_warnings)
 
         if not evidence:
@@ -620,6 +635,34 @@ class Recommender:
         except Exception as exc:  # noqa: BLE001 — calibration must never break a recommendation
             log.warning("calibrator_refit_failed", error=str(exc))
 
+    def _get_deferral_stats(self) -> dict[str, tuple[int, int]]:
+        settings = self._settings
+        if self._decision_log is None:
+            return {}
+        now = time.monotonic()
+        if (
+            not self._deferral_fitted_at
+            or now - self._deferral_fitted_at > settings.minima_calibration_refresh_seconds
+        ):
+            self._deferral_fitted_at = now
+            try:
+                since = time.time() - settings.minima_calibration_window_days * 86_400.0
+                self._deferral_stats = escalation.deferral_stats(
+                    self._decision_log.rows(since=since)
+                )
+            except Exception as exc:  # noqa: BLE001 — diagnostics must never break the hot path
+                log.warning("deferral_stats_failed", error=str(exc))
+        return self._deferral_stats
+
+    def _pair_win_rates(self, cluster: str) -> dict[tuple[str, str], tuple[int, int]] | None:
+        if not self._settings.minima_pairs_enabled or self._pair_store is None:
+            return None
+        try:
+            return self._pair_store.win_rates(cluster)
+        except Exception as exc:  # noqa: BLE001 — pair evidence must never break scoring
+            log.warning("pair_win_rates_failed", cluster=cluster, error=str(exc))
+            return None
+
     def _score_candidates(
         self,
         candidates: list[ModelCard],
@@ -628,6 +671,7 @@ class Recommender:
         input_tokens: int,
         output_tokens: int,
         req: RecommendRequest,
+        cluster: str,
     ) -> list[CandidateScore]:
         settings = self._settings
         scored: list[CandidateScore] = []
@@ -642,9 +686,18 @@ class Recommender:
             req.constraints.require_prompt_caching,
             min_cost_n,
         )
+        pair_rates = self._pair_win_rates(cluster)
         for card in candidates:
             agg = aggregates.get(card.model_id)
             prior = score.capability_prior(card, task_type)
+            if pair_rates:
+                prior = pair_prior_adjustment(
+                    prior,
+                    card.model_id,
+                    pair_rates,
+                    min_n=settings.minima_pairs_min_n,
+                    weight=settings.minima_pairs_weight,
+                )
             predicted, confidence = score.predicted_success(
                 agg, prior, settings.minima_beta_pseudocount
             )

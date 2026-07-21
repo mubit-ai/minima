@@ -156,6 +156,90 @@ def test_feedback_accepts_ladder_linkage_and_labeling_metadata(client, fake_memo
     assert bad.status_code == 422
 
 
+def test_feedback_with_missing_parent_never_fails(client, fake_memory):
+    """A parent_rec_id the decision log cannot resolve (expired, foreign, or bogus)
+    must degrade to no-pair, never a 500."""
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "evidence_source": "gate",
+            "parent_rec_id": "no-such-rec",
+            "escalation_reason": "gate_failed",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+
+def test_recovery_chain_assembles_preference_pair(app, client, fake_memory):
+    from tests.conftest import TEST_MUBIT_KEY
+
+    parent = _recommend_haiku(client, fake_memory)
+    fb1 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": parent["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "failure",
+            "evidence_source": "gate",
+        },
+    ).json()
+    assert fb1["accepted"] is True
+
+    child = _recommend_haiku(client, fake_memory)
+    fb2 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": child["recommendation_id"],
+            "chosen_model_id": "claude-opus-4-8",
+            "outcome": "success",
+            "evidence_source": "gate",
+            "parent_rec_id": parent["recommendation_id"],
+            "escalation_reason": "gate_failed",
+        },
+    ).json()
+    assert fb2["accepted"] is True
+
+    tenant = app.state.passthrough_runtime.resolve(TEST_MUBIT_KEY)
+    rates = tenant.pair_store.win_rates("code:hard")
+    assert rates[("claude-opus-4-8", "claude-haiku-4-5")] == (1, 1)
+
+
+def test_unlabeled_child_success_records_no_pair(app, client, fake_memory):
+    from tests.conftest import TEST_MUBIT_KEY
+
+    parent = _recommend_haiku(client, fake_memory)
+    client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": parent["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "failure",
+            "evidence_source": "judge",
+        },
+    )
+    child = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": child["recommendation_id"],
+            "chosen_model_id": "claude-opus-4-8",
+            "outcome": "success",
+            "evidence_source": "human",
+            "parent_rec_id": parent["recommendation_id"],
+            "escalation_reason": "judge_failed",
+        },
+    ).json()
+    assert fb["accepted"] is True
+
+    tenant = app.state.passthrough_runtime.resolve(TEST_MUBIT_KEY)
+    assert tenant.pair_store.win_rates("code:hard") == {}
+
+
 def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
     """Regression (observed live): a Mubit 503 made feedback return early BEFORE
     _reconcile_decision, so /v1/savings showed 0 reconciled rows for a whole day of
