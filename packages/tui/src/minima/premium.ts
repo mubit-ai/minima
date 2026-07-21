@@ -33,6 +33,22 @@ function unrunnableReason(id: string): string {
  * explicit user override beats policy). Throws an actionable Error when the policy is active
  * but no allowlisted model is runnable: the hard constraint never silently widens.
  */
+/**
+ * Routing opts for a plan-MODE turn that runs the NORMAL loop — mode "plan" with no live
+ * council (ground truth off, or session setup failed). Same premium hard pool + phase tag
+ * as the council's planner turn, so the plan-mode agent never widens back to the cheap
+ * general pool just because the council isn't running. Throws (via resolvePlanModels)
+ * when the policy is active but no premium model is runnable — the hard constraint stays
+ * loud on this path too.
+ */
+export function planModeRoutingOpts(config: HarnessConfig): {
+  candidates?: string[];
+  tags: string[];
+} {
+  const premium = resolvePlanModels(config);
+  return { candidates: premium?.candidates, tags: ["phase:plan"] };
+}
+
 export function resolvePlanModels(config: HarnessConfig): ResolvedPlanModels | null {
   if (!config.planPremium || config.pinned) return null;
   const pool = [...config.planPremiumModels];

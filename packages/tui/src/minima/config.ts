@@ -78,8 +78,10 @@ export interface HarnessConfig {
    * routed lead-planner turn (hard `constraints.candidate_models` pin, pre-request candidate
    * assembly) and the council's plan-shaping meta calls (draft/revise/critic-attack/synth +
    * finalize question-resolution and ground-truth synthesis) — are restricted to the premium
-   * allowlist. Keeper bookkeeping, researchers, the E1 critic, the diff reviewer, and the
-   * GT-off sessionless plan fallback keep their cheap/normal models. Hard constraint: no
+   * allowlist. The sessionless plan-mode fallback (GT off / no live council) is pinned to
+   * the same pool — the restriction is a property of the MODE, not of the council. Keeper
+   * bookkeeping, researchers, the E1 critic, and the diff reviewer keep their cheap/normal
+   * models. Hard constraint: no
    * runnable premium model fails loudly (an explicit /model pin wins over the policy). Opt
    * out with MINIMA_TUI_PLAN_PREMIUM=0 — mirrors the groundTruth flag shape. */
   planPremium: boolean;
