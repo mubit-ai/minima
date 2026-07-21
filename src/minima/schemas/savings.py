@@ -9,6 +9,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from minima.metrics.calibration import CalibrationReport, CusumFlag
+from minima.metrics.judge_calibration import JudgeBiasStats, PpiEstimate
 from minima.metrics.ope import ChallengerEstimate, RegretReport
 from minima.metrics.savings import SavingsSummary
 
@@ -38,6 +39,8 @@ class CalibrationResponse(BaseModel):
     health: dict[str, float | int] = Field(default_factory=dict)
     reports: list[CalibrationReport] = Field(default_factory=list)
     drift_flags: list[CusumFlag] = Field(default_factory=list)
+    judge_bias: JudgeBiasStats | None = None
+    ppi_corrected_success: dict[str, PpiEstimate] = Field(default_factory=dict)
 
 
 class PolicyValueResponse(BaseModel):

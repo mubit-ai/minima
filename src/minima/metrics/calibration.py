@@ -15,7 +15,13 @@ import bisect
 import time
 from dataclasses import dataclass, field
 
-from minima.memory.records import TRUSTED_LABEL_SOURCES, clamp01
+from minima.memory.records import EVIDENCE_JUDGE, TRUSTED_LABEL_SOURCES, clamp01
+from minima.metrics.judge_calibration import (
+    LengthBiasModel,
+    corrected_quality,
+    fit_length_bias,
+    ppi_overall,
+)
 from minima.recommender.decisionlog import DecisionRecord
 
 
@@ -36,7 +42,10 @@ class CalibrationReport:
     n: int
     ece: float
     ece_shrunk: float
+    # ece_quality is length-debiased for judge-sourced rows when a bias fit exists;
+    # ece_quality_raw is always the uncorrected number (equal when no fit).
     ece_quality: float
+    ece_quality_raw: float = 0.0
     bins: list[ReliabilityBin] = field(default_factory=list)
 
 
@@ -59,8 +68,15 @@ def _trusted_label(r: DecisionRecord) -> bool:
     return r.evidence_source in TRUSTED_LABEL_SOURCES
 
 
-def _pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, float]]:
-    """(predicted, realized_label, realized_quality) for trusted reconciled rows."""
+def _pairs(
+    rows: list[DecisionRecord], bias: LengthBiasModel | None = None
+) -> list[tuple[float, float, float]]:
+    """(predicted, realized_label, realized_quality) for trusted reconciled rows.
+
+    With a fitted ``bias``, judge-sourced qualities are length-debiased before entering
+    the quality-weighted ECE. Labels are never re-derived from corrected quality, and a
+    row without a real quality still falls back to its (uncorrected) outcome label.
+    """
     out: list[tuple[float, float, float]] = []
     for r in rows:
         if not r.reconciled or not _trusted_label(r):
@@ -70,6 +86,12 @@ def _pairs(rows: list[DecisionRecord]) -> list[tuple[float, float, float]]:
             continue
         label = 1.0 if r.realized_outcome == "success" else 0.0
         quality = r.realized_quality if r.realized_quality is not None else label
+        if (
+            bias is not None
+            and r.evidence_source == EVIDENCE_JUDGE
+            and r.realized_quality is not None
+        ):
+            quality = corrected_quality(bias, r.realized_quality, r.realized_output_tokens)
         out.append((predicted, label, quality))
     return out
 
@@ -111,11 +133,13 @@ def calibration_by_task_type(
     task_type with three feedbacks doesn't read as perfectly (mis)calibrated.
     The first report ("global") is the unshrunk pool.
     """
-    global_pairs = _pairs(rows)
+    bias = fit_length_bias(rows)
+    global_pairs = _pairs(rows, bias)
     g_label = [(p, y) for p, y, _ in global_pairs]
     g_quality = [(p, q) for p, _, q in global_pairs]
     global_ece, global_bins = _ece(g_label, n_bins)
     global_ece_q, _ = _ece(g_quality, n_bins)
+    global_ece_q_raw, _ = _ece([(p, q) for p, _, q in _pairs(rows)], n_bins)
     reports = [
         CalibrationReport(
             slice_key="global",
@@ -123,6 +147,7 @@ def calibration_by_task_type(
             ece=round(global_ece, 4),
             ece_shrunk=round(global_ece, 4),
             ece_quality=round(global_ece_q, 4),
+            ece_quality_raw=round(global_ece_q_raw, 4),
             bins=global_bins,
         )
     ]
@@ -131,11 +156,12 @@ def calibration_by_task_type(
     for r in rows:
         by_type.setdefault(r.task_type, []).append(r)
     for task_type in sorted(by_type):
-        pairs = _pairs(by_type[task_type])
+        pairs = _pairs(by_type[task_type], bias)
         if not pairs:
             continue
         ece, bins = _ece([(p, y) for p, y, _ in pairs], n_bins)
         ece_q, _ = _ece([(p, q) for p, _, q in pairs], n_bins)
+        ece_q_raw, _ = _ece([(p, q) for p, _, q in _pairs(by_type[task_type])], n_bins)
         n = len(pairs)
         shrunk = (n * ece + shrinkage_k * global_ece) / (n + shrinkage_k)
         reports.append(
@@ -145,6 +171,7 @@ def calibration_by_task_type(
                 ece=round(ece, 4),
                 ece_shrunk=round(shrunk, 4),
                 ece_quality=round(ece_q, 4),
+                ece_quality_raw=round(ece_q_raw, 4),
                 bins=bins,
             )
         )
@@ -259,7 +286,8 @@ def routing_health(
     explored = sum(1 for r in rows if r.explored)
     thompson_policy = sum(1 for r in rows if r.policy == "thompson")
     top_share, cheapest_share, cost_position = _cost_metrics(rows)
-    return {
+    ppi = ppi_overall(rows)
+    out: dict[str, float | int] = {
         "recommendations": n,
         "feedback_coverage": round(reconciled / mature, 4) if mature else 0.0,
         "pending_labels": pending,
@@ -281,6 +309,12 @@ def routing_health(
         "cheapest_model_share": cheapest_share,
         "cost_position": cost_position,
     }
+    # PPI-rectified success over judge-labeled rows anchored on gate gold (see
+    # metrics.judge_calibration). Only present when judge labels exist — never a
+    # fabricated 0.0 that would read as "0% success".
+    if ppi is not None:
+        out["ppi_corrected_success_rate"] = ppi.value
+    return out
 
 
 def _cost_metrics(rows: list[DecisionRecord]) -> tuple[float, float, float]:

@@ -525,6 +525,7 @@ def _reconcile_decision(
                 quality=quality,
                 cost_usd=req.actual_cost_usd,
                 latency_ms=req.latency_ms,
+                output_tokens=req.output_tokens,
                 ts=time.time(),
                 late=late,
                 evidence_source=evidence_source,
