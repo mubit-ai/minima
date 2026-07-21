@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "../src/cli/main.ts";
+import { judgeEnabled, parseArgs } from "../src/cli/main.ts";
+
+describe("judgeEnabled (F7: no judge banner for a judge that can't run)", () => {
+  test("--offline disables the judge outright — offline turns are never judged", () => {
+    expect(judgeEnabled(true, undefined, 0.15)).toBe(false);
+    expect(judgeEnabled(true, "1", 1)).toBe(false);
+  });
+
+  test("online: the existing gates hold (MINIMA_LLM_JUDGE=0 or rate 0 disable)", () => {
+    expect(judgeEnabled(false, undefined, 0.15)).toBe(true);
+    expect(judgeEnabled(false, "0", 0.15)).toBe(false);
+    expect(judgeEnabled(false, undefined, 0)).toBe(false);
+    expect(judgeEnabled(false, "1", 1)).toBe(true);
+  });
+});
 
 describe("parseArgs --resume (B1)", () => {
   test("--resume captures the name-or-id and composes with other flags", () => {

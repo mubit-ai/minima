@@ -378,6 +378,19 @@ export function parseArgs(argv: string[]): CliArgs {
   return opts;
 }
 
+/**
+ * Whether the sampled LLM judge should exist this session. Never with --offline: every
+ * offline turn is unrouted (recommendationId null), and feedbackSafely early-returns for
+ * those before any judge.grade call — a judge (and its banner) would be pure fiction.
+ */
+export function judgeEnabled(
+  offline: boolean,
+  judgeMode: string | undefined,
+  sampleRate: number,
+): boolean {
+  return !offline && judgeMode !== "0" && sampleRate > 0;
+}
+
 const HELP = `minima — cost-aware model-routing coding agent.
 
 Usage: minima [prompt] [--print|--mode json] [options]
@@ -488,7 +501,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   let bookJudgeSpend: (usd: number) => void = () => {};
   let judge: ConstJudge | LLMJudge = new ConstJudge(null);
   const judgeMode = process.env.MINIMA_LLM_JUDGE;
-  if (judgeMode !== "0" && config.judgeSampleRate > 0) {
+  if (args.offline && judgeMode === "1") {
+    process.stderr.write(
+      "minima: MINIMA_LLM_JUDGE=1 ignored (--offline: unrouted turns are never judged)\n",
+    );
+  } else if (judgeEnabled(args.offline, judgeMode, config.judgeSampleRate)) {
     const jm = findModelById(config.judgeModel);
     if (jm && providerKeyPresent(jm.provider)) {
       judge = new LLMJudge(jm, { onCostUsd: (usd) => bookJudgeSpend(usd) });
