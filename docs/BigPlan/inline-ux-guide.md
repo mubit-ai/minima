@@ -57,22 +57,57 @@ One MP at a time, in this loop:
 > (CSI 3 J) and wipes all `<Static>` scrollback. `app.tsx:3600`. Every panel height in this
 > guide is derived from this.
 
-**Prompt placement (THE RULE, added 2026-07-16)**
+**Prompt placement (THE RULE, added 2026-07-16; anchor ledger 2026-07-20)**
 
 - The prompt section (composer + status footer) is **mounted at the terminal bottom** — from
   frame 1 and permanently. Supersedes the earlier "render from the top (CC-style)" choice.
   Mechanism: a one-time `rows−1` newline reserve at startup (`main.ts`) seats the first
-  paint; a `minHeight = rows − SAFETY − Σ committed-row estimate` + `justifyContent:
-  flex-end` box around the live region keeps every later frame there until the transcript
-  outgrows the screen (then it is inert). The estimate is `computeMsgHeight` — conservative,
-  so the frame can only end at/above the bottom, never overflow toward the wipe threshold.
+  paint; the **anchor ledger** (`layout.ts nextLiveFrameHeight`, wired in `app.tsx`) keeps
+  every later frame there by giving the live box an EXPLICIT height satisfying
+  `H ≥ H_prev − K` (K = rows committed to `<Static>` this frame) and
+  `H ≤ rows − SCROLLBACK_SAFETY_ROWS`. log-update rewrites frames top-anchored, so the
+  floor keeps the frame bottom at/below the old bottom (terminal scroll re-pins it) across
+  EVERY shrink path — perm/question teardown, busy teardown, stream commits, panel close —
+  and the inequalities telescope across Ink's 32ms write throttle. The cap is structural:
+  Ink's wipe threshold reads the root's Yoga height and `<Static>` is position-absolute
+  (excluded), so our own frames can never reach `rows`. Estimate errors degrade to
+  transient flex-end padding (over-count) or a top-clip under `overflow="hidden"`
+  (under-count) — never a strand, never a wipe. Resets: a `<Static>` remount (/clear,
+  rewind, resume) seeds content-sized; a resize seeds one full-height frame that re-anchors
+  within `SCROLLBACK_SAFETY_ROWS` (exact again at the next commit) — including after Ink's
+  one unavoidable old-tree-vs-new-rows resize wipe. The pre-ledger estimate-decay
+  `minHeight` survives behind `MINIMA_TUI_ANCHOR_LEGACY=1` until the ledger has soaked.
+- **Boot resets inherited scroll margins** (`CSI r` + `CSI ?69l` lead the clear write,
+  `main.ts`; root-caused live 2026-07-20, evidence in `shots/anchor-ledger/stale-margins/`):
+  a prior CLI that pinned its UI with DECSTBM and died uncleanly leaves the region in the
+  window forever — margins survive `2J`/`3J`/`H` and resizes, imprison the newline reserve
+  (DSR reported row 24 of 60 after 59 newlines), and seat the composer mid-screen with the
+  ledger faithfully preserving the bad seat. The mount deliberately does NOT cap-seed as a
+  defense (tried, PNG-refuted: it parks early turns at the screen top, 40+ rows from the
+  composer) — the reserve stays the seat, made trustworthy by the margin reset. PTY
+  regression: `tui_verify.sh` scenario `stale-margins`. Field diagnosis:
+  `MINIMA_TUI_DEBUG_ANCHOR=<file>` (reserve line + per-render ledger line + stdout/stderr
+  write-tap + `<file>.raw` byte dump + a DSR cursor probe) and
+  `scripts/real_term_capture.sh` (AppleScript-driven REAL iTerm2/Terminal.app captures —
+  pyte has no pending-wrap and cannot stand in for a real emulator at exact-width rows).
 - **`<Static>` must never sit under a flex-end ancestor** — it is position-absolute in Ink,
   and a flex-end parent offsets it past its own render canvas: committed messages silently
-  clip to nothing. It mounts on the flex-start root, the flex-end box is its sibling.
-- Enforced (not guidance): `render-buffer.test.ts` source pins + `tui-verify`'s
-  `bottom-anchor` check (settled PTY frames must have content within 1 row of the grid
-  bottom; wired on the echo + modes scenarios). D3b's height math (`rows − footerChrome`)
-  builds on this rule.
+  clip to nothing. It mounts on the flex-start root, the ledger box is its sibling. Inside
+  the ledger box the content sits in a `flexShrink={0}` wrapper — Yoga's default shrink
+  would compress children into the fixed height instead of top-clipping them.
+- Every conditional live element must be booked in `contentRows` (pickers via colocated
+  max-row constants, banner via `BANNER_TAGLINES`, stream tail via `markdownBodyHeight`) —
+  an unbooked element top-clips. And every per-line markdown render branch armors empty
+  text (`|| " "`): Ink collapses an empty `<Text>` to ZERO rows while the ruler counts ≥1
+  per source line — that divergence alone floated the composer 6 rows on blank-line-heavy
+  replies (the wide-terminal stream-commit float).
+- Enforced (not guidance): `render-buffer.test.ts` + `anchor-ledger.test.ts` source pins,
+  the simulated log-update property test (`anchor-ledger.test.ts`), and `tui-verify`'s
+  `bottom-anchor` checks at **slack 1** (echo, modes, tasks-footer, panel-toc, both stream
+  scenarios, overlay-anchor, panel-early, big-200x50; slack 2 on plan-council and the
+  post-resize window of resize-reanchor). Before/after evidence:
+  `docs/BigPlan/shots/anchor-ledger/`. D3b's height math (`rows − footerChrome`) builds on
+  this rule.
 
 **Panel system (D3)**
 
@@ -341,9 +376,12 @@ zero extra `3J`, last grid row blank across every settled panel frame, perf medi
 `panelOuterHeight()` + `PANEL_STATUS_ROWS` in layout.ts, explicit heights + truncate rows +
 suppressed footer extras ⇒ frame ≡ rows−2. One real finding: **panel close over a long
 transcript stranded the composer at the screen top** (log-update rewrites the shrunken
-frame at the old top; bottomMountMinRows was inert). Fixed by `closePanelReseat` — closing
-moves the static-estimate basis to the current message count, so THE RULE's decay restarts
-from a fresh screen; pinned by the scenario's post-close bottom-anchor. Also learned: Ink
+frame at the old top; bottomMountMinRows was inert). Fixed at the time by
+`closePanelReseat` — closing moved the static-estimate basis so THE RULE's decay restarted
+from a fresh screen; since 2026-07-20 the anchor ledger (§2) subsumes this for free (the
+panel frame IS the rows−2 identity, so the close floor keeps a full-height frame that
+decays per commit — the basis reset survives only behind `MINIMA_TUI_ANCHOR_LEGACY=1`);
+pinned by the scenario's post-close bottom-anchor. Also learned: Ink
 delivers coalesced stdin as ONE input string — `panelReduce` iterates characters, so key
 storms and `gg` both work regardless of chunking. `tui_assert.py` gained `--before` (frame
 windows that must exclude the post-exit state).
@@ -633,13 +671,18 @@ content would be erased (not scrolled) on the next commit, corrupting scrollback
 fix is the two-line inversion: tear the live stream down FIRST, then commit — the shrink is
 erased in place and the static print scrolls the reply in above the short frame (CC's
 post-reply look; reply tail visible, composer on the bottom rows, zero-wipe intact).
-Residual, documented: at turn end the busy row's teardown (2 rows) shrinks the saturated
-frame once more, floating the frame ~2 rows — cosmetic, self-heals at the next commit, and
-generic to any saturated late shrink (not stream-specific); deferred. The stream gates
-therefore assert `bottom-anchor --bottom-slack 3` (the strand class this kills was 19 rows;
-pre-fix lowest content row 16/36). Gates: `stream-wipe-perf` + `stream-code-80/60` now carry
-bottom-anchor; evidence `shots/mp20-stream-reseat/` (capture.sh re-runs the MP10 stream shot
-and asserts) vs before `shots/mp10-render-audit/stream-code.*`.
+Residual, documented at the time: at turn end the busy row's teardown (2 rows) shrank the
+saturated frame once more — the "generic to any saturated late shrink" class this deferred.
+**Resolved 2026-07-20 by the anchor ledger** (§2): the ledger's floor absorbs every
+saturated late shrink as in-frame padding — busy teardown, perm/question teardown, and the
+wide-terminal stream commit where the reply wraps to FEWER rows than the stream-frame
+shrink (a case the commit-order inversion alone could not fix; before-evidence
+`shots/anchor-ledger/`: low row 42/50 sustained at 200×50). The MP20 ordering stays as UX
+(reply tail adjacent to the composer — the fence-verbatim gates), demoted from correctness.
+The stream gates now assert `bottom-anchor --bottom-slack 1` (were 3). Gates:
+`stream-wipe-perf` + `stream-code-80/60` + `big-200x50`; evidence
+`shots/mp20-stream-reseat/` (the MP20 state) and `shots/anchor-ledger/` (before/after the
+ledger) vs `shots/mp10-render-audit/stream-code.*` (the original strand).
 
 ---
 
@@ -820,6 +863,34 @@ re-issue — per-session, use fresh sessions or the Shift+Tab gate for repeats).
 gate + Esc-stays + cancel discards); behavior pins migrated to the new registration +
 handler. Shots: `shots/mp17-plan-exit/`.
 
+**AMENDMENT (user decision, 2026-07-20): Shift+Tab is a SILENT clean exit — the chord
+never opens the gate.** Claude Code parity: the ring just advances (build → accept-edits →
+plan → build, bypass when enabled), leaving plan mode discards any live council session via
+the mode-exit cleanup effect (transcript notice; the discard aborts the council — a council
+cannot outlive its session) and a PLAIN streaming turn is left to finish (non-disruptive
+switch; the chord never calls `agent.abort()`). Plan APPROVAL lives ONLY in the `exit_plan`
+tool and `/plan finalize` — the 3-option overlay on the chord, the `planTurnSeenRef`
+fast-path, and `requestPlanExitGate` are deleted. Mid-turn exits defer `exit_plan`'s
+unregistration to the turn's end (retire-list swept in the turn's `finally`; `isActive()`
+answers a late call with a graceful "not active") so a turn that advertised the tool never
+hits an unknown-tool error. The ring's plan→bypass sacrifice note above still holds. Gate:
+`plan-exit-gate` scenario re-pinned (tool overlay + approve; Shift+Tab = silent exit, fluid
+ring, the gate text must never appear on the chord).
+
+**Same-day amendments (user decisions, 2026-07-20) — CC permission parity across the ring:**
+(1) **Plan mode DENIES mutations** — write/edit/bash/apply_patch (+todowrite/task per the
+GT blocklist) are blocked at the dispatcher with the exit_plan-steering reason and a
+`mode-deny` guard event; the B2 ask-every-time flow is gone (PLAN_BUNDLE mirrors `deny`;
+the `ask` action stays in the policy grammar). GT-off block reasons also steer to
+exit_plan — the universal gate registers GT on or off, so "Use /plan to exit" was stale.
+(2) **The exit_plan gate is 4 options in CC's ExitPlanMode order**: Finalize &
+auto-accept edits (lands the mode on accept-edits) / Finalize & build / Revise / Cancel —
+same finalize path, only the landing mode differs. (3) **accept-edits auto is cwd-scoped**
+(`editTargetsWithinCwd`): write/edit targets and every apply_patch Add/Update/Delete/
+Move-to path must resolve inside the project dir, else the call keeps the normal prompt
+flow; the Shift+Tab-over-overlay auto-resolve applies the same check via the prompt's raw
+args (no args ⇒ fail safe, prompt stays). Bypass remains unscoped by definition.
+
 ### MP18 — Verify-command consent at first run *(M · after MP9 recommended)*
 
 **Goal:** LLM-authored `verify` shell gets bash-class scrutiny (not trust-the-gate, not
@@ -865,6 +936,24 @@ gate rows: unrunnable without the env, verified with it); `verify-consent.test.t
 runCheck sites, mutation-dodge, library default, env checker). Shots:
 `shots/mp18-verify-consent/`.
 
+**Follow-ups (user acceptance, 2026-07-21):** three fixes from the first live run of the
+CC-parity ring. (a) **Gate blocks render as `⊘ verify gate — completion blocked, statuses
+unchanged:`** (yellow, body uncolored) instead of the red `⚙ todowrite:` error styling — an
+approved-then-gate-blocked todowrite read as "Enter cancelled my todowrite" when it was the
+done-gate refusing unverified completion flips; `isGateBlockReason` (ground_truth.ts,
+prefix-keyed on the three block families) is the renderer's signature, so replayed sessions
+get the same treatment. (b) **Enter on the permission overlay is pinned as ACCEPT** ("Yes
+once") — it always was; now `behavior.test.ts` pins return-in-the-allow-branch and the
+`overlay-anchor` scenario approves with `<CR>` alone. (c) **Bash `[a]` became a persisted
+per-command-family grant** — "Always allow `pip` commands" (leading word per compound
+segment, substitution never analyzed, all-families-granted or prompt), stored per project
+in `~/.minima-harness/perm-grants.json` (perm_grants.ts) so a granted family never re-asks
+across sessions; unanalyzable commands keep the whole-tool session grant. The MP18
+session-only rule STANDS for verify consent: approved verify strings still never touch
+disk — the persisted store holds bash command families only. accept-edits itself stays CC
+parity (bash prompts; the user chose persisted grants over mode-scoped auto-bash).
+Scenario: `bash-grants`.
+
 ### MP19 — Final E2E acceptance demo *(M/L · last)*
 
 **Goal:** the whole story, proven — J1's demo intent, re-scoped to this guide.
@@ -884,8 +973,9 @@ green→milestone → `/v1/feedback` captured with realized usage → `buildGtOv
 `whyText` evidence, all with the STRICT consent checker installed) and once through a real
 PTY (`tui_verify.sh` scenario `acceptance`, 42s, ordered-beat asserts + zero-wipe +
 no-mouse + perf budgets): `/plan start` → council line ticking (MP14) → planner reply →
-Ctrl+G `plan (draft)` (MP16) → Shift+Tab exit gate approves (MP17; finalize via the mock's
-RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
+Ctrl+G `plan (draft)` (MP16) → `/plan finalize` approves (amended 2026-07-20 with the
+silent-exit chord — the MP17 gate rides `exit_plan`/`/plan finalize` only; finalize via the
+mock's RESOLVE/GT answers seeds the single-step plan + its verify consent, MP18) → `PLANDEMO`
 executes phase-scripted: in_progress todowrite (permission overlay shows the verify;
 baseline red) → completing while red → **the done-gate blocks** → `write` fixes → completing
 again → **red→green verified, plan closes** (milestone) → Ctrl+T shows the section's

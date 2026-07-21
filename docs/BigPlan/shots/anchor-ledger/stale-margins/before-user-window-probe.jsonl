@@ -1,0 +1,19 @@
+{"t":1784577429337,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?2004h"}
+{"t":1784577429338,"tap":"out","len":11,"nl":0,"flags":["2J","3J","H"],"head":"^[[2J^[[3J^[[H"}
+{"t":1784577429338,"phase":"reserve","rows":60,"cols":242,"tty":true,"term":"xterm-256color"}
+{"t":1784577429338,"tap":"out","len":59,"nl":59,"flags":[],"head":"\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"}
+{"t":1784577429338,"tap":"out","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784577429339,"tap":"out","len":4,"nl":0,"flags":["6n"],"head":"^[[6n"}
+{"t":1784577429364,"phase":"dsr","row":24,"col":1}
+{"t":1784577429400,"tap":"err","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784577429400,"tap":"out","len":2927,"nl":25,"flags":[],"head":"\\n\\n\\n                                                             "}
+{"t":1784577429401,"tap":"out","len":6,"nl":0,"flags":["25l"],"head":"^[[?25l"}
+{"t":1784577429416,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?1000l"}
+{"t":1784577429416,"tap":"out","len":8,"nl":0,"flags":[],"head":"^[[?1006l"}
+{"t":1784577429417,"rows":60,"cols":242,"liveHeight":25,"contentRows":25,"committedRows":0,"reset":"remount","msgs":0,"busy":false,"panel":false}
+{"t":1784577429422,"tap":"out","len":3453,"nl":27,"flags":["UP","EL"],"head":"^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2K^[[1A^[[2"}
+{"t":1784577429424,"rows":60,"cols":242,"liveHeight":27,"contentRows":27,"committedRows":0,"reset":null,"msgs":0,"busy":false,"panel":false}
+{"t":1784577429491,"rows":60,"cols":242,"liveHeight":27,"contentRows":27,"committedRows":0,"reset":null,"msgs":0,"busy":false,"panel":false}
+{"t":1784577579972,"tap":"err","len":6,"nl":0,"flags":[],"head":"^[[?25h"}
+{"t":1784577579973,"tap":"out","len":6,"nl":0,"flags":[],"head":"^[[?25h"}
+{"t":1784577579974,"tap":"err","len":6,"nl":0,"flags":[],"head":"^[[?25h"}

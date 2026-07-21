@@ -15,6 +15,10 @@
  *            agent loop terminates; a NEW user turn re-arms the marker
  *   "TODOV"/"TODOVSWAP"/"TODOVDONE" → MP18 consent drivers: one task with a verify shell
  *            command / the same task with a MUTATED verify / a completed claim (done-gate)
+ *   "WRITEFILE" → ONE write tool call (drives the permission overlay in build mode; the
+ *            Shift+Tab-over-the-prompt parity scenario), TWO-PHASE like TODO
+ *   "BASHCMD" → ONE bash tool call (`echo grant-probe`) — drives the bash permission
+ *            overlay and the persisted per-command grant flow, TWO-PHASE like TODO
  *   otherwise → a short text reply
  *
  * Council answering (MP14+): plan-mode meta calls carry a role-distinct SYSTEM prompt
@@ -226,6 +230,18 @@ function todoVTasks(prompt: string): string {
   return JSON.stringify([task]);
 }
 
+// Always-panel/Shift+Tab parity (2026-07-20): "WRITEFILE" → ONE write tool call, so a
+// scripted run can park the permission overlay on screen and prove Shift+Tab resolves it.
+const WRITEFILE_DONE_REPLY =
+  "File recorded — the canned write went through. This second-phase reply exists so the " +
+  "tool loop terminates deterministically.";
+
+// Per-command grants (2026-07-21): "BASHCMD" → ONE bash tool call, so a scripted run can
+// grant its command family via [a] and prove the next BASHCMD turn runs with no overlay.
+const BASHCMD_DONE_REPLY =
+  "Command recorded — the canned bash run went through. This second-phase reply exists so " +
+  "the tool loop terminates deterministically.";
+
 // MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
 // GT-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
 const EXITPLAN_MD = [
@@ -287,6 +303,8 @@ Bun.serve({
       !prompt.includes("TODOV") &&
       !hasToolResult;
     const wantExitPlan = council == null && prompt.includes("EXITPLAN") && !hasToolResult;
+    const wantWriteFile = council == null && prompt.includes("WRITEFILE") && !hasToolResult;
+    const wantBashCmd = council == null && prompt.includes("BASHCMD") && !hasToolResult;
     const toolCall = wantPlanDemo
       ? planDemoToolCall(turnToolResults)
       : wantTodoV
@@ -301,7 +319,17 @@ Bun.serve({
                   summary: "Clean up the sandbox temp dirs",
                 }),
               }
-            : null;
+            : wantWriteFile
+              ? {
+                  name: "write",
+                  args: JSON.stringify({
+                    path: "perm_probe.txt",
+                    content: "mode-cycled approval\n",
+                  }),
+                }
+              : wantBashCmd
+                ? { name: "bash", args: JSON.stringify({ command: "echo grant-probe" }) }
+                : null;
     const { text, slow } =
       council != null
         ? { text: council, slow: false }
@@ -311,7 +339,11 @@ Bun.serve({
             ? { text: TODO_DONE_REPLY, slow: false }
             : prompt.includes("EXITPLAN")
               ? { text: EXITPLAN_DONE_REPLY, slow: false }
-              : pickReply(prompt);
+              : prompt.includes("WRITEFILE")
+                ? { text: WRITEFILE_DONE_REPLY, slow: false }
+                : prompt.includes("BASHCMD")
+                  ? { text: BASHCMD_DONE_REPLY, slow: false }
+                  : pickReply(prompt);
     const model = body.model ?? "mock-model";
     const enc = new TextEncoder();
     const stream = new ReadableStream({

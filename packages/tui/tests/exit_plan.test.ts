@@ -14,7 +14,7 @@ function resultText(r: ToolResult): string {
 /** Scripted overlay: answers[i] resolves the i-th ask; records every question shown. */
 function harness(answers: (string | null)[], over: Partial<ExitPlanDeps> = {}) {
   const asked: QuestionParams[] = [];
-  const finalized: (string | null)[] = [];
+  const finalized: { planMd: string | null; autoAcceptEdits: boolean }[] = [];
   const shown: string[] = [];
   let canceled = 0;
   const deps: ExitPlanDeps = {
@@ -24,8 +24,8 @@ function harness(answers: (string | null)[], over: Partial<ExitPlanDeps> = {}) {
         return answers[asked.length - 1] ?? null;
       },
     },
-    finalize: async (planMd) => {
-      finalized.push(planMd);
+    finalize: async (planMd, autoAcceptEdits) => {
+      finalized.push({ planMd, autoAcceptEdits });
       return { ok: true, message: "finalized — build mode on" };
     },
     cancel: () => {
@@ -46,18 +46,32 @@ describe("exit_plan tool (model-callable plan-mode exit)", () => {
     const h = harness(["Finalize & build"]);
     const r = await h.tool.execute("t1", { summary: "ship the endpoint" }, null, null);
     expect(h.finalized).toHaveLength(1);
+    expect(h.finalized[0]!.autoAcceptEdits).toBe(false);
     expect(h.canceled()).toBe(0);
     expect(resultText(r)).toBe("finalized — build mode on");
     expect(r.terminate).toBeUndefined();
     expect(r.details?.choice).toBe("finalize");
-    // The summary reaches the approval prompt.
+    expect(r.details?.autoAcceptEdits).toBe(false);
+    // The summary reaches the approval prompt; CC's ExitPlanMode option order —
+    // auto-accept first, plain build second.
     expect(h.asked[0]!.question).toContain("ship the endpoint");
     expect(h.asked[0]!.options.map((o) => o.label)).toEqual([
+      "Finalize & auto-accept edits",
       "Finalize & build",
       "Revise the plan",
       "Cancel plan mode",
     ]);
     expect(h.asked[0]!.allow_freetext).toBe(false);
+  });
+
+  test("auto-accept flavor → same finalize with autoAcceptEdits=true (lands accept-edits)", async () => {
+    const h = harness(["Finalize & auto-accept edits"]);
+    const r = await h.tool.execute("t1", {}, null, null);
+    expect(h.finalized).toHaveLength(1);
+    expect(h.finalized[0]!.autoAcceptEdits).toBe(true);
+    expect(r.details?.choice).toBe("finalize");
+    expect(r.details?.autoAcceptEdits).toBe(true);
+    expect(r.terminate).toBeUndefined();
   });
 
   test("finalize refused (audit blocker) → refusal message back, plan mode stays", async () => {
@@ -158,14 +172,14 @@ describe("MP17 — universal exit gate (GT-off plan argument)", () => {
     const r = await h.tool.execute("t1", { plan: md }, null, null);
     expect(h.shown).toEqual([md]);
     expect(h.asked).toHaveLength(1);
-    expect(h.finalized).toEqual([md]);
+    expect(h.finalized).toEqual([{ planMd: md, autoAcceptEdits: false }]);
     expect(r.details?.choice).toBe("finalize");
   });
 
   test("GT-on: the plan argument is ignored — finalize receives null (store path)", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => false });
     await h.tool.execute("t1", { plan: "## ignored" }, null, null);
-    expect(h.finalized).toEqual([null]);
+    expect(h.finalized).toEqual([{ planMd: null, autoAcceptEdits: false }]);
     expect(h.shown).toHaveLength(0);
   });
 

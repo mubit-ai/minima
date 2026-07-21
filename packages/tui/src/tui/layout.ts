@@ -38,8 +38,13 @@ export const MAX_TOOL_LINES = 30;
  * wrappedLineCount). The first source line is always kept even if it alone exceeds the budget.
  */
 export function clampToolText(text: string, cols: number): { text: string; hiddenLines: number } {
+  // Tab-expanded (4 spaces) because string-width counts \t as 0 while the terminal advances
+  // to a tab stop — the same width-lie class the fence/code classifier guards (see MdLine).
+  // This is the single choke point: MessageRow, computeMsgHeight, and the D3b reader all
+  // consume the clamped text, so render == estimate == reader stays an identity.
+  const expanded = text.replaceAll("\t", "    ");
   const w = Math.max(20, cols - 4);
-  const lines = text.split("\n");
+  const lines = expanded.split("\n");
   let rendered = 0;
   let kept = 0;
   for (const line of lines) {
@@ -48,7 +53,7 @@ export function clampToolText(text: string, cols: number): { text: string; hidde
     rendered += r;
     kept++;
   }
-  if (kept >= lines.length) return { text, hiddenLines: 0 };
+  if (kept >= lines.length) return { text: expanded, hiddenLines: 0 };
   return { text: lines.slice(0, kept).join("\n"), hiddenLines: lines.length - kept };
 }
 
@@ -303,6 +308,41 @@ export function tailToFit(text: string, interior: number, budgetRows: number): s
 export const SCROLLBACK_SAFETY_ROWS = 2;
 
 /**
+ * The anchor-ledger kernel (2026-07-20). The live frame's next explicit height, holding THE
+ * RULE's invariant structurally instead of via the estimate-decay minHeight:
+ *
+ *   H >= H_prev − K   and   H <= rows − SCROLLBACK_SAFETY_ROWS
+ *
+ * where K = transcript rows committed to <Static> with this frame. log-update rewrites each
+ * frame TOP-anchored at the previous frame's top, so a frame that shrinks faster than the
+ * static rows printed above it lands its bottom above the terminal bottom — the stranded-
+ * composer float (perm/question teardown, busy teardown, wide-terminal stream commits where
+ * the reply wraps to fewer rows than the stream-frame shrink). With the floor, K + H >=
+ * H_prev keeps the bottom at/below the old bottom and the terminal scroll re-pins it; the
+ * inequalities telescope across Ink's 32ms write throttle (H_n >= H_0 − ΣK_i), so skipped
+ * intermediate frames cannot break it. The cap makes Ink's scrollback-wiping clearTerminal
+ * unreachable from our own frames: the wipe threshold reads the root's Yoga height and
+ * <Static> is position-absolute (excluded), so an explicit height <= rows − 2 can never
+ * reach `rows`. Estimate errors degrade to transient padding (over-count) or a top-clip
+ * under overflow="hidden" (under-count) — never a strand, never a wipe.
+ *
+ * prevHeight 0 = reset (startup, /clear, rewind, resume — the <Static> remount reprints the
+ * transcript and seats itself); a resize reset seeds `rows − SCROLLBACK_SAFETY_ROWS` instead
+ * (one full-height flex-end frame writes past the last row and re-anchors — the same physics
+ * the panel-close reseat used).
+ */
+export function nextLiveFrameHeight(
+  prevHeight: number,
+  committedRows: number,
+  contentRows: number,
+  rows: number,
+): number {
+  const cap = Math.max(1, rows - SCROLLBACK_SAFETY_ROWS);
+  const floor = Math.max(0, Math.min(prevHeight, cap) - Math.max(0, committedRows));
+  return Math.min(cap, Math.max(contentRows, floor));
+}
+
+/**
  * Rows to allot the live streaming-reply preview, given the terminal height `rows` and the rows
  * already reserved for the other live elements (input box, status/footer, busy, thoughts, header).
  * Keeps the total live frame `<= rows - SCROLLBACK_SAFETY_ROWS` so it never trips Ink's
@@ -486,11 +526,15 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     return 2 + wrappedLineCount(msg.text, cols - 2);
   }
   if (msg.role === "tool") {
-    // marginTop(1) + "⚙ tool:" header(1) + body + optional hint. The inline MessageRow paints
+    // marginTop(1) + wrapped "⚙ tool:" header (a long MCP tool name can wrap at narrow
+    // cols — a flat 1 under-counted) + body + optional hint. The inline MessageRow paints
     // the body unindented at the full box width, so the ruler must wrap at `cols` — counting
     // at an interior width over-reserves and floats the composer off the terminal bottom.
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
-    return 2 + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0);
+    const header = `  ⚙ ${msg.toolName ?? "tool"}:`;
+    return (
+      1 + wrappedLineCount(header, cols) + wrappedLineCount(body, cols) + (hiddenLines > 0 ? 1 : 0)
+    );
   }
   if (msg.role === "thinking") {
     // marginTop(1) + single border(2) + header(1) + body wrapped at interior cols-4 (border 2 + padL 2).
@@ -506,7 +550,10 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
 // readable-width floor; clipPanelLines is kept for the D3b live-region panels (guide MP7+).
 // ---------------------------------------------------------------------------
 
-/** Min readable width for full rendering; below it panel surfaces degrade to text. */
+/**
+ * Min readable width for full rendering. Since always-panel (2026-07-20) only /why still
+ * degrades to text below it — Ctrl+T/Ctrl+G open the panel at any width the app renders.
+ */
 export const TOC_MIN_COLS = 60;
 
 /**

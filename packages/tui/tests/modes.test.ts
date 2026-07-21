@@ -15,10 +15,13 @@ import { resolvePolicy } from "../src/agent/policy.ts";
 beforeEach(() => setMode("build")); // module singleton — reset between tests
 
 describe("mode bundles (B2)", () => {
-  test("plan: every mutating tool resolves to ask, for any subject", () => {
+  test("plan: every mutating tool resolves to deny, for any subject (CC parity)", () => {
+    // 2026-07-20 (user decision): plan mode DENIES mutations like Claude Code — the model
+    // is steered to exit_plan instead of the user being prompted per call. The TUI's
+    // layer-1 planModeBlockedTools block fires first; this bundle is defense-in-depth.
     for (const tool of ["write", "edit", "apply_patch", "bash"]) {
-      expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "anything at all" })).toBe("ask");
-      expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "" })).toBe("ask");
+      expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "anything at all" })).toBe("deny");
+      expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "" })).toBe("deny");
     }
   });
 
@@ -72,7 +75,9 @@ describe("plan-mode prompt hint (B2.3)", () => {
     const block = modeSystemAppend("plan");
     expect(block).toStartWith("\n\n# Plan mode");
     expect(block).toContain(PLAN_ESCAPE_HATCH);
-    expect(block).toContain("advisory, not a hard rule");
+    // Deny-parity copy: the model is told mutations are BLOCKED (matching the dispatcher),
+    // while the planning practice itself stays advisory via the escape hatch.
+    expect(block).toContain("BLOCKED until the plan is approved");
   });
 
   test("plan names the exit_plan tool and its plan argument (MP17 universal gate)", () => {
@@ -182,6 +187,44 @@ describe("mode_prefs persistence", () => {
     } finally {
       if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
       else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
+});
+
+// Shift+Tab-over-a-permission-prompt (Claude Code parity): cycling into a mode whose
+// bundle pre-approves the pending call resolves the on-screen prompt; a mode that still
+// asks leaves it up. Pure policy resolution — the app arm consumes exactly this.
+describe("modeAutoApproves (prompt re-resolution on mode cycle)", () => {
+  test("acceptEdits auto-approves cwd-scoped write/edit/apply_patch but never bash", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    const cwd = "/repo";
+    for (const tool of ["write", "edit"]) {
+      const args = tool === "write" ? { path: "src/a.ts" } : { filePath: "src/a.ts" };
+      expect(modeAutoApproves("acceptEdits", tool, "src/a.ts", { args, cwd })).toBe(true);
+      // Outside the project dir: the prompt stays up (CC still asks out-of-workspace).
+      const escape = tool === "write" ? { path: "/etc/hosts" } : { filePath: "../.zshrc" };
+      expect(modeAutoApproves("acceptEdits", tool, "x", { args: escape, cwd })).toBe(false);
+    }
+    // Without the pending call's args the edit family fails SAFE — no auto-approval.
+    expect(modeAutoApproves("acceptEdits", "write", "src/a.ts")).toBe(false);
+    expect(modeAutoApproves("acceptEdits", "write", "src/a.ts", { args: null, cwd })).toBe(false);
+    expect(modeAutoApproves("acceptEdits", "bash", "rm -rf /")).toBe(false);
+    expect(modeAutoApproves("acceptEdits", "read", "src/a.ts")).toBe(false);
+  });
+
+  test("build and plan auto-approve nothing", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    for (const mode of ["build", "plan"] as const) {
+      for (const tool of ["write", "edit", "apply_patch", "bash", "read"]) {
+        expect(modeAutoApproves(mode, tool, "anything")).toBe(false);
+      }
+    }
+  });
+
+  test("bypass auto-approves everything", async () => {
+    const { modeAutoApproves } = await import("../src/tui/permissions.ts");
+    for (const tool of ["write", "edit", "apply_patch", "bash", "read", "todowrite"]) {
+      expect(modeAutoApproves("bypass", tool, "anything")).toBe(true);
     }
   });
 });

@@ -60,3 +60,55 @@ describe("label-source configuration (Phase 0b)", () => {
     });
   });
 });
+
+describe("plan-premium configuration", () => {
+  const CLEAR = {
+    MINIMA_TUI_PLAN_PREMIUM: undefined,
+    MINIMA_PLAN_PREMIUM_MODELS: undefined,
+    MINIMA_PLAN_MODEL: undefined,
+    MINIMA_PLAN_ROUND_BUDGET_USD: undefined,
+  };
+
+  test("plan-premium is ON by default; MINIMA_TUI_PLAN_PREMIUM=0 opts out", () => {
+    withEnv(CLEAR, () => {
+      expect(configFromEnv().planPremium).toBe(true);
+    });
+    withEnv({ ...CLEAR, MINIMA_TUI_PLAN_PREMIUM: "0" }, () => {
+      expect(configFromEnv().planPremium).toBe(false);
+    });
+  });
+
+  test("MINIMA_PLAN_PREMIUM_MODELS parses, trims, and dedupes; empty keeps the default", () => {
+    withEnv({ ...CLEAR, MINIMA_PLAN_PREMIUM_MODELS: "a, b,,a" }, () => {
+      expect(configFromEnv().planPremiumModels).toEqual(["a", "b"]);
+    });
+    withEnv({ ...CLEAR, MINIMA_PLAN_PREMIUM_MODELS: "" }, () => {
+      expect(configFromEnv().planPremiumModels).toEqual(harnessConfig().planPremiumModels);
+    });
+  });
+
+  test("MINIMA_PLAN_MODEL sets the plan-shaping override; unset stays null", () => {
+    withEnv({ ...CLEAR, MINIMA_PLAN_MODEL: "claude-opus-4-8" }, () => {
+      expect(configFromEnv().planModel).toBe("claude-opus-4-8");
+    });
+    withEnv(CLEAR, () => {
+      expect(configFromEnv().planModel).toBeNull();
+    });
+  });
+
+  test("round budget: premium bumps the default to 1.00; an explicit env always wins", () => {
+    withEnv(CLEAR, () => {
+      expect(configFromEnv().planRoundBudgetUsd).toBeCloseTo(1.0);
+    });
+    withEnv({ ...CLEAR, MINIMA_PLAN_ROUND_BUDGET_USD: "0.5" }, () => {
+      expect(configFromEnv().planRoundBudgetUsd).toBeCloseTo(0.5);
+    });
+    withEnv({ ...CLEAR, MINIMA_TUI_PLAN_PREMIUM: "0" }, () => {
+      expect(configFromEnv().planRoundBudgetUsd).toBeCloseTo(0.25);
+    });
+    // Invalid budget env → treated as unset, so the premium bump still applies.
+    withEnv({ ...CLEAR, MINIMA_PLAN_ROUND_BUDGET_USD: "nope" }, () => {
+      expect(configFromEnv().planRoundBudgetUsd).toBeCloseTo(1.0);
+    });
+  });
+});

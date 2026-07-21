@@ -438,8 +438,9 @@ describe("tui/app.tsx wires exit_plan", () => {
   test("promptPlanner re-applies the build prompt after a mid-turn plan exit", () => {
     const idx = src.indexOf("const base = plannerBaseSystemPromptRef.current;");
     expect(idx).toBeGreaterThan(-1);
-    const wrapper = src.slice(idx, idx + 400);
-    expect(wrapper).toContain("await agent.promptRouted(turn)");
+    const wrapper = src.slice(idx, idx + 600);
+    expect(wrapper).toContain("await agent.promptRouted(turn, {");
+    expect(wrapper).toContain("candidates: premium?.candidates");
     expect(wrapper).toContain('if (getMode() !== "plan" && base != null)');
     expect(wrapper).toContain("agent.agentState.systemPrompt = base");
   });
@@ -474,11 +475,12 @@ describe("tui/app.tsx panel key routing", () => {
   test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
     // Global arm: the guard keeps falling through to the gate-answer arm.
     expect(src).toContain('input === "g" && !(gtBehavior?.block && !busy)');
-    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery.
+    // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery — but
+    // only idle, since the modal is idle-only (a busy chord swaps views, never arms dead).
     const idx = src.indexOf("function handlePanelKey");
     expect(idx).toBeGreaterThan(-1);
     const body = src.slice(idx, idx + 2600);
-    expect(body).toContain("if (gtBehavior?.block) {");
+    expect(body).toContain("if (gtBehavior?.block && !busy) {");
     expect(body).toContain("setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false })");
   });
 
@@ -498,18 +500,79 @@ describe("tui/app.tsx panel key routing", () => {
 describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("Shift+Tab cycles the ring EXCEPT out of plan mode, which routes the gate (MP17)", () => {
-    // Entering plan still rides the ring (auto-heal plants the GT session); LEAVING plan
-    // goes through the 3-option exit gate so approval and the ring share one surface. The
-    // sessionless-no-plan-turn fast-path keeps quick flipping (and the modes scenario)
-    // cycle-identical.
-    const handlerIdx = src.indexOf("onShiftTab={() => {");
+  test("Shift+Tab ALWAYS just cycles the ring — silent CC-style exit, never a dialog", () => {
+    // Claude Code parity: the chord lives in app.tsx's global useInput ABOVE the
+    // overlay/busy guards (works mid-run and over the permission overlay — the composer
+    // no longer knows about Shift+Tab), and leaving plan mode is a clean exit: the ring
+    // advances and a streaming turn FINISHES (the chord never aborts — CC's
+    // non-disruptive switch; a live council still stops via the session-discard cleanup
+    // effect, which owns the abort). Plan APPROVAL lives only in the exit_plan tool and
+    // /plan finalize; the old MP17 Shift+Tab 3-option gate is gone.
+    const handlerIdx = src.indexOf("if (key.tab && key.shift) {");
     expect(handlerIdx).toBeGreaterThan(-1);
-    const handler = src.slice(handlerIdx, handlerIdx + 220);
-    expect(handler).toContain('if (getMode() === "plan") void requestPlanExitGate();');
-    expect(handler).toContain("else cycleMode();");
-    expect(src).toContain("store == null && !planTurnSeenRef.current");
+    const handler = src.slice(handlerIdx, handlerIdx + 1600);
+    expect(handler).toContain("const next = cycleMode();");
+    expect(handler).not.toContain("ask(");
+    expect(handler).not.toContain("agent.abort()");
+    expect(handler).not.toContain("councilControllerRef");
+    // The arm sits BEFORE the modal early-return and the busy guard — mid-run parity.
+    expect(handlerIdx).toBeLessThan(src.indexOf("panelCapture // the expanded panel owns"));
+    expect(handlerIdx).toBeLessThan(src.indexOf("if (busy && (key.escape ||"));
+    expect(src).not.toContain("requestPlanExitGate");
+    expect(src).not.toContain("planTurnSeenRef");
     expect(src).not.toContain("toggleMode");
+    expect(src).not.toContain("onShiftTab");
+    const composer = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
+    expect(composer).not.toContain("onShiftTab");
+  });
+
+  test("a mid-turn plan exit defers exit_plan unregistration to the turn's end", () => {
+    // A turn that started in plan mode advertised exit_plan in its request; splicing the
+    // tool out between loop iterations would turn a late call into an unknown-tool error.
+    // The registration cleanup parks the instance (busy + mode left plan) and the turn's
+    // finally sweeps it; isActive() answers the late call gracefully. Re-registration
+    // while still in plan splices immediately — never two instances.
+    expect(src).toContain('if (busyRef.current && getMode() !== "plan") {');
+    expect(src).toContain("retireToolsRef.current.push(tool);");
+    const cleanupIdx = src.indexOf('if (busyRef.current && getMode() !== "plan") {');
+    const registerIdx = src.indexOf("agent.agentState.tools.push(tool);");
+    expect(registerIdx).toBeGreaterThan(-1);
+    expect(cleanupIdx).toBeGreaterThan(registerIdx);
+    // Both turn finallys sweep (the routed turn and the /verify refutation pass).
+    expect(src.split("sweepRetiredTools()").length - 1).toBeGreaterThanOrEqual(3);
+  });
+
+  test("a pending permission prompt re-resolves under the newly cycled mode", () => {
+    // Claude Code parity: Shift+Tab with the overlay up auto-approves the waiting call
+    // when the new mode's bundle says auto — one-time allow, audited as mode-auto, and
+    // never a recorded "always" grant.
+    const idx = src.indexOf("modeAutoApproves(next, permPrompt.toolName");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 500);
+    expect(body).toContain('kind: "mode-auto"');
+    expect(body).toContain("setPermPrompt(null);");
+    expect(body).toContain('permPrompt.resolve("allow");');
+  });
+
+  test("Enter on the permission overlay ACCEPTS (Yes once) — it can never cancel", () => {
+    // 2026-07-21: an approved-then-gate-blocked todowrite read as "Enter cancelled it".
+    // Pin the actual mapping: return sits in the ALLOW branch (escape in deny), and the
+    // overlay is the only Enter consumer while it is up — the composer unmounts entirely.
+    const idx = src.indexOf('if (input === "y" || input === "Y" || key.return) {');
+    expect(idx).toBeGreaterThan(-1);
+    const handler = src.slice(idx, idx + 300);
+    const allowAt = handler.indexOf('prompt.resolve("allow");');
+    expect(allowAt).toBeGreaterThan(-1);
+    expect(allowAt).toBeLessThan(handler.indexOf('prompt.resolve("deny");'));
+    expect(src).toContain("permPrompt || questionPrompt ? null : (");
+  });
+
+  test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {
+    // The done-gate refusing a completion flip is NOT a cancellation — the renderer keys
+    // on isGateBlockReason so the block can never be confused with a permission denial.
+    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    expect(messages).toContain("isGateBlockReason(msg.text)");
+    expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
   });
 
   test("one shared ON notice: definition + auto-heal + /plan", () => {
@@ -538,8 +601,9 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
 
   test("bare /plan in plan-mode-without-a-session RECOVERS instead of exiting", () => {
     expect(src).toContain('sub === "off" ? false : planSessionRef.current == null');
-    // The mode-store test survives only in the GT-off branch and promptPlanner's leak guard.
-    expect(src.split('getMode() !== "plan"').length - 1).toBe(2);
+    // The mode-store test survives only in the GT-off branch, promptPlanner's leak guard,
+    // and the exit_plan retire-deferral cleanup (mid-turn mode exit).
+    expect(src.split('getMode() !== "plan"').length - 1).toBe(3);
   });
 
   test("the onSubmit fallthrough is surfaced, never silent", () => {

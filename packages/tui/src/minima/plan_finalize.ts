@@ -27,6 +27,12 @@ export interface PlanFinalizeDb {
 export interface PlanFinalizeDeps {
   /** null → skip question-resolution and synthesis (deterministic toGroundTruth(null)). */
   metaModel: Model | null;
+  /** Premium plan-shaping model for question-resolution + ground-truth synthesis;
+   * absent/null → metaModel. The E1 critic ALWAYS uses metaModel (advisory, cheap). */
+  planModel?: Model | null;
+  /** Books question-resolution + synthesis realized spend (meter + budget) — at premium
+   * prices this spend is material and must not stay invisible to /cost. */
+  onMetaCostUsd?: (usd: number) => void;
   signal: AbortSignal | null;
   force: boolean;
   transcript: string;
@@ -90,11 +96,13 @@ export async function finalizePlan(
 
   // Auto-resolve any lingering open questions with a reasonable default so the ground
   // truth is complete and decisive. Fail-open: a flaky model just leaves them unanswered.
-  if (deps.metaModel) {
+  const shaper = deps.planModel ?? deps.metaModel;
+  if (shaper) {
     try {
       const resolved = await answerQuestions(store.session, {
-        metaModel: deps.metaModel,
+        metaModel: shaper,
         signal: deps.signal,
+        onCostUsd: deps.onMetaCostUsd,
       });
       for (const r of resolved) {
         store.answerQuestion(r.question, r.answer, "council", r.rationale);
@@ -108,11 +116,12 @@ export async function finalizePlan(
   // detailed, structured ground truth. Fail-open: on any error the deterministic assembly
   // (toGroundTruth(null) → toMarkdown()) is used instead so finalize always writes a doc.
   let synth: GroundTruthSynthesis | null = null;
-  if (deps.metaModel) {
+  if (shaper) {
     try {
       synth = await synthesize(store.session, deps.transcript, {
-        metaModel: deps.metaModel,
+        metaModel: shaper,
         signal: deps.signal,
+        onCostUsd: deps.onMetaCostUsd,
       });
     } catch {
       // fail-open
@@ -233,7 +242,7 @@ export async function finalizePlan(
     seededCount,
     seededVerifies,
     auditNote,
-    synthFailed: deps.metaModel != null && synth === null,
+    synthFailed: shaper != null && synth === null,
     criticFlags,
   };
 }

@@ -7,7 +7,7 @@
  * this binary only needs a MUBIT_API_KEY (routing) + a provider key (calling).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
@@ -28,7 +28,13 @@ import {
   groundTruthHooks,
   headlessVerifyConsent,
 } from "../minima/ground_truth.ts";
-import { CostMeter, type HarnessConfig, MinimaAgent, configFromEnv } from "../minima/index.ts";
+import {
+  CostMeter,
+  type HarnessConfig,
+  MinimaAgent,
+  configFromEnv,
+  resolvePlanModels,
+} from "../minima/index.ts";
 import { ConstJudge, LLMJudge } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
@@ -53,6 +59,94 @@ import { installInputFilter } from "../tui/input-filter.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 import { VERSION } from "../version.ts";
+
+// --- MINIMA_TUI_DEBUG_ANCHOR diagnostics ---------------------------------------------
+// The anchor probe (reserve line here + per-render ledger line in app.tsx) proved the
+// ledger held bottom-invariance while the user's real terminal still showed a top-seated
+// frame — so the remaining questions are byte-level: did the reserve reach the terminal
+// before frame 1, did any writer emit a clear/home, and where did the cursor actually
+// end up. These two taps answer all three; both are inert unless the env var is set.
+
+function installAnchorWriteTap(file: string): void {
+  const streams: Array<["out" | "err", NodeJS.WriteStream]> = [
+    ["out", process.stdout],
+    ["err", process.stderr],
+  ];
+  for (const [fd, stream] of streams) {
+    const orig = stream.write.bind(stream);
+    (stream as { write: (...args: unknown[]) => boolean }).write = (...args: unknown[]) => {
+      try {
+        const chunk = args[0];
+        const s =
+          typeof chunk === "string"
+            ? chunk
+            : Buffer.isBuffer(chunk)
+              ? chunk.toString("latin1")
+              : String(chunk);
+        const vis = s.replaceAll("\u001b", "^[");
+        const flags: string[] = [];
+        if (vis.includes("^[[2J")) flags.push("2J");
+        if (vis.includes("^[[3J")) flags.push("3J");
+        if (vis.includes("^[[H") || vis.includes("^[[1;1H")) flags.push("H");
+        if (/\^\[\[\d+;\d+H/.test(vis)) flags.push("CUP");
+        if (/\^\[\[\d*A/.test(vis)) flags.push("UP");
+        if (/\^\[\[[02]?K/.test(vis)) flags.push("EL");
+        if (vis.includes("^[[6n")) flags.push("6n");
+        if (vis.includes("^[[?25l")) flags.push("25l");
+        if (vis.includes("^[[?104".concat("9"))) flags.push("1049");
+        const nl = (s.match(/\n/g) ?? []).length;
+        const head = vis.slice(0, 64).replaceAll("\n", "\\n");
+        appendFileSync(
+          file,
+          `${JSON.stringify({ t: Date.now(), tap: fd, len: s.length, nl, flags, head })}\n`,
+        );
+        if (fd === "out" && (typeof chunk === "string" || Buffer.isBuffer(chunk))) {
+          appendFileSync(`${file}.raw`, chunk);
+        }
+      } catch {}
+      return (orig as (...a: unknown[]) => boolean)(...args);
+    };
+  }
+}
+
+// One-shot DSR (ESC[6n): asks the terminal where the cursor REALLY is right after the
+// newline reserve — the reply lands on stdin as ESC[row;colR. Debug-only: adds up to
+// 250ms before first render; a reply arriving after the timeout would leak ~6 junk
+// chars into Ink's key parser, acceptable for a diagnostic run.
+async function probeCursorRow(file: string): Promise<void> {
+  const stdin = process.stdin;
+  if (process.stdout.isTTY !== true || stdin.isTTY !== true) return;
+  const wasRaw = (stdin as { isRaw?: boolean }).isRaw === true;
+  await new Promise<void>((resolveProbe) => {
+    let buf = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const done = (row: number | null, col: number | null) => {
+      if (timer) clearTimeout(timer);
+      stdin.off("data", onData);
+      stdin.pause();
+      try {
+        if (!wasRaw) stdin.setRawMode(false);
+      } catch {}
+      try {
+        const raw = row === null ? buf.replaceAll("\u001b", "^[") : undefined;
+        appendFileSync(file, `${JSON.stringify({ t: Date.now(), phase: "dsr", row, col, raw })}\n`);
+      } catch {}
+      resolveProbe();
+    };
+    const onData = (chunk: Buffer | string) => {
+      buf += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const m = buf.match(/\[(\d+);(\d+)R/);
+      if (m) done(Number(m[1]), Number(m[2]));
+    };
+    timer = setTimeout(() => done(null, null), 250);
+    try {
+      stdin.setRawMode(true);
+    } catch {}
+    stdin.on("data", onData);
+    stdin.resume();
+    process.stdout.write("\u001b[6n");
+  });
+}
 
 // --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
 const ENV_FILES = [".env.harness", ".env"];
@@ -138,7 +232,7 @@ const SEED_MODELS: Model[] = [
     provider: "anthropic",
     api: "anthropic-messages",
     name: "Claude Opus 4.8",
-    cost: { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 },
+    cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
     context_window: 200_000,
     max_tokens: 16384,
     reasoning: true,
@@ -625,6 +719,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
   const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();
 
+  // Plan-premium startup advisory: the hard failure fires at plan usage (resolved per turn
+  // so /auth mid-session counts); this just tells the user at launch instead of first /plan.
+  if (config.planPremium && !config.pinned) {
+    try {
+      resolvePlanModels(config);
+    } catch (exc) {
+      process.stderr.write(`minima: plan-premium warning — ${errText(exc)}\n`);
+    }
+  }
+
   // E1 zero-context diff reviewer: when a plan closes with every step completed, review
   // the run's whole diff with fresh eyes (one cheap completion — no plan, no transcript).
   // Fire-and-forget off the tool dispatch; the exits await it briefly so a one-shot run
@@ -803,21 +907,52 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // all the terminal's own — simultaneously, no mouse capture. installInputFilter strips stray
   // wheel SGR + captures bracketed pastes before Ink's key parser sees them.
   installInputFilter();
+  if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
+    installAnchorWriteTap(process.env.MINIMA_TUI_DEBUG_ANCHOR);
+  }
   process.stdout.write("\u001b[?2004h"); // bracketed paste: pastes arrive as one marked block
-  // Start like Claude Code: full clear for a clean-slate "own app" feel — erase-display(2)
+  // DECSTBM reset FIRST (CSI r): a previous program that pinned its UI with scroll
+  // margins and died without resetting leaves the region in the WINDOW forever — margins
+  // survive 2J/3J/H and even resizes, so every newline the reserve writes scrolls inside
+  // the stale region and the composer seats mid-screen (root-caused live 2026-07-20: a
+  // window carried margins 1–24 from an earlier CLI; DSR said row 24 after a 59-newline
+  // reserve; one CSI r restored row 60). CSI ?69l drops any leaked left/right margins
+  // (DECLRMM) the same way. Then clear like Claude Code: full clear for a clean-slate
+  // "own app" feel — erase-display(2)
   // wipes the visible screen, erase-display(3) drops the prior scrollback (so no leftover shell
   // history or a previous session sits above us), cursor-home rewinds to the top. The banner +
   // input render from the TOP and grow downward; Ink commits finished output to native
   // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
-  process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
+  process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
   // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
   // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
   // so the composer + footer sit at the bottom from frame 1 instead of under the banner at
   // the top. Plain stdout BEFORE render(), not part of Ink's live frame, so it cannot trip
   // Ink's overflow-clear. Enforced by render-buffer.test.ts + tui-verify's bottom-anchor
   // check. Then hide the cursor (TextInput draws its own).
+  // MINIMA_TUI_DEBUG_ANCHOR=<file>: record what the reserve saw — the one number the whole
+  // bottom-mount hangs on. Pairs with the per-render ledger probe in app.tsx.
+  if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
+    try {
+      appendFileSync(
+        process.env.MINIMA_TUI_DEBUG_ANCHOR,
+        `${JSON.stringify({
+          t: Date.now(),
+          phase: "reserve",
+          rows: process.stdout.rows ?? null,
+          cols: process.stdout.columns ?? null,
+          tty: process.stdout.isTTY === true,
+          term: process.env.TERM ?? null,
+        })}\n`,
+      );
+    } catch {}
+  }
   process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
   process.stdout.write("\u001b[?25l");
+
+  if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
+    await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
+  }
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.

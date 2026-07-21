@@ -18,6 +18,10 @@ export const DEFAULT_CANDIDATES: string[] = [
   "claude-opus-4-8",
 ];
 
+/** Premium allowlist for plan-mode routed + plan-shaping calls (MINIMA_PLAN_PREMIUM_MODELS).
+ * Ids must exist in BOTH the TUI seed registry and the server catalog; order = preference. */
+export const PREMIUM_CANDIDATES: string[] = ["claude-opus-4-8", "gemini-2.5-pro"];
+
 export interface HarnessConfig {
   minimaUrl: string;
   minimaApiKey: string | null;
@@ -66,8 +70,25 @@ export interface HarnessConfig {
    * default 30; 0 disables the cap. Only consulted when `groundTruth` is on. */
   stepCap: number;
   /** Soft USD cap per plan-mode council round (MINIMA_PLAN_ROUND_BUDGET_USD). Read only by
-   * the groundTruth /plan workflow — inert on the default path. */
+   * the groundTruth /plan workflow — inert on the default path. Defaults to 0.25, bumped to
+   * 1.00 when `planPremium` is on and the env var is unset — premium meta spend reconciles
+   * into the round, so the base reservation chronically under-reserves. */
   planRoundBudgetUsd: number;
+  /** Plan-premium (default ON): while plan mode is active, the plan-DECIDING calls — the
+   * routed lead-planner turn (hard `constraints.candidate_models` pin, pre-request candidate
+   * assembly) and the council's plan-shaping meta calls (draft/revise/critic-attack/synth +
+   * finalize question-resolution and ground-truth synthesis) — are restricted to the premium
+   * allowlist. Keeper bookkeeping, researchers, the E1 critic, the diff reviewer, and the
+   * GT-off sessionless plan fallback keep their cheap/normal models. Hard constraint: no
+   * runnable premium model fails loudly (an explicit /model pin wins over the policy). Opt
+   * out with MINIMA_TUI_PLAN_PREMIUM=0 — mirrors the groundTruth flag shape. */
+  planPremium: boolean;
+  /** Premium model ids for plan mode (MINIMA_PLAN_PREMIUM_MODELS, comma-separated).
+   * Order = preference order; the first runnable entry becomes the plan-shaping model. */
+  planPremiumModels: string[];
+  /** Explicit plan-shaping model override (MINIMA_PLAN_MODEL). Decouples the plan council
+   * from MINIMA_JUDGE_MODEL. null = first runnable entry of `planPremiumModels`. */
+  planModel: string | null;
   /** Failure-kind matchers (A4): classify WHY a recovery rung failed and pick the fitting
    * intervention (backoff transient / escalate capability / replan structural) instead of the
    * ladder's blunt always-escalate. `MINIMA_TUI_FAILURE_MATCHER`, default on (`0` disables →
@@ -122,6 +143,9 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     spiralRepeats: 3,
     stepCap: 30,
     planRoundBudgetUsd: 0.25,
+    planPremium: true,
+    planPremiumModels: [...PREMIUM_CANDIDATES],
+    planModel: null,
     failureMatcher: true,
     toolAllowlist: true,
     backoffMs: 0,
@@ -165,10 +189,26 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isInteger(n) && n >= 0) cfg.stepCap = n;
   }
   const roundBudgetEnv = process.env.MINIMA_PLAN_ROUND_BUDGET_USD;
+  let roundBudgetFromEnv = false;
   if (roundBudgetEnv) {
     const b = Number(roundBudgetEnv);
-    if (Number.isFinite(b) && b > 0) cfg.planRoundBudgetUsd = b;
+    if (Number.isFinite(b) && b > 0) {
+      cfg.planRoundBudgetUsd = b;
+      roundBudgetFromEnv = true;
+    }
   }
+  cfg.planPremium = process.env.MINIMA_TUI_PLAN_PREMIUM !== "0";
+  const premiumEnv = process.env.MINIMA_PLAN_PREMIUM_MODELS;
+  if (premiumEnv !== undefined) {
+    const ids = premiumEnv
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length) cfg.planPremiumModels = [...new Set(ids)];
+  }
+  const planModelEnv = process.env.MINIMA_PLAN_MODEL?.trim();
+  if (planModelEnv) cfg.planModel = planModelEnv;
+  if (cfg.planPremium && !roundBudgetFromEnv) cfg.planRoundBudgetUsd = 1.0;
   // MINIMA_JUDGE_MODEL repoints the judge AND the plan-council meta model (keeper/critic/
   // synth + ground-truth synthesis) — without it, a missing/limited key for the default
   // model silently degrades the whole planning pipeline with no way to choose another.

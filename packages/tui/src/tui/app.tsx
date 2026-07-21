@@ -7,6 +7,7 @@
  * diff approval, mouse capture, sessions, and themes land in later passes.)
  */
 
+import { appendFileSync } from "node:fs";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import React, {
   useEffect,
@@ -20,7 +21,6 @@ import type { AgentEvent } from "../agent/events.ts";
 import {
   type AgentMode,
   MODE_BADGES,
-  PLAN_BUNDLE,
   bundleForMode,
   cycleMode,
   enableBypass,
@@ -28,7 +28,8 @@ import {
   setMode,
   subscribeMode,
 } from "../agent/modes.ts";
-import type { BeforeToolCall } from "../agent/tools.ts";
+import { emitGuardEvent } from "../agent/policy.ts";
+import type { AgentTool, BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -52,6 +53,7 @@ import {
   buildPlannerSystemPrompt,
   finalizePlan,
   formatDreamReport,
+  resolvePlanModels,
   runCouncilRound,
   runDream,
   runKeeperMiniUpdate,
@@ -89,6 +91,8 @@ import {
   TOC_MIN_COLS,
   childTreeHeight,
   computeMsgHeight,
+  markdownBodyHeight,
+  nextLiveFrameHeight,
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
@@ -103,7 +107,7 @@ import {
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
-import { ModelPicker } from "./model-picker.tsx";
+import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
   type PanelState,
@@ -117,7 +121,9 @@ import {
   type PermissionPrompt,
   type PermissionState,
   createPermissionState,
+  formatActionLabel,
   makeModeGatedBeforeToolCall,
+  modeAutoApproves,
   planModeBlockReason,
   planModeBlockedTools,
 } from "./permissions.ts";
@@ -512,7 +518,7 @@ export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; 
       <Text color="gray" wrap="truncate">
         {isReadTool
           ? "[y] Yes once · [a] Always for this directory · [n] Reject"
-          : "[y] Yes once · [a] Always allow this tool · [n] Reject"}
+          : `[y] Yes once · [a] ${prompt.alwaysLabel ?? "Always allow this tool"} · [n] Reject`}
       </Text>
     </Box>
   );
@@ -655,6 +661,23 @@ export interface ConfigOverlayProps {
 }
 
 const ALL_CONFIG_FIELDS = SECTIONS.flatMap((s) => s.fields);
+// Anchor-ledger reservation for ConfigOverlay (colocated with its render below): border(2)
+// + per-section title + one row per field + edit row(2, over-counted when idle) + hint(1).
+const CONFIG_OVERLAY_MAX_ROWS = 2 + SECTIONS.length + ALL_CONFIG_FIELDS.length + 2 + 1;
+// Rollback for the anchor ledger: =1 restores the estimate-decay minHeight bottom mount
+// (staticBasisIdx + closePanelReseat basis reset). Delete after the ledger has soaked.
+const ANCHOR_LEGACY = process.env.MINIMA_TUI_ANCHOR_LEGACY === "1";
+// MINIMA_TUI_DEBUG_ANCHOR=<file>: per-render ledger trace (rows/cols/heights/reset reason)
+// for diagnosing anchor loss in terminals the PTY harness can't reproduce.
+const ANCHOR_DEBUG = process.env.MINIMA_TUI_DEBUG_ANCHOR || null;
+// Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
+// reservation can't drift from the render.
+const BANNER_TAGLINES = [
+  "CLI · cost-aware model routing",
+  "recommend → run → judge → feedback → memory",
+  "type a prompt, or / for commands",
+  "scroll with your terminal (wheel / trackpad) · select & copy freely",
+];
 
 export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   const allFields = ALL_CONFIG_FIELDS;
@@ -910,11 +933,16 @@ export function HarnessApp({
     };
   }, [childEventRef]);
 
-  // Permission system
+  // Permission system. Lazy useState: repoIdentity spawns git and loadBashGrants reads disk,
+  // so the state must be built exactly once, not on every render.
   const [permPrompt, setPermPrompt] = useState<PermissionPrompt | null>(null);
-  const permStateRef = useRef<PermissionState>(
-    createPermissionState(process.cwd(), { groundTruth: agent.config.groundTruth === true }),
+  const [initialPermState] = useState(() =>
+    createPermissionState(process.cwd(), {
+      groundTruth: agent.config.groundTruth === true,
+      projectKey: repoIdentity(process.cwd()),
+    }),
   );
+  const permStateRef = useRef<PermissionState>(initialPermState);
   // MP18: swap the GT hooks' consent seam to the overlay-backed checker while the TUI is
   // mounted. Consent keys on the exact command string; bypass mode is blanket consent
   // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
@@ -1067,8 +1095,22 @@ export function HarnessApp({
     async (force: boolean, signal: AbortSignal | null) => {
       const store = planSessionRef.current;
       if (!store) return { kind: "no-session" } as const;
+      // Plan-premium: the finalize synthesis is a plan-shaping call. Resolution failure is
+      // returned (not thrown) — the exit_plan tool and /plan finalize both surface non-ok
+      // kinds and keep plan mode ON.
+      let premiumPlanModel: Model | null = null;
+      try {
+        premiumPlanModel = resolvePlanModels(agent.config)?.planModel ?? null;
+      } catch (exc) {
+        return { kind: "blocked", message: errText(exc) } as const;
+      }
       const outcome = await finalizePlan(store, {
         metaModel: planMetaModel ?? null,
+        planModel: premiumPlanModel,
+        onMetaCostUsd: (usd) => {
+          agent.meter?.addOverhead(usd);
+          agent.budget?.bookSpend(usd, "plan-finalize");
+        },
         signal,
         force,
         transcript: buildPlanTranscript(agent.agentState.messages),
@@ -1097,17 +1139,21 @@ export function HarnessApp({
     [agent, planMetaModel],
   );
   const exitPlanFinalize = useCallback(
-    async (_planMd: string | null = null) => {
+    async (_planMd: string | null = null, autoAcceptEdits = false) => {
+      // CC's ExitPlanMode approve flavors: plain approval lands on build (per-edit
+      // prompts); "auto-accept edits" lands on accept-edits (cwd-scoped auto).
+      const landing: AgentMode = autoAcceptEdits ? "acceptEdits" : "build";
+      const landingNote = autoAcceptEdits
+        ? " Your file edits inside the project are pre-approved (accept-edits mode)."
+        : "";
       // MP17: sessionless (GT-off) plan mode has no store and writes no GROUND_TRUTH.md — the
       // approved plan lives in the transcript (showPlan pushed the tool's `plan` markdown).
       // Approval here is just the mode flip back to full tool access.
       if (planSessionRef.current == null) {
-        setMode("build");
+        setMode(landing);
         return {
           ok: true,
-          message:
-            "Plan approved — plan mode is OFF and full tool access is restored. Begin " +
-            "implementing the approved plan now.",
+          message: `Plan approved — plan mode is OFF and full tool access is restored. Begin implementing the approved plan now.${landingNote}`,
         };
       }
       const outcome = await runPlanFinalize(false, agent.runSignal);
@@ -1116,6 +1162,7 @@ export function HarnessApp({
       }
       if (outcome.kind !== "ok") return { ok: false, message: outcome.message };
       exitPlanMode();
+      if (autoAcceptEdits) setMode("acceptEdits");
       setMessages((m) => [
         ...m,
         { role: "tool", text: outcome.md, toolName: "plan" },
@@ -1133,7 +1180,7 @@ export function HarnessApp({
           : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
       return {
         ok: true,
-        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${ledgerGuidance}`,
+        message: `Plan approved and finalized. Ground truth written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
       };
     },
     [agent, runPlanFinalize, exitPlanMode],
@@ -1152,89 +1199,36 @@ export function HarnessApp({
       },
     ]);
   }, [exitPlanMode]);
-  // MP17: Shift+Tab OUT of plan mode routes through the SAME 3-option gate as the
-  // exit_plan tool, so the plan and its approval live in one surface. Fast-path: a
-  // sessionless plan mode where no plan turn has completed has nothing to approve — the
-  // badge ring stays fluid (quick mode flipping, the modes scenario, and the GT-off A/B
-  // byte-identity are all preserved until a plan reply actually exists).
-  const planTurnSeenRef = useRef(false);
-  useEffect(() => {
-    if (mode === "plan") planTurnSeenRef.current = false;
-  }, [mode]);
-  const requestPlanExitGate = useCallback(async () => {
-    const ask = askUserRef?.current ?? null;
-    const store = planSessionRef.current;
-    if (!ask || (store == null && !planTurnSeenRef.current)) {
-      cycleMode();
-      return;
-    }
-    if (store) {
-      // Approve what you can see: the draft document lands in the transcript above the
-      // overlay (the D3b panel cannot coexist with the question overlay — panelVisible
-      // gates on !questionPrompt — so scrollback is the review surface here).
-      setMessages((m) => [...m, { role: "tool", text: store.toMarkdown(), toolName: "plan" }]);
-    }
-    const choice = await ask({
-      question: "Exit plan mode?",
-      header: "plan",
-      options: [
-        {
-          label: "Finalize & build",
-          description: store
-            ? "Write the ground truth, exit plan mode, start building."
-            : "Approve the plan, exit plan mode, start building.",
-        },
-        {
-          label: "Revise the plan",
-          description: "Stay in plan mode and tell the planner what to change.",
-        },
-        {
-          label: "Cancel plan mode",
-          description: store
-            ? "Discard the plan session — nothing is written."
-            : "Discard the plan.",
-        },
-      ],
-      allow_freetext: false,
-    });
-    if (choice === "Finalize & build") {
-      const r = await exitPlanFinalize(null);
-      // GT-on success pushes its own md + note inside runPlanFinalize's ok-branch; surface
-      // the message only for refusals and the sessionless approve.
-      if (!r.ok || store == null) {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: r.message, toolName: "plan", isError: !r.ok },
-        ]);
-      }
-      return;
-    }
-    if (choice === "Revise the plan") {
-      const note = await ask({
-        question: "What should the planner change?",
-        header: "revise",
-        options: [],
-        allow_freetext: true,
-      });
-      if (note?.trim()) void onSubmit(note.trim());
-      return;
-    }
-    if (choice === "Cancel plan mode") {
-      exitPlanCancel();
-      return;
-    }
-    // Esc / dismissed: stay in plan mode, ring untouched.
-  }, [askUserRef, exitPlanFinalize, exitPlanCancel]);
-
   // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
   // universal gate, GT on or off; sessionless plan mode requires the `plan` markdown arg,
   // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
   // ask-null guard covers any other pathless case. Its approval overlay rides the same
-  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab gate,
-  // /plan off) flips the mode and the effect cleanup unregisters it.
+  // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab, /plan off)
+  // flips the mode and unregisters it. This tool and /plan finalize are the ONLY approval
+  // surfaces — Shift+Tab is a clean CC-style exit, never a gate.
+  //
+  // Mid-turn exits defer the unregistration: a turn that started in plan mode advertised
+  // exit_plan in its request, so splicing it out between loop iterations would turn a late
+  // call into an unknown-tool error. The cleanup parks the instance in retireToolsRef and
+  // the turn's `finally` sweeps it; isActive() already answers the late call gracefully
+  // ("Plan mode is not active"). Re-registration while STILL in plan (planSessionGen bump)
+  // splices immediately — exactly one exit_plan instance is ever registered.
+  const busyRef = useRef(false);
+  const retireToolsRef = useRef<AgentTool[]>([]);
+  const sweepRetiredTools = useCallback(() => {
+    for (const t of retireToolsRef.current) {
+      const i = agent.agentState.tools.indexOf(t);
+      if (i >= 0) agent.agentState.tools.splice(i, 1);
+    }
+    retireToolsRef.current = [];
+  }, [agent]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: planSessionGen keys re-registration to session IDENTITY — the session lives in a ref, so replacing it (e.g. /plan recovering while the mode is already "plan") never re-renders on its own
   useEffect(() => {
     if (mode !== "plan") return;
+    sweepRetiredTools();
     const tool = exitPlanTool({
       ask: askUserRef ?? { current: null },
       isActive: () => getMode() === "plan",
@@ -1245,6 +1239,10 @@ export function HarnessApp({
     });
     agent.agentState.tools.push(tool);
     return () => {
+      if (busyRef.current && getMode() !== "plan") {
+        retireToolsRef.current.push(tool);
+        return;
+      }
       const i = agent.agentState.tools.indexOf(tool);
       if (i >= 0) agent.agentState.tools.splice(i, 1);
     };
@@ -1301,10 +1299,18 @@ export function HarnessApp({
   // suspended (draft survives).
   const [panel, setPanel] = useState<PanelState | null>(null);
   const panelCapture = panel !== null;
-  // Basis for the bottom-mount static estimate: messages BEFORE this index are treated as
-  // no-longer-on-screen. 0 for a whole normal session; moved to messages.length whenever
-  // the expanded panel closes (it covered the screen — see closePanelReseat below).
+  // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1) basis for the estimate-decay bottom mount:
+  // messages BEFORE this index are treated as no-longer-on-screen. 0 for a whole normal
+  // session; moved to messages.length whenever the expanded panel closes. Superseded by the
+  // anchor ledger (see the bottom-mount block before the render tree); kept compiled-in so
+  // the old path stays one env var away until the ledger has soaked.
   const [staticBasisIdx, setStaticBasisIdx] = useState(0);
+  // Anchor ledger (2026-07-20, layout.ts nextLiveFrameHeight): the live frame's height from
+  // the LAST committed render, the message count whose rows were already booked as committed
+  // scrollback, and the (transcriptGen, rows, cols) identity whose change resets the ledger.
+  const liveHeightRef = useRef(0);
+  const committedLenRef = useRef(0);
+  const anchorGenRef = useRef<{ gen: number; rows: number; cols: number } | null>(null);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -1376,29 +1382,25 @@ export function HarnessApp({
   // permission always runs first — first block wins, and no gate check ever executes for a
   // call the user declines.
   //
-  // Plan mode composes two layers (B2 × GT):
-  //   1. Hard blocks stay for the tools an "ask" cannot make safe: task (delegated children
-  //      are hook-free — a task call is a write bypass; council research delegation stays)
-  //      and, with GT on, todowrite (approving one authorizes running each step's `verify`
-  //      as a shell command). The blocklist lives in permissions.ts (single tested source);
-  //      the tools the plan bundle converts to ask-first are subtracted from it.
-  //   2. Everything else resolves through the active mode's PolicyBundle
-  //      (plan → write/edit/bash/apply_patch ask, outranking "always" grants), then the
-  //      normal permission flow.
+  // Plan mode DENIES at the dispatcher (Claude Code parity, 2026-07-20 — supersedes the B2
+  // ask-every-time flow): the FULL planModeBlockedTools list (permissions.ts, single tested
+  // source) hard-blocks with the exit_plan-steering reason, audited as mode-deny. Everything
+  // else resolves through the active mode's PolicyBundle (accept-edits auto is cwd-scoped
+  // inside the hook), then the normal permission flow.
   useEffect(() => {
     const modeGated = makeModeGatedBeforeToolCall({
       state: permStateRef.current,
       promptFn: (prompt) => setPermPrompt(prompt),
       getBundle: () => bundleForMode(getMode()),
     });
-    const askFirst = new Set(
-      PLAN_BUNDLE.rules.filter((r) => r.action === "ask").map((r) => r.tool),
-    );
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
       if (getMode() === "plan") {
         const gtOn = agent.config.groundTruth === true;
-        const hardBlocked = planModeBlockedTools(gtOn).filter((t) => !askFirst.has(t));
-        if (hardBlocked.includes(ctx.toolCall.name)) {
+        if (planModeBlockedTools(gtOn).includes(ctx.toolCall.name)) {
+          emitGuardEvent({
+            kind: "mode-deny",
+            detail: formatActionLabel(ctx.toolCall.name, ctx.args),
+          });
           return { block: true, reason: planModeBlockReason(ctx.toolCall.name, gtOn) };
         }
       }
@@ -1526,6 +1528,10 @@ export function HarnessApp({
               : 0;
             const accumulatedThoughts = thoughtsRef.current.trim();
             // MP20 (MUB-165): tear the live stream DOWN before committing to <Static>.
+            // Under the anchor ledger this ordering is UX, not correctness (either order
+            // stays bottom-anchored — the floor absorbs the shrink as padding): teardown-
+            // first still minimizes the transient padding gap and keeps the reply tail
+            // adjacent to the composer on the settled screen (the fence-verbatim gates).
             // These setStates flush as separate Ink renders; with the old order (commit
             // first) render A printed the static reply while the live frame was still
             // stream-tall, and render B's erase then walked that tall height back UP from
@@ -1575,7 +1581,6 @@ export function HarnessApp({
               ]);
             } else if (text) {
               setMessages((m) => [...m, { role: "assistant", text }]);
-              if (getMode() === "plan") planTurnSeenRef.current = true;
             }
           } else if (ev.message?.role === "toolResult") {
             setMessages((m) => [
@@ -1669,7 +1674,16 @@ export function HarnessApp({
     }
   }
 
-  // Ctrl+T: one-shot ToC text block into the transcript (the inline surface until D3b).
+  // Always-panel floor: can a ≥5-row panel coexist with the CURRENT composer height?
+  // Mirrors the render's inputBoxHeight math (wrapped draft included) so the chord and
+  // panelVisible can never disagree — an opened panel below the floor would be closed by
+  // the same-pass effect and the chord would silently do nothing.
+  const panelCanRender = () =>
+    panelOuterHeight(
+      rows,
+      (planMode ? 7 : 4) + Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4)) - 1,
+    ) >= 5;
+  // Ctrl+T: one-shot ToC text block into the transcript (cannot-render floor only).
   const requestTocSidebar = () => {
     setMessages((m) => [
       ...m,
@@ -1682,18 +1696,11 @@ export function HarnessApp({
   };
   // Ctrl+G: GT off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestGtSidebar = () => {
-    // MP16: a live plan session's fallback (busy / narrow terminal) is a terse draft
-    // summary — "No Ground-Truth plan recorded" would be misleading mid-drafting.
+    // MP16: a live plan session's cannot-render fallback is a terse draft summary —
+    // "No Ground-Truth plan recorded" would be misleading mid-drafting.
     const draftStore = planSessionRef.current;
     if (getMode() === "plan" && draftStore) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          text: `${draftStore.summary()}\n(idle Ctrl+G at ≥${TOC_MIN_COLS} cols opens the draft panel)`,
-          toolName: "plan",
-        },
-      ]);
+      setMessages((m) => [...m, { role: "tool", text: draftStore.summary(), toolName: "plan" }]);
       return;
     }
     if (agent.config.groundTruth !== true) {
@@ -1720,6 +1727,46 @@ export function HarnessApp({
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
       suspendToShell();
+      return;
+    }
+
+    // Shift+Tab switches the permission mode from ANY state — idle, mid-run, with the
+    // permission overlay up, or under the expanded panel (Claude Code parity: the switch
+    // is immediate and SILENT, never queued and never a dialog). Leaving plan mode is
+    // CC's clean exit: the ring just advances and a streaming turn is left to FINISH
+    // (CC's non-disruptive switch — the chord never aborts). A live council still stops,
+    // but via the mode-exit cleanup effect below: discarding the session aborts its
+    // council (a council cannot outlive its session) and posts the transcript notice.
+    // A late exit_plan call from a still-streaming turn resolves gracefully — the tool's
+    // unregistration is deferred to the turn's end and isActive() answers "not active".
+    // Plan APPROVAL lives only in the exit_plan tool and /plan finalize. Modal selectors
+    // (pickers, palette, config, question overlay) keep the keyboard instead — Tab can
+    // mean something there.
+    if (key.tab && key.shift) {
+      if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
+        return;
+      const next = cycleMode();
+      // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
+      // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
+      // the same mode-auto guard event the hook's no-prompt path emits); a mode that
+      // still asks leaves the prompt up. accept-edits auto is cwd-scoped, so the pending
+      // call's raw args ride along for the same target-path check the dispatcher applies.
+      if (
+        permPrompt &&
+        modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary, {
+          args: permPrompt.args ?? null,
+          cwd: permStateRef.current.cwd,
+        })
+      ) {
+        emitGuardEvent({
+          kind: "mode-auto",
+          detail: permPrompt.argsSummary
+            ? `${permPrompt.toolName}: ${permPrompt.argsSummary}`
+            : permPrompt.toolName,
+        });
+        setPermPrompt(null);
+        permPrompt.resolve("allow");
+      }
       return;
     }
 
@@ -1761,11 +1808,12 @@ export function HarnessApp({
       return;
     }
 
-    // Ctrl+T: idle at readable width → the expanded ToC panel (D3b, MP7). Busy and
-    // <60-col keep the one-shot text block (decided 2026-07-17) — mid-run info access
-    // with zero wipe risk, and the narrow degrade path.
+    // Ctrl+T: the expanded ToC panel in EVERY situation — idle, mid-run, narrow
+    // (always-panel, 2026-07-20; supersedes the busy/<60-col text degrade of 2026-07-17).
+    // The one-shot text block survives only below the cannot-render floor, where the
+    // same-pass close effect would kill the panel anyway.
     if (key.ctrl && input === "t") {
-      if (!busy && cols >= TOC_MIN_COLS) {
+      if (panelCanRender()) {
         const sections = buildSections(messages, buildUsageLedger());
         setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
         return;
@@ -1791,12 +1839,13 @@ export function HarnessApp({
       return;
     }
 
-    // U3 (MUB-141): GT Plan Overview on Ctrl+G — mid-run allowed (read-only, like the ToC).
-    // Shared chord, gate wins: with a 🔴 block armed and not busy this falls through to the
-    // gate-answer arm below (its modal takes Ctrl+G first). Idle + GT-on at readable width
-    // opens the D3b overview panel (MP9); busy/narrow/GT-off keep the one-shot text path.
+    // U3 (MUB-141): GT Plan Overview on Ctrl+G — the panel in EVERY situation (always-
+    // panel, 2026-07-20). Shared chord, gate wins: with a 🔴 block armed and not busy this
+    // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
+    // states stay one-line chat notices (GT off / no plan yet — nothing to page); the
+    // text path otherwise survives only below the cannot-render floor.
     if (key.ctrl && input === "g" && !(gtBehavior?.block && !busy)) {
-      if (!busy && agent.config.groundTruth === true && cols >= TOC_MIN_COLS) {
+      if (agent.config.groundTruth === true && panelCanRender()) {
         // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
         // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
         // falls through to the normal overview: the before/after switch is structural).
@@ -2188,6 +2237,7 @@ export function HarnessApp({
         }
         lines.push("");
         lines.push("  Tool permissions:");
+        const bashFams = [...ps.bashGrants].sort();
         for (const t of ["read", "ls", "glob", "grep", "write", "edit", "bash"]) {
           const isAlways = always.includes(t);
           const isRead = t === "read" || t === "ls" || t === "glob" || t === "grep";
@@ -2195,11 +2245,17 @@ export function HarnessApp({
           if (isAlways) perm = "--x------";
           else if (isRead) perm = "r-x------";
           else perm = "---x-----";
-          const status = isAlways ? "✓ always" : isRead ? "(dir-scoped)" : "asks each time";
+          let status = isAlways ? "✓ always" : isRead ? "(dir-scoped)" : "asks each time";
+          if (t === "bash" && !isAlways && bashFams.length) {
+            perm = "--x------";
+            status = `✓ always for: ${bashFams.join(", ")} (persisted)`;
+          }
           lines.push(`    ${perm}  ${t.padEnd(8)} ${status}`);
         }
         lines.push("");
-        lines.push(`  Plan mode: ${planMode ? "ON (write/edit/bash ask first)" : "off"}`);
+        lines.push(
+          `  Plan mode: ${planMode ? "ON (write/edit/bash/apply_patch denied — approve via exit_plan)" : "off"}`,
+        );
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name}` },
@@ -3519,6 +3575,7 @@ export function HarnessApp({
         } finally {
           refutationControllerRef.current = null;
           setBusy(false);
+          sweepRetiredTools();
           setBusyState("ready");
         }
         break;
@@ -3761,11 +3818,16 @@ export function HarnessApp({
   async function handlePlanTurn(text: string) {
     const store = planSessionRef.current;
     if (!store || !planSpawn || !planMetaModel) return;
+    // Plan-premium, resolved per turn (never snapshotted — /auth mid-session must count).
+    // A throw here IS the hard constraint's loud failure: it propagates to onSubmit's catch
+    // and lands in the transcript with the actionable fix lines.
+    const premium = resolvePlanModels(agent.config);
     await runPlanTurn(store, text, {
       runRound: (session, turn, o) =>
         runCouncilRound(session, turn, {
           parent: agent,
           metaModel: planMetaModel,
+          planModel: premium?.planModel,
           spawn: planSpawn,
           signal: o.signal,
           roundBudgetUsd: o.roundBudgetUsd,
@@ -3789,7 +3851,12 @@ export function HarnessApp({
         // build prompt would be stomped by that finally; re-apply it after the turn.
         const base = plannerBaseSystemPromptRef.current;
         agent.agentState.systemPrompt = systemPrompt;
-        const routing = await agent.promptRouted(turn);
+        // Premium hard pin (constraints.candidate_models) + the plan phase tag — the tag
+        // rides regardless of the premium flag so plan-turn outcomes cluster server-side.
+        const routing = await agent.promptRouted(turn, {
+          candidates: premium?.candidates,
+          tags: ["phase:plan"],
+        });
         if (getMode() !== "plan" && base != null) {
           agent.agentState.systemPrompt = base;
         }
@@ -3887,6 +3954,9 @@ export function HarnessApp({
     } finally {
       pendingEchoRef.current = false;
       setBusy(false);
+      // The turn is over — retire any exit_plan instance whose unregistration was deferred
+      // by a mid-turn mode exit (see the registration effect).
+      sweepRetiredTools();
       setBusyState("ready");
       setCouncilPhase(null);
       setActiveActions([]);
@@ -3945,20 +4015,17 @@ export function HarnessApp({
   // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
   // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
   // PANEL_STATUS_ROWS = rows − SCROLLBACK_SAFETY_ROWS. Not an estimate: the panel box has
-  // an explicit height, every row truncates, and suggestions/busy/GT-rows/ChildTree are
-  // suppressed while it is visible (gates below all AND on !panelVisible), so nothing can
-  // stack the frame toward Ink's scrollback-wiping clearTerminal. When the panel exists
-  // but cannot legitimately render (busy/overlay/too-small), chatRegion renders instead
-  // and the effect below closes it in the same pass.
+  // an explicit height, every row truncates, and suggestions/busy-indicator/GT-rows/
+  // ChildTree/currentAction are suppressed while it is visible (gates below all AND on
+  // !panelVisible), so nothing can stack the frame toward Ink's scrollback-wiping
+  // clearTerminal. Busy is allowed (always-panel, 2026-07-20): the panel replaces the
+  // streaming chatRegion while completed messages keep committing to <Static> scrollback
+  // above it. When the panel exists but cannot legitimately render (permission/question
+  // prompt claimed the bottom, too-small), chatRegion renders instead and the effect
+  // below closes it in the same pass.
   const panelOuter = panelOuterHeight(rows, inputBoxHeight);
   const panelTop = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
-  const panelVisible =
-    panelTop !== null &&
-    !busy &&
-    !permPrompt &&
-    !questionPrompt &&
-    panelOuter >= 5 &&
-    cols >= TOC_MIN_COLS;
+  const panelVisible = panelTop !== null && !permPrompt && !questionPrompt && panelOuter >= 5;
   // D3a task panel rows (MP5; GT enrichment MP6 — ONE plan surface, the old planStrip
   // banner + note/block rows are gone). Read from the in-place-mutated todos array
   // (todoGen forces the re-read after every tool end); with a GT plan the ledger
@@ -3985,12 +4052,14 @@ export function HarnessApp({
   const footerHeight = 6 + (currentAction ? 1 : 0) + taskShown.length;
   const panelInnerRows = Math.max(1, panelOuter - PANEL_CHROME_ROWS);
   // Closing must also RE-SEAT the bottom mount: the panel covered the whole screen, so the
-  // post-close frame starts from an effectively fresh screen. Moving the static-estimate
-  // basis to the current message count makes bottomMountMinRows go full and then decay per
-  // committed message — THE RULE's own math — instead of log-update stranding the shrunken
-  // composer frame at the old panel top (the spike's one real finding).
+  // post-close frame starts from an effectively fresh screen. Under the anchor ledger this
+  // is free — the panel frame IS the rows−2 identity, so the close floor keeps a
+  // full-height flex-end frame that decays per commit (exactly what the legacy basis reset
+  // produced). Legacy path: move the static-estimate basis to the current message count so
+  // bottomMountMinRows goes full and decays fresh, instead of log-update stranding the
+  // shrunken composer frame at the old panel top (the MP4 spike's one real finding).
   function closePanelReseat() {
-    setStaticBasisIdx(messages.length);
+    if (ANCHOR_LEGACY) setStaticBasisIdx(messages.length);
     setPanel(null);
   }
   function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
@@ -4011,8 +4080,9 @@ export function HarnessApp({
     }
     if (key.ctrl && input === "g") {
       // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
-      // keyboard to the gate-focus modal (the same arm the global handler uses).
-      if (gtBehavior?.block) {
+      // keyboard to the gate-focus modal (the same arm the global handler uses). The
+      // modal is idle-only, so a busy chord swaps views instead of arming it dead.
+      if (gtBehavior?.block && !busy) {
         closePanelReseat();
         dismissedGateRef.current = null;
         setGateFocus({ gateId: gtBehavior.block.gateId, noteEntry: false });
@@ -4094,7 +4164,8 @@ export function HarnessApp({
   const streamingThoughtsHeight = streamingThoughts && showThinkingRef.current ? 5 : 0;
   // The busy indicator (spinner + tip) renders as one line above the input box while a turn
   // is running and no overlay owns the bottom region. Reserve marginTop(1) + line(1) = 2 rows.
-  const busyIndicatorVisible = busy && !overlayOpen && !permPrompt && !questionPrompt;
+  const busyIndicatorVisible =
+    busy && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
   // The question overlay owns the bottom region when no permission prompt does (matching the
   // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
@@ -4149,12 +4220,139 @@ export function HarnessApp({
     ? tailToFit(streaming, cols, streamTailBudget(rows, streamReserved))
     : "";
 
-  // A panel that can no longer legitimately render (turn started, permission/question
-  // overlay claimed the bottom, terminal shrank below the floor) closes — the render
-  // above already fell back to chatRegion in the same pass, so no frame ever contains
-  // both the panel and the incoming surface.
+  // A panel that can no longer legitimately render (permission/question overlay claimed
+  // the bottom, terminal shrank below the floor — a running turn no longer closes it)
+  // closes — the render above already fell back to chatRegion in the same pass, so no
+  // frame ever contains both the panel and the incoming surface.
   useEffect(() => {
     if (panel && !panelVisible) closePanelReseat();
+  });
+
+  // Bottom-mount the prompt section (THE RULE, 2026-07-16; anchor ledger 2026-07-20): the
+  // startup newline reserve in main.ts seats the FIRST paint at the terminal bottom, and the
+  // ledger keeps every later frame there by giving the live frame an EXPLICIT height that
+  // never shrinks faster than the rows committed to <Static> above it (floor) and never
+  // reaches the terminal height (cap) — nextLiveFrameHeight in layout.ts states the
+  // invariant and the telescoping argument. Estimate errors degrade to transient padding
+  // (over-count) or a top-clip under overflow="hidden" (under-count) — never a stranded
+  // composer, never Ink's scrollback-wiping clearTerminal. Enforced by tui-verify's
+  // bottom-anchor checks and tests/anchor-ledger.test.ts.
+  //
+  // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1): the estimate-decay flex-end minHeight — inert once
+  // the transcript outgrows the screen, so any later live-frame shrink (perm/question
+  // teardown, wide-terminal stream commit, resize) stranded the composer mid-screen.
+  const staticRowsEstimate = useMemo(() => {
+    if (!ANCHOR_LEGACY) return 0;
+    const cap = rows;
+    let sum = 0;
+    for (let i = Math.min(staticBasisIdx, messages.length); i < messages.length; i++) {
+      const m = messages[i];
+      if (!m) continue;
+      sum += computeMsgHeight(m, cols);
+      if (sum >= cap) break;
+    }
+    return sum;
+  }, [messages, cols, rows, staticBasisIdx]);
+  const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
+
+  // Anchor-ledger inputs. contentRows conservatively counts everything the live frame shows
+  // THIS render — every conditional footer element must be booked here (an uncounted element
+  // top-clips under the explicit height). While the panel renders, the frame is the MP4
+  // identity: panelOuter + PANEL_STATUS_ROWS + inputBoxHeight ≡ rows − SCROLLBACK_SAFETY_ROWS.
+  const bannerShown = messages.length === 0 && matchingCommands.length === 0 && !overlayOpen;
+  const bannerRows = bannerShown
+    ? 1 +
+      wrappedLineCount(getAsciiBanner("MINIMA"), cols) +
+      BANNER_TAGLINES.reduce((n, line) => n + 1 + wrappedLineCount(line, cols), 0) +
+      (tipsEnabled && startupTip ? 1 + wrappedLineCount(startupTip, cols) : 0)
+    : 0;
+  const pickerRows = pickerOpen
+    ? MODEL_PICKER_MAX_ROWS
+    : paletteOpen
+      ? COMMANDS.length + 3
+      : sessionPickerOpen
+        ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
+        : configOverlayOpen
+          ? CONFIG_OVERLAY_MAX_ROWS
+          : 0;
+  const streamTailRows = busy && streamTail ? 2 + markdownBodyHeight(streamTail, cols) : 0;
+  const contentRows =
+    panelVisible && panelTop
+      ? Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
+      : bannerRows +
+        streamingThoughtsHeight +
+        streamTailRows +
+        busyIndicatorHeight +
+        suggestionsHeight +
+        inputBoxHeight +
+        permPromptHeight +
+        questionPromptHeight +
+        treeHeight +
+        footerHeight +
+        pickerRows;
+  // Ledger resets: a <Static> remount (startup, /clear, rewind, resume) reprints the
+  // transcript and seats itself → content-sized frame. A resize seeds one full-height frame
+  // instead: it writes past the last row and re-anchors — including after Ink's one
+  // unavoidable old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst
+  // until the next commit scrolls it home). The mount deliberately does NOT cap-seed: a
+  // full-height first frame parks the early transcript at the screen TOP, 40+ rows from
+  // the composer, for several turns (tried 2026-07-20, PNG-refuted). Boot seating is the
+  // reserve's job, made trustworthy by the CSI r margin reset in main.ts — the live
+  // failure mode was a stale DECSTBM region eating the reserve, not the reserve itself.
+  const anchorPrev = anchorGenRef.current;
+  const anchorRemounted =
+    anchorPrev === null ||
+    anchorPrev.gen !== transcriptGen ||
+    messages.length < committedLenRef.current;
+  const anchorResized =
+    anchorPrev !== null && (anchorPrev.rows !== rows || anchorPrev.cols !== cols);
+  const anchorReset = anchorRemounted || anchorResized;
+  let committedRows = 0;
+  if (!anchorReset) {
+    for (let i = committedLenRef.current; i < messages.length; i++) {
+      const m = messages[i];
+      if (m) committedRows += computeMsgHeight(m, cols);
+    }
+  }
+  const liveHeight = nextLiveFrameHeight(
+    anchorReset
+      ? anchorRemounted
+        ? 0
+        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
+      : liveHeightRef.current,
+    committedRows,
+    contentRows,
+    rows,
+  );
+  useEffect(() => {
+    liveHeightRef.current = liveHeight;
+    committedLenRef.current = messages.length;
+    anchorGenRef.current = { gen: transcriptGen, rows, cols };
+    if (ANCHOR_DEBUG) {
+      try {
+        appendFileSync(
+          ANCHOR_DEBUG,
+          `${JSON.stringify({
+            t: Date.now(),
+            rows,
+            cols,
+            liveHeight,
+            contentRows,
+            committedRows,
+            reset: anchorReset
+              ? anchorPrev === null
+                ? "mount"
+                : anchorRemounted
+                  ? "remount"
+                  : "resize"
+              : null,
+            msgs: messages.length,
+            busy,
+            panel: panelVisible,
+          })}\n`,
+        );
+      } catch {}
+    }
   });
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
@@ -4177,58 +4375,23 @@ export function HarnessApp({
     );
   }
 
-  const bannerBlock =
-    messages.length === 0 && matchingCommands.length === 0 && !overlayOpen ? (
-      <Box flexDirection="column" alignItems="center" marginTop={1}>
-        <Text color="green" bold>
-          {getAsciiBanner("MINIMA")}
-        </Text>
-        <Box marginTop={1}>
-          <Text color="gray">CLI · cost-aware model routing</Text>
+  const bannerBlock = bannerShown ? (
+    <Box flexDirection="column" alignItems="center" marginTop={1}>
+      <Text color="green" bold>
+        {getAsciiBanner("MINIMA")}
+      </Text>
+      {BANNER_TAGLINES.map((line) => (
+        <Box key={line} marginTop={1}>
+          <Text color="gray">{line}</Text>
         </Box>
+      ))}
+      {tipsEnabled && startupTip ? (
         <Box marginTop={1}>
-          <Text color="gray">recommend → run → judge → feedback → memory</Text>
+          <Text color="yellow">{startupTip}</Text>
         </Box>
-        <Box marginTop={1}>
-          <Text color="gray">type a prompt, or / for commands</Text>
-        </Box>
-        <Box marginTop={1}>
-          <Text color="gray">
-            scroll with your terminal (wheel / trackpad) · select & copy freely
-          </Text>
-        </Box>
-        {tipsEnabled && startupTip ? (
-          <Box marginTop={1}>
-            <Text color="yellow">{startupTip}</Text>
-          </Box>
-        ) : null}
-      </Box>
-    ) : null;
-
-  // Bottom-mount the prompt section (THE RULE, 2026-07-16): while the committed transcript
-  // is shorter than the screen, the live frame keeps a minHeight of rows − SAFETY −
-  // (estimated committed rows) and bottom-justifies its content, so the composer + footer
-  // sit on the terminal's bottom rows from frame 1 and stay glued as messages commit above.
-  // computeMsgHeight is the same conservative ruler the reserve math uses (>= actual, so the
-  // frame can only end AT or above the bottom, never overflow toward Ink's wipe threshold);
-  // once the transcript outgrows the screen the minHeight hits 0 and this is inert. The
-  // startup newline reserve in main.ts seats the FIRST paint at the bottom; this keeps every
-  // later frame there. Enforced by tui-verify's bottom-anchor check.
-  // The sum starts at staticBasisIdx: after the expanded panel closes (it covered the whole
-  // screen) only messages committed SINCE then are on screen above the frame, so the decay
-  // restarts from a fresh screen (min() guards /clear and rewind truncations).
-  const staticRowsEstimate = useMemo(() => {
-    const cap = rows;
-    let sum = 0;
-    for (let i = Math.min(staticBasisIdx, messages.length); i < messages.length; i++) {
-      const m = messages[i];
-      if (!m) continue;
-      sum += computeMsgHeight(m, cols);
-      if (sum >= cap) break;
-    }
-    return sum;
-  }, [messages, cols, rows, staticBasisIdx]);
-  const bottomMountMinRows = Math.max(0, rows - SCROLLBACK_SAFETY_ROWS - staticRowsEstimate);
+      ) : null}
+    </Box>
+  ) : null;
 
   // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
   // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
@@ -4378,10 +4541,6 @@ export function HarnessApp({
               onSubmit={onSubmit}
               onChange={setTypedText}
               onTab={handleTabComplete}
-              onShiftTab={() => {
-                if (getMode() === "plan") void requestPlanExitGate();
-                else cycleMode();
-              }}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
@@ -4429,7 +4588,9 @@ export function HarnessApp({
 
       <Box flexDirection="column" flexShrink={0}>
         {treeVisible && <ChildTree nodes={childrenState} maxRows={treeMaxRows} />}
-        {currentAction ? (
+        {/* Suppressed under the panel like the busy indicator: a busy-only footer row
+            would exceed the PANEL_STATUS_ROWS the panel identity budgeted. */}
+        {currentAction && !panelVisible ? (
           <Text color="yellow" wrap="truncate">
             {currentAction}
           </Text>
@@ -4448,9 +4609,10 @@ export function HarnessApp({
           routingOffline={agent.offlineReason !== null}
           offlineReason={agent.offlineReason}
           statusText={busyState}
-          planMode={planMode}
+          mode={mode}
           readDirs={[...permStateRef.current.allowedDirs].map((d) => d.replace(process.cwd(), "."))}
           alwaysTools={[...permStateRef.current.allowAlways]}
+          bashGrants={[...permStateRef.current.bashGrants]}
           activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
           badge={footerBadge}
         />
@@ -4484,15 +4646,22 @@ export function HarnessApp({
           </Box>
         </Box>
 
-        {quitArmed ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
+        {/* Suppressed under the panel like the busy/currentAction rows: an ungated footer
+            row breaks the panel frame's rows−2 height identity (one extra row is the
+            difference between a clean frame and Ink's scrollback-wiping clearTerminal). */}
+        {quitArmed && !panelVisible ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
       </Box>
     </>
   );
 
   // The transcript commits to native scrollback via <Static>; only the live region +
-  // footer re-diff. Ctrl+T/Ctrl+G print one-shot text blocks. The inner minHeight/flex-end
-  // box keeps the prompt section mounted at the terminal bottom while the transcript is
-  // short (THE RULE); <Static> stays on the flex-start root (see chatRegion note).
+  // footer re-diff. The live box carries the anchor ledger's EXPLICIT height (never
+  // minHeight: Ink's wipe threshold reads the root's Yoga height, and <Static> is
+  // position-absolute — an explicit height <= rows − 2 makes the scrollback-wiping
+  // clearTerminal unreachable). flex-end + the inner flexShrink={0} wrapper make padding
+  // land ABOVE the content and any over-tall content TOP-clip under overflow="hidden" —
+  // Yoga's default shrink would instead compress the children into the fixed height and
+  // garble the composer. <Static> stays on the flex-start root (see chatRegion note).
   return (
     <Box flexDirection="column" width="100%">
       {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
@@ -4501,30 +4670,34 @@ export function HarnessApp({
       </Static>
       <Box
         flexDirection="column"
-        minHeight={bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
+        height={ANCHOR_LEGACY ? undefined : liveHeight}
+        minHeight={ANCHOR_LEGACY && bottomMountMinRows > 0 ? bottomMountMinRows : undefined}
+        overflow={ANCHOR_LEGACY ? undefined : "hidden"}
         justifyContent="flex-end"
       >
-        {panelVisible && panelTop ? (
-          <ExpandPanel
-            title={
-              panelTop.kind === "toc"
-                ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
-                : panelTop.kind === "gt"
-                  ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
-                  : panelTop.kind === "draft"
-                    ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
-                    : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
-            }
-            lines={panelTop.lines}
-            cursor={panelTop.cursor}
-            stops={panelTop.stops}
-            outerHeight={panelOuter}
-            onKey={handlePanelKey}
-          />
-        ) : (
-          chatRegion
-        )}
-        {footerBlock}
+        <Box flexDirection="column" flexShrink={0}>
+          {panelVisible && panelTop ? (
+            <ExpandPanel
+              title={
+                panelTop.kind === "toc"
+                  ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
+                  : panelTop.kind === "gt"
+                    ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
+                    : panelTop.kind === "draft"
+                      ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
+                      : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+              }
+              lines={panelTop.lines}
+              cursor={panelTop.cursor}
+              stops={panelTop.stops}
+              outerHeight={panelOuter}
+              onKey={handlePanelKey}
+            />
+          ) : (
+            chatRegion
+          )}
+          {footerBlock}
+        </Box>
       </Box>
     </Box>
   );

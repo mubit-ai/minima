@@ -84,8 +84,9 @@ export type GuardKind =
   | "doom-loop" // A3: same tool call repeated 3× with identical input
   | "steps-cap" // A3: per-agent iteration cap hit → forced summarization
   | "allowlist-deny" // A6: tool call outside the step's declared tools
-  | "mode-ask" // B2: mutating call in Plan mode → ask
-  | "mode-auto"; // accept-edits/bypass: call pre-approved by the mode (audit trail)
+  | "mode-ask" // B2: a mode bundle forces the interactive prompt (no current producer)
+  | "mode-auto" // accept-edits/bypass: call pre-approved by the mode (audit trail)
+  | "mode-deny"; // plan mode: mutating call blocked at the dispatcher (CC parity, audit trail)
 
 /** Confidence tier the event routes through once A4 (M6.2) is wired; interim = undefined. */
 export type GuardTier = "green" | "yellow" | "red";

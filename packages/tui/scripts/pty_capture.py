@@ -30,6 +30,9 @@ Send tokens: <ESC> <CR> <ENTER> <TAB> <UP> <DOWN> <LEFT> <RIGHT> <PGUP> <PGDN> <
              <WHEELUP> <WHEELDN> <CLICK> <PASTE> <ENDPASTE> <SHIFTTAB> <CTRLZ> <CTRLD> <CTRLB>
              <HOME> <END> <ALTLEFT> <ALTRIGHT> <ALTB> <ALTF> <ALTBS>
     A step may be {"after": s, "signal": "CONT"} to send SIGCONT instead of bytes.
+    A step may be {"after": s, "resize": [cols, rows]} to resize the PTY mid-run (TIOCSWINSZ
+    on the master + SIGWINCH to the child's process group); the replayed pyte grid resizes at
+    the same timestamp, so frames before/after carry their own row counts.
 
 Steps may set "repeat" (send N times) and "gap" (seconds between repeats, default 0 = one
 burst). A nonzero gap spreads the repeats across separate stdin chunks — closer to a real
@@ -177,6 +180,10 @@ def main() -> int:
         if "signal" in s:
             events.append((float(s["after"]), ("signal", s["signal"])))
             continue
+        if "resize" in s:
+            new_cols, new_rows = int(s["resize"][0]), int(s["resize"][1])
+            events.append((float(s["after"]), ("resize", (new_cols, new_rows))))
+            continue
         data = expand(s["send"])
         repeat = int(s.get("repeat", 1))
         gap = float(s.get("gap", 0.0))
@@ -202,12 +209,21 @@ def main() -> int:
     start = time.time()
     next_event = 0
     chunks = []  # (seconds-since-start, bytes) per PTY read — replayable for frame snapshots
+    resizes = []  # (seconds-since-start, (cols, rows)) — replayed onto the pyte grid
     while time.time() - start < duration:
         now = time.time() - start
         while next_event < len(events) and now >= events[next_event][0]:
             kind, payload = events[next_event][1]
             if kind == "signal":
                 os.kill(p.pid, getattr(signal, f"SIG{payload}"))
+            elif kind == "resize":
+                new_cols, new_rows = payload
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", new_rows, new_cols, 0, 0))
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGWINCH)
+                except Exception:
+                    pass
+                resizes.append((now, payload))
             else:
                 os.write(master, payload)
             next_event += 1
@@ -237,7 +253,12 @@ def main() -> int:
     screen = pyte.HistoryScreen(cols, rows, history=5000, ratio=0.5)
     stream = pyte.ByteStream(screen)
     frames_f = open(frames_path, "w") if frames_path else None
+    next_resize = 0
     for t, data in chunks:
+        while next_resize < len(resizes) and t >= resizes[next_resize][0]:
+            r_cols, r_rows = resizes[next_resize][1]
+            screen.resize(r_rows, r_cols)
+            next_resize += 1
         stream.feed(bytes(data))
         if frames_f:
             frame = {"t": round(t, 3), "screen": [line.rstrip() for line in screen.display]}

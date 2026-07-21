@@ -224,6 +224,12 @@ export class MinimaAgent extends Agent {
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
+      /** Pre-request candidate assembly override (plan-premium): exact ids sent as
+       * constraints.candidate_models on EVERY rung of this prompt — the recovery ladder
+       * re-routes with the same pool while the failed rung's model rides in
+       * excludedModels (the server does the subtraction). Never widened to
+       * config.candidates. */
+      candidates?: string[];
     } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
@@ -361,6 +367,7 @@ export class MinimaAgent extends Agent {
             maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
             minQuality: opts.minQuality,
             excludedModels: excluded.length ? excluded : undefined,
+            candidates: opts.candidates,
             signal: routeController.signal,
           });
         } catch (exc) {
@@ -794,6 +801,7 @@ export class MinimaAgent extends Agent {
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
+      candidates?: string[];
       signal?: AbortSignal;
     },
   ): Promise<RoutingResult | null> {
@@ -813,12 +821,18 @@ export class MinimaAgent extends Agent {
       // Only let Minima pick models the user can actually run: restrict candidates to those
       // whose provider key is present, so a routed turn never dies with a provider auth error.
       // If NO candidate is runnable (no provider keys at all), fall back to the full set and
-      // let the provider layer surface an actionable "no API key" message.
-      const runnable = this.config.candidates.filter((id) => {
+      // let the provider layer surface an actionable "no API key" message. Explicit per-call
+      // candidates (plan-premium) are a HARD pool: never widened back to config.candidates.
+      const pool = opts.candidates ?? this.config.candidates;
+      const runnable = pool.filter((id) => {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
       });
-      const effective = runnable.length ? runnable : undefined;
+      const effective = runnable.length
+        ? runnable
+        : opts.candidates
+          ? [...opts.candidates]
+          : undefined;
       const routing = await this.router.recommend({
         task: taskText,
         taskType: opts.taskType ?? undefined,
@@ -854,6 +868,17 @@ export class MinimaAgent extends Agent {
       // degrade it to an offline run; let promptRouted short-circuit cleanly.
       if (opts.signal?.aborted) throw exc;
       if (this.config.allowOffline) {
+        // Explicit candidates are a hard pool even offline: a routing-server outage must
+        // not silently run the turn on a cheap incumbent when providers are reachable.
+        if (opts.candidates?.length) {
+          for (const id of opts.candidates) {
+            const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
+            if (m) {
+              this.agentState.model = m;
+              break;
+            }
+          }
+        }
         this.offlineReason = errText(exc);
         return null;
       }

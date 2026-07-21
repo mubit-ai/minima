@@ -1,16 +1,20 @@
 /**
  * exit_plan — let the model request leaving plan mode when the plan is ready (or the user
  * says to proceed). The decision stays with the USER: the tool surfaces an approval prompt
- * through the same AskUserRef seam as `question` — finalize & build / revise / cancel —
- * so enforcement lives in the overlay + dispatcher, never in prompt text. Interactive:
- * registered whenever plan mode is on (MP17 — GT on OR off), disposed on exit; headless
- * runs get the ask-null guard.
+ * through the same AskUserRef seam as `question` — finalize (auto-accept or build) /
+ * revise / cancel — so enforcement lives in the overlay + dispatcher, never in prompt
+ * text. Interactive: registered whenever plan mode is on (MP17 — GT on OR off), disposed
+ * on exit; headless runs get the ask-null guard.
  *
  * MP17 (universal gate): without a GT plan session there is no store to finalize from, so
  * the tool REQUIRES the complete plan as a markdown argument (CC's ExitPlanMode contract) —
  * `showPlan` pushes it into the transcript first, so the user approves exactly what they
  * can see. With a session, the store/finalize path is authoritative and the argument is
  * ignored.
+ *
+ * CC's ExitPlanMode dialog shape (2026-07-20): the first approve flavor lands the mode on
+ * accept-edits (implementation edits pre-approved, cwd-scoped), the second on build
+ * (per-edit prompts). Both run the SAME finalize; only the landing mode differs.
  */
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
@@ -20,6 +24,7 @@ import type { AskUserRef } from "./question.ts";
 
 export const EXIT_PLAN_TOOL_NAME = "exit_plan";
 
+const FINALIZE_AUTO = "Finalize & auto-accept edits";
 const FINALIZE = "Finalize & build";
 const REVISE = "Revise the plan";
 const CANCEL = "Cancel plan mode";
@@ -27,8 +32,12 @@ const CANCEL = "Cancel plan mode";
 export interface ExitPlanDeps {
   ask: AskUserRef;
   /** Shared finalize path. planMd is the tool's `plan` argument on the sessionless (GT-off)
-   *  path, null on the store path; ok=false (audit blocker, write failure) stays in plan mode. */
-  finalize: (planMd: string | null) => Promise<{ ok: boolean; message: string }>;
+   *  path, null on the store path; ok=false (audit blocker, write failure) stays in plan mode.
+   *  autoAcceptEdits lands the post-approval mode on accept-edits instead of build. */
+  finalize: (
+    planMd: string | null,
+    autoAcceptEdits: boolean,
+  ) => Promise<{ ok: boolean; message: string }>;
   /** Discard the plan (session if any) and exit plan mode without writing anything. */
   cancel: () => void;
   /** Guards a second call in the same batch after plan mode already ended. */
@@ -85,9 +94,10 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
       'to proceed with it ("go", "build it", "looks good"). Pass the COMPLETE plan as markdown ' +
       "in `plan` — it is what the user reviews and approves. The user is shown an approval " +
       "prompt with three outcomes: approve (plan mode ends and you begin implementing " +
-      "immediately), revise (you stay in plan mode and address their note), or cancel (the " +
-      "plan is discarded — do not implement it). Never tell the user to run slash commands; " +
-      "call this tool instead.",
+      "immediately — the user chooses whether your edits are pre-approved or reviewed one by " +
+      "one), revise (you stay in plan mode and address their note), or cancel (the plan is " +
+      "discarded — do not implement it). Never tell the user to run slash commands; call this " +
+      "tool instead.",
     parameters,
     executionMode: "sequential",
     async execute(
@@ -132,8 +142,13 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
         header: "plan",
         options: [
           {
+            label: FINALIZE_AUTO,
+            description:
+              "Approve, exit plan mode into accept-edits — file edits inside the project are pre-approved.",
+          },
+          {
             label: FINALIZE,
-            description: "Write the ground truth, exit plan mode, start building.",
+            description: "Approve, exit plan mode, build with per-edit approval.",
           },
           { label: REVISE, description: "Stay in plan mode and tell the planner what to change." },
           { label: CANCEL, description: "Discard the plan session — nothing is written." },
@@ -141,9 +156,12 @@ export function exitPlanTool(deps: ExitPlanDeps): AgentTool {
         allow_freetext: false,
       });
 
-      if (choice === FINALIZE) {
-        const r = await deps.finalize(sessionless ? planMd : null);
-        return { content: [text(r.message)], details: { choice: "finalize", ok: r.ok } };
+      if (choice === FINALIZE_AUTO || choice === FINALIZE) {
+        const r = await deps.finalize(sessionless ? planMd : null, choice === FINALIZE_AUTO);
+        return {
+          content: [text(r.message)],
+          details: { choice: "finalize", ok: r.ok, autoAcceptEdits: choice === FINALIZE_AUTO },
+        };
       }
 
       if (choice === REVISE) {

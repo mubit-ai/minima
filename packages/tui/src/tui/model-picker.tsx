@@ -20,6 +20,13 @@ export interface ModelPickerProps {
 
 const WINDOW = 12; // visible rows
 
+/**
+ * Max rows the picker can occupy — the anchor ledger's reservation for it (colocated with
+ * WINDOW so the pin can't drift): border(2) + title(1) + filter(1) + ↑marker(1) + rows(<=
+ * WINDOW, >=1 for the no-match line) + ↓marker(1) + hint(1).
+ */
+export const MODEL_PICKER_MAX_ROWS = WINDOW + 7;
+
 export function matches(model: Model, filter: string): boolean {
   const tokens = filter.toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return true;

@@ -23,7 +23,6 @@ export interface TextInputProps {
   onSubmit: (value: string) => void;
   onChange?: (value: string) => void;
   onTab?: (value: string) => string | undefined;
-  onShiftTab?: () => void;
   onUp?: (value: string) => string | undefined;
   onDown?: (value: string) => string | undefined;
   placeholder?: string;
@@ -69,7 +68,6 @@ export function TextInput({
   onSubmit,
   onChange,
   onTab,
-  onShiftTab,
   onUp,
   onDown,
   placeholder,
@@ -167,12 +165,11 @@ export function TextInput({
       return;
     }
     if (key.tab) {
-      if (key.shift) {
-        onShiftTab?.();
-      } else {
-        const completed = onTab?.(value);
-        if (completed !== undefined) update(completed, completed.length);
-      }
+      // Shift+Tab is an app-level chord (mode cycle) — it must work while this input is
+      // disabled/suspended, so the global handler in app.tsx owns it, not the composer.
+      if (key.shift) return;
+      const completed = onTab?.(value);
+      if (completed !== undefined) update(completed, completed.length);
       return;
     }
     if (key.backspace || key.delete) {

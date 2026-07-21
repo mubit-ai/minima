@@ -5,8 +5,9 @@
  *   ("always for this dir"), all future reads within that directory tree
  *   are silent. The cwd is NOT pre-approved — the user must grant access
  *   explicitly on first use in each new directory.
- * - write/edit/bash: Always prompts unless the user chose "always allow"
- *   for that specific tool.
+ * - write/edit/bash: Always prompts unless the user chose "always allow". For bash the
+ *   "always" is a per-command-family grant ("Always allow `pip` commands"), persisted per
+ *   project (perm_grants.ts); other tools keep the whole-tool, session-only grant.
  *
  * The TUI wires a BeforeToolCall hook that calls checkPermission(), which
  * returns null (allow) or { block, reason } (deny). Interactive prompts are
@@ -15,9 +16,12 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { type AgentMode, bundleForMode } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
+import { parsePatch } from "../tools/apply_patch.ts";
+import { loadBashGrants, persistBashGrants } from "./perm_grants.ts";
 
 // Read-only tools: gated by a first-use, directory-scoped prompt (see checkPermission). glob/grep
 // scan the filesystem read-only just like read/ls, so they belong here (and the PermissionOverlay
@@ -52,8 +56,8 @@ export function planModeBlockedTools(groundTruth: boolean): string[] {
 export function planModeBlockReason(toolName: string, groundTruth: boolean): string {
   if (!groundTruth) {
     return toolName === "task"
-      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). Use /plan to exit."
-      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. Use /plan to exit.";
+      ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning."
+      : "Plan mode is ON — write/edit/bash/apply_patch are blocked. When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning.";
   }
   if (toolName === "task") {
     return (
@@ -76,29 +80,106 @@ export interface PermissionPrompt {
   argsSummary: string;
   promptText: string;
   diffPreview?: string | null;
+  /** The pending call's raw args — lets a Shift+Tab mode cycle re-evaluate the call
+   *  (cwd-scoped accept-edits auto needs the real target paths, not the display summary). */
+  args?: Record<string, unknown>;
+  /** Overlay label for the "[a]" option — bash offers a per-command-family grant
+   *  ("Always allow `pip` commands") instead of the whole-tool default. */
+  alwaysLabel?: string;
   resolve: (decision: PermissionDecision) => void;
+}
+
+/**
+ * The command "families" a bash call runs: the leading word of each segment of a compound
+ * command (`pip install -e . && git add .` → ["pip", "git"]), env-var prefixes skipped,
+ * paths reduced to their basename. Drives the persisted per-command grants — a stored grant
+ * silently allows a call only when EVERY segment's family is granted. Returns null (no grant
+ * offered, no grant matched) for commands we won't analyze: command substitution can smuggle
+ * arbitrary execution under a granted family. Splitting is deliberately naive — a separator
+ * hidden inside quotes over-splits into garbage families that simply won't match a grant, so
+ * the failure direction is a prompt, never a silent allow.
+ */
+export function bashCommandFamilies(cmd: string): string[] | null {
+  if (/\$\(|`|<\(/.test(cmd)) return null;
+  const families: string[] = [];
+  for (const segment of cmd.split(/&&|\|\||[;|\n]/)) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue; // empty segment (trailing `;`/`&&`) runs nothing
+    const head = tokens.find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+    if (!head) return null; // bare env assignment — don't analyze
+    const family = head.includes("/") ? head.slice(head.lastIndexOf("/") + 1) : head;
+    if (!family) return null;
+    if (!families.includes(family)) families.push(family);
+  }
+  return families.length > 0 ? families : null;
+}
+
+/** write/edit/apply_patch — the tools whose accept-edits `auto` is cwd-scoped. */
+const EDIT_FAMILY = new Set(["write", "edit", "apply_patch"]);
+
+/**
+ * True when EVERY file the call would touch resolves inside `cwd` (Claude Code parity:
+ * accept-edits auto-approves workspace edits only — an edit escaping the project dir keeps
+ * the normal prompt flow). write/edit contribute their single target; apply_patch parses
+ * its patch for every Add/Update/Delete path AND Move-to destination; a malformed patch or
+ * a missing path never auto-approves. Non-edit tools have no path targets to scope — true.
+ */
+export function editTargetsWithinCwd(
+  toolName: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): boolean {
+  if (!EDIT_FAMILY.has(toolName)) return true;
+  const targets: string[] = [];
+  if (toolName === "write") {
+    targets.push(String(args.path ?? args.file_path ?? ""));
+  } else if (toolName === "edit") {
+    targets.push(String(args.filePath ?? args.path ?? ""));
+  } else {
+    try {
+      for (const change of parsePatch(String(args.patch ?? ""))) {
+        targets.push(change.path);
+        if (change.moveTo) targets.push(change.moveTo);
+      }
+    } catch {
+      return false;
+    }
+    if (targets.length === 0) return false;
+  }
+  return targets.every((t) => {
+    if (!t.trim()) return false;
+    const full = expand(t);
+    return isWithin(isAbsolute(full) ? full : resolve(cwd, full), cwd);
+  });
 }
 
 export interface PermissionState {
   allowAlways: Set<string>;
+  /** Persisted per-project bash command-family grants ("pip", "git", …). */
+  bashGrants: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
   /** Ground-truth mode: todowrite `verify` commands are actually executed by the harness. */
   groundTruth: boolean;
   /** verify commands the user has already seen and approved (exact-string). */
   approvedVerifies: Set<string>;
+  /** ui-modes-style project key; when set, new bash grants persist across sessions. */
+  projectKey: string | null;
 }
 
 export function createPermissionState(
   cwd: string,
-  opts: { groundTruth?: boolean } = {},
+  opts: { groundTruth?: boolean; projectKey?: string } = {},
 ): PermissionState {
+  const projectKey = opts.projectKey ?? null;
   return {
     allowAlways: new Set<string>(),
+    bashGrants: new Set<string>(projectKey ? loadBashGrants(projectKey) : []),
     allowedDirs: new Set<string>(), // NOT pre-approved — user must grant cwd access
     cwd,
     groundTruth: opts.groundTruth === true,
     approvedVerifies: new Set<string>(),
+    projectKey,
   };
 }
 
@@ -213,6 +294,13 @@ export function checkPermission(
         verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
       if (!newVerify) return Promise.resolve(null);
     }
+
+    // Persisted per-command grants (bash only): silent when every segment family was
+    // granted before. Unanalyzable commands (null) never match — they keep the prompt.
+    if (toolName === "bash" && state.bashGrants.size > 0) {
+      const families = bashCommandFamilies(String(args.command ?? ""));
+      if (families?.every((f) => state.bashGrants.has(f))) return Promise.resolve(null);
+    }
   }
 
   // For read-only tools (read/ls/glob/grep): check directory-level access
@@ -235,6 +323,7 @@ export function checkPermission(
         toolName,
         argsSummary: formatToolArgs(toolName, args),
         promptText: `read from ${targetDir}`,
+        args,
         resolve: (decision) => {
           if (decision === "always") {
             state.allowedDirs.add(targetDir);
@@ -251,14 +340,28 @@ export function checkPermission(
 
   // Sensitive tools (write/edit/bash) — or any forced prompt (plan-mode "ask"): always prompt
   const diffPreview = buildDiffPreview(toolName, args, state);
+  // Bash "always" is a per-command-family grant (persisted per project) when the command is
+  // analyzable; anything else keeps the whole-tool session grant.
+  const bashFamilies = toolName === "bash" ? bashCommandFamilies(String(args.command ?? "")) : null;
   return new Promise((resolve) => {
     promptFn({
       toolName,
       argsSummary: formatToolArgs(toolName, args),
       promptText: `${opts.promptTextPrefix ?? ""}run ${toolName}`,
       diffPreview,
+      args,
+      alwaysLabel: bashFamilies
+        ? `Always allow ${bashFamilies.map((f) => `\`${f}\``).join(", ")} commands`
+        : undefined,
       resolve: (decision) => {
-        if (decision === "always") state.allowAlways.add(toolName);
+        if (decision === "always") {
+          if (bashFamilies) {
+            for (const f of bashFamilies) state.bashGrants.add(f);
+            if (state.projectKey) persistBashGrants(state.projectKey, bashFamilies);
+          } else {
+            state.allowAlways.add(toolName);
+          }
+        }
         if (decision === "allow" || decision === "always") {
           // The user has now seen these verify commands — an "always" grant covers them,
           // but any future NEW verify still re-prompts (see the allowAlways exception above).
@@ -282,11 +385,38 @@ function verifyCommands(args: Record<string, unknown>): string[] {
 }
 
 /**
+ * Would `mode`'s policy run this tool call with NO prompt? Drives the Claude Code-parity
+ * Shift+Tab-during-a-permission-prompt path: cycling into a mode whose bundle says "auto"
+ * for the pending call (accept-edits → write/edit/apply_patch, bypass → everything)
+ * resolves the on-screen prompt instead of leaving it stranded under the new mode.
+ *
+ * accept-edits auto is cwd-scoped: `editScope` carries the pending call's raw args + the
+ * project cwd so the SAME editTargetsWithinCwd check the dispatcher applies decides here
+ * too. Without args (a caller that can't supply them) the edit family fails SAFE — the
+ * prompt stays up rather than auto-approving an unverifiable target.
+ */
+export function modeAutoApproves(
+  mode: AgentMode,
+  toolName: string,
+  subject: string,
+  editScope?: { args: Record<string, unknown> | null; cwd: string },
+): boolean {
+  if (resolvePolicy(bundleForMode(mode), { tool: toolName, subject }) !== "auto") return false;
+  if (mode === "acceptEdits" && EDIT_FAMILY.has(toolName)) {
+    if (!editScope?.args) return false;
+    return editTargetsWithinCwd(toolName, editScope.args, editScope.cwd);
+  }
+  return true;
+}
+
+/**
  * The app's mode-gating beforeToolCall hook (B2): resolve the active mode's PolicyBundle
  * first, then fall through to the normal permission flow.
- *   deny  → block with a policy reason (fed back to the model)
+ *   deny  → GuardEvent(mode-deny) + block with a policy reason (fed back to the model)
  *   ask   → GuardEvent(mode-ask) + forced prompt (outranks "always" grants)
- *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes)
+ *   auto  → GuardEvent(mode-auto) + run WITHOUT any prompt (accept-edits / bypass modes);
+ *           accept-edits scopes the edit family to cwd — an outside-cwd target falls back
+ *           to the normal prompt flow (Claude Code parity)
  *   allow → normal checkPermission flow (unchanged build-mode behavior)
  * `getBundle` is injected so tests can pin a bundle and the app can read the live mode.
  */
@@ -303,6 +433,7 @@ export function makeModeGatedBeforeToolCall(deps: {
       subject: formatToolArgs(toolName, ctx.args),
     });
     if (action === "deny") {
+      emitGuardEvent({ kind: "mode-deny", detail: formatActionLabel(toolName, ctx.args) });
       return {
         block: true,
         reason: `The ${toolName} call is denied by the ${bundle.name} mode policy — a user setting, not an environment restriction. Continue without it or ask the user to switch modes.`,
@@ -316,6 +447,12 @@ export function makeModeGatedBeforeToolCall(deps: {
       });
     }
     if (action === "auto") {
+      if (
+        bundle.name === "accept-edits" &&
+        !editTargetsWithinCwd(toolName, ctx.args, deps.state.cwd)
+      ) {
+        return checkPermission(toolName, ctx.args, deps.state, deps.promptFn);
+      }
       // Mode-pre-approved (accept-edits / bypass): run with no prompt; the guard event is
       // the audit trail for what the mode waved through.
       emitGuardEvent({ kind: "mode-auto", detail: formatActionLabel(toolName, ctx.args) });

@@ -734,6 +734,9 @@ function uncheckedFactors(): GateFactors {
   };
 }
 
+/** Leads every per-step done-gate failure line (also the renderer's gate-block signature). */
+const GATE_STEP_BLOCK_PREFIX = "Step not verified — ";
+
 /** Appended to every block reason: what happened, how to proceed, and the batch caveat. */
 const GATE_BLOCK_CODA =
   "All task statuses were left unchanged. Fix the code until the check passes, or overwrite " +
@@ -757,8 +760,25 @@ const SAME_BATCH_BLOCK =
 /** Sibling tools whose execution can regress a check after its verdict was computed. */
 const MUTATING_SIBLINGS = new Set(["write", "edit", "apply_patch", "bash", "task"]);
 
+const SOLO_COMPLETION_PREFIX =
+  "This todowrite marks steps completed, but the same message also calls ";
+
 function soloCompletionReason(names: string[]): string {
-  return `This todowrite marks steps completed, but the same message also calls ${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
+  return `${SOLO_COMPLETION_PREFIX}${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
+}
+
+/**
+ * True when a beforeToolCall block reason came from the todowrite done-gate family (step
+ * verification, same-batch refusal, solo-completion refusal) rather than a permission
+ * denial. Display-only: the TUI renders gate blocks under a distinct "⊘ verify gate"
+ * header so an approved-then-gate-blocked todowrite doesn't read as a cancelled call.
+ */
+export function isGateBlockReason(reason: string): boolean {
+  return (
+    reason.startsWith(GATE_STEP_BLOCK_PREFIX) ||
+    reason.startsWith("Only one todowrite per assistant message:") ||
+    reason.startsWith(SOLO_COMPLETION_PREFIX)
+  );
 }
 
 /**
@@ -1100,7 +1120,8 @@ export function groundTruthHooks(
           }
         }
         const lines = failures.map(
-          (f) => `Step not verified — "${f.flip.content}": check \`${f.flip.verify}\` ${f.why}`,
+          (f) =>
+            `${GATE_STEP_BLOCK_PREFIX}"${f.flip.content}": check \`${f.flip.verify}\` ${f.why}`,
         );
         return { block: true, reason: `${lines.join("\n\n")}\n\n${GATE_BLOCK_CODA}` };
       }

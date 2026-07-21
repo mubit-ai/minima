@@ -11,6 +11,7 @@
 
 import { Box, Text } from "ink";
 import { type ReactNode, memo } from "react";
+import { isGateBlockReason } from "../minima/ground_truth.ts";
 import {
   type ChatMessage,
   clampToolText,
@@ -81,7 +82,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginBottom={0}
             >
               <Text bold color="cyan">
-                {l.text}
+                {l.text || " "}
               </Text>
             </Box>
           );
@@ -128,12 +129,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
           );
         }
 
+        // The " " armor mirrors the code branch: an empty <Text> collapses to ZERO rows
+        // while markdownBodyHeight counts every source line >= 1 — on a blank-line-heavy
+        // reply that over-count decayed the anchor ledger 6+ rows past the real print and
+        // floated the composer (the wide-terminal stream-commit float, before-evidence
+        // shots/anchor-ledger). Blank lines now render as the paragraph gaps they are.
         return (
           <Box
             // biome-ignore lint/suspicious/noArrayIndexKey: lines of text are stable
             key={idx}
           >
-            <Text>{renderInlineMarkdown(l.text)}</Text>
+            <Text>{l.text ? renderInlineMarkdown(l.text) : " "}</Text>
           </Box>
         );
       })}
@@ -165,6 +171,20 @@ export const MessageRow = memo(function MessageRow({
 
   if (msg.role === "tool") {
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
+    // A done-gate block is NOT a denial/cancellation — the call was approved and the gate
+    // then refused the completion flip. Red error styling here read as "todowrite was
+    // cancelled" (2026-07-21 report), so gate blocks get their own calm header.
+    const gateBlock =
+      msg.isError === true && msg.toolName === "todowrite" && isGateBlockReason(msg.text);
+    if (gateBlock) {
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="yellow">{"  ⊘ verify gate — completion blocked, statuses unchanged:"}</Text>
+          <Text>{body}</Text>
+          {hiddenLines > 0 && <Text dimColor>{`  ${toolHiddenMarker(hiddenLines)}`}</Text>}
+        </Box>
+      );
+    }
     return (
       <Box flexDirection="column" marginTop={1}>
         <Text color={msg.isError ? "red" : "yellow"}>{`  ⚙ ${msg.toolName ?? "tool"}:`}</Text>
