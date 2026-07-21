@@ -15,7 +15,7 @@ brew install minima
 ```
 
 See [Harness Architecture](harness-architecture.md) for the internal agentic structure
-(turn lifecycle, hooks, sub-agents, ground-truth spine, memory ledger, DB spine) and
+(turn lifecycle, hooks, sub-agents, Big Plan spine (formerly ground-truth), memory ledger, DB spine) and
 [`packages/tui/README.md`](../packages/tui/README.md) for usage.
 The `minima-cli` PyPI package now contains only the Minima server (`minima`) and the
 Python client SDK (`minima_client`).
