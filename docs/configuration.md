@@ -21,6 +21,11 @@ single-tenant mode). A complete annotated template ships as
 | `MINIMA_MEMORY_RECALL_TIMEOUT_MS` | `2500` | Hard recall timeout; on breach, prior-only. Latency is embedder-bound (~100–300ms GPU, ~1.5s local CPU). |
 | `MINIMA_MEMORY_RECALL_LIMIT` | `25` | Max neighbors recalled per request. |
 | `MINIMA_RECALL_MODE` | `agent_routed` | `agent_routed` \| `direct_bypass` (faster but requires `enable_direct_search=true` on the Mubit instance — off by default on hosted Mubit). |
+| `MINIMA_RECALL_ENTRY_TYPES` | `fact,observation` | Server-side entry-type filter (seeds land as `fact`, feedback as `observation`). Empty = no filter. |
+| `MINIMA_RECALL_RANK_BY` | `balanced` | Mubit fusion strategy: `relevance` \| `freshness` \| `balanced` (empty = server default). |
+| `MINIMA_RECALL_BUDGET` | `mid` | Mubit search budget tier: `low` (<500ms) \| `mid` \| `high` (empty = server default). |
+| `MINIMA_RECALL_MAX_AGE_DAYS` | `0` | Hard recency window on recall (`min_timestamp`); `0` = no window. |
+| `MINIMA_RECALL_EXPLAIN_SAMPLE` | `0` | Fraction of recalls (0..1) that request + log Mubit's per-evidence fusion-score breakdown (`recall_explain` log lines). |
 | `MINIMA_LANE_PREFIX` | `minima` | Lane prefix; lane = `<prefix>:<namespace or "default">`. |
 | `MINIMA_SEED_LANE` | `minima:default` | Default lane for `minima-seed`. |
 
