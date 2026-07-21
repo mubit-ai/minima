@@ -61,6 +61,51 @@ export function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
 }
 
+export interface JudgeToggleState {
+  judgeEvery: number;
+  judgeSampleRate: number;
+}
+
+/**
+ * The /judge command's state transition. Bare toggles between OFF and the session default
+ * (sampled when defaultSampleRate > 0, else every turn); explicit args pin a state:
+ * on = every eligible turn, off = off, sample = the sampled default. An unrecognized arg
+ * changes nothing — a typo must never silently kill the session's judging default.
+ */
+export function applyJudgeCommand(
+  args: string,
+  cur: JudgeToggleState,
+  defaultSampleRate: number,
+): JudgeToggleState & { message: string } {
+  const describe = (s: JudgeToggleState): string =>
+    s.judgeEvery <= 0 || s.judgeSampleRate <= 0
+      ? "judging off"
+      : s.judgeSampleRate >= 1
+        ? "judging every ungated turn"
+        : `judging sampled (~${Math.round(s.judgeSampleRate * 100)}% of ungated turns)`;
+  const done = (s: JudgeToggleState) => ({ ...s, message: describe(s) });
+  const sessionDefault = (): JudgeToggleState =>
+    defaultSampleRate > 0
+      ? { judgeEvery: 1, judgeSampleRate: defaultSampleRate }
+      : { judgeEvery: 1, judgeSampleRate: 1 };
+  const arg = args.trim().toLowerCase();
+  if (["on", "1", "true", "yes"].includes(arg)) {
+    return done({ judgeEvery: 1, judgeSampleRate: 1 });
+  }
+  if (["off", "0", "false", "no"].includes(arg)) {
+    return done({ judgeEvery: 0, judgeSampleRate: cur.judgeSampleRate });
+  }
+  if (arg === "sample") {
+    const rate = defaultSampleRate > 0 && defaultSampleRate < 1 ? defaultSampleRate : 0.15;
+    return done({ judgeEvery: 1, judgeSampleRate: rate });
+  }
+  if (arg === "") {
+    const on = cur.judgeEvery > 0 && cur.judgeSampleRate > 0;
+    return done(on ? { judgeEvery: 0, judgeSampleRate: cur.judgeSampleRate } : sessionDefault());
+  }
+  return { ...cur, message: "usage: /judge [on|off|sample]" };
+}
+
 /** Wraps a qualityFn(output) -> number callable (the tasks/task_set convention). */
 export class DeterministicJudge implements QualityJudge {
   constructor(private readonly fn: (output: string) => number) {}

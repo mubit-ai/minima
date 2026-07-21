@@ -49,6 +49,7 @@ import {
 import {
   PlanSessionStore,
   type RoutingResult,
+  applyJudgeCommand,
   buildPlanTranscript,
   buildPlannerSystemPrompt,
   finalizePlan,
@@ -298,7 +299,7 @@ const COMMANDS = [
   { name: "fork", desc: "Fork a session (not implemented yet)" },
   { name: "clone", desc: "Clone a session (not implemented yet)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
-  { name: "judge", desc: "Toggle LLM judging on/off" },
+  { name: "judge", desc: "Toggle LLM judging (bare: off↔default · on|off|sample)" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
@@ -1439,6 +1440,8 @@ export function HarnessApp({
   // Status Bar states
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
+  // The session's startup sample rate — what bare /judge toggles back ON to.
+  const defaultJudgeSampleRef = useRef(agent.config.judgeSampleRate);
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
   const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
   const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
@@ -3330,8 +3333,13 @@ export function HarnessApp({
         break;
       }
       case "judge": {
-        const on = args.trim().toLowerCase() in { on: 1, "1": 1, true: 1, yes: 1 };
-        agent.config.judgeEvery = on ? 1 : 0;
+        const next = applyJudgeCommand(
+          args,
+          { judgeEvery: agent.config.judgeEvery, judgeSampleRate: agent.config.judgeSampleRate },
+          defaultJudgeSampleRef.current,
+        );
+        agent.config.judgeEvery = next.judgeEvery;
+        agent.config.judgeSampleRate = next.judgeSampleRate;
         setMessages((m) => [
           ...m,
           {
@@ -3340,7 +3348,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `judging ${agent.config.judgeEvery > 0 ? "on" : "off"} (judge_every=${agent.config.judgeEvery})`,
+            text: next.message,
             toolName: "judge",
           },
         ]);

@@ -24,11 +24,12 @@ export {
   DeterministicJudge,
   ConstJudge,
   LLMJudge,
+  applyJudgeCommand,
   clamp01,
   parseScore,
   JUDGE_SYSTEM,
 } from "./judge.ts";
-export type { QualityJudge } from "./judge.ts";
+export type { QualityJudge, JudgeToggleState } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
 export {
   MinimaAgent,
