@@ -52,3 +52,59 @@ def test_lookup_hit_never_uses_node_id_as_reference():
 def test_lookup_hit_without_record_is_dropped():
     assert _parse_lookup_record(_item({"kind": "note"})) is None
     assert _parse_lookup_record({"metadata": _outcome_meta()}) is None
+
+
+class _Transport:
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def invoke(self, op, payload, *, transport=None):
+        self.calls.append((op, payload, transport))
+        return []
+
+
+class _ClientWithoutLookup:
+    """Released mubit-sdk (<= 0.12.x): no Client.lookup attribute."""
+
+    def __init__(self):
+        self._transport = _Transport()
+
+
+class _ClientWithLookup(_ClientWithoutLookup):
+    def __init__(self):
+        super().__init__()
+        self.native_calls: list[dict] = []
+
+    def lookup(self, *, session_id=None, match=None, limit=256):
+        self.native_calls.append({"session_id": session_id, "match": match, "limit": limit})
+        return []
+
+
+def test_client_lookup_shims_released_sdk_via_transport():
+    from minima.memory.adapter import _client_lookup
+
+    client = _ClientWithoutLookup()
+    result = _client_lookup(
+        client, session_id="minima:proj-x", match=[{"kind": "outcome"}], limit=64
+    )
+    assert result == []
+    assert len(client._transport.calls) == 1
+    op, payload, transport = client._transport.calls[0]
+    assert op["http"] == {"method": "POST", "path": "/v2/core/lookup"}
+    assert payload == {
+        "run_id": "minima:proj-x",
+        "match": [{"kind": "outcome"}],
+        "limit": 64,
+    }
+    assert transport == "http"
+
+
+def test_client_lookup_prefers_native_method_when_present():
+    from minima.memory.adapter import _client_lookup
+
+    client = _ClientWithLookup()
+    _client_lookup(client, session_id="minima:proj-x", match=[], limit=256)
+    assert client.native_calls == [
+        {"session_id": "minima:proj-x", "match": [], "limit": 256}
+    ]
+    assert client._transport.calls == []
