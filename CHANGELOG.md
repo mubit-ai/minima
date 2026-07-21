@@ -4,6 +4,18 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] - 2026-07-21
+
+### Fixed
+- **Plan-mode fallback pool** (TUI, #204): plan mode's premium model-pool
+  restriction only covered the council path — with `MINIMA_TUI_GROUND_TRUTH=0`
+  (or a failed council setup) plan-mode turns ran the normal loop over the full
+  candidate pool, so a cheap/small model could end up doing the planning. The
+  sessionless fallback now routes with the same premium hard pool +
+  `phase:plan` tag as the council's planner turn, with the same loud failure
+  when the policy is active but no premium model is runnable. The restriction
+  is now a property of the mode, not of the council.
+
 ## [0.13.0] - 2026-07-21
 
 The Mubit reinforcement train: mubit-sdk 0.13.0 adopted end to end, every free
