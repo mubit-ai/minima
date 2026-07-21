@@ -61,6 +61,9 @@ describe("MubitHarnessMemory", () => {
     expect(c.remembers[0]!.intent).toBe("trace");
     expect(c.remembers[0]!.session_id).toBe("s1");
     expect(c.remembers[0]!.idempotency_key).toBe("rec-9");
+    // Lane partition: harness traces never share a lane with the Minima server's
+    // typed OutcomeRecord writes (lane=minima:<namespace>).
+    expect(c.remembers[0]!.lane).toBe("harness");
     expect(String(c.remembers[0]!.content)).toContain("haiku");
     expect(c.outcomes).toHaveLength(1);
     expect(c.outcomes[0]!.signal).toBe(0.87);
