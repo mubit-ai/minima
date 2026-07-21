@@ -16,6 +16,7 @@ build/
 # Local experimental / throwaway files
 scratch/
 playground/
+docs/TMP/
 
 
 # Astro docs site
