@@ -28,6 +28,12 @@ your real LLM call.
 - **[Harness Architecture](harness-architecture.md)** — the internal agentic structure of
   the `minima` CLI (`packages/tui`): the turn lifecycle, hook stacks, sub-agent DAG,
   budget ledger, recovery ladder, Big Plan spine (formerly ground-truth), memory ledger, and DB spine.
+- **[Feedback-Loop Research](feedback-loop-research.md)** — 2023–2026 literature survey
+  (bandits/OPE, label quality, memory/credit assignment) mapped to the implemented loop,
+  with a phased improvement roadmap.
+- **[Observer-Agent Research](observer-agent-research.md)** — evidence and design fit for
+  a parallel adversarial observer agent: trusted-monitoring literature, industry practice,
+  harness attachment points, and a phased O1–O5 plan.
 
 ## Guides
 
