@@ -11,6 +11,7 @@ across requests, and recall over the same run finds the accumulated outcomes.
 
 from __future__ import annotations
 
+import random
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -65,6 +66,36 @@ def _f(value: object, default: float = 0.0) -> float:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+def _log_explain_breakdown(lane: str, raw: object) -> None:
+    """Log Mubit's per-evidence fusion-score breakdown for a sampled recall.
+
+    Structured-log only (no schema surface): the audience is calibration debugging —
+    grep `recall_explain` to see why memory ranked what it ranked.
+    """
+    if not isinstance(raw, Mapping):
+        return
+    items = []
+    for ev in raw.get("evidence") or []:
+        if not isinstance(ev, Mapping):
+            continue
+        info = ev.get("explain_info")
+        if not isinstance(info, Mapping):
+            continue
+        items.append(
+            {
+                "entry_id": str(ev.get("id", "")),
+                "semantic": info.get("semantic_score"),
+                "lexical": info.get("lexical_score"),
+                "recency": info.get("recency_score"),
+                "temporal_decay": info.get("temporal_decay_factor"),
+                "stale_penalty": info.get("stale_penalty_applied"),
+                "rank_by": info.get("rank_by_mode"),
+            }
+        )
+    if items:
+        log.info("recall_explain", lane=lane, items=items)
 
 
 def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
@@ -252,50 +283,58 @@ class MubitMemory:
         budget_ms = (
             timeout_ms if timeout_ms is not None else settings.minima_memory_recall_timeout_ms
         )
-        # Low-level control query (the typed recall() wrapper drops rank_by / timestamps /
-        # budget / explain). Default entry_types covers both intake paths: seed records
-        # (batch_insert) land as "fact", feedback records (remember intent=observation)
-        # as "observation"; Minima outcomes are still authoritatively selected by metadata
-        # kind. prefer_current_run keeps everything in this lane's run while skipping
+        # Typed recall (mubit-sdk >= 0.13.0 exposes rank_by / timestamps / budget /
+        # explain, so the old low-level _control.query bypass is gone — same wire op).
+        # Default entry_types covers both intake paths: seed records (batch_insert) land
+        # as "fact", feedback records (remember intent=observation) as "observation";
+        # Minima outcomes are still authoritatively selected by metadata kind.
+        # prefer_current_run keeps everything in this lane's run while skipping
         # cross-run global-lesson overlays from other actors.
         resolved_types = (
             list(entry_types)
             if entry_types
             else [t.strip() for t in settings.minima_recall_entry_types.split(",") if t.strip()]
         )
-        payload: dict[str, Any] = {
-            "run_id": lane,
-            "query": query,
-            "mode": settings.minima_recall_mode,
-            "limit": limit,
-            "include_working_memory": False,
-            "prefer_current_run": True,
-            "lane_filter": lane,
-            # Skip Mubit's per-query LLM answer synthesis: Minima parses only the
-            # evidence list and discards the synthesized answer (it was most of the
-            # ~600ms recall p95). Old servers ignore the unknown field.
-            "evidence_only": True,
-        }
-        if user_id:
-            payload["user_id"] = user_id
-        if resolved_types:
-            payload["entry_types"] = resolved_types
-        if env_tags:
-            payload["env_tags"] = list(env_tags)
-        if settings.minima_recall_rank_by:
-            payload["rank_by"] = settings.minima_recall_rank_by
-        if settings.minima_recall_budget:
-            payload["budget"] = settings.minima_recall_budget
-        if settings.minima_recall_max_age_days > 0:
-            payload["min_timestamp"] = int(
-                time.time() - settings.minima_recall_max_age_days * 86_400
-            )
+        # Sampled retrieval observability: request Mubit's per-evidence fusion-score
+        # breakdown on a fraction of recalls and log it — the "why did memory rank
+        # this" tool. Off by default; the extra response payload is the only cost.
+        explain = (
+            settings.minima_recall_explain_sample > 0
+            and random.random() < settings.minima_recall_explain_sample
+        )
+        min_timestamp = (
+            int(time.time() - settings.minima_recall_max_age_days * 86_400)
+            if settings.minima_recall_max_age_days > 0
+            else None
+        )
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
-                raw = await threadpool.run_cancellable(self._client._control.query, payload)
+                raw = await threadpool.run_cancellable(
+                    self._client.recall,
+                    query=query,
+                    session_id=lane,
+                    mode=settings.minima_recall_mode,
+                    limit=limit,
+                    include_working_memory=False,
+                    prefer_current_run=True,
+                    lane=lane,
+                    # Skip Mubit's per-query LLM answer synthesis: Minima parses only the
+                    # evidence list and discards the synthesized answer (it was most of
+                    # the ~600ms recall p95).
+                    evidence_only=True,
+                    user_id=user_id or None,
+                    entry_types=resolved_types or None,
+                    env_tags=list(env_tags) if env_tags else None,
+                    rank_by=settings.minima_recall_rank_by or None,
+                    budget=settings.minima_recall_budget or None,
+                    min_timestamp=min_timestamp,
+                    explain=explain,
+                )
             if scope.cancelled_caught:
                 log.warning("recall_timeout", lane=lane, budget_ms=budget_ms)
                 return RecallResult(evidence=[], degraded=True, timed_out=True)
+            if explain:
+                _log_explain_breakdown(lane, raw)
             return self._parse_recall(raw)
         except Exception as exc:  # noqa: BLE001 — recall must never break a recommendation
             # Classify honestly: a Mubit outage, an auth failure, a rejected payload, and a
@@ -442,6 +481,9 @@ class MubitMemory:
             idempotency_key=idempotency_key,
             env_tags=list(env_tags) if env_tags else None,
             wait=True,
+            # Bi-temporal honesty: the outcome's event time is when it was observed
+            # (recorded_at), not when the async ingest job lands it.
+            occurrence_time=int(record.recorded_at) if record.recorded_at else None,
         )
         return _extract_record_id(raw)
 
@@ -458,21 +500,20 @@ class MubitMemory:
         idempotency_key: str | None = None,
         rationale: str = "",
     ) -> dict:
-        # Low-level control op so we can pass idempotency_key (the typed
-        # client.record_outcome wrapper drops it).
-        payload = {
-            "run_id": lane,
-            "reference_id": reference_id,
-            "outcome": outcome,
-            "signal": signal,
-            "rationale": rationale,
-            "user_id": user_id,
-            "verified_in_production": verified_in_production or None,
-            "entry_ids": list(entry_ids) if entry_ids else None,
-            "idempotency_key": idempotency_key,
-        }
-        payload = {k: v for k, v in payload.items() if v is not None}
-        raw = await threadpool.run(self._client._control.record_outcome, payload)
+        # Typed wrapper (mubit-sdk >= 0.13.0 forwards idempotency_key; the low-level
+        # _control bypass that existed to keep it is gone — same wire op).
+        raw = await threadpool.run(
+            self._client.record_outcome,
+            reference_id=reference_id,
+            outcome=outcome,
+            session_id=lane,
+            signal=signal,
+            rationale=rationale,
+            user_id=user_id,
+            verified_in_production=verified_in_production,
+            entry_ids=list(entry_ids) if entry_ids else None,
+            idempotency_key=idempotency_key,
+        )
         return raw if isinstance(raw, dict) else {}
 
     async def remember_lesson(
@@ -519,7 +560,7 @@ class MubitMemory:
         # Control batch_insert (/v2/control/batch_insert) is run-scoped and takes
         # {run_id, deduplicate, items}. The core route expects a bare array.
         raw = await threadpool.run(
-            self._client._control.batch_insert,
+            self._client.advanced.batch_insert,
             {"run_id": run_id, "deduplicate": deduplicate, "items": items},
         )
         return raw if isinstance(raw, dict) else {}
