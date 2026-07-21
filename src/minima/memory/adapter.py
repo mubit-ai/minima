@@ -125,35 +125,6 @@ def _parse_lookup_record(item: Mapping[str, Any]) -> RecalledEvidence | None:
     )
 
 
-_LOOKUP_OP = {
-    "key": "core.lookup",
-    "http": {"method": "POST", "path": "/v2/core/lookup"},
-    "grpc": {},
-    "run_id_field": "run_id",
-}
-
-
-def _client_lookup(client: Any, *, session_id: str, match: list[dict], limit: int) -> Any:
-    """Invoke POST /v2/core/lookup, tolerating SDKs without ``Client.lookup``.
-
-    The keyed-lookup endpoint is deliberately not part of the public SDK
-    surface, so released builds (``mubit-sdk`` <= 0.12.x) have no
-    ``Client.lookup`` — calling it raised ``AttributeError`` before any request
-    was made, silently degrading the keyed evidence channel on every recommend
-    in prod. Prefer a native method when one exists; otherwise go through the
-    SDK's transport engine, which handles endpoint/key/error mapping the same
-    way every generated client method does.
-    """
-    native = getattr(client, "lookup", None)
-    if native is not None:
-        return native(session_id=session_id, match=match, limit=limit)
-    return client._transport.invoke(  # noqa: SLF001 — released SDKs expose no public handle
-        _LOOKUP_OP,
-        {"run_id": session_id, "match": match or [], "limit": limit},
-        transport="http",
-    )
-
-
 @runtime_checkable
 class Memory(Protocol):
     async def recall(
@@ -390,8 +361,7 @@ class MubitMemory:
         try:
             with anyio.move_on_after(budget_ms / 1000.0) as scope:
                 raw = await threadpool.run_cancellable(
-                    _client_lookup,
-                    self._client,
+                    self._client.lookup,
                     session_id=lane,
                     match=match,
                     limit=limit,

@@ -37,7 +37,7 @@ dependencies = [
   "anyio>=4.4",
   "structlog>=24.1",
   "tenacity>=8.4",
-  "mubit-sdk>=0.10.0",
+  "mubit-sdk>=0.13.0",
 ]
 
 [project.urls]
