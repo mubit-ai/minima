@@ -95,7 +95,10 @@ export class AnthropicProvider {
       for await (const ev of s) {
         const etype = ev.type;
         if (etype === "message_start") {
-          const usage = (ev as { message?: { usage?: Record<string, number> } }).message?.usage;
+          const msg = (ev as { message?: { usage?: Record<string, number>; model?: string } })
+            .message;
+          if (msg?.model) assistant.provider_model = msg.model;
+          const usage = msg?.usage;
           if (usage) {
             inTokens = usage.input_tokens ?? 0;
             cacheRead = usage.cache_read_input_tokens ?? 0;

@@ -80,6 +80,41 @@ class FeedbackRequest(BaseModel):
             "learned; not yet a routing dimension."
         ),
     )
+    parent_rec_id: str | None = Field(
+        None,
+        description=(
+            "rec_id of the immediately preceding rung in a recovery-ladder chain. "
+            "Lets the server assemble same-task preference pairs (failed parent vs "
+            "succeeding child) and learn escalation deferral — absent outside recovery."
+        ),
+    )
+    escalation_reason: Literal["gate_failed", "judge_failed", "transient", "hard_error"] | None = (
+        Field(
+            None,
+            description=(
+                "Why the parent rung failed (sent alongside parent_rec_id): the ladder "
+                "cause that triggered this re-route."
+            ),
+        )
+    )
+    provider_model_snapshot: str | None = Field(
+        None,
+        description=(
+            "Exact model identifier the provider reported serving (e.g. a dated "
+            "snapshot), as opposed to the requested alias — the observable key for "
+            "version-churn posterior resets."
+        ),
+    )
+    label_propensity: float | None = Field(
+        None,
+        gt=0,
+        le=1,
+        description=(
+            "Probability this turn was selected for labeling (judge sampling rate at "
+            "selection time; 1.0 for deterministic gate labels). Required for unbiased "
+            "OPE/calibration once labeling is non-uniform."
+        ),
+    )
     notes: str | None = None
     idempotency_key: str | None = None
     step_outcomes: list[StepOutcome] = Field(

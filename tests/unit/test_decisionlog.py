@@ -99,6 +99,40 @@ class TestBackend:
         assert got.feedback_ts is not None
         assert got.late_feedback is False
 
+    def test_reconcile_carries_ladder_linkage_and_labeling_metadata(self, backend):
+        backend.put(make_decision("rid-a1"))
+        ok = backend.reconcile(
+            "rid-a1",
+            Reconciliation(
+                model_id="claude-haiku-4-5",
+                outcome="success",
+                quality=0.9,
+                evidence_source="judge",
+                parent_rec_id="rid-parent",
+                escalation_reason="gate_failed",
+                provider_model_snapshot="claude-haiku-4-5-20251001",
+                label_propensity=0.15,
+            ),
+        )
+        assert ok is True
+        got = backend.get("rid-a1")
+        assert got.parent_rec_id == "rid-parent"
+        assert got.escalation_reason == "gate_failed"
+        assert got.provider_model_snapshot == "claude-haiku-4-5-20251001"
+        assert got.label_propensity == 0.15
+
+    def test_reconcile_defaults_leave_linkage_null(self, backend):
+        backend.put(make_decision("rid-a1-null"))
+        backend.reconcile(
+            "rid-a1-null",
+            Reconciliation(model_id="claude-haiku-4-5", outcome="success", quality=None),
+        )
+        got = backend.get("rid-a1-null")
+        assert got.parent_rec_id is None
+        assert got.escalation_reason is None
+        assert got.provider_model_snapshot is None
+        assert got.label_propensity is None
+
     def test_reconcile_unjudged_stores_null_quality(self, backend):
         # M-J2: UNJUDGED feedback (judged=False) carries quality=None and must be
         # stored straight through as NULL realized_quality — never fabricated to a

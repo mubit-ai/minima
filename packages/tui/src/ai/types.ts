@@ -163,6 +163,7 @@ export interface AssistantMessageInit {
   usage?: Usage;
   error_message?: string;
   response_id?: string;
+  provider_model?: string;
   timestamp?: number;
 }
 
@@ -173,6 +174,10 @@ export class AssistantMessage extends Message {
   usage: Usage;
   error_message?: string;
   response_id?: string;
+  /** Exact model identifier the provider REPORTED serving (dated snapshot), when the
+   * response carries one — vs `model`, the id we requested. Feeds version-churn
+   * detection server-side; absent when the provider omits it. */
+  provider_model?: string;
 
   constructor(init: AssistantMessageInit) {
     super({ role: "assistant", content: init.content, timestamp: init.timestamp });
@@ -181,6 +186,7 @@ export class AssistantMessage extends Message {
     this.usage = init.usage ?? new Usage();
     this.error_message = init.error_message;
     this.response_id = init.response_id;
+    this.provider_model = init.provider_model;
   }
 
   get toolCalls(): ToolCall[] {

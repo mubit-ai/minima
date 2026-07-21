@@ -182,6 +182,14 @@ export interface FeedbackRequest {
   judged?: boolean;
   /** Reasoning-effort tier the model ran at — raw material for (model x effort) arms. */
   chosen_effort?: string;
+  /** rec_id of the immediately preceding recovery rung (preference-pair linkage). */
+  parent_rec_id?: string;
+  /** Why the parent rung failed (ladder cause; rides with parent_rec_id). */
+  escalation_reason?: "gate_failed" | "judge_failed" | "transient" | "hard_error";
+  /** Exact provider-reported model identifier (dated snapshot vs requested alias). */
+  provider_model_snapshot?: string;
+  /** P(this turn was selected for labeling); 1.0 for gate labels. */
+  label_propensity?: number;
   notes?: string;
   idempotency_key?: string;
   /**
