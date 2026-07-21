@@ -54,25 +54,8 @@ def test_lookup_hit_without_record_is_dropped():
     assert _parse_lookup_record({"metadata": _outcome_meta()}) is None
 
 
-class _Transport:
+class _ClientWithLookup:
     def __init__(self):
-        self.calls: list[tuple] = []
-
-    def invoke(self, op, payload, *, transport=None):
-        self.calls.append((op, payload, transport))
-        return []
-
-
-class _ClientWithoutLookup:
-    """Released mubit-sdk (<= 0.12.x): no Client.lookup attribute."""
-
-    def __init__(self):
-        self._transport = _Transport()
-
-
-class _ClientWithLookup(_ClientWithoutLookup):
-    def __init__(self):
-        super().__init__()
         self.native_calls: list[dict] = []
 
     def lookup(self, *, session_id=None, match=None, limit=256):
@@ -80,31 +63,21 @@ class _ClientWithLookup(_ClientWithoutLookup):
         return []
 
 
-def test_client_lookup_shims_released_sdk_via_transport():
-    from minima.memory.adapter import _client_lookup
+async def test_adapter_lookup_drives_native_client_lookup():
+    """The keyed channel must use the public Client.lookup (mubit-sdk >= 0.13.0).
 
-    client = _ClientWithoutLookup()
-    result = _client_lookup(
-        client, session_id="minima:proj-x", match=[{"kind": "outcome"}], limit=64
-    )
-    assert result == []
-    assert len(client._transport.calls) == 1
-    op, payload, transport = client._transport.calls[0]
-    assert op["http"] == {"method": "POST", "path": "/v2/core/lookup"}
-    assert payload == {
-        "run_id": "minima:proj-x",
-        "match": [{"kind": "outcome"}],
-        "limit": 64,
-    }
-    assert transport == "http"
+    This channel once degraded silently on every prod recommend because the
+    pinned SDK had no lookup method; the shim that papered over that is gone,
+    so pin the adapter to the native call.
+    """
+    from minima.config import Settings
+    from minima.memory.adapter import MubitMemory
 
-
-def test_client_lookup_prefers_native_method_when_present():
-    from minima.memory.adapter import _client_lookup
-
+    memory = MubitMemory(Settings())
     client = _ClientWithLookup()
-    _client_lookup(client, session_id="minima:proj-x", match=[], limit=256)
+    memory._client = client
+    result = await memory.lookup(lane="minima:proj-x", match=[{"kind": "outcome"}], limit=64)
+    assert result == []
     assert client.native_calls == [
-        {"session_id": "minima:proj-x", "match": [], "limit": 256}
+        {"session_id": "minima:proj-x", "match": [{"kind": "outcome"}], "limit": 64}
     ]
-    assert client._transport.calls == []
