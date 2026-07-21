@@ -86,6 +86,35 @@ def test_no_triggers_when_strong_and_distinct():
     assert not d.should_escalate
 
 
+def _strong() -> dict:
+    ranked = [_cand("a", score=0.9), _cand("b", score=0.5)]
+    aggs = {
+        f"m{i}": ModelAggregate(model_id=f"m{i}", weight_sum=2.0, weighted_success=1.9, n=2)
+        for i in range(4)
+    }
+    return {
+        "settings": _settings(),
+        "allow": True,
+        "total_weight": 8.0,
+        "distinct_models_with_evidence": 4,
+        "recommended_confidence": 0.9,
+        "ranked": ranked,
+        "aggregates": aggs,
+    }
+
+
+def test_reported_low_recall_confidence_triggers():
+    d = escalation.evaluate(**_strong(), recall_confidence=0.2)
+    assert "low_recall_confidence" in d.reasons
+
+
+def test_absent_recall_confidence_is_not_a_signal():
+    """0.0 means the server reported nothing (evidence_only recalls may omit it)."""
+    d = escalation.evaluate(**_strong(), recall_confidence=0.0)
+    assert "low_recall_confidence" not in d.reasons
+    assert not d.should_escalate
+
+
 def _uncertainty_settings() -> Settings:
     return Settings(mubit_api_key="t", minima_escalation_mode="uncertainty")
 

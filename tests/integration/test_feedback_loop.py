@@ -401,6 +401,19 @@ def test_degraded_keyed_lookup_is_surfaced(client, fake_memory):
     assert "keyed_lookup_degraded" in rec["warnings"]
 
 
+def test_drift_signals_surface_as_warnings(client, fake_memory):
+    """Mubit DriftMonitor flags on the recall response ride out as diagnostics."""
+    fake_memory.recall_result_overrides = {"drift_repeated": True, "drift_stagnant": True}
+    rec = _recommend_haiku(client, fake_memory)
+    assert "memory_drift:repeated" in rec["warnings"]
+    assert "memory_drift:stagnant" in rec["warnings"]
+
+
+def test_no_drift_signals_no_drift_warnings(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    assert not [w for w in rec["warnings"] if w.startswith("memory_drift")]
+
+
 def test_chosen_effort_is_recorded(client, fake_memory):
     """(model x effort) raw material: the effort tier rides the wire into the record."""
     rec = _recommend_haiku(client, fake_memory)

@@ -227,6 +227,9 @@ class RecalledEvidence:
     # Whether this entry can be re-read exactly via Dereference (durable fast path).
     referenceable: bool = False
     entry_type: str = ""
+    # Entry id of the record that superseded this one (bi-temporal supersession).
+    # A superseded entry is stale by definition even if is_stale lagged behind.
+    superseded_by: str | None = None
 
 
 @dataclass(slots=True)
@@ -236,6 +239,12 @@ class RecallResult:
     raw_confidence: float = 0.0
     timed_out: bool = False
     error: str | None = None
+    # Mubit DriftMonitor signals riding the query response (non-destructive diagnostics;
+    # zeroed/absent means "no signal raised"). drift/novelty scores are -1 when unknown.
+    drift_repeated: bool = False
+    drift_stagnant: bool = False
+    drift_score: float = -1.0
+    novelty_score: float = -1.0
     # Class-specific warning label for the recommend response (memory_unreachable,
     # memory_auth_failed, memory_rejected_payload, memory_server_error, memory_recall_bug).
     # Set only on the error path; the engine surfaces it instead of a generic label.

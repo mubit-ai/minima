@@ -60,12 +60,6 @@ def classify_memory_error(exc: BaseException) -> str | None:
         return "memory_unreachable"
     return None
 
-# Lowercase LTM entry-type tags for Mubit's query filter. Recall deliberately does
-# NOT filter by type (seeds land as "fact", feedback as "observation"); Minima outcomes
-# are selected by metadata kind instead. Used by get_context only.
-CONTEXT_ENTRY_TYPES = ["observation", "lesson", "fact"]
-
-
 def _f(value: object, default: float = 0.0) -> float:
     try:
         return float(value)  # type: ignore[arg-type]
@@ -74,16 +68,20 @@ def _f(value: object, default: float = 0.0) -> float:
 
 
 def _parse_evidence(ev: Mapping[str, Any]) -> RecalledEvidence:
+    superseded_by = str(ev.get("superseded_by") or "") or None
     return RecalledEvidence(
         entry_id=str(ev.get("id", "")),
         reference_id=(ev.get("reference_id") or None),
         score=_f(ev.get("score")),
         knowledge_confidence=_f(ev.get("knowledge_confidence")),
-        is_stale=bool(ev.get("is_stale", False)),
+        # A superseded entry is stale by definition, even when is_stale lags the
+        # supersession write — fold both so ranking never over-trusts a dead belief.
+        is_stale=bool(ev.get("is_stale", False)) or superseded_by is not None,
         content=str(ev.get("content", "")),
         record=OutcomeRecord.from_metadata(ev.get("metadata_json")),
         referenceable=bool(ev.get("referenceable", False)),
         entry_type=str(ev.get("entry_type", "")),
+        superseded_by=superseded_by,
     )
 
 
@@ -197,16 +195,6 @@ class Memory(Protocol):
     async def dereference(
         self, *, lane: str, reference_id: str
     ) -> RecalledEvidence | None: ...
-
-    async def get_context(
-        self,
-        *,
-        query: str,
-        lane: str,
-        user_id: str | None = None,
-        entry_types: Sequence[str] | None = None,
-        max_token_budget: int = 1500,
-    ) -> str: ...
 
     async def reflect(
         self, *, lane: str, user_id: str | None = None, include_linked_runs: bool = False
@@ -332,10 +320,20 @@ class MubitMemory:
             if not isinstance(ev, Mapping):
                 continue
             evidence.append(_parse_evidence(ev))
+        # DriftMonitor signals ride every query response (zeroed = no signal). They are
+        # free loop-pathology telemetry: the engine surfaces the boolean flags as
+        # diagnostic warnings so the harness recovery ladder hears about a looping or
+        # consistently-failing lane before its own budget ledger does.
+        signals = data.get("signals")
+        drift: Mapping[str, Any] = signals if isinstance(signals, Mapping) else {}
         return RecallResult(
             evidence=evidence,
             degraded=bool(data.get("degraded", False)),
             raw_confidence=_f(data.get("confidence")),
+            drift_repeated=bool(drift.get("repeated", False)),
+            drift_stagnant=bool(drift.get("stagnant", False)),
+            drift_score=_f(drift.get("drift_score"), default=-1.0),
+            novelty_score=_f(drift.get("novelty_score"), default=-1.0),
         )
 
     async def lookup(
@@ -387,11 +385,18 @@ class MubitMemory:
         """Exact re-read of a known durable record (the (cluster, model) outcome upsert).
 
         Returns None on any failure — the fast path is strictly additive to ANN recall.
+        Shares the recall latency budget: this was the one read path that could stall a
+        recommend for the full 30s client timeout if Mubit hung.
         """
+        budget_ms = self._settings.minima_memory_recall_timeout_ms
         try:
-            raw = await threadpool.run(
-                self._client.dereference, reference_id=reference_id, session_id=lane
-            )
+            with anyio.move_on_after(budget_ms / 1000.0) as scope:
+                raw = await threadpool.run_cancellable(
+                    self._client.dereference, reference_id=reference_id, session_id=lane
+                )
+            if scope.cancelled_caught:
+                log.warning("dereference_timeout", lane=lane, budget_ms=budget_ms)
+                return None
         except Exception as exc:  # noqa: BLE001 — fast path must never break a recommendation
             log.warning("dereference_error", lane=lane, error=str(exc))
             return None
@@ -406,34 +411,6 @@ class MubitMemory:
         if not parsed.reference_id:
             parsed.reference_id = reference_id
         return parsed
-
-    async def get_context(
-        self,
-        *,
-        query: str,
-        lane: str,
-        user_id: str | None = None,
-        entry_types: Sequence[str] | None = None,
-        max_token_budget: int = 1500,
-    ) -> str:
-        try:
-            raw = await threadpool.run(
-                self._client.get_context,
-                query=query,
-                session_id=lane,
-                user_id=user_id,
-                entry_types=list(entry_types or CONTEXT_ENTRY_TYPES),
-                include_working_memory=False,
-                max_token_budget=max_token_budget,
-                format="structured",
-                mode="full",
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("get_context_error", lane=lane, error=str(exc))
-            return ""
-        if isinstance(raw, Mapping):
-            return str(raw.get("context_block", ""))
-        return ""
 
     # ---- writes ----------------------------------------------------------------
 
@@ -579,7 +556,6 @@ class MubitMemory:
         url = f"{base}/v2/core/health"
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
             async with httpx.AsyncClient(timeout=3.0) as http:
                 resp = await http.get(url, headers=headers)
             return {

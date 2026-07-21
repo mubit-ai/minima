@@ -146,6 +146,14 @@ class Recommender:
             # transport error, or hosted policy) — the decision rests on ANN recall
             # alone. Surfaced so degraded evidence is never silent again.
             warnings.append("keyed_lookup_degraded")
+        # Mubit's DriftMonitor flags ride the recall response for free. They are
+        # diagnostics, never routing inputs: the harness recovery ladder (which owns
+        # the cascade) hears that this lane is looping or on a failure streak before
+        # its own budget ledger would notice.
+        if recall.drift_repeated:
+            warnings.append("memory_drift:repeated")
+        if recall.drift_stagnant:
+            warnings.append("memory_drift:stagnant")
         evidence = recall.outcome_evidence + fastpath_evidence
 
         # Neighbor-vote refinement: if the heuristic couldn't place the task, let the
@@ -282,6 +290,7 @@ class Recommender:
             recommended_confidence=recommended.confidence,
             ranked=ranked,
             aggregates=aggregates,
+            recall_confidence=recall.raw_confidence,
         )
         profile.mark("escalation_eval")
         # Escalation is DIAGNOSTIC only: thin/conflicting evidence is surfaced to the
