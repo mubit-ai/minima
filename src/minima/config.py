@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     minima_recall_max_age_days: int = 0
     # Mubit search budget tier: "low" | "mid" | "high" ("" = server default).
     minima_recall_budget: str = "mid"
+    # Fraction of recalls (0..1) that request Mubit's per-evidence fusion-score
+    # breakdown (explain) and log it as `recall_explain` — retrieval observability
+    # for calibration debugging. 0 disables; the extra response payload is the cost.
+    minima_recall_explain_sample: float = 0.0
 
     # --- Recommender tuning ---
     minima_tau_min: float = 0.55
