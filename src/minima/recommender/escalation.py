@@ -30,6 +30,7 @@ def evaluate(
     recommended_confidence: float,
     ranked: list[CandidateScore],
     aggregates: dict[str, ModelAggregate],
+    recall_confidence: float = 0.0,
 ) -> EscalationDecision:
     """Flag decisions resting on evidence too thin, tied, or conflicted to trust."""
     decision = EscalationDecision()
@@ -44,6 +45,12 @@ def evaluate(
 
     if recommended_confidence < settings.minima_escalation_c_min:
         decision.reasons.append("low_confidence")
+
+    # Mubit's own retrieval confidence for the recall that produced the evidence.
+    # 0.0 means the server didn't report one (evidence_only recalls may omit it) —
+    # only a *reported* low value is a signal; absence is not.
+    if 0.0 < recall_confidence < settings.minima_escalation_c_min:
+        decision.reasons.append("low_recall_confidence")
 
     if len(ranked) >= 2:
         gap = ranked[0].score - ranked[1].score
