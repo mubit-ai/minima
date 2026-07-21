@@ -35,6 +35,9 @@ jobs:
       - name: Sync deps (dev extra)
         run: uv sync --extra dev
 
+      - name: Venv integrity (installed files match wheel RECORD)
+        run: uv run python scripts/verify_venv_integrity.py
+
       - name: Ruff
         run: uv run ruff check src client_sdk tests
 

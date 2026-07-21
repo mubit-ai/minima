@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # package stays `minima`. This package ships the server + client SDK only; the `minima` CLI
 # is the TypeScript binary installed via Homebrew (brew tap mubit-ai/minima).
 name = "minima-cli"
-version = "0.12.2"
+version = "0.12.3"
 description = "Minima CLI: cost-aware LLM model routing — recommend cheaper models, backed by Mubit memory."
 readme = "README.md"
 requires-python = ">=3.11"
