@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { DecisionWrite } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 import {
-  buildGtOverview,
-  gtRows,
-  renderGtOverviewText,
+  buildPlanOverview,
+  planOverviewRows,
+  renderPlanOverviewText,
   stepCardLines,
-} from "../src/tui/gt_overview.ts";
+} from "../src/tui/plan_overview.ts";
 
 const GREEN: Factors = {
   pass: true,
@@ -93,13 +93,13 @@ describe("stepCosts + v8 step_id stamp (U3.2)", () => {
   });
 });
 
-describe("buildGtOverview (U3.1)", () => {
-  test("no plan → null; renderGtOverviewText says so", () => {
+describe("buildPlanOverview (U3.1)", () => {
+  test("no plan → null; renderPlanOverviewText says so", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const runId = db.startRun({ projectKey: "p" });
-    expect(buildGtOverview(db, runId)).toBeNull();
-    expect(renderGtOverviewText(null, 80)).toContain("No Ground-Truth plan");
+    expect(buildPlanOverview(db, runId)).toBeNull();
+    expect(renderPlanOverviewText(null, 80)).toContain("No Big Plan");
   });
 
   test("statuses, tiers, verify, drift, cost and stepPos reduce from the ledger", () => {
@@ -135,7 +135,7 @@ describe("buildGtOverview (U3.1)", () => {
     db.insertFileChange({ planId, path: "src/stray.ts", origin: "off_plan" });
     db.writeDecision(decision({ recId: "r1", runId, stepId: stepIds[2], actualCostUsd: 0.25 }));
 
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     if (!o) throw new Error("expected overview");
     expect(o.title).toBe("Checkout");
     expect(o.stepTotal).toBe(4);
@@ -157,17 +157,17 @@ describe("buildGtOverview (U3.1)", () => {
     db.ensureProject("p");
     const runId = db.startRun({ projectKey: "p" });
     db.upsertPlanFromTodos(runId, [{ content: "a", status: "pending" }], "T");
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     expect(o?.stepPos).toBe(1);
   });
 });
 
-describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
+describe("planOverviewRows / stepCardLines / renderPlanOverviewText (U3.1 + U3.3)", () => {
   test("panel rows: header, no-verify warning, — for unstamped cost, Σ footer", () => {
     const { db, runId } = seededDb();
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     if (!o) throw new Error("expected overview");
-    const rows = gtRows(o, 60);
+    const rows = planOverviewRows(o, 60);
     expect(rows[0]!.text).toContain("Checkout — step 3/4");
     const texts = rows.map((r) => r.text);
     expect(texts.some((t) => t.includes("⚠ no verify"))).toBe(true);
@@ -188,7 +188,7 @@ describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
       factors: GREEN,
       sessionId: runId,
     });
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     if (!o) throw new Error("expected overview");
     const gated = stepCardLines(o.steps[0]!, o.gatesByStep.get(o.steps[0]!.stepId) ?? []);
     expect(gated[0]).toContain("step 1 — add auth model");
@@ -210,10 +210,10 @@ describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
       factors: GREEN,
       sessionId: runId,
     });
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     if (!o) throw new Error("expected overview");
     for (const width of [20, 38]) {
-      for (const row of gtRows(o, width)) {
+      for (const row of planOverviewRows(o, width)) {
         expect(stringWidth(row.text)).toBeLessThanOrEqual(width);
       }
     }
@@ -239,7 +239,7 @@ describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
       factors: { ...GREEN, redToGreen: false },
       sessionId: runId,
     });
-    const o = buildGtOverview(db, runId);
+    const o = buildPlanOverview(db, runId);
     if (!o) throw new Error("expected overview");
     const flipped = stepCardLines(o.steps[0]!, o.gatesByStep.get(o.steps[0]!.stepId) ?? []);
     expect(flipped.some((l) => l.includes("red→green vs the captured baseline"))).toBe(true);
@@ -258,9 +258,9 @@ describe("gtRows / stepCardLines / renderGtOverviewText (U3.1 + U3.3)", () => {
       factors: GREEN,
       sessionId: runId,
     });
-    const o = buildGtOverview(db, runId);
-    const text = renderGtOverviewText(o, 100);
-    expect(text).toContain("GT plan — Checkout (step 3/4)");
+    const o = buildPlanOverview(db, runId);
+    const text = renderPlanOverviewText(o, 100);
+    expect(text).toContain("Plan Overview — Checkout (step 3/4)");
     expect(text).toContain("🟢");
     expect(text).toContain("Σ");
   });

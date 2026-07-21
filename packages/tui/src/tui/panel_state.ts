@@ -9,7 +9,7 @@
  * land on (ToC section titles); null means every line is a stop (a plain reader). The
  * cursor is ALWAYS a valid line index — with stops present it is always ON a stop.
  */
-import type { GtOverview, GtPanelRow } from "./gt_overview.ts";
+import type { PlanOverview, PlanOverviewPanelRow } from "./plan_overview.ts";
 import type { ChatMessage } from "./messages.tsx";
 import type { TocRow, TocSection } from "./toc.ts";
 
@@ -30,7 +30,7 @@ export type PanelView = PanelViewBase &
         snapshot: ChatMessage[];
       }
     | { kind: "reader" }
-    | { kind: "gt"; rows: GtPanelRow[]; overview: GtOverview }
+    | { kind: "plan_overview"; rows: PlanOverviewPanelRow[]; overview: PlanOverview }
     | { kind: "draft" }
   );
 
@@ -171,7 +171,7 @@ export function tocPanelState(
  * A pushed reader view (MP8): plain line scroll, every line a stop. Embedded newlines are
  * flattened — every view line MUST render exactly one terminal row or the panel frame
  * outgrows the height identity: log-update desyncs, a ghost row leaks into scrollback,
- * and one more row trips Ink's wipe (caught live by the panel-gt scenario on a
+ * and one more row trips Ink's wipe (caught live by the panel-plan-overview scenario on a
  * stepCardLines entry that carried a newline).
  */
 export function readerView(title: string, lines: string[]): PanelView {
@@ -185,14 +185,17 @@ export function readerView(title: string, lines: string[]): PanelView {
   };
 }
 
-/** The GT plan-overview view (MP9): snapshot-at-open, cursor stops on step-title rows. */
-export function gtPanelState(overview: GtOverview, rows: GtPanelRow[]): PanelState {
+/** The Plan Overview view (MP9): snapshot-at-open, cursor stops on step-title rows. */
+export function planOverviewPanelState(
+  overview: PlanOverview,
+  rows: PlanOverviewPanelRow[],
+): PanelState {
   const lines = rows.length > 0 ? rows.map((r) => r.text) : ["(no plan steps)"];
   const stops = rows.flatMap((r, i) => (r.isTitle ? [i] : []));
   return {
     stack: [
       {
-        kind: "gt",
+        kind: "plan_overview",
         title: `plan · ${overview.stepPos}/${overview.stepTotal}`,
         lines,
         stops,

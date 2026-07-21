@@ -6,10 +6,10 @@
  * reports pass/fail plus how the run ended (clean exit, timeout, abort, or spawn failure).
  * Total: `runCheck` NEVER throws — every failure mode is a return value.
  *
- * Zero runtime dependencies by design (only type imports from ./gt_contract.ts), so the
+ * Zero runtime dependencies by design (only type imports from ./big_plan_contract.ts), so the
  * check engine can be exercised in isolation from the rest of the harness.
  */
-import type { Baseline, CheckResult } from "./gt_contract.ts";
+import type { Baseline, CheckResult } from "./big_plan_contract.ts";
 
 export interface RunCheckOptions {
   timeoutMs?: number;

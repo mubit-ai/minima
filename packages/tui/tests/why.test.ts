@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 import { whyReportFor } from "../src/minima/why.ts";
 
 const GREEN: Factors = {
@@ -20,9 +20,9 @@ function db(): MinimaDb {
 
 describe("whyReportFor", () => {
   test("reports missing ledger context and missing plans", () => {
-    expect(whyReportFor(null, "run1")).toBe("No Ground-Truth ledger available.");
-    expect(whyReportFor(db(), null)).toBe("No Ground-Truth ledger available.");
-    expect(whyReportFor(db(), "run1")).toBe("No Ground-Truth plan recorded for this run.");
+    expect(whyReportFor(null, "run1")).toBe("No Big Plan ledger available.");
+    expect(whyReportFor(db(), null)).toBe("No Big Plan ledger available.");
+    expect(whyReportFor(db(), "run1")).toBe("No Big Plan recorded for this run.");
   });
 
   test("renders each step's check, tier, reason, and drift from the ledger", () => {
@@ -69,7 +69,7 @@ describe("whyReportFor", () => {
 
     expect(whyReportFor(d, "run1")).toBe(
       [
-        "Ground-Truth verification - Mixed plan",
+        "Big Plan verification - Mixed plan",
         "✓ step 1 🟢 trusted check passed - Trusted step",
         "  check: bun test trusted",
         "✓ step 2 🟡 self-written test - Agent step",
@@ -137,7 +137,7 @@ describe("whyReportFor", () => {
     const d = db();
     d.insertPlan({ sessionId: "run1", title: "Empty" });
     expect(whyReportFor(d, "run1")).toBe(
-      "Ground-Truth verification - Empty\nNo plan steps recorded.",
+      "Big Plan verification - Empty\nNo plan steps recorded.",
     );
   });
 });
@@ -145,10 +145,10 @@ describe("whyReportFor", () => {
 describe("the TUI wires /why", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("lists the command and gates ledger inspection behind Ground-Truth", () => {
+  test("lists the command and gates ledger inspection behind Big Plan", () => {
     expect(src).toContain('{ name: "why"');
     expect(src).toContain('case "why":');
     expect(src).toContain("whyReportFor(agent.db, agent.runId)");
-    expect(src).toContain("agent.config.groundTruth !== true");
+    expect(src).toContain("agent.config.bigPlan !== true");
   });
 });

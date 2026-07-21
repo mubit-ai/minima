@@ -350,7 +350,7 @@ Anthropic's phrasing in [claude-code-bp]:
 **Implication:** a harness that only has the advisory layer (a prompt + plan mode) is one
 confused-model away from spiraling. A harness that only has the deterministic layer
 (hooks + permissions but no plan mode) can't benefit from the model's judgment. **Both
-layers are needed.** Minima's GT build is on this exact axis — see the application guide.
+layers are needed.** Minima's Big Plan implementation is on this exact axis — see the application guide.
 
 ---
 

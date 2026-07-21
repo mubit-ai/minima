@@ -102,6 +102,105 @@ describe("migration runner: self-heal", () => {
   });
 });
 
+describe("v14 Big Plan outcome migration", () => {
+  test("a fresh database has canonical and compatibility outcome columns", () => {
+    const db = new MinimaDb(":memory:");
+    const columns = db.db.query("PRAGMA table_info(routing_decisions)").all() as {
+      name: string;
+    }[];
+    const names = new Set(columns.map((column) => column.name));
+
+    expect(db.schemaVersion).toBe(14);
+    expect(names.has("big_plan_outcome")).toBe(true);
+    expect(names.has("big_plan_verified_by")).toBe(true);
+    expect(names.has("big_plan_confidence")).toBe(true);
+    expect(names.has("gt_outcome")).toBe(true);
+    expect(names.has("gt_verified_by")).toBe(true);
+    expect(names.has("gt_confidence")).toBe(true);
+    db.db.close();
+  });
+
+  test("opening a v13 database backfills canonical outcomes from compatibility columns", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("ALTER TABLE routing_decisions DROP COLUMN big_plan_outcome");
+    raw.exec("ALTER TABLE routing_decisions DROP COLUMN big_plan_verified_by");
+    raw.exec("ALTER TABLE routing_decisions DROP COLUMN big_plan_confidence");
+    raw.exec(
+      `INSERT INTO routing_decisions
+         (rec_id, run_id, gt_outcome, gt_verified_by, gt_confidence, ts)
+       VALUES ('rec-v13', 'run-v13', 'verified', 'deterministic', 'green', 1)`,
+    );
+    raw.exec("UPDATE schema_meta SET version = 13");
+    raw.close();
+
+    const db = new MinimaDb(path);
+    const row = db.db
+      .query(
+        `SELECT big_plan_outcome, big_plan_verified_by, big_plan_confidence
+         FROM routing_decisions WHERE rec_id = 'rec-v13'`,
+      )
+      .get() as Record<string, string>;
+
+    expect(db.schemaVersion).toBe(14);
+    expect(row.big_plan_outcome).toBe("verified");
+    expect(row.big_plan_verified_by).toBe("deterministic");
+    expect(row.big_plan_confidence).toBe("green");
+    db.db.close();
+  });
+
+  test("canonical and deprecated outcome writers dual-write compatibility columns", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("project-dual");
+    const runId = db.startRun({ runId: "run-dual", projectKey: "project-dual" });
+    db.db.run("INSERT INTO routing_decisions (rec_id, run_id, ts) VALUES (?, ?, ?)", [
+      "rec-dual",
+      runId,
+      1,
+    ]);
+
+    db.attachBigPlanOutcome("rec-dual", {
+      outcome: "verified",
+      verifiedBy: "deterministic",
+      confidence: "green",
+    });
+    const row = db.db
+      .query(
+        `SELECT big_plan_outcome, big_plan_verified_by, big_plan_confidence,
+                gt_outcome, gt_verified_by, gt_confidence
+         FROM routing_decisions WHERE rec_id = 'rec-dual'`,
+      )
+      .get() as Record<string, string>;
+
+    expect(row.big_plan_outcome).toBe("verified");
+    expect(row.big_plan_verified_by).toBe("deterministic");
+    expect(row.big_plan_confidence).toBe("green");
+    expect(row.gt_outcome).toBe("verified");
+    expect(row.gt_verified_by).toBe("deterministic");
+    expect(row.gt_confidence).toBe("green");
+
+    db.attachGroundedOutcome("rec-dual", {
+      outcome: "failed",
+      verifiedBy: "judge",
+      confidence: "red",
+    });
+    const compatibilityRow = db.db
+      .query(
+        `SELECT big_plan_outcome, big_plan_verified_by, big_plan_confidence,
+                gt_outcome, gt_verified_by, gt_confidence
+         FROM routing_decisions WHERE rec_id = 'rec-dual'`,
+      )
+      .get() as Record<string, string>;
+    expect(compatibilityRow.big_plan_outcome).toBe("failed");
+    expect(compatibilityRow.big_plan_verified_by).toBe("judge");
+    expect(compatibilityRow.big_plan_confidence).toBe("red");
+    expect(compatibilityRow.gt_outcome).toBe("failed");
+    expect(compatibilityRow.gt_verified_by).toBe("judge");
+    expect(compatibilityRow.gt_confidence).toBe("red");
+    db.db.close();
+  });
+});
+
 describe("migration runner: concurrent opens", () => {
   test("two processes opening a fresh DB both succeed", async () => {
     const path = join(tempDir(), "minima.db");
@@ -141,7 +240,7 @@ describe("reconcileSchema — heals lineage-forked DBs regardless of the version
     expect(stepCols.some((c) => c.name === "verify_cwd")).toBe(true);
     const gateCols = db.db.query("PRAGMA table_info(gates)").all() as { name: string }[];
     expect(gateCols.some((c) => c.name === "rec_id")).toBe(true);
-    // The crash path from the field report: /gt-seed → upsertPlanFromTodos → insertStep.
+    // The crash path from the field report: /bp-seed → upsertPlanFromTodos → insertStep.
     const { planId } = db.upsertPlanFromTodos(
       "run1",
       [{ content: "step", status: "in_progress", verify: "bun test", verify_cwd: "/tmp" }],

@@ -3,21 +3,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Guards the D3a task-panel wiring in tui/app.tsx — the ONE plan surface (MP6, MUB-149).
-// The old GT footer banner (planStrip row + 🟡 note + 🔴 block rows) folded INTO the task
+// The old Big Plan footer banner (planStrip row + 🟡 note + 🔴 block rows) folded INTO the task
 // panel; these assertions lock in what a pure test can't reach:
 //  - the banner render sites are GONE (no second plan surface can reappear),
 //  - reservation (footerHeight) and render consume the SAME granted rows,
 //  - the budget still subtracts the wipe-guard constants,
 //  - the ledger refresh cadence and fail-open behavior survived the fold.
-describe("tui/app.tsx wires the D3a plan surface (the GT banner is gone)", () => {
+describe("tui/app.tsx wires the D3a plan surface (the Big Plan banner is gone)", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
   test("the old banner render sites are gone — one plan surface", () => {
     expect(src).not.toContain("planStripLabel(planStrip)");
     expect(src).not.toContain("planStripDrift(planStrip.drift)");
-    expect(src).not.toContain("{gtFooterNote}");
-    expect(src).not.toContain("{gtBlock.prompt}");
-    expect(src).not.toContain("gtFooterFit");
+    expect(src).not.toContain("{bigPlanFooterNote}");
+    expect(src).not.toContain("{bigPlanBlock.prompt}");
+    expect(src).not.toContain("bigPlanFooterFit");
     expect(src).not.toContain("`▸ plan ${planStrip.stepPos}");
   });
 
@@ -30,9 +30,9 @@ describe("tui/app.tsx wires the D3a plan surface (the GT banner is gone)", () =>
     expect(src).toContain("{taskShown.map((r, i) => (");
   });
 
-  test("the GT enrichment threads the ledger projection + the armed-block flag", () => {
-    expect(src).toContain("blocked: (gtBehavior?.block ?? null) !== null");
-    expect(src).toContain("taskFooterRows(todos ?? [], gt)");
+  test("the Big Plan enrichment threads the ledger projection + the armed-block flag", () => {
+    expect(src).toContain("blocked: (bigPlanBehavior?.block ?? null) !== null");
+    expect(src).toContain("taskFooterRows(todos ?? [], bigPlan)");
   });
 
   test("the too-small guard is unchanged (default-path pin)", () => {
@@ -49,8 +49,8 @@ describe("tui/app.tsx wires the D3a plan surface (the GT banner is gone)", () =>
     expect(expr).toContain("planMode ? 7 : 4");
   });
 
-  test("refresh + seed are gated on groundTruth === true", () => {
-    expect(src).toContain("agent.config.groundTruth === true");
+  test("refresh + seed are gated on bigPlan === true", () => {
+    expect(src).toContain("agent.config.bigPlan === true");
     // Both the mount seed and the tool_execution_end refresh read the same helper.
     const refreshes = src.split("setPlanStrip(planStripInfo(agent.db, agent.runId))").length - 1;
     expect(refreshes).toBeGreaterThanOrEqual(2);
@@ -59,7 +59,7 @@ describe("tui/app.tsx wires the D3a plan surface (the GT banner is gone)", () =>
   test("the refresh is driven by tool_execution_end", () => {
     const endIdx = src.indexOf('case "tool_execution_end":');
     expect(endIdx).toBeGreaterThan(-1);
-    // The GT refresh lives inside the tool_execution_end case, before the next case/break
+    // The Big Plan refresh lives inside the tool_execution_end case, before the next case/break
     // (the case body also carries the D3a todoGen bump since MP5, hence the window size).
     const after = src.slice(endIdx, endIdx + 1200);
     expect(after).toContain("setPlanStrip(planStripInfo(agent.db, agent.runId))");

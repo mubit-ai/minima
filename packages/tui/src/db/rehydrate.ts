@@ -107,7 +107,7 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
       // none (kvCacheHitRate stays null over these rows rather than faking 100% misses).
       cacheReadTokens: 0,
       inputTokens: 0,
-      labeled: Boolean(d.judged) || d.gt_outcome !== null,
+      labeled: Boolean(d.judged) || d.big_plan_outcome !== null,
     });
   }
 

@@ -1,7 +1,7 @@
 # Playbook — Writing a Plan That Actually Executes
 
 > Actionable version of `characteristics-of-successful-plans.md`. Use this when you're about
-> to write a plan for an agent (yourself, a Claude Code session, a Minima GT run, a
+> to write a plan for an agent (yourself, a Claude Code session, a Minima Big Plan run, a
 > multi-agent system). It contains: a pre-flight checklist, a plan template, a scoring rubric,
 > and four worked anti-patterns.
 
@@ -140,7 +140,7 @@ steps:
     objective: "Set up the database"
     verify: ""    # ← empty
 ```
-**Diagnosis**: §1 violated. No ground truth.
+**Diagnosis**: §1 violated. No verified evidence.
 **Fix**: For "set up the database", `verify` is `sqlite3 minima.db ".schema plans"` returning
 non-empty, or a migration test going red→green. The `verify` field is the step's actual
 contract — write it first, then the objective.
@@ -166,14 +166,14 @@ either stops too early or spirals.
 
 ---
 
-## Part 6 — How Minima's GT build operationalizes this
+## Part 6 — How Minima's Big Plan implementation operationalizes this
 
-Minima's ground-truth contract (`docs/PLAN/ground-truth-plan.md`) maps directly onto the seven
-properties. Use this as a worked example of the playbook in production:
+Minima's Big Plan contract maps directly onto the seven properties. Use this as a worked
+example of the playbook in production:
 
-| Playbook property | Minima GT mechanism |
+| Playbook property | Minima Big Plan mechanism |
 |---|---|
-| §1 Verifiable steps | `plan_steps.verify` column + frozen GT contract (`gt_contract.ts`); step is done only if check went red→green because of this step's code |
+| §1 Verifiable steps | `plan_steps.verify` column + frozen Big Plan contract (`big_plan_contract.ts`); step is done only if check went red→green because of this step's code |
 | §2 Right-sized decomposition | `todowrite` is the unit of decomposition; each step persisted via `upsertPlanFromTodos` |
 | §3 Effort scales to complexity | per-step `tool_calls` / token accounting attributed through the step id |
 | §4 Persistent + visible | `plans` / `plan_steps` tables (stage 0–1) + step X/N footer + DRIFT indicator (stage 2) |
@@ -181,6 +181,6 @@ properties. Use this as a worked example of the playbook in production:
 | §6 Tool/task match | the harness attributes each tool call / file write to an in-progress step; off-plan writes show DRIFT |
 | §7 Stop conditions | confidence tiers 🟢/🟡/🔴 → silent / flag / stop-and-ask |
 
-If you're modifying the GT build, the playbook above is the *why* behind the contract. Don't
+If you're modifying the Big Plan implementation, the playbook above is the *why* behind the contract. Don't
 weaken a property without re-reading the corresponding section in
 `characteristics-of-successful-plans.md`.

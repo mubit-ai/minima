@@ -37,13 +37,13 @@ Severity legend: 🔴 **blocker** refuses `/plan finalize` (override with `--for
 
 ---
 
-## How it connects to the rest of the ground-truth spine
+## How it connects to the rest of the Big Plan spine
 
 - **Per-step tool allowlist (task permissions).** `tools` is persisted on `plan_steps.tools`
-  (schema v8), authored by the planning council (a `tools:` line per step in `GROUND_TRUTH.md`) or by
+  (schema v8), authored by the planning council (a `tools:` line per step in `BigPlan.md`) or by
   the agent via `todowrite` (`"tools": ["edit","bash"]`, sticky like `verify`). Enforcement is in the
-  dispatcher (`tool_permissions.ts` → `groundTruthHooks`), gated by `MINIMA_TUI_TOOL_ALLOWLIST`
-  (default on when ground-truth is on). A step with no allowlist is unrestricted, so nothing changes
+  dispatcher (`tool_permissions.ts` → `bigPlanHooks`), gated by `MINIMA_TUI_TOOL_ALLOWLIST`
+  (default on when Big Plan is on). A step with no allowlist is unrestricted, so nothing changes
   for plans that don't use the feature.
 - **The audit does not fabricate quality.** It reasons only about the plan's *shape* — it never runs
   a check or judges outcomes. Runtime verification (red→green, provenance, coverage, tamper, the A5
@@ -53,4 +53,4 @@ Severity legend: 🔴 **blocker** refuses `/plan finalize` (override with `--for
   (`non-gating-verify`, `unknown-tool`) plus the structural `empty-plan` block; everything else
   advises.
 
-Everything above is behind `MINIMA_TUI_GROUND_TRUTH` and off on the default path.
+Everything above is behind `MINIMA_TUI_BIG_PLAN` and on by default.

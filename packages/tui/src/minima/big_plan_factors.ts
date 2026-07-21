@@ -1,5 +1,5 @@
 /**
- * Ground-Truth factor computation (Stage 5 — M5.1 provenance, M5.2 coverage, M5.3 tamper).
+ * Big Plan factor computation (Stage 5 — M5.1 provenance, M5.2 coverage, M5.3 tamper).
  *
  * Track A's "check engine" fills three of the {@link Factors} fields that Stage 4 left
  * hardcoded (checkOrigin/coverageHit/tamper). These are the *trust* signals: was the passing
@@ -15,7 +15,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import type { FileChangeRow } from "../db/minima_db.ts";
-import type { CheckOrigin } from "./gt_contract.ts";
+import type { CheckOrigin } from "./big_plan_contract.ts";
 
 /** Injected filesystem seam — total (never throws); returns null/false on any failure. */
 export interface FactorFs {

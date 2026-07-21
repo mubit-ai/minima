@@ -20,7 +20,7 @@ import {
 } from "../src/minima/index.ts";
 import type { AskUserRef } from "../src/tools/question.ts";
 
-// A2 stop-gate through the REAL runtime/loop wiring: with ground-truth on and an active plan whose
+// A2 stop-gate through the REAL runtime/loop wiring: with big-plan on and an active plan whose
 // step is still in_progress, promptRouted must force-continue the model instead of letting it end,
 // and — once strikes are spent, headless (no ask channel) — stop gracefully and leave one audit
 // `stop` gate row. Hermetic: faux provider + injected fetch, no network.
@@ -91,7 +91,7 @@ function setup(stopStrikes: number, askUser: AskUserRef | null) {
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: true,
+    bigPlan: true,
     stopStrikes,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });

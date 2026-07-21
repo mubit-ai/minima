@@ -1,12 +1,12 @@
 # Big Plan — Workflow Diagrams
 
-> How the **Big Plan** (Ground-Truth Core) loop actually runs: the agent writes a plan,
+> How the **Big Plan** loop actually runs: the agent writes a plan,
 > does the work, and **the harness checks each step really happened before letting it move on.**
 > Every verdict lands in one small SQLite **ledger** that two readers consume — the **screen**
 > (so you can watch) and **Minima** (so it learns which model actually succeeded).
 >
-> Design source of truth: [`docs/PLAN/ground-truth-plan.md`](../PLAN/ground-truth-plan.md) ·
-> Everything here is behind the flag `MINIMA_TUI_GROUND_TRUTH` (off by default).
+> Design authority: the active Big Plan guides in this directory · Big Plan is on by default
+> and can be disabled with `MINIMA_TUI_BIG_PLAN=0`.
 
 ---
 
@@ -40,7 +40,7 @@ The reusable loop. It runs once per task, iterating the middle box once per plan
 
 ```mermaid
 flowchart TD
-    Start(["Task starts<br/>flag: MINIMA_TUI_GROUND_TRUTH=1"])
+    Start(["Task starts<br/>Big Plan enabled by default"])
 
     subgraph P1["① Plan — capture and project"]
         Plan["Agent writes plan via todowrite<br/>every step names a verify command"]
@@ -181,7 +181,7 @@ only a step that survives all of that glides through untouched.
 
 ## Where this lives in the build
 
-The loop is built bottom-up in stages (see [`ground-truth-plan.md`](../PLAN/ground-truth-plan.md) §3):
+The loop is built bottom-up in stages:
 
 ```
 Stage 0  DB + flag           ─┐

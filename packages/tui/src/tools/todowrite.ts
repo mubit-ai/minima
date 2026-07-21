@@ -31,20 +31,17 @@ const parameters = objectSchema(
  * singleton — an isolation hazard for sub-agents.) Pass `state` to observe the list from
  * outside (e.g. a TUI panel).
  *
- * M3.3 (ground truth only): executionMode "sequential" — any batch containing todowrite runs
- * in emission order, so the ground-truth sink's pre-work baseline check (afterToolCall)
+ * M3.3 (Big Plan only): executionMode "sequential" — any batch containing todowrite runs
+ * in emission order, so the big-plan sink's pre-work baseline check (afterToolCall)
  * observes the repo before sibling edit/write/bash calls mutate it, and two todowrites in one
- * batch cannot interleave. With ground truth OFF none of that machinery exists, so the tool
+ * batch cannot interleave. With Big Plan OFF none of that machinery exists, so the tool
  * keeps its historical parallel-friendly description and mode — the model must not be told of
  * a verify gate that will never run.
  */
-export function todowriteTool(
-  state: TodoTask[] = [],
-  opts: { groundTruth?: boolean } = {},
-): AgentTool {
+export function todowriteTool(state: TodoTask[] = [], opts: { bigPlan?: boolean } = {}): AgentTool {
   return {
     name: "todowrite",
-    description: opts.groundTruth
+    description: opts.bigPlan
       ? "Track a task list for multi-step coding work. Pass a JSON array: " +
         '[{"content":"add tests","status":"pending","priority":"high","verify":"bun test tests/foo.test.ts"}]. ' +
         "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list " +
@@ -59,7 +56,7 @@ export function todowriteTool(
         '[{"content":"add tests","status":"pending","priority":"high"}]. ' +
         "status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
     parameters,
-    ...(opts.groundTruth ? { executionMode: "sequential" as const } : {}),
+    ...(opts.bigPlan ? { executionMode: "sequential" as const } : {}),
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
       try {
         // Tolerate a real array: the schema says string-of-JSON, but models sometimes emit the

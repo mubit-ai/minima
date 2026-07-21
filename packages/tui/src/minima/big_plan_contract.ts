@@ -1,6 +1,6 @@
 /**
- * Ground-Truth contract — the frozen hand-off between the two build tracks
- * (see docs/ground-truth-build-guide.md §5b, "Step 0"). This is the seam that lets the two
+ * Big Plan contract — the frozen hand-off between the two build tracks
+ * (see docs/big-plan-build-guide.md §5b, "Step 0"). This is the seam that lets the two
  * tracks run in parallel:
  *
  *   Track A (the "check engine" / producer) runs checks, computes the raw `Factors`, and
@@ -13,7 +13,7 @@
  *
  * Each string enum is declared once as an `as const` tuple and its union is derived from it,
  * so the allowed set is frozen at BOTH compile time (the union) and runtime (the array, which
- * `tests/gt-contract.test.ts` asserts and round-trips through the DB).
+ * `tests/bp-contract.test.ts` asserts and round-trips through the DB).
  *
  * Rule: do not widen these unions back to `string`. To add a value, extend the tuple (its
  * union updates automatically) and the matching test.
@@ -31,11 +31,11 @@
 export const GATE_OUTCOMES = ["verified", "failed", "unrunnable", "unchecked"] as const;
 export type GateOutcome = (typeof GATE_OUTCOMES)[number];
 
-/** Confidence tier — `gates.confidence` / `routing_decisions.gt_confidence`. Also the UI tier. */
+/** Confidence tier — `gates.confidence` / `routing_decisions.big_plan_confidence`. Also the UI tier. */
 export const CONFIDENCE_TIERS = ["green", "yellow", "red"] as const;
 export type ConfidenceTier = (typeof CONFIDENCE_TIERS)[number];
 
-/** Who produced the verdict — `gates.verified_by` / `routing_decisions.gt_verified_by`. */
+/** Who produced the verdict — `gates.verified_by` / `routing_decisions.big_plan_verified_by`. */
 export const VERIFIED_BY = ["deterministic", "judge", "user"] as const;
 export type VerifiedBy = (typeof VERIFIED_BY)[number];
 

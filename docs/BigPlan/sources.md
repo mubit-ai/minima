@@ -91,12 +91,12 @@
 
 ## First-party / in-repo
 
-### Minima Ground-Truth Plan
-- **Source**: `docs/PLAN/ground-truth-plan.md` (this repo). Linear: Minima – Big Plan.
+### Minima Big Plan
+- **Source**: Minima's Big Plan implementation and its active guides in this directory.
 - **Why relevant**: The empirical, in-production implementation of properties §1, §4, §5, §7.
   Used as the worked example at the end of `playbook.md`.
 - **Key mappings** (also reproduced in `playbook.md` Part 6):
-  - §1 verifiable steps → `plan_steps.verify` + frozen GT contract, red→green requirement.
+  - §1 verifiable steps → `plan_steps.verify` + frozen Big Plan contract, red→green requirement.
   - §4 persistent + visible → stages 0–2 (persist + project + DRIFT footer).
   - §5 replan → new `todowrite` calls upsert remaining steps.
   - §7 stop conditions → confidence tiers 🟢/🟡/🔴 → silent / flag / stop-and-ask.

@@ -1,6 +1,6 @@
 /**
  * plan_seed — canned CouncilRoundResults for the /plan-seed demo command (MP16), the
- * hermetic evidence path for the D3b draft view (precedent: /gt-seed for the GT overview).
+ * hermetic evidence path for the D3b draft view (precedent: /bp-seed for the Plan Overview).
  * Two rounds so a capture can show turn-over-turn convergence: round 1 = a first draft with
  * an open question; round 2 = a richer revision with a second decision and the question
  * count growing. Pure data — no I/O, no model calls.

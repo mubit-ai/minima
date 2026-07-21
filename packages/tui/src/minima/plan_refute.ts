@@ -7,14 +7,14 @@
  * done. Its verdict lands as a plan-level `milestone` gate with `verified_by: "judge"` —
  * never "deterministic" (an agent's opinion must not outrank a real check in the trust
  * ladder) and never 🟢 (judge-verified caps at 🟡; refuted → 🔴). The gate carries the
- * run's latest rec_id so stampGroundedOutcome feeds gt_outcome — deterministic step gates
+ * run's latest rec_id so stampVerifiedOutcome feeds big_plan_outcome — deterministic step gates
  * still dominate the identity join (red wins, worst tier otherwise). Fail-closed parsing:
  * an unparseable or aborted verdict never mints "verified".
  */
 
 import type { MinimaDb } from "../db/minima_db.ts";
 import type { ChildResult, Delegation, SpawnFn } from "../tools/task.ts";
-import { stampGroundedOutcome } from "./ground_truth.ts";
+import { stampVerifiedOutcome } from "./big_plan.ts";
 import { gateVerdictFor } from "./why.ts";
 
 export interface RefutationVerdict {
@@ -130,7 +130,7 @@ export interface RefutationOutcome {
 /**
  * Run the refutation pass end-to-end: build the brief, spawn the child, parse fail-closed,
  * write the plan-level milestone gate (judge-verified, 🟡 cap / 🔴 refuted), and stamp the
- * grounded outcome onto the run's latest rec. Returns null when there is no plan to verify
+ * verified outcome onto the run's latest rec. Returns null when there is no plan to verify
  * or the child was aborted (an aborted pass records nothing — never a fabricated verdict).
  */
 export async function runPlanRefutation(opts: {
@@ -188,6 +188,6 @@ export async function runPlanRefutation(opts: {
     recId,
     sessionId: opts.sessionId,
   });
-  if (recId) stampGroundedOutcome(opts.db, recId);
+  if (recId) stampVerifiedOutcome(opts.db, recId);
   return { gateId, verdict, recId, childCostUsd: child.costUsd };
 }

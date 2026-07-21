@@ -98,7 +98,7 @@ function ladderService() {
 function setup(
   judge: ConstJudge,
   db?: MinimaDb,
-  opts: { svc?: ReturnType<typeof ladderService>; groundTruth?: boolean } = {},
+  opts: { svc?: ReturnType<typeof ladderService>; bigPlan?: boolean } = {},
 ) {
   resetRegistry();
   resetProviderRegistration();
@@ -113,7 +113,7 @@ function setup(
     candidates: ["cheap-model", "big-model"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: opts.groundTruth ?? false,
+    bigPlan: opts.bigPlan ?? false,
     // The ladder tests script the model-routing recovery loop, not the A2 stop-gate; disable the
     // stop-gate so its force-continue can't exhaust the mock and spuriously trip escalation.
     stopStrikes: 0,
@@ -269,13 +269,13 @@ describe("recovery ladder", () => {
   });
 });
 
-describe("recovery ladder — grounded checks (M7.3)", () => {
-  test("a grounded RED check escalates; the recovered rung records failure@A + success@B", async () => {
+describe("recovery ladder — deterministic checks (M7.3)", () => {
+  test("a deterministic RED check escalates; the recovered rung records failure@A + success@B", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     let installVerifiedGate = () => {};
     const svc = gatedLadderService(() => installVerifiedGate());
-    const { agent, reg } = setup(new ConstJudge(0.9), db, { svc, groundTruth: true });
+    const { agent, reg } = setup(new ConstJudge(0.9), db, { svc, bigPlan: true });
 
     const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
       { content: "wire the endpoint", status: "in_progress" },
@@ -308,14 +308,14 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
 
     const routing = await agent.promptRouted("do the thing");
 
-    // The grounded fail excluded cheap-model → the server picked the bigger one.
+    // The deterministic fail excluded cheap-model → the server picked the bigger one.
     expect(routing?.chosenModelId).toBe("big-model");
     expect(svc.recommendCalls).toHaveLength(2);
     expect((svc.recommendCalls[1] as any).constraints.excluded_models).toEqual(["cheap-model"]);
     expect(agent.ladderEscalations).toBe(1);
     expect(agent.ladderExhausted).toBe(0); // A7: it RECOVERED — the ladder was not exhausted
 
-    // failure@A then success@B — the grounded loss AND the recovery both reach Minima.
+    // failure@A then success@B — the verified loss AND the recovery both reach Minima.
     expect(svc.feedbackCalls).toHaveLength(2);
     expect((svc.feedbackCalls[0] as any).outcome).toBe("failure");
     expect((svc.feedbackCalls[0] as any).notes).toContain("verified_by=deterministic");
@@ -332,10 +332,10 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
     db.close();
   });
 
-  test("a grounded GREEN check does NOT escalate", async () => {
+  test("a deterministic GREEN check does NOT escalate", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
-    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { bigPlan: true });
     const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
       { content: "A", status: "in_progress" },
     ]);
@@ -360,7 +360,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
   test("a persistent RED check walks every rung — escalate once, then replan (A4)", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
-    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { bigPlan: true });
     const { planId, stepIds } = db.upsertPlanFromTodos(agent.runId!, [
       { content: "A", status: "in_progress" },
     ]);
@@ -420,7 +420,7 @@ describe("recovery ladder — grounded checks (M7.3)", () => {
 
 describe("recovery ladder — exhaustion causes (A7)", () => {
   /** Seed an active plan with one in_progress, verify-less step (no gate) so the exhaustion writer
-   * has a plan to attach to, without any grounded verdict interfering with the cause under test. */
+   * has a plan to attach to, without any verified verdict interfering with the cause under test. */
   function seedActivePlan(db: MinimaDb, runId: string) {
     db.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress" }]);
     return db.getLatestPlan(runId)!.id;
@@ -435,7 +435,7 @@ describe("recovery ladder — exhaustion causes (A7)", () => {
   test("no gate + a persistent sub-τ judge → exhaustion cause='judge_failed'", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
-    const { agent, reg, svc } = setup(new ConstJudge(0.3), db, { groundTruth: true });
+    const { agent, reg, svc } = setup(new ConstJudge(0.3), db, { bigPlan: true });
     const planId = seedActivePlan(db, agent.runId!);
     reg.setResponses([
       new AssistantMessage({ content: [text("1")] }),
@@ -457,7 +457,7 @@ describe("recovery ladder — exhaustion causes (A7)", () => {
   test("persistent non-transient provider error → exhaustion cause='hard_error'", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
-    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { bigPlan: true });
     const planId = seedActivePlan(db, agent.runId!);
     reg.setResponses([
       new AssistantMessage({ content: [text("")], stop_reason: "error", error_message: "boom" }),
@@ -477,7 +477,7 @@ describe("recovery ladder — exhaustion causes (A7)", () => {
   test("a rate-limit storm across every rung → exhaustion cause='transient' (not hard_error)", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
-    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { groundTruth: true });
+    const { agent, reg, svc } = setup(new ConstJudge(0.9), db, { bigPlan: true });
     const planId = seedActivePlan(db, agent.runId!);
     reg.setResponses([
       new AssistantMessage({

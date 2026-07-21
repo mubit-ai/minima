@@ -218,7 +218,7 @@ function setupAgent(over: Partial<ReturnType<typeof harnessConfig>> = {}) {
     candidates: ["test-faux"],
     allowOffline: false,
     minimaApiKey: "k",
-    groundTruth: false,
+    bigPlan: false,
     ...over,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });

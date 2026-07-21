@@ -9,7 +9,7 @@ import {
   isTestPath,
   parseTestPathsFromVerify,
   pathsMatch,
-} from "../src/minima/gt_factors.ts";
+} from "../src/minima/big_plan_factors.ts";
 
 // Stage 5 factor computation (M5.1 provenance, M5.2 coverage, M5.3 tamper). Pure functions —
 // filesystem access is injected, so these run with no real disk.

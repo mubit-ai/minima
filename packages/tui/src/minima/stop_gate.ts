@@ -1,7 +1,7 @@
 /**
  * Stop-gate (A2) — the run-level complement to the per-step done-gate.
  *
- * The per-step done-gate (`groundTruthHooks.before`) refuses a `todowrite` that marks ONE step
+ * The per-step done-gate (`bigPlanHooks.before`) refuses a `todowrite` that marks ONE step
  * `completed` while its `verify` fails. It cannot, however, stop the agent from simply ENDING the
  * run — going quiet with no more tool calls — while the plan still has unfinished or failing steps.
  * This module fills that gap by hanging off the loop's one terminal seam, `shouldStopAfterTurn`
@@ -22,7 +22,7 @@
  *
  * Enforcement lives here (harness code at a turn boundary), not in prompt text — per the
  * "enforcement in the dispatcher, guidance in the prompt" principle. Everything is gated by
- * `config.groundTruth` + `config.stopStrikes > 0` at the call site (runtime.ts); this module is
+ * `config.bigPlan` + `config.stopStrikes > 0` at the call site (runtime.ts); this module is
  * inert unless wired in. Fail-open throughout: any ledger error assesses as "not blocked" so a
  * broken read can never wedge the loop.
  */

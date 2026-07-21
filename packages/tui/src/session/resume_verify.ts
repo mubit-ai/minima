@@ -13,7 +13,7 @@
 
 import type { MinimaDb, PlanStepRow } from "../db/minima_db.ts";
 import { baselineFromResult, runCheck } from "../minima/check.ts";
-import type { Baseline } from "../minima/gt_contract.ts";
+import type { Baseline } from "../minima/big_plan_contract.ts";
 
 export interface ResumeVerifyResult {
   stepId: string;

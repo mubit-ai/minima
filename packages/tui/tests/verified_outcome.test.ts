@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
-import { groundedOutcomeFor, stampGroundedOutcome } from "../src/minima/ground_truth.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+import { verifiedOutcomeFor, stampVerifiedOutcome } from "../src/minima/big_plan.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 
 // Week 3 Track B seams under the v6 identity join: the M6.3 user_signals reader and the M7.1
-// grounded-outcome stamp. Grounded verdicts are scoped to ONE routed rung by gates.rec_id —
+// verified-outcome stamp. Grounded verdicts are scoped to ONE routed rung by gates.rec_id —
 // recency and plan state no longer matter. Hermetic against an in-memory MinimaDb.
 
 const RED: Factors = {
@@ -81,7 +81,7 @@ describe("getUserSignals (M6.3 reader)", () => {
   });
 });
 
-describe("stampGroundedOutcome (M7.1, identity join)", () => {
+describe("stampVerifiedOutcome (M7.1, identity join)", () => {
   test("stamps the verdict of the gates minted under the rec — red wins over green", () => {
     const d = db();
     seedRun(d, "run1", "rec1");
@@ -110,12 +110,12 @@ describe("stampGroundedOutcome (M7.1, identity join)", () => {
       sessionId: "run1",
     });
 
-    stampGroundedOutcome(d, "rec1");
+    stampVerifiedOutcome(d, "rec1");
 
     const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec1")!;
-    expect(dec.gt_outcome).toBe("failed");
-    expect(dec.gt_verified_by).toBe("deterministic");
-    expect(dec.gt_confidence).toBe("red");
+    expect(dec.big_plan_outcome).toBe("failed");
+    expect(dec.big_plan_verified_by).toBe("deterministic");
+    expect(dec.big_plan_confidence).toBe("red");
   });
 
   test("gates minted under ANOTHER rec never stamp this decision (stale-gate immunity)", () => {
@@ -134,10 +134,10 @@ describe("stampGroundedOutcome (M7.1, identity join)", () => {
       recId: "rec1",
       sessionId: "run1",
     });
-    stampGroundedOutcome(d, "rec2");
+    stampVerifiedOutcome(d, "rec2");
     const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec2")!;
-    expect(dec.gt_outcome).toBeNull();
-    expect(dec.gt_verified_by).toBeNull();
+    expect(dec.big_plan_outcome).toBeNull();
+    expect(dec.big_plan_verified_by).toBeNull();
   });
 
   test("pre-identity gate rows (NULL rec_id) are invisible to every rec", () => {
@@ -154,20 +154,20 @@ describe("stampGroundedOutcome (M7.1, identity join)", () => {
       verifiedBy: "deterministic",
       factors: RED,
     });
-    stampGroundedOutcome(d, "rec1");
+    stampVerifiedOutcome(d, "rec1");
     const dec = d.getRunDecisions("run1").find((r) => r.rec_id === "rec1")!;
-    expect(dec.gt_outcome).toBeNull();
+    expect(dec.big_plan_outcome).toBeNull();
   });
 
   test("fails open on a null db / recId (never throws)", () => {
     const d = db();
     seedRun(d, "run1", "rec1");
-    expect(() => stampGroundedOutcome(null, "rec1")).not.toThrow();
-    expect(() => stampGroundedOutcome(d, null)).not.toThrow();
+    expect(() => stampVerifiedOutcome(null, "rec1")).not.toThrow();
+    expect(() => stampVerifiedOutcome(d, null)).not.toThrow();
   });
 });
 
-describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
+describe("verifiedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
   test("aggregates the rec's gates: any red wins regardless of insert order", () => {
     const d = db();
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
@@ -192,7 +192,7 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
       factors: GREEN,
       recId: "rec1",
     });
-    const g = groundedOutcomeFor(d, "rec1");
+    const g = verifiedOutcomeFor(d, "rec1");
     expect(g?.outcome).toBe("failed");
     expect(g?.verifiedBy).toBe("deterministic");
     expect(g?.confidence).toBe("red");
@@ -222,7 +222,7 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
       factors: { ...GREEN, flipContent: "ship the fix" },
       recId: "rec1",
     });
-    const g = groundedOutcomeFor(d, "rec1");
+    const g = verifiedOutcomeFor(d, "rec1");
     expect(g?.outcome).toBe("verified");
   });
 
@@ -248,7 +248,7 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
       factors: { ...GREEN, pass: false, hasCheck: false, flipContent: "B" },
       recId: "rec1",
     });
-    const g = groundedOutcomeFor(d, "rec1");
+    const g = verifiedOutcomeFor(d, "rec1");
     expect(g?.outcome).toBe("verified");
     expect(g?.confidence).toBe("yellow");
   });
@@ -269,7 +269,7 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
         recId: "rec1",
       });
     }
-    expect(groundedOutcomeFor(d, "rec1")?.confidence).toBe("green");
+    expect(verifiedOutcomeFor(d, "rec1")?.confidence).toBe("green");
   });
 
   test("only unchecked rows → null (no deterministic evidence; the judge path runs)", () => {
@@ -285,23 +285,23 @@ describe("groundedOutcomeFor (M7.2/M7.3 shared reader, identity join)", () => {
       factors: { ...GREEN, pass: false, hasCheck: false, flipContent: "A" },
       recId: "rec1",
     });
-    expect(groundedOutcomeFor(d, "rec1")).toBeNull();
+    expect(verifiedOutcomeFor(d, "rec1")).toBeNull();
   });
 
   test("null when the rec has no gates / gate missing outcome or verifier", () => {
     const empty = db();
-    expect(groundedOutcomeFor(empty, "rec1")).toBeNull();
+    expect(verifiedOutcomeFor(empty, "rec1")).toBeNull();
 
     const noVerifier = db();
     const { planId, stepIds } = noVerifier.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress" },
     ]);
     noVerifier.insertGate({ planId, stepId: stepIds[0]!, outcome: "verified", recId: "rec1" });
-    expect(groundedOutcomeFor(noVerifier, "rec1")).toBeNull();
+    expect(verifiedOutcomeFor(noVerifier, "rec1")).toBeNull();
   });
 
   test("fails open on null db / recId (never throws)", () => {
-    expect(groundedOutcomeFor(null, "rec1")).toBeNull();
-    expect(groundedOutcomeFor(db(), null)).toBeNull();
+    expect(verifiedOutcomeFor(null, "rec1")).toBeNull();
+    expect(verifiedOutcomeFor(db(), null)).toBeNull();
   });
 });

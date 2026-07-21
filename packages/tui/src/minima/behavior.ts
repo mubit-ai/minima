@@ -1,10 +1,10 @@
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
 import { confidence } from "./confidence.ts";
-import type { ConfidenceTier, Factors } from "./gt_contract.ts";
+import type { ConfidenceTier, Factors } from "./big_plan_contract.ts";
 import { gateVerdictFor } from "./why.ts";
 
 /**
- * Ground-Truth tier → behavior (M6.2). The pure projection from a step's confidence tier onto
+ * Big Plan tier → behavior (M6.2). The pure projection from a step's confidence tier onto
  * what the UI must do about it. This is the "near-zero interruptions" rule: 🟢 proceeds silently,
  * 🟡 proceeds but is counted toward a single milestone-review footer note, and 🔴 stops the run
  * and raises an approval prompt. Kept free of React/DB so it can be unit-tested against the

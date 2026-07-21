@@ -3,12 +3,12 @@ import { MinimaDb } from "../src/db/minima_db.ts";
 import { confidence } from "../src/minima/confidence.ts";
 import {
   bashWriteHints,
-  groundTruthAttributionSink,
-  groundTruthHooks,
+  bigPlanAttributionSink,
+  bigPlanHooks,
   recordFileChanges,
   recordOpaqueMarker,
-} from "../src/minima/ground_truth.ts";
-import type { Factors } from "../src/minima/gt_contract.ts";
+} from "../src/minima/big_plan.ts";
+import type { Factors } from "../src/minima/big_plan_contract.ts";
 import { parseFactors } from "../src/minima/why.ts";
 
 // GT100-2 + GT101-F5: write attribution for bash and sub-agents, and the blind-evidence cap.
@@ -136,7 +136,7 @@ describe("recordFileChanges (shared attribution sink body)", () => {
   });
 });
 
-describe("groundTruthAttributionSink (sub-agents)", () => {
+describe("bigPlanAttributionSink (sub-agents)", () => {
   const actx = (name: string, args: Record<string, unknown>, isError = false) =>
     ({ toolCall: { type: "toolCall", id: "c1", name, arguments: args }, isError }) as never;
 
@@ -145,7 +145,7 @@ describe("groundTruthAttributionSink (sub-agents)", () => {
     const { planId, stepIds } = d.upsertPlanFromTodos("run1", [
       { content: "A", status: "in_progress" },
     ]);
-    const sink = groundTruthAttributionSink({ db: d, runId: "run1" }, "child-9");
+    const sink = bigPlanAttributionSink({ db: d, runId: "run1" }, "child-9");
     await sink(actx("write", { path: "src/kid.ts", content: "x" }));
     await sink(
       actx("todowrite", { tasks: JSON.stringify([{ content: "evil", status: "completed" }]) }),
@@ -199,7 +199,7 @@ describe("done-gate: blind evidence caps the verdict", () => {
       result: "",
       isError: false,
     });
-    const { before, after } = groundTruthHooks({ db: d, runId });
+    const { before, after } = bigPlanHooks({ db: d, runId });
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));
@@ -214,7 +214,7 @@ describe("done-gate: blind evidence caps the verdict", () => {
     d.ensureProject("p");
     const runId = d.startRun({ projectKey: "p" });
     d.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress", verify: "true" }]);
-    const { before, after } = groundTruthHooks({ db: d, runId });
+    const { before, after } = bigPlanHooks({ db: d, runId });
     const todos = [{ content: "A", status: "completed" }];
     expect(await before(bctx(todos))).toBeNull();
     await after(actx(todos));

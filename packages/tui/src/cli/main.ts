@@ -23,11 +23,7 @@ import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
-import {
-  type VerifyConsent,
-  groundTruthHooks,
-  headlessVerifyConsent,
-} from "../minima/ground_truth.ts";
+import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import {
   CostMeter,
   type HarnessConfig,
@@ -402,13 +398,13 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
 
-  Ground-Truth headless note (MINIMA_TUI_GROUND_TRUTH=1 + -p/--mode json): plan-step
+  Big Plan headless note (MINIMA_TUI_BIG_PLAN=1 + -p/--mode json): plan-step
   \`verify\` shell commands fail CLOSED without an interactive user to approve them —
   set MINIMA_TUI_ALLOW_VERIFY=1 to opt a headless run into executing them.
 `;
 
-function toolsFor(args: CliArgs, groundTruth: boolean, todoState?: TodoTask[]) {
-  let tools = args.noTools ? [] : builtinTools({ groundTruth, todoState });
+function toolsFor(args: CliArgs, bigPlan: boolean, todoState?: TodoTask[]) {
+  let tools = args.noTools ? [] : builtinTools({ bigPlan, todoState });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -473,7 +469,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
   const todoState: TodoTask[] = [];
-  const tools = toolsFor(args, config.groundTruth === true, todoState);
+  const tools = toolsFor(args, config.bigPlan === true, todoState);
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: sampled LLM grading is ON by default (config.judgeSampleRate, ~15% of
@@ -548,11 +544,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   let db: MinimaDb | null = null;
   let sink: DbSinkHandle | null = null;
   let initialResume: RehydratedRun | null = null;
-  let gtGateBefore: BeforeToolCall | null = null;
+  let bigPlanGateBefore: BeforeToolCall | null = null;
   // B2 memory scribe: drains queued curation jobs (built once db + agent exist; reads
   // agent.budget at call time since --budget attaches it later).
   let scribeDrain: (() => Promise<void>) | null = null;
-  // E1 diff reviewer: late-bound — the GT hooks are built before the plan meta model
+  // E1 diff reviewer: late-bound — the Big Plan hooks are built before the plan meta model
   // exists, so closure events route through this ref; the reviewer is armed further down.
   const planClosedRef: { current: ((planId: string) => void) | null } = { current: null };
   let pendingDiffReview: Promise<unknown> | null = null;
@@ -597,7 +593,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // D2: re-run the in-progress step's verify against its recorded baseline (the
       // working tree may have moved while the session was away). Consent-gated like every
       // verify (headless: MINIMA_TUI_ALLOW_VERIFY=1); warn-only, never blocks the resume.
-      if (config.groundTruth) {
+      if (config.bigPlan) {
         const rv = await reverifyOnResume({
           db,
           planSessionId: resumeFrom.run_id,
@@ -608,27 +604,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         if (note) process.stderr.write(`minima: ${note}\n`);
       }
     }
-    // Ground-Truth ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
+    // Big Plan ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
     // sink keeps the SQLite plan of record in step with what the agent actually did (plan
     // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
     // each todowrite the gate refuses completions whose `verify` does not pass. Off unless
-    // MINIMA_TUI_GROUND_TRUTH=1. Bookkeeping stays fail-open (reads live agent.db/agent.runId;
+    // MINIMA_TUI_BIG_PLAN=1. Bookkeeping stays fail-open (reads live agent.db/agent.runId;
     // swallows its own errors); only the gate's check verdicts fail closed. The before-hook is
     // registered later — headless below, or by the TUI AFTER its permission hook so permission
     // always runs first (first block wins) and no check runs on a call the user would deny.
-    if (config.groundTruth) {
+    if (config.bigPlan) {
       // MP18: verify commands are LLM-authored shell — bash-class scrutiny. The ref starts
       // as the headless checker (deny-all unless MINIMA_TUI_ALLOW_VERIFY=1, fail-CLOSED);
       // the TUI swaps in its permission-state-backed checker on mount, so interactive runs
       // consent per exact command via the existing overlay and -p runs never execute an
       // unapproved check.
-      const { before, after } = groundTruthHooks(agent, {
+      const { before, after } = bigPlanHooks(agent, {
         enforceAllowlist: config.toolAllowlist,
         verifyConsent: (cmd) => verifyConsentRef.current(cmd),
         onPlanClosed: (planId) => planClosedRef.current?.(planId),
       });
       agent.addAfterToolCall(after);
-      gtGateBefore = before;
+      bigPlanGateBefore = before;
     }
     // B2 memory scribe: recover jobs a crashed process left `running`, build the drain
     // (routed extraction, spend booked like judge spend), and clear prior sessions'
@@ -735,7 +731,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // still lands its verdict gate. MINIMA_TUI_DIFF_REVIEW=0 opts out.
   if (
     process.env.MINIMA_TUI_DIFF_REVIEW !== "0" &&
-    config.groundTruth &&
+    config.bigPlan &&
     db &&
     providerKeyPresent(planMetaModel.provider)
   ) {
@@ -846,7 +842,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     ckpt.arm();
   }
   // Headless has no permission hook, so the done-gate registers after the checkpoint hook.
-  if (nonInteractive && gtGateBefore) agent.addBeforeToolCall(gtGateBefore);
+  if (nonInteractive && bigPlanGateBefore) agent.addBeforeToolCall(bigPlanGateBefore);
   if (nonInteractive) {
     const prompt = args.prompt.join(" ").trim();
     if (!prompt) {
@@ -967,7 +963,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       initialResume,
       planSpawn: spawnFactory,
       planMetaModel,
-      gtGateBefore,
+      bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
     }),
