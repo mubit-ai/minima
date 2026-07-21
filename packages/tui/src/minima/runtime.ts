@@ -266,6 +266,10 @@ export class MinimaAgent extends Agent {
        * excludedModels (the server does the subtraction). Never widened to
        * config.candidates. */
       candidates?: string[];
+      /** One-turn pin (picker ⏎): run exactly this model for THIS prompt — no server
+       * call, decisionBasis "pinned", no feedback. Beats config.pinned; pre-request
+       * candidate assembly, never a post-hoc override. */
+      pinModel?: Model;
     } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
@@ -404,6 +408,7 @@ export class MinimaAgent extends Agent {
             minQuality: opts.minQuality,
             excludedModels: excluded.length ? excluded : undefined,
             candidates: opts.candidates,
+            pinModel: opts.pinModel,
             signal: routeController.signal,
           });
         } catch (exc) {
@@ -857,9 +862,17 @@ export class MinimaAgent extends Agent {
       minQuality?: number;
       excludedModels?: string[];
       candidates?: string[];
+      pinModel?: Model;
       signal?: AbortSignal;
     },
   ): Promise<RoutingResult | null> {
+    // An explicit one-shot pin (picker ⏎) beats a persistent pin: run exactly this model.
+    if (opts.pinModel) {
+      this.agentState.model = opts.pinModel;
+      this.offlineReason = null;
+      this.offlineKind = null;
+      return pinnedResult(opts.pinModel);
+    }
     // A hard pin bypasses Minima entirely: run that model directly.
     if (this.config.pinned) {
       const pinnedId = this.config.candidates[0];

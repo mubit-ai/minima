@@ -3,8 +3,9 @@
  *
  * The registry can hold hundreds of models (OpenRouter + Minima catalog), so this is a
  * type-to-filter list over a scrolling viewport: type to narrow (matches name/provider/id,
- * space-separated AND tokens), ↑/↓ to move, ⏎ to run, Tab to pin (bypass routing), Esc to
- * cancel. Pinning sets MinimaAgent.config.pinned so the chosen model runs directly.
+ * space-separated AND tokens), ↑/↓ to move, ⏎ to run ONCE (a one-turn pin — the pick
+ * serves exactly the next prompt, then routing resumes), Tab to pin persistently (bypass
+ * routing until unpinned), Esc to cancel.
  */
 
 import { Box, Text, useInput } from "ink";
@@ -107,7 +108,7 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
       {start + WINDOW < filtered.length ? (
         <Text color="gray">{`  ↓ ${filtered.length - start - WINDOW} more`}</Text>
       ) : null}
-      <Text color="gray">{"↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel"}</Text>
+      <Text color="gray">{"↑/↓ select · ⏎ run once · Tab pin · type to filter · Esc cancel"}</Text>
     </Box>
   );
 }

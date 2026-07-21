@@ -109,6 +109,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
+import { type PinStash, applyPersistentPin, applyUnpin } from "./model_pick.ts";
 import {
   type PanelNavKey,
   type PanelState,
@@ -1453,6 +1454,11 @@ export function HarnessApp({
   // The in-progress line stashed when the user first presses Up into history, restored on the way back.
   const draftRef = useRef("");
 
+  // One-turn pin (picker ⏎): consumed synchronously by the next onSubmit — a ref, not state.
+  const oneShotModelRef = useRef<Model | null>(null);
+  // The candidate pool the first persistent pin narrowed away (unpin restores it).
+  const pinStashRef = useRef<PinStash>({ pool: null });
+
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
 
@@ -1953,14 +1959,25 @@ export function HarnessApp({
   });
 
   function pickModel(model: Model, pinned: boolean) {
-    agent.agentState.model = model;
     if (pinned) {
-      agent.config.pinned = true;
-      agent.config.candidates = [model.id];
+      applyPersistentPin(agent.config, pinStashRef.current, model);
+      agent.agentState.model = model;
       setBasis("pinned");
     } else {
-      agent.config.pinned = false;
-      setBasis("minima");
+      // ⏎ = one-turn pin: the NEXT prompt runs this model (pre-request candidate
+      // assembly), then routing resumes — so a persistent pin is released here, and
+      // agentState.model is left alone (the turn itself sets it via pinModel).
+      if (agent.config.pinned) applyUnpin(agent.config, pinStashRef.current);
+      oneShotModelRef.current = model;
+      setBasis(`next:${model.id}`);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: `next prompt runs ${model.id} once, then routing resumes`,
+          toolName: "model",
+        },
+      ]);
     }
     setPickerOpen(false);
   }
@@ -3390,7 +3407,7 @@ export function HarnessApp({
         if (!target) {
           setPickerOpen(true);
         } else if (target === "auto" || target === "unpin" || target === "clear") {
-          agent.config.pinned = false;
+          applyUnpin(agent.config, pinStashRef.current);
           setBasis("minima");
           setMessages((m) => [
             ...m,
@@ -3407,9 +3424,8 @@ export function HarnessApp({
         } else {
           const matched = allModels().find((m) => m.id.toLowerCase() === target);
           if (matched) {
+            applyPersistentPin(agent.config, pinStashRef.current, matched);
             agent.agentState.model = matched;
-            agent.config.pinned = true;
-            agent.config.candidates = [matched.id];
             setBasis("pinned");
             setMessages((m) => [
               ...m,
@@ -3860,6 +3876,9 @@ export function HarnessApp({
       buildSystem: (s) => buildPlannerSystemPrompt(PLANNER_PERSONA, s),
       promptPlanner: async (turn, systemPrompt) => {
         setCouncilPhase(null);
+        // An explicit one-shot pick (picker ⏎) wins over the premium pool (pin-wins rule).
+        const pin = oneShotModelRef.current;
+        oneShotModelRef.current = null;
         // promptRouted's finally restores the system prompt it saw at entry — the planner
         // persona. If exit_plan finalized/canceled mid-turn, exitPlanMode's restore to the
         // build prompt would be stomped by that finally; re-apply it after the turn.
@@ -3869,6 +3888,7 @@ export function HarnessApp({
         // rides regardless of the premium flag so plan-turn outcomes cluster server-side.
         const routing = await agent.promptRouted(turn, {
           candidates: premium?.candidates,
+          pinModel: pin ?? undefined,
           tags: ["phase:plan"],
         });
         if (getMode() !== "plan" && base != null) {
@@ -3952,7 +3972,9 @@ export function HarnessApp({
           ]);
         }
         const expanded = expandAtFiles(text, process.cwd());
-        const routing = await agent.promptRouted(expanded);
+        const pin = oneShotModelRef.current;
+        oneShotModelRef.current = null;
+        const routing = await agent.promptRouted(expanded, pin ? { pinModel: pin } : {});
         surfaceRouting(routing);
       }
     } catch (exc) {
