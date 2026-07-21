@@ -4,6 +4,24 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.3] - 2026-07-21
+
+### Fixed
+- **Keyed lookup no longer depends on an unreleased SDK method** (server): every prod
+  recommend logged `keyed_lookup_degraded` because the adapter called
+  `self._client.lookup`, which does not exist in released `mubit-sdk` (0.10.0) — the
+  deterministic per-(cluster, model) evidence channel never left the process. A new
+  `_client_lookup` shim prefers a native `Client.lookup` when present and otherwise
+  drives the `core.lookup` op through the SDK's transport engine (same endpoint, key,
+  and error handling as generated methods). Verified against a pristine 0.10.0 install
+  and live against a dev Mubit instance.
+
+### Added
+- **Venv integrity check**: `scripts/verify_venv_integrity.py` re-hashes every installed
+  file against its wheel RECORD and fails on mismatch; runs first in `make test` and as
+  a CI step. Guards against hand-patched site-packages masking prod-only failures —
+  exactly how the keyed-lookup bug stayed invisible locally.
+
 ## [0.12.2] - 2026-07-20
 
 The memory spine: the SQLite ledger starts feeding decisions. Ten PRs across the

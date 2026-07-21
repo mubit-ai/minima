@@ -53,6 +53,7 @@ bun run build     # -> dist/minima native binary (bun build --compile)
 - **Offline tests MUST stay hermetic.** `tests/conftest.py` has an autouse fixture that neutralizes `.env` — never rely on ambient credentials in a non-`live` test.
 - For service tests: `tests/factories.py:FakeMemory` + `create_app(...)` + `TestClient` gives a full in-process app with no Mubit.
 - For TUI tests: register a faux provider/model and mock `fetch` — see existing `packages/tui/tests/*.test.ts` for the pattern. No test may hit the network or spend money.
+- **Never hand-patch site-packages.** `make test` (and CI) first runs `scripts/verify_venv_integrity.py`, which re-hashes every installed file against its wheel RECORD and fails on any mismatch — a patched venv once let the whole suite vouch for an SDK method no release has. To try an SDK change, use a local editable install or a pinned fork, then `uv sync --reinstall` to restore.
 
 ## Conventions
 
