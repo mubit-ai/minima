@@ -18,6 +18,7 @@ import type {
   Constraints,
   FeedbackResponse,
   RankedModel,
+  StepOutcome,
   TaskInput,
   TaskType,
 } from "./schemas.ts";
@@ -276,6 +277,12 @@ export class MinimaRouter {
     chosenEffort?: string;
     /** Provenance tag, e.g. "unlabeled" for cadence-skipped/abstained turns. */
     notes?: string;
+    /**
+     * Per-step objective verdicts (deterministic/user gate results only — never the
+     * judge) relayed to the server as Mubit process rewards. Independent of the
+     * turn label: sent even when evidenceSource is "none".
+     */
+    stepOutcomes?: StepOutcome[];
   }): Promise<FeedbackResponse> {
     return await this.client.feedback({
       recommendation_id: opts.recommendationId,
@@ -293,6 +300,7 @@ export class MinimaRouter {
       judged: opts.judged,
       chosen_effort: opts.chosenEffort,
       notes: opts.notes,
+      step_outcomes: opts.stepOutcomes?.length ? opts.stepOutcomes : undefined,
     });
   }
 }

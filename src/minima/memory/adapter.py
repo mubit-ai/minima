@@ -211,6 +211,20 @@ class Memory(Protocol):
         idempotency_key: str | None = None,
     ) -> str | None: ...
 
+    async def record_step_outcome(
+        self,
+        *,
+        lane: str,
+        step_id: str,
+        outcome: str,
+        signal: float,
+        step_name: str | None = None,
+        rationale: str = "",
+        directive_hint: str | None = None,
+        user_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict: ...
+
     async def batch_insert(
         self, *, run_id: str, items: list[dict], deduplicate: bool = True
     ) -> dict: ...
@@ -553,6 +567,35 @@ class MubitMemory:
             wait=True,
         )
         return _extract_record_id(raw)
+
+    async def record_step_outcome(
+        self,
+        *,
+        lane: str,
+        step_id: str,
+        outcome: str,
+        signal: float,
+        step_name: str | None = None,
+        rationale: str = "",
+        directive_hint: str | None = None,
+        user_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict:
+        # Process reward: a per-step verdict (POST /v2/control/step_outcome). Feeds
+        # reflect(include_step_outcomes) and Mubit's workflow induction.
+        raw = await threadpool.run(
+            self._client.record_step_outcome,
+            step_id=step_id,
+            outcome=outcome,
+            session_id=lane,
+            step_name=step_name,
+            signal=signal,
+            rationale=rationale,
+            directive_hint=directive_hint,
+            user_id=user_id,
+            metadata=dict(metadata) if metadata else None,
+        )
+        return raw if isinstance(raw, dict) else {}
 
     async def batch_insert(
         self, *, run_id: str, items: list[dict], deduplicate: bool = True

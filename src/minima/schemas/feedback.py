@@ -9,6 +9,27 @@ from pydantic import BaseModel, Field
 from minima.schemas.common import OutcomeLabel
 
 
+class StepOutcome(BaseModel):
+    """One plan step's objective verdict, relayed to Mubit as a process reward.
+
+    Dense per-step signals give reflection finer-grained failure attribution than the
+    turn-level outcome and feed Mubit's workflow induction (reusable procedure entries
+    distilled from repeatedly-credited step traces). Send only deterministic verdicts
+    (the harness's red->green gate results) — never model self-assessment.
+    """
+
+    step_id: str = Field(..., min_length=1)
+    step_name: str | None = None
+    outcome: OutcomeLabel
+    signal: float | None = Field(
+        None, ge=-1, le=1, description="reinforcement signal; derived from outcome when omitted"
+    )
+    rationale: str | None = None
+    directive_hint: str | None = Field(
+        None, description="corrective directive for future attempts at this step"
+    )
+
+
 class FeedbackRequest(BaseModel):
     recommendation_id: str = Field(..., min_length=1)
     chosen_model_id: str = Field(..., min_length=1, description="model actually run (may differ)")
@@ -61,6 +82,14 @@ class FeedbackRequest(BaseModel):
     )
     notes: str | None = None
     idempotency_key: str | None = None
+    step_outcomes: list[StepOutcome] = Field(
+        default_factory=list,
+        description=(
+            "Per-step objective verdicts from the run (gate results), relayed to memory "
+            "as process rewards. Independent of the turn-level label: steps carry their "
+            "own provenance, so they are recorded even when the turn is unlabeled."
+        ),
+    )
 
 
 class FeedbackResponse(BaseModel):
@@ -70,4 +99,5 @@ class FeedbackResponse(BaseModel):
     updated_confidence: float | None = None
     reflection_triggered: bool = False
     lesson_promoted: bool = False
+    step_outcomes_recorded: int = 0
     warnings: list[str] = Field(default_factory=list)

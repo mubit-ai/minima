@@ -20,6 +20,7 @@ class FakeMemory:
         self.remembered: list[dict[str, Any]] = []
         self.outcomes: list[dict[str, Any]] = []
         self.lessons: list[dict[str, Any]] = []
+        self.step_outcomes: list[dict[str, Any]] = []
         self.batches: list[tuple[str, list[dict]]] = []
         self.reflects: list[dict[str, Any]] = []
         self.recall_calls: list[dict[str, Any]] = []
@@ -58,6 +59,10 @@ class FakeMemory:
     async def remember_lesson(self, **kwargs: Any) -> str | None:
         self.lessons.append(kwargs)
         return "lesson-fake-1"
+
+    async def record_step_outcome(self, **kwargs: Any) -> dict:
+        self.step_outcomes.append(kwargs)
+        return {"success": True}
 
     async def batch_insert(
         self, *, run_id: str, items: list[dict], deduplicate: bool = True

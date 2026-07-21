@@ -18,6 +18,7 @@ import {
   MinimaRouter,
   ModelMapping,
   harnessConfig,
+  stepOutcomesFromGates,
 } from "../src/minima/index.ts";
 
 // M7.2 under the v6 identity join: a deterministic gate outranks the LLM judge in the feedback
@@ -260,5 +261,108 @@ describe("feedback: deterministic gate outranks the judge (M7.2)", () => {
     expect(judge.calls).toBe(1); // the judge WAS consulted
     reg.unregister();
     db.close();
+  });
+});
+
+describe("feedback: gate verdicts ride as step_outcomes (process rewards)", () => {
+  let judge: ReturnType<typeof countingJudge>;
+  beforeEach(() => {
+    judge = countingJudge(0.9);
+  });
+
+  test("deterministic gate → step_outcomes on the wire with step identity", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    seedGate(db, runId, "verified", "green");
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    const steps = fb.step_outcomes as { step_id: string; outcome: string; rationale?: string }[];
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.outcome).toBe("success");
+    expect(steps[0]!.step_id.length).toBeGreaterThan(0);
+    expect(String(steps[0]!.rationale)).toContain("deterministic");
+    reg.unregister();
+    db.close();
+  });
+
+  test("failed gate → step outcome failure even though turn label is failure too", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    agent.recoveryRungs = 0;
+    seedGate(db, runId, "failed", "red");
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    const steps = fb.step_outcomes as { outcome: string }[];
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.outcome).toBe("failure");
+    reg.unregister();
+    db.close();
+  });
+
+  test("no gates → step_outcomes absent (judge turn)", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    db.upsertPlanFromTodos(runId, [{ content: "A", status: "in_progress" }]);
+
+    await agent.promptRouted("do the thing");
+
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    expect(fb.step_outcomes).toBeUndefined();
+    reg.unregister();
+    db.close();
+  });
+
+  test("a stale gate from an earlier rec contributes no step outcome to a later prompt", async () => {
+    const { agent, reg, feedbackCalls, db, runId } = setup(judge);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("answer 1")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("answer 2")], stop_reason: "stop" }),
+    ]);
+    agent.recoveryRungs = 0;
+    seedGate(db, runId, "failed", "red"); // minted under rec-1
+
+    await agent.promptRouted("first prompt");
+    await agent.promptRouted("second prompt");
+
+    const second = feedbackCalls[1] as Record<string, unknown>;
+    expect(second.step_outcomes).toBeUndefined();
+    reg.unregister();
+    db.close();
+  });
+});
+
+describe("stepOutcomesFromGates mapping (feedback truth per step)", () => {
+  const base = { step_id: "s1", kind: "step_check", outcome: "verified", confidence: "green" };
+
+  test("judge-verified gates are excluded — model self-assessment is not a process reward", () => {
+    const steps = stepOutcomesFromGates([{ ...base, verified_by: "judge" }]);
+    expect(steps).toHaveLength(0);
+  });
+
+  test("unrunnable/unchecked are environmental, not evidence", () => {
+    const steps = stepOutcomesFromGates([
+      { ...base, outcome: "unrunnable", verified_by: "deterministic" },
+      { ...base, outcome: "unchecked", verified_by: "deterministic" },
+    ]);
+    expect(steps).toHaveLength(0);
+  });
+
+  test("last verdict per step wins (red→green flip collapses to success)", () => {
+    const steps = stepOutcomesFromGates([
+      { ...base, outcome: "failed", verified_by: "deterministic" },
+      { ...base, outcome: "verified", verified_by: "deterministic" },
+    ]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.outcome).toBe("success");
+  });
+
+  test("user-verified gates count; rows without a step identity are skipped", () => {
+    const steps = stepOutcomesFromGates([
+      { ...base, verified_by: "user" },
+      { ...base, step_id: null, verified_by: "deterministic" },
+    ]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.rationale).toContain("user");
   });
 });

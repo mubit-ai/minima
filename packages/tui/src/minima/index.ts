@@ -30,7 +30,13 @@ export {
 } from "./judge.ts";
 export type { QualityJudge } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
-export { MinimaAgent, gradeOutcome, type BeforeRoute, type MinimaAgentOptions } from "./runtime.ts";
+export {
+  MinimaAgent,
+  gradeOutcome,
+  stepOutcomesFromGates,
+  type BeforeRoute,
+  type MinimaAgentOptions,
+} from "./runtime.ts";
 export {
   buildMemoryProjection,
   memoryProjectionFor,
