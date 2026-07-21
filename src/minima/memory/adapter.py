@@ -249,6 +249,18 @@ class Memory(Protocol):
         self, *, lane: str, lesson_types: Sequence[str] | None = None, max_strategies: int = 5
     ) -> dict: ...
 
+    async def diagnose(
+        self,
+        *,
+        lane: str,
+        error_text: str,
+        error_type: str | None = None,
+        limit: int = 5,
+        user_id: str | None = None,
+    ) -> dict: ...
+
+    async def memory_health(self, *, lane: str, stale_threshold_days: int = 30) -> dict: ...
+
     async def health(self) -> dict: ...
 
 
@@ -627,6 +639,37 @@ class MubitMemory:
             session_id=lane,
             lesson_types=list(lesson_types) if lesson_types else None,
             max_strategies=max_strategies,
+        )
+        return raw if isinstance(raw, dict) else {}
+
+    async def diagnose(
+        self,
+        *,
+        lane: str,
+        error_text: str,
+        error_type: str | None = None,
+        limit: int = 5,
+        user_id: str | None = None,
+    ) -> dict:
+        # Failure lessons matching an error (POST /v2/control/diagnose) — the
+        # "here's how this failed before" brief for a recovery re-decision.
+        raw = await threadpool.run(
+            self._client.diagnose,
+            error_text=error_text,
+            session_id=lane,
+            error_type=error_type,
+            limit=limit,
+            user_id=user_id,
+        )
+        return raw if isinstance(raw, dict) else {}
+
+    async def memory_health(self, *, lane: str, stale_threshold_days: int = 30) -> dict:
+        # Namespace memory hygiene (POST /v2/control/memory_health): staleness,
+        # contradictions, low-confidence counts, promotion candidates.
+        raw = await threadpool.run(
+            self._client.memory_health,
+            session_id=lane,
+            stale_threshold_days=stale_threshold_days,
         )
         return raw if isinstance(raw, dict) else {}
 

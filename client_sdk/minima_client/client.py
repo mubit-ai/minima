@@ -18,6 +18,7 @@ from tenacity import (
 from minima.schemas.capabilities import CapabilitiesResponse
 from minima.schemas.common import Constraints, OutcomeLabel, TaskInput
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
+from minima.schemas.insight import DiagnoseRequest, DiagnoseResponse, MemoryHealthResponse
 from minima.schemas.models_catalog import ModelsResponse
 from minima.schemas.recommend import RecommendRequest, RecommendResponse
 from minima.schemas.savings import CalibrationResponse, PolicyValueResponse, SavingsResponse
@@ -273,6 +274,38 @@ class MinimaClient:
         raise_for_status(resp)
         return StrategiesResponse.model_validate(resp.json())
 
+    def diagnose(
+        self,
+        error_text: str,
+        *,
+        error_type: str | None = None,
+        limit: int = 5,
+        namespace: str | None = None,
+        user_id: str | None = None,
+    ) -> DiagnoseResponse:
+        """Failure lessons matching an error — 'here's how this failed before'."""
+        req = DiagnoseRequest(
+            error_text=error_text,
+            error_type=error_type,
+            limit=limit,
+            namespace=namespace,
+            user_id=user_id,
+        )
+        resp = self._client.post("/v1/diagnose", json=req.model_dump(exclude_none=True))
+        raise_for_status(resp)
+        return DiagnoseResponse.model_validate(resp.json())
+
+    def memory_health(
+        self, namespace: str | None = None, stale_threshold_days: int = 30
+    ) -> MemoryHealthResponse:
+        """Per-namespace memory hygiene: staleness, contradictions, promotion candidates."""
+        params: dict[str, Any] = {"stale_threshold_days": stale_threshold_days}
+        if namespace is not None:
+            params["namespace"] = namespace
+        resp = self._client.get("/v1/memory/health", params=params)
+        raise_for_status(resp)
+        return MemoryHealthResponse.model_validate(resp.json())
+
     def capabilities(self) -> CapabilitiesResponse:
         resp = self._client.get("/v1/capabilities")
         raise_for_status(resp)
@@ -431,6 +464,38 @@ class AsyncMinimaClient:
         resp = await self._client.get("/v1/models", params=params)
         raise_for_status(resp)
         return ModelsResponse.model_validate(resp.json())
+
+    async def diagnose(
+        self,
+        error_text: str,
+        *,
+        error_type: str | None = None,
+        limit: int = 5,
+        namespace: str | None = None,
+        user_id: str | None = None,
+    ) -> DiagnoseResponse:
+        """Failure lessons matching an error — 'here's how this failed before'."""
+        req = DiagnoseRequest(
+            error_text=error_text,
+            error_type=error_type,
+            limit=limit,
+            namespace=namespace,
+            user_id=user_id,
+        )
+        resp = await self._client.post("/v1/diagnose", json=req.model_dump(exclude_none=True))
+        raise_for_status(resp)
+        return DiagnoseResponse.model_validate(resp.json())
+
+    async def memory_health(
+        self, namespace: str | None = None, stale_threshold_days: int = 30
+    ) -> MemoryHealthResponse:
+        """Per-namespace memory hygiene: staleness, contradictions, promotion candidates."""
+        params: dict[str, Any] = {"stale_threshold_days": stale_threshold_days}
+        if namespace is not None:
+            params["namespace"] = namespace
+        resp = await self._client.get("/v1/memory/health", params=params)
+        raise_for_status(resp)
+        return MemoryHealthResponse.model_validate(resp.json())
 
     async def capabilities(self) -> CapabilitiesResponse:
         resp = await self._client.get("/v1/capabilities")

@@ -251,6 +251,32 @@ export class MinimaRouter {
     });
   }
 
+  /**
+   * Failure-lesson brief for a recovery re-decision: "here's how this failed
+   * before", from Mubit's diagnose via the server. Fail-open — a memory outage
+   * or old server must never block a retry. Returns null when nothing matched.
+   */
+  async diagnoseBrief(errorText: string): Promise<string | null> {
+    const text = errorText.trim();
+    if (!text) return null;
+    try {
+      const resp = await this.client.diagnose({
+        error_text: text.slice(0, 2000),
+        limit: 3,
+        namespace: this.config.namespace ?? undefined,
+      });
+      const lessons = (resp.failure_lessons ?? [])
+        .map((l) => (l.content ?? "").trim())
+        .filter((c) => c.length > 0);
+      if (lessons.length === 0) return null;
+      return `Past failure lessons for similar errors (from memory):\n${lessons
+        .map((c) => `- ${c}`)
+        .join("\n")}`;
+    } catch {
+      return null;
+    }
+  }
+
   async feedback(opts: {
     recommendationId: string;
     chosenModelId: string;

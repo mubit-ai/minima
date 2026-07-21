@@ -199,3 +199,33 @@ describe("asOutcome", () => {
 
 // keep mock referenced to satisfy lint when unused-import detection runs
 void mock;
+
+describe("MinimaClient.diagnose + memoryHealth", () => {
+  test("diagnose posts the error text to /v1/diagnose", async () => {
+    const { client, calls } = mockClient(() => ({
+      status: 200,
+      json: {
+        lane: "minima:default",
+        failure_lessons: [{ lesson_id: "l1", content: "watch the venv" }],
+        summary: "1 match",
+        total_failure_lessons: 1,
+      },
+    }));
+    const res = await client.diagnose({ error_text: "pytest timed out", limit: 3 });
+    expect(calls[0].path).toBe("/v1/diagnose");
+    expect((calls[0].body as Record<string, unknown>).error_text).toBe("pytest timed out");
+    expect(res.failure_lessons?.[0]?.content).toBe("watch the venv");
+  });
+
+  test("memoryHealth reads /v1/memory/health with params", async () => {
+    const { client, calls } = mockClient(() => ({
+      status: 200,
+      json: { lane: "minima:acme", stale_entries: 5, entry_counts: { lesson: 2 } },
+    }));
+    const res = await client.memoryHealth({ namespace: "acme", stale_threshold_days: 14 });
+    expect(calls[0].path).toBe("/v1/memory/health");
+    expect(calls[0].params).toContain("namespace=acme");
+    expect(calls[0].params).toContain("stale_threshold_days=14");
+    expect(res.stale_entries).toBe(5);
+  });
+});

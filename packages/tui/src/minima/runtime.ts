@@ -673,6 +673,10 @@ export class MinimaAgent extends Agent {
           // output so the retry reasons from evidence. Feedback DESIGN over retry count.
           const diag = await this.collectFailureDiagnostics();
           if (diag) replanPrefix += `\n\n${diag}`;
+          // Memory brief: failure lessons Mubit already learned for errors like this one
+          // (server /v1/diagnose). Fail-open; nothing matched → nothing injected.
+          const brief = await this.router.diagnoseBrief(errorText ?? diag ?? "");
+          if (brief) replanPrefix += `\n\n${brief}`;
           if (decision) writeRecoveryGate(this.recoveryGateDeps(), decision);
           this.ladderReplans += 1;
         } else {
