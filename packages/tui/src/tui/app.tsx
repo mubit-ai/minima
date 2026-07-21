@@ -138,7 +138,7 @@ import {
   renderRewindText,
 } from "./rewind_picker.ts";
 import { routingInfoWarnings } from "./routing-warnings.ts";
-import { StatusBar } from "./status.tsx";
+import { StatusBar, fmtUsd } from "./status.tsx";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { TextInput } from "./text-input.tsx";
@@ -2984,7 +2984,7 @@ export function HarnessApp({
               setBudgetStatus(agent.budget?.status() ?? null);
             });
             setBudgetStatus(agent.budget.status());
-            textOut = `Budget set: $${usd.toFixed(2)} (${agent.budget.mode} mode) — warnings at 50/75/90/100%`;
+            textOut = `Budget set: ${fmtUsd(usd)} (${agent.budget.mode} mode) — warnings at 50/75/90/100%`;
           } else {
             textOut = "Budget unavailable: persistence is disabled this session";
             isErr = true;
@@ -3004,7 +3004,7 @@ export function HarnessApp({
           }
         } else if (agent.budget) {
           const s = agent.budget.status();
-          textOut = `Budget: $${s.spentUsd.toFixed(4)} spent + $${s.reservedUsd.toFixed(4)} reserved of $${s.limitUsd.toFixed(2)} (${Math.round(s.fraction * 100)}%) · remaining $${s.remainingUsd.toFixed(4)} · mode ${s.mode}\n/budget set <usd> · /budget mode shadow|warn|enforce`;
+          textOut = `Budget: $${s.spentUsd.toFixed(4)} spent + $${s.reservedUsd.toFixed(4)} reserved of ${fmtUsd(s.limitUsd)} (${Math.round(s.fraction * 100)}%) · remaining $${s.remainingUsd.toFixed(4)} · mode ${s.mode}\n/budget set <usd> · /budget mode shadow|warn|enforce`;
         } else {
           textOut = "No budget set. /budget set <usd> to add one (warn mode by default).";
         }
@@ -3797,12 +3797,18 @@ export function HarnessApp({
     } else {
       setBasis("offline");
       const reason = agent.offlineReason ?? "Minima unreachable";
-      // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
+      const ranOn = agent.agentState.model?.id ?? "default model";
+      // Offline is graceful degradation — the turn still ran on the default model. Muted, not
+      // red. A budget-infeasible route is NOT an outage: /reconnect can't fix it, /budget can.
+      const note =
+        agent.offlineKind === "budget"
+          ? `ℹ budget cap: ${reason} — ran ${ranOn} unrouted. /budget set <usd> to raise the cap or /budget mode warn|shadow to relax it.`
+          : `ℹ routing offline: ${reason} — ran ${ranOn} unrouted. /reconnect to retry.`;
       setMessages((m) => [
         ...m,
         {
           role: "tool",
-          text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
+          text: note,
           toolName: "routing",
           isError: false,
         },

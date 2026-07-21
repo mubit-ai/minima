@@ -7,7 +7,7 @@
 export * from "./schemas.ts";
 export { MinimaClient, asOutcome } from "./client.ts";
 export type { MinimaClientOptions, FetchLike } from "./client.ts";
-export { MinimaError, raiseForStatus } from "./errors.ts";
+export { MinimaError, isBudgetInfeasible, raiseForStatus } from "./errors.ts";
 export {
   harnessConfig,
   configFromEnv,

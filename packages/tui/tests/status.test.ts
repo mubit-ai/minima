@@ -1,5 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { permsSummary } from "../src/tui/status.tsx";
+import { fmtUsd, permsSummary } from "../src/tui/status.tsx";
+
+describe("fmtUsd (adaptive money precision)", () => {
+  test("two decimals at cent scale and above", () => {
+    expect(fmtUsd(5)).toBe("$5.00");
+    expect(fmtUsd(0.01)).toBe("$0.01");
+    expect(fmtUsd(0)).toBe("$0.00");
+  });
+
+  test("sub-cent budgets keep their significant digits", () => {
+    expect(fmtUsd(0.002)).toBe("$0.002"); // /budget set 0.002 must not display as $0.00
+    expect(fmtUsd(0.0025)).toBe("$0.0025");
+    expect(fmtUsd(0.000001)).toBe("$0.000001");
+  });
+
+  test("degenerate values fall back to $0.00", () => {
+    expect(fmtUsd(Number.NaN)).toBe("$0.00");
+    expect(fmtUsd(1e-9)).toBe("$0.00");
+  });
+});
 
 describe("permsSummary (mode-aware perms footer)", () => {
   test("states what the ACTIVE mode does with w/e/b", () => {

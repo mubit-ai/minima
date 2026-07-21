@@ -36,6 +36,18 @@ export function permsSummary(
   return { effective, grants: list.length > 0 ? `--x ${list.join(", ")}` : null };
 }
 
+/**
+ * Money with adaptive precision: two decimals normally, but sub-cent values keep their
+ * significant digits ($0.002 must not render as $0.00 — a real budget can be that small).
+ */
+export function fmtUsd(v: number): string {
+  if (Number.isFinite(v) && v > 0 && v < 0.01) {
+    const s = v.toFixed(6).replace(/0+$/, "");
+    if (!s.endsWith(".")) return `$${s}`;
+  }
+  return `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
+}
+
 export interface StatusBarProps {
   model: string;
   basis: string;
@@ -135,7 +147,7 @@ export function StatusBar({
               <>
                 <Text color="gray"> / </Text>
                 <Text color={budgetColor}>
-                  ${budget.limitUsd.toFixed(2)} ({Math.round(budget.fraction * 100)}%
+                  {fmtUsd(budget.limitUsd)} ({Math.round(budget.fraction * 100)}%
                   {budget.mode === "enforce" ? "⛔" : ""})
                 </Text>
               </>

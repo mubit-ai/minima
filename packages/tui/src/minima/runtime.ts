@@ -33,6 +33,7 @@ import {
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
+import { isBudgetInfeasible } from "./errors.ts";
 import {
   type FailureDecision,
   type Intervention,
@@ -155,6 +156,9 @@ export class MinimaAgent extends Agent {
   private promptsRun = 0;
   /** Why the last route fell back to offline (null = routed fine). */
   offlineReason: string | null = null;
+  /** What KIND of failure that was: "budget" = nothing fits max_cost_per_call (fix the
+   * budget, /reconnect can't help); "unreachable" = a genuine outage. Null when routed. */
+  offlineKind: "budget" | "unreachable" | null = null;
   /** Why the last feedback write failed (null = ok). Non-fatal — kept for diagnostics. */
   lastFeedbackError: string | null = null;
   /** Mubit memory: recall-before-route + write-back. No-op unless wired in. */
@@ -239,6 +243,7 @@ export class MinimaAgent extends Agent {
     refreshRoutingEnv(this.config);
     this.router = MinimaRouter.forConfig(this.config, this.mapping);
     this.offlineReason = null;
+    this.offlineKind = null;
   }
 
   /**
@@ -405,6 +410,7 @@ export class MinimaAgent extends Agent {
           // Esc during routing: stop cleanly, don't run the model, don't record.
           if (routeController.signal.aborted) {
             this.offlineReason = null;
+            this.offlineKind = null;
             this.lastAborted = true;
             return lastRouting;
           }
@@ -413,6 +419,7 @@ export class MinimaAgent extends Agent {
         // Aborted the instant routing returned (before any spend): end right here.
         if (routeController.signal.aborted) {
           this.offlineReason = null;
+          this.offlineKind = null;
           this.lastAborted = true;
           return routing;
         }
@@ -555,8 +562,21 @@ export class MinimaAgent extends Agent {
         // corrupts the server's observed-cost basis).
         const runUsage = this.usageSince(runStartIdx);
         // Swap the reservation for realized spend (even on error — partial spend is real).
+        // An unrouted (offline) run has no reservation: book its realized spend directly so
+        // the ledger, thresholds, and the enforce gate keep seeing the whole session. Keyed
+        // on routing === null (not the missing reservation) — a pinned turn reserves and
+        // reconciles above, and must never book twice.
         if (this.budget && reservationId) {
           this.budget.reconcile(reservationId, runUsage.cost.total, routing?.recommendationId);
+        } else if (this.budget && routing === null) {
+          try {
+            this.budget.bookSpend(
+              runUsage.cost.total,
+              `unrouted: ${shortLabel(this.offlineReason ?? "offline")}`,
+            );
+          } catch {
+            // wallet bookkeeping must never break the turn
+          }
         }
 
         // Per-rung feedback: the failed rung's outcome reaches the server too — that IS
@@ -849,6 +869,7 @@ export class MinimaAgent extends Agent {
       if (model) {
         this.agentState.model = model;
         this.offlineReason = null;
+        this.offlineKind = null;
         return pinnedResult(model);
       }
     }
@@ -892,6 +913,7 @@ export class MinimaAgent extends Agent {
         signal: opts.signal,
       });
       this.offlineReason = null;
+      this.offlineKind = null;
       if (this.beforeRouteHook) {
         const overridden = await this.beforeRouteHook(routing, taskText);
         if (overridden) return overridden;
@@ -902,6 +924,15 @@ export class MinimaAgent extends Agent {
       // An Esc during routing is a user abort, NOT a routing failure — never
       // degrade it to an offline run; let promptRouted short-circuit cleanly.
       if (opts.signal?.aborted) throw exc;
+      const budgetInfeasible = isBudgetInfeasible(exc);
+      // Nothing fits the cap + enforce: an unrouted fallback would violate the cap by
+      // construction — refuse the turn instead of switching onto the unenforced path.
+      if (budgetInfeasible && this.budget?.mode === "enforce") {
+        const s = this.budget.status();
+        throw new Error(
+          `budget: no candidate fits the remaining $${s.remainingUsd.toFixed(4)} of $${s.limitUsd.toFixed(2)} — raise it with /budget set <usd> or relax with /budget mode warn`,
+        );
+      }
       if (this.config.allowOffline) {
         // Explicit candidates are a hard pool even offline: a routing-server outage must
         // not silently run the turn on a cheap incumbent when providers are reachable.
@@ -915,6 +946,7 @@ export class MinimaAgent extends Agent {
           }
         }
         this.offlineReason = errText(exc);
+        this.offlineKind = budgetInfeasible ? "budget" : "unreachable";
         return null;
       }
       throw exc;

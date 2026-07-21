@@ -35,3 +35,14 @@ export function raiseForStatus(status: number, body: unknown): void {
   if (status >= 200 && status < 300) return;
   throw new MinimaError(extractDetail(body), status, body);
 }
+
+/**
+ * The server's "no model within max_cost_per_call budget" refusal (NoCandidatesError → 422).
+ * The substring match matters: "no models match the supplied constraints" is also a 422 but
+ * is NOT a budget problem.
+ */
+export function isBudgetInfeasible(exc: unknown): boolean {
+  return (
+    exc instanceof MinimaError && exc.status === 422 && exc.message.includes("max_cost_per_call")
+  );
+}

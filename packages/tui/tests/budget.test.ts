@@ -175,6 +175,22 @@ describe("BudgetLedger (DB-backed)", () => {
     db.close();
   });
 
+  test("maxCostPerCall: remaining in warn/enforce; undefined when shadow or spent out", () => {
+    const db = new MinimaDb(":memory:");
+    const warn = new BudgetLedger({ db, scopeKey: "m1", limitUsd: 0.01, mode: "warn" });
+    expect(warn.maxCostPerCall()).toBeCloseTo(0.01, 8);
+    const r = warn.reserve(0.02) as { ok: true; id: string };
+    warn.reconcile(r.id, 0.02); // spent past the limit
+    // Exhausted in warn = UNCAPPED, not 0: warn never blocks, and a $0 cap would make
+    // every subsequent route infeasible (the F1 death spiral this file guards against).
+    expect(warn.maxCostPerCall()).toBeUndefined();
+    const shadow = new BudgetLedger({ db, scopeKey: "m2", limitUsd: 0.01, mode: "shadow" });
+    expect(shadow.maxCostPerCall()).toBeUndefined(); // shadow never changes routing
+    const enforce = new BudgetLedger({ db, scopeKey: "m3", limitUsd: 0.01, mode: "enforce" });
+    expect(enforce.maxCostPerCall()).toBeCloseTo(0.01, 8);
+    db.close();
+  });
+
   test("budget_events audit trail is written", () => {
     const db = new MinimaDb(":memory:");
     const b = new BudgetLedger({ db, scopeKey: "s5", limitUsd: 1.0 });
