@@ -210,7 +210,7 @@ describe("v17 observer ledger migration", () => {
     db.db.close();
   });
 
-  test("a v16 database opens and migrates append-only to v17 (tables created, data kept)", () => {
+  test("a v16 database opens and migrates append-only (tables created, data kept)", () => {
     const path = migratedDbPath();
     const raw = new Database(path);
     raw.exec("DROP TABLE observer_verdicts");
@@ -240,6 +240,64 @@ describe("v17 observer ledger migration", () => {
     db.insertObserverEvent({ verdictId: vid, event: "fired" });
     expect(db.getObserverVerdicts(runId)).toHaveLength(1);
     expect(db.listObserverEvents(vid)).toHaveLength(1);
+    db.db.close();
+  });
+});
+
+describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
+  test("a v17 database (no rec_id column) migrates append-only, old rows read rec_id null", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("DROP INDEX ix_observer_verdicts_rec");
+    raw.exec("ALTER TABLE observer_verdicts DROP COLUMN rec_id");
+    raw.exec("UPDATE schema_meta SET version = 17");
+    raw.exec(
+      `INSERT INTO projects (project_key, created) VALUES ('p18', 1);
+       INSERT INTO runs (run_id, project_key, created, updated) VALUES ('run-v17', 'p18', 1, 1);
+       INSERT INTO observer_verdicts (id, run_id, turn, kind, claim, severity, created_at)
+       VALUES ('v-old', 'run-v17', 1, 'done_claim', 'old row', 'warn', 1)`,
+    );
+    raw.close();
+
+    const db = new MinimaDb(path);
+    expect(db.schemaVersion).toBe(LATEST);
+    const rows = db.getObserverVerdicts("run-v17");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.rec_id).toBeNull();
+    db.db.close();
+  });
+
+  test("hasObserverWarningsForRec: only warn-severity rows under the rec_id count", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.insertObserverVerdict({
+      runId,
+      turn: 1,
+      kind: "done_claim",
+      claim: "info only",
+      severity: "info",
+      recId: "rec-a",
+    });
+    expect(db.hasObserverWarningsForRec("rec-a")).toBe(false);
+    db.insertObserverVerdict({
+      runId,
+      turn: 2,
+      kind: "test_edit",
+      claim: "warn, other rung",
+      severity: "warn",
+      recId: "rec-b",
+    });
+    expect(db.hasObserverWarningsForRec("rec-a")).toBe(false);
+    db.insertObserverVerdict({
+      runId,
+      turn: 3,
+      kind: "test_edit",
+      claim: "warn, this rung",
+      severity: "warn",
+      recId: "rec-a",
+    });
+    expect(db.hasObserverWarningsForRec("rec-a")).toBe(true);
     db.db.close();
   });
 });
