@@ -14,7 +14,7 @@ const GLYPHS = ["⛔", "💰", "🛑", "🟢", "🟡", "🔴", "⚠", "ℹ"];
 describe("cli-truncate width contract (Ink truncate vs layout budget)", () => {
   test("a truncated line is never wider than the requested width", () => {
     for (const g of GLYPHS) {
-      const line = `x`.repeat(38) + g + "abcdef";
+      const line = `${"x".repeat(38)}${g}abcdef`;
       for (let w = 36; w <= stringWidth(line); w++) {
         const cut = cliTruncate(line, w);
         expect(stringWidth(cut)).toBeLessThanOrEqual(w);

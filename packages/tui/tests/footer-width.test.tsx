@@ -1,7 +1,8 @@
-import { EventEmitter } from "node:events";
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import { stripVTControlCharacters } from "node:util";
 import { Box, render } from "ink";
-import React from "react";
+import type React from "react";
 import stringWidth from "string-width";
 import { StatusBar } from "../src/tui/status.tsx";
 
@@ -32,10 +33,7 @@ async function renderedLines(el: React.ReactElement, columns: number): Promise<s
   const inst = render(el, { stdout: stdout as never, patchConsole: false });
   await new Promise((r) => setTimeout(r, 30));
   inst.unmount();
-  return stdout.frames
-    .join("")
-    .split("\n")
-    .map((l) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""));
+  return stdout.frames.join("").split("\n").map(stripVTControlCharacters);
 }
 
 function statusBar(over: Partial<React.ComponentProps<typeof StatusBar>> = {}) {
