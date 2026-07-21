@@ -283,14 +283,21 @@ export async function location(key: string): Promise<string> {
   return (await readFileStore())[key] !== undefined ? "file" : "—";
 }
 
-/** Load stored config into process.env (setdefault → real env / project files win). */
+/**
+ * Load stored config into process.env (setdefault → real env / project files win).
+ *
+ * A DEFINED env var — including defined-EMPTY (`export GEMINI_API_KEY=""`) — is an explicit
+ * user decision covering the ENTIRE provider, so if ANY name in a field's set (primary or
+ * alias) is defined, the whole field is skipped: the store must never re-arm a disabled
+ * provider through an undefined alias, nor let the primary shadow an explicitly-set alias
+ * (resolveApiKey walks primary-first by truthiness).
+ */
 export async function hydrateEnv(): Promise<void> {
   for (const f of allFields()) {
+    const names = [f.key, ...(f.aliases ?? [])];
+    if (names.some((n) => process.env[n] !== undefined)) continue;
     const val = await get(f.key);
     if (!val) continue;
-    if (process.env[f.key] === undefined) process.env[f.key] = val;
-    for (const alias of f.aliases ?? []) {
-      if (process.env[alias] === undefined) process.env[alias] = val;
-    }
+    for (const n of names) process.env[n] = val;
   }
 }

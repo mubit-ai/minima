@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { providerKeyPresent } from "../src/ai/provider_catalog.ts";
 import {
   backendName,
   fieldFor,
@@ -86,6 +87,74 @@ describe("config_store (file backend)", () => {
   test("backendName reports file when no native keychain is available", async () => {
     freshDir();
     expect(await backendName()).toMatch(/file|keychain/);
+  });
+
+  // F4: defined-empty ("" — e.g. `export GEMINI_API_KEY=""`) is the explicit "disable this
+  // provider" convention (scripts/tui_verify.sh's blank-key prologue relies on it). Hydration
+  // must treat the WHOLE name-set (primary + aliases) as covered by that decision.
+  const GOOGLE_ENV = ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"] as const;
+
+  function stashGoogleEnv(): Record<string, string | undefined> {
+    const saved: Record<string, string | undefined> = {};
+    for (const n of GOOGLE_ENV) {
+      saved[n] = process.env[n];
+      delete process.env[n];
+    }
+    return saved;
+  }
+
+  function restoreGoogleEnv(saved: Record<string, string | undefined>): void {
+    for (const n of GOOGLE_ENV) {
+      if (saved[n] === undefined) delete process.env[n];
+      else process.env[n] = saved[n];
+    }
+  }
+
+  test("defined-empty primary disables the whole provider — no alias re-arms it", async () => {
+    freshDir();
+    await setValue("GEMINI_API_KEY", "stored-gemini-key");
+    const saved = stashGoogleEnv();
+    try {
+      process.env.GEMINI_API_KEY = "";
+      await hydrateEnv();
+      expect(process.env.GEMINI_API_KEY).toBe(""); // never overwritten
+      expect(process.env.GOOGLE_API_KEY).toBeUndefined(); // the stored key must NOT re-enter here
+      expect(process.env.GOOGLE_GENAI_API_KEY).toBeUndefined();
+      expect(providerKeyPresent("google")).toBe(false); // provider stays disabled for routing
+    } finally {
+      restoreGoogleEnv(saved);
+    }
+  });
+
+  test("all names undefined → the store fills primary and aliases (today's behavior)", async () => {
+    freshDir();
+    await setValue("GEMINI_API_KEY", "stored-gemini-key");
+    const saved = stashGoogleEnv();
+    try {
+      await hydrateEnv();
+      expect(process.env.GEMINI_API_KEY).toBe("stored-gemini-key");
+      expect(process.env.GOOGLE_API_KEY).toBe("stored-gemini-key");
+      expect(process.env.GOOGLE_GENAI_API_KEY).toBe("stored-gemini-key");
+    } finally {
+      restoreGoogleEnv(saved);
+    }
+  });
+
+  test("a defined alias blocks the whole field — the store can't shadow an explicit env key", async () => {
+    freshDir();
+    await setValue("GEMINI_API_KEY", "stored-gemini-key");
+    const saved = stashGoogleEnv();
+    try {
+      process.env.GOOGLE_API_KEY = "explicit-from-shell";
+      await hydrateEnv();
+      expect(process.env.GOOGLE_API_KEY).toBe("explicit-from-shell"); // never overwritten
+      // Filling the primary would make resolveApiKey (primary-first) pick the STORED key
+      // over the user's explicit alias — the whole field is skipped instead.
+      expect(process.env.GEMINI_API_KEY).toBeUndefined();
+      expect(process.env.GOOGLE_GENAI_API_KEY).toBeUndefined();
+    } finally {
+      restoreGoogleEnv(saved);
+    }
   });
 
   test("EXA_API_KEY is a first-class secret credential that round-trips and hydrates", async () => {
