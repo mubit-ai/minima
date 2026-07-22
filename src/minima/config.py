@@ -242,6 +242,23 @@ class Settings(BaseSettings):
     minima_deferral_warn_rate: float = 0.3
     minima_deferral_min_chains: int = 5
 
+    # --- Structural bets (PR-F, every one default-off and individually droppable) ---
+    # F1: neural-linear contextual scoring. Per (lane, model) Bayesian linear head over the
+    # deterministic request-time context vector (classifier features — recall evidence
+    # carries no embedding), Thompson-blended with the Beta cell by evidence mass.
+    minima_contextual_bandit: bool = False
+    # F2: probe cold start. A model with no per-task capability entry borrows a prior from
+    # its cosine-nearest catalog neighbors (deterministic probe vectors; no live calls).
+    minima_probe_cold_start: bool = False
+    # F3: learned recall scoring. Per (lane, entry) utility tracker (credit on
+    # reinforcement, debit on failure-direction recall votes) re-weights evidence
+    # similarity in a sigmoid-bounded [0.5, 1.5] band before aggregation.
+    minima_recall_utility: bool = False
+    # F4a: harmful-vote weighting. Weight applied to the recall vote cast by a FAILED
+    # trusted-label outcome (a merely-unused recall keeps weight 1.0). 1.0 = legacy
+    # unweighted votes; 2.0 makes evidence that preceded a failure erode twice as fast.
+    minima_recall_vote_failure_weight: float = 1.0
+
     # --- Neighbor-vote classification ---
     # When the heuristic classifier returns `other`, disambiguate the task_type from the
     # ANN-recalled semantic neighbors' types (free + semantic) instead of (or before) a paid

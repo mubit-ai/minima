@@ -25,10 +25,12 @@ from minima.memory.records import (
     EVIDENCE_JUDGE,
     EVIDENCE_NONE,
     RECALL_VOTE_CAP,
+    TRUSTED_LABEL_SOURCES,
     OutcomeRecord,
     clamp01,
     fold_recall_vote,
     is_labeled,
+    label_score,
     merged_outcome,
     reconcile_quality,
     should_invalidate,
@@ -171,6 +173,26 @@ async def _relay_step_outcomes(
     return recorded
 
 
+def _update_contextual_head(
+    tenant: TenantContext, req: FeedbackRequest, quality: float | None, source: str, infra: bool
+) -> None:
+    """F1: fold a TRUSTED-label outcome into the chosen model's contextual head.
+
+    Pop-once on rec_id inside the store, so replays never double-count. Strictly
+    best-effort — head updates must never fail feedback.
+    """
+    if tenant.contextual is None or infra or source not in TRUSTED_LABEL_SOURCES:
+        return
+    try:
+        tenant.contextual.update(
+            req.recommendation_id,
+            req.chosen_model_id,
+            label_score(req.outcome.value, quality),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("contextual_update_failed", error=str(exc))
+
+
 def _fire_reflect(memory: Memory, lane: str, user_id: str | None) -> None:
     async def _run() -> None:
         try:
@@ -236,6 +258,7 @@ async def feedback(
     )
     _note_provider_snapshot(tenant, req)
     _record_label_signals(tenant, req)
+    _update_contextual_head(tenant, req, quality, source, infra)
 
     if not labeled:
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
@@ -361,6 +384,11 @@ async def feedback(
             )
             value = oc.get("updated_confidence")
             updated_confidence = float(value) if value is not None else None
+            # F3: reinforcement credit — every entry the outcome reinforced earns a
+            # utility credit in this lane (best-effort, in-memory).
+            if tenant.recall_utility is not None:
+                for eid in entry_ids:
+                    tenant.recall_utility.credit(stored.lane, eid)
         except Exception as exc:  # noqa: BLE001
             log.warning("record_outcome_failed", error=str(exc))
             warnings.append("reinforcement_failed")
@@ -454,7 +482,12 @@ async def _apply_recall_votes(
     record crosses the invalidation threshold gets its bi-temporal stamp here (logged
     as memory_invalidated). Every failure is swallowed — votes are additive hygiene,
     never worth failing feedback over.
+
+    F4a: a FAILED outcome's vote carries ``minima_recall_vote_failure_weight`` (default
+    1.0 — legacy behavior); evidence that preceded a verified failure erodes faster
+    than evidence that merely went unused.
     """
+    vote_weight = 1.0 if success else settings.minima_recall_vote_failure_weight
     for i, (eid, ref) in enumerate(neighbors[:RECALL_VOTE_CAP]):
         # Dereference wants a durable reference id; a numeric core-plane node id is not
         # resolvable, so such neighbors only count when they carry a reference.
@@ -465,7 +498,7 @@ async def _apply_recall_votes(
             ev = await tenant.memory.dereference(lane=lane, reference_id=target)
             if ev is None or ev.record is None or ev.record.invalidated_at is not None:
                 continue
-            voted = fold_recall_vote(ev.record, success)
+            voted = fold_recall_vote(ev.record, success, vote_weight)
             if should_invalidate(
                 voted,
                 min_n=settings.minima_recall_vote_min_n,
@@ -490,6 +523,9 @@ async def _apply_recall_votes(
                 importance="low",
                 source="human",
             )
+            # F3: an invalidation-direction (failure) vote debits the entry's utility.
+            if not success and tenant.recall_utility is not None:
+                tenant.recall_utility.debit(lane, target, vote_weight)
         except Exception as exc:  # noqa: BLE001 — votes must never fail feedback
             log.warning("recall_vote_failed", target=target, error=str(exc))
 
@@ -616,6 +652,7 @@ async def _late_feedback(
     _record_preference_pair(tenant, req, decision.cluster, EVIDENCE_NONE if infra else source)
     _note_provider_snapshot(tenant, req)
     _record_label_signals(tenant, req)
+    _update_contextual_head(tenant, req, quality, source, infra)
 
     if not labeled:
         steps_recorded = await _relay_step_outcomes(

@@ -681,6 +681,29 @@ export interface UserSignalHistoryRow extends UserSignalRow {
   run_id: string | null;
 }
 
+/** One routed decision labeled by a deterministic gate — contrast-pair mining input (F5a). */
+export interface GateLabeledDecisionRow {
+  rec_id: string;
+  task_type: string | null;
+  chosen_model: string | null;
+  gate_id: string;
+  gate_outcome: string | null;
+  gate_confidence: string | null;
+  created_at: string | null;
+  step_content: string | null;
+}
+
+/** One plan step with its latest gate verdict — workflow-induction mining input (F5b). */
+export interface PlanStepVerdictRow {
+  plan_id: string;
+  run_id: string | null;
+  idx: number;
+  content: string | null;
+  last_outcome: string | null;
+  last_gate_id: string | null;
+  created_at: string | null;
+}
+
 /** One git-shadow worktree snapshot (B3, v10) — the ref ↔ run ↔ prompt ↔ step mapping. */
 export interface CheckpointRow {
   id: string;
@@ -1628,6 +1651,48 @@ export class MinimaDb {
          ORDER BY ts LIMIT ?`,
       )
       .all(projectKey, limit) as Record<string, unknown>[];
+  }
+
+  /**
+   * Routed decisions labeled by a deterministic gate (verified or failed), joined to
+   * their step content, oldest first — the contrast-pair mining substrate (F5a).
+   */
+  getProjectGateLabeledDecisions(projectKey: string, limit = 200): GateLabeledDecisionRow[] {
+    return this.db
+      .query(
+        `SELECT rd.rec_id, rd.task_type, rd.chosen_model, g.id AS gate_id,
+                g.outcome AS gate_outcome, g.confidence AS gate_confidence,
+                g.created_at, ps.content AS step_content
+         FROM gates g
+         JOIN routing_decisions rd ON rd.rec_id = g.rec_id
+         LEFT JOIN plan_steps ps ON ps.id = g.step_id
+         WHERE g.verified_by = 'deterministic'
+           AND g.outcome IN ('verified', 'failed')
+           AND rd.task_type IS NOT NULL
+           AND rd.run_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+         ORDER BY g.created_at, g.rowid LIMIT ?`,
+      )
+      .all(projectKey, limit) as GateLabeledDecisionRow[];
+  }
+
+  /**
+   * Every plan step of the project's plans (plan order, step idx order) with the step's
+   * LATEST gate verdict — the workflow-induction mining substrate (F5b).
+   */
+  getProjectPlanStepVerdicts(projectKey: string): PlanStepVerdictRow[] {
+    return this.db
+      .query(
+        `SELECT p.id AS plan_id, p.session_id AS run_id, ps.idx, ps.content, ps.created_at,
+                (SELECT g.outcome FROM gates g WHERE g.step_id = ps.id
+                 ORDER BY g.created_at DESC, g.rowid DESC LIMIT 1) AS last_outcome,
+                (SELECT g.id FROM gates g WHERE g.step_id = ps.id
+                 ORDER BY g.created_at DESC, g.rowid DESC LIMIT 1) AS last_gate_id
+         FROM plan_steps ps
+         JOIN plans p ON p.id = ps.plan_id
+         WHERE p.session_id IN (SELECT run_id FROM runs WHERE project_key = ?)
+         ORDER BY p.created_at, p.rowid, ps.idx`,
+      )
+      .all(projectKey) as PlanStepVerdictRow[];
   }
 
   /** Distinct models this project's decisions actually chose (staleness-guard input). */

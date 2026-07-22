@@ -74,6 +74,7 @@ export {
   SCRIBE_BUDGET_FLOOR,
   type ScribeSignal,
   type ScribeSignalKind,
+  type MineOptions,
   type ScribeCandidate,
   type ScribeReport,
   type ScribePassDeps,
