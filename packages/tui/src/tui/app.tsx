@@ -1046,7 +1046,8 @@ export function HarnessApp({
   const enterPlanMode = useCallback(
     (goal: string) => {
       setMode("plan");
-      planSessionRef.current = new PlanSessionStore(goal);
+      const store = new PlanSessionStore(goal);
+      planSessionRef.current = store;
       interviewStateRef.current = newInterviewState();
       setPlanSessionGen((g) => g + 1);
       // Snapshot the base prompt only once per plan session — re-entering (e.g. /plan
@@ -1055,7 +1056,9 @@ export function HarnessApp({
       if (plannerBaseSystemPromptRef.current == null) {
         plannerBaseSystemPromptRef.current = agent.agentState.systemPrompt ?? "";
       }
-      agent.agentState.systemPrompt = PLANNER_PERSONA;
+      // Persona + goal snapshot from the start: the /plan start goal must reach the model
+      // even before the first plan turn rebuilds the prompt (and on the no-council fallback).
+      agent.agentState.systemPrompt = buildPlannerSystemPrompt(PLANNER_PERSONA, store);
     },
     [agent],
   );
@@ -1103,7 +1106,13 @@ export function HarnessApp({
     )
       return;
     enterPlanMode("");
-    setMessages((m) => [...m, { role: "tool", text: PLAN_ON_NOTICE, toolName: "plan" }]);
+    // Dedupe: a persisted-plan restore can heal right after another writer already pushed
+    // the notice — never stack two identical ON notices back to back.
+    setMessages((m) =>
+      m[m.length - 1]?.text === PLAN_ON_NOTICE
+        ? m
+        : [...m, { role: "tool", text: PLAN_ON_NOTICE, toolName: "plan" }],
+    );
   }, [mode, agent, planSpawn, planMetaModel, enterPlanMode]);
 
   // Shared finalize core (../minima/plan_finalize.ts) — one path for /plan finalize and the
@@ -3025,6 +3034,21 @@ export function HarnessApp({
         }
 
         if (sub === "start") {
+          // Idempotency guard (MUB-180): a live session is never silently replaced — that
+          // discarded the in-flight council state and re-emitted the ON notice. Only a
+          // still-unset goal may be adopted; a rework goes through /plan cancel first.
+          const live = planSessionRef.current;
+          if (live) {
+            if (rest && !live.session.goal.trim()) {
+              live.setGoal(rest);
+              pushPlan(`Plan mode is already ON — goal set: ${rest}`);
+            } else {
+              pushPlan(
+                "Plan mode is already ON — goal unchanged. /plan status · /plan finalize · /plan cancel to start over.",
+              );
+            }
+            break;
+          }
           enterPlanMode(rest);
           pushPlan(
             rest ? `Plan mode ON — goal: ${rest}` : "Plan mode ON — describe the goal to begin.",

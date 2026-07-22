@@ -989,7 +989,7 @@ export function shouldConveneCouncil(userTurn: string): boolean {
 // (rounds 0 covers both the /plan start goal and the opening ask) or an explicit replan
 // intent. Follow-up Q&A goes straight to the planner, with the keeper mini-update keeping
 // the draft current. The regex is the deliberate escape hatch for reworks phrased in
-// ordinary words; /plan start is always available to force a fresh council.
+// ordinary words; /plan cancel + /plan start is always available to force a fresh session.
 const REPLAN_RE =
   /\b(re-?plan|rethink|start (over|again)|from scratch|new plan|scrap th(is|e) plan|different approach|redo the plan)\b/i;
 

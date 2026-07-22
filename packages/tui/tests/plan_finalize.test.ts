@@ -64,6 +64,20 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     expect(out.auditNote).toBe("");
   });
 
+  test("the /plan start goal lands in BigPlan.md on both synthesis paths (MUB-180)", async () => {
+    // Deterministic path: no synthesis, the doc's Goal section is the session goal verbatim.
+    const store = new PlanSessionStore("GOAL-MARKER-180 ship the endpoint");
+    const det = deps();
+    const out1 = await finalizePlan(store, det.base);
+    if (out1.kind !== "ok") throw new Error(`expected ok, got ${out1.kind}`);
+    expect(det.written[0]!.content).toContain("## Goal\n\nGOAL-MARKER-180 ship the endpoint");
+    // Synthesis path with an empty synth goal: the session goal is the fallback, never dropped.
+    const syn = deps({ metaModel: META, synthesize: async () => synth({ goal: "" }) });
+    const out2 = await finalizePlan(store, syn.base);
+    if (out2.kind !== "ok") throw new Error(`expected ok, got ${out2.kind}`);
+    expect(syn.written[0]!.content).toContain("## Goal\n\nGOAL-MARKER-180 ship the endpoint");
+  });
+
   test("audit blocker refuses without force — nothing written, message names --force", async () => {
     const store = new PlanSessionStore("g");
     const { base, written } = deps({

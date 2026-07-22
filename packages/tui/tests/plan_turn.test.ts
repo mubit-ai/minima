@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { BudgetLedger } from "../src/minima/budget.ts";
 import { CostMeter } from "../src/minima/meter.ts";
-import { type CouncilRoundResult, PlanSessionStore } from "../src/minima/plan_session.ts";
+import {
+  type CouncilRoundResult,
+  PlanSessionStore,
+  buildPlannerSystemPrompt,
+} from "../src/minima/plan_session.ts";
 import { type PlanTurnDeps, runPlanTurn } from "../src/minima/plan_turn.ts";
 
 const roundResult = (over: Partial<CouncilRoundResult> = {}): CouncilRoundResult => ({
@@ -323,5 +327,34 @@ describe("MP15 — conditional convening + keeper mini-update", () => {
     await runPlanTurn(seededStore(), "short follow up", r2.deps);
     expect(miniCalls).toBe(0);
     db.close();
+  });
+});
+
+describe("goal plumbing (MUB-180)", () => {
+  test("the /plan start goal reaches the council round and the planner system prompt", async () => {
+    const goalsSeen: string[] = [];
+    const r = makeDeps({
+      runRound: async (session) => {
+        goalsSeen.push(session.goal);
+        return roundResult();
+      },
+      buildSystem: (s) => buildPlannerSystemPrompt("PERSONA", s),
+    });
+    const store = new PlanSessionStore("ship the goal marker end-to-end");
+    await runPlanTurn(store, "a substantive turn", r.deps);
+    expect(goalsSeen).toEqual(["ship the goal marker end-to-end"]);
+    expect(r.plannerCalls).toHaveLength(1);
+    expect(r.plannerCalls[0]!.system).toContain("Goal: ship the goal marker end-to-end");
+  });
+
+  test("a goal set AFTER the session started (idempotent /plan start) reaches the next turn", async () => {
+    const r = makeDeps({
+      convene: () => false,
+      buildSystem: (s) => buildPlannerSystemPrompt("PERSONA", s),
+    });
+    const store = new PlanSessionStore("");
+    store.setGoal("late-bound goal marker");
+    await runPlanTurn(store, "short", r.deps);
+    expect(r.plannerCalls[0]!.system).toContain("Goal: late-bound goal marker");
   });
 });
