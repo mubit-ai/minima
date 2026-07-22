@@ -166,7 +166,7 @@ export function applyRecurrenceGate(signals: ScribeSignal[], minCount = 2): Scri
 // ---------------------------------------------------------------- extraction
 
 export interface ScribeCandidate {
-  kind: "note" | "workflow" | "lesson" | "guardrail";
+  kind: "note" | "workflow" | "lesson" | "guardrail" | "preference";
   content: string;
   trigger?: string | null;
   /** 1-based indices into the evidence list this claim rests on. */
@@ -184,7 +184,9 @@ export const SCRIBE_SYSTEM =
   "distill at most 3 durable memories worth injecting into FUTURE sessions in this " +
   "repository. Write each as one self-contained sentence or two, generalized past the " +
   "specific session (no run ids, no temp paths). kinds: lesson (something learned), " +
-  "guardrail (something to avoid), workflow (a repeatable procedure), note (other). " +
+  "guardrail (something to avoid), workflow (a repeatable procedure), preference (a " +
+  "durable user preference about how work should be done here — only from " +
+  "user_correction evidence), note (other). " +
   "Only claim what the evidence supports; cite the evidence line numbers you used. " +
   'Reply with ONLY a JSON array: [{"kind":"lesson","content":"...","trigger":"when to ' +
   'surface (optional)","evidence":[1,2]}]. Reply [] if nothing generalizes.';
@@ -206,7 +208,7 @@ export function parseCandidates(text: string): ScribeCandidate[] | null {
     return null;
   }
   if (!Array.isArray(parsed)) return null;
-  const kinds = new Set(["note", "workflow", "lesson", "guardrail"]);
+  const kinds = new Set(["note", "workflow", "lesson", "guardrail", "preference"]);
   const out: ScribeCandidate[] = [];
   for (const c of parsed) {
     if (typeof c !== "object" || c === null) continue;
