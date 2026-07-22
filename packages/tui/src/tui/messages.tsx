@@ -157,10 +157,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
  * (transcriptGen bumps on /clear and resume).
  */
 /**
- * The MINIMA banner block. Lives in the live frame while the transcript is empty (it hides
- * for overlays/autocomplete), then commits INTO <Static> with the first message so its rows
- * leave the live frame as printed scrollback instead of dead padding (MUB-167). One JSX for
- * both forms; bannerRowCount in layout.ts is its row ruler.
+ * The MINIMA banner block. Commits INTO <Static> at the start of a fresh generation (boot,
+ * /clear), so it prints once at the TOP of the cleared screen and the transcript grows
+ * downward under it (R1; MUB-167's commit moved from first-message to gen-start).
+ * bannerRowCount in layout.ts is its row ruler.
  */
 export function BannerBlock({ tip, width }: { tip: string | null; width?: number }) {
   return (

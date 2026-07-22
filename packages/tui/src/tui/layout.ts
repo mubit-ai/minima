@@ -367,10 +367,12 @@ export const SCROLLBACK_SAFETY_ROWS = 2;
  * reach `rows`. Estimate errors degrade to transient padding (over-count) or a top-clip
  * under overflow="hidden" (under-count) — never a strand, never a wipe.
  *
- * prevHeight 0 = reset (startup, /clear, rewind, resume — the <Static> remount reprints the
- * transcript and seats itself); a resize reset seeds `rows − SCROLLBACK_SAFETY_ROWS` instead
- * (one full-height flex-end frame writes past the last row and re-anchors — the same physics
- * the panel-close reseat used).
+ * Resets (R1): every ledger reset — mount, remount (/clear, rewind, resume), resize — seeds
+ * prevHeight = `rows − SCROLLBACK_SAFETY_ROWS` (one full-height flex-end frame). A gen-start
+ * frame that commits the banner books its rows as `committedRows`, so banner + frame fill
+ * the screen exactly and the banner holds the top; resets that reprint an existing
+ * transcript book nothing — the cap frame writes past the last row and the terminal scroll
+ * re-anchors the composer at the bottom (the same physics the panel-close reseat used).
  */
 export function nextLiveFrameHeight(
   prevHeight: number,
