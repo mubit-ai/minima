@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from minima.config import Settings
 from minima.recommender import escalation
+from minima.recommender.decisionlog import DecisionRecord
 from minima.recommender.types import CandidateScore, ModelAggregate
 from minima.schemas.common import DecisionBasis
 from minima.schemas.models_catalog import ModelCard
@@ -117,6 +118,67 @@ def test_absent_recall_confidence_is_not_a_signal():
 
 def _uncertainty_settings() -> Settings:
     return Settings(mubit_api_key="t", minima_escalation_mode="uncertainty")
+
+
+def _row(cluster: str, *, reconciled: bool = True, reason: str | None = None) -> DecisionRecord:
+    rec = DecisionRecord(
+        recommendation_id="r",
+        org_id="default",
+        lane="minima:default",
+        cluster=cluster,
+        task_type="code",
+        difficulty="hard",
+        fingerprint="fp",
+        ts=1.0,
+        tau=0.7,
+        policy="argmin",
+        epsilon=0.0,
+        chosen_model_id="m",
+        escalated=False,
+    )
+    if reconciled:
+        rec.realized_outcome = "success"
+        rec.realized_model_id = "m"
+    rec.escalation_reason = reason
+    return rec
+
+
+def test_deferral_stats_counts_chains_per_cluster_reconciled_only():
+    rows = [
+        _row("code:hard", reason="gate_failed"),
+        _row("code:hard", reason="judge_failed"),
+        _row("code:hard"),
+        _row("code:hard", reconciled=False, reason="gate_failed"),
+        _row("qa:easy"),
+    ]
+    stats = escalation.deferral_stats(rows)
+    assert stats == {"code:hard": (2, 3), "qa:easy": (0, 1)}
+
+
+def test_deferral_warning_requires_rate_and_min_chains():
+    assert (
+        escalation.deferral_warning(
+            {"code:hard": (5, 10)}, "code:hard", warn_rate=0.3, min_chains=5
+        )
+        == "escalation_rate_high:code:hard"
+    )
+    # Rate above threshold but too few chains.
+    assert (
+        escalation.deferral_warning(
+            {"code:hard": (4, 5)}, "code:hard", warn_rate=0.3, min_chains=5
+        )
+        is None
+    )
+    # Enough chains but rate at/below threshold.
+    assert (
+        escalation.deferral_warning(
+            {"code:hard": (6, 20)}, "code:hard", warn_rate=0.3, min_chains=5
+        )
+        is None
+    )
+    assert (
+        escalation.deferral_warning({}, "code:hard", warn_rate=0.3, min_chains=5) is None
+    )
 
 
 

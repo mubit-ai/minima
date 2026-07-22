@@ -8,10 +8,12 @@ the deleted pre-decision LLM reasoner (a guess made before anything ran).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from minima.config import Settings
 from minima.recommender.aggregate import is_conflicted
+from minima.recommender.decisionlog import DecisionRecord
 from minima.recommender.types import CandidateScore, ModelAggregate
 
 
@@ -62,3 +64,32 @@ def evaluate(
 
     decision.should_escalate = bool(decision.reasons)
     return decision
+
+
+def deferral_stats(rows: Iterable[DecisionRecord]) -> dict[str, tuple[int, int]]:
+    """Per-cluster ``(recovery_chains, reconciled_rows)`` from decision-log rows.
+
+    A chain is a reconciled decision that arrived as a recovery re-route (its feedback
+    carried escalation_reason); the rate chains/reconciled is the cluster's realized
+    deferral rate.
+    """
+    stats: dict[str, tuple[int, int]] = {}
+    for rec in rows:
+        if rec.realized_outcome is None:
+            continue
+        chains, total = stats.get(rec.cluster, (0, 0))
+        stats[rec.cluster] = (chains + (1 if rec.escalation_reason else 0), total + 1)
+    return stats
+
+
+def deferral_warning(
+    stats: dict[str, tuple[int, int]],
+    cluster: str,
+    *,
+    warn_rate: float,
+    min_chains: int,
+) -> str | None:
+    chains, total = stats.get(cluster, (0, 0))
+    if total > 0 and chains >= min_chains and chains / total > warn_rate:
+        return f"escalation_rate_high:{cluster}"
+    return None
