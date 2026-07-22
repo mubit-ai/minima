@@ -14,6 +14,7 @@ import {
   webSearchTool,
   writeTool,
 } from "../src/tools/index.ts";
+import { EXA_SEARCH_FEE_USD } from "../src/tools/web_search.ts";
 
 let tmp = "";
 afterEach(() => {
@@ -306,6 +307,37 @@ describe("web_search tool", () => {
     const res = await run(webSearchTool(), { query: "nothing" });
     expect((res.content[0] as { text: string }).text).toBe("No results found.");
     expect(res.details?.count).toBe(0);
+  });
+
+  // MUB-172: the Exa per-search fee is real provider spend — book it via onFeeUsd keyed by
+  // the tool_call_id, and disclose it in details.
+  test("books the Exa per-search fee via onFeeUsd, keyed by tool_call_id", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [{ url: "https://a.example", title: "Alpha" }] });
+    const fees: [number, string][] = [];
+    const res = await run(webSearchTool({ onFeeUsd: (usd, id) => fees.push([usd, id]) }), {
+      query: "x",
+    });
+    expect(fees).toEqual([[EXA_SEARCH_FEE_USD, "t1"]]);
+    expect(res.details?.feeUsd).toBe(EXA_SEARCH_FEE_USD);
+  });
+
+  test("Exa charges the search even when it returns zero results", async () => {
+    process.env.EXA_API_KEY = "test-key";
+    mockFetch(200, { results: [] });
+    const fees: number[] = [];
+    const res = await run(webSearchTool({ onFeeUsd: (usd) => fees.push(usd) }), { query: "x" });
+    expect(fees).toEqual([EXA_SEARCH_FEE_USD]);
+    expect(res.details?.feeUsd).toBe(EXA_SEARCH_FEE_USD);
+  });
+
+  test("DuckDuckGo is free: no fee callback, feeUsd 0 in details", async () => {
+    delete process.env.EXA_API_KEY;
+    mockFetch(200, DDG_LITE_HTML);
+    const fees: number[] = [];
+    const res = await run(webSearchTool({ onFeeUsd: (usd) => fees.push(usd) }), { query: "x" });
+    expect(fees).toEqual([]);
+    expect(res.details?.feeUsd).toBe(0);
   });
 });
 

@@ -91,7 +91,7 @@ import type { TodoTask } from "../tools/todowrite.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
-import { type ChildRow, ChildTree } from "./child_tree.tsx";
+import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
@@ -924,21 +924,7 @@ export function HarnessApp({
     childEventRef.handler = (e: ChildEvent) => {
       setChildrenState((prev) => {
         const next = new Map(prev);
-        const existing = next.get(e.childId);
-        // Determine status from the incoming AgentEvent kind.
-        const kind = (e.event as { kind?: string }).kind ?? "";
-        const isDone = kind === "run_complete" || kind === "error";
-        const isAborted = kind === "aborted";
-        const status: ChildRow["status"] = isAborted
-          ? "aborted"
-          : isDone
-            ? "success" === (e.event as { outcome?: string }).outcome
-              ? "done"
-              : "failure"
-            : "running";
-        const costUsd =
-          (e.event as { cost?: { total?: number } }).cost?.total ?? existing?.costUsd ?? 0;
-        next.set(e.childId, { stepId: e.stepId, depth: e.depth, status, costUsd });
+        next.set(e.childId, applyChildEvent(next.get(e.childId), e));
         return next;
       });
     };
@@ -1385,7 +1371,7 @@ export function HarnessApp({
    */
   function buildUsageLedger(): TocUsage[] {
     const agentMsgs = agent.agentState.messages;
-    return computeSections(agentMsgs)
+    return computeSections(agentMsgs, { toolFees: agent.meter?.toolFees })
       .sections.filter((s) => agentMsgs[s.startMsgIdx]?.role === "user")
       .map((s) => ({
         tokens: s.usage.inputTokens + s.usage.outputTokens,
@@ -2139,7 +2125,7 @@ export function HarnessApp({
       }
     }
     const totals = agent.meter?.totals();
-    if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
+    if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
     // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
     const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
     setInputTokens(stats.inputTokens);
@@ -2147,7 +2133,7 @@ export function HarnessApp({
     setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
     const notices: ChatMessage[] = [
-      resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd : 0),
+      resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd : 0),
     ];
     // D1 (v13): warn-only tooling-skew banner — the resumed run was recorded under a
     // different harness/toolset, so its history may replay imperfectly. Never blocks.
@@ -4338,7 +4324,7 @@ export function HarnessApp({
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
-      if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
+      if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
       if (agent.budget) setBudgetStatus(agent.budget.status());
 
       const last = getLastAssistant(agent);

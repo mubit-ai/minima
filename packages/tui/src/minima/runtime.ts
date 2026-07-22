@@ -134,6 +134,15 @@ export function stepOutcomesFromGates(
   return [...finals.values()].slice(0, 32);
 }
 
+/** MUB-173: the plan state a rung started from — the honest basis for step-cost stamping. */
+interface StepAttribution {
+  /** The step in progress when the rung began (null: none / no plan yet). */
+  stepId: string | null;
+  /** Step ids already completed when the rung began — the diff at write time isolates the
+   * step(s) THIS rung closed. */
+  completed: Set<string>;
+}
+
 export function gradeOutcome(quality: number): "success" | "partial" | "failure" {
   if (quality >= 0.8) return "success";
   if (quality >= 0.4) return "partial";
@@ -577,6 +586,10 @@ export class MinimaAgent extends Agent {
             return bigPlanStop ? bigPlanStop(assistant, results, state, messages) : false;
           });
         }
+        // Step attribution is captured NOW, at rung start (MUB-173): by decision-write time
+        // the model has usually completed the step, leaving no in_progress row to stamp —
+        // which zeroed /why's per-step realized $.
+        const stepAtStart = this.stepAttributionAtStart();
         // Everything appended from here belongs to THIS rung (for rung-total usage). The
         // rung's rec_id is minted BEFORE the run so every gate row written during tool
         // dispatch (which only happens inside super.prompt) carries this turn's identity.
@@ -676,6 +689,7 @@ export class MinimaAgent extends Agent {
           parentRecId: attempt > 0 ? firstRecId : null,
           reinforcedEntryIds,
           lessonPromoted,
+          stepAtStart,
         });
 
         // Recover? Only with a rung left, a routed (non-pinned) decision to learn from, and a REAL
@@ -795,6 +809,8 @@ export class MinimaAgent extends Agent {
       /** Mubit-side provenance from FeedbackResponse (cited by the work record). */
       reinforcedEntryIds?: string[] | null;
       lessonPromoted?: boolean | null;
+      /** MUB-173: plan attribution captured at rung START (stepAttributionAtStart). */
+      stepAtStart?: StepAttribution | null;
     },
   ): void {
     if (!this.db || !this.runId) return;
@@ -802,10 +818,26 @@ export class MinimaAgent extends Agent {
       const routed: "server" | "offline" | "pinned" =
         routing === null ? "offline" : routing.recommendationId === null ? "pinned" : "server";
       const recId = o.recId;
+      // MUB-173: stamp priority — the step in progress when the rung STARTED, else the step
+      // that transitioned to completed during this rung (newest first), else whatever is in
+      // progress now (a step opened mid-rung and still running). The old write-time-only read
+      // stamped null whenever the model completed the step within the same prompt.
       let stepId: string | null = null;
       if (this.config.bigPlan === true) {
         const plan = this.db.getActivePlan(this.runId);
-        stepId = plan ? (this.db.getInProgressStep(plan.id)?.id ?? null) : null;
+        if (plan) {
+          const steps = this.db.getPlanSteps(plan.id);
+          const completedThisRung = o.stepAtStart
+            ? [...steps]
+                .reverse()
+                .find((s) => s.status === "completed" && !o.stepAtStart!.completed.has(s.id))
+            : undefined;
+          stepId =
+            o.stepAtStart?.stepId ??
+            completedThisRung?.id ??
+            steps.find((s) => s.status === "in_progress")?.id ??
+            null;
+        }
       }
       const eventId = this.db.appendEvent({
         runId: this.runId,
@@ -865,6 +897,23 @@ export class MinimaAgent extends Agent {
       } catch {
         // persistence is fail-open — never break the turn
       }
+    }
+  }
+
+  /** MUB-173: read the plan state at rung start. Null when Big Plan is off or the read
+   * fails (fail-open — persistDecision then degrades to its write-time fallback). */
+  private stepAttributionAtStart(): StepAttribution | null {
+    if (this.config.bigPlan !== true || !this.db || !this.runId) return null;
+    try {
+      const plan = this.db.getActivePlan(this.runId);
+      if (!plan) return { stepId: null, completed: new Set() };
+      const steps = this.db.getPlanSteps(plan.id);
+      return {
+        stepId: steps.find((s) => s.status === "in_progress")?.id ?? null,
+        completed: new Set(steps.filter((s) => s.status === "completed").map((s) => s.id)),
+      };
+    } catch {
+      return null;
     }
   }
 

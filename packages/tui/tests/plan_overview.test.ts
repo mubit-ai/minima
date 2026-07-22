@@ -160,6 +160,28 @@ describe("buildPlanOverview (U3.1)", () => {
     const o = buildPlanOverview(db, runId);
     expect(o?.stepPos).toBe(1);
   });
+
+  // MUB-173(b): all steps done must read "step N/N" (matching the footer strip's
+  // activeStepPos), never the contradictory "step 0/N".
+  test("all-completed plan → stepPos falls back to steps.length, matching the footer strip", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.upsertPlanFromTodos(
+      runId,
+      [
+        { content: "a", status: "completed" },
+        { content: "b", status: "completed" },
+        { content: "c", status: "completed" },
+      ],
+      "T",
+    );
+    const o = buildPlanOverview(db, runId);
+    expect(o?.stepPos).toBe(3);
+    expect(o?.stepTotal).toBe(3);
+    const rows = planOverviewRows(o!, 60);
+    expect(rows[0]!.text).toContain("step 3/3");
+  });
 });
 
 describe("planOverviewRows / stepCardLines / renderPlanOverviewText (U3.1 + U3.3)", () => {

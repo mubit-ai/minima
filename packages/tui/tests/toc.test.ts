@@ -1,4 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import {
+  AssistantMessage,
+  Message,
+  type Model,
+  Usage,
+  attachCost,
+  text,
+} from "../src/ai/index.ts";
+import { computeSections } from "../src/session/sections.ts";
 import type { ChatMessage } from "../src/tui/layout.ts";
 import {
   TOC_SESSION_START,
@@ -107,6 +116,51 @@ describe("tocRows / renderTocText (U2 render)", () => {
     expect(text).toContain("2. second prompt — $0.0200 · 2000 tok");
     expect(text.trimEnd().split("\n").at(-1)).toContain("Σ $0.0300 · 3000 tok (lead agent)");
     expect(renderTocText([], 80)).toContain("(empty session)");
+  });
+});
+
+// MUB-172: end-to-end through the app.tsx buildUsageLedger adapter — a booked web_search
+// fee must show in that section's price line AND the Σ footer, not just token cost.
+describe("web_search fees in the ToC (MUB-172)", () => {
+  const PRICED: Model = {
+    id: "priced",
+    provider: "faux",
+    api: "faux",
+    name: "Priced",
+    cost: { input: 3, output: 15 },
+    context_window: 200_000,
+    max_tokens: 8192,
+  };
+
+  test("a booked fee reaches the section price line and the Σ footer", () => {
+    const usage = new Usage({ input: 1000, output: 200 });
+    attachCost(PRICED, usage); // $0.0060 in tokens
+    const agentMsgs = [
+      new Message({ role: "user", content: "find docs" }),
+      new AssistantMessage({ content: [text("searching")], model: PRICED.id, usage }),
+      new Message({
+        role: "toolResult",
+        content: "[1] result",
+        tool_name: "web_search",
+        tool_call_id: "ws-1",
+      }),
+    ];
+    // The exact adapter app.tsx uses: sections over the agent Message[] (+ the meter's
+    // fee map), synthetic sections dropped, mapped to TocUsage by prompt ordinal.
+    const ledger: TocUsage[] = computeSections(agentMsgs, {
+      toolFees: new Map([["ws-1", 0.005]]),
+    })
+      .sections.filter((s) => agentMsgs[s.startMsgIdx]?.role === "user")
+      .map((s) => ({
+        tokens: s.usage.inputTokens + s.usage.outputTokens,
+        costUSD: s.usage.costUSD,
+      }));
+
+    const chat: ChatMessage[] = [user("find docs"), tool("web_search"), assistant("done")];
+    const rows = tocRows(buildSections(chat, ledger), 60);
+    expect(rows.some((r) => r.text.includes("$0.0110"))).toBe(true); // section price line
+    expect(rows[rows.length - 1]!.text).toContain("Σ $0.0110"); // footer
+    expect(renderTocText(buildSections(chat, ledger), 80)).toContain("$0.0110");
   });
 });
 

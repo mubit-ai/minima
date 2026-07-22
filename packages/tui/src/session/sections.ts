@@ -24,7 +24,8 @@ export interface SectionUsage {
   inputTokens: number;
   /** Σ assistant usage.output across the section. */
   outputTokens: number;
-  /** Σ assistant usage.cost.total (includes cache dollars; cache tokens not counted). */
+  /** Σ assistant usage.cost.total (includes cache dollars; cache tokens not counted),
+   * plus any booked tool provider fees joined by tool_call_id (MUB-172). */
   costUSD: number;
 }
 
@@ -60,8 +61,12 @@ export function sectionTitle(promptText: string, max = DEFAULT_TITLE_MAX): strin
   return `${line.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
-/** Pure section roll-up over the lead conversation. */
-export function computeSections(messages: Message[], opts?: { titleMax?: number }): SectionLedger {
+/** Pure section roll-up over the lead conversation. `toolFees` is the meter's booked
+ * provider-fee map (tool_call_id → USD) — fees join the section whose turn ran the tool. */
+export function computeSections(
+  messages: Message[],
+  opts?: { titleMax?: number; toolFees?: ReadonlyMap<string, number> },
+): SectionLedger {
   const titleMax = opts?.titleMax ?? DEFAULT_TITLE_MAX;
   const sections: Section[] = [];
   let current: Section | null = null;
@@ -86,6 +91,8 @@ export function computeSections(messages: Message[], opts?: { titleMax?: number 
       current.usage.inputTokens += msg.usage.input || 0;
       current.usage.outputTokens += msg.usage.output || 0;
       current.usage.costUSD += msg.usage.cost.total || 0;
+    } else if (msg.role === "toolResult" && msg.tool_call_id) {
+      current.usage.costUSD += opts?.toolFees?.get(msg.tool_call_id) ?? 0;
     }
   }
 

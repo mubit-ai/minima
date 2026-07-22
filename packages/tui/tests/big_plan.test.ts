@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { AfterToolCallContext } from "../src/agent/tools.ts";
+import type { AfterToolCallContext, AgentTool } from "../src/agent/tools.ts";
+import {
+  AssistantMessage,
+  type Model,
+  registerFauxProvider,
+  registerModel,
+  resetModelRegistry,
+  resetProviderRegistration,
+  resetRegistry,
+  text,
+  toolCall,
+} from "../src/ai/index.ts";
 import type { PlanRow, PlanStepRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
@@ -14,6 +25,14 @@ import {
   planStripInfo,
   writePathsFromArgs,
 } from "../src/minima/big_plan.ts";
+import {
+  CostMeter,
+  MinimaAgent,
+  MinimaClient,
+  MinimaRouter,
+  ModelMapping,
+  harnessConfig,
+} from "../src/minima/index.ts";
 
 // --------------------------------------------------------------------------- helpers
 
@@ -949,5 +968,189 @@ describe("isGateBlockReason (renderer signature for done-gate blocks)", () => {
     ).toBe(false);
     expect(isGateBlockReason("todowrite failed: invalid tasks JSON")).toBe(false);
     expect(isGateBlockReason("")).toBe(false);
+  });
+});
+
+// --------------------------------------------------------------- decision step stamping (MUB-173a)
+
+// /why's "Σ realized (stamped steps)" reads routing_decisions.step_id. The stamp used to be
+// resolved at decision-WRITE time from the then-in-progress step — but in the common case the
+// model completes the step within the same prompt, so nothing was in progress at write time,
+// the turn's cost attached to no step, and /why showed Σ $0.0000. The attribution must be
+// captured at rung start, falling back to the step that completed during the rung.
+
+const FAUX_MODEL: Model = {
+  id: "test-faux",
+  provider: "faux",
+  api: "faux",
+  name: "Test Faux",
+  cost: { input: 1, output: 2 },
+  context_window: 8192,
+  max_tokens: 4096,
+};
+
+function mockService() {
+  return async (url: string, init?: { method?: string; body?: string }) => {
+    const u = new URL(url);
+    if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
+      return {
+        status: 200,
+        json: async () => ({
+          recommendation_id: `rec-${Math.random().toString(16).slice(2, 8)}`,
+          recommended_model: {
+            model_id: "test-faux",
+            provider: "faux",
+            predicted_success: 0.9,
+            est_cost_usd: 0.001,
+            score: 0.001,
+          },
+          ranked: [
+            {
+              model_id: "test-faux",
+              provider: "faux",
+              predicted_success: 0.9,
+              est_cost_usd: 0.001,
+              score: 0.001,
+            },
+          ],
+          confidence: 0.8,
+          decision_basis: "memory",
+          threshold_used: 0.5,
+          classified_task_type: "code",
+          classified_difficulty: "easy",
+          catalog_version: "v1",
+        }),
+      };
+    }
+    if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/feedback") {
+      return { status: 200, json: async () => ({ accepted: true }) };
+    }
+    return { status: 404, json: async () => ({ detail: "nope" }) };
+  };
+}
+
+/** A tool that flips a plan step's status mid-turn — the model "doing and closing" a step. */
+function setStatusTool(store: MinimaDb, stepId: string, status: string): AgentTool {
+  return {
+    name: "close_step",
+    description: "mark the step done",
+    parameters: {
+      jsonSchema: { type: "object", properties: {} },
+      validate: () => ({ ok: true, value: {} }),
+    },
+    async execute() {
+      store.setStepStatus(stepId, status);
+      return { content: [text("step closed")] };
+    },
+  };
+}
+
+/** Big Plan runtime over a pre-seeded temp DB (stop-gate-runtime pattern; stop gate inert). */
+function bigPlanAgent(store: MinimaDb, runId: string, tools: AgentTool[]) {
+  resetRegistry();
+  resetProviderRegistration();
+  resetModelRegistry();
+  registerModel(FAUX_MODEL);
+  const reg = registerFauxProvider([FAUX_MODEL]);
+  const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: mockService() });
+  const config = harnessConfig({
+    candidates: ["test-faux"],
+    allowOffline: false,
+    minimaApiKey: "k",
+    bigPlan: true,
+    stopStrikes: 0,
+  });
+  const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+  const agent = new MinimaAgent({ config, router, meter: new CostMeter(), tools });
+  agent.db = store;
+  agent.runId = runId;
+  return { agent, reg };
+}
+
+/** One scripted prompt: call close_step, then finish with a text turn. */
+const closeStepTurns = () => [
+  new AssistantMessage({
+    content: [toolCall("c1", "close_step", {})],
+    stop_reason: "toolUse" as const,
+  }),
+  new AssistantMessage({ content: [text("done")] }),
+];
+
+describe("routing-decision step stamping (MUB-173a)", () => {
+  test("a step in progress at prompt start stays stamped when it completes mid-turn", async () => {
+    const store = new MinimaDb(":memory:");
+    store.ensureProject("p");
+    const runId = store.startRun({ projectKey: "p" });
+    const { stepIds, planId } = store.upsertPlanFromTodos(
+      runId,
+      [{ content: "wire it", status: "in_progress" }],
+      "T",
+    );
+    const { agent, reg } = bigPlanAgent(store, runId, [
+      setStatusTool(store, stepIds[0]!, "completed"),
+    ]);
+    reg.setResponses(closeStepTurns());
+
+    await agent.promptRouted("do the step");
+
+    const rows = store.getRunDecisions(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.step_id).toBe(stepIds[0]!);
+    expect(store.stepCosts(planId).totalUsd).toBeGreaterThan(0);
+
+    reg.unregister();
+    store.close();
+  });
+
+  test("nothing in progress at start: the step that completed during the rung gets the stamp", async () => {
+    const store = new MinimaDb(":memory:");
+    store.ensureProject("p");
+    const runId = store.startRun({ projectKey: "p" });
+    const { stepIds } = store.upsertPlanFromTodos(
+      runId,
+      [
+        { content: "already done", status: "completed" },
+        { content: "next up", status: "pending" },
+      ],
+      "T",
+    );
+    const { agent, reg } = bigPlanAgent(store, runId, [
+      setStatusTool(store, stepIds[1]!, "completed"),
+    ]);
+    reg.setResponses(closeStepTurns());
+
+    await agent.promptRouted("do the next step");
+
+    const rows = store.getRunDecisions(runId);
+    expect(rows).toHaveLength(1);
+    // Never the pre-completed step from an earlier prompt — only the one THIS rung closed.
+    expect(rows[0]!.step_id).toBe(stepIds[1]!);
+
+    reg.unregister();
+    store.close();
+  });
+
+  test("a step still in progress at write time keeps the current stamp behavior", async () => {
+    const store = new MinimaDb(":memory:");
+    store.ensureProject("p");
+    const runId = store.startRun({ projectKey: "p" });
+    const { stepIds } = store.upsertPlanFromTodos(
+      runId,
+      [{ content: "long step", status: "pending" }],
+      "T",
+    );
+    const { agent, reg } = bigPlanAgent(store, runId, [
+      setStatusTool(store, stepIds[0]!, "in_progress"),
+    ]);
+    reg.setResponses(closeStepTurns());
+
+    await agent.promptRouted("start the step");
+
+    const rows = store.getRunDecisions(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.step_id).toBe(stepIds[0]!);
+
+    reg.unregister();
+    store.close();
   });
 });
