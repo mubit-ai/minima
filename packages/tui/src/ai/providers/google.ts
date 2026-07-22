@@ -275,7 +275,7 @@ const TYPE_MAP: Record<string, string> = {
   null: "TYPE_UNSPECIFIED",
 };
 
-function toGeminiSchema(schema: ToolSchema): Record<string, unknown> {
+export function toGeminiSchema(schema: ToolSchema): Record<string, unknown> {
   const raw = toJsonSchema(schema);
   return convertSchema(raw);
 }
