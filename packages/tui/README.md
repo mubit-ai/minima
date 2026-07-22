@@ -91,7 +91,7 @@ Minima integration → Ink TUI + CLI → compiled native binary (`bun build --co
 Since then the harness has moved well past parity with the removed Python TUI: a SQLite
 persistence spine with sessions (`/resume` opens a session picker; `--resume <id>` from
 the CLI), permission prompts with diff previews plus accept-edits gating and a
-zero-context diff review when a plan completes, the Big Plan verification spine, the
+zero-context diff review when a plan completes, the plan verification spine, the
 curated memory ledger (`/memory`), undo/rewind over git-shadow checkpoints, and
 sub-agents (`/tree`). Still open: themes, `/goals` (an unshipped proposal —
 `docs/goals-feature-plan.md`), and `keytar`-bundled keychain in the compiled binary (it

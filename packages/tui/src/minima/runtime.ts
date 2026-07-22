@@ -926,7 +926,7 @@ export class MinimaAgent extends Agent {
     }
   }
 
-  /** MUB-173: read the plan state at rung start. Null when Big Plan is off or the read
+  /** MUB-173: read the plan state at rung start. Null when plan verification is off or the read
    * fails (fail-open — persistDecision then degrades to its write-time fallback). */
   private stepAttributionAtStart(): StepAttribution | null {
     if (this.config.bigPlan !== true || !this.db || !this.runId) return null;

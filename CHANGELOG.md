@@ -7,7 +7,7 @@ All notable changes to Minima are documented here. The format follows
 ## [Unreleased]
 
 ### Removed
-- **Big Plan compat window closed** (TUI, #243 + #212): the one-release aliases shipped
+- **Plan-rename compat window closed** (TUI, #243 + #212): the one-release aliases shipped
   in 0.13.2 are removed — `/gt`/`/gt-seed` commands, the `MINIMA_TUI_GROUND_TRUTH` env
   fallback, the `config.groundTruth` input/read alias, the deprecated API delegate
   exports (`groundTruthHooks`, `synthesizeGroundTruth`, `attachGroundedOutcome`,
@@ -31,7 +31,7 @@ All notable changes to Minima are documented here. The format follows
 ## [0.13.2] - 2026-07-21
 
 ### Changed
-- **Ground Truth is now Big Plan** (TUI, #198 via #208): the verification spine's
+- **Ground Truth is now the plan spine** (TUI, #198 via #208): the verification spine's
   user-facing surface is renamed — `/bp` + `/bp-seed` commands (Plan Overview on
   Ctrl+G), `MINIMA_TUI_BIG_PLAN` env flag, `BigPlan.md` plan artifact,
   `config.bigPlan`, and `big_plan_*` DB columns (append-only migration v14 with
@@ -41,7 +41,7 @@ All notable changes to Minima are documented here. The format follows
   unchanged (`evidence_source="gate"` et al.). A terminology guard in
   `bun run check` keeps the rename from regressing.
 - **Docs follow-through** (#209): CLAUDE.md, repo architecture docs, and the
-  docs-site updated to the Big Plan surface (deployed with this release so docs
+  docs-site updated to the renamed plan surface (deployed with this release so docs
   match installed binaries).
 
 ### Fixed
@@ -263,7 +263,7 @@ changes are client-side and release-pipeline hardening.
 
 ## [0.12.0] - 2026-07-20
 
-The Big Plan harness: the TUI's plan workflow grows verification teeth, and the
+The plan-verification harness: the TUI's plan workflow grows verification teeth, and the
 renderer goes inline-only. A TUI/harness release — the server wire contract is
 unchanged from 0.11.0.
 
