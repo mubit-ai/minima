@@ -29,7 +29,7 @@ The harness talks to the Minima recommender service over the same `/v1/*` HTTP c
     `read`, `write`, `edit`, `bash`, `ls`, `glob`, `grep`, `web_fetch`, and `todowrite` — gated by a permission system — plus `task`, which delegates subtasks to parallel, cost-routed sub-agents (watch them live with `/tree`).
   </Card>
   <Card title="Verified, not vibes" icon="circle-check" href="/harness/architecture">
-    Ground-truth verification: plan steps carry shell checks that must go red→green before the agent may call them done, a confidence tier (🟢/🟡/🔴) on every verdict, and a recovery ladder that re-routes or replans on verified failure.
+    Big Plan verification: plan steps carry shell checks that must go red→green before the agent may call them done, a confidence tier (🟢/🟡/🔴) on every verdict, and a recovery ladder that re-routes or replans on verified failure.
   </Card>
   <Card title="Budgets that hold" icon="wallet" href="/harness/architecture#the-budget-ledger">
     `--budget 5` reserves before every turn, reconciles to realized cost, warns at 50/75/90/100%, and in enforce mode actually stops the run.

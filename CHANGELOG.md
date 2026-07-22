@@ -16,6 +16,30 @@ All notable changes to Minima are documented here. The format follows
   every request; and the busy spinner skips ticks while stdout's write buffer needs
   drain.
 
+## [0.13.2] - 2026-07-21
+
+### Changed
+- **Ground Truth is now Big Plan** (TUI, #198 via #208): the verification spine's
+  user-facing surface is renamed — `/bp` + `/bp-seed` commands (Plan Overview on
+  Ctrl+G), `MINIMA_TUI_BIG_PLAN` env flag, `BigPlan.md` plan artifact,
+  `config.bigPlan`, and `big_plan_*` DB columns (append-only migration v14 with
+  backfill). One-release compatibility window: `/gt`/`/gt-seed`,
+  `MINIMA_TUI_GROUND_TRUTH`, `config.groundTruth`, and the deprecated API exports
+  keep working, and the old `gt_*` columns are dual-written. The wire contract is
+  unchanged (`evidence_source="gate"` et al.). A terminology guard in
+  `bun run check` keeps the rename from regressing.
+- **Docs follow-through** (#209): CLAUDE.md, repo architecture docs, and the
+  docs-site updated to the Big Plan surface (deployed with this release so docs
+  match installed binaries).
+
+### Fixed
+- **Enforce-mode footer overflow** (TUI, #206 via #208): the `⛔` badge could
+  render the footer row one cell wider than the terminal (three disagreeing
+  Unicode width tables in Ink's pipeline), autowrapping it and drift-looping the
+  frame. Fixed at the dependency-resolution level (`slice-ansi`/
+  `is-fullwidth-code-point` overrides + a committed `cli-truncate` patch) with
+  regression coverage for every footer emoji at 80–160 columns.
+
 ## [0.13.1] - 2026-07-21
 
 ### Fixed

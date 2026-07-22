@@ -18,7 +18,7 @@ The bar along the bottom shows, at a glance:
 - **Model** — the pinned model, or `auto` when Minima is routing.
 - **Cost** — running total from the cost meter for this session.
 - **Context** — percentage of the model's context window used, plus token counts.
-- **State** — whether a turn is in flight, plus plan/verification state when [ground truth](/harness/architecture#ground-truth-verification) is active.
+- **State** — whether a turn is in flight, plus plan/verification state when [Big Plan](/harness/architecture#big-plan-verification) is active.
 
 ## Keyboard shortcuts
 
@@ -40,7 +40,7 @@ The bar along the bottom shows, at a glance:
 | <kbd>Ctrl</kbd>+<kbd>R</kbd> | Toggle route mode (auto ↔ confirm) |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | Toggle thinking display |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | Table of contents |
-| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Plan overview |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Plan Overview |
 | <kbd>Ctrl</kbd>+<kbd>B</kbd> | Toggle the task panel |
 | <kbd>Tab</kbd> | Auto-complete a slash command |
 
@@ -68,12 +68,14 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 |---------|--------------|
 | `/plan` | Plan mode (<kbd>Shift</kbd>+<kbd>Tab</kbd>) + the planning council (`start` · `status` · `finalize` · `cancel`) — drafts a plan whose steps carry verify checks |
 | `/mode` | Show/set the permission mode: `build` \| `accept` \| `plan` \| `bypass` |
-| `/gt` | Show the Ground-Truth ledger status |
+| `/bp` | Show Plan Overview status |
 | `/why [n]` | Show the verification evidence behind the plan (or open step `n`'s card) |
 | `/verify` | Adversarial whole-plan verification pass (refutation sub-agent) |
 | `/audit` | Lint the active plan — non-discriminative checks, missing allowlists, vague steps |
-| `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + GT plan |
+| `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + Big Plan |
 | `/tree` | Toggle the live [sub-agent tree panel](/harness/tools#sub-agents-the-task-tool) |
+
+(`/gt` and `/gt-seed` still work as deprecated aliases for `/bp` and `/bp-seed` for one release.)
 
 ### Memory
 

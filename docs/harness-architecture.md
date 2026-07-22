@@ -8,8 +8,8 @@ route  →  run  →  judge  →  feedback
 ```
 
 — against the `/v1/*` contract, with its own SQLite persistence spine, a budget ledger,
-a ground-truth verification spine, and a curated memory ledger. This page documents the
-implemented architecture as of v0.13.0. (The 2026-07-02 design proposal it grew from is
+a Big Plan verification spine (formerly "Ground Truth"), and a curated memory ledger.
+This page documents the implemented architecture as of v0.13.x. (The 2026-07-02 design proposal it grew from is
 preserved in [agent-core-architecture.md](agent-core-architecture.md); where the two
 disagree, this page reflects the code.)
 
@@ -35,7 +35,7 @@ disagree, this page reflects the code.)
 |---|---|
 | `src/ai/` | LLM provider layer: `types.ts`, `stream.ts` (`stream()`/`complete()`), `registry.ts` (calling-side model catalog — distinct from Minima's routing catalog), `usage.ts` (tokens × price → USD), providers (`openai-compat`, `anthropic`, `google`, hermetic `faux`) |
 | `src/agent/` | The stateful agent core: `loop.ts` (`agentLoop`), `agent.ts` (`Agent`), `tools.ts` (hook types), `modes.ts` (permission modes), `policy.ts` |
-| `src/minima/` | The integration layer — this IS the harness (39 files): `runtime.ts` (`MinimaAgent`), `router.ts`/`client.ts`, `judge.ts`, `budget.ts`, `spawn.ts`, the ground-truth files (`ground_truth.ts`, `gt_contract.ts`, `confidence.ts`, `check.ts`, `stop_gate.ts`, `anti_spiral.ts`, `failure_kind.ts`), the memory files (`memory.ts`, `memory_ledger.ts`, `memory_scribe.ts`, `memory_dream.ts`), the plan files (`plan_turn.ts`, `plan_council.ts`, `plan_finalize.ts`, `plan_critic.ts`, `plan_refute.ts`), `diff_review.ts`, `meter.ts`, `schemas.ts` (wire mirror) |
+| `src/minima/` | The integration layer — this IS the harness (39 files): `runtime.ts` (`MinimaAgent`), `router.ts`/`client.ts`, `judge.ts`, `budget.ts`, `spawn.ts`, the Big Plan files (`big_plan.ts`, `big_plan_contract.ts`, `big_plan_factors.ts`, `confidence.ts`, `check.ts`, `stop_gate.ts`, `anti_spiral.ts`, `failure_kind.ts`), the memory files (`memory.ts`, `memory_ledger.ts`, `memory_scribe.ts`, `memory_dream.ts`), the plan files (`plan_turn.ts`, `plan_council.ts`, `plan_finalize.ts`, `plan_critic.ts`, `plan_refute.ts`), `diff_review.ts`, `meter.ts`, `schemas.ts` (wire mirror) |
 | `src/tools/` | The agent's callable tools + `builtin.ts` registry |
 | `src/db/` | Persistence spine: `minima_db.ts` (`MinimaDb`), `sink.ts` (event-stream → rows), `rehydrate.ts` (restore a run), `metrics.ts` (regret-vs-oracle) |
 | `src/tui/` | Ink/React UI: `app.tsx` (main component + slash commands) + overlays |
@@ -52,7 +52,7 @@ sequence:
 - **Mubit recall** — `memory.recall(content)` formats recalled evidence into a system
   prompt block.
 - **Mode hint** — `modeSystemAppend(getMode())` for the current permission mode.
-- **Ground-truth projection** (when `config.groundTruth`, default on) — standing GT
+- **Big Plan projection** (when `config.bigPlan`, default on) — standing plan
   guidance plus `planProjectionFor(db, runId)`: the numbered plan of record, re-injected
   every turn so it survives compaction.
 - **Memory-ledger projection** (lead agent only) — `memoryProjectionFor(db, runId)`:
@@ -98,7 +98,7 @@ Each rung:
   tool is sequential (the `task` tool is).
 - **Registered hook stacks** (wired in `cli/main.ts` / `tui/app.tsx`, in order):
   1. **Permission hook** (TUI) — must run first.
-  2. **Ground-truth hooks** — the *done-gate* (before): refuses a `todowrite` that marks
+  2. **Big Plan hooks** — the *done-gate* (before): refuses a `todowrite` that marks
      a step complete unless its `verify` command actually passes (red→green), enforces
      one-todowrite-per-message and the per-step tool allowlist; the after-sink keeps the
      plan/file-changes/gates ledger current.
@@ -112,7 +112,7 @@ Each rung:
 ## Tools
 
 The registry is `builtinTools()` (`src/tools/builtin.ts`): `read`, `write`, `edit`,
-`apply_patch`, `bash`, `ls`, `glob`, `grep`, `todowrite` (GT-aware), `web_search`,
+`apply_patch`, `bash`, `ls`, `glob`, `grep`, `todowrite` (done-gate-aware), `web_search`,
 `web_fetch` (Exa when `EXA_API_KEY` is set, else DuckDuckGo). Filesystem tools are
 confined to the configured workdir. Three tools are wired *outside* the registry: `task`
 (sub-agents; added by `cli/main.ts` with spawn depth 0), and `question` / `exit_plan`
@@ -131,7 +131,7 @@ boundaries}` are required; optional `depends_on` (DAG edges), `effort`
   (default 4); dependents wait; a failed dependency marks its dependents `blocked`.
 - `createSpawn` builds each child as a **fresh `MinimaAgent`** sharing the parent's
   router/judge/memory but with its own cost meter, tools scoped to the allowlist (minus
-  `task` at the depth cap — max depth 2), and `groundTruth: false` (the GT spine never
+  `task` at the depth cap — max depth 2), and `bigPlan: false` (the Big Plan spine never
   inherits into children). Each child routes through Minima independently — cost-aware
   routing applies **per worker**, not just at the top level.
 - Per-node `budget_usd` becomes a running-cost stop; the parent's abort signal fans out
@@ -185,10 +185,12 @@ the failing verify command and captures full output, and `router.diagnoseBrief()
 rolls the transcript back to the pre-run index; exhaustion writes a terminal `recovery`
 gate.
 
-## Ground-truth spine
+## Big Plan spine
 
-On by default (`MINIMA_TUI_GROUND_TRUTH=0` opts out). The contract enums are frozen in
-`gt_contract.ts`: gate outcomes `verified | failed | unrunnable | unchecked`, confidence
+Formerly the "Ground Truth" spine — renamed in #208 ( `/gt`→`/bp`, `gt_*`→`big_plan_*`
+with one-release compat aliases; the wire contract is unchanged). On by default
+(`MINIMA_TUI_BIG_PLAN=0` opts out; legacy `MINIMA_TUI_GROUND_TRUTH` still honored). The
+contract enums are frozen in `big_plan_contract.ts`: gate outcomes `verified | failed | unrunnable | unchecked`, confidence
 tiers `green | yellow | red`, verifiers `deterministic | judge | user`, gate kinds
 `step_check | milestone | stop | recovery`, check origins `pre_existing | agent_new |
 user`.
@@ -215,8 +217,8 @@ user`.
   (advisory, never blocking); the **zero-context diff reviewer** (`diff_review.ts`)
   fires when a plan closes fully completed and reviews the run's whole diff with fresh
   eyes — an objection writes a yellow judge milestone gate (it can yellow a plan, never
-  green it). `/verify` re-runs checks under a refutation brief; `/why` and `/gt` surface
-  gate reasoning.
+  green it). `/verify` re-runs checks under a refutation brief; `/why` and `/bp` (Plan
+  Overview; `/gt` is a deprecated alias) surface gate reasoning.
 
 ## Feedback truth (`feedbackSafely`)
 
@@ -270,7 +272,7 @@ gated on green-tier verified episodes.
 
 ## DB spine (`src/db/minima_db.ts`)
 
-Event-sourced `bun:sqlite` (WAL), currently at **migration v13** — shipped batches are
+Event-sourced `bun:sqlite` (WAL), currently at **migration v14** — shipped batches are
 append-only and never edited. `events` is the append-only source of truth; derived
 tables key back to `event_id`/`rec_id`. `DbSink` subscribes to the agent event stream
 and flushes buffered rows in one transaction at turn/agent end; writes fail open (a
@@ -283,7 +285,7 @@ degraded DB never breaks a turn); large tool results spill to blob storage.
 | `routing_decisions` | one row per routed prompt, PK `rec_id` — the local replay buffer for regret-vs-oracle metrics |
 | `tool_calls` | every tool invocation (args + result, blob refs) |
 | `budgets` / `budget_events` | budget scopes + append-only audit |
-| `plans` / `plan_steps` | the GT plan of record: steps with `verify`, `baseline`, check origin, tool allowlist |
+| `plans` / `plan_steps` | the Big Plan of record: steps with `verify`, `baseline`, check origin, tool allowlist |
 | `file_changes` | every write/edit attributed to a step (`on_plan`/`off_plan` drift) |
 | `gates` | verification verdicts: outcome, confidence tier, verifier, factors, `rec_id` identity |
 | `user_signals` | user accept/reject/steer against a gate |
@@ -295,14 +297,15 @@ re-runs verifies on resume so a stale green never carries across sessions.
 
 ## Key environment flags
 
-All default-on features follow the same rule: anything gated on ground truth lives
-behind `config.groundTruth` (code), never behind prompt text.
+All default-on features follow the same rule: anything gated on the Big Plan lives
+behind `config.bigPlan` (code; deprecated alias `config.groundTruth`), never behind
+prompt text.
 
 | Variable | Effect | Default |
 |---|---|---|
 | `MINIMA_URL` / `MINIMA_API_KEY` (or `MUBIT_API_KEY`) | routing endpoint + auth | `https://api.minima.sh` |
 | `MINIMA_NAMESPACE` | memory lane | derived from the repo |
-| `MINIMA_TUI_GROUND_TRUTH` | GT spine | on |
+| `MINIMA_TUI_BIG_PLAN` (legacy `MINIMA_TUI_GROUND_TRUTH`) | Big Plan spine | on |
 | `MINIMA_TUI_MEMORY` / `MINIMA_TUI_MEMORY_CAP` | memory ledger / projection cap | on / 4000 chars |
 | `MINIMA_JUDGE_SAMPLE` / `MINIMA_LLM_JUDGE=1` / `MINIMA_JUDGE_MODEL` | judge sample rate (0 disables) / force every turn / model | 0.15 / off / `claude-haiku-4-5` |
 | `MINIMA_TUI_STOP_STRIKES` / `MINIMA_TUI_SPIRAL_REPEATS` / `MINIMA_TUI_STEP_CAP` | stall + doom-loop detectors | 3 / 3 / 30 |
@@ -314,5 +317,5 @@ behind `config.groundTruth` (code), never behind prompt text.
 | `MINIMA_DB_PATH` / `MINIMA_HARNESS_DIR` | persistence locations | `~/.minima-harness/` |
 
 See [configuration.md](configuration.md) for the server-side variables and
-[ground-truth-build-guide.md](ground-truth-build-guide.md) for the GT spine's build
-history.
+[ground-truth-build-guide.md](ground-truth-build-guide.md) for the spine's build
+history (written under the pre-#208 "Ground Truth" name).

@@ -1,6 +1,6 @@
 ---
 title: Under the hood
-description: The harness's internal agentic structure — the routed turn lifecycle, ground-truth verification, the recovery ladder, budgets, memory, and feedback truth.
+description: The harness's internal agentic structure — the routed turn lifecycle, Big Plan verification, the recovery ladder, budgets, memory, and feedback truth.
 ---
 
 import { PageHeader, Note, Tip, Warning } from '@components'
@@ -30,18 +30,18 @@ Every prompt runs the Minima loop with retries built in:
 6. **Judge and feed back.** The outcome is labeled by the strictest available evidence (see [Feedback truth](#feedback-truth-what-gets-reported)) and reported to `POST /v1/feedback` with realized usage.
 7. **Recover if needed.** If the turn verifiably failed and retries remain, the [recovery ladder](#the-recovery-ladder) re-decides — possibly with a stronger model — after rolling the transcript back to a clean state.
 
-## Ground-truth verification
+## Big Plan verification
 
-The harness doesn't take the model's word for "done". With ground truth on (the default), work is organized around **verifiable plan steps**:
+The harness doesn't take the model's word for "done". With Big Plan on (the default — opt out with `MINIMA_TUI_BIG_PLAN=0`; the legacy `MINIMA_TUI_GROUND_TRUTH` variable is still honored for one release), work is organized around **verifiable plan steps**:
 
 - **Plans carry checks.** `/plan` drafts a plan where each step has a `verify` shell command — a test, a build, a grep — and records its **baseline**: the check must be *red before the work* (a check that already passed proves nothing).
 - **Completion is gated.** The harness refuses to let the model mark a step complete unless its verify command actually passes. This is enforced at tool dispatch, so the model cannot talk its way past it.
 - **Verdicts are tiered.** Every check run lands in a local **gates ledger** with a confidence tier: 🟢 a trusted check passed · 🟡 no discriminative check, or verified only by an LLM · 🔴 a check failed or looks fabricated. The tier shows in the TUI and decides what may be reported as verified.
 - **Fresh eyes at the end.** A cheap **planning critic** reviews the plan at finalize (are the checks discriminative?), and a **zero-context diff reviewer** re-reads the run's whole diff when a plan closes — with no session context, so it can't be talked into agreement. An objection can flag a plan, never green-light it.
-- `/verify` runs an adversarial re-verification pass over the whole plan; `/why` shows the evidence behind any step's verdict; `/gt` shows ledger status; `/audit` lints the active plan.
+- `/verify` runs an adversarial re-verification pass over the whole plan; `/why` shows the evidence behind any step's verdict; `/bp` shows Plan Overview status; `/audit` lints the active plan.
 
 <Note>
-Sub-agents never inherit ground-truth authority: a child agent can't write gate verdicts against the lead's plan, and only checks that originate from your repo, CI, or you (not ones the agent just wrote) can claim production-grade verification.
+Sub-agents never inherit Big Plan authority: a child agent can't write gate verdicts against the lead's plan, and only checks that originate from your repo, CI, or you (not ones the agent just wrote) can claim production-grade verification.
 </Note>
 
 ## The recovery ladder
