@@ -144,6 +144,12 @@ export interface HarnessConfig {
   /** Explicit classifier model override (MINIMA_CLASSIFY_MODEL). null = the cheap
    * fallback ladder starting at claude-haiku-4-5. */
   classifyModel: string | null;
+  /** Plan interview (MINIMA_TUI_INTERVIEW, default off, umbrella-covered): after a
+   * /plan council round, ask up to 3 gated questions (verification commands,
+   * budget/quality profile) and persist the answers (routing profile
+   * source='interview', user-origin verifies, preference memories). Completely inert
+   * when off. */
+  interview: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -179,6 +185,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     autoEffort: false,
     classify: false,
     classifyModel: null,
+    interview: false,
     ...overrides,
   };
 }
@@ -210,6 +217,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
+  cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);

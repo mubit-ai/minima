@@ -104,7 +104,16 @@ export {
 export type { CouncilOptions, CouncilEvent, ResolvedQuestion } from "./plan_council.ts";
 export { runPlanTurn } from "./plan_turn.ts";
 export type { PlanTurnDeps } from "./plan_turn.ts";
-export { finalizePlan, buildPlanTranscript } from "./plan_finalize.ts";
+export { finalizePlan, buildPlanTranscript, applyUserVerifies } from "./plan_finalize.ts";
+export {
+  runPlanInterview,
+  newInterviewState,
+  draftHasVerifies,
+  parseBudgetAnswer,
+  INTERVIEW_MAX_QUESTIONS,
+  type InterviewState,
+  type PlanInterviewDeps,
+} from "./plan_interview.ts";
 export {
   runPlanCritic,
   parseCriticFlags,

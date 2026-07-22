@@ -169,6 +169,10 @@ export interface PlanSession {
   findings: CouncilFinding[];
   constraints: PlanConstraint[];
   facts: PlanFact[];
+  /** Verify commands the USER confirmed in the plan interview. finalizePlan fills
+   *  verify-less synthesized steps with these, so they seed with check_origin='user'
+   *  (plan approval is their consent event, exactly like authored verifies). */
+  userVerifies: string[];
   rounds: number;
   totalCouncilCostUsd: number;
   createdAt: number;
@@ -190,6 +194,7 @@ export class PlanSessionStore {
       findings: [],
       constraints: [],
       facts: [],
+      userVerifies: [],
       rounds: 0,
       totalCouncilCostUsd: 0,
       createdAt: ts,
@@ -319,6 +324,16 @@ export class PlanSessionStore {
     } catch {
       // planning telemetry must never break the conversation loop
     }
+  }
+
+  /** Record a USER-confirmed verify command (plan interview). Deduped; fail-open. */
+  addUserVerify(command: string): void {
+    const cmd = (command ?? "").trim();
+    if (!cmd) return;
+    const seen = new Set(this.state.userVerifies.map((v) => norm(v)));
+    if (seen.has(norm(cmd))) return;
+    this.state.userVerifies.push(cmd);
+    this.state.updatedAt = now();
   }
 
   /** Record a user turn as a PlanFact (the user's words are Big Plan). */
