@@ -230,6 +230,7 @@ class Recommender:
             seed_weight=settings.minima_seed_weight,
             seed_crowdout_n=settings.minima_seed_crowdout_n,
             recall_vote_min_n=settings.minima_recall_vote_min_n,
+            human_weight=settings.minima_human_evidence_weight,
         )
         profile.mark("aggregate")
 

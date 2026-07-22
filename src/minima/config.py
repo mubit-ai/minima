@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     # set — live evidence replaces the bootstrap instead of competing with it forever.
     minima_seed_weight: float = 0.5
     minima_seed_crowdout_n: int = 5
+    # Per-source evidence weighting: caller-asserted ("human") labels are the one gameable
+    # provenance — they count at this fraction of an otherwise-identical gate/judge record
+    # (clamped to [0, 1]). 0.6 keeps a single human failure decisive at cold start while
+    # bounding label poisoning; gate/judge stay at 1.0, seeds keep their own weighting.
+    minima_human_evidence_weight: float = 0.6
     # Latency-aware ranking: annotate candidates with a robust observed latency percentile
     # and enforce Constraints.max_latency_ms against it (only for candidates with at least
     # min_n latency observations — a model is never excluded without evidence).

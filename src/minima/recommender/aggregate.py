@@ -6,6 +6,7 @@ import time
 from collections.abc import Iterable
 
 from minima.memory.records import (
+    EVIDENCE_HUMAN,
     OutcomeRecord,
     RecalledEvidence,
     clamp01,
@@ -94,12 +95,15 @@ def aggregate_by_model(
     seed_weight: float = 1.0,
     seed_crowdout_n: int = 0,
     recall_vote_min_n: int = 0,
+    human_weight: float = 1.0,
     now: float | None = None,
 ) -> dict[str, ModelAggregate]:
     """Group neighbors by model and accumulate weighted success statistics.
 
     Two passes: the first counts live (non-seed) outcomes per model so seeded evidence
     can be crowded out as real feedback accumulates; the second accumulates weights.
+    ``human_weight`` (clamped to [0, 1]) down-weights caller-asserted ("human") labels
+    relative to gate/judge evidence — bounded trust for the one gameable source.
     Defaults preserve legacy behavior (no age decay, seeds at full weight).
     """
     items: list[tuple[RecalledEvidence, OutcomeRecord]] = []
@@ -138,6 +142,8 @@ def aggregate_by_model(
         # never silently censored.
         if recall_vote_min_n > 0 and rec.recall_n >= recall_vote_min_n:
             weight *= max(RECALL_WEIGHT_FLOOR, rec.recall_success_mass / rec.recall_n)
+        if rec.evidence_source == EVIDENCE_HUMAN and human_weight != 1.0:
+            weight *= clamp01(human_weight)
         if rec.source_dataset is not None and seed_weight != 1.0:
             weight *= seed_factor(
                 n_live.get(model_id, 0), seed_weight=seed_weight, crowdout_n=seed_crowdout_n
