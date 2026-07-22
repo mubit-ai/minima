@@ -155,6 +155,16 @@ import {
   stepCardLines,
 } from "./plan_overview.ts";
 import { repoIdentity, setProject } from "./projects.ts";
+import {
+  EMPTY_QUEUE,
+  clearQueue,
+  decideBusySubmit,
+  enqueuePrompt,
+  holdOnAbort,
+  queueNote,
+  releaseOnPrompt,
+  takeNext,
+} from "./prompt_queue.ts";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
 import {
@@ -833,6 +843,11 @@ export function HarnessApp({
   const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
+  // MUB-183: prompts typed mid-turn queue here and drain one per completed turn
+  // (src/tui/prompt_queue.ts holds the pure semantics). In-memory only — survives nothing.
+  const [promptQueue, setPromptQueue] = useState(EMPTY_QUEUE);
+  const drainBusyRef = useRef(false);
+  const [drainGen, setDrainGen] = useState(0);
   // MP14: current council phase while a plan turn's round runs — drives the busy row's
   // progress line (null = normal rotating verb). Set from runCouncilRound's onEvent,
   // cleared when the planner takes over and belt-cleared in onSubmit's finally (abort).
@@ -1840,6 +1855,10 @@ export function HarnessApp({
           },
         ]);
       }
+      // Abort holds a non-empty queue instead of clearing or auto-firing it: an abort
+      // must never immediately start the NEXT queued prompt. Esc while idle clears the
+      // held queue; a fresh prompt releases it (see prompt_queue.ts).
+      setPromptQueue(holdOnAbort);
       if (getMode() === "plan") councilControllerRef.current?.abort();
       refutationControllerRef.current?.abort();
       agent.abort();
@@ -1949,6 +1968,21 @@ export function HarnessApp({
           return;
         }
       }
+    }
+    // MUB-183: Esc while idle with queued prompts clears the queue (the abort branch
+    // above already returned while busy, so this can never eat the abort key).
+    if (key.escape && promptQueue.items.length > 0) {
+      const { cleared } = clearQueue(promptQueue);
+      setPromptQueue(EMPTY_QUEUE);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          toolName: "queue",
+          text: `Cleared ${cleared} queued prompt${cleared === 1 ? "" : "s"}.`,
+        },
+      ]);
+      return;
     }
     if (key.ctrl && input === "g" && bigPlanBehavior?.block) {
       dismissedGateRef.current = null;
@@ -4129,6 +4163,52 @@ export function HarnessApp({
     });
   }
 
+  // MUB-183: one queued line per completed turn drains through the SAME submit path a
+  // typed line takes. drainBusyRef (not `busy`) is the in-flight latch because a queued
+  // slash command never sets busy; drainGen re-arms the effect when such a drain ends.
+  // Held (post-abort) queues never drain, and neither do frames a 🔴 block, the gate
+  // modal, a permission/question prompt, or a bottom-region overlay owns.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: drainGen is trigger-only — a command drain never flips `busy`, so its finally must bump SOMETHING re-render-visible or a second queued command would never fire
+  useEffect(() => {
+    if (busy || drainBusyRef.current) return;
+    if (gateFocus || bigPlanBehavior?.block || permPrompt || questionPrompt) return;
+    if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen) return;
+    const taken = takeNext(promptQueue);
+    if (!taken) return;
+    drainBusyRef.current = true;
+    setPromptQueue(taken.queue);
+    void (async () => {
+      try {
+        await submitLine(taken.next);
+      } catch (exc) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: "tool",
+            toolName: "error",
+            text: `Queued submit failed: ${errText(exc)}`,
+            isError: true,
+          },
+        ]);
+      } finally {
+        drainBusyRef.current = false;
+        setDrainGen((g) => g + 1);
+      }
+    })();
+  }, [
+    busy,
+    promptQueue,
+    gateFocus,
+    bigPlanBehavior,
+    permPrompt,
+    questionPrompt,
+    pickerOpen,
+    paletteOpen,
+    sessionPickerOpen,
+    configOverlayOpen,
+    drainGen,
+  ]);
+
   async function onSubmit(text: string) {
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
@@ -4145,6 +4225,22 @@ export function HarnessApp({
     });
     setHistoryIdx(null);
 
+    // MUB-183: mid-turn Enter either dispatches a read-only local command NOW (/tree and
+    // friends stay usable) or queues the line — it must never reach the agent mid-turn.
+    if (busy || drainBusyRef.current) {
+      const decision = decideBusySubmit(text);
+      if (decision.kind === "dispatch") {
+        await handleCommand(decision.name, decision.args);
+        return;
+      }
+      setPromptQueue((q) => enqueuePrompt(q, text));
+      return;
+    }
+    setPromptQueue((q) => releaseOnPrompt(q, text));
+    await submitLine(text);
+  }
+
+  async function submitLine(text: string) {
     const trimmed = text.trim();
     if (trimmed.startsWith("/")) {
       const firstSpace = trimmed.indexOf(" ");
@@ -4804,7 +4900,7 @@ export function HarnessApp({
               onTab={handleTabComplete}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
-              disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}
+              disabled={gateFocus !== null && !gateFocus.noteEntry}
               suspended={panelCapture}
               disabledLabel={
                 gateFocus && !busy
@@ -4812,7 +4908,11 @@ export function HarnessApp({
                   : undefined
               }
               placeholder={
-                gateFocus?.noteEntry ? "steer guidance — Enter to record, Esc to skip note" : ""
+                gateFocus?.noteEntry
+                  ? "steer guidance — Enter to record, Esc to skip note"
+                  : busy
+                    ? "turn running — Enter queues (esc aborts)"
+                    : ""
               }
               showPrefix={false}
             />
@@ -4875,6 +4975,7 @@ export function HarnessApp({
           alwaysTools={[...permStateRef.current.allowAlways]}
           bashGrants={[...permStateRef.current.bashGrants]}
           activeChildren={childrenState.size > 0 ? childrenState.size : undefined}
+          queueNote={queueNote(promptQueue)}
           badge={footerBadge}
         />
 

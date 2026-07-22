@@ -58,6 +58,8 @@ export interface StatusBarProps {
   budget?: { spentUsd: number; limitUsd: number; fraction: number; mode: string } | null;
   /** Number of sub-agents currently in flight; 0 or undefined hides the badge. */
   activeChildren?: number;
+  /** MUB-183 prompt-queue note ("2 queued" / "1 queued · held (esc clears)"); null hides it. */
+  queueNote?: string | null;
   /** Phase-0 badge slot (MUB-129): right-anchored in row 1; null/undefined hides it. */
   badge?: FooterBadge | null;
 }
@@ -81,6 +83,7 @@ export function StatusBar({
   bashGrants,
   budget,
   activeChildren,
+  queueNote,
   badge,
 }: StatusBarProps) {
   const perms = permsSummary(mode, alwaysTools ?? [], bashGrants ?? []);
@@ -145,6 +148,13 @@ export function StatusBar({
 
             <Text color="gray"> · </Text>
             <Text color={statusColor}>{statusText}</Text>
+
+            {queueNote ? (
+              <>
+                <Text color="gray"> · </Text>
+                <Text color="yellow">{queueNote}</Text>
+              </>
+            ) : null}
 
             {activeChildren ? (
               <>
