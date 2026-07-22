@@ -76,12 +76,22 @@ export class MinimaClient {
   private readonly base: string;
   private readonly apiKey?: string;
   private readonly fetchImpl: FetchLike;
+  private readonly timeoutMs: number | null;
 
   constructor(opts: MinimaClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
+    this.timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : null;
     // Global fetch bound to avoid `Illegal invocation` in some runtimes.
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init as RequestInit));
+  }
+
+  /** Per-request deadline: `timeoutMs` was accepted but never enforced, so a
+   * black-holed request hung forever. Composes with a caller signal when given. */
+  private withTimeout(signal?: AbortSignal): AbortSignal | undefined {
+    if (this.timeoutMs === null) return signal;
+    const t = AbortSignal.timeout(this.timeoutMs);
+    return signal ? AbortSignal.any([signal, t]) : t;
   }
 
   private url(path: string, params?: Record<string, unknown>): string {
@@ -99,6 +109,7 @@ export class MinimaClient {
     const resp = await this.fetchImpl(this.url(path, params), {
       method: "GET",
       headers: headers(this.apiKey),
+      signal: this.withTimeout(undefined),
     });
     const body = await resp.json();
     raiseForStatus(resp.status, body);
@@ -110,7 +121,7 @@ export class MinimaClient {
       method: "POST",
       headers: headers(this.apiKey),
       body: JSON.stringify(payload),
-      signal,
+      signal: this.withTimeout(signal),
     });
     const body = await resp.json();
     raiseForStatus(resp.status, body);
