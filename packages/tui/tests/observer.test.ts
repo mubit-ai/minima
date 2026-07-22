@@ -551,9 +551,11 @@ describe("observer — scribe mines observer_flag signals", () => {
 // ---------------------------------------------------------------- default OFF + /why
 
 describe("observer — default OFF contract", () => {
-  test("config: absent env → off; '1' → on; anything else → off", () => {
+  test("config: absent env → off; '1' → on; anything else → off (umbrella aside)", () => {
     const prev = process.env.MINIMA_TUI_OBSERVER;
+    const prevUmbrella = process.env.MINIMA_TUI_EXPERIMENTAL;
     try {
+      delete process.env.MINIMA_TUI_EXPERIMENTAL;
       delete process.env.MINIMA_TUI_OBSERVER;
       expect(configFromEnv().observer).toBe(false);
       process.env.MINIMA_TUI_OBSERVER = "1";
@@ -565,6 +567,8 @@ describe("observer — default OFF contract", () => {
     } finally {
       if (prev === undefined) delete process.env.MINIMA_TUI_OBSERVER;
       else process.env.MINIMA_TUI_OBSERVER = prev;
+      if (prevUmbrella === undefined) delete process.env.MINIMA_TUI_EXPERIMENTAL;
+      else process.env.MINIMA_TUI_EXPERIMENTAL = prevUmbrella;
     }
   });
 
