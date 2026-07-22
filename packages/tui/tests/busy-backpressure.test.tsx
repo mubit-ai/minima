@@ -8,6 +8,9 @@ import { BusyIndicator } from "../src/tui/busy.tsx";
 // overnight). The BusyIndicator now skips its animation tick while `writableNeedDrain` is
 // set — no state change, no re-render, no write — and auto-resumes once the buffer drains.
 // Deltas are asserted over generous windows, never exact frame counts (timers are jittery).
+// Rendered with ink's `debug: true`: it writes every frame straight to stdout, bypassing
+// both log-update throttling and ink's CI mode (is-in-ci), which suppresses per-update
+// writes entirely on CI runners — without it the resume assertion can never observe a frame.
 
 class FakeStdout extends EventEmitter {
   columns = 80;
@@ -30,6 +33,7 @@ describe("BusyIndicator backpressure guard", () => {
     const inst = render(<BusyIndicator active showTip={false} />, {
       stdout: stdout as never,
       patchConsole: false,
+      debug: true,
     });
 
     // Control: a draining stdout keeps animating (frames grow).
