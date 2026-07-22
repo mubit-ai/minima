@@ -1337,6 +1337,11 @@ export function HarnessApp({
   // the banner into <Static> with its first message (MUB-167). /new and resume bump the gen
   // with messages already present, so their transcripts never gain a banner row.
   const bannerGenRef = useRef<number | null>(null);
+  // MUB-169: set by reseatFreshScreen (/clear, /new) after it physically clears the screen
+  // and re-writes the bottom-mount reserve; the next ledger reset cap-seeds instead of
+  // seeding 0, so the fresh frame outruns ANY previous frame height and the reserve write
+  // re-anchors it at the terminal bottom. Consumed (cleared) by the ledger effect.
+  const reseatPendingRef = useRef(false);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -2247,10 +2252,22 @@ export function HarnessApp({
     });
   }
 
+  // MUB-169: a transcriptGen bump alone remounts <Static> but leaves the old transcript in
+  // the terminal's scrollback, and the fresh banner repaints over whatever rows the previous
+  // frame occupied. Replay the boot physics instead (main.ts): margin reset + full clear
+  // (2J screen + 3J scrollback) + home, then the rows-1 bottom-mount reserve — and arm the
+  // ledger's cap-seed so the next frame re-anchors at the bottom for ANY prior frame height.
+  function reseatFreshScreen() {
+    reseatPendingRef.current = true;
+    process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
+    process.stdout.write("\n".repeat(Math.max(0, rows - 1)));
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
       case "clear":
+        reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
         break;
@@ -3246,6 +3263,7 @@ export function HarnessApp({
       case "new":
         agent.setSessionId(Math.random().toString(16).slice(2, 14));
         agent.reset();
+        reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
         setActualCost(0);
@@ -4536,15 +4554,18 @@ export function HarnessApp({
         treeHeight +
         footerHeight +
         pickerRows;
-  // Ledger resets: a <Static> remount (startup, /clear, rewind, resume) reprints the
-  // transcript and seats itself → content-sized frame. A resize seeds one full-height frame
-  // instead: it writes past the last row and re-anchors — including after Ink's one
-  // unavoidable old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst
-  // until the next commit scrolls it home). The mount deliberately does NOT cap-seed: a
-  // full-height first frame parks the early transcript at the screen TOP, 40+ rows from
-  // the composer, for several turns (tried 2026-07-20, PNG-refuted). Boot seating is the
-  // reserve's job, made trustworthy by the CSI r margin reset in main.ts — the live
-  // failure mode was a stale DECSTBM region eating the reserve, not the reserve itself.
+  // Ledger resets: a <Static> remount (startup, rewind, resume) reprints the transcript
+  // and seats itself → content-sized frame. A resize seeds one full-height frame instead:
+  // it writes past the last row and re-anchors — including after Ink's one unavoidable
+  // old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst until the
+  // next commit scrolls it home). The /clear//new reseat (MUB-169) also cap-seeds: it has
+  // just cleared the screen and re-written the reserve, and the full-height frame outruns
+  // any previous frame height so the reserve write re-pins the bottom. The mount
+  // deliberately does NOT cap-seed: a full-height first frame parks the early transcript
+  // at the screen TOP, 40+ rows from the composer, for several turns (tried 2026-07-20,
+  // PNG-refuted). Boot seating is the reserve's job, made trustworthy by the CSI r margin
+  // reset in main.ts — the live failure mode was a stale DECSTBM region eating the
+  // reserve, not the reserve itself.
   const anchorPrev = anchorGenRef.current;
   const anchorRemounted =
     anchorPrev === null ||
@@ -4565,7 +4586,7 @@ export function HarnessApp({
   }
   const liveHeight = nextLiveFrameHeight(
     anchorReset
-      ? anchorRemounted
+      ? anchorRemounted && !reseatPendingRef.current
         ? 0
         : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
       : liveHeightRef.current,
@@ -4578,6 +4599,7 @@ export function HarnessApp({
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
     if (bannerShown) bannerGenRef.current = transcriptGen;
+    if (anchorReset) reseatPendingRef.current = false;
     if (ANCHOR_DEBUG) {
       try {
         appendFileSync(

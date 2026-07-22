@@ -70,6 +70,11 @@
 #                     transcript with the echo (it stays on screen) and no blank hole is
 #                     left where the live banner stood (pre-fix: the echo printed at the
 #                     old banner top, mid-screen, ~13 dead rows above the composer)
+#   clear-reseat      MUB-169: /clear replays the boot physics — margin reset + 2J/3J +
+#                     home + reserve — so the old transcript leaves the screen AND the
+#                     scrollback, and the banner re-seats at the terminal bottom. The ONLY
+#                     scenario whose wipe budget is 2 (startup 3J + the deliberate /clear
+#                     3J); every other scenario keeps the exactly-1 budget
 #   stale-margins     the live-window root cause (2026-07-20): a prior CLI's leaked
 #                     DECSTBM scroll region survives 2J/3J/H and resizes, imprisons the
 #                     newline reserve (DSR said row 24 of 60), and seats the composer
@@ -1465,6 +1470,55 @@ PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/firstprompt-frames.jsonl" --after 2.5 \
   --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
 
+echo "== tui-verify: scenario clear-reseat (MUB-169: /clear drops scrollback + re-seats the banner at the bottom) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 13,
+  "env": {"MINIMA_DB_PATH": "$TMP/clearreseat.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-clearreseat"},
+  "frames": "$TMP/clearreseat-frames.jsonl",
+  "raw": "$TMP/clearreseat-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE hello"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 8.5, "send": "/clear"},
+    {"after": 9.3, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture clearreseat "$SPEC"
+python3 - "$TMP/clearreseat-raw.bin" "$TMP/clearreseat-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+# The ONE deliberate exception to the suite's exactly-1 budget: startup clear + /clear.
+assert wipes == 2, f"{wipes} ESC[3J wipes (expect exactly 2: the startup clear + the /clear reseat)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# Liveness: the CODE turn actually painted a transcript to clear.
+assert any(grid_has(f, "```bash") for f in frames if f["t"] < 9.3), (
+    "the CODE turn never rendered - nothing on screen to clear, the reseat assert is vacuous")
+# Window opens AT the CR step (9.3): frames exist only on output, and the whole /clear
+# repaint can land within ~0.05s of the submit — a later window start sees zero frames.
+post = [f for f in frames if f["t"] >= 9.3]
+assert post, "no frames after /clear"
+# The old transcript is GONE from the visible screen (the 3J above proves the scrollback).
+assert not any(grid_has(f, "```bash") or grid_has(f, "▸ you") for f in post), (
+    "old transcript still on the visible screen after /clear")
+# ...and the banner is back.
+assert any(grid_has(f, "██") for f in post), "banner did not repaint after /clear"
+last = frames[-1]["screen"]
+assert any("██" in row for row in last), "banner not on the settled post-/clear screen"
+print("tui_assert: PASS clear-reseat (second 3J deliberate, transcript gone, banner repainted)")
+PY
+# Post-/clear: the fresh banner + composer seat at the terminal bottom (THE RULE) — the
+# reseat's reserve + cap-seeded frame, not a mid-screen repaint over stale rows.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/clearreseat-frames.jsonl" --after 9.3 \
+  --check final-nonblank --check bottom-anchor --bottom-slack 1
+
 # Root-caused live 2026-07-20: a prior CLI that pinned its UI with DECSTBM and died
 # uncleanly leaves scroll margins in the WINDOW forever (they survive 2J/3J/H and
 # resizes). The reserve then scrolls inside rows 1..24 and the composer seats mid-screen
@@ -1502,7 +1556,8 @@ python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
           "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \
           "$TMP"/otanchor-raw.bin "$TMP"/pearly-raw.bin "$TMP"/resizere-raw.bin \
-          "$TMP"/big200-raw.bin "$TMP"/firstprompt-raw.bin "$TMP"/margins-raw.bin <<'PY'
+          "$TMP"/big200-raw.bin "$TMP"/firstprompt-raw.bin "$TMP"/clearreseat-raw.bin \
+          "$TMP"/margins-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

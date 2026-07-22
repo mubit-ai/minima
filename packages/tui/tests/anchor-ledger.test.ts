@@ -188,12 +188,14 @@ describe("app.tsx wires the anchor ledger", () => {
     expect(src).toContain("committedRows += computeMsgHeight(bannerItem, cols)");
   });
 
-  test("remounts (incl. the mount) seed 0; only a resize cap-seeds (adjacency preserved)", () => {
+  test("remounts (incl. the mount) seed 0; only a resize or an explicit reseat cap-seeds", () => {
     // A mount cap-seed was tried and PNG-refuted 2026-07-20: it parks the early transcript
     // at the screen top, 40+ rows from the composer. Boot seating belongs to the reserve +
-    // the CSI r margin reset in main.ts.
+    // the CSI r margin reset in main.ts. The /clear//new reseat (MUB-169) is the deliberate
+    // exception: it clears + re-reserves the screen itself, and the cap seed makes the
+    // fresh frame taller than ANY previous frame so the reserve write re-anchors it.
     expect(src).toContain(
-      "anchorRemounted\n        ? 0\n        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)",
+      "anchorRemounted && !reseatPendingRef.current\n        ? 0\n        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)",
     );
   });
 });

@@ -36,3 +36,22 @@ describe("cli/main.ts wires the inline renderer", () => {
     expect(src).toContain("[r\\u001b[?69l\\u001b[2J\\u001b[3J\\u001b[H");
   });
 });
+
+// MUB-169: /clear only bumped transcriptGen + emptied messages — the old transcript stayed
+// in the terminal's scrollback and the banner repainted mid-screen over it. The handler must
+// replay the boot physics: margin reset + full clear (screen AND scrollback) + home, then the
+// rows-1 bottom-mount reserve, with the ledger cap-seeded so the fresh frame re-anchors for
+// ANY previous frame height. /new shares the reseat (same gap).
+describe("app.tsx /clear and /new reseat the terminal", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the reseat emits the boot sequence: margin reset + 2J/3J clear + home + newline reserve", () => {
+    expect(src).toContain("[r\\u001b[?69l\\u001b[2J\\u001b[3J\\u001b[H");
+    expect(src).toContain('"\\n".repeat(Math.max(0, rows - 1))');
+  });
+
+  test("both /clear and /new go through the reseat (a gen bump alone leaves stale scrollback)", () => {
+    const calls = src.match(/reseatFreshScreen\(\);/g) ?? [];
+    expect(calls.length).toBe(2);
+  });
+});
