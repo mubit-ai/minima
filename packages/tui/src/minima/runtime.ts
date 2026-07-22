@@ -1006,7 +1006,7 @@ export class MinimaAgent extends Agent {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
       });
-      const effective = runnable.length
+      let effective = runnable.length
         ? runnable
         : opts.candidates
           ? [...opts.candidates]
@@ -1016,6 +1016,22 @@ export class MinimaAgent extends Agent {
       const excludedUnion = [
         ...new Set([...(opts.excludedModels ?? []), ...this.sessionExcludedModels]),
       ];
+      // Reasoning-aware assembly (MUB-182): with an active thinking level, a model with no
+      // reasoning capability can't satisfy ANY thinking shape — drop it pre-request, exactly
+      // like the provider-key filter above (candidate assembly, never post-hoc re-ranking).
+      // Never silently empty the pool: if nothing left can reason, keep the pool unfiltered
+      // and surface the skip as a routing note.
+      let reasoningNote: string | null = null;
+      const thinkingLevel = this.agentState.thinkingLevel ?? "off";
+      if (thinkingLevel !== "off" && effective?.length) {
+        const reasoningCapable = effective.filter((id) => {
+          const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
+          return m?.reasoning === true;
+        });
+        if (reasoningCapable.length) effective = reasoningCapable;
+        else
+          reasoningNote = `reasoning_filter_skipped:no_reasoning_capable_candidates:${thinkingLevel}`;
+      }
       const routing = await this.router.recommend({
         task: taskText,
         taskType: opts.taskType ?? undefined,
@@ -1044,6 +1060,7 @@ export class MinimaAgent extends Agent {
         incumbentModelId: this.agentState.model?.id,
         signal: opts.signal,
       });
+      if (reasoningNote) routing.warnings.push(reasoningNote);
       this.offlineReason = null;
       this.offlineKind = null;
       if (this.beforeRouteHook) {

@@ -53,6 +53,21 @@ const TEXT_EVENTS: AnthropicStreamEvent[] = [
   { type: "message_stop" },
 ];
 
+async function kwargsFor(
+  model: Model,
+  options: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  resetAll();
+  const captured: Record<string, unknown>[] = [];
+  registerProvider("anthropic-messages", new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)));
+  await complete(model, context({ messages: [new Message({ role: "user", content: "x" })] }), {
+    options,
+  });
+  expect(captured).toHaveLength(1);
+  return captured[0]!;
+}
+
+
 function resetAll() {
   resetRegistry();
   resetProviderRegistration();
@@ -182,15 +197,15 @@ describe("AnthropicProvider", () => {
     expect(result.textContent).toBe("ok");
   });
 
-  test("adaptive-thinking model never gets an explicit thinking param; plain reasoning does", async () => {
-    // claude-fable-5 has always-on adaptive thinking and 400s on thinking/budget_tokens.
+  test("adaptive-thinking model never gets enabled/budget_tokens; plain reasoning does", async () => {
+    // claude-fable-5 has always-on adaptive thinking and 400s on enabled+budget_tokens.
     resetAll();
     const captured: Record<string, unknown>[] = [];
     registerProvider("anthropic-messages", new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)));
     const fable: Model = { ...MODEL, id: "claude-fable-5", adaptive_thinking: true };
     const opts = { options: { thinking: true, thinking_budget: 2048 } };
     await complete(fable, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
-    expect(captured[0].thinking).toBeUndefined();
+    expect(captured[0].thinking).toEqual({ type: "adaptive" });
 
     await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
     expect(captured[1].thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
@@ -202,6 +217,54 @@ describe("AnthropicProvider", () => {
     expect(sdkTimeoutMs({})).toBe(60_000);
     expect(sdkTimeoutMs({ timeout: 30 })).toBe(30_000);
     expect(sdkTimeoutMs({ timeout: 0.5 })).toBe(500);
+  });
+
+  test("classic reasoning model gets enabled + budget_tokens", async () => {
+    for (const id of ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"]) {
+      const kwargs = await kwargsFor(
+        { ...MODEL, id },
+        { thinking: true, thinking_budget: 2048, thinking_level: "high" },
+      );
+      expect(kwargs.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
+      expect(kwargs.output_config).toBeUndefined();
+    }
+  });
+
+  test("adaptive-format model gets adaptive + output_config.effort, no budget_tokens", async () => {
+    for (const id of ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5", "claude-fable-5"]) {
+      const kwargs = await kwargsFor(
+        { ...MODEL, id },
+        { thinking: true, thinking_budget: 2048, thinking_level: "high" },
+      );
+      expect(kwargs.thinking).toEqual({ type: "adaptive" });
+      expect(kwargs.output_config).toEqual({ effort: "high" });
+    }
+  });
+
+  test("adaptive-format model without a level omits output_config", async () => {
+    const kwargs = await kwargsFor(
+      { ...MODEL, id: "claude-opus-4-8" },
+      { thinking: true, thinking_budget: 2048 },
+    );
+    expect(kwargs.thinking).toEqual({ type: "adaptive" });
+    expect(kwargs.output_config).toBeUndefined();
+  });
+
+  test("non-reasoning model gets no thinking kwargs", async () => {
+    const kwargs = await kwargsFor(
+      { ...MODEL, id: "claude-opus-4-8", reasoning: false },
+      { thinking: true, thinking_budget: 2048, thinking_level: "high" },
+    );
+    expect(kwargs.thinking).toBeUndefined();
+    expect(kwargs.output_config).toBeUndefined();
+  });
+
+  test("thinking off sends no thinking kwargs on any format", async () => {
+    for (const id of ["claude-haiku-4-5", "claude-opus-4-8"]) {
+      const kwargs = await kwargsFor({ ...MODEL, id }, {});
+      expect(kwargs.thinking).toBeUndefined();
+      expect(kwargs.output_config).toBeUndefined();
+    }
   });
 
   test("surfaces a thrown stream error as an error event", async () => {

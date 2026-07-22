@@ -90,9 +90,9 @@ function service() {
 
 function buildAgent(
   fetchLike: (url: string, init?: { method?: string; body?: string }) => Promise<unknown>,
+  models: Model[] = [CLAUDE, GPT],
 ) {
-  registerModel(CLAUDE);
-  registerModel(GPT);
+  for (const m of models) registerModel(m);
   registerModel(FAUX);
   const reg = registerFauxProvider([FAUX]);
   reg.setResponses([new AssistantMessage({ content: [text("ok")], stop_reason: "stop" })]);
@@ -124,6 +124,41 @@ describe("route() candidate pre-filter by provider key", () => {
     const { agent, reg } = buildAgent(fetchLike);
     await agent.promptRouted("hi");
     expect(candidateLists[0]).toEqual(["claude-x", "gpt-x"]);
+    reg.unregister();
+  });
+});
+
+describe("route() reasoning-aware candidate assembly", () => {
+  test("thinkingLevel=high excludes non-reasoning models pre-request", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    process.env.OPENAI_API_KEY = "k";
+    const { fetchLike, candidateLists } = service();
+    const { agent, reg } = buildAgent(fetchLike, [{ ...CLAUDE, reasoning: true }, GPT]);
+    agent.agentState.thinkingLevel = "high";
+    await agent.promptRouted("hi");
+    expect(candidateLists[0]).toEqual(["claude-x"]);
+    reg.unregister();
+  });
+
+  test("thinkingLevel=off leaves non-reasoning models in the pool", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    process.env.OPENAI_API_KEY = "k";
+    const { fetchLike, candidateLists } = service();
+    const { agent, reg } = buildAgent(fetchLike, [{ ...CLAUDE, reasoning: true }, GPT]);
+    await agent.promptRouted("hi");
+    expect(candidateLists[0]).toEqual(["claude-x", "gpt-x"]);
+    reg.unregister();
+  });
+
+  test("falls back to the unfiltered pool with a warning when NO candidate can reason", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    process.env.OPENAI_API_KEY = "k";
+    const { fetchLike, candidateLists } = service();
+    const { agent, reg } = buildAgent(fetchLike);
+    agent.agentState.thinkingLevel = "high";
+    const routing = await agent.promptRouted("hi");
+    expect(candidateLists[0]).toEqual(["claude-x", "gpt-x"]);
+    expect(routing?.warnings.some((w) => w.startsWith("reasoning_filter_skipped"))).toBe(true);
     reg.unregister();
   });
 });
