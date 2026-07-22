@@ -133,9 +133,11 @@ function ready(slider: number | null = 5): { db: MinimaDb; runId: string } {
 }
 
 describe("config flag", () => {
-  test("MINIMA_TUI_TUNER === '1' opts in; anything else (or unset) stays off", () => {
+  test("MINIMA_TUI_TUNER=1 opts in; =0 or unset stays off (umbrella cases in config_env)", () => {
     const saved = process.env.MINIMA_TUI_TUNER;
+    const savedUmbrella = process.env.MINIMA_TUI_EXPERIMENTAL;
     try {
+      delete process.env.MINIMA_TUI_EXPERIMENTAL;
       delete process.env.MINIMA_TUI_TUNER;
       expect(configFromEnv().tuner).toBe(false);
       process.env.MINIMA_TUI_TUNER = "1";
@@ -145,6 +147,8 @@ describe("config flag", () => {
     } finally {
       if (saved === undefined) delete process.env.MINIMA_TUI_TUNER;
       else process.env.MINIMA_TUI_TUNER = saved;
+      if (savedUmbrella === undefined) delete process.env.MINIMA_TUI_EXPERIMENTAL;
+      else process.env.MINIMA_TUI_EXPERIMENTAL = savedUmbrella;
     }
   });
 });

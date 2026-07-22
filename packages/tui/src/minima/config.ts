@@ -150,10 +150,10 @@ export interface HarnessConfig {
    * source='interview', user-origin verifies, preference memories). Completely inert
    * when off. */
   interview: boolean;
-  /** Preference probes (tuner, opt-in): after a plan closes fully completed, ask ONE
-   * bounded A/B question that may nudge the per-repo profile slider one hill-climb step
-   * (±1.5 clamped to [2, 8]; ≤1 probe per session; 7-day cooldown via profile_events).
-   * `MINIMA_TUI_TUNER=1` enables — default OFF (question-asking features ship opt-in). */
+  /** Preference probes (MINIMA_TUI_TUNER, default off, umbrella-covered): after a plan
+   * closes fully completed, ask ONE bounded A/B question that may nudge the per-repo
+   * profile slider one hill-climb step (±1.5 clamped to [2, 8]; ≤1 probe per session;
+   * 7-day cooldown via profile_events). Question-asking features ship opt-in. */
   tuner: boolean;
 }
 
@@ -224,7 +224,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
-  cfg.tuner = process.env.MINIMA_TUI_TUNER === "1";
+  cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);

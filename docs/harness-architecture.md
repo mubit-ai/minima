@@ -312,7 +312,7 @@ prompt text.
 | `MINIMA_TUI_FAILURE_MATCHER` / `MINIMA_TUI_BACKOFF_MS` | recovery-ladder matcher / backoff | on / 0 |
 | `MINIMA_TUI_PLAN_PREMIUM` / `MINIMA_PLAN_PREMIUM_MODELS` | premium pool for all plan-mode turns (council or not) | on |
 | `MINIMA_TUI_PLAN_CRITIC` / `MINIMA_TUI_DIFF_REVIEW` / `MINIMA_TUI_AUTO_GATES` | verification extras | on |
-| `MINIMA_TUI_TUNER` | preference probe: after a fully completed plan, one bounded cost/quality slider A/B question (≤1 per session, 7-day cooldown) | off |
+| `MINIMA_TUI_TUNER` | preference probe: after a fully completed plan, one bounded cost/quality slider A/B question (≤1 per session, 7-day cooldown) (experimental-covered) | off |
 | `MINIMA_TUI_ALLOW_VERIFY` | headless verify consent (fail-closed) | off |
 | `MINIMA_TUI_INTERVIEW` | plan interview: ≤3 gated questions after a council round (verify commands → user-origin checks · budget/quality → routing profile `source='interview'` · prose → preference memories) (experimental-covered) | off |
 | `MINIMA_TUI_EXPERIMENTAL` | umbrella: every default-off opt-in feature at once | off |
