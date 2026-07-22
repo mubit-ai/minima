@@ -1,13 +1,14 @@
 # Examples
 
 A guided tour of the runnable examples in [`../examples/`](../examples/), from a single
-`curl` to a production routing wrapper and tenant provisioning. Each script is
-self-contained and prints what it needs.
+`curl` to a production routing wrapper. Each script is self-contained and prints what it
+needs.
 
 > **Setup.** Start the service (`make run`) against a reachable Mubit instance. Optionally
 > seed cold-start memory (`uv run minima-seed --dataset synthetic --limit 2000`) so picks are
 > grounded instead of prior-only. Run Python examples with `uv run` from the repo root. Set
-> `MINIMA_URL` (default `http://localhost:8080`); in multi-tenant mode also set `MINIMA_KEY`.
+> `MINIMA_URL` (default `http://localhost:8080`); when calling a shared deployment also set
+> `MINIMA_KEY` (your Mubit `mbt_…` key — auth is pass-through).
 
 ## 1. Quickstart with curl — [`01_quickstart.sh`](../examples/01_quickstart.sh)
 
@@ -69,17 +70,6 @@ still demonstrates end to end.
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... uv run python examples/06_routed_llm_call.py
-```
-
-## 7. Multi-tenant provisioning — [`07_multitenant_admin.py`](../examples/07_multitenant_admin.py)
-
-Provisions an org through the admin API (raw `httpx`), captures the one-time `mnim_…` key,
-lists tenants, then calls the normal API as that tenant with the SDK. Requires the service
-started in multi-tenant mode with a provisioning key.
-
-```bash
-# service: MINIMA_MULTITENANT=true MINIMA_PROVISIONING_KEY=secret uvicorn minima.main:app
-MINIMA_PROVISIONING_KEY=secret uv run python examples/07_multitenant_admin.py
 ```
 
 ## Where to go next

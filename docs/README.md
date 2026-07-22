@@ -57,7 +57,6 @@ See **[Examples](examples.md)** for a guided tour, or jump straight to:
 | 4 | [`04_workflow.py`](../examples/04_workflow.py) | Per-step recommendations for a multi-step pipeline |
 | 5 | [`05_autocapture.py`](../examples/05_autocapture.py) | Zero-code intake via `mubit.learn` |
 | 6 | [`06_routed_llm_call.py`](../examples/06_routed_llm_call.py) | A production wrapper that routes a real Claude call and feeds the outcome back |
-| 7 | [`07_multitenant_admin.py`](../examples/07_multitenant_admin.py) | Provision an org, then call as that tenant |
 
 ## At a glance
 
@@ -68,5 +67,4 @@ POST /v1/feedback             report an outcome, close the learning loop
 GET  /v1/models               the current model catalog (cost + capability priors)
 GET  /v1/strategies           rules Mubit has promoted for a namespace (explainability)
 GET  /v1/health               service, Mubit, catalog, and reasoner status
-POST /v1/admin/tenants        provision a tenant (multi-tenant mode only)
 ```

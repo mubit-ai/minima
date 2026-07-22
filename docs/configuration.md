@@ -10,7 +10,7 @@ single-tenant mode). A complete annotated template ships as
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `MUBIT_ENDPOINT` | `http://127.0.0.1:3000` | The Mubit runtime Minima reads/writes. |
-| `MUBIT_API_KEY` | — | Mubit **data-plane** key. Required single-tenant; leave blank multi-tenant (resolved per org). |
+| `MUBIT_API_KEY` | — | Mubit **data-plane** key — the server-side fallback credential when a request carries no bearer token. Callers may instead pass their own Mubit key per request (pass-through auth). |
 | `MUBIT_TRANSPORT` | `auto` | `auto` \| `grpc` \| `http`. Use `http` for the local runtime (the gRPC `QueryMode` enum does not include `direct_bypass`, and auto may select gRPC). |
 | `MUBIT_TIMEOUT_MS` | `30000` | Mubit client timeout. |
 
@@ -97,13 +97,7 @@ restarts so in-flight recommendations can still receive feedback.
 
 ## Multi-tenancy
 
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `MINIMA_MULTITENANT` | `false` | `false` = single-tenant (env key = one "default" org). `true` = per-org Mubit instance resolved from a Minima key. |
-| `MINIMA_PROVISIONING_KEY` | — | Admin credential to mint/manage tenant keys. Required (and never handed to callers) when multi-tenant. |
-| `MINIMA_TENANT_STORE` | `memory` | `memory` \| `sqlite` (durable registry). |
-| `MINIMA_TENANT_STORE_PATH` | `minima_tenants.db` | Backing file for the sqlite tenant store. |
-| `MINIMA_TENANT_BOOTSTRAP_FILE` | — | Optional JSON seed for the in-memory tenant store (dev). |
-| `MINIMA_DEFAULT_ORG_ID` | `default` | Org id used to partition single-tenant state. |
-
-See **[Multi-Tenancy](multi-tenancy.md)** for the full setup.
+Nothing to configure: auth is pass-through, so any caller's `Authorization: Bearer mbt_…`
+Mubit key selects (and scopes) its own org against the configured `MUBIT_ENDPOINT`.
+`MUBIT_API_KEY` is only the fallback for requests that carry no key. See
+**[Multi-Tenancy](multi-tenancy.md)**.

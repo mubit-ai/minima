@@ -49,7 +49,6 @@ realized tokens and cost. See [Concepts → Cost-basis tiers](docs/concepts.md#c
 | `GET  /v1/models` | The current model catalog (cost + capability priors). |
 | `GET  /v1/strategies` | Rules Mubit has promoted for a namespace (explainability). |
 | `GET  /v1/health` | Service, Mubit, catalog, and reasoner status. |
-| `POST\|GET\|DELETE /v1/admin/tenants` | Tenant provisioning (multi-tenant mode only). |
 
 Full schemas, fields, warnings, and error formats: **[API Reference](docs/api-reference.md)**.
 
@@ -127,7 +126,6 @@ Runnable, progressively advanced — in **[`examples/`](examples/)**:
 | 4 | [`04_workflow.py`](examples/04_workflow.py) | Per-step workflow recommendations. |
 | 5 | [`05_autocapture.py`](examples/05_autocapture.py) | Zero-code intake via `mubit.learn`. |
 | 6 | [`06_routed_llm_call.py`](examples/06_routed_llm_call.py) | Routing a real Claude call + feedback. |
-| 7 | [`07_multitenant_admin.py`](examples/07_multitenant_admin.py) | Provision an org, call as that tenant. |
 
 ## The `minima` CLI
 
@@ -153,7 +151,6 @@ single-tenant mode). Notable knobs:
 - `MINIMA_USE_OBSERVED_COST` / `MINIMA_OBSERVED_COST_MIN_N` — rank by realized cost.
 - `MINIMA_REASONER_PROVIDER` — enable the cheap-LLM escalation tier (`anthropic` / `gemini`).
 - `MINIMA_RECOMMENDATION_STORE=sqlite` — durable recommendation resolution (multi-worker).
-- `MINIMA_MULTITENANT` — serve many orgs from one deployment.
 
 ## Development
 
