@@ -26,3 +26,8 @@ export {
   allModels,
   resetModelRegistry,
 } from "./registry.ts";
+export {
+  resolveRunnableModel,
+  CHEAP_FALLBACK_MODELS,
+  type ResolvedRunnableModel,
+} from "./model_fallback.ts";

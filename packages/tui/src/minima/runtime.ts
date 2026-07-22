@@ -82,12 +82,14 @@ export interface MinimaAgentOptions extends Omit<AgentOptions, "model"> {
 }
 
 /** Compose the feedback `notes` field: evidence provenance first, then (E2) the named
- * rung whose intervention produced this attempt. Undefined only for a plain judged turn
- * with nothing else to say — exactly the pre-E2 behavior. */
+ * rung whose intervention produced this attempt, then the abort marker (an Esc'd turn is
+ * telemetry, never a graded answer). Undefined only for a plain judged turn with nothing
+ * else to say — exactly the pre-E2 behavior. */
 export function buildFeedbackNotes(
   deterministic: { confidence: string | null } | null,
   judged: boolean,
   recoveryRung: string | null,
+  aborted = false,
 ): string | undefined {
   const parts: string[] = [];
   if (deterministic) {
@@ -96,6 +98,7 @@ export function buildFeedbackNotes(
     parts.push("unlabeled");
   }
   if (recoveryRung) parts.push(`recovery=${recoveryRung}`);
+  if (aborted) parts.push("aborted");
   return parts.length > 0 ? parts.join(";") : undefined;
 }
 
@@ -990,8 +993,13 @@ export class MinimaAgent extends Agent {
     let errorCause: "infra" | undefined;
     let reinforcedEntryIds: string[] | null = null;
     let lessonPromoted: boolean | null = null;
+    let aborted = false;
     try {
       const last = this.lastAssistant();
+      // Esc mid-run commits an assistant stub with stop_reason "aborted" (agent/loop.ts).
+      // A truncated answer must NEVER be graded — the turn goes out as unlabeled telemetry.
+      // A deterministic gate verdict for this rung still outranks the abort below.
+      aborted = !failed && last?.stop_reason === "aborted";
       if (failed) {
         // A run/provider fault (429/5xx/timeout/stream error) is NOT a model-quality
         // signal: no fabricated quality 0, no judged claim — the server keeps it as
@@ -1012,6 +1020,9 @@ export class MinimaAgent extends Agent {
         quality = null;
         outcome = deterministicOutcomeLabel(deterministic, this.config.gradedOutcome);
         if (deterministic.confidence === "green") evidenceSource = "gate";
+      } else if (aborted) {
+        quality = null;
+        outcome = "success";
       } else if (!this.shouldJudge()) {
         quality = null;
         outcome = "success";
@@ -1067,7 +1078,7 @@ export class MinimaAgent extends Agent {
         verifiedInProduction,
         judged,
         chosenEffort: this.agentState.thinkingLevel ?? undefined,
-        notes: buildFeedbackNotes(deterministic, judged, recoveryRung),
+        notes: buildFeedbackNotes(deterministic, judged, recoveryRung, aborted),
         stepOutcomes,
       });
       // Keep the Mubit-side provenance ids (previously discarded) — the work record
