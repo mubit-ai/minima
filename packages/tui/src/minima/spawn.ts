@@ -17,6 +17,7 @@ import { attachDbSink } from "../db/sink.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
 import { bigPlanAttributionSink, recordOpaqueMarker } from "./big_plan.ts";
+import { MinimaError } from "./errors.ts";
 import { CostMeter } from "./meter.ts";
 import { MinimaAgent } from "./runtime.ts";
 
@@ -39,6 +40,13 @@ export interface CreateSpawnOptions {
 
 const TURNS_BY_EFFORT = { light: 6, standard: 12, deep: 24 } as const;
 const TIMEOUT_BY_EFFORT = { light: 120_000, standard: 300_000, deep: 600_000 } as const;
+
+/** A recommend rejection of the offered candidate pool (HTTP 422 or an explicit
+ *  no-candidates detail) — the ONLY route-error class the step-pool retry may absorb. */
+export function isNoCandidatesRouteError(exc: unknown): boolean {
+  if (exc instanceof MinimaError && exc.status === 422) return true;
+  return exc instanceof Error && /no[\s_-]?candidates?/i.test(exc.message);
+}
 
 /** Render the delegation contract + dependency results as the child's system prompt. */
 export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
@@ -116,6 +124,16 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       tools = tools.filter((t) => allowed.has(t.name));
     }
 
+    // Per-step candidate pool (dispatcher enforcement, never prompt text): keep only ids the
+    // model registry resolves; empty-after-filter falls back to the parent pool. Applied as
+    // pre-request candidate assembly via config.candidates — `pinned` stays false so the
+    // child still routes (a pool is never a pin).
+    const requestedPool = (d.candidates ?? [])
+      .map((c) => (typeof c === "string" ? c.trim() : ""))
+      .filter(Boolean);
+    const stepPool = requestedPool.filter((id) => parent.mapping.resolve("", id) !== undefined);
+    const poolApplied = stepPool.length > 0;
+
     // Per-node budget: stop the child gracefully once its realized spend hits its slice.
     let spent = 0;
     const budget = d.budget_usd;
@@ -123,7 +141,12 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       // bigPlan never inherits: children have no Big Plan hooks (lead-only by design), so an
       // inheriting child would get Big Plan guidance + the LEAD's plan projection in its prompts
       // and consult the shared gates ledger in its feedback — cross-agent poisoning.
-      config: { ...parent.config, pinned: false, bigPlan: false },
+      config: {
+        ...parent.config,
+        pinned: false,
+        bigPlan: false,
+        ...(poolApplied ? { candidates: stepPool } : {}),
+      },
       // Share the parent's router (same client/transport/auth) — rebuilding one from
       // config would bypass injected transports and re-do auth per child.
       router: parent.router,
@@ -190,7 +213,22 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
         tags: ["phase:subtask"],
       });
     } catch (exc) {
-      runError = exc;
+      // Route-failure fallback: a step pool the server cannot satisfy (422/no-candidates)
+      // degrades to the parent pool — retried ONCE; any other error (or a second failure)
+      // surfaces as this child's failure.
+      if (poolApplied && isNoCandidatesRouteError(exc)) {
+        child.config.candidates = [...parent.config.candidates];
+        try {
+          await child.promptRouted(d.objective, {
+            difficulty: d.difficulty,
+            tags: ["phase:subtask"],
+          });
+        } catch (retryExc) {
+          runError = retryExc;
+        }
+      } else {
+        runError = exc;
+      }
     } finally {
       clearTimeout(timer);
       ctx.parentSignal?.removeEventListener("abort", onAbort);

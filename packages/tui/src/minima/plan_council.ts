@@ -744,7 +744,7 @@ const BIG_PLAN_SYSTEM = `You are the RECORDER of a planning council writing the 
  "risks": ["risk, edge case, or gotcha to handle", "..."],
  "successCriteria": ["end-to-end acceptance check for the whole plan / tests to pass", "..."],
  "openItems": ["anything genuinely deferred — should be rare", "..."]}
-Every implementation step in "approach" MUST carry a concrete "verify"; a step whose completion cannot be checked is too coarse — decompose it until each piece has a check. Fill every field as richly as the conversation supports; only leave a field empty when there is truly nothing to say. ${UNTRUSTED}`;
+Every implementation step in "approach" MUST carry a concrete "verify"; a step whose completion cannot be checked is too coarse — decompose it until each piece has a check. A step MAY additionally carry "candidates" (an array of exact model ids restricting which models its delegated sub-tasks route among) — include it ONLY when observed scoreboard data provided in the context or an explicit user statement justifies the restriction; otherwise omit it. Fill every field as richly as the conversation supports; only leave a field empty when there is truly nothing to say. ${UNTRUSTED}`;
 
 /**
  * Distil the whole planning conversation + accumulated council state into a detailed, structured
@@ -868,7 +868,17 @@ function sanitizeApproach(raw: unknown): SynthPlanStep[] {
       // convert a scoped step into an unrestricted one. Enforcement ignores an unknown name safely
       // (it never matches a real call), so keeping it costs nothing at runtime.
       const tools = asStrList(r.tools).map((t) => t.toLowerCase());
-      if (action) out.push({ action, verify: asStr(r.verify), tools });
+      // Per-step candidate pools: keep names verbatim (exact model ids, case-sensitive);
+      // createSpawn filters unknown ids against the registry at enforcement time.
+      const candidates = asStrList(r.candidates);
+      if (action) {
+        out.push({
+          action,
+          verify: asStr(r.verify),
+          tools,
+          ...(candidates.length > 0 ? { candidates } : {}),
+        });
+      }
     }
   }
   return out;
