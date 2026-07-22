@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentTool } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
   type Model,
   Usage,
+  context,
   isAssistant,
   registerFauxProvider,
   registerModel,
@@ -10,7 +12,13 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  toolCall,
 } from "../src/ai/index.ts";
+import {
+  type AnthropicClientLike,
+  AnthropicProvider,
+  type AnthropicStreamEvent,
+} from "../src/ai/providers/anthropic.ts";
 import { MinimaDb, newId } from "../src/db/minima_db.ts";
 import { applyRehydratedRun, rehydrateRun } from "../src/db/rehydrate.ts";
 import { attachDbSink } from "../src/db/sink.ts";
@@ -91,7 +99,7 @@ function mockService() {
   return { fetchLike };
 }
 
-function agentWith(db: MinimaDb, runId: string): MinimaAgent {
+function agentWith(db: MinimaDb, runId: string, tools: AgentTool[] = []): MinimaAgent {
   const { fetchLike } = mockService();
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: fetchLike });
   const config = harnessConfig({
@@ -106,11 +114,62 @@ function agentWith(db: MinimaDb, runId: string): MinimaAgent {
     router,
     judge: new ConstJudge(0.9),
     meter: new CostMeter(),
-    tools: [],
+    tools,
   });
   agent.db = db;
   agent.runId = runId;
   return agent;
+}
+
+function echoTool(): AgentTool {
+  return {
+    name: "echo",
+    description: "echo the message back",
+    parameters: {
+      jsonSchema: {
+        type: "object",
+        properties: { msg: { type: "string" } },
+        required: ["msg"],
+      },
+      validate(v) {
+        if (v && typeof v === "object" && "msg" in v) {
+          return { ok: true, value: v as Record<string, unknown> };
+        }
+        return { ok: false, errors: ["msg is required"] };
+      },
+    },
+    async execute(args) {
+      return { content: [text(String((args as { msg: string }).msg))], is_error: false };
+    },
+  };
+}
+
+const ANTHROPIC_MODEL: Model = {
+  id: "claude-test",
+  provider: "anthropic",
+  api: "anthropic-messages",
+  name: "Claude Test",
+  cost: { input: 1, output: 5 },
+  context_window: 200_000,
+  max_tokens: 8192,
+};
+
+function capturingClient(): { client: AnthropicClientLike; captured: Record<string, unknown>[] } {
+  const captured: Record<string, unknown>[] = [];
+  return {
+    captured,
+    client: {
+      messages: {
+        stream: (opts: Record<string, unknown>): AsyncIterable<AnthropicStreamEvent> => {
+          captured.push(opts);
+          async function* gen(): AsyncIterable<AnthropicStreamEvent> {
+            yield { type: "message_stop" };
+          }
+          return gen();
+        },
+      },
+    },
+  };
 }
 
 describe("MinimaDb schema + lifecycle", () => {
@@ -453,6 +512,138 @@ describe("rehydration (P1c)", () => {
     db.writeDecision({ ...base, runId: b });
     expect(db.getRunDecisions(a)).toHaveLength(1);
     expect(db.getRunDecisions(b)).toHaveLength(0); // conflict-update keeps the original run
+    db.close();
+  });
+});
+
+describe("resume tool_use round-trip (MUB-175)", () => {
+  test("tool_use ids + tool_call_id survive sink → rehydrate and serialize valid wire", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("calling"), toolCall("call-1", "echo", { msg: "ping" })],
+        stop_reason: "toolUse",
+      }),
+      new AssistantMessage({ content: [text("done")] }),
+    ]);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    const agent = agentWith(db, runId, [echoTool()]);
+    const sink = attachDbSink(agent, db, { runId });
+    await agent.promptRouted("use the tool");
+    sink.detach();
+
+    const r = rehydrateRun(db, runId);
+    expect(r.messages.map((m) => m.role)).toEqual(
+      agent.agentState.messages.map((m) => m.role), // user, assistant, toolResult, assistant
+    );
+    const asst = r.messages.filter(isAssistant).find((m) => m.toolCalls.length > 0);
+    expect(asst).toBeDefined();
+    expect(asst!.toolCalls).toEqual([
+      { type: "toolCall", id: "call-1", name: "echo", arguments: { msg: "ping" } },
+    ]);
+    expect(asst!.textContent).toBe("calling");
+    const result = r.messages.find((m) => m.role === "toolResult");
+    expect(result?.tool_call_id).toBe("call-1");
+    expect(result?.tool_name).toBe("echo");
+
+    // The resume-400 itself: the reconstructed conversation must serialize with every
+    // tool_result carrying its tool_use_id (undefined here was the live 400).
+    const { client, captured } = capturingClient();
+    const provider = new AnthropicProvider(client);
+    for await (const _ of provider.stream(ANTHROPIC_MODEL, context({ messages: r.messages }))) {
+    }
+    const wire = captured[0]!.messages as {
+      role: string;
+      content: { type: string; id?: string; tool_use_id?: string }[];
+    }[];
+    const toolUses = wire.flatMap((m) => m.content.filter((b) => b.type === "tool_use"));
+    const toolResults = wire.flatMap((m) => m.content.filter((b) => b.type === "tool_result"));
+    expect(toolUses).toHaveLength(1);
+    expect(toolUses[0]!.id).toBe("call-1");
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]!.tool_use_id).toBe("call-1");
+    reg.unregister();
+    db.close();
+  });
+
+  test("rehydrate prunes orphans both directions (aborted/errored turns)", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "go" } });
+    // Aborted mid-tool: the tool_use was persisted, its result never was.
+    db.appendEvent({
+      runId,
+      type: "assistant",
+      payload: {
+        role: "assistant",
+        text: "on it",
+        tool_calls: [{ id: "c-orphan", name: "bash", arguments: { cmd: "ls" } }],
+      },
+    });
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "again" } });
+    // Dangling result: its owning assistant tool_use is gone.
+    db.appendEvent({
+      runId,
+      type: "tool",
+      payload: { role: "toolResult", text: "stale", tool_name: "bash", tool_call_id: "c-gone" },
+    });
+    db.appendEvent({ runId, type: "assistant", payload: { role: "assistant", text: "done" } });
+
+    const r = rehydrateRun(db, runId);
+    expect(r.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    const [first, second] = r.messages.filter(isAssistant);
+    expect(first!.toolCalls).toHaveLength(0); // orphan tool_use pruned
+    expect(first!.textContent).toBe("on it"); // its text survives
+    expect(second!.textContent).toBe("done");
+    db.close();
+  });
+
+  test("an all-tool_use assistant with no results is dropped; answered pairs are kept", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "go" } });
+    // Two calls, only one answered before the abort.
+    db.appendEvent({
+      runId,
+      type: "assistant",
+      payload: {
+        role: "assistant",
+        text: "",
+        tool_calls: [
+          { id: "c1", name: "bash", arguments: {} },
+          { id: "c2", name: "read", arguments: {} },
+        ],
+      },
+    });
+    db.appendEvent({
+      runId,
+      type: "tool",
+      payload: { role: "toolResult", text: "out", tool_name: "bash", tool_call_id: "c1" },
+    });
+    // A later turn aborted before ANY result: pure tool_use assistant, nothing to keep.
+    db.appendEvent({ runId, type: "user", payload: { role: "user", text: "more" } });
+    db.appendEvent({
+      runId,
+      type: "assistant",
+      payload: {
+        role: "assistant",
+        text: "",
+        tool_calls: [{ id: "c3", name: "bash", arguments: {} }],
+      },
+    });
+
+    const r = rehydrateRun(db, runId);
+    expect(r.messages.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+    const asst = r.messages.filter(isAssistant)[0]!;
+    expect(asst.toolCalls.map((c) => c.id)).toEqual(["c1"]); // c2 pruned, c1 kept
+    expect(r.messages[2]!.tool_call_id).toBe("c1");
     db.close();
   });
 });
