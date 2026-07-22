@@ -242,6 +242,11 @@ class Recommender:
                 for mid in candidate_ids
                 if (epoch := self._resets.epoch_for(mid, lane, cluster)) is not None
             } or None
+        # Discounted+reset posteriors change the LIVE pick, so they apply only behind the
+        # opt-in flag; the shadow "discounted" challenger below always sees them, which is
+        # how an org measures the counterfactual before enabling. Reset stamping (CUSUM,
+        # provider snapshots) continues regardless — history is ready when the flag flips.
+        discounting = settings.minima_posterior_discounting
         aggregates = aggregate_by_model(
             evidence,
             candidate_ids,
@@ -251,8 +256,10 @@ class Recommender:
             seed_crowdout_n=settings.minima_seed_crowdout_n,
             recall_vote_min_n=settings.minima_recall_vote_min_n,
             human_weight=settings.minima_human_evidence_weight,
-            discount_half_life_days=settings.minima_aggregate_half_life_days,
-            reset_epochs=reset_epochs,
+            discount_half_life_days=(
+                settings.minima_aggregate_half_life_days if discounting else 0.0
+            ),
+            reset_epochs=reset_epochs if discounting else None,
         )
         profile.mark("aggregate")
 
@@ -643,7 +650,7 @@ class Recommender:
         re-scoring pass only runs for orgs that disabled it. Pure CPU, best-effort."""
         settings = self._settings
         choices = {"raw_argmin": raw_argmin_id}
-        if settings.minima_aggregate_half_life_days > 0.0:
+        if settings.minima_posterior_discounting and settings.minima_aggregate_half_life_days > 0.0:
             choices["discounted"] = raw_argmin_id
             return choices
         try:

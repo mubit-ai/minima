@@ -85,7 +85,11 @@ class Settings(BaseSettings):
     minima_evidence_decay_floor: float = 0.1
     # Non-stationarity discount: every recalled record's weight is ADDITIONALLY halved per
     # half-life of observation age, with no floor — unlike the floored decay above, this
-    # lets a posterior actually forget a dead regime. 0 disables.
+    # lets a posterior actually forget a dead regime. OFF by default: the live pick only
+    # sees the discount (and posterior-reset epochs) when minima_posterior_discounting is
+    # true; until then both run shadow-only ("discounted" challenger + OPE replay), so an
+    # org can read the counterfactual before opting in. 0 half-life disables even when on.
+    minima_posterior_discounting: bool = False
     minima_aggregate_half_life_days: float = 45.0
     # Recall-track (free quality labels): once a record has this many recall votes, its
     # aggregation weight is scaled by its recall success rate (floored — see aggregate),
