@@ -6,13 +6,23 @@ from minima.catalog.store import CatalogStore
 from minima.config import Settings
 from minima.recommender.engine import Recommender
 from minima.recommender.recstore import RecommendationStore
-from minima.schemas.common import TaskInput
+from minima.schemas.common import Constraints, TaskInput
 from minima.schemas.recommend import RecommendRequest
 from tests.factories import FakeMemory, make_evidence
 
 # Classifies code:hard (Phase 0); gemini-2.5-flash's 0.74 code prior scrapes past the
 # default tau of 0.735 by 0.005 — exactly the borderline the margin exists for.
 _BAKERY = "build me a website for my bakery"
+
+# Pinned candidate pool: catalog growth must not move the borderline these tests sit on.
+_POOL = [
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "gemini-2.5-pro",
+    "claude-opus-4-8",
+]
 
 
 def _settings(**overrides) -> Settings:
@@ -22,7 +32,11 @@ def _settings(**overrides) -> Settings:
 async def _recommend(settings: Settings, memory: FakeMemory):
     engine = Recommender(settings, memory, CatalogStore(settings), RecommendationStore())
     return await engine.recommend(
-        RecommendRequest(task=TaskInput(task=_BAKERY), allow_llm_escalation=False)
+        RecommendRequest(
+            task=TaskInput(task=_BAKERY),
+            constraints=Constraints(candidate_models=_POOL),
+            allow_llm_escalation=False,
+        )
     )
 
 
