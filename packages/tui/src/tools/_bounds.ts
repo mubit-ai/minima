@@ -208,7 +208,9 @@ export class BoundedBuffer {
   snapshot(): string {
     if (this.total <= this.maxChars) return this.head + this.tail;
     const tail =
-      this.tail.length > this.tailChars ? this.tail.slice(this.tail.length - this.tailChars) : this.tail;
+      this.tail.length > this.tailChars
+        ? this.tail.slice(this.tail.length - this.tailChars)
+        : this.tail;
     const elided = this.total - this.head.length - tail.length;
     return `${this.head}\n${omissionMarker(elided)}\n${tail}`;
   }
