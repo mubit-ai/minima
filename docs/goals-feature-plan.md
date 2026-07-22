@@ -1,5 +1,7 @@
 # `/goals` — Implementation Plan
 
+> **Status: unshipped proposal.** No `/goals` command exists as of 0.13.x; kept as design history.
+
 A cost-aware goal/plan feature for the Minima harness. Two phases: **Phase 1** delivers
 table-stakes goal + task tracking (the mechanism); **Phase 2** adds Minima's differentiator —
 goal-conditioned routing and cost-to-goal budgeting.
