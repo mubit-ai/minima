@@ -45,7 +45,8 @@ export interface PlanOverviewStepRow {
 export interface PlanOverview {
   planId: string;
   title: string;
-  /** 1-based position of the active step (first in_progress, else first pending), 0 = none. */
+  /** 1-based position of the active step (first in_progress, else first not-completed,
+   * else steps.length when all done — matching the footer strip); 0 only for an empty plan. */
   stepPos: number;
   stepTotal: number;
   steps: PlanOverviewStepRow[];
@@ -101,9 +102,11 @@ export function buildPlanOverview(db: MinimaDb, sessionId: string): PlanOverview
     };
   });
 
+  // Mirrors big_plan.ts activeStepPos: first in-progress, else first not-yet-completed,
+  // else the last (all done — "step N/N", never the contradictory "step 0/N"; MUB-173b).
   const active = steps.findIndex((s) => s.status === "in_progress");
-  const firstPending = steps.findIndex((s) => s.status === "pending");
-  const pos = active >= 0 ? active + 1 : firstPending >= 0 ? firstPending + 1 : 0;
+  const firstOpen = steps.findIndex((s) => s.status !== "completed");
+  const pos = active >= 0 ? active + 1 : firstOpen >= 0 ? firstOpen + 1 : steps.length;
 
   return {
     planId: plan.id,
