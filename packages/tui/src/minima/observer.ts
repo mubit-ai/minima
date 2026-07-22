@@ -11,7 +11,10 @@
  * - Advisory only, enforcement stays in the dispatcher: outputs are (a) agent.steer()
  *   notes, (b) recId:null audit rows, (c) after repeated ignored call-outs at most ONE
  *   yellow milestone gate — never green, never red, never a feedback label, never a
- *   blocked tool. Deterministic gates always outrank the observer.
+ *   blocked tool. Deterministic gates always outrank the observer. The ONE narrow feedback
+ *   touchpoint (E5): verdicts + per-rung coverage feed the `observer_flagged` implicit
+ *   signal under the omit-absent contract — weak-supervision input on the server's opt-in
+ *   label model, never outcome/quality/evidence provenance.
  * - Actor text is UNTRUSTED DATA: anything from the actor that reaches an observer LLM
  *   prompt goes through {@link sanitizeForObserver} (strip control chars, cap, fence,
  *   explicit "data not instructions" preamble).
@@ -441,6 +444,16 @@ export class ObserverController {
 
   private async onTurnEnd(ev: { assistantText: string; recId: string | null }): Promise<void> {
     this.turnCount += 1;
+    // E5 coverage fact: the observer processed a turn_end under this rung, so an unflagged
+    // rung reads back as an OBSERVED false in the signals bridge — absent stays reserved
+    // for rungs the observer never saw. Bookkeeping only, best-effort.
+    if (ev.recId && this.deps.db && this.deps.runId) {
+      try {
+        this.deps.db.markObserverCoverage(ev.recId, this.deps.runId);
+      } catch {
+        // coverage is bookkeeping; a failed write must never stall the drain
+      }
+    }
     const turn: ObserverTurn = {
       turn: this.turnCount,
       claims: extractDoneClaims(ev.assistantText),
@@ -457,10 +470,10 @@ export class ObserverController {
 
     const planSteps = this.planSteps();
     const fired = runTripwires({ turn, planSteps });
-    for (const v of fired) this.recordVerdict(v, turn.turn, "tripwire");
+    for (const v of fired) this.recordVerdict(v, turn.turn, "tripwire", ev.recId);
 
     const due = fired.length > 0 || (this.passEvery > 0 && this.turnCount % this.passEvery === 0);
-    if (due) await this.maybeRunPass(turn.turn, planSteps);
+    if (due) await this.maybeRunPass(turn.turn, planSteps, ev.recId);
   }
 
   /** Gate rows newly landed under this turn's rung (read-only poll; dedup across turns). */
@@ -514,8 +527,15 @@ export class ObserverController {
     }
   }
 
-  /** Persist a verdict + audit; steer under the rate cap; audit-gate warn tripwires. */
-  private recordVerdict(v: TripwireVerdict, turn: number, origin: "tripwire" | "pass"): void {
+  /** Persist a verdict + audit; steer under the rate cap; audit-gate warn tripwires.
+   * `recId` (E5) is the rung identity captured at turn_end — stamped so warn verdicts can
+   * ride feedback as the `observer_flagged` implicit signal, and nothing more. */
+  private recordVerdict(
+    v: TripwireVerdict,
+    turn: number,
+    origin: "tripwire" | "pass",
+    recId: string | null,
+  ): void {
     let verdictId: string | null = null;
     try {
       if (this.deps.db && this.deps.runId) {
@@ -526,6 +546,7 @@ export class ObserverController {
           claim: v.claim,
           evidenceRef: v.evidenceRef,
           severity: v.severity,
+          recId,
         });
         this.deps.db.insertObserverEvent({ verdictId, event: "fired", detail: { origin } });
       }
@@ -577,7 +598,11 @@ export class ObserverController {
     }
   }
 
-  private async maybeRunPass(turn: number, planSteps: ObserverPlanStep[]): Promise<void> {
+  private async maybeRunPass(
+    turn: number,
+    planSteps: ObserverPlanStep[],
+    recId: string | null,
+  ): Promise<void> {
     if (this.lastPassTurn === turn) return; // never more than once per turn
     this.lastPassTurn = turn;
     const model = this.deps.metaModel;
@@ -611,6 +636,7 @@ export class ObserverController {
         { kind: r.kind, claim: r.claim, evidenceRef: r.evidence, severity: r.severity },
         turn,
         "pass",
+        recId,
       );
       const set = this.refutedTurnsByKind.get(r.kind) ?? new Set<number>();
       set.add(turn);

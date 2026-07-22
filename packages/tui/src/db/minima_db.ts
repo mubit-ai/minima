@@ -399,9 +399,10 @@ const MIGRATIONS: string[][] = [
   ],
   // v17 — observer ledger (PR-E): `observer_verdicts` stores the observer agent's advisory
   // findings (deterministic tripwires + the sampled adversarial pass); `observer_events` is
-  // the append-only audit trail mirroring memory_events. Advisory by construction: there is
-  // deliberately NO rec_id column, so verdicts can never join the feedback path — they
-  // surface only through /why, steers, and (elsewhere) at most one yellow milestone gate.
+  // the append-only audit trail mirroring memory_events. Advisory by construction: as shipped
+  // there was deliberately NO rec_id column, so verdicts could never join the feedback path —
+  // they surface through /why, steers, and (elsewhere) at most one yellow milestone gate.
+  // (v18 adds rec_id for the signals-only bridge — see that batch's comment for the contract.)
   [
     `CREATE TABLE IF NOT EXISTS observer_verdicts (
        id           TEXT PRIMARY KEY,
@@ -422,6 +423,24 @@ const MIGRATIONS: string[][] = [
        at         REAL NOT NULL
      )`,
     "CREATE INDEX IF NOT EXISTS ix_observer_events_verdict ON observer_events(verdict_id, at)",
+  ],
+  // v18 — observer→signals bridge (PR-E5): stamp the rung's rec_id (captured synchronously at
+  // turn_end, same identity join as gates) onto each verdict, and record per-rung coverage so
+  // the bridge can honor the omit-absent signals contract: `observer_flagged` is true when a
+  // warn verdict landed under the rung, false when the observer OBSERVED the rung (coverage or
+  // any verdict) and did not flag it, and ABSENT when the observer never ran — false is an
+  // observed outcome, never a default. The v17 advisory contract narrows, it does not break:
+  // rec_id joins ONLY the `signals` map (weak supervision on the server's opt-in label model)
+  // — never outcome, quality, evidence_source, or verified_in_production.
+  [
+    "ALTER TABLE observer_verdicts ADD COLUMN rec_id TEXT",
+    "CREATE INDEX IF NOT EXISTS ix_observer_verdicts_rec ON observer_verdicts(rec_id)",
+    `CREATE TABLE IF NOT EXISTS observer_coverage (
+       rec_id     TEXT PRIMARY KEY,     -- the rung the observer processed a turn_end for
+       run_id     TEXT NOT NULL,
+       turns      INTEGER NOT NULL,     -- turn_ends observed under this rung
+       updated_at REAL NOT NULL
+     )`,
   ],
 ];
 
@@ -658,6 +677,7 @@ export interface ObserverVerdictRow {
   evidence_ref: string | null;
   severity: ObserverSeverity;
   created_at: number;
+  rec_id: string | null;
 }
 
 export interface ObserverEventRow {
@@ -2491,7 +2511,8 @@ export class MinimaDb {
   }
 
   // ---------------------------------------------------------------- observer ledger (PR-E)
-  /** Persist one observer finding. Advisory-only: the table has no rec_id on purpose. */
+  /** Persist one observer finding. `recId` (v18) is the rung identity captured at turn_end —
+   * it feeds ONLY the signals-map bridge (observerFlaggedForRec), never a feedback label. */
   insertObserverVerdict(opts: {
     id?: string;
     runId: string;
@@ -2500,12 +2521,13 @@ export class MinimaDb {
     claim: string;
     evidenceRef?: string | null;
     severity: ObserverSeverity;
+    recId?: string | null;
     ts?: number;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      `INSERT INTO observer_verdicts (id, run_id, turn, kind, claim, evidence_ref, severity, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO observer_verdicts (id, run_id, turn, kind, claim, evidence_ref, severity, rec_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         opts.runId,
@@ -2514,6 +2536,7 @@ export class MinimaDb {
         opts.claim,
         opts.evidenceRef ?? null,
         opts.severity,
+        opts.recId ?? null,
         opts.ts ?? Date.now() / 1000,
       ],
     );
@@ -2540,6 +2563,41 @@ export class MinimaDb {
       ],
     );
     return id;
+  }
+
+  /** PR-E5: mark that the observer processed a turn_end under this rung — the coverage
+   * fact that makes an unflagged rung an OBSERVED false instead of an absent key. */
+  markObserverCoverage(recId: string, runId: string): void {
+    this.db.run(
+      `INSERT INTO observer_coverage (rec_id, run_id, turns, updated_at)
+       VALUES (?, ?, 1, ?)
+       ON CONFLICT(rec_id) DO UPDATE SET turns = turns + 1, updated_at = excluded.updated_at`,
+      [recId, runId, Date.now() / 1000],
+    );
+  }
+
+  /** PR-E5: the rung's `observer_flagged` value under the omit-absent contract — the only
+   * observer→feedback join, consumed as that implicit signal and nothing else (never
+   * outcome/quality/evidence provenance). true = a warn-severity verdict carries this
+   * rec_id; false = the observer observed the rung (coverage row or any verdict) and did
+   * not flag it; null = the observer never processed the rung — the caller must OMIT the
+   * key, never send a fabricated false. */
+  observerFlaggedForRec(recId: string): boolean | null {
+    const warn = this.db
+      .query(
+        "SELECT 1 AS one FROM observer_verdicts WHERE rec_id = ? AND severity = 'warn' LIMIT 1",
+      )
+      .get(recId);
+    if (warn !== null) return true;
+    const observed = this.db
+      .query(
+        `SELECT 1 AS one FROM observer_coverage WHERE rec_id = ?
+         UNION ALL
+         SELECT 1 FROM observer_verdicts WHERE rec_id = ?
+         LIMIT 1`,
+      )
+      .get(recId, recId);
+    return observed !== null ? false : null;
   }
 
   /** A run's observer verdicts, oldest first — the /why surfacing + escalation input. */

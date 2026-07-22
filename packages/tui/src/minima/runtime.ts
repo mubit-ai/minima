@@ -1246,6 +1246,12 @@ export class MinimaAgent extends Agent {
       // TODO(diff_reverted): needs checkpoint diffing — compare this rung's checkpoint
       // tree_sha against the worktree after later prompts to detect a reverted diff;
       // deferred until the checkpoint spine exposes that comparison.
+      // E5 observer→signals bridge: `observer_flagged` joins the same map — true when a
+      // WARN-severity verdict carries THIS rung's rec_id (the verdict-time identity join,
+      // captured synchronously at turn_end), false when the observer OBSERVED the rung and
+      // did not flag it, ABSENT when the observer never ran/abstained on it (a false is an
+      // observed outcome, never a default). Signals-map ONLY: never outcome, quality,
+      // evidence_source, or verified_in_production.
       let signals: Record<string, boolean> | undefined;
       try {
         signals = {
@@ -1254,6 +1260,10 @@ export class MinimaAgent extends Agent {
         };
         if (this.db) {
           signals.user_corrected = this.db.hasUserCorrectionForRec(routing.recommendationId);
+          if (this.config.observer) {
+            const flagged = this.db.observerFlaggedForRec(routing.recommendationId);
+            if (flagged !== null) signals.observer_flagged = flagged;
+          }
         }
       } catch {
         signals = undefined;
