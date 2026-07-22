@@ -6,6 +6,14 @@ All notable changes to Minima are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+- **Big Plan compat window closed** (TUI, #243 + #212): the one-release aliases shipped
+  in 0.13.2 are removed — `/gt`/`/gt-seed` commands, the `MINIMA_TUI_GROUND_TRUTH` env
+  fallback, the `config.groundTruth` input/read alias, the deprecated API delegate
+  exports (`groundTruthHooks`, `synthesizeGroundTruth`, `attachGroundedOutcome`,
+  `groundedOutcomeFor`, `stampGroundedOutcome`, …), and the `gt_*` dual-writes
+  (columns remain, read-only).
+
 ### Fixed
 - **Stream inactivity watchdog + spinner backpressure guard** (TUI): a turn whose model
   stream went silent kept `busy` pinned forever while the 8 fps spinner pumped frames
@@ -15,6 +23,10 @@ All notable changes to Minima are documented here. The format follows
   error distinct from Esc; the recommender client's dead `timeoutMs` is wired into
   every request; and the busy spinner skips ticks while stdout's write buffer needs
   drain.
+- **Legacy-row skew in plan-verification reads** (TUI, #212): rows stamped only with
+  `gt_*` columns by pre-rename binaries no longer vanish once dual-writes stop — the
+  judge/gate disagreement query (the scribe's feed) and run rehydration fall back via
+  `COALESCE(big_plan_outcome, gt_outcome)`.
 
 ## [0.13.2] - 2026-07-21
 

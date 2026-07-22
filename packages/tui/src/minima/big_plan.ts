@@ -1224,12 +1224,3 @@ export function bigPlanHooks(
 }
 
 export type { FileChangeRow };
-
-/** @deprecated Use `BigPlanAgentRef`. */
-export type GtAgentRef = BigPlanAgentRef;
-/** @deprecated Use `VerifiedOutcome`. */
-export type GroundedOutcome = VerifiedOutcome;
-/** @deprecated Use `verifiedOutcomeFor`. */
-export const groundedOutcomeFor = verifiedOutcomeFor;
-/** @deprecated Use `stampVerifiedOutcome`. */
-export const stampGroundedOutcome = stampVerifiedOutcome;
