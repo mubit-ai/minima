@@ -20,7 +20,7 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
 import { AssistantMessage } from "../ai/types.ts";
-import { type MinimaDb, newId } from "../db/minima_db.ts";
+import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
 import {
@@ -58,6 +58,7 @@ import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
+import { minDefinedCap, perTaskTypeEntry, resolveProfilePool } from "./routing_profile.ts";
 import type { StepOutcome } from "./schemas.ts";
 import { makeStopGate } from "./stop_gate.ts";
 
@@ -210,6 +211,9 @@ export class MinimaAgent extends Agent {
   /** B1: the last injected memory id-set (joined) — a changed set re-records the inject
    * audit event; an unchanged one doesn't spam the ledger every turn. */
   private lastMemoryInjectKey: string | null = null;
+  /** Per-repo routing profile cache, keyed by project so a run switch reloads. Writes
+   * (/profile, the interview) invalidate via invalidateRoutingProfile(). */
+  private profileCache: { projectKey: string; row: RoutingProfileRow | null } | null = null;
 
   /** Esc must stop BOTH phases: the in-flight route and the model run. */
   override abort(): void {
@@ -267,6 +271,27 @@ export class MinimaAgent extends Agent {
     refreshRoutingEnv(this.config);
     this.router = MinimaRouter.forConfig(this.config, this.mapping);
     this.offlineReason = null;
+  }
+
+  /** Drop the cached routing profile — call after ANY routing_profiles write. */
+  invalidateRoutingProfile(): void {
+    this.profileCache = null;
+  }
+
+  /** The current project's routing profile (cached per project; fail-open on DB errors).
+   * Null when pinned (routing is bypassed entirely) or without a persistence spine. */
+  private currentRoutingProfile(): RoutingProfileRow | null {
+    if (this.config.pinned || !this.db || !this.runId) return null;
+    try {
+      const run = this.db.getRun(this.runId);
+      if (!run) return null;
+      if (this.profileCache?.projectKey === run.project_key) return this.profileCache.row;
+      const row = this.db.getRoutingProfile(run.project_key);
+      this.profileCache = { projectKey: run.project_key, row };
+      return row;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -441,8 +466,8 @@ export class MinimaAgent extends Agent {
             tags: routeTags,
             difficulty: opts.difficulty ?? classifiedDifficulty ?? undefined,
             taskTypeConfidence: classifiedConfidence ?? undefined,
-            // The remaining budget rides into the server as a (soft) per-call cost cap.
-            maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
+            // Explicit per-call cap only; route() folds in the profile/budget ceilings.
+            maxCostPerCall: opts.maxCostPerCall,
             minQuality: opts.minQuality,
             excludedModels: excluded.length ? excluded : undefined,
             candidates: opts.candidates,
@@ -901,12 +926,24 @@ export class MinimaAgent extends Agent {
       }
     }
     try {
+      // Per-repo routing profile: the middle layer of the precedence chain
+      // EXPLICIT OPTS > PROFILE > CONFIG DEFAULT, applied as pre-request candidate
+      // assembly + request knobs (never a post-hoc re-rank). The per-task-type pool
+      // applies only when a taskType is known for this request; a profile pool is a
+      // DEFAULT pool (config.candidates semantics), not a plan-premium hard pool.
+      const profile = this.currentRoutingProfile();
+      const perTask = perTaskTypeEntry(profile, opts.taskType);
+      const profilePool = resolveProfilePool(
+        profile,
+        opts.taskType,
+        (id) => this.mapping.resolve(this.providerOf(id) ?? "", id) !== undefined,
+      );
       // Only let Minima pick models the user can actually run: restrict candidates to those
       // whose provider key is present, so a routed turn never dies with a provider auth error.
       // If NO candidate is runnable (no provider keys at all), fall back to the full set and
       // let the provider layer surface an actionable "no API key" message. Explicit per-call
       // candidates (plan-premium) are a HARD pool: never widened back to config.candidates.
-      const pool = opts.candidates ?? this.config.candidates;
+      const pool = opts.candidates ?? profilePool ?? this.config.candidates;
       const runnable = pool.filter((id) => {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
@@ -924,7 +961,7 @@ export class MinimaAgent extends Agent {
       const routing = await this.router.recommend({
         task: taskText,
         taskType: opts.taskType ?? undefined,
-        slider: opts.slider ?? undefined,
+        slider: opts.slider ?? profile?.slider ?? undefined,
         // Phase rides as a tag: recall boosts same-phase evidence and stored outcomes
         // carry it, so planning/execution/sub-task work stops collapsing into one pool.
         tags: opts.tags ?? ["phase:interactive"],
@@ -934,8 +971,12 @@ export class MinimaAgent extends Agent {
         // estimate is only truthful when it knows the real prompt size.
         expectedInputTokens: this.estimateContextTokens(taskText),
         candidates: effective,
-        maxCostPerCall: opts.maxCostPerCall,
-        minQuality: opts.minQuality,
+        // Two ceilings may coexist (profile cap + remaining-budget cap) — honoring both
+        // means the tighter one; an explicit per-call cap outranks both.
+        maxCostPerCall:
+          opts.maxCostPerCall ??
+          minDefinedCap(profile?.max_cost_per_call, this.budget?.maxCostPerCall()),
+        minQuality: opts.minQuality ?? perTask?.minQuality ?? profile?.min_quality ?? undefined,
         excludedModels: excludedUnion.length ? excludedUnion : undefined,
         // The server caps candidate selection at 8 by default; widen when the pool is larger.
         maxCandidates:

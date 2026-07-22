@@ -110,7 +110,7 @@ describe("v14 Big Plan outcome migration", () => {
     }[];
     const names = new Set(columns.map((column) => column.name));
 
-    expect(db.schemaVersion).toBe(14);
+    expect(db.schemaVersion).toBe(LATEST);
     expect(names.has("big_plan_outcome")).toBe(true);
     expect(names.has("big_plan_verified_by")).toBe(true);
     expect(names.has("big_plan_confidence")).toBe(true);
@@ -142,7 +142,7 @@ describe("v14 Big Plan outcome migration", () => {
       )
       .get() as Record<string, string>;
 
-    expect(db.schemaVersion).toBe(14);
+    expect(db.schemaVersion).toBe(LATEST);
     expect(row.big_plan_outcome).toBe("verified");
     expect(row.big_plan_verified_by).toBe("deterministic");
     expect(row.big_plan_confidence).toBe("green");
