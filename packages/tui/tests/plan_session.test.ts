@@ -327,6 +327,14 @@ describe("PlanSessionStore.snapshotBlock", () => {
     expect(prompt).toContain(store.snapshotBlock());
   });
 
+  test("a fresh store after a supersede-on-start carries the NEW goal into the prompt (R5a)", () => {
+    // /plan finalize → /plan start <divergent goal>: the second start builds a brand-new
+    // store, so the planner prompt must anchor on the new goal — never the finalized one.
+    const prompt = buildPlannerSystemPrompt("BASE", new PlanSessionStore("migrate to bun"));
+    expect(prompt).toContain("Goal: migrate to bun");
+    expect(prompt).not.toContain("Goal: (none set)");
+  });
+
   test("fences hostile draft/decision/question/constraint lines; state + doc keep originals", () => {
     const store = new PlanSessionStore("g");
     store.applyCouncilResult(

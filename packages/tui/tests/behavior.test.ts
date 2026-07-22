@@ -630,6 +630,27 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(guard).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
   });
 
+  test("/plan start with no live session supersedes the stale ACTIVE plan of record (R5a)", () => {
+    // Post-finalize exitPlanMode nulls planSessionRef, so a second /plan start bypasses the
+    // live-session guard — it must supersede the old ACTIVE plan explicitly (status flip,
+    // never DELETE) before entering the fresh session, or the next todowrite franken-merges
+    // the divergent goal's steps into the old row.
+    const idx = src.indexOf('if (sub === "start")');
+    expect(idx).toBeGreaterThan(-1);
+    const branch = src.slice(idx, idx + 1200);
+    const supersede = branch.indexOf("supersedePriorPlanOnStart()");
+    expect(supersede).toBeGreaterThan(-1);
+    expect(supersede).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+    expect(branch).toContain("superseded — planning fresh");
+    // The helper reads the ACTIVE plan only (a completed plan needs no supersede) and flips
+    // status via supersedeActivePlans — never a DELETE, never 'cancelled'.
+    const helper = src.indexOf("const supersedePriorPlanOnStart");
+    expect(helper).toBeGreaterThan(-1);
+    const body = src.slice(helper, helper + 900);
+    expect(body).toContain("getActivePlan");
+    expect(body).toContain("supersedeActivePlans");
+  });
+
   test("enterPlanMode seeds the planner prompt with the goal snapshot (MUB-180)", () => {
     expect(src).toContain(
       "agent.agentState.systemPrompt = buildPlannerSystemPrompt(PLANNER_PERSONA, store);",

@@ -2073,6 +2073,20 @@ export class MinimaDb {
     return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
   }
 
+  /**
+   * R5a (/plan start over a stale plan of record): close EVERY still-active plan for the
+   * session. 'superseded', not 'cancelled' — the user is explicitly re-planning, rejecting
+   * nothing — and a status flip, never a DELETE (steps/gates stay replayable). Returns how
+   * many were closed.
+   */
+  supersedeActivePlans(sessionId: string): number {
+    this.db.run(
+      "UPDATE plans SET status = 'superseded', closed_at = COALESCE(closed_at, ?) WHERE session_id = ? AND status = 'active'",
+      [Date.now() / 1000, sessionId],
+    );
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
+  }
+
   getPlan(planId: string): PlanRow | null {
     return (this.db.query("SELECT * FROM plans WHERE id = ?").get(planId) as PlanRow) ?? null;
   }

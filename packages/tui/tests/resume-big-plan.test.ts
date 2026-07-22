@@ -110,6 +110,36 @@ describe("MinimaDb.supersedeOtherActivePlans (completion sweep)", () => {
   });
 });
 
+// R5a: /plan start with no live session but a still-active plan of record supersedes it
+// EXPLICITLY — 'superseded', never 'cancelled' (the user rejected nothing) and never DELETE
+// (steps/gates stay replayable) — so the next todowrite can never franken-merge a divergent
+// goal's steps into the stale row.
+describe("MinimaDb.supersedeActivePlans (/plan start supersede)", () => {
+  test("closes every active for the session; closed plans and other sessions untouched", () => {
+    const d = db();
+    const a = d.insertPlan({ sessionId: "run1", status: "active" });
+    const b = d.insertPlan({ sessionId: "run1", status: "active" });
+    const done = d.insertPlan({ sessionId: "run1", status: "done" });
+    const other = d.insertPlan({ sessionId: "run2", status: "active" });
+    expect(d.supersedeActivePlans("run1")).toBe(2);
+    expect(d.getPlan(a)!.status).toBe("superseded");
+    expect(d.getPlan(b)!.status).toBe("superseded");
+    expect(d.getPlan(a)!.closed_at).not.toBeNull();
+    expect(d.getPlan(done)!.status).toBe("done");
+    expect(d.getPlan(other)!.status).toBe("active");
+    expect(d.getActivePlan("run1")).toBeNull();
+    expect(d.supersedeActivePlans("run1")).toBe(0);
+  });
+
+  test("steps of a superseded plan survive (supersede is a status flip, not a DELETE)", () => {
+    const d = db();
+    const { planId } = d.upsertPlanFromTodos("run1", [{ content: "A", status: "in_progress" }]);
+    d.supersedeActivePlans("run1");
+    expect(d.getPlan(planId)!.status).toBe("superseded");
+    expect(d.getPlanSteps(planId).map((s) => s.content)).toEqual(["A"]);
+  });
+});
+
 describe("whyReportFor: unattributed blocked attempts", () => {
   test("plan-less blocked attempts surface in /why for their session", () => {
     const d = db();

@@ -1061,6 +1061,22 @@ export function HarnessApp({
     },
     [agent],
   );
+  // R5a: /plan start with NO live session (post-finalize, planSessionRef already nulled) must
+  // not leave a stale ACTIVE plan of record behind — the next todowrite would franken-merge the
+  // divergent goal's steps into the old row. Supersede it explicitly (status flip via
+  // supersedeActivePlans, never DELETE) and return the old title for the notice. A completed
+  // plan needs no supersede — null. Fail-open: a ledger error never blocks /plan start.
+  const supersedePriorPlanOnStart = useCallback((): string | null => {
+    try {
+      if (!agent.db || !agent.runId) return null;
+      const active = agent.db.getActivePlan(agent.runId);
+      if (!active) return null;
+      agent.db.supersedeActivePlans(agent.runId);
+      return active.title?.trim() || "untitled";
+    } catch {
+      return null;
+    }
+  }, [agent]);
   const exitPlanMode = useCallback(() => {
     setMode("build");
     planSessionRef.current = null;
@@ -3049,9 +3065,14 @@ export function HarnessApp({
             }
             break;
           }
+          const prior = supersedePriorPlanOnStart();
           enterPlanMode(rest);
           pushPlan(
-            rest ? `Plan mode ON — goal: ${rest}` : "Plan mode ON — describe the goal to begin.",
+            prior
+              ? `previous plan '${prior}' superseded — planning fresh${rest ? `: ${rest}` : ""}`
+              : rest
+                ? `Plan mode ON — goal: ${rest}`
+                : "Plan mode ON — describe the goal to begin.",
           );
           break;
         }
