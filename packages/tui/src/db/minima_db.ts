@@ -528,7 +528,9 @@ export interface UserSignalRow {
 }
 
 // ---------------------------------------------------------------- memory ledger rows (B1)
-export type MemoryKind = "note" | "workflow" | "lesson" | "guardrail";
+// Kinds are app-level (no SQL CHECK on memories.kind — the shipped v12 batch string is
+// never edited): `preference` = a durable user preference about how work happens here.
+export type MemoryKind = "note" | "workflow" | "lesson" | "guardrail" | "preference";
 export type MemoryStatus = "pending" | "active" | "pinned" | "rejected" | "invalidated";
 export type MemoryOrigin = "scribe" | "agent" | "user";
 
