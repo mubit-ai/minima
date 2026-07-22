@@ -37,6 +37,7 @@ export {
   type BeforeRoute,
   type MinimaAgentOptions,
 } from "./runtime.ts";
+export { redoLastRouted, REDO_NOTE_CAP, type RedoOutcome } from "./redo.ts";
 export {
   buildMemoryProjection,
   memoryProjectionFor,

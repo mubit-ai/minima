@@ -282,8 +282,10 @@ export class MinimaRouter {
     chosenModelId: string;
     outcome: string;
     quality: number | null;
-    usage: Usage;
-    latencyMs: number;
+    /** Realized run usage. Omit ONLY for a corrective label (/redo) whose original rung
+     * already reported realized usage — never send fabricated tokens/cost. */
+    usage?: Usage;
+    latencyMs?: number;
     iterations?: number;
     /**
      * Provenance of the quality signal — the field the server keys ALL learning on.
@@ -315,9 +317,9 @@ export class MinimaRouter {
       chosen_model_id: opts.chosenModelId,
       outcome: opts.outcome as "success" | "partial" | "failure",
       quality_score: opts.quality ?? undefined,
-      input_tokens: opts.usage.input || undefined,
-      output_tokens: opts.usage.output || undefined,
-      actual_cost_usd: Math.round(opts.usage.cost.total * 1e8) / 1e8,
+      input_tokens: opts.usage ? opts.usage.input || undefined : undefined,
+      output_tokens: opts.usage ? opts.usage.output || undefined : undefined,
+      actual_cost_usd: opts.usage ? Math.round(opts.usage.cost.total * 1e8) / 1e8 : undefined,
       latency_ms: opts.latencyMs,
       iterations: opts.iterations,
       evidence_source: opts.evidenceSource,
