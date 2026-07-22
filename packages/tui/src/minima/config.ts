@@ -52,6 +52,11 @@ export interface HarnessConfig {
   judgeSampleRate: number;
   baselineModelId: string | null;
   timeout: number;
+  /** Stream inactivity watchdog (ms): abort a turn whose model stream goes silent for
+   * this long (MINIMA_STREAM_IDLE_TIMEOUT_MS, default 5 min; 0 disables). Guardrail for
+   * the pinned-busy leak: a silent stream kept `busy` true forever while the spinner
+   * pumped frames into a possibly non-draining stdout, growing RSS without bound. */
+  streamIdleTimeoutMs: number;
   allowOffline: boolean;
   /** Big Plan ledger (default ON since 0.11): persist/project the plan, attribute file
    * changes, and record verification gates — gate verdicts are the harness's honest label
@@ -146,6 +151,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     judgeSampleRate: 0.15,
     baselineModelId: null,
     timeout: 30.0,
+    streamIdleTimeoutMs: 300_000,
     allowOffline: true,
     bigPlan: true,
     stopStrikes: 3,
@@ -185,6 +191,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (timeoutEnv) {
     const t = Number(timeoutEnv);
     if (Number.isFinite(t)) cfg.timeout = t;
+  }
+  const idleEnv = process.env.MINIMA_STREAM_IDLE_TIMEOUT_MS;
+  if (idleEnv) {
+    const v = Number(idleEnv);
+    if (Number.isFinite(v) && v >= 0) cfg.streamIdleTimeoutMs = v;
   }
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";

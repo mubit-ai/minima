@@ -79,15 +79,27 @@ export async function* agentLoop(
       ),
     };
     const options = streamOptions(config);
-    const s = streamFn(state.model, ctx, { options, signal: config.signal ?? undefined });
+    // Watchdog: a silent stream must never pin the turn open forever. The provider
+    // gets a composed signal so an idle timeout also tears down its HTTP request;
+    // config.signal stays the pure user signal so the catch below still classifies
+    // Esc as `aborted` while StreamIdleTimeoutError propagates as an error.
+    const idleMs = config.streamIdleTimeoutMs ?? 0;
+    const watchdog = idleMs > 0 ? new AbortController() : null;
+    const streamSignal = watchdog
+      ? config.signal
+        ? AbortSignal.any([config.signal, watchdog.signal])
+        : watchdog.signal
+      : (config.signal ?? undefined);
+    const s = streamFn(state.model, ctx, { options, signal: streamSignal });
     yield messageStart(null);
     let aborted = false;
     let partialText = "";
+    const source = watchdog ? withIdleTimeout(s, idleMs, () => watchdog.abort()) : s;
     try {
       // Race each stream step against the abort signal so Esc stops the run
       // instantly — without this, `for await` only checks between chunks and a
       // mid-token or slow-first-token stream keeps going after abort.
-      for await (const streamEvent of raceAbort(s, config.signal ?? undefined)) {
+      for await (const streamEvent of raceAbort(source, config.signal ?? undefined)) {
         if ((streamEvent as { type?: string }).type === "text_delta") {
           partialText += (streamEvent as { delta?: string }).delta ?? "";
         }
@@ -248,6 +260,80 @@ async function* raceAbort<T>(
     // Best-effort: close the source iterator so the provider generator's
     // finally-block (and any open HTTP request) is torn down.
     if (typeof it.return === "function") {
+      try {
+        await it.return();
+      } catch {
+        // ignore teardown errors
+      }
+    }
+  }
+}
+
+/**
+ * Thrown when the model stream emits nothing for `idleMs` — the stall that once pinned
+ * `busy` true all night (spinner pumping frames into a sleeping terminal, 43 GB RSS).
+ * The "idle timeout" wording deliberately matches failure_kind's TRANSIENT_RE: a stall
+ * is an infra fault, so feedback is suppressed — never charged to the model — and the
+ * recovery ladder may retry, bounding worst-case surface time to (1+recoveryRungs)×idleMs.
+ */
+export class StreamIdleTimeoutError extends Error {
+  readonly idleMs: number;
+  constructor(idleMs: number) {
+    super(
+      `stream stalled — no data for ${Math.round(idleMs / 1000)}s (idle timeout); turn aborted`,
+    );
+    this.name = "StreamIdleTimeoutError";
+    this.idleMs = idleMs;
+  }
+}
+
+const IDLE = Symbol("idle-timeout");
+
+/**
+ * Yield from an async iterable, but throw {@link StreamIdleTimeoutError} if `idleMs`
+ * passes with no event — each `.next()` races a fresh timer, so the clock resets on
+ * every event. `onTimeout` runs first on the timeout path: abort the provider's
+ * composed signal there so the underlying HTTP request is torn down.
+ */
+export async function* withIdleTimeout<T>(
+  iterable: AsyncIterable<T>,
+  idleMs: number,
+  onTimeout?: () => void,
+): AsyncGenerator<T> {
+  const it = iterable[Symbol.asyncIterator]();
+  let timedOut = false;
+  try {
+    for (;;) {
+      const next = it.next();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<typeof IDLE>((resolve) => {
+        timer = setTimeout(() => resolve(IDLE), idleMs);
+      });
+      let winner: IteratorResult<T> | typeof IDLE;
+      try {
+        winner = await Promise.race([next, idle]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (winner === IDLE) {
+        timedOut = true;
+        // The losing next() may still reject once the provider signal aborts below;
+        // swallow it so the late rejection never surfaces as unhandled.
+        next.catch(() => {});
+        onTimeout?.();
+        // Fire-and-forget teardown — NEVER await it here: a native async generator's
+        // return() queues behind the pending next(), so awaiting would re-pin the
+        // turn on the stalled stream — the very bug this watchdog removes.
+        void Promise.resolve(it.return?.()).catch(() => {});
+        throw new StreamIdleTimeoutError(idleMs);
+      }
+      if (winner.done) return;
+      yield winner.value;
+    }
+  } finally {
+    // Normal completion / user abort: awaited best-effort close, mirroring raceAbort.
+    // The timeout path already closed fire-and-forget above (awaiting would hang).
+    if (!timedOut && typeof it.return === "function") {
       try {
         await it.return();
       } catch {

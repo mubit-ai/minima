@@ -8,7 +8,7 @@
  * spinner + verb. Timers only run while `active` is true, so an idle app burns nothing.
  */
 
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import React, { useEffect, useState } from "react";
 import { formatTip, pick } from "./tips.ts";
 
@@ -92,15 +92,23 @@ export function BusyIndicator({ active, showTip = true, statusLine = null }: Bus
   const [tick, setTick] = useState(0);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [base, setBase] = useState(0);
+  const { stdout } = useStdout();
 
   useEffect(() => {
     if (!active) return;
     setTick(0);
     setStartedAt(Date.now());
     setBase(busyEpoch++);
-    const id = setInterval(() => setTick((t) => t + 1), SPINNER_INTERVAL_MS);
+    const id = setInterval(() => {
+      // Self-defense: a non-draining terminal (display sleep / App Nap) must not keep
+      // accumulating frames in the writable's native buffer. Skipping the tick means no
+      // state change -> no re-render -> no write; the next tick re-checks (auto-resume).
+      const w = stdout as unknown as { writableNeedDrain?: boolean };
+      if (w?.writableNeedDrain === true) return;
+      setTick((t) => t + 1);
+    }, SPINNER_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [active]);
+  }, [active, stdout]);
 
   if (!active) return null;
 
