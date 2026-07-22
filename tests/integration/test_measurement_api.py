@@ -78,6 +78,49 @@ class TestSavingsAndCalibration:
         assert global_report["n"] == 3
         assert data["health"]["feedback_coverage"] == 1.0
 
+    def test_calibration_reports_judge_bias_and_ppi(self, client, fake_memory):
+        fake_memory.evidence = [
+            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
+        ]
+        for i in range(8):
+            rec = _recommend(client)
+            _feedback(
+                client,
+                rec,
+                evidence_source="judge",
+                quality_score=0.8 + 0.02 * i,
+                output_tokens=100 * (i + 1),
+            )
+        for _ in range(2):
+            rec = _recommend(client)
+            _feedback(client, rec, evidence_source="gate", quality_score=None)
+
+        data = client.get("/v1/calibration", params={"days": 1}).json()
+        bias = data["judge_bias"]
+        assert bias["corrected"] is True
+        assert bias["n_fit"] == 8
+        assert bias["mean_output_tokens"] == 450.0
+        assert "ece_quality_raw" in data["reports"][0]
+
+        ppi = data["ppi_corrected_success"]
+        est = ppi[next(iter(ppi))]
+        assert est["judge_n"] == 8
+        assert est["gate_n"] == 2
+        assert est["value"] == est["raw_judge_value"] == 1.0  # all-success, zero rectifier
+        assert data["health"]["ppi_corrected_success_rate"] == 1.0
+
+    def test_calibration_judge_bias_absent_without_judge_data(self, client, fake_memory):
+        fake_memory.evidence = [
+            make_evidence("claude-haiku-4-5", 0.9, entry_id=f"e{i}") for i in range(3)
+        ]
+        rec = _recommend(client)
+        _feedback(client, rec)
+        data = client.get("/v1/calibration", params={"days": 1}).json()
+        assert data["judge_bias"]["corrected"] is False
+        assert data["judge_bias"]["n_fit"] == 0
+        assert data["ppi_corrected_success"] == {}
+        assert "ppi_corrected_success_rate" not in data["health"]
+
     def test_tenant_isolation_on_savings(self, client):
         _recommend(client)
         other = client.get(

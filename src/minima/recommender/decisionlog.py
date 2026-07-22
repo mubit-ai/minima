@@ -85,6 +85,10 @@ class DecisionRecord:
     realized_quality: float | None = None
     realized_cost_usd: float | None = None
     realized_latency_ms: int | None = None
+    # Realized output size from feedback (req.output_tokens) — the regressor for the judge
+    # length-bias fit. None on rows reconciled before capture existed (back-compat on
+    # deserialize, same as realized_cost_usd).
+    realized_output_tokens: int | None = None
     feedback_ts: float | None = None
     late_feedback: bool = False
     # Provenance of the realized quality signal ("gate" | "judge" | "human" | "none").
@@ -178,6 +182,7 @@ class Reconciliation:
     quality: float | None
     cost_usd: float | None = None
     latency_ms: int | None = None
+    output_tokens: int | None = None
     ts: float = 0.0
     late: bool = False
     evidence_source: str | None = None
@@ -237,6 +242,8 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
             rec.realized_cost_usd = update.cost_usd
         if update.latency_ms is not None:
             rec.realized_latency_ms = update.latency_ms
+        if update.output_tokens is not None:
+            rec.realized_output_tokens = update.output_tokens
         rec.feedback_ts = update.ts or time.time()
         rec.late_feedback = update.late
         rec.evidence_source = update.evidence_source
@@ -249,6 +256,7 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
     rec.realized_quality = update.quality
     rec.realized_cost_usd = update.cost_usd
     rec.realized_latency_ms = update.latency_ms
+    rec.realized_output_tokens = update.output_tokens
     rec.feedback_ts = update.ts or time.time()
     rec.late_feedback = update.late
     rec.evidence_source = update.evidence_source

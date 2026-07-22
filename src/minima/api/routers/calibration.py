@@ -10,6 +10,7 @@ from minima.api.auth import get_tenant
 from minima.config import Settings
 from minima.deps import get_settings
 from minima.metrics.calibration import calibration_by_task_type, cusum_flags, routing_health
+from minima.metrics.judge_calibration import judge_bias_stats, ppi_by_model
 from minima.schemas.savings import CalibrationResponse
 from minima.tenancy.context import TenantContext
 
@@ -50,4 +51,6 @@ async def calibration(
         drift_flags=cusum_flags(
             rows, k=settings.minima_cusum_k, h=settings.minima_cusum_h
         ),
+        judge_bias=judge_bias_stats(rows),
+        ppi_corrected_success=ppi_by_model(rows),
     )

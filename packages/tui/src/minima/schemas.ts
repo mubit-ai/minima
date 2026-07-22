@@ -292,6 +292,8 @@ export interface CalibrationResponse {
   health?: Record<string, number>;
   reports?: Record<string, unknown>[];
   drift_flags?: Record<string, unknown>[];
+  judge_bias?: Record<string, unknown>;
+  ppi_corrected_success?: Record<string, Record<string, unknown>>;
 }
 
 export interface StrategiesResponse {

@@ -205,6 +205,7 @@ class TestTrustedCorrection:
                 quality=None,
                 cost_usd=0.002,
                 latency_ms=900,
+                output_tokens=250,
                 evidence_source="none",
             ),
         )
@@ -221,9 +222,10 @@ class TestTrustedCorrection:
         assert got.realized_outcome == "failure"
         assert got.realized_quality == 0.1
         assert got.evidence_source == "human"
-        # First-reconcile cost/latency survive a correction that omits them.
+        # First-reconcile cost/latency/output_tokens survive a correction that omits them.
         assert got.realized_cost_usd == 0.002
         assert got.realized_latency_ms == 900
+        assert got.realized_output_tokens == 250
         assert got.feedback_ts is not None
 
     def test_legacy_null_evidence_is_correctable(self, backend):

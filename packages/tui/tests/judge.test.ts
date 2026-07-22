@@ -105,6 +105,11 @@ describe("parseScore", () => {
     expect(parseScore("10/10")).toBe(10); // slash form still works
     expect(parseScore("Score: 8")).toBe(8);
   });
+
+  test("evidence-first replies parse to the final Score line", () => {
+    expect(parseScore("Correct and complete against the task.\nScore: 7")).toBe(7);
+    expect(parseScore("Missed the edge case the task required.\nScore: 3")).toBe(3);
+  });
 });
 
 describe("judge prompt hardening (live prompt-bench findings)", () => {
@@ -141,6 +146,31 @@ describe("judge prompt hardening (live prompt-bench findings)", () => {
   test("JUDGE_SYSTEM declares the response untrusted", () => {
     expect(JUDGE_SYSTEM).toContain("UNTRUSTED");
     expect(JUDGE_SYSTEM).toContain("<response>");
+  });
+
+  test("JUDGE_SYSTEM requires evidence before the grade and an explicit concision clause", () => {
+    expect(JUDGE_SYSTEM).toContain("terse but complete and correct answer deserves full marks");
+    expect(JUDGE_SYSTEM).toContain("length is not quality");
+    const evidenceAt = JUDGE_SYSTEM.indexOf("state your evidence");
+    const scoreAt = JUDGE_SYSTEM.indexOf("Score: <integer 0-10>");
+    expect(evidenceAt).toBeGreaterThan(-1);
+    expect(scoreAt).toBeGreaterThan(evidenceAt);
+  });
+
+  test("an evidence-first judge reply grades end to end", async () => {
+    const reg = setup();
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("The response lists every required prime and nothing else.\nScore: 9")],
+      }),
+    ]);
+    const judge = new LLMJudge(JUDGE_MODEL);
+    expect(await judge.grade("list the primes under 30", "2 3 5 7 11 13 17 19 23 29")).toBeCloseTo(
+      0.9,
+      5,
+    );
+    expect(judge.lastAbstainReason).toBeNull();
+    reg.unregister();
   });
 });
 
