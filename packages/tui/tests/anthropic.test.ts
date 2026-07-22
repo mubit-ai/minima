@@ -27,10 +27,14 @@ const MODEL: Model = {
   reasoning: true,
 };
 
-function fakeClient(events: AnthropicStreamEvent[]): AnthropicClientLike {
+function fakeClient(
+  events: AnthropicStreamEvent[],
+  captured?: Record<string, unknown>[],
+): AnthropicClientLike {
   return {
     messages: {
-      stream: (_opts: Record<string, unknown>): AsyncIterable<AnthropicStreamEvent> => {
+      stream: (opts: Record<string, unknown>): AsyncIterable<AnthropicStreamEvent> => {
+        captured?.push(opts);
         async function* gen(): AsyncIterable<AnthropicStreamEvent> {
           for (const e of events) yield e;
         }
@@ -39,6 +43,15 @@ function fakeClient(events: AnthropicStreamEvent[]): AnthropicClientLike {
     },
   };
 }
+
+const TEXT_EVENTS: AnthropicStreamEvent[] = [
+  { type: "message_start", message: { usage: { input_tokens: 1 } } },
+  { type: "content_block_start", index: 0, content_block: { type: "text" } },
+  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+  { type: "content_block_stop", index: 0 },
+  { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+  { type: "message_stop" },
+];
 
 function resetAll() {
   resetRegistry();
@@ -167,6 +180,20 @@ describe("AnthropicProvider", () => {
     expect(result.content.map((b) => b.type)).toEqual(["thinking", "text"]);
     expect((result.content[0] as { signature?: string }).signature).toBe("sig123");
     expect(result.textContent).toBe("ok");
+  });
+
+  test("adaptive-thinking model never gets an explicit thinking param; plain reasoning does", async () => {
+    // claude-fable-5 has always-on adaptive thinking and 400s on thinking/budget_tokens.
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)));
+    const fable: Model = { ...MODEL, id: "claude-fable-5", adaptive_thinking: true };
+    const opts = { options: { thinking: true, thinking_budget: 2048 } };
+    await complete(fable, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
+    expect(captured[0].thinking).toBeUndefined();
+
+    await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
+    expect(captured[1].thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
   });
 
   test("converts the seconds-based timeout option to SDK milliseconds", () => {

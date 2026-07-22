@@ -16,11 +16,15 @@ export const DEFAULT_CANDIDATES: string[] = [
   "claude-sonnet-4-6",
   "gemini-2.5-pro",
   "claude-opus-4-8",
+  "claude-sonnet-5",
+  "gemini-3.6-flash",
+  "deepseek-v4-flash",
+  "gpt-5.6-luna",
 ];
 
 /** Premium allowlist for plan-mode routed + plan-shaping calls (MINIMA_PLAN_PREMIUM_MODELS).
  * Ids must exist in BOTH the TUI seed registry and the server catalog; order = preference. */
-export const PREMIUM_CANDIDATES: string[] = ["claude-opus-4-8", "gemini-2.5-pro"];
+export const PREMIUM_CANDIDATES: string[] = ["claude-fable-5", "claude-opus-4-8", "gemini-2.5-pro"];
 
 export interface HarnessConfig {
   minimaUrl: string;

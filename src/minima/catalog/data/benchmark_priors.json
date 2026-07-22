@@ -1,8 +1,26 @@
 {
-  "version": "curated-2026-07",
-  "source": "curated (migrated verbatim from the hand-authored snapshot; the catalog-snapshot refresh replaces this with benchmark-derived per-task-type scores \u2014 SPROUT/HELM/Arena-category aggregates)",
-  "as_of": "2026-07-14",
+  "version": "curated-2026-07.2",
+  "source": "curated (migrated verbatim from the hand-authored snapshot; 2026-07-22 adds the July 2026 lineup \u2014 claude-fable-5/claude-sonnet-5, gpt-5.6 sol/terra/luna, gemini-3.6-flash, grok-4.5/4.3, deepseek-v4 flash/pro, glm-5.2/kimi-k2.6/minimax-m3 \u2014 placed relative to the existing anchors; the catalog-snapshot refresh replaces this with benchmark-derived per-task-type scores \u2014 SPROUT/HELM/Arena-category aggregates)",
+  "as_of": "2026-07-22",
   "models": {
+    "claude-fable-5": {
+      "by_task_type": {
+        "code": 0.97,
+        "summarization": 0.94,
+        "extraction": 0.95,
+        "qa": 0.96,
+        "reasoning": 0.975,
+        "classification": 0.96,
+        "translation": 0.94,
+        "creative": 0.95,
+        "rag": 0.95,
+        "tool_use": 0.97,
+        "other": 0.94
+      },
+      "priors": {
+        "intelligence_index": 0.97
+      }
+    },
     "claude-haiku-4-5": {
       "by_task_type": {
         "code": 0.7,
@@ -55,6 +73,60 @@
       },
       "priors": {
         "intelligence_index": 0.72
+      }
+    },
+    "claude-sonnet-5": {
+      "by_task_type": {
+        "code": 0.94,
+        "summarization": 0.91,
+        "extraction": 0.93,
+        "qa": 0.92,
+        "reasoning": 0.9,
+        "classification": 0.94,
+        "translation": 0.91,
+        "creative": 0.9,
+        "rag": 0.92,
+        "tool_use": 0.94,
+        "other": 0.89
+      },
+      "priors": {
+        "intelligence_index": 0.85
+      }
+    },
+    "deepseek-v4-flash": {
+      "by_task_type": {
+        "code": 0.86,
+        "summarization": 0.88,
+        "extraction": 0.89,
+        "qa": 0.85,
+        "reasoning": 0.76,
+        "classification": 0.9,
+        "translation": 0.87,
+        "creative": 0.81,
+        "rag": 0.86,
+        "tool_use": 0.87,
+        "other": 0.8
+      },
+      "priors": {
+        "intelligence_index": 0.66
+      }
+    },
+    "deepseek-v4-pro": {
+      "by_task_type": {
+        "code": 0.88,
+        "summarization": 0.89,
+        "extraction": 0.9,
+        "qa": 0.87,
+        "reasoning": 0.84,
+        "classification": 0.91,
+        "translation": 0.88,
+        "creative": 0.83,
+        "rag": 0.88,
+        "tool_use": 0.88,
+        "other": 0.82
+      },
+      "priors": {
+        "intelligence_index": 0.71
       }
     },
     "gemini-2.5-flash": {
@@ -183,6 +255,24 @@
         "intelligence_index": 0.65
       }
     },
+    "gemini-3.6-flash": {
+      "by_task_type": {
+        "code": 0.87,
+        "summarization": 0.89,
+        "extraction": 0.91,
+        "qa": 0.86,
+        "reasoning": 0.75,
+        "classification": 0.92,
+        "translation": 0.89,
+        "creative": 0.84,
+        "rag": 0.88,
+        "tool_use": 0.89,
+        "other": 0.82
+      },
+      "priors": {
+        "intelligence_index": 0.68
+      }
+    },
     "gpt-4o": {
       "by_task_type": {
         "code": 0.85,
@@ -217,6 +307,150 @@
       },
       "priors": {
         "intelligence_index": 0.45
+      }
+    },
+    "gpt-5.6-luna": {
+      "by_task_type": {
+        "code": 0.72,
+        "summarization": 0.85,
+        "extraction": 0.87,
+        "qa": 0.8,
+        "reasoning": 0.62,
+        "classification": 0.9,
+        "translation": 0.85,
+        "creative": 0.75,
+        "rag": 0.82,
+        "tool_use": 0.76,
+        "other": 0.72
+      },
+      "priors": {
+        "intelligence_index": 0.52
+      }
+    },
+    "gpt-5.6-sol": {
+      "by_task_type": {
+        "code": 0.95,
+        "summarization": 0.93,
+        "extraction": 0.94,
+        "qa": 0.94,
+        "reasoning": 0.96,
+        "classification": 0.95,
+        "translation": 0.93,
+        "creative": 0.93,
+        "rag": 0.93,
+        "tool_use": 0.94,
+        "other": 0.92
+      },
+      "priors": {
+        "intelligence_index": 0.94
+      }
+    },
+    "gpt-5.6-terra": {
+      "by_task_type": {
+        "code": 0.89,
+        "summarization": 0.9,
+        "extraction": 0.91,
+        "qa": 0.9,
+        "reasoning": 0.87,
+        "classification": 0.92,
+        "translation": 0.9,
+        "creative": 0.88,
+        "rag": 0.9,
+        "tool_use": 0.89,
+        "other": 0.86
+      },
+      "priors": {
+        "intelligence_index": 0.74
+      }
+    },
+    "grok-4.3": {
+      "by_task_type": {
+        "code": 0.84,
+        "summarization": 0.86,
+        "extraction": 0.87,
+        "qa": 0.85,
+        "reasoning": 0.82,
+        "classification": 0.89,
+        "translation": 0.85,
+        "creative": 0.81,
+        "rag": 0.85,
+        "tool_use": 0.84,
+        "other": 0.8
+      },
+      "priors": {
+        "intelligence_index": 0.66
+      }
+    },
+    "grok-4.5": {
+      "by_task_type": {
+        "code": 0.93,
+        "summarization": 0.89,
+        "extraction": 0.9,
+        "qa": 0.9,
+        "reasoning": 0.91,
+        "classification": 0.91,
+        "translation": 0.88,
+        "creative": 0.87,
+        "rag": 0.89,
+        "tool_use": 0.92,
+        "other": 0.87
+      },
+      "priors": {
+        "intelligence_index": 0.86
+      }
+    },
+    "minimax/minimax-m3": {
+      "by_task_type": {
+        "code": 0.74,
+        "summarization": 0.84,
+        "extraction": 0.85,
+        "qa": 0.79,
+        "reasoning": 0.68,
+        "classification": 0.88,
+        "translation": 0.84,
+        "creative": 0.76,
+        "rag": 0.81,
+        "tool_use": 0.76,
+        "other": 0.72
+      },
+      "priors": {
+        "intelligence_index": 0.55
+      }
+    },
+    "moonshotai/kimi-k2.6": {
+      "by_task_type": {
+        "code": 0.89,
+        "summarization": 0.87,
+        "extraction": 0.88,
+        "qa": 0.86,
+        "reasoning": 0.83,
+        "classification": 0.89,
+        "translation": 0.86,
+        "creative": 0.83,
+        "rag": 0.86,
+        "tool_use": 0.88,
+        "other": 0.81
+      },
+      "priors": {
+        "intelligence_index": 0.73
+      }
+    },
+    "z-ai/glm-5.2": {
+      "by_task_type": {
+        "code": 0.9,
+        "summarization": 0.87,
+        "extraction": 0.88,
+        "qa": 0.86,
+        "reasoning": 0.84,
+        "classification": 0.89,
+        "translation": 0.86,
+        "creative": 0.82,
+        "rag": 0.87,
+        "tool_use": 0.9,
+        "other": 0.82
+      },
+      "priors": {
+        "intelligence_index": 0.75
       }
     }
   }

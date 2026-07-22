@@ -6,7 +6,10 @@ import {
   resetModelRegistry,
   tryGetModel,
 } from "../src/ai/index.ts";
+import { SEED_MODELS } from "../src/cli/main.ts";
 import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
+import { DEFAULT_CANDIDATES, PREMIUM_CANDIDATES } from "../src/minima/config.ts";
+import { ModelMapping } from "../src/minima/mapping.ts";
 import type { ModelCard } from "../src/minima/schemas.ts";
 
 const ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] as const;
@@ -36,6 +39,31 @@ function card(model_id: string, provider: string, extra: Partial<ModelCard> = {}
     ...extra,
   };
 }
+
+describe("seed registry (July 2026 lineup)", () => {
+  test("new lineup resolves and deprecated deepseek-chat is gone", () => {
+    for (const m of SEED_MODELS) registerModel(m);
+    expect(tryGetModel("deepseek", "deepseek-v4-flash")).toBeDefined();
+    expect(tryGetModel("anthropic", "claude-fable-5")).toBeDefined();
+    expect(tryGetModel("openrouter", "z-ai/glm-5.2")).toBeDefined();
+    // deepseek-chat is deprecated by DeepSeek effective 2026-07-24 — keeping it would break calls.
+    expect(findModelById("deepseek-chat")).toBeUndefined();
+  });
+
+  test("every default + premium candidate id is runnable from the seeds", () => {
+    for (const m of SEED_MODELS) registerModel(m);
+    const mapping = new ModelMapping();
+    for (const id of [...DEFAULT_CANDIDATES, ...PREMIUM_CANDIDATES]) {
+      expect(mapping.resolve("", id)?.id).toBe(id);
+    }
+  });
+
+  test("claude-fable-5 seed declares always-on adaptive thinking", () => {
+    const fable = SEED_MODELS.find((m) => m.id === "claude-fable-5")!;
+    expect(fable.reasoning).toBe(true);
+    expect(fable.adaptive_thinking).toBe(true);
+  });
+});
 
 describe("populateFromMinima", () => {
   test("registers only models whose provider key is present (runnable-only)", async () => {

@@ -235,7 +235,7 @@ function buildKwargs(
     kwargs.tools = tools;
   }
   if (cache && wire.length) markLastBlock(wire[wire.length - 1] as Record<string, unknown>);
-  if (options.thinking && model.reasoning) {
+  if (options.thinking && model.reasoning && !model.adaptive_thinking) {
     kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
   }
   return kwargs;

@@ -9,6 +9,7 @@ from minima.catalog.store import (
     CatalogStore,
     apply_benchmark_priors,
     load_aliases,
+    load_benchmark_priors,
     load_snapshot_cards,
 )
 from minima.config import Settings
@@ -149,6 +150,40 @@ def test_overlay_litellm_converts_per_token_to_per_mtok():
     assert haiku.output_cost_per_mtok == pytest.approx(5.0)
     assert haiku.cost_source == "litellm"
     assert haiku.cost_stale is False
+
+
+def test_catalog_covers_every_task_type_with_valid_scores():
+    from minima.schemas.common import TaskType
+
+    cards, _ = load_snapshot_cards()
+    # July 2026 lineup: 12 legacy + 13 new (anthropic/openai/google/xai/deepseek/openrouter).
+    assert len(cards) >= 25
+    for card in cards:
+        assert set(card.capability_by_task_type) == set(TaskType), card.model_id
+        for task_type, score in card.capability_by_task_type.items():
+            assert 0.0 <= score <= 1.0, f"{card.model_id}:{task_type}={score}"
+        ii = card.capability_priors.get("intelligence_index")
+        assert ii is not None and 0.0 <= ii <= 1.0, card.model_id
+
+
+def test_benchmark_priors_mirror_catalog_ids():
+    # Every catalog model must have a benchmark-priors entry (and vice versa) so the
+    # overlay never silently skips a new model back to hand-authored priors.
+    cards, _ = load_snapshot_cards()
+    overlay, version = load_benchmark_priors()
+    assert version
+    assert set(overlay) == {c.model_id for c in cards}
+
+
+def test_every_catalog_model_has_alias_entry_for_price_overlay():
+    # A card with no alias row can never match the LiteLLM price map, so its price
+    # stays frozen at the snapshot values (the gap that hid the gemini-3.x cards).
+    cards, _ = load_snapshot_cards()
+    aliases = load_aliases()
+    for card in cards:
+        keys = aliases.get(card.model_id)
+        assert keys, f"{card.model_id} has no model_aliases.json entry"
+        assert card.model_id in keys
 
 
 def test_benchmark_priors_overlay_stamps_provenance():

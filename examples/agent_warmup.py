@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import anthropic as _anthropic
+import httpx
 from google import genai as _genai
 from google.genai import types as _gtypes
 
@@ -42,13 +43,19 @@ SEED   = int(os.environ.get("WARMUP_SEED", "7"))   # task ORDER only (reshuffles
 NAMESPACE = os.environ.get("WARMUP_NAMESPACE")     # None → default lane; set for an isolated run
 JUDGE_MODEL = "claude-haiku-4-5"   # cheap, different provider → avoids self-grading bias
 
-# Models available on hosted api.minima.sh — Google + Anthropic only (no OpenAI key)
+# Mirror of packages/tui/src/minima/config.ts DEFAULT_CANDIDATES so cold-start routing
+# matches. gpt-5.6-luna needs OPENAI_API_KEY and deepseek-v4-flash needs DEEPSEEK_API_KEY;
+# the rest reuse the required Gemini/Anthropic keys.
 CANDIDATES = [
     "gemini-2.5-flash",    # $0.30/$2.50 — cheap, solid
     "claude-haiku-4-5",    # $1.00/$5.00 — cheap, solid
     "claude-sonnet-4-6",   # $3.00/$15.0 — mid, great
     "gemini-2.5-pro",      # $1.25/$10.0 — expensive, great
     "claude-opus-4-8",     # $15.0/$75.0 — premium
+    "claude-sonnet-5",     # $3.00/$15.0 — near-opus coding at sonnet cost
+    "gemini-3.6-flash",    # $1.50/$7.50 — best stable Gemini
+    "deepseek-v4-flash",   # $0.14/$0.28 — dominant cost-performance tier
+    "gpt-5.6-luna",        # $1.00/$6.00 — cheap GPT-5.6 tier
 ]
 
 # ---------------------------------------------------------------------------
@@ -314,6 +321,39 @@ TASKS: list[Task] = [
 # Model dispatch: call the right provider based on model_id
 # ---------------------------------------------------------------------------
 
+# OpenAI-compatible chat/completions providers, keyed by model-id prefix.
+_OPENAI_COMPAT = {
+    "gpt": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+    "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+}
+
+
+def _call_openai_compat(model_id: str, prompt: str) -> tuple[str, int, int]:
+    base, env = _OPENAI_COMPAT["deepseek" if model_id.startswith("deepseek") else "gpt"]
+    key = os.environ.get(env)
+    if not key:
+        raise RuntimeError(f"{model_id} was routed but {env} is not set")
+    r = httpx.post(
+        f"{base}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": model_id,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1024,
+            "temperature": 0.0,
+        },
+        timeout=120.0,
+    )
+    r.raise_for_status()
+    body = r.json()
+    usage = body.get("usage") or {}
+    return (
+        body["choices"][0]["message"]["content"] or "",
+        int(usage.get("prompt_tokens", 0)),
+        int(usage.get("completion_tokens", 0)),
+    )
+
+
 def _call_model(model_id: str, prompt: str) -> tuple[str, int, int, int]:
     """Returns (text, input_tokens, output_tokens, latency_ms)."""
     t0 = time.monotonic()
@@ -329,6 +369,8 @@ def _call_model(model_id: str, prompt: str) -> tuple[str, int, int, int]:
         text = r.text or ""
         in_t = r.usage_metadata.prompt_token_count or 0
         out_t = r.usage_metadata.candidates_token_count or 0
+    elif model_id.startswith(("gpt", "deepseek")):
+        text, in_t, out_t = _call_openai_compat(model_id, prompt)
     else:
         msg = _anth.messages.create(
             model=model_id,
