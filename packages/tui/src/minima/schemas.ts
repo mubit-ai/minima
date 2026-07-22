@@ -191,10 +191,15 @@ export interface FeedbackRequest {
   /** P(this turn was selected for labeling); 1.0 for gate labels. */
   label_propensity?: number;
   /**
-   * Free-form boolean implicit-signal map (max 16 keys; each key 1-32 chars of a-z or
-   * underscore), consumed only by the server's opt-in weak-supervision label model —
-   * never by evidence provenance. Reserved keys: retried, user_corrected,
-   * diff_reverted, session_continued, observer_flagged.
+   * Implicit-signal map (max 16 keys; each key 1-32 chars of a-z or underscore) — the
+   * program's ONE signals block; new signal kinds are new keys here, never new fields.
+   * Omit-absent semantics: a key is present only when that signal was actually
+   * observed; true and false are BOTH observed outcomes (false = observed and did not
+   * fire). An absent key means not-observed — senders must never default an unobserved
+   * key to false, and consumers must treat absent as abstain, not as false. Consumed
+   * only by the server's opt-in weak-supervision label model — never by evidence
+   * provenance. Reserved keys: retried, user_corrected, diff_reverted,
+   * session_continued, observer_flagged.
    */
   signals?: Record<string, boolean>;
   notes?: string;

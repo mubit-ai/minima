@@ -887,6 +887,52 @@ def test_feedback_signals_accepted_and_stored_on_record(client, fake_memory):
     assert written.evidence_source == "judge"  # provenance untouched by signals
 
 
+def test_feedback_signals_absent_vs_false_distinguishable(client, fake_memory):
+    """Omit-absent contract: false is an OBSERVED outcome (the signal did not fire);
+    an absent key is not-observed. The two must survive the wire and the durable
+    record distinguishably — a consumer reading the record can tell them apart."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "signals": {"retried": False},
+        },
+    ).json()
+    assert fb["accepted"] is True
+    written = fake_memory.remembered[0]["record"]
+    # Observed-false survives verbatim: the key is present with value False...
+    assert written.signals == {"retried": False}
+    assert written.signals["retried"] is False
+    # ...and unobserved keys are absent, not defaulted to False.
+    assert "user_corrected" not in written.signals
+    assert "observer_flagged" not in written.signals
+    # Round-trip through the serialized metadata keeps the distinction.
+    parsed = type(written).from_metadata(written.to_metadata())
+    assert parsed.signals == {"retried": False}
+    assert "user_corrected" not in parsed.signals
+
+    rec2 = _recommend_haiku(client, fake_memory)
+    fb2 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec2["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+        },
+    ).json()
+    assert fb2["accepted"] is True
+    written2 = fake_memory.remembered[-1]["record"]
+    # A feedback with NO signals block stays None — never {} and never false-filled.
+    assert written2.signals is None
+
+
 def test_feedback_signals_key_regex_rejected(client, fake_memory):
     rec = _recommend_haiku(client, fake_memory)
     resp = client.post(

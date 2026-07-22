@@ -23,6 +23,8 @@ import {
 // (ladder re-run), `user_corrected` (reject/steer on a gate under this rec), and
 // `session_continued` (later prompts in the session). Label-model input only: the
 // evidence_source / verified_in_production provenance fields are untouched by them.
+// Omit-absent contract: a key is sent only when observed (false = observed and did
+// not fire); an unobservable signal (no ledger) is omitted, never defaulted to false.
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -131,6 +133,22 @@ describe("feedback: implicit signals (D2)", () => {
       user_corrected: false,
       session_continued: false,
     });
+    reg.unregister();
+    db.close();
+  });
+
+  test("without a ledger, user_corrected is absent — never a fabricated false", async () => {
+    const { agent, reg, feedbackCalls, db } = setup(judge);
+    agent.db = null;
+
+    await agent.promptRouted("do the thing");
+
+    expect(feedbackCalls).toHaveLength(1);
+    const fb = feedbackCalls[0] as Record<string, unknown>;
+    const signals = fb.signals as Record<string, boolean>;
+    expect(signals.retried).toBe(false);
+    expect(signals.session_continued).toBe(false);
+    expect("user_corrected" in signals).toBe(false);
     reg.unregister();
     db.close();
   });

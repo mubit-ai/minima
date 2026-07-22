@@ -1241,6 +1241,8 @@ export class MinimaAgent extends Agent {
       }
       // D2: cheap ledger-derived implicit signals, fail-open (a DB read must never sink
       // feedback). Consumed only by the server's opt-in label model — never provenance.
+      // Omit-absent contract: a key is sent only when observed (false = observed and
+      // did not fire) — with no ledger, user_corrected is unobservable and stays absent.
       // TODO(diff_reverted): needs checkpoint diffing — compare this rung's checkpoint
       // tree_sha against the worktree after later prompts to detect a reverted diff;
       // deferred until the checkpoint spine exposes that comparison.
@@ -1248,9 +1250,11 @@ export class MinimaAgent extends Agent {
       try {
         signals = {
           retried,
-          user_corrected: this.db?.hasUserCorrectionForRec(routing.recommendationId) ?? false,
           session_continued: this.promptsRun > 1,
         };
+        if (this.db) {
+          signals.user_corrected = this.db.hasUserCorrectionForRec(routing.recommendationId);
+        }
       } catch {
         signals = undefined;
       }

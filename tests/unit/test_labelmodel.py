@@ -158,6 +158,19 @@ def test_build_votes_signal_polarity_and_steps():
     assert "free_form_extra" not in votes["r1"]
 
 
+def test_build_votes_absent_key_abstains_observed_false_votes():
+    """Omit-absent contract at the consumer: an absent key is an abstention (no vote),
+    while an observed False IS a vote — the two must never collapse into each other."""
+    rows = [_row("r1", source="none", outcome="success")]
+    observed_false = {"r1": FeedbackSignals(signals={"user_corrected": False})}
+    votes = {v.rec_id: v.votes for v in build_votes(rows, signals_by_rec=observed_false)}
+    assert votes["r1"] == {"user_corrected": 1}  # un-fired negative signal: a real vote
+
+    absent = {"r1": FeedbackSignals(signals={}, steps_all_success=True)}
+    votes = {v.rec_id: v.votes for v in build_votes(rows, signals_by_rec=absent)}
+    assert "user_corrected" not in votes["r1"]  # not observed: abstain, no vote at all
+
+
 def test_build_votes_steps_failure_votes_failure():
     rows = [_row("r1", source="none", outcome="success")]
     fs = {"r1": FeedbackSignals(steps_all_success=False)}

@@ -122,13 +122,19 @@ class FeedbackRequest(BaseModel):
     signals: dict[str, bool] | None = Field(
         None,
         description=(
-            "Free-form boolean implicit-signal map (max 16 keys, keys ^[a-z_]{1,32}$), "
-            "stored on the outcome record and consumed only by the (opt-in) "
-            "weak-supervision label model — never by evidence provenance. Reserved keys: "
-            "retried (the recovery ladder re-attempted this prompt), user_corrected (the "
-            "user rejected/steered a gate this turn), diff_reverted (the turn's diff was "
-            "later reverted), session_continued (the user kept prompting after this turn), "
-            "observer_flagged (an observer agent flagged the turn)."
+            "Implicit-signal map (max 16 keys, keys ^[a-z_]{1,32}$) — the program's ONE "
+            "signals block; new signal kinds are new keys here, never new fields. "
+            "Omit-absent semantics: a key is present only when that signal was actually "
+            "observed; true and false are BOTH observed outcomes (false = observed and "
+            "did not fire). An absent key means not-observed — senders must never "
+            "default an unobserved key to false, and consumers must treat absent as "
+            "abstain, not as false. Stored on the outcome record and consumed only by "
+            "the (opt-in) weak-supervision label model — never by evidence provenance. "
+            "Reserved keys: retried (the recovery ladder re-attempted this prompt), "
+            "user_corrected (the user rejected/steered a gate this turn), diff_reverted "
+            "(the turn's diff was later reverted), session_continued (the user kept "
+            "prompting after this turn), observer_flagged (an observer agent flagged "
+            "the turn)."
         ),
     )
     notes: str | None = None
