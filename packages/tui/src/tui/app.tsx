@@ -69,6 +69,13 @@ import { runPlanRefutation } from "../minima/plan_refute.ts";
 import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
 import { redoLastRouted } from "../minima/redo.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import {
+  renderScoreboardContext,
+  renderScoreboardTable,
+  runTaskTypes,
+  scoreboardAdvisories,
+  taskTypeScoreboard,
+} from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
 import { detectRepo, gcCheckpoints, makeCheckpointHook, restore } from "../session/checkpoint.ts";
@@ -1150,6 +1157,27 @@ export function HarnessApp({
       // would dead-end at the execution-time consent check.
       if (outcome.kind === "ok") {
         for (const v of outcome.seededVerifies) permStateRef.current.approvedVerifies.add(v);
+      }
+      // Learned pool suggestion: when a non-pool model has a strictly better observed green
+      // rate than the pool's best on a task type this run touched, say so in the finalize
+      // note — advisory only (the user applies it via /profile set); never auto-applied,
+      // and a broken ledger read never blocks finalize.
+      if (outcome.kind === "ok" && agent.db && agent.runId) {
+        try {
+          const run = agent.db.getRun(agent.runId);
+          if (run) {
+            const advisories = scoreboardAdvisories(
+              taskTypeScoreboard(agent.db, run.project_key),
+              agent.config.candidates,
+              runTaskTypes(agent.db, agent.runId),
+            );
+            if (advisories.length > 0) {
+              return { ...outcome, auditNote: `${outcome.auditNote}\n\n${advisories.join("\n")}` };
+            }
+          }
+        } catch {
+          // advisory only
+        }
       }
       return outcome;
     },
@@ -3602,14 +3630,30 @@ export function HarnessApp({
       }
       case "bp": {
         const on = agent.config.bigPlan === true;
+        // Learned scoreboard section — pure read over the ledger; shown only when a cell
+        // clears the n-floor, and never allowed to break /bp itself.
+        let scoreboardSection = "";
+        if (agent.db && agent.runId) {
+          try {
+            const run = agent.db.getRun(agent.runId);
+            const table = run
+              ? renderScoreboardTable(taskTypeScoreboard(agent.db, run.project_key))
+              : "";
+            if (table) scoreboardSection = `\n\n${table}`;
+          } catch {
+            // advisory surface only
+          }
+        }
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
           {
             role: "tool",
-            text: on
-              ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
-              : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)",
+            text: `${
+              on
+                ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
+                : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)"
+            }${scoreboardSection}`,
             toolName: "bp",
           },
         ]);
@@ -3983,6 +4027,20 @@ export function HarnessApp({
   // books through the BudgetLedger + lead CostMeter, and an Esc mid-council ends the turn with
   // the partial result merged — no question overlay, no fresh planner call. This wrapper only
   // wires the deps; it is reachable only when config.bigPlan planted a PlanSessionStore.
+  // Bounded scoreboard projection for the plan council's SYNTH stage — observed
+  // (task_type × model) outcomes so the planner grounds model talk in data. Pure read;
+  // fail-open (a broken ledger read never costs a council round).
+  function planScoreboardContext(): string | undefined {
+    if (!agent.db || !agent.runId) return undefined;
+    try {
+      const run = agent.db.getRun(agent.runId);
+      if (!run) return undefined;
+      return renderScoreboardContext(taskTypeScoreboard(agent.db, run.project_key)) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function handlePlanTurn(text: string) {
     const store = planSessionRef.current;
     if (!store || !planSpawn || !planMetaModel) return;
@@ -3999,6 +4057,7 @@ export function HarnessApp({
           spawn: planSpawn,
           signal: o.signal,
           roundBudgetUsd: o.roundBudgetUsd,
+          scoreboard: planScoreboardContext(),
           // MP14: phases feed the busy-row progress line, not the transcript — the
           // per-phase `· phase: note` scrollback pushes carried no post-hoc information
           // (fixed strings; the round-summary note below is the durable record).
