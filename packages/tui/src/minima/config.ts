@@ -49,14 +49,10 @@ export interface HarnessConfig {
   baselineModelId: string | null;
   timeout: number;
   allowOffline: boolean;
-  cacheEnabled: boolean;
-  cacheThreshold: number;
   /** Big Plan ledger (default ON since 0.11): persist/project the plan, attribute file
    * changes, and record verification gates — gate verdicts are the harness's honest label
    * source. Opt out with MINIMA_TUI_BIG_PLAN=0. */
   bigPlan: boolean;
-  /** @deprecated Use `bigPlan`. Retained as a synchronized read/input alias for one release. */
-  groundTruth?: boolean;
   /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
    * END the run while the plan has incomplete/failing steps before it stops denying and asks the
    * user. `MINIMA_TUI_STOP_STRIKES`, default 3; 0 disables the stop-gate entirely (pure-nudge
@@ -126,7 +122,6 @@ export interface HarnessConfig {
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
-  const bigPlan = overrides.bigPlan ?? overrides.groundTruth ?? true;
   return {
     minimaUrl: DEFAULT_MINIMA_URL,
     minimaApiKey: null,
@@ -141,8 +136,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     baselineModelId: null,
     timeout: 30.0,
     allowOffline: true,
-    cacheEnabled: false,
-    cacheThreshold: 0.95,
+    bigPlan: true,
     stopStrikes: 3,
     spiralRepeats: 3,
     stepCap: 30,
@@ -156,8 +150,6 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     gradedOutcome: true,
     memoryLedger: true,
     ...overrides,
-    bigPlan,
-    groundTruth: bigPlan,
   };
 }
 
@@ -170,15 +162,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const t = Number(timeoutEnv);
     if (Number.isFinite(t)) cfg.timeout = t;
   }
-  const bigPlanEnv = process.env.MINIMA_TUI_BIG_PLAN;
-  const legacyBigPlanEnv = process.env.MINIMA_TUI_GROUND_TRUTH;
-  cfg.bigPlan =
-    bigPlanEnv !== undefined
-      ? bigPlanEnv !== "0"
-      : legacyBigPlanEnv !== undefined
-        ? legacyBigPlanEnv !== "0"
-        : true;
-  cfg.groundTruth = cfg.bigPlan;
+  cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
@@ -236,8 +220,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(backoffEnv);
     if (Number.isInteger(n) && n >= 0) cfg.backoffMs = n;
   }
-  const bigPlan = overrides.bigPlan ?? overrides.groundTruth ?? cfg.bigPlan;
-  return { ...cfg, ...overrides, bigPlan, groundTruth: bigPlan };
+  return { ...cfg, ...overrides };
 }
 
 /** Re-read the Minima endpoint + routing auth from the environment, in place. */

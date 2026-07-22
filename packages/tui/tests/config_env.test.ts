@@ -21,43 +21,15 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 
 describe("label-source configuration (Phase 0b)", () => {
   test("Big Plan is ON by default; MINIMA_TUI_BIG_PLAN=0 opts out", () => {
-    withEnv(
-      {
-        MINIMA_TUI_BIG_PLAN: undefined,
-        MINIMA_TUI_GROUND_TRUTH: undefined,
-        MINIMA_LLM_JUDGE: undefined,
-      },
-      () => {
-        expect(configFromEnv().bigPlan).toBe(true);
-      },
-    );
+    withEnv({ MINIMA_TUI_BIG_PLAN: undefined, MINIMA_LLM_JUDGE: undefined }, () => {
+      expect(configFromEnv().bigPlan).toBe(true);
+    });
     withEnv({ MINIMA_TUI_BIG_PLAN: "0" }, () => {
       expect(configFromEnv().bigPlan).toBe(false);
     });
     withEnv({ MINIMA_TUI_BIG_PLAN: "1" }, () => {
       expect(configFromEnv().bigPlan).toBe(true);
     });
-  });
-
-  test("the deprecated environment variable remains a fallback for one release", () => {
-    withEnv({ MINIMA_TUI_BIG_PLAN: undefined, MINIMA_TUI_GROUND_TRUTH: "0" }, () => {
-      const config = configFromEnv();
-      expect(config.bigPlan).toBe(false);
-      expect(config.groundTruth).toBe(false);
-    });
-    withEnv({ MINIMA_TUI_BIG_PLAN: "1", MINIMA_TUI_GROUND_TRUTH: "0" }, () => {
-      expect(configFromEnv().bigPlan).toBe(true);
-    });
-    withEnv({ MINIMA_TUI_BIG_PLAN: "0", MINIMA_TUI_GROUND_TRUTH: "1" }, () => {
-      expect(configFromEnv().bigPlan).toBe(false);
-    });
-  });
-
-  test("canonical config input wins and the deprecated read alias stays synchronized", () => {
-    expect(harnessConfig({ groundTruth: false }).bigPlan).toBe(false);
-    const config = harnessConfig({ bigPlan: true, groundTruth: false });
-    expect(config.bigPlan).toBe(true);
-    expect(config.groundTruth).toBe(true);
   });
 
   test("judge sampling defaults to 15% of eligible turns", () => {

@@ -301,8 +301,6 @@ const COMMANDS = [
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + Big Plan" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
-  { name: "fork", desc: "Fork a session (not implemented yet)" },
-  { name: "clone", desc: "Clone a session (not implemented yet)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
@@ -3222,34 +3220,6 @@ export function HarnessApp({
         ]);
         break;
       }
-      case "fork":
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: "/fork isn't implemented yet — session branching is planned. For now use /resume to reopen a past session or /new to start fresh.",
-            toolName: "fork",
-          },
-        ]);
-        break;
-      case "clone":
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: "/clone isn't implemented yet — session copy is planned. For now use /resume to reopen a past session or /new to start fresh.",
-            toolName: "clone",
-          },
-        ]);
-        break;
       case "resume": {
         const targetId = args.trim();
         if (!targetId) {
@@ -3445,20 +3415,16 @@ export function HarnessApp({
         }
         break;
       }
-      case "gt":
       case "bp": {
         const on = agent.config.bigPlan === true;
-        const deprecated = name === "gt" ? "Deprecated: /gt; use /bp.\n" : "";
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
           {
             role: "tool",
-            text: `${deprecated}${
-              on
-                ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
-                : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)"
-            }`,
+            text: on
+              ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
+              : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)",
             toolName: "bp",
           },
         ]);
@@ -3648,9 +3614,7 @@ export function HarnessApp({
         ]);
         break;
       }
-      case "gt-seed":
       case "bp-seed": {
-        const deprecated = name === "gt-seed" ? "Deprecated: /gt-seed; use /bp-seed.\n" : "";
         let text: string;
         if (agent.config.bigPlan !== true) {
           text = "Big Plan is OFF (MINIMA_TUI_BIG_PLAN=0) — unset before seeding.";
@@ -3760,7 +3724,6 @@ export function HarnessApp({
           setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
           text = `Seeded Big Plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped verified outcome onto ${seedRecId}. Run /why to inspect it.`;
         }
-        text = `${deprecated}${text}`;
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },
