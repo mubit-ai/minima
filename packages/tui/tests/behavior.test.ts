@@ -585,8 +585,30 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
   });
 
-  test("one shared ON notice: definition + auto-heal + /plan", () => {
-    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(3);
+  test("one shared ON notice: definition + auto-heal (dedupe + push) + /plan", () => {
+    expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(4);
+  });
+
+  test("the auto-heal never stacks a duplicate ON notice (MUB-180)", () => {
+    expect(src).toContain("m[m.length - 1]?.text === PLAN_ON_NOTICE");
+  });
+
+  test("/plan start is idempotent — a live session is never silently replaced (MUB-180)", () => {
+    expect(src).toContain("Plan mode is already ON — goal unchanged");
+    expect(src).toContain("Plan mode is already ON — goal set:");
+    const idx = src.indexOf('if (sub === "start")');
+    expect(idx).toBeGreaterThan(-1);
+    const branch = src.slice(idx, idx + 900);
+    // The live-session guard runs BEFORE enterPlanMode can replace the store.
+    const guard = branch.indexOf("planSessionRef.current");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+  });
+
+  test("enterPlanMode seeds the planner prompt with the goal snapshot (MUB-180)", () => {
+    expect(src).toContain(
+      "agent.agentState.systemPrompt = buildPlannerSystemPrompt(PLANNER_PERSONA, store);",
+    );
   });
 
   test("planSessionGen keys exit_plan registration to session identity", () => {
@@ -600,7 +622,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   test("auto-heal effect: plan mode without a session converges to a real one (no loop)", () => {
     const idx = src.indexOf("planSessionRef.current != null ||");
     expect(idx).toBeGreaterThan(-1);
-    const effect = src.slice(idx - 400, idx + 400);
+    const effect = src.slice(idx - 400, idx + 700);
     expect(effect).toContain('mode !== "plan" ||');
     expect(effect).toContain("agent.config.bigPlan !== true ||");
     expect(effect).toContain("!planSpawn ||");

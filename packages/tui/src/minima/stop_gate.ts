@@ -73,6 +73,11 @@ export function assessStop(db: MinimaDb | null, sessionId: string | null): StopA
   try {
     const plan = db.getActivePlan(sessionId);
     if (!plan) return EMPTY_ASSESSMENT;
+    // Gate only on the plan of record — the newest non-cancelled plan, the same one /why and
+    // Ctrl+G display. An older still-active row (adoption/seeding pile-up) that a newer closed
+    // plan has outlived is stale evidence, never a reason to block the stop (MUB-181).
+    const latest = db.getLatestPlan(sessionId, { excludeCancelled: true });
+    if (latest && latest.id !== plan.id) return EMPTY_ASSESSMENT;
     const steps = db.getPlanSteps(plan.id);
     if (steps.length === 0) return EMPTY_ASSESSMENT;
 
@@ -229,6 +234,11 @@ function isToolTurn(assistant: AssistantMessage): boolean {
   return assistant.stop_reason === "toolUse";
 }
 
+/** True when a result carries an explicit user answer (the question tool's details contract). */
+function hasAnsweredQuestion(results: ToolResultLike[]): boolean {
+  return results.some((r) => r.details?.answered === true);
+}
+
 /**
  * Build the run-level stop-gate as a `ShouldStopAfterTurn`. The strike counter is closed over here,
  * so a fresh gate (one per recovery rung) resets strikes. Returns:
@@ -238,16 +248,25 @@ function isToolTurn(assistant: AssistantMessage): boolean {
  */
 export function makeStopGate(deps: StopGateDeps): ShouldStopAfterTurn {
   let strikes = 0;
+  let answeredLastTurn = false;
   return async (
     assistant: AssistantMessage,
-    _results: ToolResultLike[],
+    results: ToolResultLike[],
     state: AgentState,
   ): Promise<boolean> => {
     if (deps.maxStrikes <= 0) return false; // disabled
-    if (isToolTurn(assistant)) return false; // still working — not a stop attempt
+    if (isToolTurn(assistant)) {
+      answeredLastTurn = hasAnsweredQuestion(results);
+      return false; // still working — not a stop attempt
+    }
+    const answered = answeredLastTurn;
+    answeredLastTurn = false;
     // Queued steering already re-drives the loop (loop.ts:165, drained before our follow-up), so
     // defer to it rather than spend a strike and push a continuation that would only wait behind it.
     if (state.steering.length > 0) return false;
+    // A question the user just answered IS steering: the reply that immediately follows it may
+    // end the turn without spending a strike — the user is present and directing the run.
+    if (answered) return false;
 
     const assessment = assessStop(deps.db, deps.sessionId);
     if (!assessment.blocked) return false; // plan done → allow the natural stop

@@ -84,6 +84,7 @@ export type StreamFnLike = (
 
 export interface ToolResultLike {
   terminate?: boolean;
+  details?: Record<string, unknown>;
 }
 
 /** Snapshot of loop behaviour handed to agentLoop. */

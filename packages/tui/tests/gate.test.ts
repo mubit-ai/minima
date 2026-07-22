@@ -1034,4 +1034,19 @@ describe("done-gate milestone rollup (M4.3)", () => {
     await before(bctx([{ content: "A", status: "in_progress" }], "t1"));
     expect(milestoneGates(d)).toHaveLength(0);
   });
+
+  test("closure supersedes stale sibling actives (MUB-181 adoption pile-up)", async () => {
+    const d = db();
+    const { before, after } = bigPlanHooks({ db: d, runId: "run1" });
+    const stale = d.upsertPlanFromTodos("run1", [{ content: "Old", status: "in_progress" }]);
+    d.upsertPlanFromTodos("old-run", [{ content: "New", status: "in_progress", verify: "true" }]);
+    d.adoptActivePlans("old-run", "run1");
+    const todos = [{ content: "New", status: "completed" }];
+    expect(await before(bctx(todos, "t1"))).toBeNull();
+    await after(actx(todos, "t1"));
+    const current = d.getLatestPlan("run1", { excludeCancelled: true })!;
+    expect(current.status).toBe("done");
+    expect(d.getPlan(stale.planId)!.status).toBe("superseded");
+    expect(d.getActivePlan("run1")).toBeNull();
+  });
 });

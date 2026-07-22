@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentTool } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
   type Model,
@@ -8,6 +9,7 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
@@ -18,7 +20,7 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
-import type { AskUserRef } from "../src/tools/question.ts";
+import { type AskUserRef, questionTool } from "../src/tools/question.ts";
 
 // A2 stop-gate through the REAL runtime/loop wiring: with big-plan on and an active plan whose
 // step is still in_progress, promptRouted must force-continue the model instead of letting it end,
@@ -79,7 +81,7 @@ function mockService() {
   return { fetchLike, recommendCalls };
 }
 
-function setup(stopStrikes: number, askUser: AskUserRef | null) {
+function setup(stopStrikes: number, askUser: AskUserRef | null, tools: AgentTool[] = []) {
   resetRegistry();
   resetProviderRegistration();
   resetModelRegistry();
@@ -98,7 +100,7 @@ function setup(stopStrikes: number, askUser: AskUserRef | null) {
   const db = new MinimaDb(":memory:");
   db.ensureProject("p");
   const runId = db.startRun({ projectKey: "p" });
-  const agent = new MinimaAgent({ config, router, meter: new CostMeter(), tools: [] });
+  const agent = new MinimaAgent({ config, router, meter: new CostMeter(), tools });
   agent.db = db;
   agent.runId = runId;
   if (askUser) agent.askUser = askUser;
@@ -148,6 +150,45 @@ describe("A2 stop-gate — runtime integration", () => {
 
     await agent.promptRouted("do the thing");
 
+    expect(reg.state.pendingResponseCount).toBe(1);
+    const plan = db.getActivePlan(runId)!;
+    expect(db.getGates(plan.id).filter((g) => g.kind === "stop")).toHaveLength(0);
+  });
+
+  test("a stale older active does not gate when the current plan is done (MUB-181)", async () => {
+    const { agent, reg, db, runId } = setup(2, null);
+    db.upsertPlanFromTodos(runId, [{ content: "old work", status: "in_progress" }]);
+    const current = db.insertPlan({ sessionId: runId, title: "current", status: "done" });
+    db.insertStep({ planId: current, idx: 0, content: "new work", status: "completed" });
+    reg.setResponses([bail(), bail()]);
+
+    await agent.promptRouted("do the thing");
+
+    // The run ends on the first bail — the stale active is not the plan of record.
+    expect(reg.state.pendingResponseCount).toBe(1);
+    const stale = db.getActivePlan(runId)!;
+    expect(db.getGates(stale.id).filter((g) => g.kind === "stop")).toHaveLength(0);
+  });
+
+  test("a question answered mid-run suppresses the gate on the following reply (MUB-181)", async () => {
+    const qRef: AskUserRef = { current: async () => "continue chatting" };
+    const { agent, reg, db, runId } = setup(2, null, [questionTool(qRef)]);
+    db.upsertPlanFromTodos(runId, [{ content: "wire it", status: "in_progress" }]);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [
+          toolCall("q1", "question", { question: "Keep going?", options: ["continue chatting"] }),
+        ],
+        stop_reason: "toolUse",
+      }),
+      bail(),
+      bail(),
+    ]);
+
+    await agent.promptRouted("do the thing");
+
+    // The reply after the answered question ends the run: no forced continuation consumed
+    // the third scripted response, and no audit stop gate was written.
     expect(reg.state.pendingResponseCount).toBe(1);
     const plan = db.getActivePlan(runId)!;
     expect(db.getGates(plan.id).filter((g) => g.kind === "stop")).toHaveLength(0);

@@ -592,6 +592,43 @@ describe("injection fencing", () => {
   });
 });
 
+describe("goal plumbing (MUB-180)", () => {
+  test("the session goal rides in every goal-tagged council prompt of a round", async () => {
+    reg.setResponses([
+      json([{ focus: "x", boundaries: "read only", output_format: "notes", difficulty: "easy" }]),
+      json([]),
+      msg("Initial draft."),
+      json([{ summary: "missing error handling", severity: "concern" }]),
+      msg("Revised draft."),
+      json({ plan: "Final." }),
+    ]);
+    await runCouncilRound(
+      sessionFor("GOAL-MARKER-180 build the widget"),
+      "A substantive turn requiring real deliberation here",
+      makeOpts({ spawn: spawnWith({}), maxCriticPasses: 3 }),
+    );
+    const reqs = reg.state.requests;
+    expect(reqs).toHaveLength(6);
+    // scope, draft, attack, revise, synth all carry the <goal> tag; the keeper
+    // post-check (index 1) is scope-vs-findings only, by design.
+    for (const i of [0, 2, 3, 4, 5]) {
+      expect(reqs[i]!.user).toContain("<goal>\nGOAL-MARKER-180 build the widget\n</goal>");
+    }
+  });
+
+  test("finalize synthesis carries the goal into its prompt", async () => {
+    reg.setResponses([json({ title: "T", goal: "restated", overview: "o", approach: ["a"] })]);
+    await synthesizeBigPlan(
+      sessionFor("GOAL-MARKER-180 finalize me"),
+      "User: transcript body",
+      { metaModel: META_MODEL },
+    );
+    expect(reg.state.requests[0]!.user).toContain(
+      "<goal>\nGOAL-MARKER-180 finalize me\n</goal>",
+    );
+  });
+});
+
 describe("recommended option (sanitizeQuestions via synth)", () => {
   const roundWithQuestions = (
     options: { label: string; description?: string; recommended?: boolean }[],

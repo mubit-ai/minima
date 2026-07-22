@@ -1200,6 +1200,9 @@ export function bigPlanHooks(
         if (steps.length > 0 && steps.every((s) => s.status === "completed")) {
           writeMilestoneGate(db, plan.id, ref, session);
           db.setPlanStatus(plan.id, "done");
+          // MUB-181: close stale sibling actives with the plan of record, or the stop-gate's
+          // getActivePlan read would resurrect one the user cannot see in /why.
+          db.supersedeOtherActivePlans(session, plan.id);
           try {
             opts?.onPlanClosed?.(plan.id);
           } catch {

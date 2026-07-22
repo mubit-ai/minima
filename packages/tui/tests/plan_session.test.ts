@@ -285,6 +285,24 @@ describe("PlanSessionStore.recordUserTurn", () => {
   });
 });
 
+describe("PlanSessionStore.setGoal (/plan start idempotency, MUB-180)", () => {
+  test("updates the goal in place without discarding accumulated session state", () => {
+    const store = new PlanSessionStore("");
+    store.applyCouncilResult(
+      emptyResult({
+        draft: "The working draft.",
+        decisions: [{ topic: "Storage", decision: "Use SQLite", rationale: "r" }],
+      }),
+    );
+    store.setGoal("Fix the failing test in this repo");
+    expect(store.session.goal).toBe("Fix the failing test in this repo");
+    expect(store.session.rounds).toBe(1);
+    expect(store.session.decisions).toHaveLength(1);
+    expect(store.session.draft).toBe("The working draft.");
+    expect(store.snapshotBlock()).toContain("Goal: Fix the failing test in this repo");
+  });
+});
+
 describe("PlanSessionStore.snapshotBlock", () => {
   test("includes goal, decisions, and open questions", () => {
     const store = new PlanSessionStore("Ship the planner");
