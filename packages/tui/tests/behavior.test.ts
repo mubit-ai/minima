@@ -358,7 +358,8 @@ describe("tui/app.tsx wires tier→behavior", () => {
   });
 
   test("while armed the prompt input is disabled and shows the answer-key hint", () => {
-    expect(src).toContain("disabled={busy || (gateFocus !== null && !gateFocus.noteEntry)}");
+    // MUB-183 unlocked the busy composer: the ONLY remaining disable is the gate-focus modal.
+    expect(src).toContain("disabled={gateFocus !== null && !gateFocus.noteEntry}");
     expect(src).toContain("[a]ccept · [r]eject · [s]teer · [v]iew · esc to type");
   });
 
