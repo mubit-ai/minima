@@ -19,6 +19,7 @@ import {
   detectRepo,
   gcCheckpoints,
   makeCheckpointHook,
+  makeRepoResolver,
   restore,
   snapshot,
 } from "../src/session/checkpoint.ts";
@@ -66,6 +67,42 @@ describe("detectRepo (B3.3)", () => {
     const plain = mkdtempSync(join(tmpdir(), "minima-nogit-"));
     dirs.push(plain);
     expect(detectRepo(plain)).toBeNull();
+  });
+
+  test("resolver re-detects a mid-session git init; found value is cached (MUB-176)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "minima-lateinit-"));
+    dirs.push(dir);
+    const resolve = makeRepoResolver(dir);
+    expect(resolve()).toBeNull();
+    Bun.spawnSync(["git", "init", dir]);
+    const top = resolve();
+    expect(top).not.toBeNull();
+    // Once found, cached — steady state never forks git again.
+    rmSync(join(dir, ".git"), { recursive: true, force: true });
+    expect(resolve()).toBe(top);
+  });
+
+  test("checkpoint hook snapshots a repo initialized after boot (MUB-176)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "minima-lateinit-"));
+    dirs.push(dir);
+    const { db, runId } = db3();
+    const notices: string[] = [];
+    const { arm, hook } = makeCheckpointHook({
+      top: makeRepoResolver(dir),
+      db,
+      getRunId: () => runId,
+      notify: (m) => notices.push(m),
+    });
+    arm();
+    await hook(ctx("write"));
+    expect(db.listCheckpoints(runId)).toHaveLength(0);
+    expect(notices.some((n) => n.includes("not a git repository"))).toBe(true);
+
+    Bun.spawnSync(["git", "init", dir]);
+    writeFileSync(join(dir, "a.txt"), "one\n");
+    arm();
+    await hook(ctx("write"));
+    expect(db.listCheckpoints(runId)).toHaveLength(1);
   });
 });
 

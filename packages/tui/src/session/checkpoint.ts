@@ -63,6 +63,15 @@ export function detectRepo(cwd: string): string | null {
   return top || null;
 }
 
+/** Lazy repo resolver for cwd: re-probes while null so a mid-session `git init` is picked
+ * up (MUB-176), caches the toplevel once found so steady state never forks git again.
+ * Callers probe at event time only (/ckpt, /undo, /rewind, the checkpoint hook) — never
+ * per render (a blocking git spawn per keystroke was the "TUI freezes" bug). */
+export function makeRepoResolver(cwd: string): () => string | null {
+  let top: string | null = null;
+  return () => (top ??= detectRepo(cwd));
+}
+
 const indexPathFor = (runId: string) => join(tmpdir(), `minima-ckpt-${runId}.index`);
 
 /** True while a snapshot/restore runs — spawnSync blocks, but parallel hooks await around us. */
@@ -300,8 +309,9 @@ export function gcCheckpoints(opts: {
 }
 
 export interface CheckpointHookDeps {
-  /** Repo toplevel; null = not a git repo (hook stays dormant after one notice). */
-  top: string | null;
+  /** Repo toplevel, or a resolver for it (makeRepoResolver — picks up a mid-session
+   * `git init`); null = not a git repo (one notice, then dormant until a repo appears). */
+  top: string | null | (() => string | null);
   db: MinimaDb | null;
   getRunId: () => string | null;
   /** In-progress Big Plan step at snapshot time (null when Big Plan off). */
@@ -330,7 +340,8 @@ export function makeCheckpointHook(deps: CheckpointHookDeps): CheckpointArm {
     try {
       const runId = deps.getRunId();
       if (!deps.db || !runId) return null;
-      if (!deps.top) {
+      const top = typeof deps.top === "function" ? deps.top() : deps.top;
+      if (!top) {
         if (!noticedNonGit) {
           noticedNonGit = true;
           deps.notify?.(
@@ -340,7 +351,7 @@ export function makeCheckpointHook(deps: CheckpointHookDeps): CheckpointArm {
         return null;
       }
       const row = snapshot({
-        top: deps.top,
+        top,
         db: deps.db,
         runId,
         promptOrdinal: deps.db.countLeadUserEvents(runId),
