@@ -743,17 +743,16 @@ describe("MUB-179 — finalizeAutoAcceptLanding ('Finalize & auto-accept edits')
     expect(res?.block).toBe(true);
   });
 
-  test("bypass becomes ring-reachable, but the mode is NOT switched", async () => {
+  test("the landing only seeds allowedDirs — the mode is NOT switched", async () => {
+    // MUB-177 R2: bypass is a permanent Shift+Tab ring member, so the landing no longer
+    // needs (or has) a latch to flip — it seeds the cwd and nothing else.
     const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
-    const { cycleMode, getMode, isBypassEnabled, setMode } = await import(
-      "../src/agent/modes.ts"
-    );
+    const { getMode, setMode } = await import("../src/agent/modes.ts");
     setMode("acceptEdits");
-    finalizeAutoAcceptLanding(createPermissionState("/repo"));
+    const state = createPermissionState("/repo");
+    finalizeAutoAcceptLanding(state);
     expect(getMode()).toBe("acceptEdits");
-    expect(isBypassEnabled()).toBe(true);
-    setMode("plan");
-    expect(cycleMode()).toBe("bypass");
+    expect(state.allowedDirs.has("/repo")).toBe(true);
     setMode("build");
   });
 

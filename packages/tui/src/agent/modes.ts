@@ -12,9 +12,9 @@
  *                 the user being prompted per call. The bundle mirrors that as `deny`
  *                 (defense-in-depth for any non-TUI consumer); the TUI's layer-1 block in
  *                 app.tsx fires first with the richer planModeBlockReason copy.
- *   bypass      — everything pre-approved. NOT in the Shift+Tab ring unless explicitly
- *                 enabled (--dangerously-bypass-permissions or /mode bypass); never
- *                 persisted across sessions.
+ *   bypass      — everything pre-approved. A permanent member of the Shift+Tab ring
+ *                 (MUB-177 R2 user decision); never persisted across sessions, so every
+ *                 session still boots into a non-bypass mode.
  *
  * The mode lives in a module-level external store (same pattern as tui/badge_slot.ts) so
  * the beforeToolCall closure, the footer, /plan, and the Shift+Tab handler all read one
@@ -79,7 +79,6 @@ export const MODE_BADGES: Record<AgentMode, { text: string; color: string } | nu
 
 // ---------------------------------------------------------------- mode store
 let currentMode: AgentMode = "build";
-let bypassEnabled = false;
 const subscribers = new Set<() => void>();
 
 export function getMode(): AgentMode {
@@ -92,25 +91,12 @@ export function setMode(next: AgentMode): void {
   for (const fn of subscribers) fn();
 }
 
-/**
- * Opt bypass into the session (CLI flag or an explicit /mode bypass). One-way: it joins
- * the Shift+Tab ring for the rest of the process, but is never persisted.
- */
-export function enableBypass(): void {
-  bypassEnabled = true;
-}
+const RING: AgentMode[] = ["build", "acceptEdits", "plan", "bypass"];
 
-export function isBypassEnabled(): boolean {
-  return bypassEnabled;
-}
-
-const RING: AgentMode[] = ["build", "acceptEdits", "plan"];
-
-/** build → acceptEdits → plan (→ bypass when enabled) → build. Bound to Shift+Tab. */
+/** build → acceptEdits → plan → bypass → build. Bound to Shift+Tab. */
 export function cycleMode(): AgentMode {
-  const ring = bypassEnabled ? [...RING, "bypass" as AgentMode] : RING;
-  const idx = ring.indexOf(currentMode);
-  setMode(ring[(idx + 1) % ring.length] ?? "build");
+  const idx = RING.indexOf(currentMode);
+  setMode(RING[(idx + 1) % RING.length] ?? "build");
   return currentMode;
 }
 

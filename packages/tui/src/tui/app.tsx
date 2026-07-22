@@ -23,7 +23,6 @@ import {
   MODE_BADGES,
   bundleForMode,
   cycleMode,
-  enableBypass,
   getMode,
   setMode,
   subscribeMode,
@@ -3175,7 +3174,6 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (want === "bypass") enableBypass(); // explicit consent: joins the ring for this session
         setMode(want);
         setMessages((m) => [
           ...m,
@@ -3184,7 +3182,7 @@ export function HarnessApp({
             role: "tool",
             text:
               want === "bypass"
-                ? "⚠ BYPASS mode — every tool call runs without prompting for the rest of this session's bypass mode. Shift+Tab now includes it in the cycle; it is never persisted."
+                ? "⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the Shift+Tab cycle; it is never persisted."
                 : want === "acceptEdits"
                   ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
                   : want === "plan"

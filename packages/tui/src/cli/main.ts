@@ -11,7 +11,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
-import { enableBypass, setMode } from "../agent/modes.ts";
+import { setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -1122,10 +1122,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
-  // this project's last persisted mode (build when none). Bypass is never persisted — it
-  // must be re-consented each session via the flag or /mode bypass.
+  // this project's last persisted mode (build when none). Bypass is never persisted — a
+  // session always boots into a non-bypass mode unless the flag asks for it.
   if (args.bypassPermissions) {
-    enableBypass();
     setMode("bypass");
   } else {
     const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
