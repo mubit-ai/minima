@@ -2282,15 +2282,24 @@ export class MinimaDb {
    * whole spine assumes). Revisit with BEGIN IMMEDIATE if a second writer process ever lands.
    */
   /**
-   * The plan a todowrite would apply to — the active plan, else (reopen over resurrect) the
-   * session's latest DONE plan when the incoming contents overlap it, so sticky verify/baseline
-   * survive a reopen-after-completion cycle while a disjoint list starts fresh. SHARED by
-   * completionsForTodos and upsertPlanFromTodos: the done-gate's preview must resolve the same
-   * plan the upsert will, or resends of a completed list would preview as brand-new flips.
+   * The plan a todowrite would apply to — the active plan WHEN the incoming contents overlap
+   * it (R5b: the same matcher the step reconcile uses, so exact and Jaccard-rescued matches
+   * both count; a fully disjoint list means a NEW plan — upsertPlanFromTodos supersedes the
+   * old one — never a franken-merge of old title + new steps), else (reopen over resurrect)
+   * the session's latest DONE plan when the incoming contents overlap it, so sticky
+   * verify/baseline survive a reopen-after-completion cycle while a disjoint list starts
+   * fresh. SHARED by completionsForTodos and upsertPlanFromTodos: the done-gate's preview
+   * must resolve the same plan the upsert will, or resends of a completed list would preview
+   * as brand-new flips.
    */
   private planForTodos(sessionId: string, tasks: TodoInput[]): PlanRow | null {
     const active = this.getActivePlan(sessionId);
-    if (active) return active;
+    if (active) {
+      const steps = this.getPlanSteps(active.id);
+      if (steps.length === 0 || tasks.length === 0) return active;
+      if (this.matchStepsToTodos(steps, tasks).some((m) => m !== undefined)) return active;
+      return null;
+    }
     const latest = this.getLatestPlan(sessionId);
     if (latest && latest.status === "done") {
       const contents = new Set(this.getPlanSteps(latest.id).map((s) => (s.content ?? "").trim()));
@@ -2315,6 +2324,9 @@ export class MinimaDb {
     const planId =
       existingPlan?.id ??
       this.insertPlan({ sessionId, title: title ?? tasks[0]?.content ?? null, status: "active" });
+    // R5b: a fresh plan (no overlap with the active one) supersedes it — status flip, never
+    // DELETE — so the divergent list can't leave two competing actives for the stop-gate.
+    if (!existingPlan) this.supersedeOtherActivePlans(sessionId, planId);
     const existing = this.getPlanSteps(planId);
     const matchedSteps = this.matchStepsToTodos(existing, tasks);
     const stepIds: string[] = [];
@@ -2379,6 +2391,15 @@ export class MinimaDb {
         this.db.run("UPDATE file_changes SET step_id = NULL WHERE step_id = ?", [s.id]);
         this.db.run("UPDATE gates SET step_id = NULL WHERE step_id = ?", [s.id]);
         this.db.run("DELETE FROM plan_steps WHERE id = ?", [s.id]);
+      }
+      // R5b: a wholesale replacement on a reused plan (no old step matched — only reachable
+      // when the row had no steps left) must refresh the title, or the stale title fronts
+      // steps it never described.
+      if (existingPlan && tasks.length > 0 && matched.size === 0) {
+        this.db.run("UPDATE plans SET title = ? WHERE id = ?", [
+          title ?? tasks[0]!.content,
+          planId,
+        ]);
       }
     });
     tx();
