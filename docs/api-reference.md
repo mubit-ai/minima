@@ -5,17 +5,16 @@ served at `/docs` when the service is running.
 
 ## Authentication
 
-- **Single-tenant mode** (`MINIMA_MULTITENANT=false`, the default): no caller credential is
-  required. Every request maps to the one org configured by the env Mubit key. Any
-  `Authorization` header is ignored.
-- **Multi-tenant mode** (`MINIMA_MULTITENANT=true`): callers must present
-  `Authorization: Bearer mnim_<org>_<keyid>_<secret>`, which resolves server-side to that
-  org's own Mubit instance. A missing or invalid key returns `401`. The admin/provisioning
-  endpoints are guarded separately by the `X-Minima-Provisioning-Key` header. See
-  **[Multi-Tenancy](multi-tenancy.md)**.
+Auth is **pass-through**: the caller's Mubit API key IS the credential. Present it as
+`Authorization: Bearer mbt_…` and Minima uses it directly against the configured Mubit
+endpoint, scoping all state to the org derived from that key. There is no provisioning
+step and no Minima-issued keys. When no `Authorization` header is sent, the server falls
+back to its env-configured `MUBIT_API_KEY` (single-tenant deployments). A bearer token
+that is not a well-formed Mubit key (`mbt_…`) returns `401`, as does a missing key when
+the server has none configured. See **[Multi-Tenancy](multi-tenancy.md)**.
 
 `user_id` and `namespace` are **within-org** scoping fields, not auth boundaries. The tenant
-boundary is the Minima key → a Mubit instance.
+boundary is the Mubit key → its Mubit instance.
 
 ## Errors
 
@@ -29,10 +28,7 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 | Status | Title | When |
 |--------|-------|------|
 | `400` | Invalid request | Request body fails validation (`ValueError`). |
-| `401` | Unauthorized | Multi-tenant: missing/invalid Minima key. |
-| `403` | Forbidden | Admin endpoint: invalid/missing provisioning key. |
-| `404` | Not Found | Admin endpoint called while multi-tenancy is disabled. |
-| `409` | Conflict | Provisioning an `org_id` that already exists. |
+| `401` | Unauthorized | No Mubit key (none passed, none configured) or a malformed bearer token (not `mbt_…`). |
 | `422` | No candidate models | Constraints eliminated every catalog model. |
 
 Note that `POST /v1/feedback` does **not** error on an unknown `recommendation_id`; it
@@ -298,7 +294,7 @@ The current model catalog (cost + capability priors).
 ## `GET /v1/strategies`
 
 Surfaces the rules Mubit has promoted for a namespace — the "why" behind routing patterns.
-(Requires a resolved tenant; in multi-tenant mode, send the Minima key.)
+(Requires a resolved tenant — pass your Mubit key, or rely on the server's configured one.)
 
 ### Query parameters
 
@@ -378,15 +374,16 @@ low_confidence_count, promotion_candidates, section_health, warnings[] }`.
 
 ## `GET /v1/health`
 
-Always returns `200`; reports degraded state in the body. Never requires auth (in
-multi-tenant mode, an authenticated probe additionally reports its org's Mubit reachability).
+Always returns `200`; reports degraded state in the body. Never requires auth (an
+unauthenticated probe gets liveness only; a key-bearing probe additionally reports that
+org's Mubit reachability).
 
 ```json
 {
   "status": "ok",
   "mubit": {"reachable": true, "transport": "http", "latency_ms": 12,
             "endpoint": "http://127.0.0.1:3000", "org_id": "default"},
-  "multitenant": false,
+  "auth": "passthrough",
   "catalog": {"version": "…", "cost_source": "litellm+openrouter", "stale": false, "models": 42},
   "reasoner": {"provider": "none", "configured": false},
   "version": "0.1.0"
@@ -395,15 +392,3 @@ multi-tenant mode, an authenticated probe additionally reports its org's Mubit r
 
 `status` is `degraded` when Mubit is unreachable. In that state `/recommend` still serves
 prior-only recommendations.
-
----
-
-## `POST|GET|DELETE /v1/admin/tenants`
-
-Tenant provisioning. **Multi-tenant mode only** (returns `404` otherwise), guarded by the
-`X-Minima-Provisioning-Key` header. Full details and schemas in
-**[Multi-Tenancy](multi-tenancy.md)**.
-
-- `POST /v1/admin/tenants` → mint a new org + Minima key (the key is shown **once**).
-- `GET /v1/admin/tenants` → list orgs (summaries only; no secrets).
-- `DELETE /v1/admin/tenants/{org_id}` → revoke an org.

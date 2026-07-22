@@ -149,9 +149,6 @@ export interface BigPlanSynthesis {
   openItems: string[];
 }
 
-/** @deprecated Use `BigPlanSynthesis`. */
-export type GroundTruthSynthesis = BigPlanSynthesis;
-
 /** MP15: the keeper mini-update's payload — the shape lives HERE (this module stays
  *  zero-import pure); plan_council's runKeeperMiniUpdate produces it. */
 export interface KeeperMiniResult {
@@ -556,11 +553,6 @@ export class PlanSessionStore {
     if (ctx.length) out.push("## Context & Findings", "", ...ctx, "");
 
     return `${out.join("\n").trimEnd()}\n`;
-  }
-
-  /** @deprecated Use `toBigPlan`. */
-  toGroundTruth(synth: BigPlanSynthesis | null): string {
-    return this.toBigPlan(synth);
   }
 
   /** One-line status. */

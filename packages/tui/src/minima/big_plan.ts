@@ -1226,15 +1226,7 @@ export type { FileChangeRow };
 export type GtAgentRef = BigPlanAgentRef;
 /** @deprecated Use `VerifiedOutcome`. */
 export type GroundedOutcome = VerifiedOutcome;
-/** @deprecated Use `BIG_PLAN_SYSTEM_GUIDANCE`. */
-export const GROUND_TRUTH_SYSTEM_GUIDANCE = BIG_PLAN_SYSTEM_GUIDANCE;
-/** @deprecated Use `bigPlanAttributionSink`. */
-export const groundTruthAttributionSink = bigPlanAttributionSink;
 /** @deprecated Use `verifiedOutcomeFor`. */
 export const groundedOutcomeFor = verifiedOutcomeFor;
 /** @deprecated Use `stampVerifiedOutcome`. */
 export const stampGroundedOutcome = stampVerifiedOutcome;
-/** @deprecated Use `bigPlanAfterToolCall`. */
-export const groundTruthAfterToolCall = bigPlanAfterToolCall;
-/** @deprecated Use `bigPlanHooks`. */
-export const groundTruthHooks = bigPlanHooks;

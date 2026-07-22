@@ -34,7 +34,7 @@ uv run --extra server uvicorn minima.main:app --host 0.0.0.0 --port 8080 --worke
 ```json
 { "status": "ok|degraded",
   "mubit": {"reachable": true, "transport": "http", "latency_ms": 12},
-  "multitenant": false,
+  "auth": "passthrough",
   "catalog": {"version": "…", "cost_source": "…", "stale": false, "models": 42},
   "reasoner": {"provider": "none", "configured": false},
   "version": "0.1.0" }
@@ -42,8 +42,8 @@ uv run --extra server uvicorn minima.main:app --host 0.0.0.0 --port 8080 --worke
 
 - Use `status == "ok"` (or `mubit.reachable != false`) for a **readiness** probe.
 - For a **liveness** probe, any `200` from `/v1/health` suffices — it doesn't require Mubit.
-- In multi-tenant mode, an unauthenticated probe gets liveness only; pass a Minima key to
-  also check that org's Mubit reachability.
+- An unauthenticated probe gets liveness only; pass a Mubit key to also check that org's
+  Mubit reachability.
 
 ## Degradation behavior
 
@@ -100,10 +100,9 @@ Mount the sqlite paths on durable storage if you rely on them.
 
 ## Secret hygiene
 
-- Never log or echo Mubit keys, Minima `mnim_…` keys, or provider API keys.
+- Never log or echo Mubit keys or provider API keys. Auth is pass-through, so every bearer
+  token IS a live Mubit credential — treat request logs accordingly.
 - Use a Mubit **data-plane** key (not an admin key) for `MUBIT_API_KEY`.
-- In multi-tenant mode, store each org's Mubit key by reference (`env:NAME`), not inline.
-- Keep `MINIMA_PROVISIONING_KEY` out of caller-facing config entirely.
 
 ## Tests in CI
 

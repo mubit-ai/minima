@@ -1,94 +1,35 @@
 # Multi-Tenancy
 
-One Minima deployment can serve many organizations, each backed by **its own Mubit
-instance**, with per-org API keys. This is off by default; when off, Minima runs
-single-tenant against one env-configured Mubit instance.
+One Minima deployment serves many organizations. There is no tenant registry, no
+provisioning step, and no Minima-issued keys: auth is **pass-through**, and the client's
+Mubit API key IS the credential. Each org brings its own Mubit key (its own Mubit
+project/instance), and that key both authenticates the call and selects the tenant.
 
 ## The model
 
-- **Tenant boundary = the Minima key → a Mubit instance.** Each org provides its own Mubit
-  instance once at onboarding. Callers authenticate with a Minima-issued key
-  (`mnim_<org>_<keyid>_<secret>`) that resolves server-side to that org's Mubit instance.
-  **The org's Mubit key is never sent per call.**
-- **`namespace` and `user_id` are intra-org** sub-scoping, not tenant boundaries.
-- **State is org-scoped.** Recommendation store and propensity tracking are partitioned by
-  org, so a `recommendation_id` minted for one org resolves to nothing for another — orgs
-  cannot credit or poison each other's learning.
-- **The provisioning key is the admin credential** (LiteLLM master-key model). It mints and
-  manages per-org keys and is never handed to callers.
+- **Tenant boundary = the Mubit key.** Callers pass their key as
+  `Authorization: Bearer mbt_…`. Minima uses it directly against the configured
+  `MUBIT_ENDPOINT` — each org's memory lives in the Mubit instance its own key unlocks.
+- **`org_id` is derived from the key.** A canonical `mbt_<instance>_…` key yields the
+  instance segment; anything else falls back to a hash of the key. One `TenantContext`
+  (memory adapter + recommender + org-scoped stores) is lazily built and cached per key.
+- **State is org-scoped.** The recommendation store, decision log, and durable refs are
+  partitioned by `org_id`, so a `recommendation_id` minted for one org resolves to nothing
+  for another — orgs cannot credit or poison each other's learning.
+- **`namespace` and `user_id` are intra-org** sub-scoping (team/project/env), not tenant
+  boundaries. A namespace maps to lane `minima:<namespace>` inside the org's own Mubit.
 
-## Enabling it
+## Single-tenant mode is the same path
 
-```bash
-MINIMA_MULTITENANT=true
-MINIMA_PROVISIONING_KEY=<long-random-secret>     # required; admin credential
-MINIMA_TENANT_STORE=sqlite                       # durable registry (or "memory")
-MINIMA_TENANT_STORE_PATH=minima_tenants.db
-# Leave MUBIT_API_KEY blank — each org's key is resolved from the registry.
-```
-
-When multi-tenant is on, `MUBIT_API_KEY` is unused; `/recommend`, `/feedback`, and
-`/strategies` require `Authorization: Bearer mnim_…`; and the `/v1/admin/tenants`
-endpoints become active.
-
-## Provisioning a tenant
-
-Mint an org and its first Minima key. The full key is returned **once** at creation — only a
-hash is persisted and it cannot be recovered later.
-
-```bash
-curl -s -X POST http://localhost:8080/v1/admin/tenants \
-  -H "x-minima-provisioning-key: $MINIMA_PROVISIONING_KEY" \
-  -H 'content-type: application/json' \
-  -d '{
-        "org_id": "acme",
-        "mubit_endpoint": "https://acme.mubit.example",
-        "mubit_api_key_ref": "env:ACME_MUBIT_KEY",
-        "mubit_transport": "http"
-      }' | jq
-```
-
-### `TenantCreateRequest`
-
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| `org_id` | string | required | 1–63 chars `[a-z0-9-]`, starts alphanumeric. |
-| `mubit_endpoint` | string | required | The org's own Mubit instance URL. |
-| `mubit_api_key_ref` | string | required | Reference to the org's Mubit data-plane key: `env:NAME` (recommended), `inline:VALUE` (dev only), or `vault:path` (future). The raw key is never stored in the clear with a real backend. |
-| `mubit_transport` | string | `http` | `http` \| `grpc` \| `auto`. |
-| `lane_prefix` | string | `minima` | Intra-org lane prefix. |
-| `reads_shared_seed` | bool | `false` | Reserved: read a Minima-owned warm-start reference instance. |
-
-### `TenantCreateResponse`
-
-`{ org_id, key_id, minima_api_key, created_at }` — `minima_api_key` is the full
-`mnim_…` secret, shown only here. Store it securely and hand it to the org.
-
-> **Secret hygiene:** prefer `mubit_api_key_ref: "env:NAME"` so the org's Mubit key lives in
-> the deployment environment, not the registry. Never log or echo `mnim_…` keys or Mubit
-> keys.
-
-## Listing and revoking
-
-```bash
-# List (summaries only — no secrets)
-curl -s http://localhost:8080/v1/admin/tenants \
-  -H "x-minima-provisioning-key: $MINIMA_PROVISIONING_KEY" | jq
-
-# Revoke (re-key by deleting then re-creating)
-curl -s -X DELETE http://localhost:8080/v1/admin/tenants/acme \
-  -H "x-minima-provisioning-key: $MINIMA_PROVISIONING_KEY" | jq
-```
-
-Re-creating an existing `org_id` returns `409` — delete it first to re-key.
+When a request carries no `Authorization` header, Minima falls back to the env-configured
+`MUBIT_API_KEY` — that is all "single-tenant mode" is. Setting only `MUBIT_API_KEY` gives
+one implicit org; any caller may still pass their own Mubit key to bring their own org.
 
 ## Calling as a tenant
 
-Once provisioned, the org calls the normal endpoints with its Minima key:
-
 ```bash
 curl -s http://localhost:8080/v1/recommend \
-  -H "authorization: Bearer mnim_acme_…" \
+  -H "authorization: Bearer mbt_yourinstance_…" \
   -H 'content-type: application/json' \
   -d '{"task":{"task":"…"},"cost_quality_tradeoff":3,"namespace":"prod"}' | jq
 ```
@@ -97,12 +38,18 @@ Or with the SDK:
 
 ```python
 from minima_client import MinimaClient
-minima = MinimaClient("https://minima.example", api_key="mnim_acme_…")
+minima = MinimaClient("https://api.minima.sh", api_key="mbt_yourinstance_…")
 ```
 
-A missing or invalid key returns `401`. `GET /v1/health` is the exception — an
-unauthenticated probe still gets service liveness, and a key-bearing probe additionally gets
-that org's Mubit reachability.
+A bearer token that is not a well-formed Mubit key (`mbt_…`) returns `401`, as does a
+missing key when the server has no `MUBIT_API_KEY` configured. The format check is a cheap
+front-door gate only — Minima never validates the key itself; a wrong-but-well-formed key
+simply resolves an org whose Mubit calls fail, and `/recommend` degrades to prior-only
+recommendations.
 
-See [`examples/07_multitenant_admin.py`](../examples/07_multitenant_admin.py) for an
-end-to-end provision-then-call script.
+`GET /v1/health` is the exception — an unauthenticated probe still gets service liveness,
+and a key-bearing probe additionally gets that org's Mubit reachability.
+
+> **Secret hygiene:** Mubit keys are data-plane credentials. Never log or echo them, and
+> never commit them — configure the server-side fallback via the `MUBIT_API_KEY` env var
+> only.

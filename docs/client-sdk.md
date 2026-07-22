@@ -21,15 +21,16 @@ with MinimaClient("http://localhost:8080", api_key=None, timeout=10.0) as minima
 ```
 
 - `base_url` — the Minima service URL.
-- `api_key` — sent as `Authorization: Bearer <key>`. Only needed in multi-tenant mode
-  (single-tenant ignores it). `None` to omit.
+- `api_key` — your Mubit key, sent as `Authorization: Bearer <key>` (pass-through auth: it
+  authenticates you and selects your org). `None` to omit and use the server's configured
+  fallback key, if any.
 - `timeout` — HTTP timeout in seconds.
 
 The async client mirrors every method with `await`; use it inside FastAPI/async apps so the
 event loop stays unblocked.
 
 ```python
-async with AsyncMinimaClient("http://localhost:8080", api_key="mnim_…") as minima:
+async with AsyncMinimaClient("http://localhost:8080", api_key="mbt_…") as minima:
     rec = await minima.recommend(task)
 ```
 

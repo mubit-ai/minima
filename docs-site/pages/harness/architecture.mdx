@@ -32,7 +32,7 @@ Every prompt runs the Minima loop with retries built in:
 
 ## Big Plan verification
 
-The harness doesn't take the model's word for "done". With Big Plan on (the default — opt out with `MINIMA_TUI_BIG_PLAN=0`; the legacy `MINIMA_TUI_GROUND_TRUTH` variable is still honored for one release), work is organized around **verifiable plan steps**:
+The harness doesn't take the model's word for "done". With Big Plan on (the default — opt out with `MINIMA_TUI_BIG_PLAN=0`), work is organized around **verifiable plan steps**:
 
 - **Plans carry checks.** `/plan` drafts a plan where each step has a `verify` shell command — a test, a build, a grep — and records its **baseline**: the check must be *red before the work* (a check that already passed proves nothing).
 - **Completion is gated.** The harness refuses to let the model mark a step complete unless its verify command actually passes. This is enforced at tool dispatch, so the model cannot talk its way past it.

@@ -19,17 +19,7 @@ const activeDocs = [
 
 const allowed: Record<string, RegExp> = {
   "src/db/minima_db.ts": /^gt_(?:outcome|verified_by|confidence)$/,
-  "src/minima/big_plan.ts":
-    /^(?:GtAgentRef|GROUND_TRUTH_SYSTEM_GUIDANCE|groundTruth(?:AttributionSink|AfterToolCall|Hooks))$/,
-  "src/minima/config.ts": /^(?:groundTruth|GroundTruth|MINIMA_TUI_GROUND_TRUTH)$/,
-  "src/minima/index.ts": /^(?:GroundTruthSynthesis|synthesizeGroundTruth)$/,
-  "src/minima/plan_council.ts": /^synthesizeGroundTruth$/,
-  "src/minima/plan_session.ts": /^(?:GroundTruthSynthesis|toGroundTruth)$/,
-  "src/tui/app.tsx": /^\/gt(?:-seed)?$/,
-  "tests/behavior.test.ts": /^\/gt(?:-seed)?$/,
-  "tests/big-plan-compat.test.ts":
-    /^(?:GroundTruthSynthesis|GROUND_TRUTH_SYSTEM_GUIDANCE|groundTruth(?:AttributionSink|AfterToolCall|Hooks)|synthesizeGroundTruth|toGroundTruth)$/,
-  "tests/config_env.test.ts": /^(?:groundTruth|MINIMA_TUI_GROUND_TRUTH)$/,
+  "src/minima/big_plan.ts": /^GtAgentRef$/,
   "tests/db_migrate.test.ts": /^gt_(?:outcome|verified_by|confidence)$/,
 };
 

@@ -823,9 +823,6 @@ export async function synthesizeBigPlan(
   );
 }
 
-/** @deprecated Use `synthesizeBigPlan`. */
-export const synthesizeGroundTruth = synthesizeBigPlan;
-
 // --------------------------------------------------------------------------- sanitizers
 
 function sanitizeFindings(raw: unknown, defaultSource: Finding["source"]): Finding[] {

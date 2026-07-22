@@ -149,7 +149,7 @@ describe("v14 Big Plan outcome migration", () => {
     db.db.close();
   });
 
-  test("canonical and deprecated outcome writers dual-write compatibility columns", () => {
+  test("the outcome writer stamps canonical columns only — legacy columns stay null", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("project-dual");
     const runId = db.startRun({ runId: "run-dual", projectKey: "project-dual" });
@@ -170,33 +170,14 @@ describe("v14 Big Plan outcome migration", () => {
                 gt_outcome, gt_verified_by, gt_confidence
          FROM routing_decisions WHERE rec_id = 'rec-dual'`,
       )
-      .get() as Record<string, string>;
+      .get() as Record<string, string | null>;
 
     expect(row.big_plan_outcome).toBe("verified");
     expect(row.big_plan_verified_by).toBe("deterministic");
     expect(row.big_plan_confidence).toBe("green");
-    expect(row.gt_outcome).toBe("verified");
-    expect(row.gt_verified_by).toBe("deterministic");
-    expect(row.gt_confidence).toBe("green");
-
-    db.attachGroundedOutcome("rec-dual", {
-      outcome: "failed",
-      verifiedBy: "judge",
-      confidence: "red",
-    });
-    const compatibilityRow = db.db
-      .query(
-        `SELECT big_plan_outcome, big_plan_verified_by, big_plan_confidence,
-                gt_outcome, gt_verified_by, gt_confidence
-         FROM routing_decisions WHERE rec_id = 'rec-dual'`,
-      )
-      .get() as Record<string, string>;
-    expect(compatibilityRow.big_plan_outcome).toBe("failed");
-    expect(compatibilityRow.big_plan_verified_by).toBe("judge");
-    expect(compatibilityRow.big_plan_confidence).toBe("red");
-    expect(compatibilityRow.gt_outcome).toBe("failed");
-    expect(compatibilityRow.gt_verified_by).toBe("judge");
-    expect(compatibilityRow.gt_confidence).toBe("red");
+    expect(row.gt_outcome).toBeNull();
+    expect(row.gt_verified_by).toBeNull();
+    expect(row.gt_confidence).toBeNull();
     db.db.close();
   });
 });

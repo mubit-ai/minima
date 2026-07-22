@@ -2152,27 +2152,10 @@ export class MinimaDb {
   ): void {
     this.db.run(
       `UPDATE routing_decisions
-       SET big_plan_outcome = ?, big_plan_verified_by = ?, big_plan_confidence = ?,
-           gt_outcome = ?, gt_verified_by = ?, gt_confidence = ?
+       SET big_plan_outcome = ?, big_plan_verified_by = ?, big_plan_confidence = ?
        WHERE rec_id = ?`,
-      [
-        o.outcome,
-        o.verifiedBy,
-        o.confidence ?? null,
-        o.outcome,
-        o.verifiedBy,
-        o.confidence ?? null,
-        recId,
-      ],
+      [o.outcome, o.verifiedBy, o.confidence ?? null, recId],
     );
-  }
-
-  /** @deprecated Use attachBigPlanOutcome. */
-  attachGroundedOutcome(
-    recId: string,
-    o: { outcome: GateOutcome; verifiedBy: VerifiedBy; confidence?: ConfidenceTier | null },
-  ): void {
-    this.attachBigPlanOutcome(recId, o);
   }
 
   close(): void {

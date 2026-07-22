@@ -329,15 +329,9 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(src).toContain("confidence: gateConfidence(red)");
   });
 
-  test("/bp commands are public while deprecated /gt aliases stay hidden and warn", () => {
+  test("/bp commands are public", () => {
     expect(src).toContain('{ name: "bp", desc: "Show Plan Overview status');
     expect(src).toContain('{ name: "bp-seed", desc: "Seed a demo Big Plan');
-    expect(src).not.toContain('{ name: "gt", desc:');
-    expect(src).not.toContain('{ name: "gt-seed", desc:');
-    expect(src).toContain('case "gt":');
-    expect(src).toContain('case "gt-seed":');
-    expect(src).toContain("Deprecated: /gt; use /bp.");
-    expect(src).toContain("Deprecated: /gt-seed; use /bp-seed.");
   });
 
   // M6.3: the 🔴 block captures the override through the gate-focus modal. While armed, the
