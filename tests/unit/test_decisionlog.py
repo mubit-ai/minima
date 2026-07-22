@@ -160,6 +160,100 @@ class TestOrgScoping:
         assert {r.recommendation_id for r in org_b.rows()} == {"rid-b1"}
 
 
+class TestTrustedCorrection:
+    def test_telemetry_then_trusted_corrects_the_row(self, backend):
+        backend.put(make_decision("rid-corr"))
+        assert backend.reconcile(
+            "rid-corr",
+            Reconciliation(
+                model_id="claude-haiku-4-5",
+                outcome="success",
+                quality=None,
+                cost_usd=0.002,
+                latency_ms=900,
+                evidence_source="none",
+            ),
+        )
+        assert backend.reconcile(
+            "rid-corr",
+            Reconciliation(
+                model_id="claude-haiku-4-5",
+                outcome="failure",
+                quality=0.1,
+                evidence_source="human",
+            ),
+        )
+        got = backend.get("rid-corr")
+        assert got.realized_outcome == "failure"
+        assert got.realized_quality == 0.1
+        assert got.evidence_source == "human"
+        # First-reconcile cost/latency survive a correction that omits them.
+        assert got.realized_cost_usd == 0.002
+        assert got.realized_latency_ms == 900
+        assert got.feedback_ts is not None
+
+    def test_legacy_null_evidence_is_correctable(self, backend):
+        # Rows reconciled before provenance existed carry evidence_source=None —
+        # untrusted, so a trusted verdict may still land.
+        backend.put(make_decision("rid-null"))
+        assert backend.reconcile(
+            "rid-null", Reconciliation("claude-haiku-4-5", "success", None)
+        )
+        assert backend.reconcile(
+            "rid-null",
+            Reconciliation("claude-haiku-4-5", "failure", 0.2, evidence_source="gate"),
+        )
+        assert backend.get("rid-null").realized_outcome == "failure"
+
+    def test_judge_then_human_keeps_first_write(self, backend):
+        backend.put(make_decision("rid-judge"))
+        assert backend.reconcile(
+            "rid-judge",
+            Reconciliation("claude-haiku-4-5", "success", 0.9, evidence_source="judge"),
+        )
+        assert not backend.reconcile(
+            "rid-judge",
+            Reconciliation("claude-haiku-4-5", "failure", 0.1, evidence_source="human"),
+        )
+        got = backend.get("rid-judge")
+        assert got.realized_outcome == "success"
+        assert got.evidence_source == "judge"
+
+    def test_trusted_replay_still_false(self, backend):
+        backend.put(make_decision("rid-replay"))
+        update = Reconciliation(
+            "claude-haiku-4-5", "success", 0.9, cost_usd=0.001, evidence_source="human"
+        )
+        assert backend.reconcile("rid-replay", update)
+        assert not backend.reconcile("rid-replay", update)
+
+    def test_untrusted_replay_still_false(self, backend):
+        backend.put(make_decision("rid-telemetry"))
+        update = Reconciliation(
+            "claude-haiku-4-5", "success", None, evidence_source="none"
+        )
+        assert backend.reconcile("rid-telemetry", update)
+        assert not backend.reconcile("rid-telemetry", update)
+
+    def test_cross_org_correction_blocked(self, backend):
+        org_a = OrgScopedDecisionLog(backend, "org-a")
+        org_b = OrgScopedDecisionLog(backend, "org-b")
+        org_a.put(make_decision("rid-org"))
+        assert org_a.reconcile(
+            "rid-org",
+            Reconciliation("claude-haiku-4-5", "success", None, evidence_source="none"),
+        )
+        assert not org_b.reconcile(
+            "rid-org",
+            Reconciliation("claude-haiku-4-5", "failure", 0.1, evidence_source="human"),
+        )
+        assert org_a.get("rid-org").realized_outcome == "success"
+        assert org_a.reconcile(
+            "rid-org",
+            Reconciliation("claude-haiku-4-5", "failure", 0.1, evidence_source="human"),
+        )
+
+
 def test_retention_purges_on_write(tmp_path):
     backend = SqliteDecisionLog(str(tmp_path / "d.db"), retention_days=1)
     backend.put(make_decision("ancient", ts=time.time() - 10 * 86_400))

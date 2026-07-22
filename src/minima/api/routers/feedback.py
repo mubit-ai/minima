@@ -206,7 +206,11 @@ async def feedback(
     # are local analytics facts and must survive a memory outage. (Observed live: a Mubit
     # 503 made every feedback return early and /v1/savings showed 0 reconciled rows for a
     # whole day of traffic.)
-    _reconcile_decision(tenant, req, quality, EVIDENCE_NONE if infra else source, late=False)
+    corrected = _reconcile_decision(
+        tenant, req, quality, EVIDENCE_NONE if infra else source, late=False
+    )
+    if corrected:
+        warnings.append("decision_corrected")
 
     if not labeled:
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
@@ -471,17 +475,27 @@ def _reconcile_decision(
     evidence_source: str,
     *,
     late: bool,
-) -> None:
+) -> bool:
     """Fill the decision-log row's realized columns (best-effort analytics).
 
     Quality is strictly what the caller supplied — a label-based default is never
     substituted (it would corrupt calibration and OPE). evidence_source lets every
     reader (calibration fit, ECE, CUSUM) filter to trusted labels.
+
+    Returns True when this feedback CORRECTED an already-reconciled row for the same
+    realized model (a trusted label replacing stored untrusted telemetry) — surfaced
+    to the caller as the decision_corrected warning.
     """
     if tenant.decision_log is None:
-        return
+        return False
     try:
-        tenant.decision_log.reconcile(
+        prior = tenant.decision_log.get(req.recommendation_id)
+        already_reconciled = (
+            prior is not None
+            and prior.reconciled
+            and prior.realized_model_id == req.chosen_model_id
+        )
+        applied = tenant.decision_log.reconcile(
             req.recommendation_id,
             Reconciliation(
                 model_id=req.chosen_model_id,
@@ -495,8 +509,10 @@ def _reconcile_decision(
                 chosen_effort=req.chosen_effort,
             ),
         )
+        return already_reconciled and applied
     except Exception as exc:  # noqa: BLE001 — analytics must never fail feedback
         log.warning("decision_reconcile_failed", error=str(exc))
+        return False
 
 
 async def _late_feedback(
@@ -515,7 +531,11 @@ async def _late_feedback(
 
     # Realized analytics first — must survive a memory outage (same ordering as the
     # main path).
-    _reconcile_decision(tenant, req, quality, EVIDENCE_NONE if infra else source, late=True)
+    corrected = _reconcile_decision(
+        tenant, req, quality, EVIDENCE_NONE if infra else source, late=True
+    )
+    if corrected:
+        warnings.append("decision_corrected")
 
     if not labeled:
         steps_recorded = await _relay_step_outcomes(
