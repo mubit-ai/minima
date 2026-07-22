@@ -58,10 +58,14 @@ describe("seed registry (July 2026 lineup)", () => {
     }
   });
 
-  test("claude-fable-5 seed declares always-on adaptive thinking", () => {
-    const fable = SEED_MODELS.find((m) => m.id === "claude-fable-5")!;
-    expect(fable.reasoning).toBe(true);
-    expect(fable.adaptive_thinking).toBe(true);
+  test("adaptive-shape Claude seeds declare adaptive_thinking (MUB-182)", () => {
+    for (const id of ["claude-fable-5", "claude-sonnet-5", "claude-opus-4-8"]) {
+      const m = SEED_MODELS.find((s) => s.id === id)!;
+      expect(m.reasoning).toBe(true);
+      expect(m.adaptive_thinking).toBe(true);
+    }
+    const sonnet46 = SEED_MODELS.find((s) => s.id === "claude-sonnet-4-6")!;
+    expect(sonnet46.adaptive_thinking).toBeUndefined();
   });
 });
 

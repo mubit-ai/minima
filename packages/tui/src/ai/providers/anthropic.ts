@@ -24,6 +24,7 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
+import { effortForLevel, thinkingFormatFor } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -235,8 +236,17 @@ function buildKwargs(
     kwargs.tools = tools;
   }
   if (cache && wire.length) markLastBlock(wire[wire.length - 1] as Record<string, unknown>);
-  if (options.thinking && model.reasoning && !model.adaptive_thinking) {
-    kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
+  if (options.thinking) {
+    // Per-model thinking shape (MUB-182): newer Claude models 400 on the classic
+    // enabled+budget_tokens config and require adaptive + output_config.effort.
+    const format = thinkingFormatFor(model);
+    if (format === "adaptive") {
+      kwargs.thinking = { type: "adaptive" };
+      const effort = effortForLevel(options.thinking_level);
+      if (effort) kwargs.output_config = { effort };
+    } else if (format === "enabled") {
+      kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
+    }
   }
   return kwargs;
 }

@@ -360,6 +360,7 @@ function streamOptions(config: AgentLoopConfig): Record<string, unknown> {
   const opts: Record<string, unknown> = { ...(config.streamOptions ?? {}) };
   opts.thinking = config.thinkingLevel !== "off";
   if (config.thinkingLevel !== "off") {
+    opts.thinking_level = config.thinkingLevel;
     const budget = config.thinkingBudgets?.[config.thinkingLevel];
     if (budget !== undefined) opts.thinking_budget = budget;
   }

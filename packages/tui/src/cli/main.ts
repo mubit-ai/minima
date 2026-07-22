@@ -328,6 +328,7 @@ export const SEED_MODELS: Model[] = [
     context_window: 200_000,
     max_tokens: 16384,
     reasoning: true,
+    adaptive_thinking: true,
   },
   {
     id: "claude-sonnet-5",
@@ -338,6 +339,7 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_000_000,
     max_tokens: 128_000,
     reasoning: true,
+    adaptive_thinking: true,
   },
   {
     id: "claude-fable-5",

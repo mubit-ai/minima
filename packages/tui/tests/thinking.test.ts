@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Agent } from "../src/agent/agent.ts";
 import type { AgentEvent } from "../src/agent/events.ts";
+import { effortForLevel } from "../src/ai/provider_quirks.ts";
 import {
   AssistantMessage,
   type Model,
@@ -152,6 +153,23 @@ describe("Thinking mode event flow", () => {
     expect(last2.textContent).toBe("response 2");
 
     reg.unregister();
+  });
+});
+
+describe("Thinking level to effort mapping", () => {
+  test("maps each harness level onto a wire effort", () => {
+    expect(effortForLevel("minimal")).toBe("low");
+    expect(effortForLevel("low")).toBe("low");
+    expect(effortForLevel("medium")).toBe("medium");
+    expect(effortForLevel("high")).toBe("high");
+    expect(effortForLevel("xhigh")).toBe("xhigh");
+  });
+
+  test("off, unknown, and missing levels map to no effort", () => {
+    expect(effortForLevel("off")).toBeUndefined();
+    expect(effortForLevel("turbo")).toBeUndefined();
+    expect(effortForLevel(undefined)).toBeUndefined();
+    expect(effortForLevel(3)).toBeUndefined();
   });
 });
 
