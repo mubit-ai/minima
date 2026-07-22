@@ -137,6 +137,8 @@ export class MinimaRouter {
     slider?: number;
     tags?: string[];
     difficulty?: string;
+    /** Caller's classifier confidence — sent only alongside a task_type override. */
+    taskTypeConfidence?: number;
     expectedInputTokens?: number;
     candidates?: string[];
     /** Per-call USD ceiling (server-honored as a SOFT filter + warning; enforce locally). */
@@ -175,6 +177,8 @@ export class MinimaRouter {
       if (opts.taskType) enriched.task_type = opts.taskType as TaskType;
       if (opts.tags) enriched.tags = opts.tags;
       if (opts.difficulty) enriched.difficulty = opts.difficulty as TaskInput["difficulty"];
+      if (opts.taskType && opts.taskTypeConfidence !== undefined)
+        enriched.task_type_confidence = opts.taskTypeConfidence;
       if (opts.expectedInputTokens !== undefined)
         enriched.expected_input_tokens = opts.expectedInputTokens;
       taskInput = enriched;

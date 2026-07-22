@@ -94,6 +94,12 @@ class DecisionRecord:
     # Reasoning-effort tier the model actually ran at (client-reported) — the raw
     # material for learning (model x effort) arms.
     realized_effort: str | None = None
+    # Classification provenance ("caller" | "heuristic" | "neighbor_vote") + the caller's
+    # classifier confidence (TaskInput.task_type_confidence), so caller-labeled and
+    # heuristic-labeled rows can be segmented later. None on rows written before these
+    # existed (rows persist as JSON payloads — additive, no migration).
+    task_type_source: str | None = None
+    task_type_confidence: float | None = None
 
     @property
     def reconciled(self) -> bool:

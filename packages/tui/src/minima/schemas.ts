@@ -56,6 +56,9 @@ export interface TaskInput {
   task: string;
   task_type?: TaskType;
   difficulty?: Difficulty;
+  /** Caller's classifier confidence in its task_type/difficulty override [0,1];
+   * diagnostic only — the override wins regardless. */
+  task_type_confidence?: number;
   expected_input_tokens?: number;
   expected_output_tokens?: number;
   tags?: string[];

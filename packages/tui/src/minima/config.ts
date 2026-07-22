@@ -135,6 +135,15 @@ export interface HarnessConfig {
   /** Effort routing Phase A (MINIMA_AUTO_EFFORT, default off, umbrella-covered): the
    * server's classified difficulty picks each prompt's thinking level. */
   autoEffort: boolean;
+  /** Client-side task classification (MINIMA_TUI_CLASSIFY=1, default OFF): one cheap
+   * completion labels each interactive lead prompt with task_type/difficulty before
+   * routing, sent as the caller override (which the server honors absolutely) plus a
+   * diagnostic task_type_confidence. Fail-open: unparseable/low-confidence → the
+   * server's heuristic applies unchanged. */
+  classify: boolean;
+  /** Explicit classifier model override (MINIMA_CLASSIFY_MODEL). null = the cheap
+   * fallback ladder starting at claude-haiku-4-5. */
+  classifyModel: string | null;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -168,6 +177,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     memoryLedger: true,
     experimental: false,
     autoEffort: false,
+    classify: false,
+    classifyModel: null,
     ...overrides,
   };
 }
@@ -247,6 +258,9 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   // model silently degrades the whole planning pipeline with no way to choose another.
   const judgeEnv = process.env.MINIMA_JUDGE_MODEL?.trim();
   if (judgeEnv) cfg.judgeModel = judgeEnv;
+  cfg.classify = process.env.MINIMA_TUI_CLASSIFY === "1";
+  const classifyModelEnv = process.env.MINIMA_CLASSIFY_MODEL?.trim();
+  if (classifyModelEnv) cfg.classifyModel = classifyModelEnv;
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;
   if (process.env.MINIMA_TUI_TOOL_ALLOWLIST === "0") cfg.toolAllowlist = false;
   if (process.env.MINIMA_TUI_GRADED_OUTCOME === "0") cfg.gradedOutcome = false;

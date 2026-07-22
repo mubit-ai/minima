@@ -40,6 +40,7 @@ import {
 } from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
+import { CLASSIFY_CONFIDENCE_FLOOR, type TaskClassifier } from "./classify.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import {
   type FailureDecision,
@@ -199,6 +200,9 @@ export class MinimaAgent extends Agent {
   lastAborted = false;
   /** The task string of the most recent promptRouted call — what /redo re-runs. */
   lastRoutedTask: string | null = null;
+  /** Client-side task classifier (MINIMA_TUI_CLASSIFY=1) — wired by the CLI for the
+   * lead agent only; null everywhere else (children/scribe/judge lanes never classify). */
+  classifier: TaskClassifier | null = null;
   /** Session-scoped model exclusions (/redo): unioned into EVERY recommend request's
    * excluded_models — pre-request candidate assembly, never a client-side re-rank.
    * FIFO, capped below the candidate pool size so at least one model stays routable. */
@@ -382,6 +386,23 @@ export class MinimaAgent extends Agent {
         }
       }
     }
+    // Client-side classification (MINIMA_TUI_CLASSIFY=1): one cheap completion labels
+    // this prompt before routing — interactive LEAD prompts only (children, the scribe,
+    // and the judge never route through here with agentId===null), and only when the
+    // caller supplied no explicit taskType. Computed once per prompt; every ladder rung
+    // reuses it. Below the confidence floor the override is dropped entirely (the
+    // server's heuristic classification applies). Fail-open throughout.
+    let classifiedType: string | null = null;
+    let classifiedDifficulty: string | null = null;
+    let classifiedConfidence: number | null = null;
+    if (this.config.classify && this.classifier && this.agentId === null && !effectiveTaskType) {
+      const cls = await this.classifier.classify(content);
+      if (cls && cls.confidence >= CLASSIFY_CONFIDENCE_FLOOR) {
+        classifiedType = cls.taskType;
+        classifiedDifficulty = opts.difficulty ? null : cls.difficulty;
+        classifiedConfidence = cls.confidence;
+      }
+    }
     try {
       // Recovery ladder: walk SERVER-SUPPLIED rungs (fresh recommend per rung with the
       // failed model excluded — never a client-side re-rank, which would corrupt the
@@ -415,10 +436,11 @@ export class MinimaAgent extends Agent {
         let routing: RoutingResult | null;
         try {
           routing = await this.route(content, {
-            taskType: effectiveTaskType ?? null,
+            taskType: effectiveTaskType ?? classifiedType,
             slider: opts.slider ?? null,
             tags: routeTags,
-            difficulty: opts.difficulty,
+            difficulty: opts.difficulty ?? classifiedDifficulty ?? undefined,
+            taskTypeConfidence: classifiedConfidence ?? undefined,
             // The remaining budget rides into the server as a (soft) per-call cost cap.
             maxCostPerCall: opts.maxCostPerCall ?? this.budget?.maxCostPerCall(),
             minQuality: opts.minQuality,
@@ -858,6 +880,7 @@ export class MinimaAgent extends Agent {
       slider: number | null;
       tags: string[] | undefined;
       difficulty?: string;
+      taskTypeConfidence?: number;
       maxCostPerCall?: number;
       minQuality?: number;
       excludedModels?: string[];
@@ -906,6 +929,7 @@ export class MinimaAgent extends Agent {
         // carry it, so planning/execution/sub-task work stops collapsing into one pool.
         tags: opts.tags ?? ["phase:interactive"],
         difficulty: opts.difficulty,
+        taskTypeConfidence: opts.taskTypeConfidence,
         // The live context IS the input the chosen model will read — the server's cost
         // estimate is only truthful when it knows the real prompt size.
         expectedInputTokens: this.estimateContextTokens(taskText),
