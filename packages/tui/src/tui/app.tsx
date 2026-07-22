@@ -47,18 +47,21 @@ import {
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
+  type InterviewState,
   PlanSessionStore,
   type RoutingResult,
   buildPlanTranscript,
   buildPlannerSystemPrompt,
   finalizePlan,
   formatDreamReport,
+  newInterviewState,
   parseProfileCandidates,
   planModeRoutingOpts,
   resolvePlanModels,
   runCouncilRound,
   runDream,
   runKeeperMiniUpdate,
+  runPlanInterview,
   runPlanTurn,
 } from "../minima/index.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
@@ -1005,6 +1008,8 @@ export function HarnessApp({
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
   // big-plan .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
+  // Plan interview (opt-in): per-plan-session question budget (≤3), reset with the session.
+  const interviewStateRef = useRef<InterviewState>(newInterviewState());
   // Session-identity counter (transcriptGen pattern): the session lives in a ref, so effects
   // that must re-run when it is replaced (exit_plan registration) key on this instead. The
   // load-bearing case is /plan recovering a session while the mode is ALREADY "plan" —
@@ -1042,6 +1047,7 @@ export function HarnessApp({
     (goal: string) => {
       setMode("plan");
       planSessionRef.current = new PlanSessionStore(goal);
+      interviewStateRef.current = newInterviewState();
       setPlanSessionGen((g) => g + 1);
       // Snapshot the base prompt only once per plan session — re-entering (e.g. /plan
       // start while already planning) must not overwrite the snapshot with the planner
@@ -4029,6 +4035,26 @@ export function HarnessApp({
       budget: agent.budget,
       meter: agent.meter,
       roundBudgetUsd: agent.config.planRoundBudgetUsd,
+      // Plan interview (opt-in, MINIMA_TUI_INTERVIEW=1): wired ONLY when the flag is on,
+      // so the default path's plan turn is byte-identical to before.
+      runInterview: agent.config.interview
+        ? (o) =>
+            runPlanInterview(interviewStateRef.current, {
+              enabled: true,
+              askUser: askUserRef?.current ?? null,
+              store,
+              db: agent.db,
+              projectKey:
+                agent.db && agent.runId
+                  ? (agent.db.getRun(agent.runId)?.project_key ?? null)
+                  : null,
+              repoDir: process.cwd(),
+              signal: o.signal,
+              onNote: (note) =>
+                setMessages((m) => [...m, { role: "tool", toolName: "council", text: note }]),
+              onProfileWrite: () => agent.invalidateRoutingProfile(),
+            })
+        : undefined,
       // MP15: on non-council turns the keeper folds the planner's just-committed reply
       // into the draft so the Ctrl+G draft view never stales between councils.
       runMiniUpdate: async (session, turn, o) => {

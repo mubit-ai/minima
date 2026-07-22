@@ -60,6 +60,9 @@ export interface PlanTurnDeps {
   meter?: CostMeter | null;
   /** Per-round soft cap in USD (config.planRoundBudgetUsd). */
   roundBudgetUsd?: number;
+  /** Plan interview (opt-in): runs after a convened round has presented SYNTH's own
+   *  decision-point questions, reusing the same overlay. Absent = inert (default path). */
+  runInterview?: (o: { signal: AbortSignal }) => Promise<void>;
 }
 
 export async function runPlanTurn(
@@ -216,6 +219,20 @@ async function conveneCouncil(
     if (controller.signal.aborted) {
       deps.onNote("(plan turn aborted — planner not called)");
       return false;
+    }
+    // Plan interview (opt-in): right after the round's own decision-points were
+    // presented, so the council never re-asks what the interview covers and vice versa.
+    // Fail-open — a broken interview never costs the planner reply.
+    if (deps.runInterview && deps.askUser) {
+      try {
+        await deps.runInterview({ signal: controller.signal });
+      } catch {
+        // interview is strictly additive
+      }
+      if (controller.signal.aborted) {
+        deps.onNote("(plan turn aborted — planner not called)");
+        return false;
+      }
     }
     return true;
   } catch (exc) {

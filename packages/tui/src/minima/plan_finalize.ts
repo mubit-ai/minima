@@ -74,6 +74,30 @@ export type PlanFinalizeOutcome =
       criticFlags: string[] | null;
     };
 
+/**
+ * Fill verify-less synthesized steps with the USER-confirmed interview commands (fills
+ * gaps only — an authored verify is never overwritten, mirroring attachAutoGates). Non-
+ * last steps get the first command (fast feedback in-loop); the last step gets ALL of
+ * them joined, so the done-gate ends the plan on the complete confirmed check set.
+ * Returns the 1-based step numbers touched.
+ */
+export function applyUserVerifies<T extends { verify: string }>(
+  steps: T[],
+  verifies: string[],
+): { steps: T[]; attached: number[] } {
+  const clean = verifies.map((v) => v.trim()).filter(Boolean);
+  if (clean.length === 0) return { steps, attached: [] };
+  const attached: number[] = [];
+  const out = steps.map((st, i) => {
+    if (st.verify.trim()) return st;
+    const isLast = i === steps.length - 1;
+    const pick = isLast ? clean.join(" && ") : clean[0]!;
+    attached.push(i + 1);
+    return { ...st, verify: pick };
+  });
+  return { steps: out, attached };
+}
+
 /** The planning conversation as a labelled transcript (user/planner turns only). */
 export function buildPlanTranscript(messages: Message[]): string {
   return messages
@@ -136,6 +160,22 @@ export async function finalizePlan(
         "Finalize aborted before the Big Plan was written — plan mode stays ON. " +
         "Run /plan finalize (or approve exit_plan again) to retry.",
     };
+  }
+
+  // Plan-interview verifies: the commands the USER confirmed in the interview fill
+  // verify-less steps FIRST — user-confirmed outranks mined, and both ride the same
+  // MP18 consent event (plan approval). Applied before the audit/doc/critic/seed so
+  // everything downstream sees them; seedPlanFromSteps stamps check_origin='user'.
+  let interviewNote = "";
+  if (synth && synth.approach.length > 0) {
+    const userVerifies = store.session.userVerifies ?? [];
+    if (userVerifies.length > 0) {
+      const applied = applyUserVerifies(synth.approach, userVerifies);
+      if (applied.attached.length > 0) {
+        synth.approach = applied.steps;
+        interviewNote = `\n\n🎤 Interview checks: attached your confirmed command(s) to step(s) ${applied.attached.join(", ")}. Approving the plan approves these commands.`;
+      }
+    }
   }
 
   // E3 auto-gates: fill verify-less steps with the repo's OWN check commands (mined from
@@ -233,6 +273,7 @@ export async function finalizePlan(
 
   const auditNote =
     (auditFindings.length > 0 ? `\n\n${formatFindings(auditFindings)}` : "") +
+    interviewNote +
     autoGateNote +
     formatCriticNote(criticFlags);
   return {
