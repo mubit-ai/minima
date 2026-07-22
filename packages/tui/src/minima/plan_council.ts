@@ -58,6 +58,10 @@ export interface CouncilOptions {
   /** Realized spend of every off-routing meta complete() (0 on throw/fallback). The round
    *  already folds meta spend into result.costUsd; this hook is for external capture. */
   onCostUsd?: (usd: number) => void;
+  /** Bounded task-type × model scoreboard rendering (scoreboard.ts) injected into the
+   *  SYNTH stage as harness-derived DATA, so the planner can ground model choices in
+   *  observed outcomes. Absent/empty = no injection. */
+  scoreboard?: string;
   apiKey?: string;
   /** Injectable for tests; DEFAULT = createSpawn({ parent, workdir, onChildEvent }). */
   spawn?: SpawnFn;
@@ -573,7 +577,12 @@ async function synthesize(
   faults: Fault[],
   opts: CouncilOptions,
 ): Promise<SynthOutput> {
+  // The scoreboard is harness-derived ledger data (never model/repo/web text) — injected
+  // as-is, bounded by the caller via renderScoreboardContext.
+  const scoreboard = opts.scoreboard?.trim();
   const user = `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>\n\n<user>\n${midTruncate(userTurn, 4000)}\n</user>\n\n<approach>\n${fenced(draft, 6000)}\n</approach>\n\n<findings>\n${fenced(digest, 4000)}\n</findings>\n\n${
+    scoreboard ? `${scoreboard}\n\n` : ""
+  }${
     keeperFindings.length
       ? `Keeper flags:\n<flags>\n${keeperFindings.map((f) => `- ${fenceUntrusted(f.summary)}`).join("\n")}\n</flags>\n\n`
       : ""

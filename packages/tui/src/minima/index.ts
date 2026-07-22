@@ -115,6 +115,16 @@ export {
   type PlanInterviewDeps,
 } from "./plan_interview.ts";
 export {
+  taskTypeScoreboard,
+  runTaskTypes,
+  renderScoreboardTable,
+  renderScoreboardContext,
+  scoreboardAdvisories,
+  SCOREBOARD_MIN_N,
+  SCOREBOARD_CONTEXT_CAP_CHARS,
+  type ScoreboardCell,
+} from "./scoreboard.ts";
+export {
   runPlanCritic,
   parseCriticFlags,
   buildCriticPrompt,
