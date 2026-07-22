@@ -90,7 +90,26 @@ describe("SessionStore", () => {
 });
 
 describe("SessionManager", () => {
-  test("new creates a file under the cwd-slug dir; open resumes most-recent", async () => {
+  // MUB-168 boot contract: a plain `minima` must NEVER attach to a prior session. Resuming
+  // is always explicit — an id (--resume//resume) or the resumeMostRecent opt-in.
+  test("open without an id starts a NEW session, never the most-recent one", async () => {
+    const base = freshDir();
+    const mgr = new SessionManager(base);
+    const cwd = "/tmp/project-x";
+    const s1 = await mgr.new(cwd);
+    await s1.append("user", { text: "first" });
+
+    const opened = await mgr.open(cwd);
+    expect(opened.entries).toHaveLength(0);
+    await opened.append("user", { text: "unrelated" });
+    expect(await mgr.listSessions(cwd)).toHaveLength(2);
+    const reloaded = await SessionStore.fileBacked((await mgr.mostRecent(cwd))!.path);
+    expect(reloaded.entries.map((e) => (e.payload as { text?: string }).text)).not.toContain(
+      "first",
+    );
+  });
+
+  test("new creates a file under the cwd-slug dir; resumeMostRecent opts in to most-recent", async () => {
     const base = freshDir();
     const mgr = new SessionManager(base);
     const cwd = "/tmp/project-x";
@@ -106,8 +125,16 @@ describe("SessionManager", () => {
     const recent = await mgr.mostRecent(cwd);
     expect(recent).not.toBeNull();
 
-    const resumed = await mgr.open(cwd);
+    const resumed = await mgr.open(cwd, { resumeMostRecent: true });
     expect(resumed.entries.map((e) => (e.payload as { text?: string }).text)).toContain("second");
+  });
+
+  test("resumeMostRecent with no prior sessions falls back to a new session", async () => {
+    const base = freshDir();
+    const mgr = new SessionManager(base);
+    const s = await mgr.open("/tmp/project-y", { resumeMostRecent: true });
+    expect(s.persistent).toBe(true);
+    expect(s.entries).toHaveLength(0);
   });
 
   test("open with noSession returns an in-memory store", async () => {

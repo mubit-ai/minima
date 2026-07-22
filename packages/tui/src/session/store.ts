@@ -206,9 +206,14 @@ export class SessionManager {
     return SessionStore.fileBacked(path, name ?? null);
   }
 
+  /**
+   * Boot contract (MUB-168): without an explicit `sessionId` this starts a NEW session —
+   * a plain `minima` must never attach to a prior one. Resuming the most-recent session
+   * is the /resume path's explicit opt-in via `resumeMostRecent`.
+   */
   async open(
     directory: string,
-    opts: { sessionId?: string; noSession?: boolean } = {},
+    opts: { sessionId?: string; noSession?: boolean; resumeMostRecent?: boolean } = {},
   ): Promise<SessionStore> {
     if (opts.noSession) return SessionStore.inMemory();
     if (opts.sessionId) {
@@ -220,8 +225,10 @@ export class SessionManager {
       }
       throw new Error(`no session matching id: ${opts.sessionId}`);
     }
-    const recent = await this.mostRecent(directory);
-    if (recent) return SessionStore.fileBacked(recent.path, recent.displayName);
+    if (opts.resumeMostRecent) {
+      const recent = await this.mostRecent(directory);
+      if (recent) return SessionStore.fileBacked(recent.path, recent.displayName);
+    }
     return this.new(directory);
   }
 
