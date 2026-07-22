@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { type AgentMode, bundleForMode } from "../agent/modes.ts";
+import { type AgentMode, bundleForMode, enableBypass } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
@@ -183,6 +183,17 @@ export function createPermissionState(
   };
 }
 
+/**
+ * "Finalize & auto-accept edits" landing (MUB-179): approving a plan with auto-accept is
+ * consent to work the project — in-cwd reads run silent (out-of-cwd reads still prompt)
+ * and bypass joins the Shift+Tab ring for the rest of the process. The mode is NOT
+ * switched to bypass, and bypass stays never-persisted (mode_prefs.ts).
+ */
+export function finalizeAutoAcceptLanding(state: PermissionState): void {
+  state.allowedDirs.add(state.cwd);
+  enableBypass();
+}
+
 function extractPath(args: Record<string, unknown>): string | null {
   return (args.path ?? args.file_path ?? args.file ?? ".") as string;
 }
@@ -287,12 +298,17 @@ export function checkPermission(
     // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
     // command (baseline capture + done-gate), so a stored "always" only covers verify commands
     // the user has already seen — a call carrying a new or changed verify re-prompts.
+    // Second exception (MUB-178): edit-family grants are cwd-scoped — an out-of-cwd target
+    // re-prompts in EVERY mode (the grant stays valid for in-cwd targets), so a session
+    // "Always write" can never defeat accept-edits' cwd fallback by short-circuit ordering.
     if (state.allowAlways.has(toolName)) {
       const newVerify =
         toolName === "todowrite" &&
         state.bigPlan &&
         verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
-      if (!newVerify) return Promise.resolve(null);
+      const outsideCwd =
+        EDIT_FAMILY.has(toolName) && !editTargetsWithinCwd(toolName, args, state.cwd);
+      if (!newVerify && !outsideCwd) return Promise.resolve(null);
     }
 
     // Persisted per-command grants (bash only): silent when every segment family was

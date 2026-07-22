@@ -140,6 +140,7 @@ import {
   type PermissionPrompt,
   type PermissionState,
   createPermissionState,
+  finalizeAutoAcceptLanding,
   formatActionLabel,
   makeModeGatedBeforeToolCall,
   modeAutoApproves,
@@ -1173,6 +1174,7 @@ export function HarnessApp({
       // Approval here is just the mode flip back to full tool access.
       if (planSessionRef.current == null) {
         setMode(landing);
+        if (autoAcceptEdits) finalizeAutoAcceptLanding(permStateRef.current);
         return {
           ok: true,
           message: `Plan approved — plan mode is OFF and full tool access is restored. Begin implementing the approved plan now.${landingNote}`,
@@ -1184,7 +1186,10 @@ export function HarnessApp({
       }
       if (outcome.kind !== "ok") return { ok: false, message: outcome.message };
       exitPlanMode();
-      if (autoAcceptEdits) setMode("acceptEdits");
+      if (autoAcceptEdits) {
+        setMode("acceptEdits");
+        finalizeAutoAcceptLanding(permStateRef.current);
+      }
       setMessages((m) => [
         ...m,
         { role: "tool", text: outcome.md, toolName: "plan" },

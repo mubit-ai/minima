@@ -156,6 +156,16 @@ describe("exit_plan tool (model-callable plan-mode exit)", () => {
   });
 });
 
+describe("MUB-179 — auto-accept landing wiring (source pin)", () => {
+  test("both exitPlanFinalize paths (sessionless + store) apply the landing", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    const hits = src.match(/finalizeAutoAcceptLanding\(permStateRef\.current\)/g) ?? [];
+    expect(hits).toHaveLength(2);
+  });
+});
+
 describe("MP17 — universal exit gate (Big Plan-off plan argument)", () => {
   test("Big Plan-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => true });
