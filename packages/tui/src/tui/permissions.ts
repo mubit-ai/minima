@@ -287,12 +287,17 @@ export function checkPermission(
     // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
     // command (baseline capture + done-gate), so a stored "always" only covers verify commands
     // the user has already seen — a call carrying a new or changed verify re-prompts.
+    // Second exception (MUB-178): edit-family grants are cwd-scoped — an out-of-cwd target
+    // re-prompts in EVERY mode (the grant stays valid for in-cwd targets), so a session
+    // "Always write" can never defeat accept-edits' cwd fallback by short-circuit ordering.
     if (state.allowAlways.has(toolName)) {
       const newVerify =
         toolName === "todowrite" &&
         state.bigPlan &&
         verifyCommands(args).some((v) => !state.approvedVerifies.has(v));
-      if (!newVerify) return Promise.resolve(null);
+      const outsideCwd =
+        EDIT_FAMILY.has(toolName) && !editTargetsWithinCwd(toolName, args, state.cwd);
+      if (!newVerify && !outsideCwd) return Promise.resolve(null);
     }
 
     // Persisted per-command grants (bash only): silent when every segment family was

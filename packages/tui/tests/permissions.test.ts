@@ -539,6 +539,121 @@ describe("editTargetsWithinCwd (cwd-scoped accept-edits auto)", () => {
   });
 });
 
+describe("MUB-178 — edit-family always grants are cwd-scoped", () => {
+  // A session "Always allow write" grant must not defeat the cwd scope: the acceptEdits
+  // hook correctly falls back to checkPermission for an out-of-cwd target, but the
+  // allowAlways short-circuit used to wave it through with no path check.
+  test("always-write grant + out-of-cwd write → prompts", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("write");
+    let prompted = false;
+    const res = await checkPermission(
+      "write",
+      { path: "/tmp/m2-escape.txt", content: "x" },
+      state,
+      (p) => {
+        prompted = true;
+        p.resolve("deny");
+      },
+    );
+    expect(prompted).toBe(true);
+    expect(res?.block).toBe(true);
+  });
+
+  test("in-cwd write with the grant stays silent", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("write");
+    let prompted = false;
+    const res = await checkPermission("write", { path: "src/a.ts", content: "x" }, state, () => {
+      prompted = true;
+    });
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
+  });
+
+  test("edit and apply_patch grants are scoped the same way", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("edit");
+    state.allowAlways.add("apply_patch");
+    const outEdit = await checkPermission(
+      "edit",
+      { filePath: "../outside.ts", old_string: "a", new_string: "b" },
+      state,
+      (p) => p.resolve("deny"),
+    );
+    expect(outEdit?.block).toBe(true);
+    const outPatch = "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
+    const outApply = await checkPermission("apply_patch", { patch: outPatch }, state, (p) =>
+      p.resolve("deny"),
+    );
+    expect(outApply?.block).toBe(true);
+    let prompted = false;
+    const inEdit = await checkPermission(
+      "edit",
+      { filePath: "src/a.ts", old_string: "a", new_string: "b" },
+      state,
+      () => {
+        prompted = true;
+      },
+    );
+    expect(inEdit).toBeNull();
+    expect(prompted).toBe(false);
+  });
+
+  test("an 'always' answer on the out-of-cwd prompt does not silence the next escape", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("write");
+    let prompts = 0;
+    await checkPermission("write", { path: "/tmp/a.txt", content: "x" }, state, (p) => {
+      prompts++;
+      p.resolve("always");
+    });
+    await checkPermission("write", { path: "/tmp/b.txt", content: "x" }, state, (p) => {
+      prompts++;
+      p.resolve("deny");
+    });
+    expect(prompts).toBe(2);
+  });
+
+  test("bash grants are unaffected (family and whole-tool)", async () => {
+    const state = createPermissionState("/repo");
+    state.bashGrants.add("pip");
+    let prompted = false;
+    const family = await checkPermission("bash", { command: "pip install ." }, state, () => {
+      prompted = true;
+    });
+    expect(family).toBeNull();
+    const whole = createPermissionState("/repo");
+    whole.allowAlways.add("bash");
+    const res = await checkPermission("bash", { command: "echo `date`" }, whole, () => {
+      prompted = true;
+    });
+    expect(res).toBeNull();
+    expect(prompted).toBe(false);
+  });
+
+  test("build mode: out-of-cwd write with the grant prompts through the mode hook", async () => {
+    const state = createPermissionState("/repo");
+    state.allowAlways.add("write");
+    let prompted = false;
+    const hook = makeModeGatedBeforeToolCall({
+      state,
+      promptFn: (p) => {
+        prompted = true;
+        p.resolve("deny");
+      },
+      getBundle: () => BUILD_BUNDLE,
+    });
+    const res = await hook({
+      toolCall: { type: "toolCall", id: "tc-3", name: "write", arguments: {} },
+      args: { path: "/tmp/m2-escape.txt", content: "x" },
+      context: {} as AgentState,
+    } as never);
+    expect(prompted).toBe(true);
+    expect(res?.block).toBe(true);
+  });
+});
+
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
   test("Big Plan off: the historical array plus task (the approved default-path bypass fix)", () => {
     // Deliberate default-path change: a spawned child gets its own unrestricted toolset with
