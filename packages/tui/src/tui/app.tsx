@@ -53,6 +53,7 @@ import {
   buildPlannerSystemPrompt,
   finalizePlan,
   formatDreamReport,
+  parseProfileCandidates,
   planModeRoutingOpts,
   resolvePlanModels,
   runCouncilRound,
@@ -326,6 +327,10 @@ const COMMANDS = [
   {
     name: "memory",
     desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
+  },
+  {
+    name: "profile",
+    desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
 ];
 
@@ -2536,6 +2541,164 @@ export function HarnessApp({
           "usage: /memory [list] · add <text> · pin|confirm|reject|delete <n|id>\nCurated cross-session memory for this repo — active + pinned entries are injected into the system prompt each turn.",
           true,
         );
+        break;
+      }
+      case "profile": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "profile", isError }]);
+        const db = agent.db;
+        const run = db && agent.runId ? db.getRun(agent.runId) : null;
+        if (!db || !run) {
+          say("profile unavailable — no persistence for this session");
+          break;
+        }
+        const projectKey = run.project_key;
+        const usage =
+          "usage: /profile [show] · set slider|min_quality|max_cost_per_call <n> · set candidates <id,id> · set pool.<taskType> <id,id> · clear\nPer-repo routing preferences applied to every routed prompt (explicit per-call opts > profile > config default).";
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const sub = (parts[0] ?? "show").toLowerCase();
+        if (sub === "show") {
+          const row = db.getRoutingProfile(projectKey);
+          const events = db.listProfileEvents(projectKey, 200);
+          const lastFor = (field: string) => events.find((e) => e.field === field);
+          const stamp = (field: string) => {
+            const e = lastFor(field);
+            if (!e) return "";
+            const when = e.ts ? new Date(e.ts * 1000).toLocaleString() : "?";
+            return ` — set by ${e.source ?? "?"} ${when}`;
+          };
+          const line = (label: string, profVal: string | null, confVal: string, field: string) =>
+            profVal !== null
+              ? `  ${label.padEnd(18)} ${profVal}  (profile${stamp(field)})`
+              : `  ${label.padEnd(18)} ${confVal}  (config default)`;
+          const lines = [
+            `Routing profile for ${projectKey}:`,
+            line(
+              "slider",
+              row?.slider != null ? String(row.slider) : null,
+              String(agent.config.costQualityTradeoff),
+              "slider",
+            ),
+            line(
+              "min_quality",
+              row?.min_quality != null ? String(row.min_quality) : null,
+              "(none)",
+              "min_quality",
+            ),
+            line(
+              "max_cost_per_call",
+              row?.max_cost_per_call != null ? `$${row.max_cost_per_call}` : null,
+              "(none)",
+              "max_cost_per_call",
+            ),
+            line(
+              "candidates",
+              parseProfileCandidates(row)?.join(", ") ?? null,
+              agent.config.candidates.join(", "),
+              "candidates",
+            ),
+          ];
+          let pools: Record<string, { candidates?: string[] }> = {};
+          try {
+            pools = row?.per_task_type ? JSON.parse(row.per_task_type) : {};
+          } catch {
+            pools = {};
+          }
+          for (const [t, entry] of Object.entries(pools)) {
+            lines.push(
+              `  ${`pool.${t}`.padEnd(18)} ${(entry.candidates ?? []).join(", ")}  (profile${stamp("per_task_type")})`,
+            );
+          }
+          lines.push(
+            "",
+            "Explicit per-call opts always win; the profile overrides config defaults.",
+            "/profile set <field> <value> · set pool.<taskType> <id,id> · clear",
+          );
+          say(lines.join("\n"));
+          break;
+        }
+        if (sub === "set") {
+          const field = (parts[1] ?? "").toLowerCase();
+          const value = args.trim().replace(/^set\s+\S+\s*/i, "");
+          if (!field || !value) {
+            say(usage, true);
+            break;
+          }
+          const numeric: Record<
+            string,
+            {
+              key: "slider" | "minQuality" | "maxCostPerCall";
+              ok: (n: number) => boolean;
+              hint: string;
+            }
+          > = {
+            slider: { key: "slider", ok: (n) => n >= 0 && n <= 10, hint: "0–10" },
+            min_quality: { key: "minQuality", ok: (n) => n >= 0 && n <= 1, hint: "0–1" },
+            max_cost_per_call: { key: "maxCostPerCall", ok: (n) => n > 0, hint: "> 0 (USD)" },
+          };
+          if (numeric[field]) {
+            const n = Number(value);
+            if (!Number.isFinite(n) || !numeric[field].ok(n)) {
+              say(`${field} must be a number ${numeric[field].hint}`, true);
+              break;
+            }
+            db.upsertRoutingProfile(projectKey, { [numeric[field].key]: n }, "user");
+            agent.invalidateRoutingProfile();
+            say(`profile updated: ${field} = ${n}`);
+            break;
+          }
+          if (field === "candidates") {
+            const ids = value
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            if (ids.length === 0) {
+              say("usage: /profile set candidates <id,id,...>", true);
+              break;
+            }
+            db.upsertRoutingProfile(projectKey, { candidates: ids }, "user");
+            agent.invalidateRoutingProfile();
+            say(`profile updated: candidates = ${ids.join(", ")}`);
+            break;
+          }
+          if (field.startsWith("pool.") && field.length > 5) {
+            const taskType = field.slice(5);
+            const ids = value
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            if (ids.length === 0) {
+              say(`usage: /profile set pool.${taskType} <id,id,...>`, true);
+              break;
+            }
+            const row = db.getRoutingProfile(projectKey);
+            let map: Record<string, { candidates: string[]; minQuality?: number }> = {};
+            try {
+              map = row?.per_task_type ? JSON.parse(row.per_task_type) : {};
+            } catch {
+              map = {};
+            }
+            map[taskType] = { ...(map[taskType] ?? {}), candidates: ids };
+            db.upsertRoutingProfile(projectKey, { perTaskType: map }, "user");
+            agent.invalidateRoutingProfile();
+            say(`profile updated: pool.${taskType} = ${ids.join(", ")}`);
+            break;
+          }
+          say(usage, true);
+          break;
+        }
+        if (sub === "clear") {
+          const removed = db.clearRoutingProfile(projectKey, "user");
+          agent.invalidateRoutingProfile();
+          say(
+            removed
+              ? "profile cleared — routing falls back to config defaults (audit event kept)."
+              : "no profile set for this repo.",
+          );
+          break;
+        }
+        say(usage, true);
         break;
       }
       case "rewind": {

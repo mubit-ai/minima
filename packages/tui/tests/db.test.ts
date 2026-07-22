@@ -123,7 +123,9 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v12 memory ledger (memories/memory_events/memory_jobs)
     // + v13 version stamps (harness_version/tool_schema_hash) + tool_calls.result_ref
     // + v14 canonical Big Plan outcome columns
-    expect(db.schemaVersion).toBe(14);
+    // + routing profiles (routing_profiles/profile_events; exact batch number floats
+    //   until the parallel migration stacks settle — the table checks below pin content)
+    expect(db.schemaVersion).toBeGreaterThanOrEqual(14);
     for (const t of [
       "projects",
       "runs",
@@ -140,6 +142,8 @@ describe("MinimaDb schema + lifecycle", () => {
       "memories",
       "memory_events",
       "memory_jobs",
+      "routing_profiles",
+      "profile_events",
     ]) {
       expect(db.db.query(`SELECT count(*) AS n FROM ${t}`).get()).toEqual({ n: 0 });
     }

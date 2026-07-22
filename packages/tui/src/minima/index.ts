@@ -31,6 +31,12 @@ export {
 export type { QualityJudge } from "./judge.ts";
 export { MinimaRouter, type RoutingResult, type Ranking } from "./router.ts";
 export {
+  parseProfileCandidates,
+  perTaskTypeEntry,
+  resolveProfilePool,
+  minDefinedCap,
+} from "./routing_profile.ts";
+export {
   MinimaAgent,
   gradeOutcome,
   stepOutcomesFromGates,

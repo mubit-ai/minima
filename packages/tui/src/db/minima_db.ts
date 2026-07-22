@@ -364,6 +364,34 @@ const MIGRATIONS: string[][] = [
          AND big_plan_verified_by IS NULL
          AND big_plan_confidence IS NULL`,
   ],
+  // per-repo routing profiles (batch position may shift at rebase if other migration PRs
+  // land first — append-only discipline: renumber unmerged, never edit shipped batches).
+  // `routing_profiles` is one row of learned/asked routing preferences per project — the
+  // knobs applied at route time with precedence explicit opts > profile > config default.
+  // `profile_events` is the append-only audit trail, one row PER CHANGED FIELD, mirroring
+  // the memories/memory_events pattern.
+  [
+    `CREATE TABLE IF NOT EXISTS routing_profiles (
+       project_key       TEXT PRIMARY KEY,
+       slider            REAL,             -- cost/quality tradeoff (NULL = config default)
+       min_quality       REAL,
+       max_cost_per_call REAL,
+       candidates        TEXT,             -- JSON string[]: the default candidate pool
+       per_task_type     TEXT,             -- JSON map taskType -> {candidates, minQuality?}
+       source            TEXT CHECK(source IN ('interview','user','tuner')),
+       updated_at        INTEGER
+     )`,
+    `CREATE TABLE IF NOT EXISTS profile_events (
+       id          INTEGER PRIMARY KEY AUTOINCREMENT,
+       project_key TEXT NOT NULL,
+       ts          INTEGER,
+       source      TEXT,
+       field       TEXT,
+       old_value   TEXT,
+       new_value   TEXT
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_profile_events_project ON profile_events(project_key, ts)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -540,6 +568,47 @@ export interface MemoryJobRow {
   not_before: number | null;
   created: number;
   updated: number;
+}
+
+// ---------------------------------------------------------------- routing profiles
+export type RoutingProfileSource = "interview" | "user" | "tuner";
+
+export interface RoutingProfileRow {
+  project_key: string;
+  slider: number | null;
+  min_quality: number | null;
+  max_cost_per_call: number | null;
+  /** JSON string[] — the default candidate pool (NULL = config default). */
+  candidates: string | null;
+  /** JSON map taskType -> { candidates: string[], minQuality?: number }. */
+  per_task_type: string | null;
+  source: RoutingProfileSource | null;
+  updated_at: number | null;
+}
+
+export interface ProfileEventRow {
+  id: number;
+  project_key: string;
+  ts: number | null;
+  source: string | null;
+  field: string | null;
+  old_value: string | null;
+  new_value: string | null;
+}
+
+/** One per-task-type override inside a profile's per_task_type map. */
+export interface PerTaskTypePool {
+  candidates: string[];
+  minQuality?: number;
+}
+
+/** Partial-patch input: only provided fields change; explicit null clears a field. */
+export interface RoutingProfilePatch {
+  slider?: number | null;
+  minQuality?: number | null;
+  maxCostPerCall?: number | null;
+  candidates?: string[] | null;
+  perTaskType?: Record<string, PerTaskTypePool> | null;
 }
 
 /** One gate row joined to its step + owning run — the scribe's mining substrate. */
@@ -1603,6 +1672,121 @@ export class MinimaDb {
       )
       .get(runId) as { n: number };
     return row.n;
+  }
+
+  // ================================================================ routing profiles
+
+  getRoutingProfile(projectKey: string): RoutingProfileRow | null {
+    return (
+      (this.db
+        .query("SELECT * FROM routing_profiles WHERE project_key = ?")
+        .get(projectKey) as RoutingProfileRow) ?? null
+    );
+  }
+
+  /**
+   * Partial-patch upsert: only fields PRESENT on the patch change (explicit null clears);
+   * every changed field writes one profile_events audit row and stamps source/updated_at.
+   * An all-noop patch writes nothing (and creates no empty row — a row's existence is a
+   * signal, e.g. the interview's budget-question skip-gate). Returns the resulting row.
+   */
+  upsertRoutingProfile(
+    projectKey: string,
+    patch: RoutingProfilePatch,
+    source: RoutingProfileSource,
+  ): RoutingProfileRow | null {
+    const serializeList = (v: string[] | null): string | null =>
+      v && v.length > 0 ? JSON.stringify(v) : null;
+    const serializeMap = (v: Record<string, PerTaskTypePool> | null): string | null =>
+      v && Object.keys(v).length > 0 ? JSON.stringify(v) : null;
+    this.db.transaction(() => {
+      const prev = this.getRoutingProfile(projectKey);
+      const next = {
+        slider: patch.slider !== undefined ? patch.slider : (prev?.slider ?? null),
+        min_quality:
+          patch.minQuality !== undefined ? patch.minQuality : (prev?.min_quality ?? null),
+        max_cost_per_call:
+          patch.maxCostPerCall !== undefined
+            ? patch.maxCostPerCall
+            : (prev?.max_cost_per_call ?? null),
+        candidates:
+          patch.candidates !== undefined
+            ? serializeList(patch.candidates)
+            : (prev?.candidates ?? null),
+        per_task_type:
+          patch.perTaskType !== undefined
+            ? serializeMap(patch.perTaskType)
+            : (prev?.per_task_type ?? null),
+      };
+      const changed: [field: string, oldV: string | null, newV: string | null][] = [];
+      const cmp = (field: string, oldV: number | string | null, newV: number | string | null) => {
+        const o = oldV === null ? null : String(oldV);
+        const n = newV === null ? null : String(newV);
+        if (o !== n) changed.push([field, o, n]);
+      };
+      cmp("slider", prev?.slider ?? null, next.slider);
+      cmp("min_quality", prev?.min_quality ?? null, next.min_quality);
+      cmp("max_cost_per_call", prev?.max_cost_per_call ?? null, next.max_cost_per_call);
+      cmp("candidates", prev?.candidates ?? null, next.candidates);
+      cmp("per_task_type", prev?.per_task_type ?? null, next.per_task_type);
+      if (changed.length === 0) return;
+      const now = Math.floor(Date.now() / 1000);
+      this.db.run(
+        `INSERT INTO routing_profiles
+           (project_key, slider, min_quality, max_cost_per_call, candidates, per_task_type, source, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_key) DO UPDATE SET
+           slider = excluded.slider,
+           min_quality = excluded.min_quality,
+           max_cost_per_call = excluded.max_cost_per_call,
+           candidates = excluded.candidates,
+           per_task_type = excluded.per_task_type,
+           source = excluded.source,
+           updated_at = excluded.updated_at`,
+        [
+          projectKey,
+          next.slider,
+          next.min_quality,
+          next.max_cost_per_call,
+          next.candidates,
+          next.per_task_type,
+          source,
+          now,
+        ],
+      );
+      for (const [field, oldV, newV] of changed) {
+        this.db.run(
+          `INSERT INTO profile_events (project_key, ts, source, field, old_value, new_value)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [projectKey, now, source, field, oldV, newV],
+        );
+      }
+    })();
+    return this.getRoutingProfile(projectKey);
+  }
+
+  /** Delete the profile row + one `profile` audit event (old_value = the removed row). */
+  clearRoutingProfile(projectKey: string, source: RoutingProfileSource): boolean {
+    let removed = false;
+    this.db.transaction(() => {
+      const prev = this.getRoutingProfile(projectKey);
+      if (!prev) return;
+      this.db.run("DELETE FROM routing_profiles WHERE project_key = ?", [projectKey]);
+      this.db.run(
+        `INSERT INTO profile_events (project_key, ts, source, field, old_value, new_value)
+         VALUES (?, ?, ?, 'profile', ?, NULL)`,
+        [projectKey, Math.floor(Date.now() / 1000), source, JSON.stringify(prev)],
+      );
+      removed = true;
+    })();
+    return removed;
+  }
+
+  /** A project's profile audit trail, newest first (provenance for /profile show). */
+  listProfileEvents(projectKey: string, limit = 100): ProfileEventRow[] {
+    return this.db
+      .query("SELECT * FROM profile_events WHERE project_key = ? ORDER BY ts DESC, id DESC LIMIT ?")
+      .all(projectKey, limit) as ProfileEventRow[];
   }
 
   // ================================================================ Big Plan ledger
