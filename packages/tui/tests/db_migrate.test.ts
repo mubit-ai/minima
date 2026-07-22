@@ -102,7 +102,7 @@ describe("migration runner: self-heal", () => {
   });
 });
 
-describe("v14 Big Plan outcome migration", () => {
+describe("v14 big_plan_* outcome migration", () => {
   test("a fresh database has canonical and compatibility outcome columns", () => {
     const db = new MinimaDb(":memory:");
     const columns = db.db.query("PRAGMA table_info(routing_decisions)").all() as {

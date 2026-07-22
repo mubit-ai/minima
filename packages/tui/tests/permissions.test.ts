@@ -127,7 +127,7 @@ describe("formatToolArgs", () => {
 });
 
 describe("todowrite permission prompt surfaces verify commands", () => {
-  // With Big Plan on, approving a todowrite authorizes running each task's `verify` in
+  // With plan verification on, approving a todowrite authorizes running each task's `verify` in
   // the shell (done-gate + baseline capture). The exact commands must be VISIBLE in the
   // approval — never truncated out of a JSON summary (they used to be sliced away at 120
   // chars, letting a lying model run arbitrary shell off a blind approval).
@@ -165,9 +165,9 @@ describe("todowrite permission prompt surfaces verify commands", () => {
   });
 
   // "Always allow" on todowrite must never become a silent grant of unattended shell
-  // execution: with Big Plan on, a call carrying a verify the user has NOT yet seen
+  // execution: with plan verification on, a call carrying a verify the user has NOT yet seen
   // re-prompts even after [a]; verifies the user approved once pass through.
-  test("always-allow does not cover NEW verify commands (Big Plan on)", async () => {
+  test("always-allow does not cover NEW verify commands (plan verification on)", async () => {
     const state = createPermissionState("/repo", { bigPlan: true });
     const taskWith = (verify: string) =>
       JSON.stringify([{ content: "step", status: "pending", verify }]);
@@ -207,7 +207,7 @@ describe("todowrite permission prompt surfaces verify commands", () => {
     expect(blocked?.block).toBe(true);
   });
 
-  test("always-allow fully covers todowrite when Big Plan is off", async () => {
+  test("always-allow fully covers todowrite when plan verification is off", async () => {
     const state = createPermissionState("/repo");
     state.allowAlways.add("todowrite");
     const tasks = JSON.stringify([{ content: "s", status: "pending", verify: "anything" }]);
@@ -248,7 +248,7 @@ describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
     expect(before).toContain('<Text color="gray" wrap="truncate">');
   });
 
-  test("a real Big Plan todowrite preview round-trips through the helpers without hiding the verify", async () => {
+  test("a real plan-verification todowrite preview round-trips through the helpers without hiding the verify", async () => {
     const state = createPermissionState("/repo", { bigPlan: true });
     const tasks = JSON.stringify([
       {
@@ -655,26 +655,26 @@ describe("MUB-178 — edit-family always grants are cwd-scoped", () => {
 });
 
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
-  test("Big Plan off: the historical array plus task (the approved default-path bypass fix)", () => {
+  test("plan verification off: the historical array plus task (the approved default-path bypass fix)", () => {
     // Deliberate default-path change: a spawned child gets its own unrestricted toolset with
     // no permission hooks, so plan mode's read-only promise was bypassable by delegating.
     expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch", "task"]);
   });
 
-  test("Big Plan on: keeps the historical set and additionally blocks todowrite and task", () => {
+  test("plan verification on: keeps the historical set and additionally blocks todowrite and task", () => {
     const blocked = planModeBlockedTools(true);
     for (const t of planModeBlockedTools(false)) expect(blocked).toContain(t);
     expect(blocked).toContain("todowrite");
     expect(blocked).toContain("task");
   });
 
-  test("Big Plan-off block reasons steer to exit_plan (MP17: the gate registers Big Plan on OR off)", () => {
+  test("verification-off block reasons steer to exit_plan (MP17: the gate registers verification on OR off)", () => {
     expect(planModeBlockReason("write", false)).toContain(
       "Plan mode is ON — write/edit/bash/apply_patch are blocked.",
     );
     expect(planModeBlockReason("task", false)).toContain("task is blocked");
     expect(planModeBlockReason("task", false)).toContain("unrestricted toolset");
-    // Since the MP17 universal gate, exit_plan registers in plan mode with Big Plan on OR off —
+    // Since the MP17 universal gate, exit_plan registers in plan mode with plan verification on OR off —
     // the old "Use /plan to exit" copy pointed the model at a user-only slash command.
     for (const tool of ["write", "task"]) {
       expect(planModeBlockReason(tool, false)).toContain("call the exit_plan tool");
@@ -682,16 +682,16 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
     }
   });
 
-  test("Big Plan-on task reason explains hook-free children + council read-only delegation", () => {
+  test("verification-on task reason explains hook-free children + council read-only delegation", () => {
     const reason = planModeBlockReason("task", true);
     expect(reason).toContain("task is blocked");
     expect(reason).toContain("unrestricted toolset");
     expect(reason).toContain("read-only");
-    // Other Big Plan-on tools keep the general plan-mode copy naming the verify hazard.
+    // Other verification-on tools keep the general plan-mode copy naming the verify hazard.
     expect(planModeBlockReason("todowrite", true)).toContain("`verify` shell checks");
   });
 
-  test("Big Plan-on reasons steer the model to exit_plan, never to user-only slash commands", () => {
+  test("verification-on reasons steer the model to exit_plan, never to user-only slash commands", () => {
     for (const tool of ["write", "todowrite", "task"]) {
       const reason = planModeBlockReason(tool, true);
       expect(reason).toContain("call the exit_plan tool");

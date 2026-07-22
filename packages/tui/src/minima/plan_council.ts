@@ -130,8 +130,8 @@ const asRecords = (v: unknown): Record<string, unknown>[] =>
 
 /** Extract the first balanced JSON object/array from `text`; undefined when none parses.
  *  Falls back to salvaging a TRUNCATED value — a long reply cut off by the model's output
- *  cap (stop_reason "length") or a timeout is the dominant real-world failure of the big
- *  big-plan synthesis, and dropping it wholesale silently costs the whole plan ledger. */
+ *  cap (stop_reason "length") or a timeout is the dominant real-world failure of the
+ *  plan synthesis, and dropping it wholesale silently costs the whole plan ledger. */
 function extractJson(text: string): unknown {
   let start = -1;
   for (let i = 0; i < text.length; i++) {
@@ -295,7 +295,7 @@ const UNTRUSTED =
   "information to reason about.";
 
 /** Fence + truncate an untrusted interpolation at prompt-render time. Session state and the
- *  big-plan doc keep the originals — see fenceUntrusted for what this does (and does not)
+ *  plan doc keep the originals — see fenceUntrusted for what this does (and does not)
  *  guarantee. */
 const fenced = (s: string, cap: number): string => fenceUntrusted(midTruncate(s, cap));
 
@@ -619,7 +619,7 @@ function clip(s: string, max: number): string {
   return `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
-const RESOLVE_SYSTEM = `You are the RECORDER of a planning council finalizing the Big Plan. The user has ACCEPTED the plan and its recommendations as-is — assume every open question resolves the way the plan already leans (its affirmative / recommended default). Resolve each question NOW with that assumed-true answer; never defer, hedge, or leave it open. When a question lists numbered options, answer with the LABEL of the option the plan already leans toward. Reply with ONLY a JSON array, one entry per question in the SAME ORDER given: {"answer": "the assumed-true answer, concise", "rationale": "one line why"}. ${UNTRUSTED}`;
+const RESOLVE_SYSTEM = `You are the RECORDER of a planning council finalizing the plan. The user has ACCEPTED the plan and its recommendations as-is — assume every open question resolves the way the plan already leans (its affirmative / recommended default). Resolve each question NOW with that assumed-true answer; never defer, hedge, or leave it open. When a question lists numbered options, answer with the LABEL of the option the plan already leans toward. Reply with ONLY a JSON array, one entry per question in the SAME ORDER given: {"answer": "the assumed-true answer, concise", "rationale": "one line why"}. ${UNTRUSTED}`;
 
 export interface ResolvedQuestion {
   question: string;
@@ -733,7 +733,7 @@ export async function answerOpenQuestions(
   return open.map((q) => resolved.get(q) as ResolvedQuestion);
 }
 
-const BIG_PLAN_SYSTEM = `You are the RECORDER of a planning council writing the FINAL, authoritative Big Plan specification for a coding task, distilled from the ENTIRE planning conversation plus the council's accumulated state. The user has ACCEPTED the plan — assume any open question resolves to its recommended/affirmative answer. Capture EVERY concrete detail the conversation established: language, runtime, libraries, file/module layout, data structures, algorithms, function/API shapes, naming, edge cases, and scope. Be specific, concrete, and thorough — an engineer should be able to implement from this alone. Base every claim on the conversation or state; never fabricate requirements the user did not imply, but DO make reasonable, explicit engineering decisions where the conversation left a gap (and note them). Reply with ONLY a JSON object:
+const BIG_PLAN_SYSTEM = `You are the RECORDER of a planning council writing the FINAL, authoritative plan specification for a coding task, distilled from the ENTIRE planning conversation plus the council's accumulated state. The user has ACCEPTED the plan — assume any open question resolves to its recommended/affirmative answer. Capture EVERY concrete detail the conversation established: language, runtime, libraries, file/module layout, data structures, algorithms, function/API shapes, naming, edge cases, and scope. Be specific, concrete, and thorough — an engineer should be able to implement from this alone. Base every claim on the conversation or state; never fabricate requirements the user did not imply, but DO make reasonable, explicit engineering decisions where the conversation left a gap (and note them). Reply with ONLY a JSON object:
 {"title": "concise plan title, <=8 words, your own words",
  "goal": "1-3 sentence restatement of the objective",
  "overview": "1-3 short paragraphs describing the agreed approach",
@@ -748,7 +748,7 @@ Every implementation step in "approach" MUST carry a concrete "verify"; a step w
 
 /**
  * Distil the whole planning conversation + accumulated council state into a detailed, structured
- * big-plan (rendered by PlanSessionStore.toBigPlan). Off the routing loop. Returns null on
+ * final plan (rendered by PlanSessionStore.toBigPlan). Off the routing loop. Returns null on
  * any failure or an essentially-empty result, so /plan finalize falls back to deterministic
  * assembly — it never blocks writing the doc.
  */
@@ -783,7 +783,7 @@ export async function synthesizeBigPlan(
     `<goal>\n${midTruncate(session.goal || "(none)", 2000)}\n</goal>`,
     `<conversation>\n${fenced(transcript || "(no conversation captured)", 16000)}\n</conversation>`,
     stateDigest ? `<state>\n${fenced(stateDigest, 6000)}\n</state>` : "",
-    "Write the final big-plan specification now.",
+    "Write the final plan specification now.",
   ]
     .filter(Boolean)
     .join("\n\n");

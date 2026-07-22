@@ -528,7 +528,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
   -h, --help
 
-  Big Plan headless note (MINIMA_TUI_BIG_PLAN=1 + -p/--mode json): plan-step
+  Plan verification headless note (MINIMA_TUI_BIG_PLAN=1 + -p/--mode json): plan-step
   \`verify\` shell commands fail CLOSED without an interactive user to approve them —
   set MINIMA_TUI_ALLOW_VERIFY=1 to opt a headless run into executing them.
 `;
@@ -751,7 +751,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // B2 memory scribe: drains queued curation jobs (built once db + agent exist; reads
   // agent.budget at call time since --budget attaches it later).
   let scribeDrain: (() => Promise<void>) | null = null;
-  // E1 diff reviewer: late-bound — the Big Plan hooks are built before the plan meta model
+  // E1 diff reviewer: late-bound — the plan hooks are built before the plan meta model
   // exists, so closure events route through this ref; the reviewer is armed further down.
   const planClosedRef: { current: ((planId: string) => void) | null } = { current: null };
   let pendingDiffReview: Promise<unknown> | null = null;
@@ -807,7 +807,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         if (note) process.stderr.write(`minima: ${note}\n`);
       }
     }
-    // Big Plan ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
+    // Plan ledger (M1.1/M2.1/M2.2) + done-gate (M4.1–M4.3): after each tool call the
     // sink keeps the SQLite plan of record in step with what the agent actually did (plan
     // upsert, baseline capture, on_plan/off_plan file changes) and writes gate rows; before
     // each todowrite the gate refuses completions whose `verify` does not pass. Off unless

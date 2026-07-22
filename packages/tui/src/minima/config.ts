@@ -58,7 +58,7 @@ export interface HarnessConfig {
    * pumped frames into a possibly non-draining stdout, growing RSS without bound. */
   streamIdleTimeoutMs: number;
   allowOffline: boolean;
-  /** Big Plan ledger (default ON since 0.11): persist/project the plan, attribute file
+  /** Plan ledger (default ON since 0.11): persist/project the plan, attribute file
    * changes, and record verification gates — gate verdicts are the harness's honest label
    * source. Opt out with MINIMA_TUI_BIG_PLAN=0. */
   bigPlan: boolean;
@@ -84,8 +84,8 @@ export interface HarnessConfig {
   /** Plan-premium (default ON): while plan mode is active, the plan-DECIDING calls — the
    * routed lead-planner turn (hard `constraints.candidate_models` pin, pre-request candidate
    * assembly) and the council's plan-shaping meta calls (draft/revise/critic-attack/synth +
-   * finalize question-resolution and big-plan synthesis) — are restricted to the premium
-   * allowlist. The sessionless plan-mode fallback (Big Plan off / no live council) is pinned
+   * finalize question-resolution and plan synthesis) — are restricted to the premium
+   * allowlist. The sessionless plan-mode fallback (plan verification off / no live council) is pinned
    * to the same pool — the restriction is a property of the MODE, not of the council. Keeper
    * bookkeeping, researchers, the E1 critic, and the diff reviewer keep their cheap/normal
    * models. Hard constraint: no
@@ -278,7 +278,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (planModelEnv) cfg.planModel = planModelEnv;
   if (cfg.planPremium && !roundBudgetFromEnv) cfg.planRoundBudgetUsd = 1.0;
   // MINIMA_JUDGE_MODEL repoints the judge AND the plan-council meta model (keeper/critic/
-  // synth + big-plan synthesis) — without it, a missing/limited key for the default
+  // synth + plan synthesis) — without it, a missing/limited key for the default
   // model silently degrades the whole planning pipeline with no way to choose another.
   const judgeEnv = process.env.MINIMA_JUDGE_MODEL?.trim();
   if (judgeEnv) cfg.judgeModel = judgeEnv;

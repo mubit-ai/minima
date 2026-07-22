@@ -157,7 +157,7 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN reinforced_entry_ids TEXT",
     "ALTER TABLE routing_decisions ADD COLUMN lesson_promoted INTEGER",
   ],
-  // v3 — Big Plan ledger: the plan + its steps.
+  // v3 — plan ledger: the plan + its steps.
   // `verify` (M3.1) and `baseline` (M3.3) are carried from the start so the red→green
   // machinery can fill them without another migration.
   [
@@ -256,7 +256,7 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE plan_steps ADD COLUMN tools TEXT", // JSON string[] (NULL/[] = unrestricted)
   ],
   // v9 — per-step cost attribution (U3): the in-progress plan step at routing time, stamped by
-  // the DecisionRecord writer when Big Plan is on. This is provenance for reporting (U3
+  // the DecisionRecord writer when plan verification is on. This is provenance for reporting (U3
   // sidebar / J1 /why), never a feedback input. NULL = pre-v8 row or no step in progress.
   [
     "ALTER TABLE routing_decisions ADD COLUMN step_id TEXT REFERENCES plan_steps(id)",
@@ -350,7 +350,7 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE gates ADD COLUMN tool_schema_hash TEXT",
     "ALTER TABLE tool_calls ADD COLUMN result_ref TEXT", // sha256 blob file, NULL = inline only
   ],
-  // v14 — canonical Big Plan outcome columns. Legacy gt_* columns remain populated for one
+  // v14 — canonical big_plan_* outcome columns. Legacy gt_* columns remain populated for one
   // compatibility release so older binaries can still read decisions written by this version.
   [
     "ALTER TABLE routing_decisions ADD COLUMN big_plan_outcome TEXT",
@@ -514,11 +514,11 @@ export interface DecisionWrite {
   /** Mubit-side provenance from FeedbackResponse (v2 columns). */
   reinforcedEntryIds?: string[] | null;
   lessonPromoted?: boolean | null;
-  /** In-progress Big Plan step at routing time (v9) — reporting provenance, not feedback. */
+  /** In-progress plan step at routing time (v9) — reporting provenance, not feedback. */
   stepId?: string | null;
 }
 
-// ---------------------------------------------------------------- Big Plan rows
+// ---------------------------------------------------------------- plan-ledger rows
 export interface PlanRow {
   id: string;
   session_id: string | null;
@@ -1953,7 +1953,7 @@ export class MinimaDb {
       .all(projectKey, limit) as ProfileEventRow[];
   }
 
-  // ================================================================ Big Plan ledger
+  // ================================================================ plan ledger
   // Writers/readers are fail-open at the call site (a broken
   // write must never break a turn); these throw only on genuine DB errors.
 
@@ -1979,7 +1979,7 @@ export class MinimaDb {
   }
 
   /**
-   * Seed a fresh active plan + its steps from an APPROVED Big Plan (the planner→ledger
+   * Seed a fresh active plan + its steps from an APPROVED plan (the planner→ledger
    * bridge). Each step is inserted `pending` with its verify; a step that carries a check is
    * stamped `check_origin='user'` — the user accepted this plan at /plan finalize, so its checks
    * are user-trusted, not agent-graded homework. Once seeded this becomes the session's active
@@ -2049,7 +2049,7 @@ export class MinimaDb {
   /**
    * /tasks cancel: close EVERY active plan for the session — adoption on resume and
    * repeated seeding can pile up several, and getActivePlan(LIMIT 1) would let the
-   * next-newest surface right back ("Big Plan still holds"). Returns how many were cancelled.
+   * next-newest surface right back ("the plan still holds"). Returns how many were cancelled.
    */
   cancelActivePlans(sessionId: string): number {
     this.db.run(
@@ -2254,7 +2254,7 @@ export class MinimaDb {
    * follow the logical step across inserts and reorders instead of binding to whatever row
    * happens to sit at each idx. Rows whose content no longer appears in the list (removed or
    * reworded steps) are dropped, detaching their file_changes/gates first; a reworded step
-   * therefore re-enters fresh with NULL verify/baseline — Big Plan evidence is lost, never
+   * therefore re-enters fresh with NULL verify/baseline — verification evidence is lost, never
    * misattributed. A matched step's `verify` is preserved unless a new value is supplied.
    *
    * M3.3: `started` reports the steps whose pre-work baseline should be captured now — a step
@@ -2647,7 +2647,7 @@ export class MinimaDb {
     return row !== null;
   }
 
-  // ---------------------------------------------------------------- Big Plan outcome (M7.1)
+  // ---------------------------------------------------------------- plan outcome (M7.1)
   /** Stamp the step's real (deterministic) result onto its routing decision. Legacy `gt_*`
    * columns are read-only from here on (COALESCE fallback for rows written by pre-rename
    * binaries); the dual-write compat window closed with 0.13.2. */

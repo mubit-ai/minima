@@ -1,6 +1,6 @@
 /**
- * Big Plan contract — the frozen hand-off between the two build tracks
- * (see docs/big-plan-build-guide.md §5b, "Step 0"). This is the seam that lets the two
+ * Plan-verification contract — the frozen hand-off between the two build tracks
+ * (see the build guide §5b, "Step 0"). This is the seam that lets the two
  * tracks run in parallel:
  *
  *   Track A (the "check engine" / producer) runs checks, computes the raw `Factors`, and

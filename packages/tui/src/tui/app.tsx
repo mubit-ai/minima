@@ -205,13 +205,13 @@ export interface AppProps {
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
   /**
-   * Big Plan done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_BIG_PLAN.
+   * Plan done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_BIG_PLAN.
    * Registered HERE, after the permission hook, so permission always runs first (first block
    * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
    */
   bigPlanGateBefore?: BeforeToolCall | null;
   /**
-   * MP18: the verify-consent seam main.ts wired into the Big Plan hooks. Defaults to the headless
+   * MP18: the verify-consent seam main.ts wired into the plan hooks. Defaults to the headless
    * fail-closed checker; this component swaps in the permission-state-backed one on mount
    * (approvedVerifies — exact command strings the user allowed via the overlay; bypass mode
    * is the user's blanket consent) and restores the headless checker on unmount.
@@ -221,12 +221,12 @@ export interface AppProps {
    * The LEAD agent's live todo list (D3a task panel): the same array main.ts handed to
    * todowriteTool, mutated in place by the tool. Re-reads are driven by tool_execution_end
    * (the event carries no toolName, so every tool end bumps the cheap re-read — the same
-   * unfiltered pattern the Big Plan strip refresh uses).
+   * unfiltered pattern the plan strip refresh uses).
    */
   todos?: TodoTask[];
 }
 
-/** Persona the lead adopts in plan mode; the council's big-plan snapshot is appended each turn. */
+/** Persona the lead adopts in plan mode; the council's plan snapshot is appended each turn. */
 const PLANNER_PERSONA =
   "You are the planning lead in an interactive, read-only plan-mode session: you cannot edit " +
   "files, run bash, or write anything. Converse with the user to shape a concrete, well-reasoned " +
@@ -243,11 +243,11 @@ function anyProviderKeyPresent(): boolean {
   return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
 }
 
-/** Big Plan-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
+/** Verification-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
 const PLAN_ON_NOTICE =
   "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
   "Talk through the plan; the design council convenes on substantive turns. " +
-  "/plan finalize writes the Big Plan to the project root. /plan status · /plan cancel.";
+  "/plan finalize writes the plan to the project root. /plan status · /plan cancel.";
 
 /** The finalize success note, shared by /plan finalize and the exit_plan tool. */
 function finalizeSuccessNote(o: {
@@ -263,7 +263,7 @@ function finalizeSuccessNote(o: {
   const synthNote = o.synthFailed
     ? "\n\n⚠ Plan synthesis failed (model output truncated or unavailable) — the doc is the deterministic assembly and NO steps were seeded to the plan ledger. The agent was told to record them with todowrite."
     : "";
-  return `Big Plan written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
+  return `Plan written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
 }
 
 /** Suggested `/config set` hint for a provider (or a generic one). */
@@ -313,7 +313,7 @@ const COMMANDS = [
   { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + Big Plan" },
+  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
@@ -331,9 +331,9 @@ const COMMANDS = [
   { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
   { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
-  { name: "bp-seed", desc: "Seed a demo Big Plan with gates for this run (Big Plan on only)" },
-  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (Big Plan on only)" },
-  { name: "why", desc: "Show Big Plan verification (/why <n> opens the step card)" },
+  { name: "bp-seed", desc: "Seed a demo plan with gates for this run (plan verification on only)" },
+  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
+  { name: "why", desc: "Show plan verification (/why <n> opens the step card)" },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
   {
@@ -949,7 +949,7 @@ export function HarnessApp({
     }),
   );
   const permStateRef = useRef<PermissionState>(initialPermState);
-  // MP18: swap the Big Plan hooks' consent seam to the overlay-backed checker while the TUI is
+  // MP18: swap the plan hooks' consent seam to the overlay-backed checker while the TUI is
   // mounted. Consent keys on the exact command string; bypass mode is blanket consent
   // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
   // still prompt). Unmount restores the headless fail-closed default.
@@ -983,10 +983,10 @@ export function HarnessApp({
   const planMode = mode === "plan";
   // Phase-0 footer badge slot (MUB-129): external store so guards/modes outside React set it.
   const footerBadge = useSyncExternalStore(subscribeFooterBadge, getFooterBadge);
-  // Big Plan footer strip (M1.3/M2.3). Null when Big Plan is off or there is no
+  // Plan footer strip (M1.3/M2.3). Null when plan verification is off or there is no
   // plan yet; refreshed from the DB on each tool_execution_end (todowrite → step, write → drift).
   const [planStrip, setPlanStrip] = useState<PlanStripInfo | null>(null);
-  // Big Plan tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
+  // Plan-verification tier→behavior (M6.2): the active plan's gates reduced to a 🟡 milestone-review footer note
   // and the earliest 🔴 block. Refreshed alongside planStrip; fails open to null (no note/block).
   const [bigPlanBehavior, setBigPlanBehavior] = useState<LedgerBehavior | null>(null);
   // M6.3 gate-focus modal: while a 🔴 block owns the keyboard the prompt input is disabled, so
@@ -998,7 +998,7 @@ export function HarnessApp({
   /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
   const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
-  // big-plan .md written to the project root on /plan finalize.
+  // plan .md written to the project root on /plan finalize.
   const planSessionRef = useRef<PlanSessionStore | null>(null);
   // Plan interview (opt-in): per-plan-session question budget (≤3), reset with the session.
   const interviewStateRef = useRef<InterviewState>(newInterviewState());
@@ -1065,7 +1065,7 @@ export function HarnessApp({
       plannerBaseSystemPromptRef.current = null;
     }
   }, [agent]);
-  // Any store writer (Shift+Tab, a bare /plan) can leave plan mode while a Big Plan council
+  // Any store writer (Shift+Tab, a bare /plan) can leave plan mode while a plan council
   // session is live — tear the session down exactly like /plan off, so build mode never
   // runs with the planner persona as its system prompt. The notice keeps the discard visible.
   useEffect(() => {
@@ -1080,12 +1080,12 @@ export function HarnessApp({
       },
     ]);
   }, [mode, exitPlanMode]);
-  // Mirror of the cleanup above, and the PRIMARY door into the Big Plan workflow: ANY
+  // Mirror of the cleanup above, and the PRIMARY door into the plan-verification workflow: ANY
   // store writer that lands the mode on "plan" (the Shift+Tab ring, a persisted-mode
   // restore at startup, a future /mode) gets a real session — persona + council + exit_plan
   // — so plan mode is never a badge-only half-state (prompts would route through the normal
   // loop and the model could execute with per-call approval, never planning). /plan and
-  // /plan start call enterPlanMode directly, so this no-ops for them; with Big Plan off or no
+  // /plan start call enterPlanMode directly, so this no-ops for them; with plan verification off or no
   // council deps it leaves the bare B2 policy flip alone (the onSubmit fallthrough warning
   // surfaces the latter).
   useEffect(() => {
@@ -1185,7 +1185,7 @@ export function HarnessApp({
       const landingNote = autoAcceptEdits
         ? " Your file edits inside the project are pre-approved (accept-edits mode)."
         : "";
-      // MP17: sessionless (Big Plan-off) plan mode has no store and writes no BigPlan.md — the
+      // MP17: sessionless (verification-off) plan mode has no store and writes no BigPlan.md — the
       // approved plan lives in the transcript (showPlan pushed the tool's `plan` markdown).
       // Approval here is just the mode flip back to full tool access.
       if (planSessionRef.current == null) {
@@ -1215,7 +1215,7 @@ export function HarnessApp({
         outcome.seededCount > 0
           ? `; ${outcome.seededCount} verifiable step${outcome.seededCount === 1 ? "" : "s"} seeded to the plan ledger`
           : "";
-      // The ledger drives the whole Big Plan build spine (plan strip, Ctrl+G overview, done-gates) —
+      // The ledger drives the whole plan build spine (plan strip, Ctrl+G overview, done-gates) —
       // when finalize could not seed it, the agent must recreate it as its FIRST move.
       const ledgerGuidance =
         outcome.seededCount > 0
@@ -1223,7 +1223,7 @@ export function HarnessApp({
           : " The plan ledger has no seeded steps — FIRST record the plan's implementation steps with the todowrite tool (each step with a shell `verify` check that proves it landed), then implement them in order.";
       return {
         ok: true,
-        message: `Plan approved and finalized. Big Plan written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
+        message: `Plan approved and finalized — written to ${outcome.outPath}${seeded}. Plan mode is OFF and full tool access is restored — begin implementing the plan now.${landingNote}${ledgerGuidance}`,
       };
     },
     [agent, runPlanFinalize, exitPlanMode],
@@ -1243,7 +1243,7 @@ export function HarnessApp({
     ]);
   }, [exitPlanMode]);
   // exit_plan (model-callable plan exit): registered whenever plan mode is ON (MP17 — the
-  // universal gate, Big Plan on or off; sessionless plan mode requires the `plan` markdown arg,
+  // universal gate, plan verification on or off; sessionless plan mode requires the `plan` markdown arg,
   // CC's ExitPlanMode contract). Headless runs never mount this component, and the tool's
   // ask-null guard covers any other pathless case. Its approval overlay rides the same
   // AskUserRef seam as `question`; ANY exit path (finalize, cancel, Shift+Tab, /plan off)
@@ -1432,7 +1432,7 @@ export function HarnessApp({
     };
   }, []);
 
-  // Wire the beforeToolCall permission hook, then the Big Plan done-gate (when on) so
+  // Wire the beforeToolCall permission hook, then the plan done-gate (when on) so
   // permission always runs first — first block wins, and no gate check ever executes for a
   // call the user declines.
   //
@@ -1461,7 +1461,7 @@ export function HarnessApp({
       return modeGated(ctx);
     });
     // B3: checkpoint snapshot rides between the permission gate (a denied call must not
-    // snapshot) and the Big Plan done-gate (a big-plan-block after a snapshot is harmless — deduped by
+    // snapshot) and the plan done-gate (a done-gate block after a snapshot is harmless — deduped by
     // tree). Same effect as its neighbors: a separate effect with different deps would lose
     // the relative order on re-registration.
     const ckpt = makeCheckpointHook({
@@ -1656,9 +1656,9 @@ export function HarnessApp({
           setActiveActions((a) => reduceActiveActions(a, ev));
           // D3a: todowrite mutates the `todos` array in place — bump the gen so the memo
           // re-reads it (the event carries no toolName; an unconditional bump is the
-          // established pattern, same as the Big Plan refresh below).
+          // established pattern, same as the plan refresh below).
           setTodoGen((g) => g + 1);
-          // Keep the Big Plan footer strip in step with the ledger the afterToolCall sink just wrote:
+          // Keep the plan footer strip in step with the ledger the afterToolCall sink just wrote:
           // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
           if (agent.config.bigPlan === true) {
             try {
@@ -1675,7 +1675,7 @@ export function HarnessApp({
     return unsub;
   }, [agent]);
 
-  // Big Plan footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
+  // Plan footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
   // already has a plan shows it immediately; tool_execution_end keeps it current thereafter.
   useEffect(() => {
     if (agent.config.bigPlan !== true) return;
@@ -1704,7 +1704,7 @@ export function HarnessApp({
   }, [bigPlanBlockId, busy]);
 
   /** M6.3: record a gate answer into user_signals and release the modal. Fail-open like every
-   * other Big Plan touchpoint — a ledger error must not crash the TUI from inside Ink's input
+   * other plan touchpoint — a ledger error must not crash the TUI from inside Ink's input
    * dispatch; on failure the modal stays armed so the keys still answer. */
   function answerGate(gateId: string, action: "accept" | "reject" | "steer", note: string | null) {
     try {
@@ -1750,10 +1750,10 @@ export function HarnessApp({
       },
     ]);
   };
-  // Ctrl+G: Big Plan off → one-line notice (the flag-off contract); on → one-shot overview block.
+  // Ctrl+G: plan verification off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestPlanOverview = () => {
     // MP16: a live plan session's cannot-render fallback is a terse draft summary —
-    // "No Big Plan recorded" would be misleading mid-drafting.
+    // "No plan recorded" would be misleading mid-drafting.
     const draftStore = planSessionRef.current;
     if (getMode() === "plan" && draftStore) {
       setMessages((m) => [...m, { role: "tool", text: draftStore.summary(), toolName: "plan" }]);
@@ -1764,7 +1764,7 @@ export function HarnessApp({
         ...m,
         {
           role: "tool",
-          text: "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to see the plan overview.",
+          text: "Plan verification is OFF — set MINIMA_TUI_BIG_PLAN=1 to see the plan overview.",
           toolName: "bp",
         },
       ]);
@@ -1902,7 +1902,7 @@ export function HarnessApp({
     // U3 (MUB-141): Plan Overview on Ctrl+G — the panel in EVERY situation (always-
     // panel, 2026-07-20). Shared chord, gate wins: with a 🔴 block armed and not busy this
     // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
-    // states stay one-line chat notices (Big Plan off / no plan yet — nothing to page); the
+    // states stay one-line chat notices (plan verification off / no plan yet — nothing to page); the
     // text path otherwise survives only below the cannot-render floor.
     if (key.ctrl && input === "g" && !(bigPlanBehavior?.block && !busy)) {
       if (agent.config.bigPlan === true && panelCanRender()) {
@@ -2100,7 +2100,7 @@ export function HarnessApp({
       } catch {
         // lineage is best-effort
       }
-      // Big Plan resume: re-key the old run's still-active plan onto this run so sticky
+      // Plan resume: re-key the old run's still-active plan onto this run so sticky
       // verify/baselines, the projection, and the done-gate survive the resume; without
       // this the old plan stays 'active' under a dead run forever and the gate is
       // silently bypassed. Old-run session-keyed gates are deliberately not adopted.
@@ -3004,7 +3004,7 @@ export function HarnessApp({
             );
           } else {
             pushPlan(
-              `/plan ${sub} is part of the Big Plan workflow (on by default; currently disabled via MINIMA_TUI_BIG_PLAN=0). Without it, /plan is a mode toggle.`,
+              `/plan ${sub} is part of the plan-verification workflow (on by default; currently disabled via MINIMA_TUI_BIG_PLAN=0). Without it, /plan is a mode toggle.`,
               true,
             );
           }
@@ -3413,7 +3413,7 @@ export function HarnessApp({
         ]);
         break;
       case "tasks": {
-        // `/tasks cancel` — the CC-style plan reject, applied to todowrite + Big Plan: clear the
+        // `/tasks cancel` — the CC-style plan reject, applied to todowrite + the plan ledger: clear the
         // observable todo list, close the ledger plan, and TELL THE MODEL (mandatory —
         // clearing state alone is meaningless: the next todowrite re-seeds a fresh active
         // plan, big_plan.ts upsert path). Cancelled plans stay dead: planForTodos only
@@ -3451,7 +3451,7 @@ export function HarnessApp({
           }
           // The model-facing rejection notice (the exit_plan CANCEL / denialReason
           // precedent): rides the next prompt as a user turn, the /rewind pattern.
-          const scope = planCancelled ? "task list and its Big Plan" : "task list";
+          const scope = planCancelled ? "task list and its plan" : "task list";
           agent.agentState.messages.push(
             new AgentMessage({
               role: "user",
@@ -3463,7 +3463,7 @@ export function HarnessApp({
             { role: "user", text: `/${name} ${args}`.trim() },
             {
               role: "tool",
-              text: `Cancelled: ${clearedCount} task(s) cleared${planCancelled ? " and the Big Plan closed" : ""}. The model has been told not to re-create them.`,
+              text: `Cancelled: ${clearedCount} task(s) cleared${planCancelled ? " and the plan closed" : ""}. The model has been told not to re-create them.`,
               toolName: "tasks",
             },
           ]);
@@ -3706,8 +3706,8 @@ export function HarnessApp({
             role: "tool",
             text: `${
               on
-                ? `Plan Overview: available — Big Plan ON (default) — run ${agent.runId ?? "?"}`
-                : "Plan Overview: unavailable — Big Plan OFF (MINIMA_TUI_BIG_PLAN=0)"
+                ? `Plan Overview: available — plan verification ON (default) — run ${agent.runId ?? "?"}`
+                : "Plan Overview: unavailable — plan verification OFF (MINIMA_TUI_BIG_PLAN=0)"
             }${scoreboardSection}`,
             toolName: "bp",
           },
@@ -3717,7 +3717,7 @@ export function HarnessApp({
       case "why": {
         // J1.1 + MP9: in the TUI, `/why` opens the D3b Plan Overview panel and `/why <n>`
         // opens it with step n's card pushed (the shared stepCardLines surface). The text
-        // path stays for Big Plan-off, narrow terminals, and out-of-range steps — and is the
+        // path stays for verification-off, narrow terminals, and out-of-range steps — and is the
         // only path headless runs ever had (no slash commands there).
         const overview =
           agent.config.bigPlan === true && agent.db && agent.runId
@@ -3761,12 +3761,13 @@ export function HarnessApp({
         }
         let text: string;
         if (agent.config.bigPlan !== true) {
-          text = "Big Plan is OFF (MINIMA_TUI_BIG_PLAN=0) — unset to inspect verification.";
+          text =
+            "Plan verification is OFF (MINIMA_TUI_BIG_PLAN=0) — unset to inspect verification.";
         } else if (/^\d+$/.test(args.trim())) {
           const n = Number(args.trim());
           const row = overview?.steps[n - 1];
           text = !overview
-            ? "No Big Plan recorded for this run."
+            ? "No plan recorded for this run."
             : !row
               ? `No step ${n} — the plan has ${overview.steps.length} step(s).`
               : stepCardLines(row, overview.gatesByStep.get(row.stepId) ?? []).join("\n");
@@ -3792,7 +3793,7 @@ export function HarnessApp({
             echo,
             {
               role: "tool",
-              text: "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to verify a plan.",
+              text: "Plan verification is OFF — set MINIMA_TUI_BIG_PLAN=1 to verify a plan.",
               toolName: "verify",
             },
           ]);
@@ -3833,7 +3834,7 @@ export function HarnessApp({
             signal: controller.signal,
           });
           const text = !outcome
-            ? "Nothing to verify — no Big Plan with steps (or the pass was aborted)."
+            ? "Nothing to verify — no plan with steps (or the pass was aborted)."
             : outcome.verdict.refuted
               ? `🔴 REFUTED — the plan did not survive verification:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}\nRecorded as a red milestone gate; run /why for the full picture.`
               : `🟡 not refuted — the subagent re-ran the checks and found no holes${outcome.verdict.reasons.length ? `:\n${outcome.verdict.reasons.map((r) => `- ${r}`).join("\n")}` : "."}\n(Judge-verified caps at 🟡 — only deterministic red→green checks earn 🟢.)`;
@@ -3863,7 +3864,7 @@ export function HarnessApp({
         // gate uses) on demand — a read-only report, never a block.
         let text: string;
         if (agent.config.bigPlan !== true) {
-          text = "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 to audit plans.";
+          text = "Plan verification is OFF — set MINIMA_TUI_BIG_PLAN=1 to audit plans.";
         } else {
           const plan = agent.db && agent.runId ? agent.db.getActivePlan(agent.runId) : null;
           if (!plan || !agent.db) {
@@ -3887,7 +3888,7 @@ export function HarnessApp({
         // model calls. Purely in-memory; the ledger is untouched until finalize.
         let text: string;
         if (agent.config.bigPlan !== true) {
-          text = "Big Plan is OFF — set MINIMA_TUI_BIG_PLAN=1 before seeding.";
+          text = "Plan verification is OFF — set MINIMA_TUI_BIG_PLAN=1 before seeding.";
         } else if (!planSpawn || !planMetaModel) {
           text = "Plan session deps unavailable — cannot seed a draft.";
         } else {
@@ -3912,7 +3913,7 @@ export function HarnessApp({
       case "bp-seed": {
         let text: string;
         if (agent.config.bigPlan !== true) {
-          text = "Big Plan is OFF (MINIMA_TUI_BIG_PLAN=0) — unset before seeding.";
+          text = "Plan verification is OFF (MINIMA_TUI_BIG_PLAN=0) — unset before seeding.";
         } else if (!agent.db || !agent.runId) {
           text = "No DB / run available to seed.";
         } else {
@@ -3935,7 +3936,7 @@ export function HarnessApp({
                 verify: "bun test packages/tui/tests/behavior.test.ts",
               },
             ],
-            "Big Plan seed plan",
+            "Demo seed plan",
           );
           const seedRecId = `seed-rec-${agent.runId}`;
           if (agent.db.getGates(planId).length === 0) {
@@ -3997,7 +3998,7 @@ export function HarnessApp({
           agent.db.writeDecision({
             recId: seedRecId,
             runId: agent.runId,
-            taskLabel: "Big Plan seed",
+            taskLabel: "Plan seed",
             chosenModel: "anthropic/claude-sonnet-5",
             decisionBasis: "seed",
             confidence: 0,
@@ -4017,7 +4018,7 @@ export function HarnessApp({
           // tool_execution_end; a slash command doesn't emit one). Shows the 🟡 note + 🔴 block.
           setPlanStrip(planStripInfo(agent.db, agent.runId));
           setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
-          text = `Seeded Big Plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped verified outcome onto ${seedRecId}. Run /why to inspect it.`;
+          text = `Seeded plan ${planId} (${stepIds.length} steps) for run ${agent.runId}, stamped verified outcome onto ${seedRecId}. Run /why to inspect it.`;
         }
         setMessages((m) => [
           ...m,
@@ -4390,13 +4391,13 @@ export function HarnessApp({
   const panelOuter = panelOuterHeight(rows, inputBoxHeight);
   const panelTop = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
   const panelVisible = panelTop !== null && !permPrompt && !questionPrompt && panelOuter >= 5;
-  // D3a task panel rows (MP5; Big Plan enrichment MP6 — ONE plan surface, the old planStrip
+  // D3a task panel rows (MP5; plan enrichment MP6 — ONE plan surface, the old planStrip
   // banner + note/block rows are gone). Read from the in-place-mutated todos array
-  // (todoGen forces the re-read after every tool end); with a Big Plan the ledger
+  // (todoGen forces the re-read after every tool end); with a plan of record the ledger
   // projection upgrades the header and arms the alert row. A dropped alert row is
   // display-only — the gate stays enforced in the dispatcher and answerable via the
   // gate-focus modal's input-box hint. Reservation (footerHeight) and render consume the
-  // SAME granted rows (the fit-grant discipline the old Big Plan banner used).
+  // SAME granted rows (the fit-grant discipline the old plan banner used).
   const taskRows = useMemo(() => {
     void todoGen;
     const bigPlan = planStrip
@@ -4435,7 +4436,7 @@ export function HarnessApp({
       return;
     }
     if (key.ctrl && input === "t") {
-      // Ctrl+T toggles the ToC family closed; from the Big Plan view it SWAPS to a fresh ToC.
+      // Ctrl+T toggles the ToC family closed; from the plan view it SWAPS to a fresh ToC.
       if (!top || top.kind === "toc" || top.kind === "reader") {
         closePanelReseat();
         return;

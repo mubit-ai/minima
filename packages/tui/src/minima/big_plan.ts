@@ -1,5 +1,5 @@
 /**
- * Big Plan ledger — pure projection/attribution helpers + the afterToolCall sink that
+ * Plan ledger — pure projection/attribution helpers + the afterToolCall sink that
  * keeps the SQLite plan of record in step with what the agent actually did. Everything here
  * is gated by MINIMA_TUI_BIG_PLAN at the wiring sites (main.ts / runtime.ts); this module
  * itself is inert until a caller invokes it.
@@ -368,7 +368,7 @@ export function isPathClaimed(stepContent: string | null | undefined, path: stri
 }
 
 /**
- * The always-on Big Plan contract, injected into the system prompt whenever `bigPlan` is
+ * The always-on plan-verification contract, injected into the system prompt whenever `bigPlan` is
  * on — INDEPENDENT of whether a plan exists yet. This is the fix for the plan-authoring gap: the
  * plan projection ({@link formatPlanProjection}) carries the "attach a verify" nudge but is inert
  * until the first todowrite has already created the plan, so without this block the model authors
@@ -377,7 +377,7 @@ export function isPathClaimed(stepContent: string | null | undefined, path: stri
  * not fabricate throwaway checks to dodge the gate.
  */
 export const BIG_PLAN_SYSTEM_GUIDANCE = [
-  "# Big Plan verification is ON",
+  "# Plan verification is ON",
   "You plan with the todowrite tool and the harness verifies each step against a real command.",
   "When you FIRST create a step that produces something a command can check — a feature, a fix, a",
   "test — attach a `verify` shell command that proves it (a real test/build command, e.g.",
@@ -856,7 +856,7 @@ export function batchToolCalls(state: unknown): { id: string; name: string }[] {
 }
 
 /**
- * M4.1–M4.3: the Big Plan hook pair. `after` is the existing ledger sink
+ * M4.1–M4.3: the plan hook pair. `after` is the existing ledger sink
  * (bigPlanAfterToolCall: plan upsert, baseline capture, file_change attribution) plus the
  * gate-row writer; `before` is the done-gate. Register BOTH on the agent's hook stacks, after
  * the permission hook where one exists (permission first, gate second; first block wins).

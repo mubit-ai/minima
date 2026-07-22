@@ -99,7 +99,7 @@ describe("buildPlanOverview (U3.1)", () => {
     db.ensureProject("p");
     const runId = db.startRun({ projectKey: "p" });
     expect(buildPlanOverview(db, runId)).toBeNull();
-    expect(renderPlanOverviewText(null, 80)).toContain("No Big Plan");
+    expect(renderPlanOverviewText(null, 80)).toContain("No plan recorded");
   });
 
   test("statuses, tiers, verify, drift, cost and stepPos reduce from the ledger", () => {

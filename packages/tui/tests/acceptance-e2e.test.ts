@@ -419,7 +419,7 @@ describe("MP19 — Track W acceptance demo (plan → approve → gated build →
       expect(card).toContain("red→green vs the captured baseline");
 
       const why = whyReportFor(db, runId);
-      expect(why).toContain("Big Plan verification - Demo Widget Wiring");
+      expect(why).toContain("Plan verification - Demo Widget Wiring");
       expect(why).toContain("✓ step 1");
       expect(why).toContain(`check: ${verify}`);
       expect(why).toContain("milestone");

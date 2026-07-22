@@ -138,8 +138,8 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     let spent = 0;
     const budget = d.budget_usd;
     const child = new MinimaAgent({
-      // bigPlan never inherits: children have no Big Plan hooks (lead-only by design), so an
-      // inheriting child would get Big Plan guidance + the LEAD's plan projection in its prompts
+      // bigPlan never inherits: children have no plan hooks (lead-only by design), so an
+      // inheriting child would get plan-verification guidance + the LEAD's plan projection in its prompts
       // and consult the shared gates ledger in its feedback — cross-agent poisoning.
       config: {
         ...parent.config,
@@ -179,7 +179,7 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       parent.db && parent.runId
         ? attachDbSink(child, parent.db, { runId: parent.runId, agentId: childId })
         : null;
-    // Big Plan write attribution (file_changes ONLY — children never touch gates/baselines/plans):
+    // Plan write attribution (file_changes ONLY — children never touch gates/baselines/plans):
     // a shared-workdir child's writes land attributed to agent_id=childId; a worktree child's
     // edits are invisible here AND its bash can still reach the parent repo via absolute
     // paths, so it leaves one opaque marker instead — Factors.blind caps the tier at yellow

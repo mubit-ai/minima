@@ -27,7 +27,7 @@
 #   tasks-footer      MP5 (D3a): the mock's TODO tool-call populates the task panel
 #                     MID-RUN (tasks 1/3 + current task), Ctrl+B hides it, and a second
 #                     session on the same prefs dir honors the persisted hide
-#   panel-plan-overview          MP9 (D3b Big Plan view): an unanswered 🔴 gate WINS the Ctrl+G chord (no
+#   panel-plan-overview          MP9 (D3b plan view): an unanswered 🔴 gate WINS the Ctrl+G chord (no
 #                     panel); answering it lets Ctrl+G open the overview; Enter opens the
 #                     step card; /why re-opens the panel — same zero-wipe byte gates
 #   plan-council      MP14: during a /plan turn the busy row shows the council progress
@@ -38,7 +38,7 @@
 #   panel-draft       MP16: /plan-seed rounds show the D3b `plan (draft)` view converging
 #                     (round 1 → round 2); /plan finalize --force flips the SAME Ctrl+G
 #                     chord to the ledger-backed Plan Overview (structural switch)
-#   plan-exit-gate    Big Plan-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
+#   plan-exit-gate    verification-off, the mock's EXITPLAN marker calls exit_plan(plan) — the
 #                     markdown lands in the transcript, the 4-option overlay (CC's
 #                     ExitPlanMode shape, auto-accept flavor first) approves into
 #                     accept-edits (the tool is the ONLY approval surface); Shift+Tab OUT
@@ -832,7 +832,7 @@ capture planoverview "$SPEC"
 python3 - "$TMP/planoverview-raw.bin" "$TMP/planoverview-frames.jsonl" <<'PY'
 import json, sys
 raw = open(sys.argv[1], "rb").read()
-assert b"\x1b[?1049" not in raw, "alt-screen sequence during Big Plan panel ops"
+assert b"\x1b[?1049" not in raw, "alt-screen sequence during plan panel ops"
 wipes = raw.count(b"\x1b[3J")
 assert wipes == 1, f"{wipes} ESC[3J wipes (expect exactly 1: the startup clear)"
 frames = [json.loads(l) for l in open(sys.argv[2])]
@@ -862,19 +862,19 @@ assert any(grid_has(f, PLAN_OVERVIEW_CRUMB) and not grid_has(f, CARD) for f in f
 closed = [f for f in frames_between(10.6, 11.2) if not grid_has(f, PLAN_OVERVIEW_CRUMB)]
 assert closed, "Esc did not close the overview"
 # /why re-opens the panel (the primary /why surface in a TTY).
-assert any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in frames_between(12.0, 13.2)), "/why did not open the Big Plan panel"
+assert any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in frames_between(12.0, 13.2)), "/why did not open the plan panel"
 # /tasks cancel is a REAL reject: the plan closes and NOTHING resurrects it — the D3a
 # header disappears and Ctrl+G reports no plan instead of showing the cancelled one.
-assert any(grid_has(f, "Big Plan closed") for f in frames_between(14.4, 15.2)), (
-    "/tasks cancel did not report closing the Big Plan")
+assert any(grid_has(f, "plan closed") for f in frames_between(14.4, 15.2)), (
+    "/tasks cancel did not report closing the plan")
 post = frames_between(15.2, 16.2)
-assert any(grid_has(f, "No Big Plan recorded") for f in post), (
+assert any(grid_has(f, "No plan recorded") for f in post), (
     "Ctrl+G after cancel did not report an empty ledger")
-assert not any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in post), "Big Plan panel resurrected a cancelled plan"
+assert not any(grid_has(f, PLAN_OVERVIEW_CRUMB) for f in post), "plan panel resurrected a cancelled plan"
 assert not any(grid_has(f, " plan 3/3 · ▸") for f in post), "D3a header still shows the cancelled plan"
 last = frames[-1]["screen"]
 assert sum(1 for row in last if row.strip()) >= 5, "transcript gone after exit"
-print("tui_assert: PASS panel-plan-overview (gate wins, overview, step card, /why, cancel kills Big Plan)")
+print("tui_assert: PASS panel-plan-overview (gate wins, overview, step card, /why, cancel kills the plan)")
 PY
 
 echo "== tui-verify: scenario plan-council (MP14: busy-row council progress line) =="
@@ -964,7 +964,7 @@ assert len(cost_rows) == 1, f"expected ONE council round summary, saw: {cost_row
 print("tui_assert: PASS plan-council (line advances role-by-role; follow-up skips the council)")
 PY
 # Anchor-ledger coverage: the council children's ChildTree teardown is a live-frame shrink
-# the old design floated on. Slack 2 (settled frames, whole run): Big Plan mode transitions
+# the old design floated on. Slack 2 (settled frames, whole run): plan-mode transitions
 # oscillate a row; the defect class this catches floats 5+.
 python3 "$TUI/scripts/tui_assert.py" "$TMP/plancouncil-frames.jsonl" --after 2.5 \
   --check final-nonblank --check bottom-anchor --bottom-slack 2
@@ -1072,7 +1072,7 @@ def has(f, n):
 # The model's exit_plan(plan) call: the plan markdown lands in the transcript and the
 # 4-option approval overlay opens (CC's ExitPlanMode shape — auto-accept flavor FIRST);
 # Enter approves the default = auto-accept, so approval lands in accept-edits mode
-# (Big Plan off, no BigPlan.md — approval is the mode flip).
+# (plan verification off, no BigPlan.md — approval is the mode flip).
 tool = win(4.85, 8.0)
 assert any(has(f, "Sandbox cleanup plan") for f in tool), "plan markdown not shown before the ask"
 assert any(has(f, "auto-accept edits") for f in tool), "approval overlay missing the auto-accept flavor"
@@ -1244,7 +1244,7 @@ def first(n, t0=0.0):
 beats = [
     ("council line", first("council: researcher")),
     ("draft view", first("plan (draft) · round 1", 12.0)),
-    ("finalize note", first("Big Plan written", 15.0)),
+    ("finalize note", first("Plan written", 15.0)),
     ("verify in todowrite overlay", first("test -f demo_widget.ts", 20.0)),
     ("gate blocked red", first("Step not verified", 21.0)),
     ("the fix (write overlay)", first("run write", 21.0)),

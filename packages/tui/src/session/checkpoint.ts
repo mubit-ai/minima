@@ -314,7 +314,7 @@ export interface CheckpointHookDeps {
   top: string | null | (() => string | null);
   db: MinimaDb | null;
   getRunId: () => string | null;
-  /** In-progress Big Plan step at snapshot time (null when Big Plan off). */
+  /** In-progress plan step at snapshot time (null when plan verification is off). */
   getStepId?: () => string | null;
   /** One-line notices ("checkpoints off — not a git repo", snapshot failures). */
   notify?: (message: string) => void;

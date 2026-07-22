@@ -699,7 +699,7 @@ describe("recommended option (sanitizeQuestions via synth)", () => {
 });
 
 describe("synthesizeBigPlan", () => {
-  test("distils the conversation into a rich structured Big Plan", async () => {
+  test("distils the conversation into a rich structured plan", async () => {
     reg.setResponses([
       json({
         title: "Binary search in Python",

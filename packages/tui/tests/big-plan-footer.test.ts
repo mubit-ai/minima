@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Guards the D3a task-panel wiring in tui/app.tsx — the ONE plan surface (MP6, MUB-149).
-// The old Big Plan footer banner (planStrip row + 🟡 note + 🔴 block rows) folded INTO the task
+// The old plan footer banner (planStrip row + 🟡 note + 🔴 block rows) folded INTO the task
 // panel; these assertions lock in what a pure test can't reach:
 //  - the banner render sites are GONE (no second plan surface can reappear),
 //  - reservation (footerHeight) and render consume the SAME granted rows,
 //  - the budget still subtracts the wipe-guard constants,
 //  - the ledger refresh cadence and fail-open behavior survived the fold.
-describe("tui/app.tsx wires the D3a plan surface (the Big Plan banner is gone)", () => {
+describe("tui/app.tsx wires the D3a plan surface (the old plan banner is gone)", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
   test("the old banner render sites are gone — one plan surface", () => {
@@ -30,7 +30,7 @@ describe("tui/app.tsx wires the D3a plan surface (the Big Plan banner is gone)",
     expect(src).toContain("{taskShown.map((r, i) => (");
   });
 
-  test("the Big Plan enrichment threads the ledger projection + the armed-block flag", () => {
+  test("the plan enrichment threads the ledger projection + the armed-block flag", () => {
     expect(src).toContain("blocked: (bigPlanBehavior?.block ?? null) !== null");
     expect(src).toContain("taskFooterRows(todos ?? [], bigPlan)");
   });
@@ -59,7 +59,7 @@ describe("tui/app.tsx wires the D3a plan surface (the Big Plan banner is gone)",
   test("the refresh is driven by tool_execution_end", () => {
     const endIdx = src.indexOf('case "tool_execution_end":');
     expect(endIdx).toBeGreaterThan(-1);
-    // The Big Plan refresh lives inside the tool_execution_end case, before the next case/break
+    // The plan refresh lives inside the tool_execution_end case, before the next case/break
     // (the case body also carries the D3a todoGen bump since MP5, hence the window size).
     const after = src.slice(endIdx, endIdx + 1200);
     expect(after).toContain("setPlanStrip(planStripInfo(agent.db, agent.runId))");

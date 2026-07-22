@@ -166,8 +166,8 @@ describe("MUB-179 — auto-accept landing wiring (source pin)", () => {
   });
 });
 
-describe("MP17 — universal exit gate (Big Plan-off plan argument)", () => {
-  test("Big Plan-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
+describe("MP17 — universal exit gate (verification-off plan argument)", () => {
+  test("verification-off: a missing plan argument is an error asking for the markdown, no overlay", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => true });
     const r = await h.tool.execute("t1", { summary: "s" }, null, null);
     expect(r.details?.error).toBe(true);
@@ -176,7 +176,7 @@ describe("MP17 — universal exit gate (Big Plan-off plan argument)", () => {
     expect(h.finalized).toHaveLength(0);
   });
 
-  test("Big Plan-off: the plan markdown is SHOWN before the ask and reaches finalize", async () => {
+  test("verification-off: the plan markdown is SHOWN before the ask and reaches finalize", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => true });
     const md = "## The plan\n\n1. do the thing\n2. verify it";
     const r = await h.tool.execute("t1", { plan: md }, null, null);
@@ -186,14 +186,14 @@ describe("MP17 — universal exit gate (Big Plan-off plan argument)", () => {
     expect(r.details?.choice).toBe("finalize");
   });
 
-  test("Big Plan-on: the plan argument is ignored — finalize receives null (store path)", async () => {
+  test("verification-on: the plan argument is ignored — finalize receives null (store path)", async () => {
     const h = harness(["Finalize & build"], { requiresPlan: () => false });
     await h.tool.execute("t1", { plan: "## ignored" }, null, null);
     expect(h.finalized).toEqual([{ planMd: null, autoAcceptEdits: false }]);
     expect(h.shown).toHaveLength(0);
   });
 
-  test("Big Plan-off cancel still terminates with the not-approved text", async () => {
+  test("verification-off cancel still terminates with the not-approved text", async () => {
     const h = harness(["Cancel plan mode"], { requiresPlan: () => true });
     const r = await h.tool.execute("t1", { plan: "## p" }, null, null);
     expect(h.canceled()).toBe(1);

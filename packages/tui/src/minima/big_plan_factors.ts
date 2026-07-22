@@ -1,5 +1,5 @@
 /**
- * Big Plan factor computation (Stage 5 — M5.1 provenance, M5.2 coverage, M5.3 tamper).
+ * Plan-verification factor computation (Stage 5 — M5.1 provenance, M5.2 coverage, M5.3 tamper).
  *
  * Track A's "check engine" fills three of the {@link Factors} fields that Stage 4 left
  * hardcoded (checkOrigin/coverageHit/tamper). These are the *trust* signals: was the passing

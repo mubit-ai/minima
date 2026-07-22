@@ -159,7 +159,7 @@ export interface PermissionState {
   bashGrants: Set<string>;
   allowedDirs: Set<string>;
   cwd: string;
-  /** Big Plan mode: todowrite `verify` commands are actually executed by the harness. */
+  /** Plan verification mode: todowrite `verify` commands are actually executed by the harness. */
   bigPlan: boolean;
   /** verify commands the user has already seen and approved (exact-string). */
   approvedVerifies: Set<string>;
@@ -294,7 +294,7 @@ export function checkPermission(
     // Zero-side-effect UI tools (e.g. question): never prompt.
     if (NO_PROMPT_TOOLS.has(toolName)) return Promise.resolve(null);
 
-    // Tool globally allowed (write/edit/bash with "always"). Exception: with Big Plan on,
+    // Tool globally allowed (write/edit/bash with "always"). Exception: with plan verification on,
     // approving a todowrite authorizes the harness to EXECUTE each task's `verify` as a shell
     // command (baseline capture + done-gate), so a stored "always" only covers verify commands
     // the user has already seen — a call carrying a new or changed verify re-prompts.
@@ -515,7 +515,7 @@ function buildDiffPreview(
       return `--- ${filePath} (old)\n+++ ${filePath} (new, first 8 lines)\n${preview}`;
     }
     if (toolName === "todowrite") {
-      // With Big Plan on, approving a todowrite authorizes running each task's `verify`
+      // With plan verification on, approving a todowrite authorizes running each task's `verify`
       // as a shell command (done-gate + baseline capture) — the user must SEE those commands,
       // not a truncated JSON blob, before granting that.
       const tasks = parseTodowriteTasks(args);
@@ -524,7 +524,7 @@ function buildDiffPreview(
         const mark = t.status === "completed" ? "x" : t.status === "in_progress" ? ">" : " ";
         const verifyLabel = state.bigPlan
           ? "verify (runs as a shell command)"
-          : "verify (recorded only — Big Plan is disabled via MINIMA_TUI_BIG_PLAN=0)";
+          : "verify (recorded only — plan verification is disabled via MINIMA_TUI_BIG_PLAN=0)";
         const verify = t.verify ? `\n     ${verifyLabel}: ${t.verify}` : "";
         return `${i + 1}. [${mark}] ${t.content}${verify}`;
       });

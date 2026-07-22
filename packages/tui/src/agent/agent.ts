@@ -206,7 +206,7 @@ export class Agent {
     this.controller?.abort();
   }
 
-  /** The in-flight run's AbortSignal (null when idle). Lets hooks (e.g. the Big Plan
+  /** The in-flight run's AbortSignal (null when idle). Lets hooks (e.g. the plan
    * done-gate) make their own child processes cancellable by the same abort() that stops
    * the run — BeforeToolCallContext carries AgentState, not the loop config's signal. */
   get runSignal(): AbortSignal | null {

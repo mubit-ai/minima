@@ -37,7 +37,7 @@ import {
 } from "../src/minima/index.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
 
-// M8.2 — the big-plan spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
+// M8.2 — the plan spine end-to-end, pinned as a regression. Test 1 seeds the ledger (the
 // /bp-seed / seedPlan pattern) to pin the full footer snapshot — tiers, drift, and the M7.1 stamp —
 // in one glance. Test 2 is the live-gate join: the hooks are REGISTERED on the agent and every gate
 // row is minted during real tool dispatch inside a routed rung, so it carries that rung's rec_id
@@ -55,7 +55,7 @@ const GREEN: Factors = {
 const YELLOW: Factors = { ...GREEN, checkOrigin: "agent_new" };
 const RED: Factors = { ...GREEN, pass: false };
 
-describe("Big Plan spine — end-to-end demo (M8.2)", () => {
+describe("plan verification spine — end-to-end demo (M8.2)", () => {
   test("seeded plan renders the full footer snapshot (🟢🟡🔴 + drift) and stamps a verified outcome", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
@@ -255,7 +255,7 @@ describe("Big Plan spine — end-to-end demo (M8.2)", () => {
     agent.db = db;
     agent.runId = db.startRun({ projectKey: "p" });
 
-    // M8.2 live-gate join — nothing below is seeded. The flag file IS the Big Plan: the
+    // M8.2 live-gate join — nothing below is seeded. The flag file IS the plan: the
     // step's check (`test -f`) is red until the "work" creates it. The flag name avoids
     // test/spec so the factor heuristics read it as a pre-existing check with unknown coverage.
     const dir = mkdtempSync(join(tmpdir(), "big-plan-e2e-"));

@@ -1,7 +1,7 @@
 /**
  * finalizePlan — the /plan finalize core, extracted from the TUI closure so the exit_plan
  * tool and the slash command share ONE path: resolve open questions (fail-open), distil the
- * planning conversation into a big-plan synthesis (fail-open), run the A6 poka-yoke
+ * planning conversation into a plan synthesis (fail-open), run the A6 poka-yoke
  * audit (blockers refuse unless force), write BigPlan.md DIRECTLY (not via the agent
  * tool loop — plan mode's read-only block must not apply to the harness's own artifact),
  * and seed the check-engine ledger. Mode exit and message pushes stay with the callers.
@@ -32,7 +32,7 @@ export interface PlanFinalizeDb {
 export interface PlanFinalizeDeps {
   /** null → skip question-resolution and synthesis (deterministic toBigPlan(null)). */
   metaModel: Model | null;
-  /** Premium plan-shaping model for question-resolution + big-plan synthesis;
+  /** Premium plan-shaping model for question-resolution + plan synthesis;
    * absent/null → metaModel. The E1 critic ALWAYS uses metaModel (advisory, cheap). */
   planModel?: Model | null;
   /** Books question-resolution + synthesis realized spend (meter + budget) — at premium
@@ -142,7 +142,7 @@ export async function finalizePlan(
   }
 
   // Distil the WHOLE planning conversation (not just accumulated council state) into a
-  // detailed, structured Big Plan. Fail-open: on any error the deterministic assembly
+  // detailed, structured plan. Fail-open: on any error the deterministic assembly
   // (toBigPlan(null) → toMarkdown()) is used instead so finalize always writes a doc.
   let synth: BigPlanSynthesis | null = null;
   if (shaper) {
@@ -162,7 +162,7 @@ export async function finalizePlan(
     return {
       kind: "blocked",
       message:
-        "Finalize aborted before the Big Plan was written — plan mode stays ON. " +
+        "Finalize aborted before the plan was written — plan mode stays ON. " +
         "Run /plan finalize (or approve exit_plan again) to retry.",
     };
   }

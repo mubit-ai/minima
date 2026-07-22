@@ -21,13 +21,13 @@ export interface GateVerdict {
 }
 
 export function whyReportFor(db: MinimaDb | null, sessionId: string | null): string {
-  if (!db || !sessionId) return "No Big Plan ledger available.";
+  if (!db || !sessionId) return "No plan ledger available.";
   const plan = db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) {
     const orphans = orphanLines(db, sessionId);
     return orphans.length > 0
-      ? ["No Big Plan recorded for this run.", ...orphans].join("\n")
-      : "No Big Plan recorded for this run.";
+      ? ["No plan recorded for this run.", ...orphans].join("\n")
+      : "No plan recorded for this run.";
   }
 
   const steps = db.getPlanSteps(plan.id);
@@ -49,7 +49,7 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
     driftByStep.set(change.step_id, paths);
   }
 
-  const lines = [`Big Plan verification - ${plan.title?.trim() || plan.id}`];
+  const lines = [`Plan verification - ${plan.title?.trim() || plan.id}`];
   if (steps.length === 0) lines.push("No plan steps recorded.");
   for (const step of steps) {
     const gate = latestGateByStep.get(step.id);

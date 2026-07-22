@@ -304,7 +304,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
     const refreshes =
       src.split("setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId))").length - 1;
     expect(refreshes).toBeGreaterThanOrEqual(2);
-    // Refresh is gated on Big Plan being on, like the plan strip.
+    // Refresh is gated on plan verification being on, like the plan strip.
     expect(src).toContain("agent.config.bigPlan === true");
   });
 
@@ -331,7 +331,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
 
   test("/bp commands are public", () => {
     expect(src).toContain('{ name: "bp", desc: "Show Plan Overview status');
-    expect(src).toContain('{ name: "bp-seed", desc: "Seed a demo Big Plan');
+    expect(src).toContain('{ name: "bp-seed", desc: "Seed a demo plan');
   });
 
   // M6.3: the 🔴 block captures the override through the gate-focus modal. While armed, the
@@ -403,7 +403,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
   });
 });
 
-// exit_plan (plan-mode exit): the tool is registered only while a Big Plan session is live,
+// exit_plan (plan-mode exit): the tool is registered only while a plan session is live,
 // the persona steers the model to it (never to slash commands), and the promptPlanner wrapper
 // re-applies the build prompt after a mid-turn exit (promptRouted's finally would otherwise
 // restore the planner persona it captured at entry — permanently).
@@ -493,7 +493,7 @@ describe("tui/app.tsx panel key routing", () => {
     );
   });
 
-  test("/why opens the Big Plan panel in the TUI; the text path survives for Big Plan-off/narrow", () => {
+  test("/why opens the plan panel in the TUI; the text path survives for verification-off/narrow", () => {
     const idx = src.indexOf('case "why": {');
     expect(idx).toBeGreaterThan(-1);
     // 3200: the PR-E observer section sits inside the case body ahead of the text path.
@@ -505,7 +505,7 @@ describe("tui/app.tsx panel key routing", () => {
   });
 });
 
-// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL Big Plan
+// Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL
 // planning workflow — session + planner persona + exit_plan — never the badge-only half-state
 // (mode flipped, session null → prompts ran the NORMAL loop and the model executed with
 // per-call approval instead of planning; bare /plan then EXITED instead of recovering).
@@ -635,7 +635,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
 
   test("bare /plan in plan-mode-without-a-session RECOVERS instead of exiting", () => {
     expect(src).toContain('sub === "off" ? false : planSessionRef.current == null');
-    // The mode-store test survives only in the Big Plan-off branch, promptPlanner's leak guard,
+    // The mode-store test survives only in the verification-off branch, promptPlanner's leak guard,
     // and the exit_plan retire-deferral cleanup (mid-turn mode exit).
     expect(src.split('getMode() !== "plan"').length - 1).toBe(3);
   });
@@ -650,7 +650,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   });
 });
 
-// Finalize handoff (2026-07-15): the ledger drives the whole Big Plan build spine — when synthesis
+// Finalize handoff (2026-07-15): the ledger drives the whole plan build spine — when synthesis
 // fails (truncated output was silently costing every seeded step), the user sees it and the
 // agent is told to rebuild the ledger via todowrite as its first move.
 describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {

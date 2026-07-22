@@ -18,7 +18,7 @@ The bar along the bottom shows, at a glance:
 - **Model** — the pinned model, or `auto` when Minima is routing.
 - **Cost** — running total from the cost meter for this session.
 - **Context** — percentage of the model's context window used, plus token counts.
-- **State** — whether a turn is in flight, plus plan/verification state when [Big Plan](/harness/architecture#big-plan-verification) is active.
+- **State** — whether a turn is in flight, plus plan/verification state when [plan verification](/harness/architecture#plan-verification) is active.
 
 ## Keyboard shortcuts
 
@@ -72,7 +72,7 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 | `/why [n]` | Show the verification evidence behind the plan (or open step `n`'s card) |
 | `/verify` | Adversarial whole-plan verification pass (refutation sub-agent) |
 | `/audit` | Lint the active plan — non-discriminative checks, missing allowlists, vague steps |
-| `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + Big Plan |
+| `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + the plan |
 | `/tree` | Toggle the live [sub-agent tree panel](/harness/tools#sub-agents-the-task-tool) |
 
 ### Memory

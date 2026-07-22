@@ -129,7 +129,7 @@ function setup(over: Partial<ReturnType<typeof harnessConfig>> = {}) {
   });
   agent.db = db;
   agent.runId = runId;
-  // A Big Plan exists (as in real use); the audit stop gate attaches to it. A2 is off
+  // A plan of record exists (as in real use); the audit stop gate attaches to it. A2 is off
   // (stopStrikes:0), so the in_progress step does not itself force continuation.
   db.upsertPlanFromTodos(runId, [{ content: "work", status: "in_progress" }]);
   return { agent, reg, db, runId, recommendCalls };

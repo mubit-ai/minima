@@ -113,13 +113,13 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
     );
   });
   test("a tool body wraps at the FULL box width, like MessageRow paints it", () => {
-    // The Big Plan mode notice (239 chars): MessageRow renders the body unindented, so at
+    // The plan-mode ON notice (235 chars): MessageRow renders the body unindented, so at
     // 120 cols it wraps to 2 rows. Counting at an interior width (cols-4 → 3 rows) floats
     // the composer off the terminal bottom — the tui-verify bottom-anchor regression.
     const notice =
       "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
       "Talk through the plan; the design council convenes on substantive turns. " +
-      "/plan finalize writes the Big Plan to the project root. /plan status · /plan cancel.";
+      "/plan finalize writes the plan to the project root. /plan status · /plan cancel.";
     expect(computeMsgHeight(tool(notice, "plan"), 120)).toBe(2 + wrappedLineCount(notice, 120));
     expect(wrappedLineCount(notice, 120)).toBe(2);
   });
@@ -347,7 +347,7 @@ describe("permPreviewLines — clips the permission preview by RENDERED rows", (
 
 describe("permPreviewKey — unique React key per preview row", () => {
   test("todowrite verify rows sharing the fixed label prefix get distinct keys", () => {
-    // The Big Plan todowrite preview shape (permissions.ts buildDiffPreview): the verify label
+    // The plan-verification todowrite preview shape (permissions.ts buildDiffPreview): the verify label
     // prefix is 39 chars, so a bare line.slice(0, 40) key collides whenever two commands
     // start with the same character — exactly this fixture.
     const preview = [
@@ -407,7 +407,7 @@ describe("permOverlayHeight — mirrors PermissionOverlay, estimate == render", 
     expect(permOverlayHeight(p, 24)).toBe(18);
   });
 
-  test("a Big Plan todowrite preview with a long verify command reserves its true rendered rows", () => {
+  test("a plan-verification todowrite preview with a long verify command reserves its true rendered rows", () => {
     const preview = [
       "1. [ ] wire the parser",
       `     verify (runs as a shell command): bun test tests/${"deeply/nested/".repeat(8)}parser.test.ts`,

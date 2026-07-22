@@ -1,5 +1,5 @@
 /**
- * The live "current action" indicator (Big Plan-0.5): while the agent is running tools, the footer
+ * The live "current action" indicator (BP-0.5): while the agent is running tools, the footer
  * shows what it is doing right now (`⚙ bash: git diff --stat`). Tools run in PARALLEL, so we
  * track the in-flight set keyed by toolCallId and clear each on its tool_execution_end — a
  * single string would be trampled when N tools start before any finishes.
