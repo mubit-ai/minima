@@ -34,6 +34,9 @@ your real LLM call.
 - **[Observer-Agent Research](observer-agent-research.md)** — evidence and design fit for
   a parallel adversarial observer agent: trusted-monitoring literature, industry practice,
   harness attachment points, and a phased O1–O5 plan.
+- **[Classifier Redesign Research](classifier-redesign-research.md)** — the regex/word-count
+  classifier's measured failure mode, router-industry prior art (OpenRouter, NVIDIA,
+  Arch-Router, semantic-router, UniRoute), method tiers, and the phased upgrade plan.
 
 ## Guides
 

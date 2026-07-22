@@ -1,7 +1,10 @@
 """Heuristic task classification: feature vector, type, and difficulty.
 
 Cheap and deterministic. Caller-supplied ``task_type``/``difficulty`` always win.
-Neighbor votes can refine an ``other`` result, but no LLM is consulted here.
+Neighbor votes can refine a heuristic result the caller didn't override (and the
+difficulty is re-inferred coherently with the refined type), but no LLM is
+consulted here. Callers gate WHEN to pass votes (the engine only does so for
+``other``/low-confidence classifications).
 """
 
 from __future__ import annotations
@@ -87,13 +90,19 @@ _FEATURE_RULES: tuple[_FeatureRule, ...] = (
             r"|\btraceback\b|compile|refactor|implement|debug"
             # coding-agent vocabulary: bugs, tests, builds, repos, tooling (a live coding
             # prompt classified summarization/trivial because none of these matched)
-            r"|\bbugs?\b|\bfix(es|ed|ing)? (the |a |this |it\b)|\bfix it\b"
+            r"|\bbugs?\b|\bfix(es|ed|ing)? (the |a |this |my |our |your |it\b)|\bfix it\b"
             r"|\b(failing|unit|integration|broken) tests?\b|\btests? (pass|fail|suite)\b"
             r"|\brun the tests\b|\bpytest\b|\bnpm (test|run)\b|\blint(er)?\b|\btype-?check"
             r"|\bcodebase\b|\brepo(sitory)?\b|\bgit (commit|branch|diff|rebase)\b"
             r"|\bcompil(er|ation) error\b|\bexit code\b"
+            # web-building vocabulary: build-intent verb + web artifact noun, plus bare
+            # strong signals (a live "build me a website" prompt classified other/easy)
+            r"|\b(build|create|make|develop)\b[^.?!]{0,60}?"
+            r"\b(web ?site|web ?pages?|web ?app|webapp|landing page|front-?end)\b"
+            r"|\bhtml\b|\bcss\b|\bfront-?end\b"
             # file-path/extension mentions are strong code signals
-            r"|\b[\w/.-]+\.(py|ts|tsx|js|jsx|go|rs|java|rb|cpp|cs|sh|sql|yaml|yml|toml|json)\b",
+            r"|\b[\w/.-]+\.(py|ts|tsx|js|jsx|go|rs|java|rb|cpp|cs|sh|sql|yaml|yml|toml|json"
+            r"|html|css|scss|sass|less|vue|svelte)\b",
             re.I,
         ),
         TaskFeatureVector(
@@ -184,6 +193,14 @@ _COMPLEXITY_MARKERS = re.compile(
     # systems-hardness cues: concurrency/distribution/compat push real difficulty up
     r"|lock-free|concurren(t|cy)|thread-?safe|race condition|deadlock|distributed"
     r"|memory[- ]ordering|multi-tenant|SLAs?|backwards?[- ]compatib|migration|atomic)\b",
+    re.I,
+)
+# Build-scope markers: a generative verb aimed at a substantial artifact. Word count
+# alone reads "build me a website" as trivial; the requested SCOPE is what's large.
+_BUILD_SCOPE_MARKERS = re.compile(
+    r"\b(build|create|make|write|develop)\b[^.?!]{0,60}?"
+    r"\b(web ?site|web ?pages?|web ?app|webapp|landing page|apps?|applications?|games?"
+    r"|dashboards?|services?|apis?|clis?|tools?|bots?)\b",
     re.I,
 )
 
@@ -469,6 +486,9 @@ def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
     else:
         base = 4  # expert
 
+    if _BUILD_SCOPE_MARKERS.search(text):
+        base = max(base, 2)  # build-scope floor: a short ask for a big artifact is not easy
+
     if len(_COMPLEXITY_MARKERS.findall(text)) >= 2:
         base += 1  # multiple multi-step / constraint markers
 
@@ -502,7 +522,11 @@ def classify_details(
             features = _blend_vectors(features, neighbor_estimate.features, 0.35)
             neighbor_support = neighbor_estimate.neighbor_support
             neighbor_count = neighbor_estimate.neighbor_count
-            if task.task_type is None and task_type == TaskType.other and neighbor_estimate.task_type != TaskType.other:
+            if (
+                task.task_type is None
+                and neighbor_estimate.task_type != TaskType.other
+                and neighbor_estimate.task_type != task_type
+            ):
                 task_type = neighbor_estimate.task_type
                 task_type_source = "neighbor_vote"
         profiler.mark("neighbor_vote")
