@@ -180,6 +180,21 @@ describe("v14 Big Plan outcome migration", () => {
     expect(row.gt_confidence).toBeNull();
     db.db.close();
   });
+
+  test("legacy-only gt_* rows still read through the COALESCE fallback", () => {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("project-legacy");
+    const runId = db.startRun({ runId: "run-legacy", projectKey: "project-legacy" });
+    db.db.run(
+      `INSERT INTO routing_decisions (rec_id, run_id, ts, judged, quality, gt_outcome)
+       VALUES ('rec-legacy', ?, 1, 1, 0.9, 'failure')`,
+      [runId],
+    );
+    const rows = db.getProjectJudgeGateDisagreements("project-legacy");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.big_plan_outcome).toBe("failure");
+    db.db.close();
+  });
 });
 
 describe("migration runner: concurrent opens", () => {

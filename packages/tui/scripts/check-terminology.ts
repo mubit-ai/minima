@@ -19,7 +19,7 @@ const activeDocs = [
 
 const allowed: Record<string, RegExp> = {
   "src/db/minima_db.ts": /^gt_(?:outcome|verified_by|confidence)$/,
-  "src/minima/big_plan.ts": /^GtAgentRef$/,
+  "src/db/rehydrate.ts": /^gt_outcome$/,
   "tests/db_migrate.test.ts": /^gt_(?:outcome|verified_by|confidence)$/,
 };
 

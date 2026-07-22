@@ -1569,12 +1569,14 @@ export class MinimaDb {
   getProjectJudgeGateDisagreements(projectKey: string, limit = 200): Record<string, unknown>[] {
     return this.db
       .query(
-        `SELECT rec_id, task_type, chosen_model, quality, big_plan_outcome, ts
+        `SELECT rec_id, task_type, chosen_model, quality,
+                COALESCE(big_plan_outcome, gt_outcome) AS big_plan_outcome, ts
          FROM routing_decisions
          WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)
-           AND judged = 1 AND quality IS NOT NULL AND big_plan_outcome IS NOT NULL
-           AND ((quality >= 0.8 AND big_plan_outcome = 'failure')
-             OR (quality < 0.4 AND big_plan_outcome = 'success'))
+           AND judged = 1 AND quality IS NOT NULL
+           AND COALESCE(big_plan_outcome, gt_outcome) IS NOT NULL
+           AND ((quality >= 0.8 AND COALESCE(big_plan_outcome, gt_outcome) = 'failure')
+             OR (quality < 0.4 AND COALESCE(big_plan_outcome, gt_outcome) = 'success'))
          ORDER BY ts LIMIT ?`,
       )
       .all(projectKey, limit) as Record<string, unknown>[];
@@ -2376,7 +2378,9 @@ export class MinimaDb {
   }
 
   // ---------------------------------------------------------------- Big Plan outcome (M7.1)
-  /** Stamp the step's real (deterministic) result onto its routing decision. */
+  /** Stamp the step's real (deterministic) result onto its routing decision. Legacy `gt_*`
+   * columns are read-only from here on (COALESCE fallback for rows written by pre-rename
+   * binaries); the dual-write compat window closed with 0.13.2. */
   attachBigPlanOutcome(
     recId: string,
     o: { outcome: GateOutcome; verifiedBy: VerifiedBy; confidence?: ConfidenceTier | null },
