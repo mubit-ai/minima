@@ -1785,6 +1785,13 @@ export function HarnessApp({
       },
     ]);
   };
+  // R8: the footer's session $ — meter-only figures (actual + judge/finalize overhead + tool
+  // fees) live on the in-memory CostMeter, never in the DB, so the overview and /why are
+  // handed the number at build time.
+  const sessionTotalUsd = () => {
+    const t = agent.meter?.totals();
+    return t ? t.actualCostUsd + t.overheadUsd + t.toolFeesUsd : 0;
+  };
   // Ctrl+G: plan verification off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestPlanOverview = () => {
     // MP16: a live plan session's cannot-render fallback is a terse draft summary —
@@ -1805,7 +1812,8 @@ export function HarnessApp({
       ]);
       return;
     }
-    const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+    const overview =
+      agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd()) : null;
     setMessages((m) => [
       ...m,
       { role: "tool", text: renderPlanOverviewText(overview, cols - 6), toolName: "bp" },
@@ -1949,7 +1957,10 @@ export function HarnessApp({
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+        const overview =
+          agent.db && agent.runId
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
+            : null;
         if (overview) {
           setPanel(
             planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),
@@ -1993,7 +2004,7 @@ export function HarnessApp({
         if (input === "v") {
           let report: string;
           try {
-            report = whyReportFor(bigPlanDb, agent.runId);
+            report = whyReportFor(bigPlanDb, agent.runId, sessionTotalUsd());
           } catch (exc) {
             report = `⚠ /why unavailable: ${errText(exc)}`;
           }
@@ -3760,7 +3771,7 @@ export function HarnessApp({
         // only path headless runs ever had (no slash commands there).
         const overview =
           agent.config.bigPlan === true && agent.db && agent.runId
-            ? buildPlanOverview(agent.db, agent.runId)
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
             : null;
         // PR-E: the observer's projection — verdict count + last 3, muted (dim tool
         // output), only when the flag is on and verdicts exist.
@@ -3811,7 +3822,7 @@ export function HarnessApp({
               ? `No step ${n} — the plan has ${overview.steps.length} step(s).`
               : stepCardLines(row, overview.gatesByStep.get(row.stepId) ?? []).join("\n");
         } else {
-          text = whyReportFor(agent.db, agent.runId);
+          text = whyReportFor(agent.db, agent.runId, sessionTotalUsd());
         }
         if (obsSection) text = `${text}\n\n${obsSection}`;
         setMessages((m) => [
@@ -4506,7 +4517,10 @@ export function HarnessApp({
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+        const overview =
+          agent.db && agent.runId
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
+            : null;
         if (overview) {
           setPanel(
             planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),

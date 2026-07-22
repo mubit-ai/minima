@@ -20,7 +20,11 @@ export interface GateVerdict {
   reason: string;
 }
 
-export function whyReportFor(db: MinimaDb | null, sessionId: string | null): string {
+export function whyReportFor(
+  db: MinimaDb | null,
+  sessionId: string | null,
+  sessionTotalUsd = 0,
+): string {
   if (!db || !sessionId) return "No plan ledger available.";
   const plan = db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) {
@@ -88,6 +92,16 @@ export function whyReportFor(db: MinimaDb | null, sessionId: string | null): str
       lines.push(`${icon} ${gate.kind ?? "milestone"} ${tier}${display.reason}`);
       for (const reason of gateReasons(gate).slice(0, 5)) lines.push(`  - ${reason}`);
     }
+  }
+  // R8: the same three figures as the Plan Overview's Σ footer — the text path is the only
+  // cost surface for plan-verification-off/narrow terminals. Omitted when every figure is 0.
+  const stampedUsd = db.stepCosts(plan.id).totalUsd;
+  const unattributedUsd = Math.max(0, db.runRoutedTotal(sessionId) - stampedUsd);
+  if (stampedUsd > 0 || sessionTotalUsd > 0 || unattributedUsd > 0) {
+    lines.push(`Σ $${stampedUsd.toFixed(4)} realized (stamped steps)`);
+    lines.push(
+      `session total $${sessionTotalUsd.toFixed(4)} · unattributed $${unattributedUsd.toFixed(4)}`,
+    );
   }
   lines.push(...orphanLines(db, sessionId));
   return lines.join("\n");
