@@ -676,7 +676,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     } else {
       process.stderr.write(
-        "minima: MINIMA_TUI_CLASSIFY=1 ignored (no runnable classifier model — provider key missing)\n",
+        "minima: client-side classification ignored (no runnable classifier model — provider key missing)\n",
       );
     }
   }
