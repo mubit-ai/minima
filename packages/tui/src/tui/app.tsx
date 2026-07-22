@@ -165,6 +165,7 @@ import {
   releaseOnPrompt,
   takeNext,
 } from "./prompt_queue.ts";
+import { QueueList, queueListRowCount } from "./queue_list.tsx";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
 import {
@@ -4594,6 +4595,13 @@ export function HarnessApp({
   const busyIndicatorVisible =
     busy && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
+  // The visual prompt queue (QueueList) stacks dim single-height rows directly above the
+  // prompt box whenever items wait. Same suppression gate as the busy indicator (an overlay
+  // or the panel owns the bottom region), and its exact row count is booked below in
+  // contentRows/streamReserved/treeMaxRows — an unbooked row would top-clip the composer.
+  const queueListVisible =
+    promptQueue.items.length > 0 && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
+  const queueListHeight = queueListVisible ? queueListRowCount(promptQueue) : 0;
   // The question overlay renders when no permission prompt does (matching the render gate
   // below). Its rows must be reserved like permPrompt's — AND its model-supplied content
   // must be made to fit: the question text is clamped (questionDisplayText) and the option
@@ -4633,6 +4641,7 @@ export function HarnessApp({
       permPromptHeight -
       questionPromptHeight -
       busyIndicatorHeight -
+      queueListHeight -
       TREE_CHROME,
   );
   const treeVisible = treeOpen && treeMaxRows > 0 && !panelVisible;
@@ -4647,6 +4656,7 @@ export function HarnessApp({
     questionPromptHeight +
     treeHeight +
     busyIndicatorHeight +
+    queueListHeight +
     streamingThoughtsHeight +
     2; // "◆ assistant" header + marginTop
   const streamTail = streaming
@@ -4730,6 +4740,7 @@ export function HarnessApp({
       : streamingThoughtsHeight +
         streamTailRows +
         busyIndicatorHeight +
+        queueListHeight +
         suggestionsHeight +
         inputBoxHeight +
         permPromptHeight +
@@ -4961,6 +4972,7 @@ export function HarnessApp({
               )}
             </Box>
           )}
+          {queueListVisible && <QueueList queue={promptQueue} />}
           <Box
             borderStyle="round"
             borderColor={planMode ? "magenta" : "yellow"}
