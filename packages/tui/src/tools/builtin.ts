@@ -51,6 +51,11 @@ export interface BuiltinToolsOptions {
    * never pass it, so their todos can't leak into the lead panel.
    */
   todoState?: TodoTask[];
+  /**
+   * Booking seam for web_search provider fees (MUB-172), keyed by tool_call_id. main.ts
+   * wires it to the meter + budget so real search spend never vanishes from the wallet.
+   */
+  onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
@@ -66,7 +71,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     globTool(fs),
     grepTool(fs),
     todowriteTool(opts.todoState ?? [], { bigPlan: opts.bigPlan === true }),
-    webSearchTool(),
+    webSearchTool({ onFeeUsd: opts.onWebSearchFeeUsd }),
     webFetchTool(),
   ];
   const exclude = new Set(opts.exclude ?? []);

@@ -1371,7 +1371,7 @@ export function HarnessApp({
    */
   function buildUsageLedger(): TocUsage[] {
     const agentMsgs = agent.agentState.messages;
-    return computeSections(agentMsgs)
+    return computeSections(agentMsgs, { toolFees: agent.meter?.toolFees })
       .sections.filter((s) => agentMsgs[s.startMsgIdx]?.role === "user")
       .map((s) => ({
         tokens: s.usage.inputTokens + s.usage.outputTokens,
@@ -2125,7 +2125,7 @@ export function HarnessApp({
       }
     }
     const totals = agent.meter?.totals();
-    if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
+    if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
     // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
     const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
     setInputTokens(stats.inputTokens);
@@ -2133,7 +2133,7 @@ export function HarnessApp({
     setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
     const notices: ChatMessage[] = [
-      resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd : 0),
+      resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd : 0),
     ];
     // D1 (v13): warn-only tooling-skew banner — the resumed run was recorded under a
     // different harness/toolset, so its history may replay imperfectly. Never blocks.
@@ -4324,7 +4324,7 @@ export function HarnessApp({
       setStreaming("");
       setStreamingThoughts("");
       const totals = agent.meter?.totals();
-      if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd);
+      if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
       if (agent.budget) setBudgetStatus(agent.budget.status());
 
       const last = getLastAssistant(agent);

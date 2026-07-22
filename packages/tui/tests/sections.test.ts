@@ -110,6 +110,39 @@ describe("computeSections (U1.2)", () => {
     expect(sections[0]!.usage.inputTokens).toBe(100);
     expect(sections[0]!.usage.costUSD).toBeCloseTo((100 * 3 + 10 * 15) / 1e6, 12);
   });
+
+  // MUB-172: booked web_search provider fees join by tool_call_id — the section's costUSD
+  // is realized $ (tokens + tool fees), so the ToC can never under-report a search turn.
+  test("booked tool fees join by tool_call_id into section costUSD and totals", () => {
+    const ws = new Message({
+      role: "toolResult",
+      content: "[1] result",
+      tool_name: "web_search",
+      tool_call_id: "ws-1",
+    });
+    const msgs = [user("find docs"), turn(1000, 200), ws, user("next"), turn(1000, 200)];
+    const fees = new Map([["ws-1", 0.005]]);
+    const { sections, totals } = computeSections(msgs, { toolFees: fees });
+    const tokenCost = (1000 * 3 + 200 * 15) / 1e6;
+    expect(sections[0]!.usage.costUSD).toBeCloseTo(tokenCost + 0.005, 12);
+    expect(sections[1]!.usage.costUSD).toBeCloseTo(tokenCost, 12);
+    expect(totals.costUSD).toBeCloseTo(2 * tokenCost + 0.005, 12);
+  });
+
+  test("unbooked tool_call_ids and an absent fee map leave costUSD token-only", () => {
+    const ws = new Message({
+      role: "toolResult",
+      content: "[1] result",
+      tool_name: "web_search",
+      tool_call_id: "ws-1",
+    });
+    const msgs = [user("find docs"), turn(1000, 200), ws];
+    const tokenCost = (1000 * 3 + 200 * 15) / 1e6;
+    expect(computeSections(msgs).totals.costUSD).toBeCloseTo(tokenCost, 12);
+    expect(
+      computeSections(msgs, { toolFees: new Map([["other", 1]]) }).totals.costUSD,
+    ).toBeCloseTo(tokenCost, 12);
+  });
 });
 
 describe("sectionTitle", () => {

@@ -33,6 +33,9 @@ export interface CostTotals {
   /** Harness overhead (LLM judge spend) — real money outside every routed row, so it is
    * never part of actualCostUsd/savings and never reaches feedback's actual_cost_usd. */
   overheadUsd: number;
+  /** Non-LLM tool provider fees (web_search) — also real money outside every routed row,
+   * booked per tool_call_id so sections can attribute it; never reaches feedback. */
+  toolFeesUsd: number;
   baselineCostUsd: number;
   baselineRows: number;
   successes: number;
@@ -61,6 +64,7 @@ export function emptyTotals(): CostTotals {
     estCostUsd: 0,
     actualCostUsd: 0,
     overheadUsd: 0,
+    toolFeesUsd: 0,
     baselineCostUsd: 0,
     baselineRows: 0,
     successes: 0,
@@ -83,7 +87,7 @@ export function emptyTotals(): CostTotals {
     },
     get costOfPassUsd() {
       return this.labeledSuccesses > 0
-        ? (this.actualCostUsd + this.overheadUsd) / this.labeledSuccesses
+        ? (this.actualCostUsd + this.overheadUsd + this.toolFeesUsd) / this.labeledSuccesses
         : null;
     },
     get labelCoverage() {
@@ -95,11 +99,27 @@ export function emptyTotals(): CostTotals {
 export class CostMeter {
   readonly rows: CostRow[] = [];
   overheadUsd = 0;
+  /** MUB-172: booked tool provider fees by tool_call_id — the join key the section ledger
+   * uses to attribute each fee to the prompt whose turn ran the tool. */
+  readonly toolFees = new Map<string, number>();
 
   /** Book harness overhead (judge spend). Rejects NaN/Infinity/negatives — the hook fires
    * with 0 on judge transport errors and must never corrupt the accumulator. */
   addOverhead(usd: number): void {
     if (Number.isFinite(usd) && usd > 0) this.overheadUsd += usd;
+  }
+
+  /** Book a non-LLM tool provider fee (web_search), keyed by tool_call_id. Same guards as
+   * addOverhead; never folded into actualCostUsd or feedback's realized cost. */
+  bookToolFee(toolCallId: string, usd: number): void {
+    if (!toolCallId || !Number.isFinite(usd) || usd <= 0) return;
+    this.toolFees.set(toolCallId, (this.toolFees.get(toolCallId) ?? 0) + usd);
+  }
+
+  get toolFeesUsd(): number {
+    let sum = 0;
+    for (const v of this.toolFees.values()) sum += v;
+    return sum;
   }
 
   record(opts: {
@@ -137,6 +157,7 @@ export class CostMeter {
   totals(): CostTotals {
     const t = emptyTotals();
     t.overheadUsd = this.overheadUsd;
+    t.toolFeesUsd = this.toolFeesUsd;
     for (const r of this.rows) {
       t.n += 1;
       t.estCostUsd += r.estCostUsd;
@@ -196,11 +217,12 @@ export class CostMeter {
         `savings ${t.savingsPct.toFixed(1)}% ($${t.savingsUsd.toFixed(6)}) | ` +
         `success ${t.successRate.toFixed(1)}% (${t.successes}/${t.n})`,
     );
-    if (t.overheadUsd > 0) {
-      lines.push(
-        `judge overhead $${t.overheadUsd.toFixed(6)} | ` +
-          `session total $${(t.actualCostUsd + t.overheadUsd).toFixed(6)}`,
-      );
+    const extras: string[] = [];
+    if (t.overheadUsd > 0) extras.push(`judge overhead $${t.overheadUsd.toFixed(6)}`);
+    if (t.toolFeesUsd > 0) extras.push(`tool fees $${t.toolFeesUsd.toFixed(6)}`);
+    if (extras.length > 0) {
+      extras.push(`session total $${(t.actualCostUsd + t.overheadUsd + t.toolFeesUsd).toFixed(6)}`);
+      lines.push(extras.join(" | "));
     }
     // F1 honest metrics: KV-cache hit rate (a realized-cost lever AND a canary — a harness
     // change that breaks prefix stability corrupts the cost basis the server learns from)

@@ -530,8 +530,13 @@ Usage: minima [prompt] [--print|--mode json] [options]
   set MINIMA_TUI_ALLOW_VERIFY=1 to opt a headless run into executing them.
 `;
 
-function toolsFor(args: CliArgs, bigPlan: boolean, todoState?: TodoTask[]) {
-  let tools = args.noTools ? [] : builtinTools({ bigPlan, todoState });
+function toolsFor(
+  args: CliArgs,
+  bigPlan: boolean,
+  todoState?: TodoTask[],
+  onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void,
+) {
+  let tools = args.noTools ? [] : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -640,7 +645,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
   const todoState: TodoTask[] = [];
-  const tools = toolsFor(args, config.bigPlan === true, todoState);
+  // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
+  // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
+  let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
+  const tools = toolsFor(args, config.bigPlan === true, todoState, (usd, id) =>
+    bookSearchFee(usd, id),
+  );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: sampled LLM grading is ON by default (config.judgeSampleRate, ~15% of
@@ -700,6 +710,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   bookClassifySpend = (usd) => {
     agent.meter?.addOverhead(usd);
     agent.budget?.bookSpend(usd, "classify");
+  };
+  bookSearchFee = (usd, toolCallId) => {
+    agent.meter?.bookToolFee(toolCallId, usd);
+    agent.budget?.bookSpend(usd, "web_search");
   };
   // Apply the --thinking CLI flag to the initial reasoning level. It was parsed but never used;
   // the agent kept its default, so the flag was a silent no-op.

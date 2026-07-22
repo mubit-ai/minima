@@ -73,3 +73,42 @@ describe("honest meter (F1)", () => {
     expect(empty.report()).toContain("cost-of-pass n/a (no labeled successes; label coverage 0%)");
   });
 });
+
+// MUB-172: web_search provider fees are real money outside every routed row — booked per
+// tool_call_id (so sections can attribute them), never into actualCostUsd or feedback.
+describe("tool fees (web_search provider spend)", () => {
+  test("bookToolFee accumulates per tool_call_id into totals().toolFeesUsd, never actualCostUsd", () => {
+    const meter = new CostMeter();
+    rec(meter, { cost: 0.5, outcome: "success" });
+    meter.bookToolFee("ws-1", 0.005);
+    meter.bookToolFee("ws-2", 0.005);
+    const t = meter.totals();
+    expect(t.toolFeesUsd).toBeCloseTo(0.01, 12);
+    expect(t.actualCostUsd).toBeCloseTo(0.5, 12);
+    expect(meter.toolFees.get("ws-1")).toBeCloseTo(0.005, 12);
+  });
+
+  test("guards NaN / Infinity / zero / negatives / empty id", () => {
+    const meter = new CostMeter();
+    meter.bookToolFee("t1", Number.NaN);
+    meter.bookToolFee("t1", Number.POSITIVE_INFINITY);
+    meter.bookToolFee("t1", 0);
+    meter.bookToolFee("t1", -0.01);
+    meter.bookToolFee("", 0.01);
+    expect(meter.totals().toolFeesUsd).toBe(0);
+    expect(meter.toolFees.size).toBe(0);
+  });
+
+  test("report() shows tool fees + session total; cost-of-pass includes the spend", () => {
+    const meter = new CostMeter();
+    rec(meter, { cost: 0.5, outcome: "success", quality: 0.9 });
+    expect(meter.report()).not.toContain("tool fees");
+    meter.addOverhead(0.25);
+    meter.bookToolFee("ws-1", 0.05);
+    const report = meter.report();
+    expect(report).toContain("judge overhead $0.250000");
+    expect(report).toContain("tool fees $0.050000");
+    expect(report).toContain("session total $0.800000");
+    expect(meter.totals().costOfPassUsd).toBeCloseTo(0.8, 8);
+  });
+});
