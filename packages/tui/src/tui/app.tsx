@@ -468,8 +468,14 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
  * Approval overlay for a gated tool call. Its height math lives in permOverlayHeight() in
  * layout.ts — component and reservation consume the same permToolLabel/permPreviewLines/
  * permHiddenMarker helpers, so the estimate can never drift from the render.
+ * `minimal` (LB-20): the too-small notice renders a one-line form so the SAME useInput stays
+ * mounted — an armed prompt must stay answerable at any terminal size.
  */
-export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; cols: number }) {
+export function PermissionOverlay({
+  prompt,
+  cols,
+  minimal = false,
+}: { prompt: PermissionPrompt; cols: number; minimal?: boolean }) {
   const isReadTool = prompt.toolName === "read" || prompt.toolName === "ls";
 
   useInput((input, key) => {
@@ -481,6 +487,14 @@ export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; 
       prompt.resolve("deny");
     }
   });
+
+  if (minimal) {
+    return (
+      <Text color="yellow" wrap="truncate">
+        {permToolLabel(prompt.toolName)} {prompt.argsSummary || prompt.promptText} · [y/a/n]
+      </Text>
+    );
+  }
 
   return (
     <Box
@@ -4357,10 +4371,12 @@ export function HarnessApp({
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
-  // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
-  // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
-  // inside the box, so grow the reserve by the extra wrapped lines.
-  const inputHidden = overlayOpen || permPrompt || questionPrompt;
+  // The prompt/plan input box only hides for the pickers/overlays that replace it in the
+  // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
+  // unmounting zeroed its booked rows AND dropped the draft's keyboard home, and the prompt
+  // box vanishing under an overlay read as a lost composer. Plan mode adds its banner (+3).
+  // A long typed prompt wraps inside the box, so grow the reserve by the extra wrapped lines.
+  const inputHidden = overlayOpen;
   // The trailing "▋" accounts for the cursor cell: a draft line exactly at the interior
   // width wraps the cursor onto a fresh row, which the reserve must include.
   const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
@@ -4525,19 +4541,25 @@ export function HarnessApp({
   const busyIndicatorVisible =
     busy && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
-  // The question overlay owns the bottom region when no permission prompt does (matching the
-  // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
-  // content must be made to fit: the question text is clamped (questionDisplayText) and the
-  // option list is windowed to the rows actually left after the safety margin, footer,
-  // suggestions, and the overlay's own chrome (border 2 + question + 2 window markers + hint).
-  // Component and reservation use the same numbers, so estimate == render.
+  // The question overlay renders when no permission prompt does (matching the render gate
+  // below). Its rows must be reserved like permPrompt's — AND its model-supplied content
+  // must be made to fit: the question text is clamped (questionDisplayText) and the option
+  // list is windowed to the rows actually left after the safety margin, footer, suggestions,
+  // the still-mounted composer (LB-20), and the overlay's own chrome (border 2 + question +
+  // 2 window markers + hint). Component and reservation use the same numbers, so
+  // estimate == render.
   const questionChrome = questionPrompt
     ? 5 +
       wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
     : 0;
   const questionMaxOptionRows = Math.max(
     1,
-    rows - SCROLLBACK_SAFETY_ROWS - footerHeight - suggestionsHeight - questionChrome,
+    rows -
+      SCROLLBACK_SAFETY_ROWS -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      questionChrome,
   );
   const questionPromptHeight =
     questionPrompt && !permPrompt
@@ -4724,7 +4746,10 @@ export function HarnessApp({
   });
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
-  // show a single resize notice instead of a clipped, garbled UI.
+  // show a single resize notice instead of a clipped, garbled UI. An armed permission prompt
+  // must stay ANSWERABLE here (LB-20): unmounting PermissionOverlay strips its useInput and
+  // wedges the run until a blind resize, so the notice carries a one-line minimal overlay
+  // whose key handling is the same hook.
   if (rows < 10 || cols < 40) {
     return (
       <Box
@@ -4739,6 +4764,19 @@ export function HarnessApp({
           Terminal too small
         </Text>
         <Text color="gray">{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
+        {permPrompt && (
+          <PermissionOverlay
+            prompt={{
+              ...permPrompt,
+              resolve: (decision) => {
+                setPermPrompt(null);
+                permPrompt.resolve(decision);
+              },
+            }}
+            cols={cols}
+            minimal
+          />
+        )}
       </Box>
     );
   }
@@ -4826,7 +4864,9 @@ export function HarnessApp({
         />
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : permPrompt || questionPrompt ? null : ( // permission/question prompt owns the bottom region (rendered below)
+      ) : (
+        // The composer stays MOUNTED under a permission/question prompt (LB-20) — suspended
+        // so the overlay below owns the keys, its rows still booked (inputBoxHeight).
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
@@ -4894,7 +4934,7 @@ export function HarnessApp({
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={gateFocus !== null && !gateFocus.noteEntry}
-              suspended={panelCapture}
+              suspended={panelCapture || permPrompt !== null || questionPrompt !== null}
               disabledLabel={
                 gateFocus && !busy
                   ? "🔴 [a]ccept · [r]eject · [s]teer · [v]iew · esc to type"

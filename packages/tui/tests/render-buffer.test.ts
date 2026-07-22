@@ -56,3 +56,38 @@ describe("app.tsx /clear and /new reseat the terminal", () => {
     expect(calls.length).toBe(2);
   });
 });
+
+// LB-20: an armed permission/question prompt must never make the UI unanswerable. The old
+// render nulled the composer subtree under a prompt (its booked rows vanished), and the
+// too-small branch unmounted PermissionOverlay entirely — taking its useInput with it, so
+// y/a/n stopped working and the run wedged until a blind resize.
+describe("app.tsx keeps the permission overlay answerable (LB-20)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("composer stays MOUNTED-but-suspended under permPrompt/questionPrompt (never null)", () => {
+    expect(src).not.toContain("permPrompt || questionPrompt ? null");
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
+  });
+
+  test("the composer's rows stay booked under a prompt (inputHidden is overlay-only)", () => {
+    expect(src).toContain("const inputHidden = overlayOpen;");
+  });
+
+  test("the question overlay's option window accounts for the mounted composer", () => {
+    const start = src.indexOf("const questionMaxOptionRows");
+    const expr = src.slice(start, src.indexOf(";", start));
+    expect(expr).toContain("inputBoxHeight");
+  });
+
+  test("the too-small branch keeps the armed prompt answerable (minimal overlay, useInput alive)", () => {
+    const tooSmall = src.indexOf("Terminal too small");
+    expect(tooSmall).toBeGreaterThan(0);
+    const overlayInNotice = src.indexOf("<PermissionOverlay", tooSmall);
+    const noticeEnd = src.indexOf("const chatRegion", tooSmall);
+    expect(overlayInNotice).toBeGreaterThan(tooSmall);
+    expect(overlayInNotice).toBeLessThan(noticeEnd);
+    expect(src.slice(overlayInNotice, noticeEnd)).toContain("minimal");
+  });
+});

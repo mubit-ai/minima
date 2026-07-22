@@ -475,7 +475,11 @@ describe("tui/app.tsx panel key routing", () => {
   });
 
   test("the composer suspends on the SAME expression (the leak fix)", () => {
-    expect(src).toContain("suspended={panelCapture}");
+    // LB-20 widened it: an armed permission/question prompt also suspends the composer
+    // (mounted, draft kept, zero key consumption) instead of unmounting it.
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
     expect(src).not.toContain("suspended={tocOpen}");
   });
 
@@ -569,14 +573,17 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   test("Enter on the permission overlay ACCEPTS (Yes once) — it can never cancel", () => {
     // 2026-07-21: an approved-then-gate-blocked todowrite read as "Enter cancelled it".
     // Pin the actual mapping: return sits in the ALLOW branch (escape in deny), and the
-    // overlay is the only Enter consumer while it is up — the composer unmounts entirely.
+    // overlay is the only Enter consumer while it is up — the composer stays MOUNTED but
+    // SUSPENDED (LB-20), and a suspended TextInput consumes nothing.
     const idx = src.indexOf('if (input === "y" || input === "Y" || key.return) {');
     expect(idx).toBeGreaterThan(-1);
     const handler = src.slice(idx, idx + 300);
     const allowAt = handler.indexOf('prompt.resolve("allow");');
     expect(allowAt).toBeGreaterThan(-1);
     expect(allowAt).toBeLessThan(handler.indexOf('prompt.resolve("deny");'));
-    expect(src).toContain("permPrompt || questionPrompt ? null : (");
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
   });
 
   test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {
