@@ -1,5 +1,10 @@
 # Python Client SDK
 
+> **Deployment framing:** this page targets a **self-hosted** Minima (`localhost:8080`,
+> schemas imported from the co-installed `minima` package). For the **hosted service**
+> (`https://api.minima.sh`, Mubit-key auth), see the published version at
+> [docs.minima.sh/sdk/client-sdk](https://docs.minima.sh/sdk/client-sdk).
+
 The `minima_client` package is a thin, typed client for the Minima API plus an optional
 zero-code intake helper. It ships in the same repo as the server.
 

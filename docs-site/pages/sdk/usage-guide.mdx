@@ -1,0 +1,82 @@
+---
+title: Using Minima correctly
+description: The end-to-end proper-use flow — the loop, the golden rules, and what degrades when you skip them.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# Using Minima correctly
+
+Minima is **recommend-only**. Everything about using it well follows from that one fact: it tells you which model to run, *you* run the model, and you tell it what actually happened. This page is the whole proper-use flow in one place.
+
+## The loop
+
+```
+        ┌─────────────────────────────────────────────────────────┐
+        │                                                           │
+        ▼                                                           │
+  POST /v1/recommend  ──▶  you run the model  ──▶  POST /v1/feedback
+   (recall + rank)          (your stack)            (write outcome,
+                                                     reinforce memory)
+        ▲                                                           │
+        │              memory gets sharper for next time           │
+        └───────────────────────────────────────────────────────-─┘
+```
+
+`recommend → run the model yourself → judge quality → feedback`. Minima never proxies, executes, or caches an LLM call — so it adds zero latency to your real request, and everything it learns comes from the feedback you send.
+
+## The golden rules
+
+### 1. Run the model yourself
+
+The response gives you `recommended_model.model_id` and a `recommendation_id`. Run that model in your own stack with your own provider credentials. If `recommend` fails, **fail open** to your default model — your LLM call must never block on Minima.
+
+### 2. Report realized usage and cost — never echo `est_cost_usd`
+
+Feedback must carry what **actually** happened: realized `input_tokens`, `output_tokens`, `actual_cost_usd`, and `latency_ms`, measured from the provider's own response.
+
+<Warning>
+`est_cost_usd` on the recommendation is Minima's *prediction*. Echoing it back as `actual_cost_usd` teaches the ranker nothing — it just confirms its own guess. Real numbers are what let the cost basis climb `estimate → observed → rescaled`, the **single biggest accuracy lever** of the whole system: `estimate` prices catalog rates against assumed token counts, `observed` uses the median realized cost per call, and `rescaled` prices *your request's* input against observed output behavior (which is what catches models with cheap list prices but heavy internal reasoning). See [Cost-basis tiers](/sdk/concepts#cost-basis-tiers-estimate--observed--rescaled).
+</Warning>
+
+### 3. Report outcomes honestly
+
+`outcome` is `"success"` | `"partial"` | `"failure"`. When you have a quality score in `[0, 1]`, the ecosystem-wide mapping is:
+
+| Score | Outcome |
+|-------|---------|
+| ≥ 0.8 | `success` |
+| ≥ 0.4 | `partial` |
+| < 0.4 | `failure` |
+
+Declare where the label came from with `evidence_source`: `"gate"` (a deterministic check passed — the only origin that may claim verified-in-production), `"judge"` (an LLM judge), `"human"` (you asserted it), or `"none"` (no label — the outcome rides as cost/latency telemetry only and never teaches the success posterior). Never fabricate a score you don't have; an honest `"none"` is more useful than an invented `0.9`.
+
+### 4. Keep `recommendation_id` as the join key
+
+The `recommendation_id` from each recommendation is the single key that joins your run to Minima's decision log and memory. Carry it through your pipeline and quote it back on feedback — feedback with a lost or invented id can't credit the memories that drove the pick.
+
+### 5. Send feedback even for failures
+
+A failure is a learning signal, not an embarrassment to hide — it's how Minima learns a model *can't* handle a task type and stops recommending it. For provider/infra faults (429s, 5xx, timeouts) pass `error_cause: "infra"` so a rate limit is never learned as model quality.
+
+### What degrades if you skip feedback
+
+- The **cost basis stays at `estimate`** — ranking runs on list prices and assumed token counts instead of your realized costs.
+- Recommendations stay **prior-driven** (`decision_basis: "prior"`) instead of grounded in your own history.
+- The measurement layer goes dark: [`/v1/savings`](/api-reference/endpoints#get-v1savings) reports low `feedback_coverage` (its realized figures can't bear weight), and [`/v1/calibration`](/api-reference/endpoints#get-v1calibration) has no outcomes to check predictions against.
+- No reinforcement, no lesson promotion — the system never converges on your workload.
+
+<Tip>
+Feedback is cheap (one POST, retried transparently, deduped server-side) and it is the entire mechanism by which routing gets better. If you only adopt one habit from this page: **close the loop every time, with real numbers.**
+</Tip>
+
+## Where to go from here
+
+| You are… | Go to |
+|----------|-------|
+| Using the `minima` terminal agent | [Minima CLI](/harness/overview) — the harness runs this whole loop for you, with gate-verified labels |
+| Writing Python | [Python Client SDK](/sdk/client-sdk) and the [examples](/sdk/examples) |
+| Writing TypeScript | [TypeScript SDK](/sdk/typescript) |
+| Operating your own deployment | [Self-hosting](/sdk/self-hosting) |

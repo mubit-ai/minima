@@ -88,7 +88,12 @@ bypasses the recommender; `--model`/`--provider` pin a model and skip routing.
 
 Phases 0–7 complete: scaffold → client → AI layer (3 providers) → agent core → tools →
 Minima integration → Ink TUI + CLI → compiled native binary (`bun build --compile`).
-Remaining for full parity with the Python TUI: the rest of the overlays (session picker,
-diff-approval gating, themes, goals) and `keytar`-bundled keychain in the compiled binary
-(it falls back to the file store today). Mouse capture is deliberately out — the inline
+Since then the harness has moved well past parity with the removed Python TUI: a SQLite
+persistence spine with sessions (`/resume` opens a session picker; `--resume <id>` from
+the CLI), permission prompts with diff previews plus accept-edits gating and a
+zero-context diff review when a plan completes, the Big Plan verification spine, the
+curated memory ledger (`/memory`), undo/rewind over git-shadow checkpoints, and
+sub-agents (`/tree`). Still open: themes, `/goals` (an unshipped proposal —
+`docs/goals-feature-plan.md`), and `keytar`-bundled keychain in the compiled binary (it
+falls back to the 0600 file store today). Mouse capture is deliberately out — the inline
 renderer leaves scroll/select/copy to the terminal.

@@ -1,0 +1,76 @@
+---
+title: Self-hosting
+description: Run your own Minima — uv install, Mubit backend, cold-start seeding, and pass-through multi-tenancy.
+---
+
+import { PageHeader, Note, Steps, Step, Tip } from '@components'
+
+<PageHeader />
+
+# Self-hosting
+
+The hosted service at `api.minima.sh` needs nothing installed — but Minima is also a small FastAPI service you can run yourself. The core recommender's only external dependency is a [Mubit](https://docs.mubit.ai) memory backend. This page condenses the repo's operator docs; the deep versions are [`docs/getting-started.md`](https://github.com/mubit-ai/minima/blob/main/docs/getting-started.md), [`docs/configuration.md`](https://github.com/mubit-ai/minima/blob/main/docs/configuration.md), and [`docs/seeding.md`](https://github.com/mubit-ai/minima/blob/main/docs/seeding.md).
+
+## Prerequisites
+
+- **Python 3.11+** and [`uv`](https://github.com/astral-sh/uv).
+- **A Mubit runtime** to store and recall `task → model → outcome` history. Default endpoint is a local runtime at `http://127.0.0.1:3000`; or point `MUBIT_ENDPOINT` at a hosted instance. Minima uses Mubit's server-side embeddings, so it needs no embedding model of its own.
+
+<Steps>
+  <Step title="Install">
+    From a checkout of [`mubit-ai/minima`](https://github.com/mubit-ai/minima):
+
+    ```bash
+    uv sync --extra dev
+    ```
+
+    Optional extras: `--extra reasoner-anthropic` / `--extra reasoner-gemini` (the cheap-LLM escalation reasoner) and `--extra seed` (RouterBench cold-start seeding).
+  </Step>
+  <Step title="Configure">
+    ```bash
+    cp .env.example .env
+    ```
+
+    The only **required** value (single-tenant mode) is `MUBIT_API_KEY` — a Mubit data-plane key for the instance Minima should read/write. If your Mubit isn't local, also set `MUBIT_ENDPOINT`. Everything else has sensible defaults — the full environment-variable reference is [`docs/configuration.md`](https://github.com/mubit-ai/minima/blob/main/docs/configuration.md).
+  </Step>
+  <Step title="Run">
+    ```bash
+    make run
+    # == uv run --extra server uvicorn minima.main:app --reload --host 0.0.0.0 --port 8080
+    ```
+
+    Interactive API docs (OpenAPI/Swagger) are served at `http://localhost:8080/docs`.
+  </Step>
+  <Step title="Seed cold-start memory (optional)">
+    With no history, picks lean on capability priors (`decision_basis: "prior"`, a `cold_start` warning). `minima-seed` loads a base of outcome history so day-one recommendations are grounded:
+
+    ```bash
+    uv run minima-seed --limit 2000 --lane minima:default
+    # or, no external dataset download:
+    uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
+    ```
+
+    RouterBench mode needs the `seed` extra. Verify by re-requesting a similar task and checking `decision_basis` is `"memory"`. Full flag reference: [`docs/seeding.md`](https://github.com/mubit-ai/minima/blob/main/docs/seeding.md).
+  </Step>
+</Steps>
+
+## Pointing clients at your deployment
+
+Every client takes a base URL — nothing else changes:
+
+- **Python**: `MinimaClient("http://localhost:8080", api_key=…)` — see [Python Client SDK](/sdk/client-sdk).
+- **TypeScript**: `new MinimaClient({ baseUrl: "http://localhost:8080", … })` — see [TypeScript SDK](/sdk/typescript).
+- **Minima CLI**: set `MINIMA_URL=http://localhost:8080` — see [harness configuration](/harness/configuration).
+
+## Multi-tenancy: pass-through auth
+
+One self-hosted Minima can serve many organizations with **no provisioning step**: auth is pass-through, meaning the caller's Mubit API key **is** the credential. Each request's `Authorization: Bearer mbt_…` key is used directly against the configured Mubit endpoint, and Minima builds an isolated, cached per-key context — recommendation store, decision log, and memory are all scoped by an org id derived from the key, so one org's `recommendation_id`s resolve to nothing for another and orgs cannot credit or poison each other's learning. There are no Minima-issued keys to mint or manage: each org brings its own Mubit key, and gets its own memory.
+
+<Note>
+Without a `Bearer` key on the request, Minima falls back to the server's own `MUBIT_API_KEY` (single-tenant mode). A malformed bearer token (not `mbt_…`-shaped) is rejected with `401` before any work is done.
+</Note>
+
+## Next steps
+
+- [Using Minima correctly](/sdk/usage-guide) — the loop's golden rules apply identically to self-hosted deployments.
+- [`docs/operations.md`](https://github.com/mubit-ai/minima/blob/main/docs/operations.md) — deployment, health checks, degradation behavior, and monitoring.
