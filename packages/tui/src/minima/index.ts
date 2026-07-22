@@ -125,6 +125,23 @@ export {
   type ScoreboardCell,
 } from "./scoreboard.ts";
 export {
+  createPreferenceProbe,
+  probeDirection,
+  boundedCandidate,
+  projectTradeoffStats,
+  TUNER_STEP,
+  TUNER_SLIDER_MIN,
+  TUNER_SLIDER_MAX,
+  TUNER_MIN_RECONCILED_DECISIONS,
+  TUNER_COOLDOWN_SECONDS,
+  TUNER_CHEAPER_GREEN_RATE,
+  type ProbeDirection,
+  type ProbeResult,
+  type ProbeSkip,
+  type PreferenceProbeDeps,
+  type TradeoffStats,
+} from "./preference_probe.ts";
+export {
   runPlanCritic,
   parseCriticFlags,
   buildCriticPrompt,

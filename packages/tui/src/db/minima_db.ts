@@ -1784,6 +1784,26 @@ export class MinimaDb {
     return removed;
   }
 
+  /**
+   * Append one audit event outside a field upsert — e.g. the tuner's `field='probe'`
+   * cooldown-ledger rows (one per probe SHOWN, regardless of the answer). `ts` is
+   * injectable for tests; defaults to now.
+   */
+  insertProfileEvent(
+    projectKey: string,
+    source: RoutingProfileSource,
+    field: string,
+    oldValue: string | null,
+    newValue: string | null,
+    ts?: number,
+  ): void {
+    this.db.run(
+      `INSERT INTO profile_events (project_key, ts, source, field, old_value, new_value)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [projectKey, ts ?? Math.floor(Date.now() / 1000), source, field, oldValue, newValue],
+    );
+  }
+
   /** A project's profile audit trail, newest first (provenance for /profile show). */
   listProfileEvents(projectKey: string, limit = 100): ProfileEventRow[] {
     return this.db
