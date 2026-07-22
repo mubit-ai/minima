@@ -682,3 +682,64 @@ def test_duplicate_feedback_skips_step_outcome_replay(client, fake_memory):
     assert "duplicate_feedback_ignored" in fb2["warnings"]
     assert fb2["step_outcomes_recorded"] == 0
     assert len(fake_memory.step_outcomes) == 1  # no replay
+
+
+def test_corrective_human_feedback_updates_decision_log(client, fake_memory):
+    """Telemetry first, the human verdict later: the trusted label corrects the
+    decision-log row instead of being dropped by first-write-wins, and the caller
+    hears about it via the decision_corrected warning."""
+    from tests.conftest import TEST_MUBIT_KEY
+
+    rec = _recommend_haiku(client, fake_memory)
+    rec_id = rec["recommendation_id"]
+
+    fb1 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec_id,
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "evidence_source": "none",
+            "actual_cost_usd": 0.002,
+            "latency_ms": 900,
+        },
+    ).json()
+    assert fb1["accepted"] is True
+    assert "decision_corrected" not in fb1["warnings"]
+
+    fb2 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec_id,
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "failure",
+            "quality_score": 0.1,
+            "evidence_source": "human",
+        },
+    ).json()
+    assert fb2["accepted"] is True
+    assert "decision_corrected" in fb2["warnings"]
+
+    tenant = client.app.state.passthrough_runtime.resolve(TEST_MUBIT_KEY)
+    row = tenant.decision_log.get(rec_id)
+    assert row is not None
+    assert row.realized_outcome == "failure"
+    assert row.realized_quality == 0.1
+    assert row.evidence_source == "human"
+    assert row.realized_cost_usd == 0.002  # first-reconcile cost kept when omitted
+    assert row.realized_latency_ms == 900
+
+    fb3 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec_id,
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+        },
+    ).json()
+    # Trusted rows stay first-write-wins: no further correction, row unchanged.
+    assert "decision_corrected" not in fb3["warnings"]
+    row = tenant.decision_log.get(rec_id)
+    assert row.realized_outcome == "failure"

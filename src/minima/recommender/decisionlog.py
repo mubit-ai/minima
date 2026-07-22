@@ -21,6 +21,7 @@ from typing import Protocol, runtime_checkable
 
 from minima.config import Settings
 from minima.logging import get_logger
+from minima.memory.records import TRUSTED_LABEL_SOURCES
 
 log = get_logger("minima.decisionlog")
 
@@ -193,9 +194,29 @@ def _deserialize(payload: str) -> DecisionRecord:
 def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
     """Apply realized fields; returns False for a replay (already reconciled with the
     same model — first write wins; a duplicate must not flip outcomes or costs). A
-    different realized model is a divergence correction and is allowed through."""
+    different realized model is a divergence correction and is allowed through, and so
+    is a TRUSTED label (gate/judge/human) landing on a row whose stored evidence is
+    untrusted (None/"none") — telemetry first, the verdict later. Same-or-lower trust
+    keeps first-write-wins; the first reconcile's cost/latency survive when the
+    correction omits them."""
     if rec.reconciled and rec.realized_model_id == update.model_id:
-        return False
+        if (
+            rec.evidence_source in TRUSTED_LABEL_SOURCES
+            or update.evidence_source not in TRUSTED_LABEL_SOURCES
+        ):
+            return False
+        rec.realized_outcome = update.outcome
+        rec.realized_quality = update.quality
+        if update.cost_usd is not None:
+            rec.realized_cost_usd = update.cost_usd
+        if update.latency_ms is not None:
+            rec.realized_latency_ms = update.latency_ms
+        rec.feedback_ts = update.ts or time.time()
+        rec.late_feedback = update.late
+        rec.evidence_source = update.evidence_source
+        if update.chosen_effort is not None:
+            rec.realized_effort = update.chosen_effort
+        return True
     rec.realized_model_id = update.model_id
     rec.realized_outcome = update.outcome
     rec.realized_quality = update.quality
