@@ -64,6 +64,7 @@ import {
   runPlanInterview,
   runPlanTurn,
 } from "../minima/index.ts";
+import { observerWhySection } from "../minima/observer.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
 import { runPlanRefutation } from "../minima/plan_refute.ts";
 import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
@@ -3722,6 +3723,10 @@ export function HarnessApp({
           agent.config.bigPlan === true && agent.db && agent.runId
             ? buildPlanOverview(agent.db, agent.runId)
             : null;
+        // PR-E: the observer's projection — verdict count + last 3, muted (dim tool
+        // output), only when the flag is on and verdicts exist.
+        const obsSection =
+          agent.config.observer === true ? observerWhySection(agent.db, agent.runId) : null;
         if (overview && cols >= TOC_MIN_COLS) {
           const wantStep = /^\d+$/.test(args.trim()) ? Number(args.trim()) : null;
           const step = wantStep !== null ? overview.steps[wantStep - 1] : undefined;
@@ -3730,7 +3735,13 @@ export function HarnessApp({
               overview,
               planOverviewRows(overview, Math.max(20, cols - 6)),
             );
-            setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+            setMessages((m) => [
+              ...m,
+              { role: "user", text: `/${name} ${args}`.trim() },
+              ...(obsSection
+                ? [{ role: "tool", text: obsSection, toolName: "why" } as ChatMessage]
+                : []),
+            ]);
             setPanel(
               step
                 ? {
@@ -3762,6 +3773,7 @@ export function HarnessApp({
         } else {
           text = whyReportFor(agent.db, agent.runId);
         }
+        if (obsSection) text = `${text}\n\n${obsSection}`;
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name} ${args}`.trim() },

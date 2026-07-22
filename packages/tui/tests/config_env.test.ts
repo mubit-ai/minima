@@ -121,6 +121,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     MINIMA_TUI_CLASSIFY: undefined,
     MINIMA_TUI_INTERVIEW: undefined,
     MINIMA_TUI_TUNER: undefined,
+    MINIMA_TUI_OBSERVER: undefined,
   };
 
   test("off by default; opt-in features stay off", () => {
@@ -131,6 +132,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
       expect(config.classify).toBe(false);
       expect(config.interview).toBe(false);
       expect(config.tuner).toBe(false);
+      expect(config.observer).toBe(false);
     });
   });
 
@@ -142,6 +144,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
       expect(config.classify).toBe(true);
       expect(config.interview).toBe(true);
       expect(config.tuner).toBe(true);
+      expect(config.observer).toBe(true);
     });
   });
 
@@ -158,6 +161,9 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_TUNER: "0" }, () => {
       expect(configFromEnv().tuner).toBe(false);
     });
+    withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_OBSERVER: "0" }, () => {
+      expect(configFromEnv().observer).toBe(false);
+    });
   });
 
   test("an explicit per-flag =1 works without the umbrella", () => {
@@ -172,6 +178,9 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     });
     withEnv({ ...CLEAR, MINIMA_TUI_TUNER: "1" }, () => {
       expect(configFromEnv().tuner).toBe(true);
+    });
+    withEnv({ ...CLEAR, MINIMA_TUI_OBSERVER: "1" }, () => {
+      expect(configFromEnv().observer).toBe(true);
     });
   });
 

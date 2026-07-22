@@ -40,7 +40,8 @@ export type ScribeSignalKind =
   | "gate_flip"
   | "verified_failure"
   | "user_correction"
-  | "judge_gate_disagreement";
+  | "judge_gate_disagreement"
+  | "observer_flag";
 
 export interface ScribeSignal {
   kind: ScribeSignalKind;
@@ -147,6 +148,23 @@ export function mineSignals(db: MinimaDb, projectKey: string): ScribeSignal[] {
       recIds: [String(d.rec_id)],
       gateIds: [],
       ts: Number(d.ts) || 0,
+      immediate: false,
+      weight: 1,
+    });
+  }
+
+  // Observer warn-verdicts (PR-E): a pattern the observer kept flagging is worth
+  // remembering. Recurrence-gated like every non-immediate signal, and never gate-cited
+  // (verdicts are advisory, not verified evidence) — so provenance keeps any resulting
+  // memory `pending` until the user confirms it.
+  for (const v of db.getProjectObserverFlags(projectKey)) {
+    out.push({
+      kind: "observer_flag",
+      pattern: normalizePattern(`${v.kind} ${v.claim}`),
+      detail: `observer flagged: ${v.claim} (${v.kind})`,
+      recIds: [],
+      gateIds: [],
+      ts: Number(v.created_at) || 0,
       immediate: false,
       weight: 1,
     });

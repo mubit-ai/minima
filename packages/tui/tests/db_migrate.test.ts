@@ -197,6 +197,53 @@ describe("v14 Big Plan outcome migration", () => {
   });
 });
 
+describe("v17 observer ledger migration", () => {
+  test("a fresh database has the observer tables", () => {
+    const db = new MinimaDb(":memory:");
+    expect(db.schemaVersion).toBe(LATEST);
+    for (const t of ["observer_verdicts", "observer_events"]) {
+      const row = db.db
+        .query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(t);
+      expect(row).not.toBeNull();
+    }
+    db.db.close();
+  });
+
+  test("a v16 database opens and migrates append-only to v17 (tables created, data kept)", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("DROP TABLE observer_verdicts");
+    raw.exec("DROP TABLE observer_events");
+    raw.exec("UPDATE schema_meta SET version = 16");
+    raw.exec(
+      `INSERT INTO routing_decisions (rec_id, run_id, big_plan_outcome, ts)
+       VALUES ('rec-v16', 'run-v16', 'verified', 1)`,
+    );
+    raw.close();
+
+    const db = new MinimaDb(path);
+    expect(db.schemaVersion).toBe(LATEST);
+    const kept = db.db
+      .query("SELECT big_plan_outcome FROM routing_decisions WHERE rec_id = 'rec-v16'")
+      .get() as { big_plan_outcome: string };
+    expect(kept.big_plan_outcome).toBe("verified");
+    db.ensureProject("p-obs");
+    const runId = db.startRun({ projectKey: "p-obs" });
+    const vid = db.insertObserverVerdict({
+      runId,
+      turn: 1,
+      kind: "done_claim",
+      claim: "claimed done with steps open",
+      severity: "warn",
+    });
+    db.insertObserverEvent({ verdictId: vid, event: "fired" });
+    expect(db.getObserverVerdicts(runId)).toHaveLength(1);
+    expect(db.listObserverEvents(vid)).toHaveLength(1);
+    db.db.close();
+  });
+});
+
 describe("migration runner: concurrent opens", () => {
   test("two processes opening a fresh DB both succeed", async () => {
     const path = join(tempDir(), "minima.db");

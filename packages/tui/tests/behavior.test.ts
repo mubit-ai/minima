@@ -496,10 +496,12 @@ describe("tui/app.tsx panel key routing", () => {
   test("/why opens the Big Plan panel in the TUI; the text path survives for Big Plan-off/narrow", () => {
     const idx = src.indexOf('case "why": {');
     expect(idx).toBeGreaterThan(-1);
-    const body = src.slice(idx, idx + 2400);
+    // 3200: the PR-E observer section sits inside the case body ahead of the text path.
+    const body = src.slice(idx, idx + 3200);
     expect(body).toContain("planOverviewPanelState(");
     expect(body).toContain("planOverviewRows(overview,");
     expect(body).toContain("whyReportFor(agent.db, agent.runId)");
+    expect(body).toContain("observerWhySection(agent.db, agent.runId)");
   });
 });
 
