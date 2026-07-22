@@ -4,7 +4,85 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.0] - 2026-07-22
+
+One release, three programs: the July 2026 model lineup, the interview program
+(per-repo routing profiles the harness learns and asks for), and the observer
+program (the feedback loop grown into a real learning substrate) — plus the
+launch-bug wave and the close of the plan-rename compat window. Every new
+learning surface ships opt-in.
+
+### Added
+- **July 2026 model lineup** (#244): the catalog grows from 12 to 25 models across
+  seven providers (Anthropic, OpenAI, Google, xAI, DeepSeek, OpenRouter, Groq) in
+  both the server catalog and the TUI registry. The deprecated `deepseek-chat`
+  entry is replaced ahead of its API ID's 2026-07-24 retirement, `adaptive_thinking`
+  handling lands for the Claude 5-generation models (per-model semantics refined in
+  #236), and an alias backfill fixes stale Gemini prices.
+- **Interview program** (#231, #232, #233, #228, #229, #238): per-repo routing
+  profiles — learned/asked routing knobs applied at route time with explicit-opts >
+  profile > default precedence — managed via `/profile` (DB v15, #231); a
+  `preference` memory kind the scribe distills from user corrections (#232); an
+  opt-in `/plan` interview stage behind `MINIMA_TUI_INTERVIEW` (#233); plan-authored,
+  dispatcher-enforced per-step candidate pools (DB v16, #228); learned per-task-type
+  model scoreboards, read-only and advisory (#229); and opt-in A/B preference probes
+  behind `MINIMA_TUI_TUNER` (#238).
+- **Observer program** (#213, #214, #215, #216, #217, #218, #219, #220): the
+  feedback wire learns recovery-ladder linkage (`parent_rec_id`), `label_propensity`,
+  and a decision-snapshot echo (#213); recovery chains are mined into preference
+  pairs + calibrated deferral (#214); the judge gains length-debias + a PPI rectifier
+  over gate gold labels (#215); an OPE estimator suite + shadow replay with
+  discounted/reset posteriors lands flag-gated default-off
+  (`MINIMA_POSTERIOR_DISCOUNTING`, #216); a weak-supervision label model + the
+  omit-absent `signals` wire block (#218); the observer agent substrate — tripwires
+  plus a sampled adversarial pass — behind `MINIMA_TUI_OBSERVER` (DB v17, #217),
+  with its verdicts riding feedback as the `observer_flagged` signal under tri-state
+  coverage (DB v18, #220); and structural bets — contextual scoring, probe
+  cold-start, recall utility (#219).
+- **Cold-start + dissatisfaction fixes** (#223, #225, #227, #246, #248): the
+  classifier learns web/build vocabulary, scope-aware difficulty, and
+  confidence-gated neighbor refinement, and cold-start candidates get an eligibility
+  margin (#223); human evidence is bounded, with trusted-over-untrusted decision-log
+  correction (#246); `/redo` rejects the last routed turn and re-routes without that
+  model (#225); abort-label hygiene and previously hidden routing warnings surfaced
+  (#248); opt-in client-side LLM task classification behind `MINIMA_TUI_CLASSIFY`
+  (#227).
+- **`MINIMA_TUI_EXPERIMENTAL` umbrella** (#241): one flag opts into the TUI's
+  experimental opt-in features; the individual flags keep working.
+- **Prompt queue** (#237): the composer unlocks while a turn is running and queues
+  submitted prompts instead of dropping them.
+
+### Changed
+- **Terminology** (#245): the plan spine is referred to as just "plan" across docs
+  and UI. Identifiers, flags, and the wire contract are unchanged.
+- **Docs overhaul** (#242, #249, #211): the `est_cost_usd`-echo anti-pattern is
+  fixed across examples (feedback must carry *your* realized cost), and usage-guide,
+  TypeScript-SDK, and self-hosting pages land alongside stale-doc pruning (#242);
+  the launch-bug audit is committed (#249); feedback-loop + observer research
+  surveys mapped to the code (#211).
+
+### Fixed
+- **Stream inactivity watchdog + spinner backpressure guard** (TUI, #222): a turn
+  whose model stream went silent kept `busy` pinned forever while the 8 fps spinner
+  pumped frames into a possibly non-draining stdout — overnight this grew RSS
+  without bound until macOS jetsam OOM (observed at 43 GB). Streams now abort after
+  `MINIMA_STREAM_IDLE_TIMEOUT_MS` (default 5 min; 0 disables) with a clear transcript
+  error distinct from Esc; the recommender client's dead `timeoutMs` is wired into
+  every request; and the busy spinner skips ticks while stdout's write buffer needs
+  drain.
+- **Launch-bug wave** (TUI, #234, #235, #230, #239, #240, #236): renderer + session
+  boot fixes (#234); permission scoping + finalize auto-accept semantics (#235);
+  cost truth — `/tree`, websearch, and `/why` stamping (#230); abort/budget labels,
+  the resume `tool_use` round-trip, and checkpoint re-detect (#239); stop-gate
+  stale-plan handling + `/plan` start idempotency (#240); per-model thinking format
+  + reasoning-aware candidates (#236).
+- **Legacy-row skew in plan-verification reads** (TUI, #212): rows stamped only with
+  `gt_*` columns by pre-rename binaries no longer vanish once dual-writes stop — the
+  judge/gate disagreement query (the scribe's feed) and run rehydration fall back via
+  `COALESCE(big_plan_outcome, gt_outcome)`.
+- **Test de-flakes** (#247, #250): cold-start margin tests pinned to a fixed
+  candidate pool (#247); the mode-ring walk made latch-aware, removing a cross-file
+  order flake (#250).
 
 ### Removed
 - **Plan-rename compat window closed** (TUI, #243 + #212): the one-release aliases shipped
@@ -12,21 +90,8 @@ All notable changes to Minima are documented here. The format follows
   fallback, the `config.groundTruth` input/read alias, the deprecated API delegate
   exports (`groundTruthHooks`, `synthesizeGroundTruth`, `attachGroundedOutcome`,
   `groundedOutcomeFor`, `stampGroundedOutcome`, …), and the `gt_*` dual-writes
-  (columns remain, read-only).
-
-### Fixed
-- **Stream inactivity watchdog + spinner backpressure guard** (TUI): a turn whose model
-  stream went silent kept `busy` pinned forever while the 8 fps spinner pumped frames
-  into a possibly non-draining stdout — overnight this grew RSS without bound until
-  macOS jetsam OOM (observed at 43 GB). Streams now abort after
-  `MINIMA_STREAM_IDLE_TIMEOUT_MS` (default 5 min; 0 disables) with a clear transcript
-  error distinct from Esc; the recommender client's dead `timeoutMs` is wired into
-  every request; and the busy spinner skips ticks while stdout's write buffer needs
-  drain.
-- **Legacy-row skew in plan-verification reads** (TUI, #212): rows stamped only with
-  `gt_*` columns by pre-rename binaries no longer vanish once dual-writes stop — the
-  judge/gate disagreement query (the scribe's feed) and run rehydration fall back via
-  `COALESCE(big_plan_outcome, gt_outcome)`.
+  (columns remain, read-only). Stale provisioning docs and dead remnants pruned in
+  the same pass.
 
 ## [0.13.2] - 2026-07-21
 
