@@ -1,9 +1,9 @@
 /**
- * D3a — the compact footer task panel (guide §8 MP5, Big Plan enrichment MP6). Pure row
- * builder: CC-parity, fed straight from todowrite's observable state; with a Big Plan the
+ * D3a — the compact footer task panel (guide §8 MP5, plan enrichment MP6). Pure row
+ * builder: CC-parity, fed straight from todowrite's observable state; with a plan of record the
  * header upgrades to the ledger projection (position/step/drift/plan-scoped cost) and a
  * conditional alert row appears — colored ASCII, no emoji (Q25; the full tiered view is
- * Ctrl+G's job). ONE plan surface: this replaces the old Big PlanStrip banner + note/block
+ * Ctrl+G's job). ONE plan surface: this replaces the old PlanStrip banner + note/block
  * footer rows. Zero rows when there is nothing to show — auto-show IS the empty state.
  * Rows render with wrap="truncate", so no width math lives here.
  */

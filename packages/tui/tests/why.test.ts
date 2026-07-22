@@ -20,9 +20,9 @@ function db(): MinimaDb {
 
 describe("whyReportFor", () => {
   test("reports missing ledger context and missing plans", () => {
-    expect(whyReportFor(null, "run1")).toBe("No Big Plan ledger available.");
-    expect(whyReportFor(db(), null)).toBe("No Big Plan ledger available.");
-    expect(whyReportFor(db(), "run1")).toBe("No Big Plan recorded for this run.");
+    expect(whyReportFor(null, "run1")).toBe("No plan ledger available.");
+    expect(whyReportFor(db(), null)).toBe("No plan ledger available.");
+    expect(whyReportFor(db(), "run1")).toBe("No plan recorded for this run.");
   });
 
   test("renders each step's check, tier, reason, and drift from the ledger", () => {
@@ -69,7 +69,7 @@ describe("whyReportFor", () => {
 
     expect(whyReportFor(d, "run1")).toBe(
       [
-        "Big Plan verification - Mixed plan",
+        "Plan verification - Mixed plan",
         "✓ step 1 🟢 trusted check passed - Trusted step",
         "  check: bun test trusted",
         "✓ step 2 🟡 self-written test - Agent step",
@@ -137,7 +137,7 @@ describe("whyReportFor", () => {
     const d = db();
     d.insertPlan({ sessionId: "run1", title: "Empty" });
     expect(whyReportFor(d, "run1")).toBe(
-      "Big Plan verification - Empty\nNo plan steps recorded.",
+      "Plan verification - Empty\nNo plan steps recorded.",
     );
   });
 });
@@ -145,7 +145,7 @@ describe("whyReportFor", () => {
 describe("the TUI wires /why", () => {
   const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
 
-  test("lists the command and gates ledger inspection behind Big Plan", () => {
+  test("lists the command and gates ledger inspection behind plan verification", () => {
     expect(src).toContain('{ name: "why"');
     expect(src).toContain('case "why":');
     expect(src).toContain("whyReportFor(agent.db, agent.runId)");

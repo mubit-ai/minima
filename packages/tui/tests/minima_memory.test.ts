@@ -179,7 +179,7 @@ describe("MinimaAgent <-> Mubit memory", () => {
   // exists — or it authors the whole plan with no checks (the plan projection alone is inert until
   // the first todowrite). The static guidance is injected whenever bigPlan is on and reverted
   // like recall, so it leaks into no later turn and never appears when the flag is off.
-  test("big-plan ON injects the verify contract on turn 1 (no plan yet), then restores it", async () => {
+  test("plan verification ON injects the verify contract on turn 1 (no plan yet), then restores it", async () => {
     resetAll();
     registerModel(FAUX_MODEL);
     const reg = registerFauxProvider([FAUX_MODEL]);
@@ -197,14 +197,14 @@ describe("MinimaAgent <-> Mubit memory", () => {
     // No agent.db / no plan — planProjectionFor is null, so only the static contract can appear.
     await agent.promptRouted("scaffold a project");
 
-    expect(seenSystem ?? "").toContain("Big Plan verification is ON");
+    expect(seenSystem ?? "").toContain("Plan verification is ON");
     expect(seenSystem ?? "").toContain("`verify`");
     expect(seenSystem ?? "").toContain("BASE");
     expect(agent.agentState.systemPrompt).toBe("BASE"); // reverted — no leak into later turns
     reg.unregister();
   });
 
-  test("big-plan OFF injects no verify contract", async () => {
+  test("plan verification OFF injects no verify contract", async () => {
     resetAll();
     registerModel(FAUX_MODEL);
     const reg = registerFauxProvider([FAUX_MODEL]);

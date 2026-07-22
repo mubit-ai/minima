@@ -4,7 +4,7 @@ import { confidence } from "./confidence.ts";
 import { gateVerdictFor } from "./why.ts";
 
 /**
- * Big Plan tier → behavior (M6.2). The pure projection from a step's confidence tier onto
+ * Plan-verification tier → behavior (M6.2). The pure projection from a step's confidence tier onto
  * what the UI must do about it. This is the "near-zero interruptions" rule: 🟢 proceeds silently,
  * 🟡 proceeds but is counted toward a single milestone-review footer note, and 🔴 stops the run
  * and raises an approval prompt. Kept free of React/DB so it can be unit-tested against the

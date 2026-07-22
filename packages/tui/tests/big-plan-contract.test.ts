@@ -10,7 +10,7 @@ import {
   VERIFIED_BY,
 } from "../src/minima/big_plan_contract.ts";
 
-// The Big Plan contract (docs §5b Step 0) is the frozen seam between the two build tracks.
+// The plan-verification contract (docs §5b Step 0) is the frozen seam between the two build tracks.
 // These tests lock the enum spellings (a rename breaks a test) and prove every value survives
 // a verbatim round-trip through the DB boundary in db/minima_db.ts — so producer, consumer,
 // and schema can never silently disagree.

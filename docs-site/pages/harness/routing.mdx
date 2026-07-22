@@ -45,7 +45,7 @@ Routing also **fails open**: if the recommender is unreachable mid-session, the 
 
 The harness labels outcomes by a strict evidence hierarchy — the same [feedback-truth discipline](/harness/architecture#feedback-truth-what-gets-reported) throughout:
 
-1. **Deterministic checks win.** With [Big Plan](/harness/architecture#big-plan-verification) on (the default), a plan step's verify command passing red→green is the label — reported as gate evidence, the strongest kind. Verified steps also ride as per-step outcomes in the same feedback call.
+1. **Deterministic checks win.** With [plan verification](/harness/architecture#plan-verification) on (the default), a plan step's verify command passing red→green is the label — reported as gate evidence, the strongest kind. Verified steps also ride as per-step outcomes in the same feedback call.
 2. **A sampled LLM judge covers the rest.** About 15% of unchecked turns are graded by a cheap judge model. `/judge on|off` toggles it; `MINIMA_JUDGE_SAMPLE` tunes the rate.
 3. **Everything else is telemetry.** Unjudged turns report realized cost and latency with *no* quality claim — never a fabricated score.
 

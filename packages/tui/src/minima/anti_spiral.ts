@@ -124,7 +124,7 @@ export class DoomLoopRing {
   }
 }
 
-/** Plan progress, when a Big Plan exists — enriches the wrap-up summary. Fail-open → null. */
+/** Plan progress, when a plan of record exists — enriches the wrap-up summary. Fail-open → null. */
 function planProgress(db: MinimaDb | null, sessionId: string | null): string | null {
   if (!db || !sessionId) return null;
   try {

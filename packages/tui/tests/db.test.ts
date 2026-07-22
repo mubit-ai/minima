@@ -181,7 +181,7 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v10 checkpoints (B3) + v11 lineage-convergence re-run of the tools ALTER
     // + v12 memory ledger (memories/memory_events/memory_jobs)
     // + v13 version stamps (harness_version/tool_schema_hash) + tool_calls.result_ref
-    // + v14 canonical Big Plan outcome columns
+    // + v14 canonical big_plan_* outcome columns
     // + v15 routing profiles (routing_profiles/profile_events)
     // + per-step candidate pools (plan_steps.candidates)
     // + v17 observer ledger (observer_verdicts/observer_events)

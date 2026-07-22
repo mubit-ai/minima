@@ -361,7 +361,7 @@ export class MinimaAgent extends Agent {
     if (modeBlock) {
       this.agentState.systemPrompt = (this.agentState.systemPrompt ?? "") + modeBlock;
     }
-    // Big Plan: inject the verify contract + the plan of record into THIS turn's system
+    // Plan verification: inject the verify contract + the plan of record into THIS turn's system
     // prompt (appended after recall, reverted together in `finally`). Off unless bigPlan is set.
     //   1. The static contract (BIG_PLAN_SYSTEM_GUIDANCE) goes in EVERY bigPlan turn,
     //      including the first — before any plan exists — so the model learns to attach a `verify`
@@ -533,7 +533,7 @@ export class MinimaAgent extends Agent {
             throw new Error(r.reason);
           }
         }
-        // Per-turn stop seam (single slot): compose the budget cutoff and the big-plan
+        // Per-turn stop seam (single slot): compose the budget cutoff and the plan
         // stop-gate into one function so neither clobbers the other. Budget wins first (finish the
         // CURRENT turn on cross, stop gracefully — no partial-tool corruption); the stop-gate then
         // decides whether an END-of-run with unfinished/failing steps is allowed (A2). Rebuilt per
@@ -926,7 +926,7 @@ export class MinimaAgent extends Agent {
     }
   }
 
-  /** MUB-173: read the plan state at rung start. Null when Big Plan is off or the read
+  /** MUB-173: read the plan state at rung start. Null when plan verification is off or the read
    * fails (fail-open — persistDecision then degrades to its write-time fallback). */
   private stepAttributionAtStart(): StepAttribution | null {
     if (this.config.bigPlan !== true || !this.db || !this.runId) return null;
@@ -1360,7 +1360,7 @@ export class MinimaAgent extends Agent {
    * E2 diagnostics unlock: re-run the in-progress step's verify with FULL output for the
    * replan retry prompt. The command is the exact string the done-gate just consented to
    * and executed — no new consent surface. Null when there is nothing to diagnose
-   * (no plan / no in-progress verify / Big Plan off) or the re-run itself breaks.
+   * (no plan / no in-progress verify / plan verification off) or the re-run itself breaks.
    */
   private async collectFailureDiagnostics(): Promise<string | null> {
     if (!this.config.bigPlan || !this.db || !this.runId) return null;

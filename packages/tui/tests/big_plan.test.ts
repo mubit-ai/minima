@@ -1045,7 +1045,7 @@ function setStatusTool(store: MinimaDb, stepId: string, status: string): AgentTo
   };
 }
 
-/** Big Plan runtime over a pre-seeded temp DB (stop-gate-runtime pattern; stop gate inert). */
+/** Plan-verification runtime over a pre-seeded temp DB (stop-gate-runtime pattern; stop gate inert). */
 function bigPlanAgent(store: MinimaDb, runId: string, tools: AgentTool[]) {
   resetRegistry();
   resetProviderRegistration();

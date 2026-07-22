@@ -17,7 +17,7 @@ const BIG_PLAN_FIXTURE = {
   totalCostUsd: null,
 };
 
-describe("taskFooterRows — the D3a row builder (CC parity, Big Plan never the gate)", () => {
+describe("taskFooterRows — the D3a row builder (CC parity, plan verification never the gate)", () => {
   test("empty list is ZERO rows — auto-show IS the empty state", () => {
     expect(taskFooterRows([])).toEqual([]);
     expect(taskFooterRows([], null)).toEqual([]);
@@ -60,8 +60,8 @@ describe("taskFooterRows — the D3a row builder (CC parity, Big Plan never the 
   });
 });
 
-describe("taskFooterRows — Big Plan enrichment (MP6: ONE plan surface)", () => {
-  test("a Big Plan upgrades the header to the ledger projection, even with no session todos", () => {
+describe("taskFooterRows — plan enrichment (MP6: ONE plan surface)", () => {
+  test("a plan of record upgrades the header to the ledger projection, even with no session todos", () => {
     const rows = taskFooterRows([], BIG_PLAN_FIXTURE);
     expect(rows.length).toBe(1);
     expect(rows[0]!.text).toBe(" plan 2/5 · ▸ Wire the router");
@@ -230,9 +230,9 @@ describe("cancelled plans stay dead (the ledger side of /tasks cancel)", () => {
     const db = new MinimaDb(":memory:");
     db.upsertPlanFromTodos("run1", [{ content: "a", status: "in_progress" }], "Rejected plan");
     db.cancelActivePlans("run1");
-    // Ctrl+G and /why: the "Big Plan still holds" report — both must come back empty.
+    // Ctrl+G and /why: the "plan still holds" report — both must come back empty.
     expect(buildPlanOverview(db, "run1")).toBeNull();
-    expect(whyReportFor(db, "run1")).toContain("No Big Plan recorded");
+    expect(whyReportFor(db, "run1")).toContain("No plan recorded");
     // The todo-upsert path keeps the DEFAULT view so it starts fresh, never resurrects.
     expect(db.getLatestPlan("run1")!.status).toBe("cancelled");
     expect(db.getLatestPlan("run1", { excludeCancelled: true })).toBeNull();

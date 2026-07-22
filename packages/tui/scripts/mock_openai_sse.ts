@@ -243,7 +243,7 @@ const BASHCMD_DONE_REPLY =
   "the tool loop terminates deterministically.";
 
 // MP17: "EXITPLAN" → an exit_plan tool call carrying the canned plan markdown (the CC-style
-// Big Plan-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
+// verification-off contract), TWO-PHASE like TODO so the loop terminates after the tool result.
 const EXITPLAN_MD = [
   "## Sandbox cleanup plan",
   "",

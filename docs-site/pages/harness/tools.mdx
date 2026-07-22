@@ -25,7 +25,7 @@ The agent gets things done by calling **tools**. Each tool call passes through a
 | `edit` | Modify an existing file | write |
 | `apply_patch` | Apply a multi-file patch | write |
 | `bash` | Run a shell command (with timeout + abort) | dangerous |
-| `todowrite` | Maintain the plan/todo list — when [Big Plan](/harness/architecture#big-plan-verification) is active, marking a step complete is **gated on its verify check passing** | write |
+| `todowrite` | Maintain the plan/todo list — when [plan verification](/harness/architecture#plan-verification) is active, marking a step complete is **gated on its verify check passing** | write |
 | `task` | Delegate subtasks to cost-routed sub-agents (see [Sub-agents](#sub-agents-the-task-tool)) | orchestration |
 
 ## The permission model
@@ -63,7 +63,7 @@ A delegation with `isolation: "workdir"` runs in a **temporary git worktree** cr
 
 - **`build`** (default) — tools prompt per the model above.
 - **`accept`** — edits are auto-approved; `bash` still prompts.
-- **`plan`** — read-only: `write`, `edit`, and `bash` are blocked, so the agent can read, search, and design without changing anything. `/plan` also drives the [planning council](/harness/architecture#big-plan-verification), which produces a step-by-step plan with verify checks.
+- **`plan`** — read-only: `write`, `edit`, and `bash` are blocked, so the agent can read, search, and design without changing anything. `/plan` also drives the [planning council](/harness/architecture#plan-verification), which produces a step-by-step plan with verify checks.
 - **`bypass`** — no prompts at all. Trusted repos only.
 
 <Tip>

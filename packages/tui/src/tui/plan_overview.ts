@@ -241,7 +241,7 @@ function redGreenEvidence(gate: GateRow): string | null {
 
 /** One-shot text overview — the Ctrl+G output. */
 export function renderPlanOverviewText(overview: PlanOverview | null, width: number): string {
-  if (!overview) return "No Big Plan recorded for this run.";
+  if (!overview) return "No plan recorded for this run.";
   const lines = [
     `Plan Overview — ${overview.title} (step ${overview.stepPos}/${overview.stepTotal})`,
   ];

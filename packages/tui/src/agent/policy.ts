@@ -1,6 +1,6 @@
 /**
  * Phase-0 interface contract (docs/BigPlan/PLAN.md §3, MUB-129): the permission grammar and
- * guard-event type both Big-Plan tracks build on. Pure data + resolution — no enforcement
+ * guard-event type both plan-verification tracks build on. Pure data + resolution — no enforcement
  * lives here. The beforeToolCall wiring lands in A6 (per-step allowlist) and B2 (Plan/Build
  * modes); guards emit in A2 (verify N-strike) and A3 (doom_loop / steps cap).
  *

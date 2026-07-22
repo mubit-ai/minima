@@ -21,7 +21,7 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 }
 
 describe("label-source configuration (Phase 0b)", () => {
-  test("Big Plan is ON by default; MINIMA_TUI_BIG_PLAN=0 opts out", () => {
+  test("plan verification is ON by default; MINIMA_TUI_BIG_PLAN=0 opts out", () => {
     withEnv({ MINIMA_TUI_BIG_PLAN: undefined, MINIMA_LLM_JUDGE: undefined }, () => {
       expect(configFromEnv().bigPlan).toBe(true);
     });

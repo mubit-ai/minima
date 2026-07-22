@@ -171,13 +171,13 @@ describe("builtinTools", () => {
     ]);
   });
 
-  test("todowrite runs sequentially so baseline checks see the pre-work repo (M3.3, Big Plan on)", () => {
+  test("todowrite runs sequentially so baseline checks see the pre-work repo (M3.3, plan verification on)", () => {
     const todo = builtinTools({ bigPlan: true }).find((t) => t.name === "todowrite")!;
     expect(todo.executionMode).toBe("sequential");
     expect(todo.description).toContain("verify");
   });
 
-  test("todowrite stays plain with Big Plan off: no verify promise, no sequential mode", () => {
+  test("todowrite stays plain with plan verification off: no verify promise, no sequential mode", () => {
     const todo = builtinTools().find((t) => t.name === "todowrite")!;
     expect(todo.executionMode).toBeUndefined();
     expect(todo.description).not.toContain("verify");

@@ -32,7 +32,7 @@ import {
 import { todowriteTool } from "../src/tools/todowrite.ts";
 import { writeTool } from "../src/tools/write.ts";
 
-// MP13 — the plan-loop audit: one scripted Big Plan run driving plan→execute→verify→learn against the
+// MP13 — the plan-loop audit: one scripted plan-verified run driving plan→execute→verify→learn against the
 // faux provider, asserting EVERY ledger row the spine writes. Test 1 pins the /plan finalize →
 // seedPlanFromSteps bridge (user-origin checks, pending steps). Test 2 executes the seeded plan
 // through the real done-gate (baseline red → blocked completion → escalation → red→green pass →

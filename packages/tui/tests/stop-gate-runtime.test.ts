@@ -22,7 +22,7 @@ import {
 } from "../src/minima/index.ts";
 import { type AskUserRef, questionTool } from "../src/tools/question.ts";
 
-// A2 stop-gate through the REAL runtime/loop wiring: with big-plan on and an active plan whose
+// A2 stop-gate through the REAL runtime/loop wiring: with plan verification on and an active plan whose
 // step is still in_progress, promptRouted must force-continue the model instead of letting it end,
 // and — once strikes are spent, headless (no ask channel) — stop gracefully and leave one audit
 // `stop` gate row. Hermetic: faux provider + injected fetch, no network.

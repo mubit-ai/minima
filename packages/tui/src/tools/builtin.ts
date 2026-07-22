@@ -40,9 +40,9 @@ export interface BuiltinToolsOptions {
    */
   workdir?: string;
   /**
-   * Big Plan mode (MINIMA_TUI_BIG_PLAN=1): todowrite advertises + enforces per-task
+   * Plan verification mode (MINIMA_TUI_BIG_PLAN=1): todowrite advertises + enforces per-task
    * `verify` commands and runs sequentially. Leave unset for the plain task list — sub-agents
-   * always get the plain tool because the big-plan hooks only exist on the lead agent.
+   * always get the plain tool because the plan hooks only exist on the lead agent.
    */
   bigPlan?: boolean;
   /**

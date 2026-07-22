@@ -100,7 +100,7 @@ async function execute(
 
   if (winner.kind === "timeout" || winner.kind === "aborted") {
     // Kill the WHOLE process group: proc.kill() only signals the bash leader, so the
-    // grandchildren of a timed-out command survived and ran unbounded (same bug the Big Plan
+    // grandchildren of a timed-out command survived and ran unbounded (same bug the plan
     // check runner had). Clean exits are untouched — deliberately started daemons live.
     killProcessGroup(proc);
     return errorResult(
