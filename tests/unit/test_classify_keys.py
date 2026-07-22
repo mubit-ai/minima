@@ -129,3 +129,44 @@ def test_summarize_a_code_file_prefers_code_capability():
 
 def test_qa_still_wins_for_plain_questions():
     assert infer_task_type("What is the capital of France?") == TaskType.qa
+
+
+# --- regressions from the 2026-07 website-prompt misroute (other:easy -> flash) ---------
+
+
+def test_website_build_prompt_is_code_and_at_least_medium():
+    # Observed live: classified other/easy (no web/build vocabulary, 7 words) and priced
+    # like a one-liner. Building a website is code work at build scope.
+    text = "build me a website for my bakery"
+    assert infer_task_type(text) == TaskType.code
+    # StrEnum compares alphabetically — assert exact membership, not >=.
+    assert infer_difficulty(text, TaskType.code) in {
+        Difficulty.medium,
+        Difficulty.hard,
+        Difficulty.expert,
+    }
+    task_type, difficulty = classify(TaskInput(task=text))
+    assert keys.task_cluster(task_type.value, difficulty.value) != "other:easy"
+    assert task_type == TaskType.code
+
+
+def test_fix_my_thing_is_code():
+    # The fix-verb alternation only knew the/a/this/it — "fix my ..." fell through.
+    assert infer_task_type("fix my landing page, the layout is broken") == TaskType.code
+    assert infer_task_type("fix our checkout flow bug") == TaskType.code
+
+
+def test_web_file_extensions_signal_code():
+    assert infer_task_type("tweak styles.css so the header sticks") == TaskType.code
+    assert infer_task_type("update index.html with the new nav") == TaskType.code
+
+
+def test_bare_web_signals_and_build_verbs():
+    assert infer_task_type("create a landing page for the product launch") == TaskType.code
+    assert infer_task_type("add some html and css for the hero section") == TaskType.code
+
+
+def test_build_scope_floor_leaves_scopeless_prompts_alone():
+    # No build verb + artifact noun -> the word-count base still rules.
+    assert infer_difficulty("what time is it in Tokyo", TaskType.qa) == Difficulty.easy
+    assert infer_difficulty("fix the typo in the readme", TaskType.code) == Difficulty.medium

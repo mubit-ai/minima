@@ -18,7 +18,7 @@ from minima.memory.records import label_score
 from minima.metrics.calibration import CalibratorSet, fit_calibrators
 from minima.recommender import escalation, score
 from minima.recommender.aggregate import aggregate_by_model
-from minima.recommender.classify import classify_details, classify_from_neighbors_details
+from minima.recommender.classify import classify_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
 from minima.recommender.recstore import RecStore, StoredRecommendation
@@ -156,29 +156,32 @@ class Recommender:
             warnings.append("memory_drift:stagnant")
         evidence = recall.outcome_evidence + fastpath_evidence
 
-        # Neighbor-vote refinement: if the heuristic couldn't place the task, let the
-        # ANN-recalled semantic neighbors vote on its type (free; the cluster key then
-        # becomes coherent for scoring + the stored outcome). Caller-supplied types win.
+        # Neighbor-vote refinement: if the heuristic couldn't place the task confidently
+        # (type `other`, or confidence below the gate), let the ANN-recalled semantic
+        # neighbors vote and re-classify with them — type AND difficulty re-inferred
+        # coherently (free; the cluster key then becomes coherent for scoring + the
+        # stored outcome). Caller-supplied types win.
         if (
             req.task.task_type is None
-            and task_type == TaskType.other
             and settings.minima_neighbor_classify
             and evidence
-        ):
-            neighbor_estimate = classify_from_neighbors_details(
-                [(ev.record.task_type, ev.score) for ev in evidence if ev.record is not None]
+            and (
+                task_type == TaskType.other
+                or classification.confidence < settings.minima_neighbor_classify_confidence
             )
-            if neighbor_estimate is not None:
-                class_profile.neighbor_support = neighbor_estimate.neighbor_support
-                class_profile.neighbor_count = neighbor_estimate.neighbor_count
-                if (
-                    neighbor_estimate.task_type != task_type
-                    and class_profile.caller_task_type is None
-                    and task_type == TaskType.other
-                ):
-                    task_type = neighbor_estimate.task_type
-                    class_profile.task_type_source = "neighbor_vote"
-                    class_profile.final_task_type = task_type
+        ):
+            refined = classify_details(
+                req.task,
+                neighbor_votes=[
+                    (ev.record.task_type, ev.score) for ev in evidence if ev.record is not None
+                ],
+            )
+            if refined.neighbor_count > 0:
+                classification = refined
+                class_profile = refined.profile
+                assert class_profile is not None
+                task_type = refined.task_type
+                difficulty = refined.difficulty
                 cluster = task_cluster(task_type, difficulty)
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
@@ -571,7 +574,7 @@ class Recommender:
             c.score = score.ranking_score(
                 c.predicted_success, c.est_cost_usd / max_cost, cost_quality_tradeoff
             )
-        return _optimize(scored, tau)
+        return _optimize(scored, tau, self._settings.minima_cold_start_margin)
 
 
     # --------------------------------------------------------------- calibration
@@ -775,17 +778,33 @@ def _select_candidates(
 
 
 def _optimize(
-    scored: list[CandidateScore], tau: float
+    scored: list[CandidateScore], tau: float, cold_start_margin: float = 0.0
 ) -> tuple[CandidateScore, CandidateScore | None, list[CandidateScore], list[str]]:
     """Deterministic MAP pick: cheapest candidate clearing tau, else highest-predicted.
 
     This is the argmin limit of the Thompson policy, which handles uncertainty-driven
     optimism natively at selection time (subsuming the old collapse-margin rescue,
     epsilon-softmax, and exploration-bonus mechanisms this replaced).
+
+    ``cold_start_margin`` raises the eligibility bar to tau + margin for candidates whose
+    prediction rests on pure catalog prior (decision_basis "prior" — zero evidence
+    weight): a coarse prior scraping past tau must not win on price alone. Evidence-backed
+    candidates are unaffected, and if the margin empties the eligible set, plain tau
+    applies — the margin never causes the no-candidates failure path.
     """
     warnings: list[str] = []
     ranked = sorted(scored, key=lambda c: c.score, reverse=True)
     eligible = [c for c in scored if c.predicted_success >= tau]
+    if cold_start_margin > 0.0 and eligible:
+        margined = [
+            c
+            for c in eligible
+            if c.decision_basis != DecisionBasis.prior
+            or c.predicted_success >= tau + cold_start_margin
+        ]
+        if margined and len(margined) < len(eligible):
+            eligible = margined
+            warnings.append("cold_start_margin_applied")
 
     if eligible:
         recommended = min(

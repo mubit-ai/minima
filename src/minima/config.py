@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     minima_tau_min: float = 0.55
     minima_tau_max: float = 0.92
     minima_beta_pseudocount: float = 2.5
+    # Cold-start eligibility margin: a candidate whose prediction rests on pure catalog
+    # prior (no memory evidence) must clear tau + this margin to be eligible — priors are
+    # coarse, so a borderline prior shouldn't win on price alone. If the margin empties
+    # the eligible set, plain tau applies (the margin never causes a 422).
+    minima_cold_start_margin: float = 0.03
     minima_escalation_w_min: float = 1.5
     minima_escalation_n_min: int = 3
     minima_escalation_c_min: float = 0.45
@@ -199,6 +204,10 @@ class Settings(BaseSettings):
     # LLM-classify call. Embedding-based routing already happens via recall; this just makes
     # the cluster KEY semantically coherent for ambiguous prompts.
     minima_neighbor_classify: bool = True
+    # Also re-classify with neighbor votes when the heuristic placed the task but with
+    # confidence below this threshold (caller-supplied types always win; `other` always
+    # qualifies). The re-run re-infers difficulty coherently with the refined type.
+    minima_neighbor_classify_confidence: float = 0.6
 
     # --- Multi-tenancy (T3: hosted, per-org Mubit instance) ---
     # org id used for state partitioning (recstore / propensity) in single-key mode

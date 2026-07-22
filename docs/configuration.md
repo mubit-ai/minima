@@ -40,6 +40,9 @@ single-tenant mode). A complete annotated template ships as
 | `MINIMA_TAU_MIN` | `0.55` | Quality threshold at slider 0. |
 | `MINIMA_TAU_MAX` | `0.92` | Quality threshold at slider 10. |
 | `MINIMA_BETA_PSEUDOCOUNT` | `2.5` | Beta-smoothing strength toward the capability prior. |
+| `MINIMA_COLD_START_MARGIN` | `0.03` | Extra eligibility margin over tau for candidates with no memory evidence (pure catalog prior). Falls back to plain tau if it would empty the eligible set. |
+| `MINIMA_NEIGHBOR_CLASSIFY` | `true` | Re-classify `other`/low-confidence tasks from the recalled neighbors' task types (free, no LLM). |
+| `MINIMA_NEIGHBOR_CLASSIFY_CONFIDENCE` | `0.6` | Heuristic-confidence threshold below which neighbor votes may refine the classification (type + difficulty). Caller-supplied types always win. |
 | `MINIMA_ESCALATION_W_MIN` | `1.5` | Escalate if total recalled weight is below this. |
 | `MINIMA_ESCALATION_N_MIN` | `3` | Escalate if fewer than this many candidates have evidence. |
 | `MINIMA_ESCALATION_C_MIN` | `0.45` | Escalate if recommended confidence is below this. |
