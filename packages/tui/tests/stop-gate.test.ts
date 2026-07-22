@@ -87,6 +87,23 @@ describe("assessStop", () => {
     seed(d, [{ status: "completed", gates: ["unrunnable"] }]);
     expect(assessStop(d, SESSION)).toMatchObject({ blocked: false, redSteps: 0 });
   });
+
+  test("a stale older active does not block when a newer plan is done (MUB-181)", () => {
+    const d = db();
+    const stale = d.insertPlan({ sessionId: SESSION, title: "old", status: "active" });
+    d.insertStep({ planId: stale, idx: 0, content: "old step", status: "in_progress" });
+    const current = d.insertPlan({ sessionId: SESSION, title: "current", status: "done" });
+    d.insertStep({ planId: current, idx: 0, content: "new step", status: "completed" });
+    expect(assessStop(d, SESSION).blocked).toBe(false);
+  });
+
+  test("the latest active still blocks even with an older done plan present", () => {
+    const d = db();
+    const olderDone = d.insertPlan({ sessionId: SESSION, title: "done earlier", status: "done" });
+    d.insertStep({ planId: olderDone, idx: 0, content: "done step", status: "completed" });
+    seed(d, [{ status: "in_progress" }]);
+    expect(assessStop(d, SESSION).blocked).toBe(true);
+  });
 });
 
 describe("makeStopGate", () => {
@@ -226,6 +243,44 @@ describe("makeStopGate", () => {
     expect(await gate(terminalTurn(), [], state)).toBe(false);
     const last = state.followUp[state.followUp.length - 1]!;
     expect((last.content[0] as { text: string }).text).toContain("rewrite step 3");
+  });
+
+  test("a question answered in the prior tool turn suppresses the strike (one-shot)", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate(deps(d, 3));
+    const state = new AgentState();
+    const answered = [{ details: { answered: true, answer: "continue chatting" } }];
+    expect(await gate(toolTurn(), answered, state)).toBe(false);
+    // The conversational reply right after the answer may end the turn — no strike.
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(0);
+    // One-shot: the NEXT bare stop attempt is denied again.
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(1);
+  });
+
+  test("a dismissed question does not suppress the gate", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate(deps(d, 3));
+    const state = new AgentState();
+    const dismissed = [{ details: { answered: false, reason: "dismissed" } }];
+    expect(await gate(toolTurn(), dismissed, state)).toBe(false);
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(1);
+  });
+
+  test("an intervening tool turn clears the answer suppression", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate(deps(d, 3));
+    const state = new AgentState();
+    const answered = [{ details: { answered: true, answer: "go on" } }];
+    expect(await gate(toolTurn(), answered, state)).toBe(false);
+    expect(await gate(toolTurn(), [], state)).toBe(false);
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(1);
   });
 
   test("queued steering defers to the loop without spending a strike", async () => {

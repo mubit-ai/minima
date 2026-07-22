@@ -1924,6 +1924,20 @@ export class MinimaDb {
     return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
   }
 
+  /**
+   * Plan-completion sweep: when `keepPlanId` closes, every OTHER active plan for the session
+   * is stale (adoption on resume and repeated seeding pile them up — the same hazard the
+   * cancel sweep above covers). 'superseded', not 'cancelled': the user rejected nothing.
+   * Returns how many were closed.
+   */
+  supersedeOtherActivePlans(sessionId: string, keepPlanId: string): number {
+    this.db.run(
+      "UPDATE plans SET status = 'superseded', closed_at = COALESCE(closed_at, ?) WHERE session_id = ? AND status = 'active' AND id <> ?",
+      [Date.now() / 1000, sessionId, keepPlanId],
+    );
+    return (this.db.query("SELECT changes() AS n").get() as { n: number }).n;
+  }
+
   getPlan(planId: string): PlanRow | null {
     return (this.db.query("SELECT * FROM plans WHERE id = ?").get(planId) as PlanRow) ?? null;
   }

@@ -81,6 +81,35 @@ describe("MinimaDb.adoptActivePlans (resume)", () => {
   });
 });
 
+// MUB-181: adoption + repeated seeding can pile several 'active' rows on one session. When the
+// current plan completes, every OTHER active is stale — sweep them so getActivePlan (the
+// stop-gate's read) can never resurrect a plan the user no longer sees in /why.
+describe("MinimaDb.supersedeOtherActivePlans (completion sweep)", () => {
+  test("closes every other active for the session; kept plan and other sessions untouched", () => {
+    const d = db();
+    const a = d.insertPlan({ sessionId: "run1", status: "active" });
+    const b = d.insertPlan({ sessionId: "run1", status: "active" });
+    const c = d.insertPlan({ sessionId: "run2", status: "active" });
+    expect(d.supersedeOtherActivePlans("run1", b)).toBe(1);
+    expect(d.getPlan(a)!.status).toBe("superseded");
+    expect(d.getPlan(a)!.closed_at).not.toBeNull();
+    expect(d.getPlan(b)!.status).toBe("active");
+    expect(d.getPlan(c)!.status).toBe("active");
+    expect(d.supersedeOtherActivePlans("run1", b)).toBe(0);
+  });
+
+  test("the sweep keeps getActivePlan and getLatestPlan on the same plan of record", () => {
+    const d = db();
+    const stale = d.insertPlan({ sessionId: "run1", status: "active" });
+    const current = d.insertPlan({ sessionId: "run1", status: "active" });
+    d.setPlanStatus(current, "done");
+    d.supersedeOtherActivePlans("run1", current);
+    expect(d.getActivePlan("run1")).toBeNull();
+    expect(d.getLatestPlan("run1", { excludeCancelled: true })!.id).toBe(current);
+    expect(d.getPlan(stale)!.status).toBe("superseded");
+  });
+});
+
 describe("whyReportFor: unattributed blocked attempts", () => {
   test("plan-less blocked attempts surface in /why for their session", () => {
     const d = db();
