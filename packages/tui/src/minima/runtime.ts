@@ -194,6 +194,12 @@ export class MinimaAgent extends Agent {
   /** True when the last promptRouted was cut short by Esc during routing (so the
    * UI shows "aborted" instead of a misleading "routing offline" note). */
   lastAborted = false;
+  /** The task string of the most recent promptRouted call — what /redo re-runs. */
+  lastRoutedTask: string | null = null;
+  /** Session-scoped model exclusions (/redo): unioned into EVERY recommend request's
+   * excluded_models — pre-request candidate assembly, never a client-side re-rank.
+   * FIFO, capped below the candidate pool size so at least one model stays routable. */
+  readonly sessionExcludedModels: string[] = [];
   /** B1: the last injected memory id-set (joined) — a changed set re-records the inject
    * audit event; an unchanged one doesn't spam the ledger every turn. */
   private lastMemoryInjectKey: string | null = null;
@@ -202,6 +208,17 @@ export class MinimaAgent extends Agent {
   override abort(): void {
     this.routeController?.abort();
     super.abort();
+  }
+
+  /** /redo: exclude a model from this session's routing (FIFO; when adding would exceed
+   * pool size - 1, the oldest exclusion is dropped so routing always has a candidate). */
+  excludeModelForSession(modelId: string): void {
+    const list = this.sessionExcludedModels;
+    const idx = list.indexOf(modelId);
+    if (idx !== -1) list.splice(idx, 1);
+    list.push(modelId);
+    const cap = Math.max(1, this.config.candidates.length - 1);
+    while (list.length > cap) list.shift();
   }
 
   constructor(opts: MinimaAgentOptions) {
@@ -269,6 +286,7 @@ export class MinimaAgent extends Agent {
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
     this.promptsRun += 1;
+    this.lastRoutedTask = content;
     // The surfaced learning-loop note must reflect THIS turn only. Reset here because
     // feedbackSafely early-returns without touching the field on turns that send no feedback
     // (pinned / offline / no-recommendation) — otherwise an earlier rejection would re-display
@@ -872,6 +890,11 @@ export class MinimaAgent extends Agent {
         : opts.candidates
           ? [...opts.candidates]
           : undefined;
+      // Session-scoped /redo exclusions ride on EVERY request, unioned with the ladder's
+      // per-prompt exclusions — the server does the subtraction (propensity-safe).
+      const excludedUnion = [
+        ...new Set([...(opts.excludedModels ?? []), ...this.sessionExcludedModels]),
+      ];
       const routing = await this.router.recommend({
         task: taskText,
         taskType: opts.taskType ?? undefined,
@@ -886,7 +909,7 @@ export class MinimaAgent extends Agent {
         candidates: effective,
         maxCostPerCall: opts.maxCostPerCall,
         minQuality: opts.minQuality,
-        excludedModels: opts.excludedModels,
+        excludedModels: excludedUnion.length ? excludedUnion : undefined,
         // The server caps candidate selection at 8 by default; widen when the pool is larger.
         maxCandidates:
           effective && effective.length > 8 ? Math.min(effective.length, 16) : undefined,

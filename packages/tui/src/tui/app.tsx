@@ -63,6 +63,7 @@ import {
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
 import { runPlanRefutation } from "../minima/plan_refute.ts";
 import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
+import { redoLastRouted } from "../minima/redo.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
@@ -303,6 +304,7 @@ const COMMANDS = [
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
+  { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
   { name: "thoughts", desc: "Toggle streaming model's reasoning" },
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
@@ -3021,6 +3023,20 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text: textOut, toolName: "budget", isError: isErr },
         ]);
+        break;
+      }
+      case "redo": {
+        // The user's explicit rejection lever: corrective human-evidence feedback for the
+        // last routed turn + session-scoped exclusion, then the SAME submit path a typed
+        // prompt takes (onSubmit) so streaming/busy/echo behave normally. route() unions
+        // agent.sessionExcludedModels into every recommend request, so the re-route (and
+        // every later prompt this session) skips the rejected model.
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const result = await redoLastRouted(agent, args || undefined);
+        setMessages((m) => [...m, echo, { role: "tool", text: result.message, toolName: "redo" }]);
+        if (result.kind === "reroute") {
+          await onSubmit(result.task);
+        }
         break;
       }
       case "reconnect": {
