@@ -118,6 +118,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
   const CLEAR = {
     MINIMA_TUI_EXPERIMENTAL: undefined,
     MINIMA_AUTO_EFFORT: undefined,
+    MINIMA_TUI_CLASSIFY: undefined,
   };
 
   test("off by default; opt-in features stay off", () => {
@@ -125,6 +126,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
       const config = configFromEnv();
       expect(config.experimental).toBe(false);
       expect(config.autoEffort).toBe(false);
+      expect(config.classify).toBe(false);
     });
   });
 
@@ -133,6 +135,7 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
       const config = configFromEnv();
       expect(config.experimental).toBe(true);
       expect(config.autoEffort).toBe(true);
+      expect(config.classify).toBe(true);
     });
   });
 
@@ -140,11 +143,17 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_AUTO_EFFORT: "0" }, () => {
       expect(configFromEnv().autoEffort).toBe(false);
     });
+    withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_CLASSIFY: "0" }, () => {
+      expect(configFromEnv().classify).toBe(false);
+    });
   });
 
   test("an explicit per-flag =1 works without the umbrella", () => {
     withEnv({ ...CLEAR, MINIMA_AUTO_EFFORT: "1" }, () => {
       expect(configFromEnv().autoEffort).toBe(true);
+    });
+    withEnv({ ...CLEAR, MINIMA_TUI_CLASSIFY: "1" }, () => {
+      expect(configFromEnv().classify).toBe(true);
     });
   });
 

@@ -13,7 +13,7 @@ import { render } from "ink";
 import React from "react";
 import { enableBypass, setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
-import { resolveRunnableModel } from "../ai/model_fallback.ts";
+import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
@@ -32,7 +32,7 @@ import {
   configFromEnv,
   resolvePlanModels,
 } from "../minima/index.ts";
-import { ConstJudge, LLMJudge } from "../minima/index.ts";
+import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
@@ -656,6 +656,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write(`minima: ${notice}\n`);
   }
 
+  // Classifier (MINIMA_TUI_CLASSIFY=1, default OFF): one cheap completion labels each
+  // interactive lead prompt before routing (caller-override wire seam). Same runnable-
+  // model resolution as the judge; spend books to the wallet like judge spend, never
+  // into feedback's actual_cost_usd. No runnable model → the feature stays off.
+  let bookClassifySpend: (usd: number) => void = () => {};
+  let classifier: TaskClassifier | null = null;
+  if (config.classify) {
+    const preferred = config.classifyModel ?? CHEAP_FALLBACK_MODELS[0]!;
+    const resolved = resolveRunnableModel(preferred);
+    if (resolved) {
+      classifier = new TaskClassifier(resolved.model, {
+        onCostUsd: (usd) => bookClassifySpend(usd),
+      });
+      if (resolved.substituted) {
+        process.stderr.write(
+          `minima: classifier model ${preferred} has no provider key — using ${resolved.model.id} instead\n`,
+        );
+      }
+    } else {
+      process.stderr.write(
+        "minima: client-side classification ignored (no runnable classifier model — provider key missing)\n",
+      );
+    }
+  }
+
   const agent = new MinimaAgent({
     config,
     tools,
@@ -669,6 +694,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   bookJudgeSpend = (usd) => {
     agent.meter?.addOverhead(usd);
     agent.budget?.bookSpend(usd, "judge");
+  };
+  agent.classifier = classifier;
+  bookClassifySpend = (usd) => {
+    agent.meter?.addOverhead(usd);
+    agent.budget?.bookSpend(usd, "classify");
   };
   // Apply the --thinking CLI flag to the initial reasoning level. It was parsed but never used;
   // the agent kept its default, so the flag was a silent no-op.

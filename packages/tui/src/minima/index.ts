@@ -39,6 +39,13 @@ export {
 } from "./runtime.ts";
 export { redoLastRouted, REDO_NOTE_CAP, type RedoOutcome } from "./redo.ts";
 export {
+  TaskClassifier,
+  parseClassification,
+  CLASSIFY_CONFIDENCE_FLOOR,
+  CLASSIFY_SYSTEM,
+  type TaskClassification,
+} from "./classify.ts";
+export {
   buildMemoryProjection,
   memoryProjectionFor,
   memoryProjectionCap,

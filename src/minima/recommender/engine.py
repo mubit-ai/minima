@@ -395,6 +395,7 @@ class Recommender:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             est_cost_premium=est_cost_premium,
+            task_type_source=class_profile.task_type_source,
         )
         profile.mark("decision_log")
 
@@ -496,6 +497,7 @@ class Recommender:
         input_tokens: int,
         output_tokens: int,
         est_cost_premium: float,
+        task_type_source: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
@@ -562,6 +564,8 @@ class Recommender:
                     user_id=req.user_id,
                     env_tags=list(req.task.tags or []),
                     content=build_content(task_type.value, difficulty.value, req.task.task),
+                    task_type_source=task_type_source,
+                    task_type_confidence=req.task.task_type_confidence,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path

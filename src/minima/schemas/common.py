@@ -68,6 +68,15 @@ class TaskInput(BaseModel):
     task: str = Field(..., min_length=1, description="Raw task/prompt text; embedded by Mubit")
     task_type: TaskType | None = None
     difficulty: Difficulty | None = None
+    task_type_confidence: float | None = Field(
+        None,
+        ge=0,
+        le=1,
+        description=(
+            "caller's classifier confidence in its task_type/difficulty override; "
+            "diagnostic only — the override wins regardless"
+        ),
+    )
     expected_input_tokens: int | None = Field(None, ge=0)
     expected_output_tokens: int | None = Field(None, ge=0)
     tags: list[str] = Field(default_factory=list, description="-> Mubit env_tags")
