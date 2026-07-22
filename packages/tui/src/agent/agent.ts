@@ -50,6 +50,8 @@ export interface AgentOptions {
   followUpMode?: QueueMode;
   shouldStopAfterTurn?: AgentLoopConfig["shouldStopAfterTurn"];
   streamFn?: StreamFnLike;
+  /** Abort a turn whose model stream goes silent for this many ms. Undefined/0 disables. */
+  streamIdleTimeoutMs?: number;
 }
 
 export class Agent {
@@ -65,6 +67,7 @@ export class Agent {
   private readonly streamOptions: Record<string, unknown> | null;
   private shouldStopAfterTurn: AgentLoopConfig["shouldStopAfterTurn"] | null;
   private readonly streamFn: StreamFnLike | null;
+  private readonly streamIdleTimeoutMs: number | null;
   private readonly listeners: Listener[] = [];
   private controller: AbortController | null = null;
   private idleResolvers: (() => void)[] = [];
@@ -91,6 +94,7 @@ export class Agent {
     this.streamOptions = opts.streamOptions ?? null;
     this.shouldStopAfterTurn = opts.shouldStopAfterTurn ?? null;
     this.streamFn = opts.streamFn ?? null;
+    this.streamIdleTimeoutMs = opts.streamIdleTimeoutMs ?? null;
   }
 
   get agentState(): AgentState {
@@ -286,6 +290,7 @@ export class Agent {
       streamFn: this.streamFn,
       streamOptions: this.streamOptions,
       signal,
+      streamIdleTimeoutMs: this.streamIdleTimeoutMs,
     };
   }
 

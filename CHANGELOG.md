@@ -4,6 +4,18 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Stream inactivity watchdog + spinner backpressure guard** (TUI): a turn whose model
+  stream went silent kept `busy` pinned forever while the 8 fps spinner pumped frames
+  into a possibly non-draining stdout — overnight this grew RSS without bound until
+  macOS jetsam OOM (observed at 43 GB). Streams now abort after
+  `MINIMA_STREAM_IDLE_TIMEOUT_MS` (default 5 min; 0 disables) with a clear transcript
+  error distinct from Esc; the recommender client's dead `timeoutMs` is wired into
+  every request; and the busy spinner skips ticks while stdout's write buffer needs
+  drain.
+
 ## [0.13.1] - 2026-07-21
 
 ### Fixed
