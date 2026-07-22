@@ -13,6 +13,7 @@ import { render } from "ink";
 import React from "react";
 import { enableBypass, setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
+import { resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
@@ -552,6 +553,50 @@ function buildConfig(args: CliArgs): HarnessConfig {
   return cfg;
 }
 
+/**
+ * Judge wiring, extracted for tests: sampled LLM grading is ON by default whenever a
+ * runnable judge model exists. The configured model (MINIMA_JUDGE_MODEL) wins when its
+ * provider key is present; otherwise the cheap-model ladder substitutes the first
+ * runnable fallback (one-time notice names the substitution) — without this, a user
+ * with only e.g. a Gemini key silently never gets a graded turn. No runnable model at
+ * all keeps ConstJudge(null) (abstain). MINIMA_LLM_JUDGE=0 disables entirely.
+ */
+export function buildJudge(
+  config: HarnessConfig,
+  onCostUsd: (usd: number) => void,
+): { judge: ConstJudge | LLMJudge; notices: string[] } {
+  const judgeMode = process.env.MINIMA_LLM_JUDGE;
+  if (judgeMode === "0" || config.judgeSampleRate <= 0) {
+    return { judge: new ConstJudge(null), notices: [] };
+  }
+  const resolved = resolveRunnableModel(config.judgeModel);
+  if (!resolved) {
+    return {
+      judge: new ConstJudge(null),
+      notices:
+        judgeMode === "1"
+          ? [
+              `MINIMA_LLM_JUDGE=1 ignored (judge model ${config.judgeModel} unavailable or key missing)`,
+            ]
+          : [],
+    };
+  }
+  const notices: string[] = [];
+  if (resolved.substituted) {
+    notices.push(
+      `judge model ${config.judgeModel} has no provider key — using ${resolved.model.id} instead`,
+    );
+  }
+  const coverage =
+    config.judgeSampleRate >= 1
+      ? "every ungated turn"
+      : `~${Math.round(config.judgeSampleRate * 100)}% of ungated turns`;
+  notices.push(
+    `sampled LLM judge on (${resolved.model.id}, ${coverage}; MINIMA_LLM_JUDGE=0 disables) — spend books to /cost + budget`,
+  );
+  return { judge: new LLMJudge(resolved.model, { onCostUsd }), notices };
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   await loadEnvFiles();
 
@@ -598,33 +643,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const systemPrompt = buildSystemPrompt(process.cwd());
 
   // Judge: sampled LLM grading is ON by default (config.judgeSampleRate, ~15% of
-  // ungated turns) whenever the judge model's provider key is present — a small,
-  // unbiased labeled subset is what keeps the learning loop honest now that the server
-  // treats unlabeled turns as telemetry-only. MINIMA_LLM_JUDGE=0 disables entirely;
-  // =1 forces grading on every eligible turn (legacy full-grading behaviour).
+  // ungated turns) whenever a RUNNABLE judge model exists — the configured model when
+  // its provider key is present, else the first runnable cheap fallback (buildJudge).
   // Judge spend books to the session wallet (meter overhead + budget) but NEVER into
   // feedback's actual_cost_usd — folding it in would inflate the routed model's observed
   // $/call and poison the observed/rescaled cost basis. Late-bound: the agent (and its
   // optional budget) doesn't exist yet at judge construction.
   let bookJudgeSpend: (usd: number) => void = () => {};
-  let judge: ConstJudge | LLMJudge = new ConstJudge(null);
-  const judgeMode = process.env.MINIMA_LLM_JUDGE;
-  if (judgeMode !== "0" && config.judgeSampleRate > 0) {
-    const jm = findModelById(config.judgeModel);
-    if (jm && providerKeyPresent(jm.provider)) {
-      judge = new LLMJudge(jm, { onCostUsd: (usd) => bookJudgeSpend(usd) });
-      const coverage =
-        config.judgeSampleRate >= 1
-          ? "every ungated turn"
-          : `~${Math.round(config.judgeSampleRate * 100)}% of ungated turns`;
-      process.stderr.write(
-        `minima: sampled LLM judge on (${jm.id}, ${coverage}; MINIMA_LLM_JUDGE=0 disables) — spend books to /cost + budget\n`,
-      );
-    } else if (judgeMode === "1") {
-      process.stderr.write(
-        `minima: MINIMA_LLM_JUDGE=1 ignored (judge model ${config.judgeModel} unavailable or key missing)\n`,
-      );
-    }
+  const built = buildJudge(config, (usd) => bookJudgeSpend(usd));
+  const judge = built.judge;
+  for (const notice of built.notices) {
+    process.stderr.write(`minima: ${notice}\n`);
   }
 
   const agent = new MinimaAgent({
