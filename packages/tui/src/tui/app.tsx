@@ -101,6 +101,7 @@ import { footerStatsFromMessages } from "./footer.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
+  bannerRowCount,
   childTreeHeight,
   computeMsgHeight,
   markdownBodyHeight,
@@ -117,7 +118,13 @@ import {
   tailToFit,
   wrappedLineCount,
 } from "./layout.ts";
-import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
+import {
+  BannerBlock,
+  type ChatMessage,
+  MessageRow,
+  StreamingReply,
+  StreamingThoughts,
+} from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
@@ -260,28 +267,6 @@ function actionableError(msg: string, provider?: string): string {
     );
   if (!authish || /config set/i.test(msg)) return msg;
   return `${msg}\n→ Set a model-provider key: ${keyHint(provider)} (\`/auth\` configures routing only), then /reconnect.`;
-}
-
-const GLYPHS: Record<string, string[]> = {
-  M: ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
-  I: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
-  N: ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
-  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
-};
-
-function getAsciiBanner(word: string): string {
-  const rows: string[] = [];
-  for (let r = 0; r < 6; r++) {
-    const chars: string[] = [];
-    for (const ch of word) {
-      const glyph = GLYPHS[ch];
-      if (glyph) {
-        chars.push(glyph[r] || "");
-      }
-    }
-    rows.push(chars.join(" "));
-  }
-  return rows.join("\n");
 }
 
 function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
@@ -691,14 +676,6 @@ const ANCHOR_LEGACY = process.env.MINIMA_TUI_ANCHOR_LEGACY === "1";
 // MINIMA_TUI_DEBUG_ANCHOR=<file>: per-render ledger trace (rows/cols/heights/reset reason)
 // for diagnosing anchor loss in terminals the PTY harness can't reproduce.
 const ANCHOR_DEBUG = process.env.MINIMA_TUI_DEBUG_ANCHOR || null;
-// Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
-// reservation can't drift from the render.
-const BANNER_TAGLINES = [
-  "CLI · cost-aware model routing",
-  "recommend → run → judge → feedback → memory",
-  "type a prompt, or / for commands",
-  "scroll with your terminal (wheel / trackpad) · select & copy freely",
-];
 
 export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   const allFields = ALL_CONFIG_FIELDS;
@@ -1356,6 +1333,10 @@ export function HarnessApp({
   const liveHeightRef = useRef(0);
   const committedLenRef = useRef(0);
   const anchorGenRef = useRef<{ gen: number; rows: number; cols: number } | null>(null);
+  // The transcript generation whose LIVE banner has rendered — only that generation commits
+  // the banner into <Static> with its first message (MUB-167). /new and resume bump the gen
+  // with messages already present, so their transcripts never gain a banner row.
+  const bannerGenRef = useRef<number | null>(null);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -4516,12 +4497,21 @@ export function HarnessApp({
   // top-clips under the explicit height). While the panel renders, the frame is the MP4
   // identity: panelOuter + PANEL_STATUS_ROWS + inputBoxHeight ≡ rows − SCROLLBACK_SAFETY_ROWS.
   const bannerShown = messages.length === 0 && matchingCommands.length === 0 && !overlayOpen;
-  const bannerRows = bannerShown
-    ? 1 +
-      wrappedLineCount(getAsciiBanner("MINIMA"), cols) +
-      BANNER_TAGLINES.reduce((n, line) => n + 1 + wrappedLineCount(line, cols), 0) +
-      (tipsEnabled && startupTip ? 1 + wrappedLineCount(startupTip, cols) : 0)
-    : 0;
+  const bannerTip = tipsEnabled && startupTip ? startupTip : null;
+  const bannerRows = bannerShown ? bannerRowCount(bannerTip, cols) : 0;
+  // MUB-167: once this generation's transcript starts, the live banner COMMITS into <Static>
+  // ahead of the first message — the first flush then prints the banner + echo where the
+  // banner stood, instead of leaving its vanished rows as dead live-frame padding with the
+  // echo stranded at the old banner top, mid-screen.
+  const bannerCommitted = messages.length > 0 && bannerGenRef.current === transcriptGen;
+  const bannerItem = useMemo<ChatMessage>(
+    () => ({ role: "banner", text: bannerTip ?? "" }),
+    [bannerTip],
+  );
+  const staticItems = useMemo(
+    () => (bannerCommitted ? [bannerItem, ...messages] : messages),
+    [bannerCommitted, bannerItem, messages],
+  );
   const pickerRows = pickerOpen
     ? MODEL_PICKER_MAX_ROWS
     : paletteOpen
@@ -4565,6 +4555,9 @@ export function HarnessApp({
   const anchorReset = anchorRemounted || anchorResized;
   let committedRows = 0;
   if (!anchorReset) {
+    if (bannerCommitted && committedLenRef.current === 0) {
+      committedRows += computeMsgHeight(bannerItem, cols);
+    }
     for (let i = committedLenRef.current; i < messages.length; i++) {
       const m = messages[i];
       if (m) committedRows += computeMsgHeight(m, cols);
@@ -4584,6 +4577,7 @@ export function HarnessApp({
     liveHeightRef.current = liveHeight;
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
+    if (bannerShown) bannerGenRef.current = transcriptGen;
     if (ANCHOR_DEBUG) {
       try {
         appendFileSync(
@@ -4631,23 +4625,7 @@ export function HarnessApp({
     );
   }
 
-  const bannerBlock = bannerShown ? (
-    <Box flexDirection="column" alignItems="center" marginTop={1}>
-      <Text color="green" bold>
-        {getAsciiBanner("MINIMA")}
-      </Text>
-      {BANNER_TAGLINES.map((line) => (
-        <Box key={line} marginTop={1}>
-          <Text color="gray">{line}</Text>
-        </Box>
-      ))}
-      {tipsEnabled && startupTip ? (
-        <Box marginTop={1}>
-          <Text color="yellow">{startupTip}</Text>
-        </Box>
-      ) : null}
-    </Box>
-  ) : null;
+  const bannerBlock = bannerShown ? <BannerBlock tip={bannerTip} /> : null;
 
   // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
   // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
@@ -4921,7 +4899,7 @@ export function HarnessApp({
   return (
     <Box flexDirection="column" width="100%">
       {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
-      <Static key={transcriptGen} items={messages}>
+      <Static key={transcriptGen} items={staticItems}>
         {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
       </Static>
       <Box

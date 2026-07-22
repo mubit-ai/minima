@@ -105,6 +105,24 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
     }
   });
 
+  test("MUB-167 first submit on a fresh session: banner + echo commit together, echo adjacent to the composer", () => {
+    // The banner is live-only until the first message exists. If the first flush commits
+    // only the ~2-row echo while the ~15-row banner unmounts, the floor keeps the vanished
+    // banner rows as dead padding and the echo prints at the old banner top, mid-screen.
+    // The fix commits the banner INTO <Static> with the echo, so the printed K covers the
+    // whole shrink: anchored (gap 0) AND content-sized (no padding hole above the composer).
+    const rows = 36;
+    const term = makeTerm(rows);
+    const banner = 15;
+    const composer = 8;
+    const echo = 3;
+    let ledger = nextLiveFrameHeight(0, 0, banner + composer, rows);
+    expect(term.flush(0, ledger)).toBe(0);
+    ledger = nextLiveFrameHeight(ledger, banner + echo, composer, rows);
+    expect(term.flush(banner + echo, ledger)).toBe(0);
+    expect(ledger).toBe(composer);
+  });
+
   test("the MP20 wide-terminal case: commit smaller than the stream-frame shrink stays anchored", () => {
     // At 200 cols the committed reply wraps to FEWER rows than the stream frame it replaces —
     // pre-ledger this floated the composer by the difference (before-evidence: low 42/50).
@@ -160,6 +178,14 @@ describe("app.tsx wires the anchor ledger", () => {
     const mount = src.indexOf("height={ANCHOR_LEGACY ? undefined : liveHeight}");
     expect(staticMount).toBeGreaterThan(0);
     expect(staticMount).toBeLessThan(mount);
+  });
+
+  test("MUB-167: the banner joins <Static> once the transcript starts, and its rows are credited", () => {
+    // Without this the first submit leaves the vanished banner rows as live-frame padding
+    // and the echo commits at the old banner top, mid-screen (fresh-session first prompt).
+    expect(src).toContain("items={staticItems}");
+    expect(src).toContain("bannerCommitted ? [bannerItem, ...messages] : messages");
+    expect(src).toContain("committedRows += computeMsgHeight(bannerItem, cols)");
   });
 
   test("remounts (incl. the mount) seed 0; only a resize cap-seeds (adjacency preserved)", () => {

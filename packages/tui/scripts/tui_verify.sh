@@ -66,6 +66,10 @@
 #                     SAFETY_ROWS, exact after the next commit), and the reporter's 200x50
 #                     geometry where the committed reply wraps to FEWER rows than the
 #                     stream-frame shrink (the float the MP20 ordering alone cannot fix)
+#   first-prompt      MUB-167: fresh-session first submit — the banner COMMITS into the
+#                     transcript with the echo (it stays on screen) and no blank hole is
+#                     left where the live banner stood (pre-fix: the echo printed at the
+#                     old banner top, mid-screen, ~13 dead rows above the composer)
 #   stale-margins     the live-window root cause (2026-07-20): a prior CLI's leaked
 #                     DECSTBM scroll region survives 2J/3J/H and resizes, imprisons the
 #                     newline reserve (DSR said row 24 of 60), and seats the composer
@@ -1411,6 +1415,56 @@ python3 "$TUI/scripts/tui_assert.py" "$TMP/big200-frames.jsonl" --after 2.5 \
   --check bottom-anchor --bottom-slack 1
 perf_check "$TMP/big200-perf.jsonl" big200 4000
 
+echo "== tui-verify: scenario first-prompt (MUB-167: banner commits with the first echo, no mid-frame hole) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 11,
+  "env": {"MINIMA_DB_PATH": "$TMP/firstprompt.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-firstprompt"},
+  "frames": "$TMP/firstprompt-frames.jsonl",
+  "raw": "$TMP/firstprompt-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "SLOW first prompt of a fresh session"},
+    {"after": 4.0, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture firstprompt "$SPEC"
+python3 - "$TMP/firstprompt-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# Pre-submit: the live banner is on screen.
+assert any(grid_has(f, "██") for f in frames if f["t"] < 4.0), "MINIMA banner never rendered on the fresh session"
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+post = [f for f in settled if f["t"] >= 4.2 and grid_has(f, "▸ you")]
+assert post, "no settled frames with the echoed prompt after submit"
+# The banner COMMITTED with the echo: it stays on screen above the transcript instead of
+# being erased into a dead-padding hole.
+assert all(grid_has(f, "██") for f in post), "banner erased on first submit - it must commit into the transcript"
+# The MUB-167 symptom: pre-fix the vanished banner rows sat as blank padding between the
+# echo (stranded at the old banner top) and the composer — a constant 10-row hole through
+# the busy window (A/B measured 2026-07-22; the committed banner holds it at 4: the busy
+# spinner separation plus the turn-end teardown transient the ledger decays per commit).
+for f in post:
+    rows = f["screen"]
+    first_echo = next(i for i, row in enumerate(rows) if "▸ you" in row)
+    last_content = max(i for i, row in enumerate(rows) if row.strip())
+    run = best = 0
+    for i in range(first_echo, last_content + 1):
+        run = run + 1 if not rows[i].strip() else 0
+        best = max(best, run)
+    assert best <= 5, (
+        f"{best}-row blank hole below the first echo at t={f['t']} - banner rows left as live-frame padding")
+print(f"tui_assert: PASS first-prompt (banner committed, no mid-frame hole across {len(post)} settled frames)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/firstprompt-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
+
 # Root-caused live 2026-07-20: a prior CLI that pinned its UI with DECSTBM and died
 # uncleanly leaves scroll margins in the WINDOW forever (they survive 2J/3J/H and
 # resizes). The reserve then scrolls inside rows 1..24 and the composer seats mid-screen
@@ -1448,7 +1502,7 @@ python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
           "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \
           "$TMP"/otanchor-raw.bin "$TMP"/pearly-raw.bin "$TMP"/resizere-raw.bin \
-          "$TMP"/big200-raw.bin "$TMP"/margins-raw.bin <<'PY'
+          "$TMP"/big200-raw.bin "$TMP"/firstprompt-raw.bin "$TMP"/margins-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:
