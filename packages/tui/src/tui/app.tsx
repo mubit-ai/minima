@@ -93,7 +93,7 @@ import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_sl
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import { compactMessages, maybeAutoCompact } from "./compact.ts";
+import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
@@ -101,6 +101,7 @@ import { footerStatsFromMessages } from "./footer.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
+  bannerRowCount,
   childTreeHeight,
   computeMsgHeight,
   markdownBodyHeight,
@@ -117,7 +118,13 @@ import {
   tailToFit,
   wrappedLineCount,
 } from "./layout.ts";
-import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
+import {
+  BannerBlock,
+  type ChatMessage,
+  MessageRow,
+  StreamingReply,
+  StreamingThoughts,
+} from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
@@ -260,28 +267,6 @@ function actionableError(msg: string, provider?: string): string {
     );
   if (!authish || /config set/i.test(msg)) return msg;
   return `${msg}\n→ Set a model-provider key: ${keyHint(provider)} (\`/auth\` configures routing only), then /reconnect.`;
-}
-
-const GLYPHS: Record<string, string[]> = {
-  M: ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
-  I: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
-  N: ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
-  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
-};
-
-function getAsciiBanner(word: string): string {
-  const rows: string[] = [];
-  for (let r = 0; r < 6; r++) {
-    const chars: string[] = [];
-    for (const ch of word) {
-      const glyph = GLYPHS[ch];
-      if (glyph) {
-        chars.push(glyph[r] || "");
-      }
-    }
-    rows.push(chars.join(" "));
-  }
-  return rows.join("\n");
 }
 
 function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
@@ -691,14 +676,6 @@ const ANCHOR_LEGACY = process.env.MINIMA_TUI_ANCHOR_LEGACY === "1";
 // MINIMA_TUI_DEBUG_ANCHOR=<file>: per-render ledger trace (rows/cols/heights/reset reason)
 // for diagnosing anchor loss in terminals the PTY harness can't reproduce.
 const ANCHOR_DEBUG = process.env.MINIMA_TUI_DEBUG_ANCHOR || null;
-// Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
-// reservation can't drift from the render.
-const BANNER_TAGLINES = [
-  "CLI · cost-aware model routing",
-  "recommend → run → judge → feedback → memory",
-  "type a prompt, or / for commands",
-  "scroll with your terminal (wheel / trackpad) · select & copy freely",
-];
 
 export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
   const allFields = ALL_CONFIG_FIELDS;
@@ -1356,6 +1333,15 @@ export function HarnessApp({
   const liveHeightRef = useRef(0);
   const committedLenRef = useRef(0);
   const anchorGenRef = useRef<{ gen: number; rows: number; cols: number } | null>(null);
+  // The transcript generation whose LIVE banner has rendered — only that generation commits
+  // the banner into <Static> with its first message (MUB-167). /new and resume bump the gen
+  // with messages already present, so their transcripts never gain a banner row.
+  const bannerGenRef = useRef<number | null>(null);
+  // MUB-169: set by reseatFreshScreen (/clear, /new) after it physically clears the screen
+  // and re-writes the bottom-mount reserve; the next ledger reset cap-seeds instead of
+  // seeding 0, so the fresh frame outruns ANY previous frame height and the reserve write
+  // re-anchors it at the terminal bottom. Consumed (cleared) by the ledger effect.
+  const reseatPendingRef = useRef(false);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -2266,10 +2252,22 @@ export function HarnessApp({
     });
   }
 
+  // MUB-169: a transcriptGen bump alone remounts <Static> but leaves the old transcript in
+  // the terminal's scrollback, and the fresh banner repaints over whatever rows the previous
+  // frame occupied. Replay the boot physics instead (main.ts): margin reset + full clear
+  // (2J screen + 3J scrollback) + home, then the rows-1 bottom-mount reserve — and arm the
+  // ledger's cap-seed so the next frame re-anchors at the bottom for ANY prior frame height.
+  function reseatFreshScreen() {
+    reseatPendingRef.current = true;
+    process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
+    process.stdout.write("\n".repeat(Math.max(0, rows - 1)));
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
       case "clear":
+        reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
         break;
@@ -2790,9 +2788,8 @@ export function HarnessApp({
         break;
       }
       case "compact": {
-        const before = agent.agentState.messages.length;
-        agent.agentState.messages = compactMessages(agent, agent.agentState.messages);
-        const after = agent.agentState.messages.length;
+        const before = agent.agentState.messages;
+        agent.agentState.messages = compactMessages(agent, before);
         setMessages((m) => [
           ...m,
           {
@@ -2801,7 +2798,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Context compacted: ${before} → ${after} messages`,
+            text: compactReport(before, agent.agentState.messages),
             toolName: "compact",
           },
         ]);
@@ -3265,6 +3262,7 @@ export function HarnessApp({
       case "new":
         agent.setSessionId(Math.random().toString(16).slice(2, 14));
         agent.reset();
+        reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
         setActualCost(0);
@@ -4230,12 +4228,13 @@ export function HarnessApp({
         setCtxPct(stats.ctxPct);
       }
 
+      const beforeAuto = agent.agentState.messages;
       if (maybeAutoCompact(agent)) {
         setMessages((m) => [
           ...m,
           {
             role: "tool",
-            text: "Context auto-compacted (was >80% full)",
+            text: `Auto (context was >80% full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
             toolName: "compact",
           },
         ]);
@@ -4516,12 +4515,21 @@ export function HarnessApp({
   // top-clips under the explicit height). While the panel renders, the frame is the MP4
   // identity: panelOuter + PANEL_STATUS_ROWS + inputBoxHeight ≡ rows − SCROLLBACK_SAFETY_ROWS.
   const bannerShown = messages.length === 0 && matchingCommands.length === 0 && !overlayOpen;
-  const bannerRows = bannerShown
-    ? 1 +
-      wrappedLineCount(getAsciiBanner("MINIMA"), cols) +
-      BANNER_TAGLINES.reduce((n, line) => n + 1 + wrappedLineCount(line, cols), 0) +
-      (tipsEnabled && startupTip ? 1 + wrappedLineCount(startupTip, cols) : 0)
-    : 0;
+  const bannerTip = tipsEnabled && startupTip ? startupTip : null;
+  const bannerRows = bannerShown ? bannerRowCount(bannerTip, cols) : 0;
+  // MUB-167: once this generation's transcript starts, the live banner COMMITS into <Static>
+  // ahead of the first message — the first flush then prints the banner + echo where the
+  // banner stood, instead of leaving its vanished rows as dead live-frame padding with the
+  // echo stranded at the old banner top, mid-screen.
+  const bannerCommitted = messages.length > 0 && bannerGenRef.current === transcriptGen;
+  const bannerItem = useMemo<ChatMessage>(
+    () => ({ role: "banner", text: bannerTip ?? "" }),
+    [bannerTip],
+  );
+  const staticItems = useMemo(
+    () => (bannerCommitted ? [bannerItem, ...messages] : messages),
+    [bannerCommitted, bannerItem, messages],
+  );
   const pickerRows = pickerOpen
     ? MODEL_PICKER_MAX_ROWS
     : paletteOpen
@@ -4546,15 +4554,18 @@ export function HarnessApp({
         treeHeight +
         footerHeight +
         pickerRows;
-  // Ledger resets: a <Static> remount (startup, /clear, rewind, resume) reprints the
-  // transcript and seats itself → content-sized frame. A resize seeds one full-height frame
-  // instead: it writes past the last row and re-anchors — including after Ink's one
-  // unavoidable old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst
-  // until the next commit scrolls it home). The mount deliberately does NOT cap-seed: a
-  // full-height first frame parks the early transcript at the screen TOP, 40+ rows from
-  // the composer, for several turns (tried 2026-07-20, PNG-refuted). Boot seating is the
-  // reserve's job, made trustworthy by the CSI r margin reset in main.ts — the live
-  // failure mode was a stale DECSTBM region eating the reserve, not the reserve itself.
+  // Ledger resets: a <Static> remount (startup, rewind, resume) reprints the transcript
+  // and seats itself → content-sized frame. A resize seeds one full-height frame instead:
+  // it writes past the last row and re-anchors — including after Ink's one unavoidable
+  // old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst until the
+  // next commit scrolls it home). The /clear//new reseat (MUB-169) also cap-seeds: it has
+  // just cleared the screen and re-written the reserve, and the full-height frame outruns
+  // any previous frame height so the reserve write re-pins the bottom. The mount
+  // deliberately does NOT cap-seed: a full-height first frame parks the early transcript
+  // at the screen TOP, 40+ rows from the composer, for several turns (tried 2026-07-20,
+  // PNG-refuted). Boot seating is the reserve's job, made trustworthy by the CSI r margin
+  // reset in main.ts — the live failure mode was a stale DECSTBM region eating the
+  // reserve, not the reserve itself.
   const anchorPrev = anchorGenRef.current;
   const anchorRemounted =
     anchorPrev === null ||
@@ -4565,6 +4576,9 @@ export function HarnessApp({
   const anchorReset = anchorRemounted || anchorResized;
   let committedRows = 0;
   if (!anchorReset) {
+    if (bannerCommitted && committedLenRef.current === 0) {
+      committedRows += computeMsgHeight(bannerItem, cols);
+    }
     for (let i = committedLenRef.current; i < messages.length; i++) {
       const m = messages[i];
       if (m) committedRows += computeMsgHeight(m, cols);
@@ -4572,7 +4586,7 @@ export function HarnessApp({
   }
   const liveHeight = nextLiveFrameHeight(
     anchorReset
-      ? anchorRemounted
+      ? anchorRemounted && !reseatPendingRef.current
         ? 0
         : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
       : liveHeightRef.current,
@@ -4584,6 +4598,8 @@ export function HarnessApp({
     liveHeightRef.current = liveHeight;
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
+    if (bannerShown) bannerGenRef.current = transcriptGen;
+    if (anchorReset) reseatPendingRef.current = false;
     if (ANCHOR_DEBUG) {
       try {
         appendFileSync(
@@ -4631,23 +4647,7 @@ export function HarnessApp({
     );
   }
 
-  const bannerBlock = bannerShown ? (
-    <Box flexDirection="column" alignItems="center" marginTop={1}>
-      <Text color="green" bold>
-        {getAsciiBanner("MINIMA")}
-      </Text>
-      {BANNER_TAGLINES.map((line) => (
-        <Box key={line} marginTop={1}>
-          <Text color="gray">{line}</Text>
-        </Box>
-      ))}
-      {tipsEnabled && startupTip ? (
-        <Box marginTop={1}>
-          <Text color="yellow">{startupTip}</Text>
-        </Box>
-      ) : null}
-    </Box>
-  ) : null;
+  const bannerBlock = bannerShown ? <BannerBlock tip={bannerTip} /> : null;
 
   // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
   // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
@@ -4921,7 +4921,7 @@ export function HarnessApp({
   return (
     <Box flexDirection="column" width="100%">
       {/* Finalized transcript → native scrollback (each message once, never re-diffed). */}
-      <Static key={transcriptGen} items={messages}>
+      <Static key={transcriptGen} items={staticItems}>
         {(msg, i) => <MessageRow key={i} msg={msg} cols={cols} />}
       </Static>
       <Box

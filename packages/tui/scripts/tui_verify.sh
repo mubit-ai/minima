@@ -66,6 +66,15 @@
 #                     SAFETY_ROWS, exact after the next commit), and the reporter's 200x50
 #                     geometry where the committed reply wraps to FEWER rows than the
 #                     stream-frame shrink (the float the MP20 ordering alone cannot fix)
+#   first-prompt      MUB-167: fresh-session first submit — the banner COMMITS into the
+#                     transcript with the echo (it stays on screen) and no blank hole is
+#                     left where the live banner stood (pre-fix: the echo printed at the
+#                     old banner top, mid-screen, ~13 dead rows above the composer)
+#   clear-reseat      MUB-169: /clear replays the boot physics — margin reset + 2J/3J +
+#                     home + reserve — so the old transcript leaves the screen AND the
+#                     scrollback, and the banner re-seats at the terminal bottom. The ONLY
+#                     scenario whose wipe budget is 2 (startup 3J + the deliberate /clear
+#                     3J); every other scenario keeps the exactly-1 budget
 #   stale-margins     the live-window root cause (2026-07-20): a prior CLI's leaked
 #                     DECSTBM scroll region survives 2J/3J/H and resizes, imprisons the
 #                     newline reserve (DSR said row 24 of 60), and seats the composer
@@ -1411,6 +1420,105 @@ python3 "$TUI/scripts/tui_assert.py" "$TMP/big200-frames.jsonl" --after 2.5 \
   --check bottom-anchor --bottom-slack 1
 perf_check "$TMP/big200-perf.jsonl" big200 4000
 
+echo "== tui-verify: scenario first-prompt (MUB-167: banner commits with the first echo, no mid-frame hole) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 11,
+  "env": {"MINIMA_DB_PATH": "$TMP/firstprompt.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-firstprompt"},
+  "frames": "$TMP/firstprompt-frames.jsonl",
+  "raw": "$TMP/firstprompt-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "SLOW first prompt of a fresh session"},
+    {"after": 4.0, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture firstprompt "$SPEC"
+python3 - "$TMP/firstprompt-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# Pre-submit: the live banner is on screen.
+assert any(grid_has(f, "██") for f in frames if f["t"] < 4.0), "MINIMA banner never rendered on the fresh session"
+settled = [f for i, f in enumerate(frames)
+           if i == len(frames) - 1 or frames[i + 1]["t"] - f["t"] >= 0.15]
+post = [f for f in settled if f["t"] >= 4.2 and grid_has(f, "▸ you")]
+assert post, "no settled frames with the echoed prompt after submit"
+# The banner COMMITTED with the echo: it stays on screen above the transcript instead of
+# being erased into a dead-padding hole.
+assert all(grid_has(f, "██") for f in post), "banner erased on first submit - it must commit into the transcript"
+# The MUB-167 symptom: pre-fix the vanished banner rows sat as blank padding between the
+# echo (stranded at the old banner top) and the composer — a constant 10-row hole through
+# the busy window (A/B measured 2026-07-22; the committed banner holds it at 4: the busy
+# spinner separation plus the turn-end teardown transient the ledger decays per commit).
+for f in post:
+    rows = f["screen"]
+    first_echo = next(i for i, row in enumerate(rows) if "▸ you" in row)
+    last_content = max(i for i, row in enumerate(rows) if row.strip())
+    run = best = 0
+    for i in range(first_echo, last_content + 1):
+        run = run + 1 if not rows[i].strip() else 0
+        best = max(best, run)
+    assert best <= 5, (
+        f"{best}-row blank hole below the first echo at t={f['t']} - banner rows left as live-frame padding")
+print(f"tui_assert: PASS first-prompt (banner committed, no mid-frame hole across {len(post)} settled frames)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/firstprompt-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario clear-reseat (MUB-169: /clear drops scrollback + re-seats the banner at the bottom) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 120, "rows": 36, "duration": 13,
+  "env": {"MINIMA_DB_PATH": "$TMP/clearreseat.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-clearreseat"},
+  "frames": "$TMP/clearreseat-frames.jsonl",
+  "raw": "$TMP/clearreseat-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "CODE hello"},
+    {"after": 3.6, "send": "<CR>"},
+    {"after": 8.5, "send": "/clear"},
+    {"after": 9.3, "send": "<CR>"}
+  ]
+}
+EOF
+)
+capture clearreseat "$SPEC"
+python3 - "$TMP/clearreseat-raw.bin" "$TMP/clearreseat-frames.jsonl" <<'PY'
+import json, sys
+raw = open(sys.argv[1], "rb").read()
+wipes = raw.count(b"\x1b[3J")
+# The ONE deliberate exception to the suite's exactly-1 budget: startup clear + /clear.
+assert wipes == 2, f"{wipes} ESC[3J wipes (expect exactly 2: the startup clear + the /clear reseat)"
+frames = [json.loads(l) for l in open(sys.argv[2])]
+def grid_has(f, needle):
+    return any(needle in row for row in f["screen"])
+# Liveness: the CODE turn actually painted a transcript to clear.
+assert any(grid_has(f, "```bash") for f in frames if f["t"] < 9.3), (
+    "the CODE turn never rendered - nothing on screen to clear, the reseat assert is vacuous")
+# Window opens AT the CR step (9.3): frames exist only on output, and the whole /clear
+# repaint can land within ~0.05s of the submit — a later window start sees zero frames.
+post = [f for f in frames if f["t"] >= 9.3]
+assert post, "no frames after /clear"
+# The old transcript is GONE from the visible screen (the 3J above proves the scrollback).
+assert not any(grid_has(f, "```bash") or grid_has(f, "▸ you") for f in post), (
+    "old transcript still on the visible screen after /clear")
+# ...and the banner is back.
+assert any(grid_has(f, "██") for f in post), "banner did not repaint after /clear"
+last = frames[-1]["screen"]
+assert any("██" in row for row in last), "banner not on the settled post-/clear screen"
+print("tui_assert: PASS clear-reseat (second 3J deliberate, transcript gone, banner repainted)")
+PY
+# Post-/clear: the fresh banner + composer seat at the terminal bottom (THE RULE) — the
+# reseat's reserve + cap-seeded frame, not a mid-screen repaint over stale rows.
+python3 "$TUI/scripts/tui_assert.py" "$TMP/clearreseat-frames.jsonl" --after 9.3 \
+  --check final-nonblank --check bottom-anchor --bottom-slack 1
+
 # Root-caused live 2026-07-20: a prior CLI that pinned its UI with DECSTBM and died
 # uncleanly leaves scroll margins in the WINDOW forever (they survive 2J/3J/H and
 # resizes). The reserve then scrolls inside rows 1..24 and the composer seats mid-screen
@@ -1448,7 +1556,8 @@ python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \
           "$TMP"/plancouncil-raw.bin "$TMP"/plandraft-raw.bin "$TMP"/planexit-raw.bin \
           "$TMP"/vconsent-raw.bin "$TMP"/accept-raw.bin \
           "$TMP"/otanchor-raw.bin "$TMP"/pearly-raw.bin "$TMP"/resizere-raw.bin \
-          "$TMP"/big200-raw.bin "$TMP"/margins-raw.bin <<'PY'
+          "$TMP"/big200-raw.bin "$TMP"/firstprompt-raw.bin "$TMP"/clearreseat-raw.bin \
+          "$TMP"/margins-raw.bin <<'PY'
 import sys
 BAD = [b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1049h"]
 for path in sys.argv[1:]:

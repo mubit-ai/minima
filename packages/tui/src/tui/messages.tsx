@@ -13,9 +13,11 @@ import { Box, Text } from "ink";
 import { type ReactNode, memo } from "react";
 import { isGateBlockReason } from "../minima/big_plan.ts";
 import {
+  BANNER_TAGLINES,
   type ChatMessage,
   clampToolText,
   classifyMarkdownLines,
+  getAsciiBanner,
   toolHiddenMarker,
 } from "./layout.ts";
 
@@ -154,10 +156,40 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
  * memo: each row renders once via <Static>; memo is a cheap guard for the rare re-mount paths
  * (transcriptGen bumps on /clear and resume).
  */
+/**
+ * The MINIMA banner block. Lives in the live frame while the transcript is empty (it hides
+ * for overlays/autocomplete), then commits INTO <Static> with the first message so its rows
+ * leave the live frame as printed scrollback instead of dead padding (MUB-167). One JSX for
+ * both forms; bannerRowCount in layout.ts is its row ruler.
+ */
+export function BannerBlock({ tip, width }: { tip: string | null; width?: number }) {
+  return (
+    <Box flexDirection="column" alignItems="center" marginTop={1} width={width}>
+      <Text color="green" bold>
+        {getAsciiBanner("MINIMA")}
+      </Text>
+      {BANNER_TAGLINES.map((line) => (
+        <Box key={line} marginTop={1}>
+          <Text color="gray">{line}</Text>
+        </Box>
+      ))}
+      {tip ? (
+        <Box marginTop={1}>
+          <Text color="yellow">{tip}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
 export const MessageRow = memo(function MessageRow({
   msg,
   cols,
 }: { msg: ChatMessage; cols: number }) {
+  if (msg.role === "banner") {
+    return <BannerBlock tip={msg.text || null} width={cols} />;
+  }
+
   if (msg.role === "user") {
     return (
       <Box flexDirection="column" marginTop={1}>

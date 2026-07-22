@@ -20,11 +20,52 @@
 import stringWidth from "string-width";
 
 export interface ChatMessage {
-  role: "user" | "assistant" | "tool" | "thinking";
+  role: "user" | "assistant" | "tool" | "thinking" | "banner";
   text: string;
   toolName?: string;
   isError?: boolean;
   thoughtDurationSecs?: number;
+}
+
+const BANNER_GLYPHS: Record<string, string[]> = {
+  M: ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
+  I: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
+  N: ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
+  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+};
+
+export function getAsciiBanner(word: string): string {
+  const rows: string[] = [];
+  for (let r = 0; r < 6; r++) {
+    const chars: string[] = [];
+    for (const ch of word) {
+      const glyph = BANNER_GLYPHS[ch];
+      if (glyph) {
+        chars.push(glyph[r] || "");
+      }
+    }
+    rows.push(chars.join(" "));
+  }
+  return rows.join("\n");
+}
+
+// Startup banner taglines — one array feeds BOTH the JSX and the ledger's row count, so the
+// reservation can't drift from the render.
+export const BANNER_TAGLINES = [
+  "CLI · cost-aware model routing",
+  "recommend → run → judge → feedback → memory",
+  "type a prompt, or / for commands",
+  "scroll with your terminal (wheel / trackpad) · select & copy freely",
+];
+
+/** Rendered rows of the MINIMA banner block (live and committed forms are the same JSX). */
+export function bannerRowCount(tip: string | null, cols: number): number {
+  return (
+    1 +
+    wrappedLineCount(getAsciiBanner("MINIMA"), cols) +
+    BANNER_TAGLINES.reduce((n, line) => n + 1 + wrappedLineCount(line, cols), 0) +
+    (tip ? 1 + wrappedLineCount(tip, cols) : 0)
+  );
 }
 
 /** Max rendered lines of a tool message before it's clipped (keeps /model, big bash, etc. bounded). */
@@ -521,6 +562,9 @@ export function childTreeHeight(childCount: number, maxRows: number): number {
  * render past its budget and desync Ink — the garble class). `cols` is the terminal width.
  */
 export function computeMsgHeight(msg: ChatMessage, cols: number): number {
+  if (msg.role === "banner") {
+    return bannerRowCount(msg.text || null, cols);
+  }
   if (msg.role === "user") {
     // marginTop(1) + "▸ you" header(1) + body (` ${text} ` — pad 2 cols; wrap at &lt;= cols-2).
     return 2 + wrappedLineCount(msg.text, cols - 2);
