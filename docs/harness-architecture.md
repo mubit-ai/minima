@@ -313,7 +313,7 @@ prompt text.
 | `MINIMA_TUI_PLAN_PREMIUM` / `MINIMA_PLAN_PREMIUM_MODELS` | premium pool for all plan-mode turns (council or not) | on |
 | `MINIMA_TUI_PLAN_CRITIC` / `MINIMA_TUI_DIFF_REVIEW` / `MINIMA_TUI_AUTO_GATES` | verification extras | on |
 | `MINIMA_TUI_ALLOW_VERIFY` | headless verify consent (fail-closed) | off |
-| `MINIMA_TUI_INTERVIEW=1` | plan interview: ≤3 gated questions after a council round (verify commands → user-origin checks · budget/quality → routing profile `source='interview'` · prose → preference memories) | off |
+| `MINIMA_TUI_INTERVIEW` | plan interview: ≤3 gated questions after a council round (verify commands → user-origin checks · budget/quality → routing profile `source='interview'` · prose → preference memories) (experimental-covered) | off |
 | `MINIMA_TUI_EXPERIMENTAL` | umbrella: every default-off opt-in feature at once | off |
 | `MINIMA_AUTO_EFFORT` | difficulty → thinking effort (experimental-covered) | off |
 | `MINIMA_DB_PATH` / `MINIMA_HARNESS_DIR` | persistence locations | `~/.minima-harness/` |
