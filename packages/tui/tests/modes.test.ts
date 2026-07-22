@@ -44,10 +44,14 @@ describe("mode bundles (B2)", () => {
 });
 
 describe("mode store (B2)", () => {
-  test("defaults to build; cycleMode walks build → acceptEdits → plan → build", () => {
+  test("defaults to build; cycleMode walks the ring (bypass leg iff latched)", async () => {
+    // enableBypass() is a one-way module-global latch and bun shares one process
+    // across test files — whether the bypass leg exists here depends on file order.
+    const { isBypassEnabled } = await import("../src/agent/modes.ts");
     expect(getMode()).toBe("build");
     expect(cycleMode()).toBe("acceptEdits");
     expect(cycleMode()).toBe("plan");
+    if (isBypassEnabled()) expect(cycleMode()).toBe("bypass");
     expect(cycleMode()).toBe("build");
   });
 
