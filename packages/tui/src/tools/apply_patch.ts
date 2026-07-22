@@ -23,7 +23,7 @@
  *   *** End Patch
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
@@ -279,27 +279,56 @@ function makeResolver(workdir?: string): (rel: string) => string {
   };
 }
 
-function diskReader(resolve: (rel: string) => string): ReadFile {
-  return (rel: string) => {
-    const abs = resolve(rel);
+/**
+ * Pre-read every file the parsed changes reference so planPatch can stay sync.
+ * Mirrors the old disk reader exactly: unreadable or missing files map to null
+ * (an Add File target need not exist), and a path-resolution failure is stored
+ * and re-thrown only when planPatch actually reads that path.
+ */
+async function preloadFiles(
+  changes: FileChange[],
+  resolve: (rel: string) => string,
+): Promise<Map<string, string | null | PatchError>> {
+  const files = new Map<string, string | null | PatchError>();
+  for (const ch of changes) {
+    if (files.has(ch.path)) continue;
+    let abs: string;
     try {
-      return readFileSync(abs, "utf8");
-    } catch {
-      return null;
+      abs = resolve(ch.path);
+    } catch (exc) {
+      if (exc instanceof PatchError) {
+        files.set(ch.path, exc);
+        continue;
+      }
+      throw exc;
     }
+    try {
+      files.set(ch.path, await readFile(abs, "utf8"));
+    } catch {
+      files.set(ch.path, null);
+    }
+  }
+  return files;
+}
+
+function mapReader(files: Map<string, string | null | PatchError>): ReadFile {
+  return (rel: string) => {
+    const cached = files.get(rel);
+    if (cached instanceof PatchError) throw cached;
+    return cached ?? null;
   };
 }
 
 /** Flush a resolved plan to disk: writes (with mkdir) first, then deletes. */
-export function writePlan(plan: PatchPlan, resolve: (rel: string) => string): void {
+export async function writePlan(plan: PatchPlan, resolve: (rel: string) => string): Promise<void> {
   for (const [rel, content] of plan.writes) {
     const abs = resolve(rel);
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content, "utf8");
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, content, "utf8");
   }
   for (const rel of plan.deletes) {
     if (plan.writes.has(rel)) continue; // a moved-to-itself or re-created path; keep it
-    rmSync(resolve(rel), { force: true });
+    await rm(resolve(rel), { force: true });
   }
 }
 
@@ -338,12 +367,13 @@ export function applyPatchTool(opts: FsToolOptions = {}): AgentTool {
         const changes = parsePatch(String(params.patch));
         if (!changes.length) return errorResult("apply_patch: empty patch (no file sections)");
         changeCount = changes.length;
-        plan = planPatch(changes, diskReader(resolve));
+        const files = await preloadFiles(changes, resolve);
+        plan = planPatch(changes, mapReader(files));
       } catch (exc) {
         if (exc instanceof PatchError) return errorResult(`apply_patch: ${exc.message}`);
         throw exc;
       }
-      writePlan(plan, resolve);
+      await writePlan(plan, resolve);
       const summary = plan.summary.join("\n");
       return {
         content: [text(`applied patch (${changeCount} change(s)):\n${summary}`)],
