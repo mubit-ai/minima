@@ -57,8 +57,10 @@ export interface Model {
   max_tokens: number;
   input?: Modality[];
   reasoning?: boolean;
-  // Always-on adaptive thinking (claude-fable-5): the API rejects an explicit
-  // thinking/budget_tokens param, so providers must not send one.
+  // Requires the adaptive thinking shape (claude-fable-5, claude-sonnet-5, opus-4.7+):
+  // the API 400s on thinking:{type:"enabled", budget_tokens}; providers send
+  // thinking:{type:"adaptive"} (+ output_config.effort) instead. Source of truth for
+  // ai/provider_quirks.thinkingFormatFor.
   adaptive_thinking?: boolean;
   base_url?: string;
   headers?: Record<string, string>;

@@ -34,20 +34,20 @@ export function quirksFor(provider: string): ProviderQuirks {
  */
 export type ThinkingFormat = "enabled" | "adaptive" | "none";
 
-// Model-id patterns that REQUIRE the adaptive shape (budget_tokens is rejected with a 400):
-// Opus 4.7+, Sonnet 5+, Fable 5, Mythos 5. Conservative on purpose — anything unmatched
-// keeps the classic shape so unknown/older models never regress. Extend with one line.
-const ADAPTIVE_THINKING_MODELS: readonly RegExp[] = [
-  /^(?:[\w.:-]+\/)?claude-opus-4-[7-9]/,
-  /^(?:[\w.:-]+\/)?claude-sonnet-[5-9]/,
-  /^(?:[\w.:-]+\/)?claude-fable-[0-9]/,
-  /^(?:[\w.:-]+\/)?claude-mythos-[0-9]/,
-];
-
-/** Thinking API shape for `model` ("none" when the model cannot reason at all). */
-export function thinkingFormatFor(model: { id: string; reasoning?: boolean }): ThinkingFormat {
+/**
+ * Thinking API shape for `model` ("none" when the model cannot reason at all).
+ *
+ * Which models require the adaptive shape is DATA on the model registry — the
+ * `Model.adaptive_thinking` flag (set in the seed catalog / at registration) is the single
+ * source of truth; there is no id-pattern list here. Unflagged reasoning models keep the
+ * classic shape so unknown/older models never regress.
+ */
+export function thinkingFormatFor(model: {
+  reasoning?: boolean;
+  adaptive_thinking?: boolean;
+}): ThinkingFormat {
   if (!model.reasoning) return "none";
-  return ADAPTIVE_THINKING_MODELS.some((re) => re.test(model.id)) ? "adaptive" : "enabled";
+  return model.adaptive_thinking ? "adaptive" : "enabled";
 }
 
 // Harness ThinkingLevel -> wire `output_config.effort`. "off" (and anything unknown)

@@ -219,7 +219,7 @@ describe("AnthropicProvider", () => {
     expect(sdkTimeoutMs({ timeout: 0.5 })).toBe(500);
   });
 
-  test("classic reasoning model gets enabled + budget_tokens", async () => {
+  test("unflagged reasoning model gets enabled + budget_tokens", async () => {
     for (const id of ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"]) {
       const kwargs = await kwargsFor(
         { ...MODEL, id },
@@ -230,10 +230,10 @@ describe("AnthropicProvider", () => {
     }
   });
 
-  test("adaptive-format model gets adaptive + output_config.effort, no budget_tokens", async () => {
+  test("adaptive_thinking model gets adaptive + output_config.effort, no budget_tokens", async () => {
     for (const id of ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5", "claude-fable-5"]) {
       const kwargs = await kwargsFor(
-        { ...MODEL, id },
+        { ...MODEL, id, adaptive_thinking: true },
         { thinking: true, thinking_budget: 2048, thinking_level: "high" },
       );
       expect(kwargs.thinking).toEqual({ type: "adaptive" });
@@ -241,9 +241,9 @@ describe("AnthropicProvider", () => {
     }
   });
 
-  test("adaptive-format model without a level omits output_config", async () => {
+  test("adaptive_thinking model without a level omits output_config", async () => {
     const kwargs = await kwargsFor(
-      { ...MODEL, id: "claude-opus-4-8" },
+      { ...MODEL, id: "claude-opus-4-8", adaptive_thinking: true },
       { thinking: true, thinking_budget: 2048 },
     );
     expect(kwargs.thinking).toEqual({ type: "adaptive" });
@@ -252,7 +252,7 @@ describe("AnthropicProvider", () => {
 
   test("non-reasoning model gets no thinking kwargs", async () => {
     const kwargs = await kwargsFor(
-      { ...MODEL, id: "claude-opus-4-8", reasoning: false },
+      { ...MODEL, id: "claude-opus-4-8", adaptive_thinking: true, reasoning: false },
       { thinking: true, thinking_budget: 2048, thinking_level: "high" },
     );
     expect(kwargs.thinking).toBeUndefined();
@@ -260,8 +260,11 @@ describe("AnthropicProvider", () => {
   });
 
   test("thinking off sends no thinking kwargs on any format", async () => {
-    for (const id of ["claude-haiku-4-5", "claude-opus-4-8"]) {
-      const kwargs = await kwargsFor({ ...MODEL, id }, {});
+    for (const model of [
+      { ...MODEL, id: "claude-haiku-4-5" },
+      { ...MODEL, id: "claude-opus-4-8", adaptive_thinking: true },
+    ]) {
+      const kwargs = await kwargsFor(model, {});
       expect(kwargs.thinking).toBeUndefined();
       expect(kwargs.output_config).toBeUndefined();
     }
