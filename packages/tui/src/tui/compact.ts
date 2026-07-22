@@ -43,16 +43,42 @@ export function compactMessages(_agent: MinimaAgent, messages: Message[]): Messa
   return [summaryMsg, ...recentMessages];
 }
 
+/** Estimated context tokens of a message list (chars/4 — the auto-threshold's own basis). */
+export function approxContextTokens(messages: Message[]): number {
+  let totalChars = 0;
+  for (const m of messages) {
+    totalChars += m.textContent.length;
+  }
+  return Math.ceil(totalChars / 4);
+}
+
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/**
+ * The user-facing /compact line (MUB-170): a session-derived estimated-token delta instead
+ * of the canned constant message count. Deterministic and offline — same basis as the 80%
+ * auto threshold.
+ */
+export function compactReport(before: Message[], after: Message[]): string {
+  const beforeTokens = approxContextTokens(before);
+  if (after === before || after.length === before.length) {
+    return `Nothing to compact: ${before.length} messages, ~${fmtTokens(beforeTokens)} tokens (est.)`;
+  }
+  const afterTokens = approxContextTokens(after);
+  const freed =
+    beforeTokens > 0
+      ? Math.max(0, Math.round(((beforeTokens - afterTokens) / beforeTokens) * 100))
+      : 0;
+  return `Context compacted: ~${fmtTokens(beforeTokens)} → ~${fmtTokens(afterTokens)} tokens (est., ${freed}% freed) · ${before.length} → ${after.length} messages`;
+}
+
 export function maybeAutoCompact(agent: MinimaAgent): boolean {
   const model = agent.agentState.model;
   if (!model?.context_window) return false;
 
-  let totalChars = 0;
-  for (const m of agent.agentState.messages) {
-    totalChars += m.textContent.length;
-  }
-  const approxTokens = Math.ceil(totalChars / 4);
-  const pct = (approxTokens / model.context_window) * 100;
+  const pct = (approxContextTokens(agent.agentState.messages) / model.context_window) * 100;
 
   if (pct < 80) return false;
 

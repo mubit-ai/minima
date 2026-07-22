@@ -93,7 +93,7 @@ import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_sl
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import { compactMessages, maybeAutoCompact } from "./compact.ts";
+import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
@@ -2788,9 +2788,8 @@ export function HarnessApp({
         break;
       }
       case "compact": {
-        const before = agent.agentState.messages.length;
-        agent.agentState.messages = compactMessages(agent, agent.agentState.messages);
-        const after = agent.agentState.messages.length;
+        const before = agent.agentState.messages;
+        agent.agentState.messages = compactMessages(agent, before);
         setMessages((m) => [
           ...m,
           {
@@ -2799,7 +2798,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Context compacted: ${before} → ${after} messages`,
+            text: compactReport(before, agent.agentState.messages),
             toolName: "compact",
           },
         ]);
@@ -4229,12 +4228,13 @@ export function HarnessApp({
         setCtxPct(stats.ctxPct);
       }
 
+      const beforeAuto = agent.agentState.messages;
       if (maybeAutoCompact(agent)) {
         setMessages((m) => [
           ...m,
           {
             role: "tool",
-            text: "Context auto-compacted (was >80% full)",
+            text: `Auto (context was >80% full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
             toolName: "compact",
           },
         ]);
