@@ -91,7 +91,7 @@ import type { TodoTask } from "../tools/todowrite.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
-import { type ChildRow, ChildTree } from "./child_tree.tsx";
+import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
@@ -924,21 +924,7 @@ export function HarnessApp({
     childEventRef.handler = (e: ChildEvent) => {
       setChildrenState((prev) => {
         const next = new Map(prev);
-        const existing = next.get(e.childId);
-        // Determine status from the incoming AgentEvent kind.
-        const kind = (e.event as { kind?: string }).kind ?? "";
-        const isDone = kind === "run_complete" || kind === "error";
-        const isAborted = kind === "aborted";
-        const status: ChildRow["status"] = isAborted
-          ? "aborted"
-          : isDone
-            ? "success" === (e.event as { outcome?: string }).outcome
-              ? "done"
-              : "failure"
-            : "running";
-        const costUsd =
-          (e.event as { cost?: { total?: number } }).cost?.total ?? existing?.costUsd ?? 0;
-        next.set(e.childId, { stepId: e.stepId, depth: e.depth, status, costUsd });
+        next.set(e.childId, applyChildEvent(next.get(e.childId), e));
         return next;
       });
     };

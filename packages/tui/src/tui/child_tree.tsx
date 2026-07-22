@@ -8,12 +8,39 @@
 
 import { Box, Text } from "ink";
 import React from "react";
+import { isAssistant } from "../ai/types.ts";
+import type { ChildEvent } from "../minima/spawn.ts";
 
 export interface ChildRow {
   stepId: string;
   depth: number;
   status: "running" | "done" | "aborted" | "failure";
   costUsd: number;
+}
+
+/**
+ * Reduce one forwarded child AgentEvent into the row's next state (pure — app.tsx wires it).
+ * Realized cost accumulates from each assistant message_end (usage.cost.total, attached by
+ * the provider); the terminal status comes from stop_reason (aborted/error) and agent_end.
+ */
+export function applyChildEvent(prev: ChildRow | undefined, e: ChildEvent): ChildRow {
+  let status = prev?.status ?? "running";
+  let costUsd = prev?.costUsd ?? 0;
+  const ev = e.event;
+  if (ev.type === "message_end" && ev.message && isAssistant(ev.message)) {
+    costUsd += ev.message.usage.cost.total || 0;
+    if (ev.message.stop_reason === "aborted") status = "aborted";
+    else if (ev.message.stop_reason === "error") status = "failure";
+  } else if (ev.type === "agent_end" && status === "running") {
+    const last = [...ev.messages].reverse().find(isAssistant);
+    status =
+      last?.stop_reason === "aborted"
+        ? "aborted"
+        : last?.stop_reason === "error"
+          ? "failure"
+          : "done";
+  }
+  return { stepId: e.stepId, depth: e.depth, status, costUsd };
 }
 
 export interface ChildTreeProps {
