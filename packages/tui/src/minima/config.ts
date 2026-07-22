@@ -127,6 +127,13 @@ export interface HarnessConfig {
    * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
    * writes memories unless the user (or a later curator) does. */
   memoryLedger: boolean;
+  /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
+   * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
+   * always win; consent gates and diagnostic switches are never covered. */
+  experimental: boolean;
+  /** Effort routing Phase A (MINIMA_AUTO_EFFORT, default off, umbrella-covered): the
+   * server's classified difficulty picks each prompt's thinking level. */
+  autoEffort: boolean;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -159,16 +166,29 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     backoffMs: 0,
     gradedOutcome: true,
     memoryLedger: true,
+    experimental: false,
+    autoEffort: false,
     ...overrides,
     bigPlan,
     groundTruth: bigPlan,
   };
 }
 
+/** Resolve a default-off opt-in FEATURE flag against the experimental umbrella:
+ * explicit "1" → on; explicit "0" → off (even under experimental); unset → on iff
+ * experimental. Convention: every future default-off feature flag MUST resolve through
+ * this helper so MINIMA_TUI_EXPERIMENTAL reaches it; consent gates (e.g.
+ * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. */
+export function optInFlag(value: string | undefined, experimental: boolean): boolean {
+  return value === "1" || (experimental && value !== "0");
+}
+
 /** Build a config from the environment + optional overrides. */
 export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
   const cfg = harnessConfig();
   refreshRoutingEnv(cfg);
+  cfg.experimental = process.env.MINIMA_TUI_EXPERIMENTAL === "1";
+  cfg.autoEffort = optInFlag(process.env.MINIMA_AUTO_EFFORT, cfg.experimental);
   const timeoutEnv = process.env.MINIMA_TIMEOUT;
   if (timeoutEnv) {
     const t = Number(timeoutEnv);

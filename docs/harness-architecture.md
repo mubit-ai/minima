@@ -313,8 +313,19 @@ prompt text.
 | `MINIMA_TUI_PLAN_PREMIUM` / `MINIMA_PLAN_PREMIUM_MODELS` | premium pool for all plan-mode turns (council or not) | on |
 | `MINIMA_TUI_PLAN_CRITIC` / `MINIMA_TUI_DIFF_REVIEW` / `MINIMA_TUI_AUTO_GATES` | verification extras | on |
 | `MINIMA_TUI_ALLOW_VERIFY` | headless verify consent (fail-closed) | off |
-| `MINIMA_AUTO_EFFORT` | difficulty → thinking effort | off |
+| `MINIMA_TUI_EXPERIMENTAL` | umbrella: every default-off opt-in feature at once | off |
+| `MINIMA_AUTO_EFFORT` | difficulty → thinking effort (experimental-covered) | off |
 | `MINIMA_DB_PATH` / `MINIMA_HARNESS_DIR` | persistence locations | `~/.minima-harness/` |
+
+`MINIMA_TUI_EXPERIMENTAL=1` covers default-off **opt-in features** only (currently
+`MINIMA_AUTO_EFFORT`). An explicit per-flag value always wins — `=0` keeps a feature
+off even under the umbrella. Consent gates (`MINIMA_TUI_ALLOW_VERIFY`: an umbrella
+must never grant permission to execute shell commands) and diagnostic/rollback
+switches (`MINIMA_TUI_PERF`, `MINIMA_TUI_BADGE`, `MINIMA_TUI_DEBUG_ANCHOR`,
+`MINIMA_TUI_ANCHOR_LEGACY`) are exempt, and default-on opt-out flags are unaffected.
+New default-off feature flags — including any currently unmerged — must resolve
+through `optInFlag()` in `packages/tui/src/minima/config.ts` when they land so the
+umbrella reaches them.
 
 See [configuration.md](configuration.md) for the server-side variables and
 [ground-truth-build-guide.md](ground-truth-build-guide.md) for the spine's build

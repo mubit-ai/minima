@@ -649,8 +649,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // Effort routing Phase A (staged default-off): the server's classified difficulty picks
-  // each prompt's thinking level — routing (model, effort), not just model.
-  agent.autoEffort = process.env.MINIMA_AUTO_EFFORT === "1";
+  // each prompt's thinking level — routing (model, effort), not just model. Resolved in
+  // config (MINIMA_AUTO_EFFORT through the experimental umbrella).
+  agent.autoEffort = config.autoEffort;
 
   // Wire Mubit memory (recall-before-route + write-back) into the agent. No-op unless a
   // MUBIT_API_KEY is present. Use a STABLE per-repo memory session id (the provisioned project

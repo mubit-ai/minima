@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { configFromEnv, harnessConfig } from "../src/minima/config.ts";
+import { headlessVerifyConsent } from "../src/minima/big_plan.ts";
+import { configFromEnv, harnessConfig, optInFlag } from "../src/minima/config.ts";
 
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
   const saved: Record<string, string | undefined> = {};
@@ -138,5 +139,60 @@ describe("plan-premium configuration", () => {
     withEnv({ ...CLEAR, MINIMA_PLAN_ROUND_BUDGET_USD: "nope" }, () => {
       expect(configFromEnv().planRoundBudgetUsd).toBeCloseTo(1.0);
     });
+  });
+});
+
+describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
+  const CLEAR = {
+    MINIMA_TUI_EXPERIMENTAL: undefined,
+    MINIMA_AUTO_EFFORT: undefined,
+  };
+
+  test("off by default; opt-in features stay off", () => {
+    withEnv(CLEAR, () => {
+      const config = configFromEnv();
+      expect(config.experimental).toBe(false);
+      expect(config.autoEffort).toBe(false);
+    });
+  });
+
+  test("MINIMA_TUI_EXPERIMENTAL=1 turns unset opt-in features on", () => {
+    withEnv({ ...CLEAR, MINIMA_TUI_EXPERIMENTAL: "1" }, () => {
+      const config = configFromEnv();
+      expect(config.experimental).toBe(true);
+      expect(config.autoEffort).toBe(true);
+    });
+  });
+
+  test("an explicit per-flag =0 wins over the umbrella", () => {
+    withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_AUTO_EFFORT: "0" }, () => {
+      expect(configFromEnv().autoEffort).toBe(false);
+    });
+  });
+
+  test("an explicit per-flag =1 works without the umbrella", () => {
+    withEnv({ ...CLEAR, MINIMA_AUTO_EFFORT: "1" }, () => {
+      expect(configFromEnv().autoEffort).toBe(true);
+    });
+  });
+
+  test("the umbrella never grants headless verify consent", () => {
+    expect(
+      headlessVerifyConsent({ MINIMA_TUI_EXPERIMENTAL: "1" } as unknown as NodeJS.ProcessEnv)(
+        "true",
+      ),
+    ).toBe(false);
+    withEnv({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_ALLOW_VERIFY: undefined }, () => {
+      expect(headlessVerifyConsent()("true")).toBe(false);
+    });
+  });
+
+  test("optInFlag semantics", () => {
+    expect(optInFlag("1", false)).toBe(true);
+    expect(optInFlag("1", true)).toBe(true);
+    expect(optInFlag("0", false)).toBe(false);
+    expect(optInFlag("0", true)).toBe(false);
+    expect(optInFlag(undefined, false)).toBe(false);
+    expect(optInFlag(undefined, true)).toBe(true);
   });
 });
