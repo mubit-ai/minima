@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { type AgentMode, bundleForMode } from "../agent/modes.ts";
+import { type AgentMode, bundleForMode, enableBypass } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
@@ -181,6 +181,17 @@ export function createPermissionState(
     approvedVerifies: new Set<string>(),
     projectKey,
   };
+}
+
+/**
+ * "Finalize & auto-accept edits" landing (MUB-179): approving a plan with auto-accept is
+ * consent to work the project — in-cwd reads run silent (out-of-cwd reads still prompt)
+ * and bypass joins the Shift+Tab ring for the rest of the process. The mode is NOT
+ * switched to bypass, and bypass stays never-persisted (mode_prefs.ts).
+ */
+export function finalizeAutoAcceptLanding(state: PermissionState): void {
+  state.allowedDirs.add(state.cwd);
+  enableBypass();
 }
 
 function extractPath(args: Record<string, unknown>): string | null {

@@ -710,6 +710,70 @@ describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () =>
   });
 });
 
+describe("MUB-179 — finalizeAutoAcceptLanding ('Finalize & auto-accept edits')", () => {
+  test("seeds the project cwd: in-cwd reads run silent, out-of-cwd reads still prompt", async () => {
+    const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
+    const state = createPermissionState("/repo");
+    finalizeAutoAcceptLanding(state);
+    let prompts = 0;
+    const inCwd = await checkPermission("read", { path: "/repo/src/a.ts" }, state, () => {
+      prompts++;
+    });
+    expect(inCwd).toBeNull();
+    expect(prompts).toBe(0);
+    const outside = await checkPermission("read", { path: "/etc/hosts" }, state, (p) => {
+      prompts++;
+      p.resolve("deny");
+    });
+    expect(outside?.block).toBe(true);
+    expect(prompts).toBe(1);
+  });
+
+  test("bash keeps the normal prompt flow", async () => {
+    const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
+    const state = createPermissionState("/repo");
+    finalizeAutoAcceptLanding(state);
+    let prompted = false;
+    const res = await checkPermission("bash", { command: "ls" }, state, (p) => {
+      prompted = true;
+      p.resolve("deny");
+    });
+    expect(prompted).toBe(true);
+    expect(res?.block).toBe(true);
+  });
+
+  test("bypass becomes ring-reachable, but the mode is NOT switched", async () => {
+    const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
+    const { cycleMode, getMode, isBypassEnabled, setMode } = await import(
+      "../src/agent/modes.ts"
+    );
+    setMode("acceptEdits");
+    finalizeAutoAcceptLanding(createPermissionState("/repo"));
+    expect(getMode()).toBe("acceptEdits");
+    expect(isBypassEnabled()).toBe(true);
+    setMode("plan");
+    expect(cycleMode()).toBe("bypass");
+    setMode("build");
+  });
+
+  test("bypass is still never persisted", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-finalize-landing-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const { loadPersistedMode, persistMode } = await import("../src/tui/mode_prefs.ts");
+      persistMode("github.com/x/y", "bypass");
+      expect(loadPersistedMode("github.com/x/y")).toBeNull();
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
+});
+
 describe("MP18 — mode interaction with verify consent", () => {
   test("acceptEdits: todowrite with an unseen verify still prompts (not in the auto bundle)", async () => {
     const { ACCEPT_EDITS_BUNDLE } = await import("../src/agent/modes.ts");
