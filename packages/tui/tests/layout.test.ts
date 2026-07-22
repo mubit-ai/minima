@@ -8,6 +8,8 @@ import {
   childTreeHeight,
   clampToolText,
   computeMsgHeight,
+  guardDenyLine,
+  harnessNoiseLine,
   markdownBodyHeight,
   nextLiveFrameHeight,
   panelOuterHeight,
@@ -96,6 +98,30 @@ describe("streamTailBudget — keeps the live region below the terminal height",
 });
 
 describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", () => {
+  test("R3b dim projections: guard-deny and harness rows measure their one-line producers", () => {
+    // Single producer identity: MessageRow paints guardDenyLine/harnessNoiseLine; the ruler
+    // must wrap the SAME strings, so render == estimate stays exact for the compact rows.
+    const deny: ChatMessage = {
+      role: "tool",
+      text: "Plan mode is ON — write/edit/bash/apply_patch are blocked.",
+      toolName: "write",
+      isError: true,
+      guardKind: "deny",
+    };
+    expect(computeMsgHeight(deny, 80)).toBe(1 + wrappedLineCount(guardDenyLine("write"), 80));
+    expect(computeMsgHeight(deny, 80)).toBe(2);
+    const harness: ChatMessage = {
+      role: "user",
+      text: "⛔ You are ending the turn, but the plan is not done — 2 step(s)\nmore\nlines",
+      guardKind: "harness",
+    };
+    expect(computeMsgHeight(harness, 80)).toBe(
+      1 + wrappedLineCount(harnessNoiseLine(harness.text), 80),
+    );
+    // The compact row is bounded by the FIRST line — the body lines never render.
+    expect(computeMsgHeight(harness, 80)).toBeLessThan(computeMsgHeight({ ...harness, guardKind: undefined }, 80));
+  });
+
   test("a short assistant line = marginTop + header + 1 body row", () => {
     expect(computeMsgHeight(asst("hello"), 80)).toBe(3); // 1 + 1 + markdownBodyHeight("hello")=1
   });

@@ -75,6 +75,20 @@ export function planModeBlockReason(toolName: string, bigPlan: boolean): string 
   );
 }
 
+/**
+ * R3b: a HARNESS-authored guard denial — the plan-mode dispatcher block above or the mode
+ * policy deny (makeModeGatedBeforeToolCall below); both producers live in this module and own
+ * these stable prefixes. The transcript renders a match as a calm dim one-liner: the guard
+ * working as designed, not a failure. A USER decline (denialReason) deliberately does NOT
+ * match — a user choice stays a real denial. The full text always reaches the model.
+ */
+export function isGuardDenyReason(text: string): boolean {
+  return (
+    text.startsWith("Plan mode is ON —") ||
+    /^The \S+ call is denied by the \S+ mode policy/.test(text)
+  );
+}
+
 export interface PermissionPrompt {
   toolName: string;
   argsSummary: string;

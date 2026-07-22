@@ -10,6 +10,7 @@ import {
   editTargetsWithinCwd,
   formatActionLabel,
   formatToolArgs,
+  isGuardDenyReason,
   planModeBlockReason,
   planModeBlockedTools,
 } from "../src/tui/permissions.ts";
@@ -920,5 +921,35 @@ describe("persisted per-command bash grants", () => {
       if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
       else process.env.MINIMA_HARNESS_DIR = prevEnv;
     }
+  });
+});
+
+// R3b: guard denials (plan-mode dispatcher block, mode-policy deny) are the harness working
+// as designed — the transcript renders them as calm dim one-liners. The predicate keys on the
+// STABLE prefixes both producers in permissions.ts own; a USER decline stays a real denial.
+describe("isGuardDenyReason (R3b)", () => {
+  test("matches the plan-mode dispatcher block (all variants)", () => {
+    expect(isGuardDenyReason(planModeBlockReason("write", true))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("task", true))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("write", false))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("task", false))).toBe(true);
+  });
+
+  test("matches the mode-policy deny reason", () => {
+    expect(
+      isGuardDenyReason(
+        "The bash call is denied by the plan mode policy — a user setting, not an environment restriction. Continue without it or ask the user to switch modes.",
+      ),
+    ).toBe(true);
+  });
+
+  test("a USER decline is NOT a guard deny — it must stay a real (red) denial", () => {
+    expect(isGuardDenyReason(denialReason("the bash call"))).toBe(false);
+    expect(isGuardDenyReason(denialReason("read access to /repo/src"))).toBe(false);
+  });
+
+  test("ordinary tool errors do not match", () => {
+    expect(isGuardDenyReason("Error: ENOENT no such file or directory")).toBe(false);
+    expect(isGuardDenyReason("tasks: expected string")).toBe(false);
   });
 });
