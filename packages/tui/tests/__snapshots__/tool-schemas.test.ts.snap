@@ -380,6 +380,11 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
 {
   "anthropic_input_schema": {
     "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "boolean",
+      },
       "path": {
         "default": ".",
         "description": "Base directory to search from.",
@@ -397,6 +402,11 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
   "google_function_declaration_parameters": {
     "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "BOOLEAN",
+      },
       "path": {
         "default": ".",
         "description": "Base directory to search from.",
@@ -414,6 +424,11 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
   "openai_function_parameters": {
     "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "boolean",
+      },
       "path": {
         "default": ".",
         "description": "Base directory to search from.",
