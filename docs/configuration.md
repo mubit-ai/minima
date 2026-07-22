@@ -42,6 +42,8 @@ single-tenant mode). A complete annotated template ships as
 | `MINIMA_BETA_PSEUDOCOUNT` | `2.5` | Beta-smoothing strength toward the capability prior. |
 | `MINIMA_COLD_START_MARGIN` | `0.03` | Extra eligibility margin over tau for candidates with no memory evidence (pure catalog prior). Falls back to plain tau if it would empty the eligible set. |
 | `MINIMA_HUMAN_EVIDENCE_WEIGHT` | `0.6` | Aggregation weight multiplier for caller-asserted (`human`) labels relative to gate/judge evidence (clamped 0–1). |
+| `MINIMA_POSTERIOR_DISCOUNTING` | `false` | Opt-in: apply the non-stationarity discount and posterior-reset epochs to the LIVE pick. Off, they run shadow-only (the `discounted` challenger + OPE replay) and recommendations are unchanged. |
+| `MINIMA_AGGREGATE_HALF_LIFE_DAYS` | `45` | Half-life of the non-stationarity discount (unfloored, on top of the floored evidence decay). Only affects the live pick when `MINIMA_POSTERIOR_DISCOUNTING` is on; `0` disables even then. |
 | `MINIMA_NEIGHBOR_CLASSIFY` | `true` | Re-classify `other`/low-confidence tasks from the recalled neighbors' task types (free, no LLM). |
 | `MINIMA_NEIGHBOR_CLASSIFY_CONFIDENCE` | `0.6` | Heuristic-confidence threshold below which neighbor votes may refine the classification (type + difficulty). Caller-supplied types always win. |
 | `MINIMA_ESCALATION_W_MIN` | `1.5` | Escalate if total recalled weight is below this. |

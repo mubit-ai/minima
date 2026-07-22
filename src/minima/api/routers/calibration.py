@@ -26,7 +26,8 @@ async def calibration(
     days: float | None = Query(None, gt=0, le=365, description="lookback window in days"),
 ) -> CalibrationResponse:
     window_days = days if days is not None else float(settings.minima_calibration_window_days)
-    since = time.time() - window_days * _SECONDS_PER_DAY
+    now = time.time()
+    since = now - window_days * _SECONDS_PER_DAY
     lane = f"{tenant.lane_prefix}:{namespace}" if namespace else None
     rows = (
         tenant.decision_log.rows(since=since, lane=lane)
@@ -38,7 +39,9 @@ async def calibration(
         since=since,
         days=window_days,
         namespace=namespace,
-        health=routing_health(rows),
+        health=routing_health(
+            rows, now=now, label_maturity_hours=settings.minima_label_maturity_hours
+        ),
         reports=calibration_by_task_type(
             rows,
             n_bins=settings.minima_calibration_bins,

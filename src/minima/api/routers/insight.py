@@ -19,6 +19,7 @@ from minima.schemas.insight import (
     DiagnoseResponse,
     FailureLesson,
     MemoryHealthResponse,
+    PosteriorReset,
 )
 from minima.tenancy.context import TenantContext
 
@@ -68,6 +69,12 @@ async def memory_health(
     tenant: TenantContext = Depends(get_tenant),
 ) -> MemoryHealthResponse:
     lane = tenant.lane(namespace)
+    resets = [
+        PosteriorReset(
+            model=e.model_id, lane=e.lane, cluster=e.cluster, at=e.at, cause=e.cause
+        )
+        for e in (tenant.resets.active() if tenant.resets is not None else [])
+    ]
     try:
         raw = await tenant.memory.memory_health(
             lane=lane, stale_threshold_days=stale_threshold_days
@@ -75,7 +82,10 @@ async def memory_health(
     except Exception as exc:  # noqa: BLE001 — memory unavailability must never break the read
         log.warning("memory_health_failed", lane=lane, error=str(exc))
         return MemoryHealthResponse(
-            namespace=namespace, lane=lane, warnings=["memory_unavailable"]
+            namespace=namespace,
+            lane=lane,
+            posterior_resets=resets,
+            warnings=["memory_unavailable"],
         )
     data: Mapping = raw if isinstance(raw, Mapping) else {}
     counts = data.get("entry_counts")
@@ -91,4 +101,5 @@ async def memory_health(
         low_confidence_count=int(data.get("low_confidence_count", 0) or 0),
         promotion_candidates=int(data.get("promotion_candidates", 0) or 0),
         section_health=dict(section) if isinstance(section, Mapping) else {},
+        posterior_resets=resets,
     )

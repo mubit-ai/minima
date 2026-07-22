@@ -341,6 +341,15 @@ export interface DiagnoseResponse {
   warnings?: string[];
 }
 
+/** An active posterior reset epoch (CUSUM drift or provider snapshot change). */
+export interface PosteriorReset {
+  model: string;
+  lane?: string | null;
+  cluster?: string | null;
+  at: number;
+  cause: string;
+}
+
 export interface MemoryHealthResponse {
   namespace?: string;
   lane: string;
@@ -350,6 +359,8 @@ export interface MemoryHealthResponse {
   low_confidence_count?: number;
   promotion_candidates?: number;
   section_health?: Record<string, unknown>;
+  /** Evidence older than an epoch is zero-weighted at ranking time. */
+  posterior_resets?: PosteriorReset[];
   warnings?: string[];
 }
 
@@ -379,6 +390,17 @@ export interface PolicyEstimate {
   cost_value: number;
   /** Share of rows where this policy's pick equals the logged pick. */
   matched_share: number;
+  /** Full estimator suite over the same rows: {dr, snips, switch, dr_shrunk}. */
+  estimates?: Record<string, number>;
+}
+
+/** Replay-matched value of a logged shadow challenger policy. */
+export interface ChallengerEstimate {
+  policy: string;
+  n: number;
+  n_matched: number;
+  success_value: number;
+  cost_value: number;
 }
 
 export interface RegretReport {
@@ -389,6 +411,8 @@ export interface RegretReport {
   policies: PolicyEstimate[];
   /** Model-based oracle success minus deployed success (honest upper bound). */
   regret_vs_oracle: number;
+  /** True when the deployed policy's estimator suite disagrees beyond the margin. */
+  estimator_disagreement?: boolean;
 }
 
 export interface PolicyValueResponse {
@@ -397,4 +421,6 @@ export interface PolicyValueResponse {
   days: number;
   namespace?: string | null;
   report: RegretReport;
+  challengers?: ChallengerEstimate[];
+  warnings?: string[];
 }

@@ -23,6 +23,7 @@ from minima.recommender.durablerefs import (
 from minima.recommender.engine import Recommender
 from minima.recommender.pairs import MemoryPairStore, OrgScopedPairStore
 from minima.recommender.recstore import LaneCounter, OrgScopedRecStore, RecStore
+from minima.recommender.resets import ResetRegistry
 from minima.tenancy.context import TenantContext
 
 
@@ -62,6 +63,7 @@ class PassthroughRuntime:
             settings.minima_pairs_retention
         )
         self._cache: dict[str, TenantContext] = {}
+        self._resets_by_org: dict[str, ResetRegistry] = {}
         self._lock = Lock()
 
     def resolve(self, mubit_api_key: str) -> TenantContext:
@@ -80,6 +82,8 @@ class PassthroughRuntime:
         scoped_decision_log = OrgScopedDecisionLog(self._decision_log_backend, org_id)
         scoped_durable_refs = OrgScopedDurableRefs(self._durable_refs_backend, org_id)
         scoped_pair_store = OrgScopedPairStore(self._pair_store_backend, org_id)
+        with self._lock:
+            resets = self._resets_by_org.setdefault(org_id, ResetRegistry())
         recommender = Recommender(
             self._settings,
             memory,
@@ -89,6 +93,7 @@ class PassthroughRuntime:
             org_id=org_id,
             durable_refs=scoped_durable_refs,
             pair_store=scoped_pair_store,
+            resets=resets,
         )
         ctx = TenantContext(
             org_id=org_id,
@@ -101,6 +106,7 @@ class PassthroughRuntime:
             decision_log=scoped_decision_log,
             durable_refs=scoped_durable_refs,
             pair_store=scoped_pair_store,
+            resets=resets,
         )
         with self._lock:
             existing = self._cache.get(key_hash)

@@ -56,6 +56,16 @@ class DiagnoseResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class PosteriorReset(BaseModel):
+    """An active posterior reset epoch (CUSUM drift or provider snapshot change)."""
+
+    model: str
+    lane: str | None = None
+    cluster: str | None = None
+    at: float
+    cause: str
+
+
 class MemoryHealthResponse(BaseModel):
     namespace: str | None = None
     lane: str = ""
@@ -65,4 +75,7 @@ class MemoryHealthResponse(BaseModel):
     low_confidence_count: int = 0
     promotion_candidates: int = 0
     section_health: dict[str, Any] = Field(default_factory=dict)
+    # Active posterior reset epochs for this org — evidence older than an epoch is
+    # zero-weighted at ranking time (server-local state, not a Mubit relay).
+    posterior_resets: list[PosteriorReset] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
