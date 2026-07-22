@@ -1541,6 +1541,9 @@ export function HarnessApp({
       switch (ev.type) {
         case "message_start":
           if (ev.message?.role === "user") {
+            // LB-21: a recovery-ladder rung >= 1 re-issues the SAME task — the flagged
+            // re-prompt must never re-echo (the original already printed at submit).
+            if (ev.message.ladder_reprompt) break;
             if (pendingEchoRef.current) {
               pendingEchoRef.current = false;
               break;

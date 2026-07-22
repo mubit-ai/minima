@@ -128,6 +128,7 @@ export interface MessageInit {
   tool_call_id?: string;
   tool_name?: string;
   is_error?: boolean;
+  ladder_reprompt?: boolean;
 }
 
 export class Message {
@@ -137,6 +138,9 @@ export class Message {
   tool_call_id?: string;
   tool_name?: string;
   is_error: boolean;
+  /** Harness-internal (LB-21): a recovery-ladder rung >= 1 re-issue of the same task —
+   * consumers that echo user messages (the TUI transcript) must skip it. */
+  ladder_reprompt?: boolean;
 
   constructor(init: MessageInit) {
     this.role = init.role;
@@ -145,6 +149,7 @@ export class Message {
     this.tool_call_id = init.tool_call_id;
     this.tool_name = init.tool_name;
     this.is_error = init.is_error ?? false;
+    if (init.ladder_reprompt) this.ladder_reprompt = true;
   }
 
   /** Concatenated text across all TextContent blocks (empty for non-text). */

@@ -509,6 +509,22 @@ describe("tui/app.tsx panel key routing", () => {
   });
 });
 
+// LB-21: the recovery ladder re-issues super.prompt(runContent) on every rung, so rung >= 1
+// emits another message_start(user) with the SAME task text — pre-fix the retry duplicated
+// the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
+// pendingEcho dedupe (which only covers the optimistic first echo).
+describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
+    const idx = src.indexOf('case "message_start":');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 700);
+    expect(body).toContain("ladder_reprompt");
+    expect(body.indexOf("ladder_reprompt")).toBeLessThan(body.indexOf("pendingEchoRef"));
+  });
+});
+
 // Shift+Tab plan mode (2026-07-15): entering plan mode via ANY door must mean the REAL
 // planning workflow — session + planner persona + exit_plan — never the badge-only half-state
 // (mode flipped, session null → prompts ran the NORMAL loop and the model executed with

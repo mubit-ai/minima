@@ -19,7 +19,7 @@ import type { ThinkingLevel } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import type { Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
-import { AssistantMessage } from "../ai/types.ts";
+import { AssistantMessage, Message } from "../ai/types.ts";
 import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
@@ -615,7 +615,13 @@ export class MinimaAgent extends Agent {
         const runContent = replanPrefix ? `${replanPrefix}\n\n${content}` : content;
         replanPrefix = null;
         try {
-          await super.prompt(runContent);
+          // LB-21: rung >= 1 re-issues the SAME task — flag it so transcript consumers
+          // (the TUI echo) can tell a retry from a fresh prompt.
+          await super.prompt(
+            attempt > 0
+              ? new Message({ role: "user", content: runContent, ladder_reprompt: true })
+              : runContent,
+          );
         } catch (exc) {
           runError = exc;
         } finally {
