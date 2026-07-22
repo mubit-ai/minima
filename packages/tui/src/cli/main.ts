@@ -30,6 +30,7 @@ import {
   type HarnessConfig,
   MinimaAgent,
   configFromEnv,
+  createPreferenceProbe,
   resolvePlanModels,
 } from "../minima/index.ts";
 import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
@@ -947,6 +948,25 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
+
+  // Preference probe (tuner, opt-in MINIMA_TUI_TUNER=1): the SAME plan-closed seam as the
+  // diff reviewer — after a plan closes fully completed, at most one bounded slider A/B
+  // question per session (7-day cooldown via profile_events). Composes with the reviewer's
+  // handler; every gate fails open and silent, and headless runs skip (no overlay).
+  if (config.tuner && db) {
+    const probe = createPreferenceProbe({
+      db,
+      projectKey: repoIdentity(process.cwd()),
+      tuner: config.tuner,
+      defaultSlider: config.costQualityTradeoff,
+      askUser: askUserRef,
+    });
+    const prevPlanClosed = planClosedRef.current;
+    planClosedRef.current = (planId) => {
+      prevPlanClosed?.(planId);
+      void probe();
+    };
+  }
 
   // D1 (v13): stamp every subsequent decision/gate with the running harness + toolset
   // digest — set here, AFTER the toolset is final (task/question tools included). Resume
