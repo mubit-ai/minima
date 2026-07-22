@@ -212,6 +212,10 @@ export interface AntiSpiralDeps {
   db: MinimaDb | null;
   sessionId: string | null;
   agentId: string | null;
+  /** R5c: shared per-rung flag, written when the step-cap wrap fires. runtime.ts threads the
+   * SAME object into the A2 stop-gate (as `capWrapFired`), so once the harness has said
+   * "wrap up NOW" the gate can never answer a stop attempt with "keep going". */
+  flags?: { capWrapFired: boolean };
 }
 
 /** `pass` → no action (fall through to the next stop check); `handled` → injected a steer, continue
@@ -248,6 +252,7 @@ export function makeAntiSpiral(deps: AntiSpiralDeps): AntiSpiralGate {
     if (deps.stepCap > 0 && turnCount >= deps.stepCap) {
       state.steering.push(stepCapMessage(deps, deps.ring, turnCount));
       capWrapInjected = true;
+      if (deps.flags) deps.flags.capWrapFired = true; // R5c: the stop-gate reads this
       return "handled"; // one wrap-up turn, then stop
     }
 

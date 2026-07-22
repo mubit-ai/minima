@@ -195,6 +195,10 @@ export interface StopGateDeps {
   maxStrikes: number;
   /** Late-bound ask channel (null in headless). */
   askUser: AskUserRef | null;
+  /** R5c: true once the anti-spiral's step-cap wrap fired this rung (runtime.ts threads one
+   * shared per-rung flag). A stop attempt is then SKIPPED — no strike spent, no follow-up:
+   * the harness just told the model to wrap up, and a ⛔ "keep working" would whipsaw it. */
+  capWrapFired?: () => boolean;
 }
 
 /**
@@ -267,6 +271,9 @@ export function makeStopGate(deps: StopGateDeps): ShouldStopAfterTurn {
     // A question the user just answered IS steering: the reply that immediately follows it may
     // end the turn without spending a strike — the user is present and directing the run.
     if (answered) return false;
+    // R5c: the step-cap already told the model to wrap up NOW — never contradict it with a
+    // "keep working" strike for the rest of the rung (skip, don't count).
+    if (deps.capWrapFired?.()) return false;
 
     const assessment = assessStop(deps.db, deps.sessionId);
     if (!assessment.blocked) return false; // plan done → allow the natural stop

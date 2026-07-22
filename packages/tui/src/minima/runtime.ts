@@ -549,6 +549,10 @@ export class MinimaAgent extends Agent {
             return enforce && runSpend >= limitLeft;
           };
         }
+        // R5c: ONE per-rung flag shared by the anti-spiral (writer, on the step-cap wrap) and
+        // the A2 stop-gate (reader) — the two turn-boundary voices must never whipsaw: once the
+        // harness says "wrap up NOW", the gate may not answer a stop attempt with "keep going".
+        const rungFlags = { capWrapFired: false };
         const bigPlanStop =
           this.config.bigPlan && this.config.stopStrikes > 0
             ? makeStopGate({
@@ -557,6 +561,7 @@ export class MinimaAgent extends Agent {
                 agentId: this.agentId,
                 maxStrikes: this.config.stopStrikes,
                 askUser: this.askUser,
+                capWrapFired: () => rungFlags.capWrapFired,
               })
             : null;
         // Anti-spiral (A3): a doom-loop ring buffer fed by an afterToolCall hook, plus a soft turn
@@ -581,6 +586,7 @@ export class MinimaAgent extends Agent {
             db: this.db,
             sessionId: this.runId,
             agentId: this.agentId,
+            flags: rungFlags,
           });
         }
         // Install ONLY when we have something to install. If nothing applies, leave the slot

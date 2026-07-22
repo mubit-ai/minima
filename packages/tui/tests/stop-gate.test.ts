@@ -184,6 +184,31 @@ describe("makeStopGate", () => {
     expect(state.followUp.length).toBeGreaterThanOrEqual(3);
   });
 
+  test("once the step-cap wrap fired, a stop attempt is SKIPPED — no ⛔, no stop (R5c)", async () => {
+    // The anti-spiral just told the model "wrap up NOW"; a ⛔ "keep working" the same rung
+    // would whipsaw it. The shared per-rung flag (threaded in runtime.ts) suppresses the strike.
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate({ ...deps(d, 3), capWrapFired: () => true });
+    const state = new AgentState();
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(0);
+  });
+
+  test("a cap-skipped stop attempt is not COUNTED as a strike (R5c)", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    let fired = true;
+    const gate = makeStopGate({ ...deps(d, 3), capWrapFired: () => fired });
+    const state = new AgentState();
+    expect(await gate(terminalTurn(), [], state)).toBe(false); // skipped, not spent
+    expect(state.followUp).toHaveLength(0);
+    fired = false;
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(1);
+    expect((state.followUp[0]!.content[0] as { text: string }).text).toContain("attempt 1 of 3");
+  });
+
   test("strikes spent, user 'accept as done' → stops", async () => {
     const d = db();
     seed(d, [{ status: "in_progress" }]);
