@@ -100,6 +100,17 @@ class DecisionRecord:
     # existed (rows persist as JSON payloads — additive, no migration).
     task_type_source: str | None = None
     task_type_confidence: float | None = None
+    # Recovery-ladder linkage: the immediately preceding rung's rec_id and the ladder
+    # cause that triggered this re-route — the raw material for preference pairs and
+    # learned escalation deferral. None outside recovery chains.
+    parent_rec_id: str | None = None
+    escalation_reason: str | None = None
+    # Exact provider-reported model identifier (dated snapshot vs requested alias) —
+    # the observable reset key for version-churn non-stationarity handling.
+    provider_model_snapshot: str | None = None
+    # P(this turn was selected for labeling); 1.0 for gate labels. NULL on legacy rows
+    # and unlabeled turns — consumers must treat NULL as "uniform-era row".
+    label_propensity: float | None = None
 
     @property
     def reconciled(self) -> bool:
@@ -167,6 +178,10 @@ class Reconciliation:
     late: bool = False
     evidence_source: str | None = None
     chosen_effort: str | None = None
+    parent_rec_id: str | None = None
+    escalation_reason: str | None = None
+    provider_model_snapshot: str | None = None
+    label_propensity: float | None = None
 
 
 @runtime_checkable
@@ -204,7 +219,8 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
     is a TRUSTED label (gate/judge/human) landing on a row whose stored evidence is
     untrusted (None/"none") — telemetry first, the verdict later. Same-or-lower trust
     keeps first-write-wins; the first reconcile's cost/latency survive when the
-    correction omits them."""
+    correction omits them. label_propensity travels with the label (a correction IS a
+    new label event); the run-descriptive linkage fields stay first-write-wins."""
     if rec.reconciled and rec.realized_model_id == update.model_id:
         if (
             rec.evidence_source in TRUSTED_LABEL_SOURCES
@@ -220,6 +236,7 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
         rec.feedback_ts = update.ts or time.time()
         rec.late_feedback = update.late
         rec.evidence_source = update.evidence_source
+        rec.label_propensity = update.label_propensity
         if update.chosen_effort is not None:
             rec.realized_effort = update.chosen_effort
         return True
@@ -232,6 +249,10 @@ def _apply(rec: DecisionRecord, update: Reconciliation) -> bool:
     rec.late_feedback = update.late
     rec.evidence_source = update.evidence_source
     rec.realized_effort = update.chosen_effort
+    rec.parent_rec_id = update.parent_rec_id
+    rec.escalation_reason = update.escalation_reason
+    rec.provider_model_snapshot = update.provider_model_snapshot
+    rec.label_propensity = update.label_propensity
     return True
 
 

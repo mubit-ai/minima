@@ -123,6 +123,39 @@ def test_reflection_triggers_on_cadence(client, fake_memory):
     assert triggers == [False, False, True]
 
 
+def test_feedback_accepts_ladder_linkage_and_labeling_metadata(client, fake_memory):
+    """A1 plumbing: parent_rec_id / escalation_reason / provider_model_snapshot /
+    label_propensity validate and are accepted on the wire (reconciliation coverage
+    lives in test_decisionlog.py)."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "parent_rec_id": "rec-previous-rung",
+            "escalation_reason": "gate_failed",
+            "provider_model_snapshot": "claude-haiku-4-5-20251001",
+            "label_propensity": 0.15,
+        },
+    ).json()
+    assert fb["accepted"] is True
+
+    bad = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "escalation_reason": "because-i-said-so",
+        },
+    )
+    assert bad.status_code == 422
+
+
 def test_memory_outage_still_reconciles_the_decision_log(client, fake_memory):
     """Regression (observed live): a Mubit 503 made feedback return early BEFORE
     _reconcile_decision, so /v1/savings showed 0 reconciled rows for a whole day of

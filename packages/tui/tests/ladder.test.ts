@@ -208,6 +208,18 @@ describe("recovery ladder", () => {
     expect((svc.feedbackCalls[0] as any).outcome).toBe("failure");
     expect((svc.feedbackCalls[1] as any).outcome).toBe("success");
 
+    // A1 plumbing: the recovery rung's feedback carries the chain linkage — the failed
+    // parent's rec_id and WHY it failed — so the server can assemble preference pairs.
+    expect((svc.feedbackCalls[0] as any).parent_rec_id).toBeUndefined();
+    expect((svc.feedbackCalls[1] as any).parent_rec_id).toBe(
+      (svc.feedbackCalls[0] as any).recommendation_id,
+    );
+    expect((svc.feedbackCalls[1] as any).escalation_reason).toBe("hard_error");
+    // Judge-labeled rung reports its labeling propensity (sample rate 1 in this setup);
+    // the infra-failure rung has no label to weight.
+    expect((svc.feedbackCalls[1] as any).label_propensity).toBe(1);
+    expect((svc.feedbackCalls[0] as any).label_propensity).toBeUndefined();
+
     // Both rungs persisted; the retry links to the first rung's rec_id.
     const rows = db.getRunDecisions(agent.runId!);
     expect(rows).toHaveLength(2);
@@ -234,6 +246,13 @@ describe("recovery ladder", () => {
       // Judge fails EVERY rung (const 0.3), so it walks all rungs: 1 + 2 retries.
       expect(svc.recommendCalls.length).toBe(3);
       expect(agent.ladderEscalations).toBe(2);
+      // A1: each later rung names the judge miss as its escalation cause and chains to
+      // its immediate predecessor (not the first rung).
+      expect((svc.feedbackCalls[1] as any).escalation_reason).toBe("judge_failed");
+      expect((svc.feedbackCalls[2] as any).escalation_reason).toBe("judge_failed");
+      expect((svc.feedbackCalls[2] as any).parent_rec_id).toBe(
+        (svc.feedbackCalls[1] as any).recommendation_id,
+      );
       reg.unregister();
     }
     {

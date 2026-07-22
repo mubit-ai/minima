@@ -463,6 +463,10 @@ export class MinimaAgent extends Agent {
       // E2: the named rung state (retry_step/revise_step/replan) the PREVIOUS decision entered —
       // the next rung's feedback carries it so the server sees WHY this rung exists.
       let lastRungName: string | null = null;
+      // A1 plumbing: the PREVIOUS rung's rec_id + ladder cause, sent with the next rung's
+      // feedback so the server can join the escalation chain into preference pairs.
+      let lastRungRecId: string | null = null;
+      let lastRungCause: "gate_failed" | "judge_failed" | "transient" | "hard_error" | null = null;
 
       for (let attempt = 0; attempt <= this.recoveryRungs; attempt++) {
         // Budget gate (enforce mode only): refuse BEFORE any provider spend.
@@ -664,6 +668,9 @@ export class MinimaAgent extends Agent {
           transient,
           verifiedOutcome,
           lastRungName,
+          attempt > 0 && lastRungRecId !== null
+            ? { parentRecId: lastRungRecId, escalationReason: lastRungCause }
+            : null,
         );
 
         if (this.meter) {
@@ -752,6 +759,16 @@ export class MinimaAgent extends Agent {
           if (decision) intervention = decision.intervention;
         }
         lastRungName = decision?.rung ?? null;
+        // Record THIS rung's identity + failure cause for the NEXT rung's feedback linkage
+        // (same cause precedence as the exhaustion gate: check-fail > quality > infra kind).
+        lastRungRecId = routing?.recommendationId ?? null;
+        lastRungCause = gateFailed
+          ? "gate_failed"
+          : judgeFailed
+            ? "judge_failed"
+            : transient
+              ? "transient"
+              : "hard_error";
         // Roll back this rung's messages so the retry starts from the same context the failed rung
         // saw (no confusing half-answers in the next rung's prompt).
         this.agentState.messages.length = preRunIdx;
@@ -1110,6 +1127,13 @@ export class MinimaAgent extends Agent {
     /** E2: the named rung state (retry_step/revise_step/replan) whose intervention produced
      * THIS rung — richer failure attribution for the server; null on the first attempt. */
     recoveryRung: string | null = null,
+    /** A1 plumbing: the immediately preceding rung's rec_id + WHY it failed — the server
+     * assembles same-task preference pairs and deferral stats from this linkage. Null on
+     * the first attempt. */
+    ladder: {
+      parentRecId: string | null;
+      escalationReason: "gate_failed" | "judge_failed" | "transient" | "hard_error" | null;
+    } | null = null,
   ): Promise<{
     quality: number | null;
     outcome: "success" | "partial" | "failure";
@@ -1224,6 +1248,20 @@ export class MinimaAgent extends Agent {
         verifiedInProduction,
         judged,
         chosenEffort: this.agentState.thinkingLevel ?? undefined,
+        parentRecId: ladder?.parentRecId ?? undefined,
+        escalationReason: ladder?.escalationReason ?? undefined,
+        // Exact snapshot the provider reported serving this rung (vs the requested
+        // alias) — the server's observable key for version-churn posterior resets.
+        providerModelSnapshot: last?.provider_model ?? undefined,
+        // P(this turn was selected for labeling): gates are always read (1.0); a judge
+        // label was sampled at the configured rate. Unlabeled turns carry none — there
+        // is no label whose selection bias needs correcting.
+        labelPropensity:
+          evidenceSource === "gate"
+            ? 1.0
+            : evidenceSource === "judge"
+              ? this.config.judgeSampleRate
+              : undefined,
         notes: buildFeedbackNotes(deterministic, judged, recoveryRung, aborted),
         stepOutcomes,
       });

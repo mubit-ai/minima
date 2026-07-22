@@ -507,6 +507,10 @@ def _reconcile_decision(
                 late=late,
                 evidence_source=evidence_source,
                 chosen_effort=req.chosen_effort,
+                parent_rec_id=req.parent_rec_id,
+                escalation_reason=req.escalation_reason,
+                provider_model_snapshot=req.provider_model_snapshot,
+                label_propensity=req.label_propensity,
             ),
         )
         return already_reconciled and applied

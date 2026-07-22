@@ -307,6 +307,14 @@ export class MinimaRouter {
     judged: boolean;
     /** Reasoning-effort tier the model ran at (raw material for model x effort arms). */
     chosenEffort?: string;
+    /** rec_id of the immediately preceding recovery rung (preference-pair linkage). */
+    parentRecId?: string;
+    /** Why the parent rung failed — the ladder cause that triggered this re-route. */
+    escalationReason?: "gate_failed" | "judge_failed" | "transient" | "hard_error";
+    /** Exact provider-reported model identifier (dated snapshot vs requested alias). */
+    providerModelSnapshot?: string;
+    /** P(this turn was selected for labeling); 1.0 for gate labels. */
+    labelPropensity?: number;
     /** Provenance tag, e.g. "unlabeled" for cadence-skipped/abstained turns. */
     notes?: string;
     /**
@@ -331,6 +339,10 @@ export class MinimaRouter {
       verified_in_production: opts.verifiedInProduction,
       judged: opts.judged,
       chosen_effort: opts.chosenEffort,
+      parent_rec_id: opts.parentRecId,
+      escalation_reason: opts.escalationReason,
+      provider_model_snapshot: opts.providerModelSnapshot,
+      label_propensity: opts.labelPropensity,
       notes: opts.notes,
       step_outcomes: opts.stepOutcomes?.length ? opts.stepOutcomes : undefined,
     });

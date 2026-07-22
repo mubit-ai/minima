@@ -217,6 +217,7 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
     } catch {
       continue;
     }
+    if (typeof chunk.model === "string" && chunk.model) assistant.provider_model = chunk.model;
     const usage = chunk.usage as Record<string, number> | undefined;
     if (usage) {
       usageInput = usage.prompt_tokens ?? usageInput;

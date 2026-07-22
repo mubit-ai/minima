@@ -112,6 +112,8 @@ export class GoogleProvider {
         config: opts.signal ? { ...config, abortSignal: opts.signal } : config,
       });
       for await (const chunk of stream) {
+        const version = (chunk as { modelVersion?: string }).modelVersion;
+        if (version) assistant.provider_model = version;
         const usage = chunk.usageMetadata ?? chunk.usage_metadata;
         if (usage) {
           inTokens =
