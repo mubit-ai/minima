@@ -220,7 +220,11 @@ export class MinimaAgent extends Agent {
     } = opts;
     const map = mapping ?? router?.mapping ?? new ModelMapping();
     const initial = model ?? map.defaultModel();
-    super({ ...agentOpts, model: initial });
+    super({
+      ...agentOpts,
+      model: initial,
+      streamIdleTimeoutMs: agentOpts.streamIdleTimeoutMs ?? config.streamIdleTimeoutMs,
+    });
     this.config = config;
     this.mapping = map;
     this.router = router ?? MinimaRouter.forConfig(config, map);

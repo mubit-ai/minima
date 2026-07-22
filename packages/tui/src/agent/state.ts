@@ -102,6 +102,9 @@ export interface AgentLoopConfig {
   streamFn: StreamFnLike | null;
   streamOptions: Record<string, unknown> | null;
   signal: AbortSignal | null;
+  /** Abort the turn when the model stream emits nothing for this many ms
+   * (StreamIdleTimeoutError). 0/null/undefined disables the watchdog. */
+  streamIdleTimeoutMs?: number | null;
 }
 
 /** Drop anything the LLM can't ingest (keeps user/assistant/toolResult). */
