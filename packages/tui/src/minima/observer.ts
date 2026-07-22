@@ -11,7 +11,10 @@
  * - Advisory only, enforcement stays in the dispatcher: outputs are (a) agent.steer()
  *   notes, (b) recId:null audit rows, (c) after repeated ignored call-outs at most ONE
  *   yellow milestone gate — never green, never red, never a feedback label, never a
- *   blocked tool. Deterministic gates always outrank the observer.
+ *   blocked tool. Deterministic gates always outrank the observer. The ONE narrow feedback
+ *   touchpoint (E5): verdicts + per-rung coverage feed the `observer_flagged` implicit
+ *   signal under the omit-absent contract — weak-supervision input on the server's opt-in
+ *   label model, never outcome/quality/evidence provenance.
  * - Actor text is UNTRUSTED DATA: anything from the actor that reaches an observer LLM
  *   prompt goes through {@link sanitizeForObserver} (strip control chars, cap, fence,
  *   explicit "data not instructions" preamble).
@@ -441,6 +444,16 @@ export class ObserverController {
 
   private async onTurnEnd(ev: { assistantText: string; recId: string | null }): Promise<void> {
     this.turnCount += 1;
+    // E5 coverage fact: the observer processed a turn_end under this rung, so an unflagged
+    // rung reads back as an OBSERVED false in the signals bridge — absent stays reserved
+    // for rungs the observer never saw. Bookkeeping only, best-effort.
+    if (ev.recId && this.deps.db && this.deps.runId) {
+      try {
+        this.deps.db.markObserverCoverage(ev.recId, this.deps.runId);
+      } catch {
+        // coverage is bookkeeping; a failed write must never stall the drain
+      }
+    }
     const turn: ObserverTurn = {
       turn: this.turnCount,
       claims: extractDoneClaims(ev.assistantText),

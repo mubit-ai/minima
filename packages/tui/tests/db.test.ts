@@ -185,9 +185,9 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v15 routing profiles (routing_profiles/profile_events)
     // + per-step candidate pools (plan_steps.candidates)
     // + v17 observer ledger (observer_verdicts/observer_events)
-    // + v18 observer_verdicts.rec_id (signals-only feedback bridge) — floor, not exact:
-    //   parallel unmerged stacks each append batches, so an exact count churns on
-    //   every rebase.
+    // + v18 observer signals bridge (observer_verdicts.rec_id + observer_coverage) —
+    //   floor, not exact: parallel unmerged stacks each append batches, so an exact
+    //   count churns on every rebase.
     expect(db.schemaVersion).toBeGreaterThanOrEqual(14);
     for (const t of [
       "projects",
@@ -209,6 +209,7 @@ describe("MinimaDb schema + lifecycle", () => {
       "profile_events",
       "observer_verdicts",
       "observer_events",
+      "observer_coverage",
     ]) {
       expect(db.db.query(`SELECT count(*) AS n FROM ${t}`).get()).toEqual({ n: 0 });
     }

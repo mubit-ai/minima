@@ -21,10 +21,12 @@ import {
   harnessConfig,
 } from "../src/minima/index.ts";
 
-// PR-E5 observer→signals bridge: a WARN-severity observer verdict stamped with THIS rung's
-// rec_id joins the landed D2 signals map as `observer_flagged` — signals-map ONLY, never
-// outcome/quality/evidence provenance. Omit-absent contract: the key rides only when the
-// observer actually observed the rung. Hermetic: mock fetch service + faux provider.
+// PR-E5 observer→signals bridge: observer verdicts ride the landed D2 signals map as
+// `observer_flagged` — signals-map ONLY, never outcome/quality/evidence provenance.
+// Omit-absent contract: true = a warn verdict under this rung's rec_id; false = the
+// observer OBSERVED the rung (coverage or any verdict) and did not flag it; ABSENT =
+// the observer never ran/abstained — false is an observed outcome, never a default.
+// Hermetic: mock fetch service + faux provider.
 
 const CHEAP: Model = {
   id: "cheap-model",
@@ -155,7 +157,35 @@ describe("E5: observer verdicts ride feedback as the observer_flagged implicit s
     db.close();
   });
 
-  test("no verdicts → observer_flagged is ABSENT from the map (absence is not evidence)", async () => {
+  test("observed rung with no warn → observer_flagged === false (present-false)", async () => {
+    const { agent, reg, svc, db } = setup({ observer: true });
+    db.markObserverCoverage("rec-1", agent.runId!);
+    reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
+
+    await agent.promptRouted("do the thing");
+
+    expect(svc.feedbackCalls).toHaveLength(1);
+    const signals = sentSignals(svc.feedbackCalls[0] as Record<string, unknown>);
+    expect(signals.observer_flagged).toBe(false);
+    reg.unregister();
+    db.close();
+  });
+
+  test("an info verdict under this rung is an observation → observer_flagged === false", async () => {
+    const { agent, reg, svc, db } = setup({ observer: true });
+    insertVerdict(db, agent.runId!, "info", "rec-1");
+    reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
+
+    await agent.promptRouted("do the thing");
+
+    expect(svc.feedbackCalls).toHaveLength(1);
+    const signals = sentSignals(svc.feedbackCalls[0] as Record<string, unknown>);
+    expect(signals.observer_flagged).toBe(false);
+    reg.unregister();
+    db.close();
+  });
+
+  test("observer never processed the rung → observer_flagged ABSENT (absent-when-abstained)", async () => {
     const { agent, reg, svc, db } = setup({ observer: true });
     reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
 
@@ -168,7 +198,7 @@ describe("E5: observer verdicts ride feedback as the observer_flagged implicit s
     db.close();
   });
 
-  test("a warn verdict under ANOTHER rung's rec_id → observer_flagged never true here", async () => {
+  test("a warn verdict under ANOTHER rung's rec_id never leaks into this one", async () => {
     const { agent, reg, svc, db } = setup({ observer: true });
     insertVerdict(db, agent.runId!, "warn", "rec-other");
     reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
@@ -177,7 +207,8 @@ describe("E5: observer verdicts ride feedback as the observer_flagged implicit s
 
     expect(svc.feedbackCalls).toHaveLength(1);
     const signals = sentSignals(svc.feedbackCalls[0] as Record<string, unknown>);
-    expect(signals.observer_flagged).not.toBe(true);
+    // This rung was never observed → absent, NOT a false borrowed from rec-other.
+    expect("observer_flagged" in signals).toBe(false);
     reg.unregister();
     db.close();
   });
@@ -224,7 +255,7 @@ describe("E5: observer verdicts ride feedback as the observer_flagged implicit s
     expect(sentSignals(flagged).observer_flagged).toBe(true);
   });
 
-  test("the controller stamps the turn_end rec_id onto verdicts (the join the bridge reads)", async () => {
+  test("the controller stamps rec_id onto verdicts AND marks coverage at turn_end", async () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("proj");
     const runId = db.startRun({ projectKey: "proj" });
@@ -243,8 +274,13 @@ describe("E5: observer verdicts ride feedback as the observer_flagged implicit s
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0]!.rec_id).toBe("rec-x");
     expect(verdicts[0]!.severity).toBe("warn");
-    expect(db.hasObserverWarningsForRec("rec-x")).toBe(true);
-    expect(db.hasObserverWarningsForRec("rec-y")).toBe(false);
+    expect(db.observerFlaggedForRec("rec-x")).toBe(true);
+
+    // A clean rung the controller processed reads back OBSERVED-false (coverage row)...
+    await c.consume({ type: "turn_end", assistantText: "reading around", recId: "rec-y" });
+    expect(db.observerFlaggedForRec("rec-y")).toBe(false);
+    // ...and a rung it never saw stays null → the bridge omits the key.
+    expect(db.observerFlaggedForRec("rec-z")).toBeNull();
     db.close();
   });
 });

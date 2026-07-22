@@ -244,12 +244,13 @@ describe("v17 observer ledger migration", () => {
   });
 });
 
-describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
-  test("a v17 database (no rec_id column) migrates append-only, old rows read rec_id null", () => {
+describe("v18 observer signals-bridge migration (rec_id + coverage)", () => {
+  test("a v17 database (no rec_id, no coverage) migrates append-only, old rows read rec_id null", () => {
     const path = migratedDbPath();
     const raw = new Database(path);
     raw.exec("DROP INDEX ix_observer_verdicts_rec");
     raw.exec("ALTER TABLE observer_verdicts DROP COLUMN rec_id");
+    raw.exec("DROP TABLE observer_coverage");
     raw.exec("UPDATE schema_meta SET version = 17");
     raw.exec(
       `INSERT INTO projects (project_key, created) VALUES ('p18', 1);
@@ -264,13 +265,22 @@ describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
     const rows = db.getObserverVerdicts("run-v17");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.rec_id).toBeNull();
+    const coverage = db.db
+      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='observer_coverage'")
+      .get();
+    expect(coverage).not.toBeNull();
+    // A pre-bridge warn row (rec_id null) joins nothing: no rung reads it back.
+    expect(db.observerFlaggedForRec("rec-v17")).toBeNull();
     db.db.close();
   });
 
-  test("hasObserverWarningsForRec: only warn-severity rows under the rec_id count", () => {
+  test("observerFlaggedForRec tri-state: warn=true, observed-clean=false, unobserved=null", () => {
     const db = new MinimaDb(":memory:");
     db.ensureProject("p");
     const runId = db.startRun({ projectKey: "p" });
+    // Never observed → null (the caller must OMIT the key, never fabricate false).
+    expect(db.observerFlaggedForRec("rec-a")).toBeNull();
+    // An info verdict IS an observation: the observer looked and did not flag → false.
     db.insertObserverVerdict({
       runId,
       turn: 1,
@@ -279,7 +289,11 @@ describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
       severity: "info",
       recId: "rec-a",
     });
-    expect(db.hasObserverWarningsForRec("rec-a")).toBe(false);
+    expect(db.observerFlaggedForRec("rec-a")).toBe(false);
+    // Coverage without any verdict is also an observation → false.
+    db.markObserverCoverage("rec-c", runId);
+    expect(db.observerFlaggedForRec("rec-c")).toBe(false);
+    // Another rung's warn never leaks into this one.
     db.insertObserverVerdict({
       runId,
       turn: 2,
@@ -288,7 +302,9 @@ describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
       severity: "warn",
       recId: "rec-b",
     });
-    expect(db.hasObserverWarningsForRec("rec-a")).toBe(false);
+    expect(db.observerFlaggedForRec("rec-a")).toBe(false);
+    expect(db.observerFlaggedForRec("rec-b")).toBe(true);
+    // A warn under this rung flips it to true.
     db.insertObserverVerdict({
       runId,
       turn: 3,
@@ -297,7 +313,13 @@ describe("v18 observer_verdicts.rec_id migration (E5 signals bridge)", () => {
       severity: "warn",
       recId: "rec-a",
     });
-    expect(db.hasObserverWarningsForRec("rec-a")).toBe(true);
+    expect(db.observerFlaggedForRec("rec-a")).toBe(true);
+    // Coverage upsert is per-rung and idempotent across turns.
+    db.markObserverCoverage("rec-c", runId);
+    const cov = db.db
+      .query("SELECT turns FROM observer_coverage WHERE rec_id = 'rec-c'")
+      .get() as { turns: number };
+    expect(cov.turns).toBe(2);
     db.db.close();
   });
 });
