@@ -21,6 +21,11 @@ from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
+from minima.recommender.labelmodel import (
+    FeedbackSignals,
+    SignalCache,
+    fit_lane_label_scores,
+)
 from minima.recommender.pairs import PairStore, pair_prior_adjustment
 from minima.recommender.recstore import RecStore, StoredRecommendation
 from minima.recommender.resets import CAUSE_CUSUM, ResetRegistry
@@ -108,6 +113,13 @@ class Recommender:
         # the calibrator — both are windowed scans over this org's decision rows).
         self._deferral_stats: dict[str, tuple[int, int]] = {}
         self._deferral_fitted_at: float = 0.0
+        # Weak-supervision label model (MINIMA_LABEL_MODEL): per-lane rec_id -> p_success,
+        # fit lazily over the calibration window and cached on the same refresh cadence.
+        # The signal cache holds the feedback facts (implicit signals, step summary,
+        # iterations) the decision log deliberately does not carry.
+        self._label_scores: dict[str, dict[str, float]] = {}
+        self._label_scores_fitted_at: dict[str, float] = {}
+        self._signal_cache = SignalCache()
 
     async def recommend(self, req: RecommendRequest) -> RecommendResponse:
         started = time.monotonic()
@@ -227,6 +239,11 @@ class Recommender:
         # refit scans the decision-log window — a sync DB read that must not stall the
         # loop). _score_candidates then reads the warm cache synchronously.
         await threadpool.run(self._get_calibrators)
+        label_scores = (
+            await threadpool.run(self._get_label_scores, lane)
+            if settings.minima_label_model
+            else None
+        )
         # Recall-track: invalidated records (tombstoned by their recall track record) are
         # surfaced as a warning, then excluded from ranking (aggregate_by_model skips them
         # too — the count here is the diagnostic).
@@ -260,6 +277,7 @@ class Recommender:
                 settings.minima_aggregate_half_life_days if discounting else 0.0
             ),
             reset_epochs=reset_epochs if discounting else None,
+            label_model_scores=label_scores,
         )
         profile.mark("aggregate")
 
@@ -406,6 +424,7 @@ class Recommender:
             cluster,
             tau,
             reset_epochs,
+            label_scores,
             raw_argmin_id,
         )
 
@@ -640,6 +659,7 @@ class Recommender:
         cluster: str,
         tau: float,
         reset_epochs: dict[str, float] | None,
+        label_scores: dict[str, float] | None,
         raw_argmin_id: str,
     ) -> dict[str, str]:
         """Would-have-chosen model ids for the shadow challenger policies.
@@ -665,6 +685,7 @@ class Recommender:
                 human_weight=settings.minima_human_evidence_weight,
                 discount_half_life_days=_SHADOW_DISCOUNT_HALF_LIFE_DAYS,
                 reset_epochs=reset_epochs,
+                label_model_scores=label_scores,
             )
             scored = self._score_candidates(
                 cards, aggs, task_type, input_tokens, output_tokens, req, cluster
@@ -707,6 +728,55 @@ class Recommender:
             self._calibrators_fitted_at = now
             self._refit_calibrators()
         return self._calibrators
+
+    def record_feedback_signals(
+        self,
+        rec_id: str,
+        *,
+        signals: dict[str, bool] | None,
+        steps_all_success: bool | None,
+        iterations: int | None,
+    ) -> None:
+        """Feedback-side intake for the label model's signal cache. No-op unless the
+        flag is on; never raises past the caller's fail-open wrapper by construction."""
+        if not self._settings.minima_label_model:
+            return
+        if signals is None and steps_all_success is None and iterations is None:
+            return
+        self._signal_cache.put(
+            rec_id,
+            FeedbackSignals(
+                signals=dict(signals or {}),
+                steps_all_success=steps_all_success,
+                iterations=iterations,
+            ),
+        )
+
+    def _get_label_scores(self, lane: str) -> dict[str, float] | None:
+        settings = self._settings
+        if not settings.minima_label_model or self._decision_log is None:
+            return None
+        now = time.monotonic()
+        fitted_at = self._label_scores_fitted_at.get(lane)
+        if (
+            fitted_at is None
+            or now - fitted_at > settings.minima_calibration_refresh_seconds
+        ):
+            # Stamp BEFORE the fit so concurrent requests don't all refit (same
+            # single-flight shape as the calibrator refresh).
+            self._label_scores_fitted_at[lane] = now
+            try:
+                since = time.time() - settings.minima_calibration_window_days * 86_400.0
+                rows = self._decision_log.rows(since=since, lane=lane)
+                self._label_scores[lane] = fit_lane_label_scores(
+                    rows,
+                    signals_by_rec=self._signal_cache.snapshot(),
+                    surrogate_enabled=settings.minima_surrogate_index,
+                )
+            except Exception as exc:  # noqa: BLE001 — never break a recommendation
+                log.warning("label_model_fit_failed", lane=lane, error=str(exc))
+                self._label_scores.setdefault(lane, {})
+        return self._label_scores.get(lane)
 
     def _refit_calibrators(self) -> None:
         """Refit from the org's reconciled decision rows (best-effort: keep prior on failure)."""

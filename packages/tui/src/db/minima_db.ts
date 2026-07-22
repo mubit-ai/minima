@@ -2509,6 +2509,21 @@ export class MinimaDb {
       .all(projectKey, limit) as ObserverVerdictRow[];
   }
 
+  /** D2: did the user reject/steer any gate minted under this routed rung (rec_id)?
+   * Feeds the `user_corrected` implicit feedback signal (accept is agreement, not a
+   * correction). */
+  hasUserCorrectionForRec(recId: string): boolean {
+    const row = this.db
+      .query(
+        `SELECT 1 FROM user_signals us
+         JOIN gates g ON us.gate_id = g.id
+         WHERE g.rec_id = ? AND us.action IN ('reject', 'steer')
+         LIMIT 1`,
+      )
+      .get(recId);
+    return row !== null;
+  }
+
   // ---------------------------------------------------------------- Big Plan outcome (M7.1)
   /** Stamp the step's real (deterministic) result onto its routing decision. Legacy `gt_*`
    * columns are read-only from here on (COALESCE fallback for rows written by pre-rename

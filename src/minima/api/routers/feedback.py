@@ -44,6 +44,25 @@ log = get_logger("minima.feedback")
 router = APIRouter(prefix="/v1", tags=["feedback"])
 
 
+def _record_label_signals(tenant: TenantContext, req: FeedbackRequest) -> None:
+    """Hand the label model its feedback facts (implicit signals, step summary,
+    iterations). Strictly best-effort: a no-op unless MINIMA_LABEL_MODEL is on."""
+    try:
+        steps_all_success = (
+            all(s.outcome == OutcomeLabel.success for s in req.step_outcomes)
+            if req.step_outcomes
+            else None
+        )
+        tenant.recommender.record_feedback_signals(
+            req.recommendation_id,
+            signals=req.signals,
+            steps_all_success=steps_all_success,
+            iterations=req.iterations,
+        )
+    except Exception as exc:  # noqa: BLE001 — label bookkeeping must never fail feedback
+        log.warning("label_signal_record_failed", error=str(exc))
+
+
 def _resolve_evidence_source(req: FeedbackRequest) -> str:
     """Explicit evidence_source wins; else derive from the deprecated flags.
 
@@ -216,6 +235,7 @@ async def feedback(
         tenant, req, stored.task_cluster, EVIDENCE_NONE if infra else source
     )
     _note_provider_snapshot(tenant, req)
+    _record_label_signals(tenant, req)
 
     if not labeled:
         # Telemetry only: an unjudged turn or an infrastructure fault says nothing about
@@ -250,6 +270,7 @@ async def feedback(
         recommendation_id=req.recommendation_id,
         verified_in_production=verified,
         recorded_at=time.time(),
+        signals=req.signals,
     )
     # Accumulate: fold this outcome into the durable record's counters/rings so the
     # upsert carries HISTORY, not just the latest outcome. A replayed rec_id returns
@@ -594,6 +615,7 @@ async def _late_feedback(
         warnings.append("decision_corrected")
     _record_preference_pair(tenant, req, decision.cluster, EVIDENCE_NONE if infra else source)
     _note_provider_snapshot(tenant, req)
+    _record_label_signals(tenant, req)
 
     if not labeled:
         steps_recorded = await _relay_step_outcomes(
@@ -622,6 +644,7 @@ async def _late_feedback(
         recommendation_id=req.recommendation_id,
         verified_in_production=source == EVIDENCE_GATE,
         recorded_at=time.time(),
+        signals=req.signals,
     )
     prev = await _previous_record(tenant, decision.lane, decision.cluster, req.chosen_model_id)
     record = merged_outcome(prev, record)

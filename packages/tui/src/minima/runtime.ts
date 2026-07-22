@@ -671,6 +671,7 @@ export class MinimaAgent extends Agent {
           attempt > 0 && lastRungRecId !== null
             ? { parentRecId: lastRungRecId, escalationReason: lastRungCause }
             : null,
+          attempt > 0,
         );
 
         if (this.meter) {
@@ -1134,6 +1135,9 @@ export class MinimaAgent extends Agent {
       parentRecId: string | null;
       escalationReason: "gate_failed" | "judge_failed" | "transient" | "hard_error" | null;
     } | null = null,
+    /** D2: this attempt is a recovery-ladder re-run (attempt > 0) — the `retried`
+     * implicit feedback signal. */
+    retried = false,
   ): Promise<{
     quality: number | null;
     outcome: "success" | "partial" | "failure";
@@ -1235,6 +1239,25 @@ export class MinimaAgent extends Agent {
       } catch {
         stepOutcomes = undefined;
       }
+      // D2: cheap ledger-derived implicit signals, fail-open (a DB read must never sink
+      // feedback). Consumed only by the server's opt-in label model — never provenance.
+      // Omit-absent contract: a key is sent only when observed (false = observed and
+      // did not fire) — with no ledger, user_corrected is unobservable and stays absent.
+      // TODO(diff_reverted): needs checkpoint diffing — compare this rung's checkpoint
+      // tree_sha against the worktree after later prompts to detect a reverted diff;
+      // deferred until the checkpoint spine exposes that comparison.
+      let signals: Record<string, boolean> | undefined;
+      try {
+        signals = {
+          retried,
+          session_continued: this.promptsRun > 1,
+        };
+        if (this.db) {
+          signals.user_corrected = this.db.hasUserCorrectionForRec(routing.recommendationId);
+        }
+      } catch {
+        signals = undefined;
+      }
       const resp = await this.router.feedback({
         recommendationId: routing.recommendationId,
         chosenModelId: routing.chosenModelId,
@@ -1262,6 +1285,7 @@ export class MinimaAgent extends Agent {
             : evidenceSource === "judge"
               ? this.config.judgeSampleRate
               : undefined,
+        signals,
         notes: buildFeedbackNotes(deterministic, judged, recoveryRung, aborted),
         stepOutcomes,
       });

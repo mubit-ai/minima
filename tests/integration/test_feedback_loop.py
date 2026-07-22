@@ -860,3 +860,134 @@ def test_corrective_human_feedback_updates_decision_log(client, fake_memory):
     assert "decision_corrected" not in fb3["warnings"]
     row = tenant.decision_log.get(rec_id)
     assert row.realized_outcome == "failure"
+
+
+def test_feedback_signals_accepted_and_stored_on_record(client, fake_memory):
+    """D2: implicit signals ride the wire onto the OutcomeRecord — label-model input
+    only, never provenance."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "signals": {"retried": True, "user_corrected": False, "session_continued": True},
+        },
+    ).json()
+    assert fb["accepted"] is True
+    written = fake_memory.remembered[0]["record"]
+    assert written.signals == {
+        "retried": True,
+        "user_corrected": False,
+        "session_continued": True,
+    }
+    assert written.evidence_source == "judge"  # provenance untouched by signals
+
+
+def test_feedback_signals_absent_vs_false_distinguishable(client, fake_memory):
+    """Omit-absent contract: false is an OBSERVED outcome (the signal did not fire);
+    an absent key is not-observed. The two must survive the wire and the durable
+    record distinguishably — a consumer reading the record can tell them apart."""
+    rec = _recommend_haiku(client, fake_memory)
+    fb = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+            "signals": {"retried": False},
+        },
+    ).json()
+    assert fb["accepted"] is True
+    written = fake_memory.remembered[0]["record"]
+    # Observed-false survives verbatim: the key is present with value False...
+    assert written.signals == {"retried": False}
+    assert written.signals["retried"] is False
+    # ...and unobserved keys are absent, not defaulted to False.
+    assert "user_corrected" not in written.signals
+    assert "observer_flagged" not in written.signals
+    # Round-trip through the serialized metadata keeps the distinction.
+    parsed = type(written).from_metadata(written.to_metadata())
+    assert parsed.signals == {"retried": False}
+    assert "user_corrected" not in parsed.signals
+
+    rec2 = _recommend_haiku(client, fake_memory)
+    fb2 = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec2["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "evidence_source": "judge",
+        },
+    ).json()
+    assert fb2["accepted"] is True
+    written2 = fake_memory.remembered[-1]["record"]
+    # A feedback with NO signals block stays None — never {} and never false-filled.
+    assert written2.signals is None
+
+
+def test_feedback_signals_key_regex_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {"Bad-Key": True},
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_signals_key_cap_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {f"key_{chr(ord('a') + i)}": True for i in range(17)},
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_feedback_signals_at_cap_and_long_key_accepted(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    signals = {f"key_{chr(ord('a') + i)}": True for i in range(15)}
+    signals["a" * 32] = False  # exactly the 32-char key limit
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "quality_score": 0.9,
+            "signals": signals,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] is True
+
+
+def test_feedback_signals_key_too_long_rejected(client, fake_memory):
+    rec = _recommend_haiku(client, fake_memory)
+    resp = client.post(
+        "/v1/feedback",
+        json={
+            "recommendation_id": rec["recommendation_id"],
+            "chosen_model_id": "claude-haiku-4-5",
+            "outcome": "success",
+            "signals": {"a" * 33: True},
+        },
+    )
+    assert resp.status_code == 422

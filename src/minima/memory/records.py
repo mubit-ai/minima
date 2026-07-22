@@ -119,6 +119,11 @@ class OutcomeRecord:
     # Unix seconds when the outcome was observed. Powers evidence age decay; None on
     # legacy (schema v1) records, which fall back to the binary staleness penalty.
     recorded_at: float | None = None
+    # Implicit boolean feedback signals for the LATEST outcome (retried, user_corrected,
+    # diff_reverted, session_continued, observer_flagged, ...). Consumed only by the
+    # opt-in weak-supervision label model — never by evidence provenance or aggregation
+    # directly. Point-in-time like quality/outcome: not accumulated by merged_outcome.
+    signals: dict[str, bool] | None = None
     # --- v4 accumulating counters (the durable (cluster, model) record is an upsert,
     # so history must live IN the record: without these, organic evidence caps at n=1
     # and one failure erases every prior success). All maintained by merged_outcome().
@@ -196,6 +201,7 @@ class OutcomeRecord:
             recorded_at=(
                 _as_float(parsed.get("recorded_at")) if parsed.get("recorded_at") else None
             ),
+            signals=_as_bool_dict(parsed.get("signals")),
             iterations=(_as_int(parsed.get("iterations")) if parsed.get("iterations") else None),
             n_outcomes=_as_int(parsed.get("n_outcomes")),
             success_mass=_as_float(parsed.get("success_mass")),
@@ -363,6 +369,13 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _as_bool_dict(value: Any) -> dict[str, bool] | None:
+    if not isinstance(value, Mapping):
+        return None
+    out = {str(k): bool(v) for k, v in value.items()}
+    return out or None
 
 
 def _as_float_list(value: Any) -> list[float]:

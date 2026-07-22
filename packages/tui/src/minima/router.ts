@@ -315,6 +315,12 @@ export class MinimaRouter {
     providerModelSnapshot?: string;
     /** P(this turn was selected for labeling); 1.0 for gate labels. */
     labelPropensity?: number;
+    /**
+     * Implicit boolean signals (retried / user_corrected / session_continued / ...) —
+     * ledger-derived, consumed only by the server's opt-in label model, never by
+     * evidence provenance.
+     */
+    signals?: Record<string, boolean>;
     /** Provenance tag, e.g. "unlabeled" for cadence-skipped/abstained turns. */
     notes?: string;
     /**
@@ -343,6 +349,7 @@ export class MinimaRouter {
       escalation_reason: opts.escalationReason,
       provider_model_snapshot: opts.providerModelSnapshot,
       label_propensity: opts.labelPropensity,
+      signals: opts.signals,
       notes: opts.notes,
       step_outcomes: opts.stepOutcomes?.length ? opts.stepOutcomes : undefined,
     });

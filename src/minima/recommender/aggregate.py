@@ -6,6 +6,7 @@ import time
 from collections.abc import Iterable
 
 from minima.memory.records import (
+    EVIDENCE_GATE,
     EVIDENCE_HUMAN,
     OutcomeRecord,
     RecalledEvidence,
@@ -99,6 +100,7 @@ def aggregate_by_model(
     discount_half_life_days: float = 0.0,
     reset_epochs: dict[str, float] | None = None,
     now: float | None = None,
+    label_model_scores: dict[str, float] | None = None,
 ) -> dict[str, ModelAggregate]:
     """Group neighbors by model and accumulate weighted success statistics.
 
@@ -107,6 +109,13 @@ def aggregate_by_model(
     ``human_weight`` (clamped to [0, 1]) down-weights caller-asserted ("human") labels
     relative to gate/judge evidence — bounded trust for the one gameable source.
     Defaults preserve legacy behavior (no age decay, seeds at full weight).
+
+    ``label_model_scores`` (MINIMA_LABEL_MODEL): weak-supervision rec_id -> p_success.
+    For a NON-GATE record whose latest outcome's recommendation_id is in the map, the
+    fitted fractional label replaces that outcome's label_score in the success mass.
+    Gate rows keep their deterministic label regardless (the anchor is never
+    overridden), and evidence provenance is untouched — this shifts aggregation weight
+    only. None (the default) is byte-identical to pre-label-model behavior.
     """
     ref_now = now if now is not None else time.time()
     items: list[tuple[RecalledEvidence, OutcomeRecord]] = []
@@ -169,16 +178,33 @@ def aggregate_by_model(
             aggs[model_id] = agg
             kc_totals[model_id] = 0.0
 
+        model_p = (
+            label_model_scores.get(rec.recommendation_id or "")
+            if label_model_scores is not None and rec.evidence_source != EVIDENCE_GATE
+            else None
+        )
         if rec.n_outcomes > 0:
             # v4 accumulating record: its counters ARE the history for this
             # (cluster, model) — one success no longer erases fifty prior ones.
             eff_n = float(min(rec.n_outcomes, COUNTER_N_CAP))
             mean_y = clamp01(rec.success_mass / rec.n_outcomes)
+            if model_p is not None:
+                # The mass folds one label_score per outcome; only the LATEST outcome
+                # is identified by recommendation_id — swap exactly its contribution
+                # for the fitted fractional label. History stays as folded.
+                latest = label_score(rec.outcome, rec.quality_score)
+                mean_y = clamp01(
+                    (rec.success_mass - latest + clamp01(model_p)) / rec.n_outcomes
+                )
             agg.weight_sum += weight * eff_n
             agg.weighted_success += weight * eff_n * mean_y
             agg.n += rec.n_outcomes
         else:
-            y = clamp01(label_score(rec.outcome, rec.quality_score))
+            y = (
+                clamp01(model_p)
+                if model_p is not None
+                else clamp01(label_score(rec.outcome, rec.quality_score))
+            )
             agg.weight_sum += weight
             agg.weighted_success += weight * y
             agg.n += 1
