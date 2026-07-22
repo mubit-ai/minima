@@ -2,7 +2,9 @@
  * read tool — port of the Python harness's tools/read.py.
  */
 
-import { existsSync, statSync } from "node:fs";
+import type { Stats } from "node:fs";
+import { stat } from "node:fs/promises";
+import { extname } from "node:path";
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
 import { readLines, resolveWithin } from "./_io.ts";
@@ -18,6 +20,9 @@ const parameters = objectSchema(
   ["path"],
 );
 
+const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"]);
+const BINARY_SNIFF_BYTES = 8192;
+
 export function readTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "read",
@@ -28,8 +33,20 @@ export function readTool(opts: FsToolOptions = {}): AgentTool {
       const r = resolveWithin(String(params.path), opts.workdir);
       if (!r.ok) return errorResult(`read: ${r.error}`);
       const p = r.path;
-      if (!existsSync(p)) return errorResult(`read: no such file: ${p}`);
-      if (statSync(p).isDirectory()) return errorResult(`read: is a directory: ${p}`);
+      let st: Stats;
+      try {
+        st = await stat(p);
+      } catch {
+        return errorResult(`read: no such file: ${p}`);
+      }
+      if (st.isDirectory()) return errorResult(`read: is a directory: ${p}`);
+      if (IMAGE_EXTS.has(extname(p).toLowerCase()))
+        return errorResult(`read: image file not supported yet: ${p}`);
+      const head = await Bun.file(p).slice(0, BINARY_SNIFF_BYTES).bytes();
+      if (head.includes(0))
+        return errorResult(
+          `read: binary file (${st.size} bytes): ${p} — use bash to inspect binary content`,
+        );
       const { body, n } = await readLines(p, {
         offset: params.offset as number,
         limit: params.limit as number,
