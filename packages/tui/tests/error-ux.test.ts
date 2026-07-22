@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Model } from "../src/ai/types.ts";
 import { errText } from "../src/errtext.ts";
 import { matches } from "../src/tui/model-picker.tsx";
-import { routingInfoWarnings } from "../src/tui/routing-warnings.ts";
+import { compactRoutingNote, routingInfoWarnings } from "../src/tui/routing-warnings.ts";
 
 describe("errText", () => {
   test("returns an Error's message without the class-name prefix (no 'Error: Error:')", () => {
@@ -24,15 +24,12 @@ describe("errText", () => {
 describe("routingInfoWarnings", () => {
   test("hides purely-internal diagnostics", () => {
     for (const w of [
-      "cold_start",
       "reasoner_disabled",
       "reasoner_consulted",
       "thompson_pick",
       "exploration_pick",
       "prices_stale",
       "collapse_guard_applied",
-      "escalation_suggested:thin_evidence",
-      "escalation_suggested:wide_interval",
     ]) {
       expect(routingInfoWarnings([w])).toEqual([]);
     }
@@ -45,6 +42,34 @@ describe("routingInfoWarnings", () => {
   });
   test("empty in → empty out", () => {
     expect(routingInfoWarnings([])).toEqual([]);
+  });
+  test("cold_start collapses to ONE compact line, however many variants arrive", () => {
+    expect(routingInfoWarnings(["cold_start", "cold_start_no_memory"])).toEqual([
+      "cold start — no prior outcomes for this task yet",
+    ]);
+  });
+  test("escalation_suggested:* collapses to ONE compact thin-evidence line", () => {
+    expect(
+      routingInfoWarnings(["escalation_suggested:thin_evidence", "escalation_suggested:tied"]),
+    ).toEqual(["thin evidence for this pick — worth verifying"]);
+  });
+  test("cold start + escalation together are still a single compact line", () => {
+    expect(
+      routingInfoWarnings(["cold_start", "escalation_suggested:wide_interval", "cold_start"]),
+    ).toEqual(["cold start · thin evidence — pick based on priors"]);
+  });
+  test("the compact note rides alongside pass-through warnings, deduplicated", () => {
+    expect(
+      routingInfoWarnings([
+        "cold_start",
+        "no_model_meets_threshold",
+        "no_model_meets_threshold",
+      ]),
+    ).toEqual(["cold start — no prior outcomes for this task yet", "no_model_meets_threshold"]);
+  });
+  test("compactRoutingNote returns null when neither family is present", () => {
+    expect(compactRoutingNote(["no_model_meets_threshold"])).toBeNull();
+    expect(compactRoutingNote([])).toBeNull();
   });
 });
 
