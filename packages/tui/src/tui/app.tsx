@@ -173,7 +173,7 @@ import {
   parseRewindArgs,
   renderRewindText,
 } from "./rewind_picker.ts";
-import { routingInfoWarnings } from "./routing-warnings.ts";
+import { routingSurfaceNotes } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
@@ -4024,47 +4024,30 @@ export function HarnessApp({
     }
   }
 
-  // Surface the outcome of a routed turn (warnings / feedback / offline notes). Shared by the
-  // normal path and the plan-mode planner reply so both report routing identically.
+  // Surface the outcome of a routed turn (warnings / feedback / offline / abort notes).
+  // Shared by the normal path and the plan-mode planner reply so both report routing
+  // identically. Message-building lives in routingSurfaceNotes (routing-warnings.ts) so the
+  // abort/offline/budget wording is testable without React.
   function surfaceRouting(routing: RoutingResult | null) {
-    if (routing) {
-      setBasis(routing.decisionBasis || "minima");
-      // Recommend-path warnings are all benign/informational (routing succeeded or degraded
-      // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
-      const info = routingInfoWarnings(routing.warnings);
-      if (info.length > 0) {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: `ℹ ${info.join("; ")}`, toolName: "routing", isError: false },
-        ]);
-      }
-      // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
-      // land in lastFeedbackError but previously nothing read it — a server-side write
-      // outage starved the learning loop invisibly (observed live). Muted note, not red:
-      // the turn itself succeeded, only the learning write-back failed.
-      if (agent.lastFeedbackError) {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: `ℹ learning loop: ${agent.lastFeedbackError}`,
-            toolName: "routing",
-            isError: false,
-          },
-        ]);
-      }
-    } else {
-      setBasis("offline");
-      const reason = agent.offlineReason ?? "Minima unreachable";
-      // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
+    const surface = routingSurfaceNotes(routing, {
+      lastAborted: agent.lastAborted,
+      offlineReason: agent.offlineReason,
+      offlineKind: agent.offlineKind,
+      lastFeedbackError: agent.lastFeedbackError,
+      modelId: agent.agentState.model?.id ?? null,
+    });
+    if (surface.basis !== null) setBasis(surface.basis);
+    if (surface.notes.length > 0) {
       setMessages((m) => [
         ...m,
-        {
-          role: "tool",
-          text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
-          toolName: "routing",
-          isError: false,
-        },
+        ...surface.notes.map(
+          (note): ChatMessage => ({
+            role: "tool",
+            text: note,
+            toolName: "routing",
+            isError: false,
+          }),
+        ),
       ]);
     }
   }

@@ -22,6 +22,17 @@ import {
   type RoutingResult,
   harnessConfig,
 } from "../src/minima/index.ts";
+import { routingSurfaceNotes } from "../src/tui/routing-warnings.ts";
+
+function surfaceFor(agent: MinimaAgent, routing: RoutingResult | null) {
+  return routingSurfaceNotes(routing, {
+    lastAborted: agent.lastAborted,
+    offlineReason: agent.offlineReason,
+    offlineKind: agent.offlineKind,
+    lastFeedbackError: agent.lastFeedbackError,
+    modelId: agent.agentState.model?.id ?? null,
+  });
+}
 
 function echoTool(): AgentTool {
   return {
@@ -218,6 +229,13 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     // The model never ran and no feedback was recorded.
     expect(agent.agentState.messages.some((m) => m.role === "assistant")).toBe(false);
     expect(feedbackCalls).toHaveLength(0);
+    // MUB-174: the SURFACED note must say aborted — never "routing offline: Minima
+    // unreachable" (the turn was cut short by the user, not by connectivity), and the
+    // footer basis must not flip to offline.
+    const surface = surfaceFor(agent, routing);
+    expect(surface.notes.join(" ")).not.toContain("routing offline");
+    expect(surface.notes.join(" ")).toContain("aborted");
+    expect(surface.basis).toBeNull();
     reg.unregister();
   });
 
@@ -405,6 +423,59 @@ describe("MinimaAgent full loop (route -> run -> judge -> feedback)", () => {
     expect(agent.offlineReason).toMatch(/down|500/);
     // The run still produced an assistant on the fallback model.
     expect(agent.agentState.messages.some((m) => m.role === "assistant")).toBe(true);
+    // MUB-174: a genuine service failure keeps the honest offline label.
+    expect(agent.offlineKind).toBe("network");
+    const surface = surfaceFor(agent, routing);
+    expect(surface.basis).toBe("offline");
+    expect(surface.notes.join(" ")).toContain("routing offline");
+    reg.unregister();
+  });
+
+  test("a 422 budget-infeasible rejection gets a budget label, not the offline line (MUB-174)", async () => {
+    resetAll();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([new AssistantMessage({ content: [text("unrouted reply")] })]);
+
+    // The server's NoCandidatesError shape (problem+json, api/errors.py): a structured
+    // rejection of THIS request's constraints — the service itself is reachable and healthy.
+    const rejectingFetch = async (url: string, init?: { method?: string }) => {
+      const u = new URL(url);
+      if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
+        return {
+          status: 422,
+          json: async () => ({
+            type: "about:blank",
+            title: "No candidate models",
+            status: 422,
+            detail: "no model within max_cost_per_call budget",
+          }),
+        };
+      }
+      return { status: 404, json: async () => ({ detail: "not found" }) };
+    };
+    const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: rejectingFetch });
+    const config = harnessConfig({
+      judgeSampleRate: 0,
+      candidates: ["test-faux"],
+      allowOffline: true,
+      minimaApiKey: "k",
+    });
+    const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
+    const agent = new MinimaAgent({ config, router, judge: { grade: async () => null } });
+
+    const routing = await agent.promptRouted("expensive task");
+    expect(routing).toBeNull();
+    expect(agent.offlineKind).toBe("budget");
+    expect(agent.offlineReason).toContain("budget");
+    // The run still happened unrouted.
+    expect(agent.agentState.messages.some((m) => m.role === "assistant")).toBe(true);
+    const surface = surfaceFor(agent, routing);
+    const note = surface.notes.join(" ");
+    expect(note).toContain("budget-infeasible");
+    expect(note).toContain("test-faux");
+    expect(note).not.toContain("routing offline");
+    expect(note).not.toContain("/reconnect");
     reg.unregister();
   });
 

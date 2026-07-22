@@ -35,3 +35,13 @@ export function raiseForStatus(status: number, body: unknown): void {
   if (status >= 200 && status < 300) return;
   throw new MinimaError(extractDetail(body), status, body);
 }
+
+/**
+ * The server's structured budget-infeasibility rejection: NoCandidatesError → 422
+ * problem+json with detail "no model within max_cost_per_call budget" (api/errors.py).
+ * A reachable, healthy service saying "nothing fits this cost cap" — never conflate it
+ * with connectivity offline.
+ */
+export function isBudgetInfeasible(exc: unknown): boolean {
+  return exc instanceof MinimaError && exc.status === 422 && exc.message.includes("budget");
+}

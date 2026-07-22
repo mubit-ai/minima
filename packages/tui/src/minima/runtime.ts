@@ -42,6 +42,7 @@ import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import { CLASSIFY_CONFIDENCE_FLOOR, type TaskClassifier } from "./classify.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
+import { isBudgetInfeasible } from "./errors.ts";
 import {
   type FailureDecision,
   type Intervention,
@@ -169,6 +170,10 @@ export class MinimaAgent extends Agent {
   private promptsRun = 0;
   /** Why the last route fell back to offline (null = routed fine). */
   offlineReason: string | null = null;
+  /** What KIND of failure offlineReason describes: "budget" = the server structurally
+   * rejected the request (budget-infeasible — the service is fine), "network" = Minima
+   * genuinely unreachable/errored. Null whenever offlineReason is null. */
+  offlineKind: "network" | "budget" | null = null;
   /** Why the last feedback write failed (null = ok). Non-fatal — kept for diagnostics. */
   lastFeedbackError: string | null = null;
   /** Mubit memory: recall-before-route + write-back. No-op unless wired in. */
@@ -280,6 +285,7 @@ export class MinimaAgent extends Agent {
     refreshRoutingEnv(this.config);
     this.router = MinimaRouter.forConfig(this.config, this.mapping);
     this.offlineReason = null;
+    this.offlineKind = null;
   }
 
   /** Drop the cached routing profile — call after ANY routing_profiles write. */
@@ -486,6 +492,7 @@ export class MinimaAgent extends Agent {
           // Esc during routing: stop cleanly, don't run the model, don't record.
           if (routeController.signal.aborted) {
             this.offlineReason = null;
+            this.offlineKind = null;
             this.lastAborted = true;
             return lastRouting;
           }
@@ -494,6 +501,7 @@ export class MinimaAgent extends Agent {
         // Aborted the instant routing returned (before any spend): end right here.
         if (routeController.signal.aborted) {
           this.offlineReason = null;
+          this.offlineKind = null;
           this.lastAborted = true;
           return routing;
         }
@@ -971,6 +979,7 @@ export class MinimaAgent extends Agent {
       if (model) {
         this.agentState.model = model;
         this.offlineReason = null;
+        this.offlineKind = null;
         return pinnedResult(model);
       }
     }
@@ -1036,6 +1045,7 @@ export class MinimaAgent extends Agent {
         signal: opts.signal,
       });
       this.offlineReason = null;
+      this.offlineKind = null;
       if (this.beforeRouteHook) {
         const overridden = await this.beforeRouteHook(routing, taskText);
         if (overridden) return overridden;
@@ -1059,6 +1069,7 @@ export class MinimaAgent extends Agent {
           }
         }
         this.offlineReason = errText(exc);
+        this.offlineKind = isBudgetInfeasible(exc) ? "budget" : "network";
         return null;
       }
       throw exc;

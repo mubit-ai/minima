@@ -62,3 +62,59 @@ export function routingInfoWarnings(warnings: readonly string[]): string[] {
   }
   return out;
 }
+
+/** Agent-side facts routingSurfaceNotes reads (a plain snapshot — keeps it pure/testable). */
+export interface RoutingSurfaceState {
+  lastAborted: boolean;
+  offlineReason: string | null;
+  offlineKind: "network" | "budget" | null;
+  lastFeedbackError: string | null;
+  modelId: string | null;
+}
+
+export interface RoutingSurface {
+  /** New decision-basis label for the footer; null = leave unchanged. */
+  basis: string | null;
+  /** Muted info notes for the transcript (never errors). */
+  notes: string[];
+}
+
+/**
+ * Build the post-turn routing notes surfaced in the transcript (the pure core of the
+ * TUI's surfaceRouting). One source of truth for the normal path and the plan-mode
+ * planner reply.
+ */
+export function routingSurfaceNotes(
+  routing: { decisionBasis: string; warnings: readonly string[] } | null,
+  state: RoutingSurfaceState,
+): RoutingSurface {
+  // Esc during routing is a USER abort — no model ran, nothing is offline. An honest
+  // one-liner, never the "routing offline / Minima unreachable" note (MUB-174).
+  if (state.lastAborted) {
+    return { basis: null, notes: ["ℹ aborted during routing — no model ran."] };
+  }
+  if (routing) {
+    const notes: string[] = [];
+    const info = routingInfoWarnings(routing.warnings);
+    if (info.length > 0) notes.push(`ℹ ${info.join("; ")}`);
+    if (state.lastFeedbackError) notes.push(`ℹ learning loop: ${state.lastFeedbackError}`);
+    return { basis: routing.decisionBasis || "minima", notes };
+  }
+  const model = state.modelId ?? "default model";
+  // A structured budget-infeasibility rejection is NOT connectivity offline: the service is
+  // up and said "no model fits this cost cap" — label it honestly and point at /budget.
+  if (state.offlineKind === "budget") {
+    return {
+      basis: "offline",
+      notes: [
+        `ℹ budget-infeasible: ${state.offlineReason ?? "no model within the per-call cost cap"} — ran ${model} unrouted. Raise it with /budget set <usd> or relax with /budget mode warn.`,
+      ],
+    };
+  }
+  return {
+    basis: "offline",
+    notes: [
+      `ℹ routing offline: ${state.offlineReason ?? "Minima unreachable"} — ran ${model} unrouted. /reconnect to retry.`,
+    ],
+  };
+}
