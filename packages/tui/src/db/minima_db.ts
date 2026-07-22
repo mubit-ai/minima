@@ -392,6 +392,11 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_profile_events_project ON profile_events(project_key, ts)",
   ],
+  // per-step candidate pools — batch index may shift at rebase (parallel unmerged stacks
+  // also append here; append-only discipline: renumber unmerged, never edit shipped).
+  [
+    "ALTER TABLE plan_steps ADD COLUMN candidates TEXT", // JSON string[] (NULL = inherit the session pool)
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -491,6 +496,8 @@ export interface PlanStepRow {
   check_origin: CheckOrigin | null;
   /** A6: JSON array of permitted tool names, or NULL/"[]" for unrestricted. See tool_permissions.ts. */
   tools: string | null;
+  /** JSON array of exact model ids this step's delegated work routes among; NULL = inherit the session pool. */
+  candidates: string | null;
 }
 
 export interface FileChangeRow {
@@ -1852,6 +1859,7 @@ export class MinimaDb {
       verify?: string | null;
       verifyCwd?: string | null;
       tools?: string[] | null;
+      candidates?: string[] | null;
     }[],
   ): { planId: string; stepIds: string[] } {
     const planId = this.insertPlan({ sessionId, title, status: "active" });
@@ -1869,6 +1877,7 @@ export class MinimaDb {
             verifyCwd: st.verifyCwd?.trim() ? st.verifyCwd.trim() : null,
             checkOrigin: verify ? "user" : null,
             tools: st.tools ?? null,
+            candidates: st.candidates ?? null,
           }),
         );
       });
@@ -1953,10 +1962,11 @@ export class MinimaDb {
     verifyCwd?: string | null;
     checkOrigin?: CheckOrigin | null;
     tools?: string[] | null;
+    candidates?: string[] | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools, candidates) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -1969,6 +1979,7 @@ export class MinimaDb {
         opts.verifyCwd ?? null,
         opts.checkOrigin ?? null,
         serializeToolList(opts.tools),
+        serializeToolList(opts.candidates),
       ],
     );
     return id;

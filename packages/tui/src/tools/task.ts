@@ -32,6 +32,10 @@ export interface Delegation {
   tool_allowlist?: string[];
   budget_usd?: number;
   isolation?: "workdir" | "inherit";
+  /** Per-step candidate pool: exact model ids this child's routing is restricted to.
+   *  Validated + applied in createSpawn (registry-filtered; empty-after-filter falls back
+   *  to the parent pool) — pre-request candidate assembly, never a post-hoc re-rank. */
+  candidates?: string[];
 }
 
 export interface ChildResult {
@@ -121,8 +125,11 @@ const parameters = objectSchema(
         'JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", ' +
         '"output_format": "what to return", "boundaries": "what NOT to touch", ' +
         '"depends_on": ["other-step-ids"], "effort": "light|standard|deep", ' +
-        '"difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5}. ' +
-        "objective/output_format/boundaries are REQUIRED per subtask.",
+        '"difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, ' +
+        '"candidates": ["exact-model-id"]}. ' +
+        "objective/output_format/boundaries are REQUIRED per subtask. candidates is an " +
+        "OPTIONAL model pool for this subtask's routing — use only when the plan or " +
+        "observed data justifies it.",
     },
   },
   ["delegations"],

@@ -123,8 +123,9 @@ describe("MinimaDb schema + lifecycle", () => {
     // + v12 memory ledger (memories/memory_events/memory_jobs)
     // + v13 version stamps (harness_version/tool_schema_hash) + tool_calls.result_ref
     // + v14 canonical Big Plan outcome columns
-    // + routing profiles (routing_profiles/profile_events; exact batch number floats
-    //   until the parallel migration stacks settle — the table checks below pin content)
+    // + v15 routing profiles (routing_profiles/profile_events)
+    // + per-step candidate pools (plan_steps.candidates) — floor, not exact: parallel
+    //   unmerged stacks each append batches, so an exact count churns on every rebase.
     expect(db.schemaVersion).toBeGreaterThanOrEqual(14);
     for (const t of [
       "projects",

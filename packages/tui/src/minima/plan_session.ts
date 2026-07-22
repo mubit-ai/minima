@@ -129,6 +129,9 @@ export interface SynthPlanStep {
   verify: string;
   /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
   tools: string[];
+  /** Per-step candidate pool: exact model ids this step's delegated work routes among.
+   *  Absent/empty = inherit the session pool. Enforced in createSpawn, never by prompt text. */
+  candidates?: string[];
 }
 
 /**
@@ -539,6 +542,7 @@ export class PlanSessionStore {
         action: st.action.trim(),
         verify: st.verify.trim(),
         tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
+        candidates: (st.candidates ?? []).map((c) => c.trim()).filter(Boolean),
       }))
       .filter((st) => st.action.length > 0);
     out.push("## Implementation Plan", "");
@@ -547,6 +551,7 @@ export class PlanSessionStore {
       // Each step names its verify — the verifiable-steps contract. A step the model could not
       // give a check for is rendered with a decompose nudge (nudge/advise: it is not blocked).
       // A6: a step also names its minimal tool allowlist (enforced at execution); absent = unrestricted.
+      // A step may also name its candidate model pool (enforced at spawn); absent = session pool.
       steps.forEach((st, i) => {
         out.push(`${i + 1}. ${st.action}`);
         out.push(
@@ -555,6 +560,7 @@ export class PlanSessionStore {
             : "   - verify: _none — decompose or add a check_",
         );
         if (st.tools.length > 0) out.push(`   - tools: ${st.tools.join(", ")}`);
+        if (st.candidates.length > 0) out.push(`   - models: ${st.candidates.join(", ")}`);
       });
       out.push("");
     }

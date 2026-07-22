@@ -20,7 +20,12 @@ export interface PlanFinalizeDb {
   seedPlanFromSteps(
     sessionId: string,
     title: string | null,
-    steps: { content: string; verify?: string | null; tools?: string[] | null }[],
+    steps: {
+      content: string;
+      verify?: string | null;
+      tools?: string[] | null;
+      candidates?: string[] | null;
+    }[],
   ): { planId: string; stepIds: string[] };
 }
 
@@ -238,7 +243,12 @@ export async function finalizePlan(
   if (deps.db && deps.runId && synth && synth.approach.length > 0) {
     try {
       const seedSteps = synth.approach
-        .map((st) => ({ content: st.action.trim(), verify: st.verify, tools: st.tools }))
+        .map((st) => ({
+          content: st.action.trim(),
+          verify: st.verify,
+          tools: st.tools,
+          candidates: st.candidates ?? null,
+        }))
         .filter((st) => st.content.length > 0);
       if (seedSteps.length > 0) {
         seededCount = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps).stepIds
