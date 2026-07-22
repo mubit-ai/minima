@@ -40,10 +40,20 @@ function messagePayload(m: Message): Record<string, unknown> {
       cache_write: m.usage.cache_write,
       cost_total: m.usage.cost.total,
     };
+    // MUB-175: tool_use blocks must round-trip — a rehydrated conversation missing the
+    // ids serializes tool_result rows with tool_use_id undefined and 400s on resume.
+    if (m.toolCalls.length > 0) {
+      base.tool_calls = m.toolCalls.map((c) => ({
+        id: c.id,
+        name: c.name,
+        arguments: c.arguments,
+      }));
+    }
   }
   if (m.role === "toolResult") {
     base.tool_name = (m as Message & { tool_name?: string }).tool_name;
     base.is_error = (m as Message & { is_error?: boolean }).is_error ?? false;
+    if (m.tool_call_id) base.tool_call_id = m.tool_call_id;
   }
   return base;
 }

@@ -78,7 +78,12 @@ import {
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { whyReportFor } from "../minima/why.ts";
-import { detectRepo, gcCheckpoints, makeCheckpointHook, restore } from "../session/checkpoint.ts";
+import {
+  gcCheckpoints,
+  makeCheckpointHook,
+  makeRepoResolver,
+  restore,
+} from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
@@ -173,7 +178,7 @@ import {
   parseRewindArgs,
   renderRewindText,
 } from "./rewind_picker.ts";
-import { routingInfoWarnings } from "./routing-warnings.ts";
+import { routingSurfaceNotes } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
 import { setResumeCallback, suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
@@ -1313,11 +1318,13 @@ export function HarnessApp({
       stdinListeners: process.stdin.listenerCount("readable"),
     });
   });
-  // B3 (MUB-136): git-shadow checkpoints. Repo detection once; arm() re-armed per prompt.
-  // LAZY initializer, load-bearing: detectRepo forks `git rev-parse` synchronously, and a
-  // plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking git
-  // spawn per keystroke/wheel notch was the "TUI freezes and the title flaps bun↔git" bug.
-  const [repoTop] = useState<string | null>(() => detectRepo(process.cwd()));
+  // B3 (MUB-136): git-shadow checkpoints. Repo detection via a lazy resolver: re-probes
+  // while null so a mid-session `git init` is picked up (MUB-176), cached once found —
+  // and only ever called at event time (/ckpt, /undo, /rewind, the checkpoint hook). A
+  // LAZY useState initializer, load-bearing: detectRepo forks `git rev-parse` synchronously,
+  // and a plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking
+  // git spawn per keystroke/wheel notch was the "TUI freezes and the title flaps bun↔git" bug.
+  const [resolveRepoTop] = useState(() => makeRepoResolver(process.cwd()));
   const checkpointArmRef = useRef<(() => void) | null>(null);
   // B4 (MUB-139): /undo. Cursor = created-time of the last restored checkpoint, so stacked
   // /undo walks backwards; reset on the next real prompt. Prefill remounts TextInput (nonce
@@ -1457,7 +1464,7 @@ export function HarnessApp({
     // tree). Same effect as its neighbors: a separate effect with different deps would lose
     // the relative order on re-registration.
     const ckpt = makeCheckpointHook({
-      top: repoTop,
+      top: resolveRepoTop,
       db: agent.db ?? null,
       getRunId: () => agent.runId,
       getStepId: () => {
@@ -1477,7 +1484,7 @@ export function HarnessApp({
       checkpointArmRef.current = null;
       disposePermission();
     };
-  }, [agent, bigPlanGateBefore, repoTop]);
+  }, [agent, bigPlanGateBefore, resolveRepoTop]);
 
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
@@ -2227,7 +2234,7 @@ export function HarnessApp({
     const runId = agent.runId;
     const notes: string[] = [];
     if (mode !== "convo") {
-      const top = repoTop;
+      const top = resolveRepoTop();
       if (!top) {
         notes.push("code: unavailable (not a git repository)");
       } else {
@@ -2352,7 +2359,7 @@ export function HarnessApp({
         // B4: checkpoint restore (safety snapshot inside) + rewind marker on the events
         // spine + in-memory truncation + composer prefilled with the undone prompt.
         const echo: ChatMessage = { role: "user", text: "/undo" };
-        const top = repoTop;
+        const top = resolveRepoTop();
         if (!top || !agent.db || !agent.runId) {
           setMessages((m) => [
             ...m,
@@ -2451,7 +2458,7 @@ export function HarnessApp({
       }
       case "ckpt": {
         const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
-        const top = repoTop;
+        const top = resolveRepoTop();
         if (!top || !agent.db || !agent.runId) {
           setMessages((m) => [
             ...m,
@@ -4024,47 +4031,30 @@ export function HarnessApp({
     }
   }
 
-  // Surface the outcome of a routed turn (warnings / feedback / offline notes). Shared by the
-  // normal path and the plan-mode planner reply so both report routing identically.
+  // Surface the outcome of a routed turn (warnings / feedback / offline / abort notes).
+  // Shared by the normal path and the plan-mode planner reply so both report routing
+  // identically. Message-building lives in routingSurfaceNotes (routing-warnings.ts) so the
+  // abort/offline/budget wording is testable without React.
   function surfaceRouting(routing: RoutingResult | null) {
-    if (routing) {
-      setBasis(routing.decisionBasis || "minima");
-      // Recommend-path warnings are all benign/informational (routing succeeded or degraded
-      // gracefully) — surface as a MUTED info note, never a red error. See routing-warnings.ts.
-      const info = routingInfoWarnings(routing.warnings);
-      if (info.length > 0) {
-        setMessages((m) => [
-          ...m,
-          { role: "tool", text: `ℹ ${info.join("; ")}`, toolName: "routing", isError: false },
-        ]);
-      }
-      // Post-turn feedback rejections (HTTP-200 accepted=false, e.g. memory_write_failed)
-      // land in lastFeedbackError but previously nothing read it — a server-side write
-      // outage starved the learning loop invisibly (observed live). Muted note, not red:
-      // the turn itself succeeded, only the learning write-back failed.
-      if (agent.lastFeedbackError) {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: `ℹ learning loop: ${agent.lastFeedbackError}`,
-            toolName: "routing",
-            isError: false,
-          },
-        ]);
-      }
-    } else {
-      setBasis("offline");
-      const reason = agent.offlineReason ?? "Minima unreachable";
-      // Offline is graceful degradation — the turn still ran on the default model. Muted, not red.
+    const surface = routingSurfaceNotes(routing, {
+      lastAborted: agent.lastAborted,
+      offlineReason: agent.offlineReason,
+      offlineKind: agent.offlineKind,
+      lastFeedbackError: agent.lastFeedbackError,
+      modelId: agent.agentState.model?.id ?? null,
+    });
+    if (surface.basis !== null) setBasis(surface.basis);
+    if (surface.notes.length > 0) {
       setMessages((m) => [
         ...m,
-        {
-          role: "tool",
-          text: `ℹ routing offline: ${reason} — ran ${agent.agentState.model?.id ?? "default model"} unrouted. /reconnect to retry.`,
-          toolName: "routing",
-          isError: false,
-        },
+        ...surface.notes.map(
+          (note): ChatMessage => ({
+            role: "tool",
+            text: note,
+            toolName: "routing",
+            isError: false,
+          }),
+        ),
       ]);
     }
   }

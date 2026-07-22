@@ -4,7 +4,16 @@
  * (judge cadence continuity). The inverse of the DbSink + DecisionRecord writer.
  */
 
-import { AssistantMessage, Message, type StopReason, Usage } from "../ai/types.ts";
+import {
+  AssistantMessage,
+  type ContentBlock,
+  Message,
+  type StopReason,
+  type ToolCall,
+  Usage,
+  text as textBlock,
+  toolCall,
+} from "../ai/types.ts";
 import type { CostRow } from "../minima/meter.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { parseRewindMarker, truncateBeforePrompt } from "../session/rewind.ts";
@@ -33,6 +42,67 @@ function usageFrom(raw: unknown): Usage {
   });
   usage.cost.total = n(r.cost_total);
   return usage;
+}
+
+/** Rebuild persisted tool_use blocks (sink payload `tool_calls`); malformed rows → []. */
+function toolCallsFrom(raw: unknown): ToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ToolCall[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== "object") continue;
+    const r = c as Record<string, unknown>;
+    if (typeof r.id !== "string" || !r.id || typeof r.name !== "string") continue;
+    const args =
+      r.arguments && typeof r.arguments === "object" && !Array.isArray(r.arguments)
+        ? (r.arguments as Record<string, unknown>)
+        : {};
+    out.push(toolCall(r.id, r.name, args));
+  }
+  return out;
+}
+
+/**
+ * MUB-175: drop half-pairs an aborted/errored/rewound turn left behind, BOTH directions —
+ * an assistant tool_use with no following result loses that block (the whole message when
+ * nothing else remains), and a toolResult with no owning tool_use is dropped — so every
+ * provider serializes a valid conversation on resume.
+ */
+export function pruneOrphanToolMessages(messages: Message[]): Message[] {
+  const out: Message[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i]!;
+    if (m.role === "toolResult") {
+      i += 1; // reached only when no preceding assistant claimed it — orphan
+      continue;
+    }
+    if (m instanceof AssistantMessage && m.toolCalls.length > 0) {
+      const results: Message[] = [];
+      let j = i + 1;
+      while (j < messages.length && messages[j]!.role === "toolResult") {
+        results.push(messages[j]!);
+        j += 1;
+      }
+      const callIds = new Set(m.toolCalls.map((c) => c.id));
+      const answered = new Set<string>();
+      const kept: Message[] = [];
+      for (const r of results) {
+        const id = r.tool_call_id;
+        if (id && callIds.has(id) && !answered.has(id)) {
+          answered.add(id);
+          kept.push(r);
+        }
+      }
+      m.content = m.content.filter((b) => b.type !== "toolCall" || answered.has(b.id));
+      if (m.content.length > 0) out.push(m);
+      out.push(...kept);
+      i = j;
+      continue;
+    }
+    out.push(m);
+    i += 1;
+  }
+  return out;
 }
 
 export interface RehydratedRun {
@@ -68,9 +138,13 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
     if (ev.type === "user") {
       messages.push(new Message({ role: "user", content: text }));
     } else if (ev.type === "assistant") {
+      const calls = toolCallsFrom(payload.tool_calls);
+      const content: ContentBlock[] | string = calls.length
+        ? [...(text ? [textBlock(text)] : []), ...calls]
+        : text;
       messages.push(
         new AssistantMessage({
-          content: text,
+          content,
           model: String(payload.model ?? ""),
           stop_reason: stopReasonFrom(payload.stop_reason),
           usage: usageFrom(payload.usage),
@@ -81,6 +155,7 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
         new Message({
           role: "toolResult",
           content: text,
+          tool_call_id: typeof payload.tool_call_id === "string" ? payload.tool_call_id : undefined,
           tool_name: String(payload.tool_name ?? "tool"),
           is_error: Boolean(payload.is_error ?? false),
         }),
@@ -88,6 +163,7 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
     }
     // 'routing' events carry decision metadata, not conversation — skipped here.
   }
+  messages = pruneOrphanToolMessages(messages);
 
   const meterRows: CostRow[] = [];
   const decisions = db.getRunDecisions(runId);

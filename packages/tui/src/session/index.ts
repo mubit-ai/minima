@@ -20,6 +20,7 @@ export {
   detectRepo,
   gcCheckpoints,
   makeCheckpointHook,
+  makeRepoResolver,
   MUTATING_TOOLS,
   restore,
   snapshot,
