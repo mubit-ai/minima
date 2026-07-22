@@ -31,6 +31,7 @@ export const sidebar: Record<string, SidebarGroup[]> = {
       items: [
         { text: 'Getting Started', link: '/sdk/getting-started' },
         { text: 'Concepts', link: '/sdk/concepts' },
+        { text: 'Using Minima correctly', link: '/sdk/usage-guide' },
       ],
     },
     {
@@ -42,11 +43,17 @@ export const sidebar: Record<string, SidebarGroup[]> = {
     },
     {
       text: 'Reference',
-      items: [{ text: 'Python Client SDK', link: '/sdk/client-sdk' }],
+      items: [
+        { text: 'Python Client SDK', link: '/sdk/client-sdk' },
+        { text: 'TypeScript SDK', link: '/sdk/typescript' },
+      ],
     },
     {
       text: 'Guides',
-      items: [{ text: 'Examples', link: '/sdk/examples' }],
+      items: [
+        { text: 'Examples', link: '/sdk/examples' },
+        { text: 'Self-hosting', link: '/sdk/self-hosting' },
+      ],
     },
   ],
   '/harness': [

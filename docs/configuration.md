@@ -5,6 +5,10 @@ local `.env` file (case-insensitive). The only **required** value is `MUBIT_API_
 single-tenant mode). A complete annotated template ships as
 [`.env.example`](../.env.example).
 
+> This page covers the **server** (`src/minima/`). The `minima` CLI/TUI harness has its own
+> flag set — see [Harness Architecture § Key environment
+> flags](harness-architecture.md#key-environment-flags).
+
 ## Mubit memory backend
 
 | Variable | Default | Notes |

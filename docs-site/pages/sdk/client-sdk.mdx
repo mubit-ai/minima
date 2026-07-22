@@ -3,13 +3,17 @@ title: Python Client SDK
 description: The minima_client package — sync and async clients, autocapture, and error handling.
 ---
 
-import { PageHeader, Warning } from '@components'
+import { PageHeader, Note, Warning } from '@components'
 
 <PageHeader />
 
 # Python Client SDK
 
 The `minima_client` package is the official thin, typed Python client for the hosted Minima API, plus an optional zero-code intake helper.
+
+<Note>
+**This page targets the hosted service** (`https://api.minima.sh`, authenticated with your Mubit key). The same package works against a self-hosted Minima — point `base_url` at your deployment (see [Self-hosting](/sdk/self-hosting)); the repo's [`docs/client-sdk.md`](https://github.com/mubit-ai/minima/blob/main/docs/client-sdk.md) documents that framing.
+</Note>
 
 ## Install
 
@@ -102,6 +106,10 @@ print(wf.total_est_cost_usd, "vs", wf.total_est_cost_if_all_premium)
 ## `feedback(recommendation_id, chosen_model_id, outcome, **kwargs)`
 
 Returns a `FeedbackResponse`. `outcome` is `"success"` | `"partial"` | `"failure"`. Pass realized numbers to power the observed/rescaled cost tiers, and declare where the label came from with `evidence_source`:
+
+<Warning>
+The typed `Usage` parameter is the loop's **single biggest accuracy lever** — report what the provider **actually** billed (never echo Minima's own `est_cost_usd` back as `cost_usd`). Realized `input_tokens` / `output_tokens` / `cost_usd` / `latency_ms` are what let the cost basis climb `estimate → observed → rescaled` for your account.
+</Warning>
 
 ```python
 from minima_client import Usage

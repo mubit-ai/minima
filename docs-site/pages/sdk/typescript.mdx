@@ -1,0 +1,154 @@
+---
+title: TypeScript SDK
+description: The @mubit-ai/minima-sdk package — a pure-fetch typed client for Node, Bun, Deno, and edge runtimes.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# TypeScript SDK
+
+[`@mubit-ai/minima-sdk`](https://www.npmjs.com/package/@mubit-ai/minima-sdk) is the official TypeScript client for the Minima API: pure `fetch`, **zero runtime dependencies**, typed against the same `/v1/*` wire contract as the [Python SDK](/sdk/client-sdk). It works in Node, Bun, Deno, and edge runtimes.
+
+## Install
+
+```bash
+npm install @mubit-ai/minima-sdk
+# or: bun add / pnpm add / yarn add @mubit-ai/minima-sdk
+```
+
+## Client
+
+```ts
+import { MinimaClient } from "@mubit-ai/minima-sdk";
+
+const minima = new MinimaClient({
+  baseUrl: "https://api.minima.sh",
+  apiKey: process.env.MUBIT_API_KEY,   // your Mubit key (mbt_…), sent as Bearer auth
+});
+```
+
+`MinimaClientOptions` also accepts `feedbackRetryDelaysMs` (default `[500, 2000]`) and an injectable `fetch` for hermetic tests.
+
+## The full loop: recommend → run → feedback
+
+You run the model — Minima only recommends. Close the loop with **realized** usage measured from the provider's own response:
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+import { MinimaClient } from "@mubit-ai/minima-sdk";
+
+const minima = new MinimaClient({
+  baseUrl: "https://api.minima.sh",
+  apiKey: process.env.MUBIT_API_KEY,
+});
+const anthropic = new Anthropic();
+
+// $/Mtok — from your provider contract, or GET /v1/models (input_cost_per_mtok / output_cost_per_mtok)
+const PRICES: Record<string, { in: number; out: number }> = {
+  "claude-haiku-4-5": { in: 1.0, out: 5.0 },
+  "claude-sonnet-4-6": { in: 3.0, out: 15.0 },
+};
+
+// 1. recommend
+const rec = await minima.recommend(
+  { task: "Summarize this incident report into 3 bullets.", task_type: "summarization" },
+  { costQualityTradeoff: 3 },
+);
+const model = rec.recommended_model.model_id;
+
+// 2. run the model YOURSELF, measuring real usage
+const started = Date.now();
+const msg = await anthropic.messages.create({
+  model,
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Summarize this incident report into 3 bullets." }],
+});
+const latencyMs = Date.now() - started;
+
+// 3. realized cost from the provider's actual token counts × your price table
+const p = PRICES[model] ?? { in: 0, out: 0 };
+const costUsd =
+  (msg.usage.input_tokens / 1e6) * p.in + (msg.usage.output_tokens / 1e6) * p.out;
+
+// 4. close the loop with what ACTUALLY happened
+await minima.feedback(rec.recommendation_id, model, "success", {
+  usage: {
+    inputTokens: msg.usage.input_tokens,
+    outputTokens: msg.usage.output_tokens,
+    costUsd,
+    latencyMs,
+  },
+  qualityScore: 0.95,        // your judge/eval score, if you have one
+  evidenceSource: "human",   // gate | judge | human | none — label provenance
+});
+```
+
+<Warning>
+**Never echo `est_cost_usd` back as the actual cost.** `rec.recommended_model.est_cost_usd` is Minima's own *prediction*; `usage.costUsd` must be the **realized** cost of the call. Real numbers are what let the cost basis climb `estimate → observed → rescaled` — the single biggest accuracy lever of the loop.
+</Warning>
+
+## `recommend(task, opts)`
+
+`task` is a string or a `TaskInput` (`{ task, task_type?, difficulty?, expected_input_tokens?, expected_output_tokens?, tags? }`). Options (camelCase; mapped to the wire):
+
+```ts
+const rec = await minima.recommend("refactor the auth module", {
+  costQualityTradeoff: 5,                 // 0..10 (default 5)
+  constraints: {                          // hard filters
+    candidate_models: ["claude-haiku-4-5", "claude-sonnet-4-6"],
+  },
+  namespace: "team-payments",
+  baselineModelId: "claude-opus-4-8",     // what you'd use without Minima -> honest savings()
+  incumbentModelId: undefined,            // session's prompt-cache holder, if any
+  phase: "interactive",                   // rides as a `phase:<value>` tag
+  signal: undefined,                      // per-call AbortSignal
+});
+```
+
+`recommend` **fails fast and never retries** — catch the error and fail open to your default model; your LLM call must never block on Minima.
+
+## `feedback(recommendationId, chosenModelId, outcome, opts)`
+
+`outcome` is `"success" | "partial" | "failure"`. Options: `usage` (`{ inputTokens, outputTokens, costUsd, latencyMs }` — all realized), `qualityScore`, `evidenceSource` (`"gate" | "judge" | "human" | "none"`), `errorCause` (`"infra" | "quality"`), `chosenEffort`, `iterations`, `notes`, `idempotencyKey`, `signal`.
+
+Feedback **retries transparently** on transient faults (transport errors, 502/503/504) with the `feedbackRetryDelaysMs` schedule; the server dedupes via the idempotency key. For wire-level fields like `step_outcomes`, use `feedbackRaw(req)` — the raw request shape with the same retry behavior.
+
+<Note>
+`evidenceSource: "none"` marks an unlabeled outcome — it rides as cost/latency **telemetry only** and never teaches the success posterior. `"gate"` (a deterministic check passed) is the only origin that may claim verified-in-production. For provider faults pass `errorCause: "infra"` so a rate limit never reads as model quality.
+</Note>
+
+## Reporting and catalog
+
+```ts
+await minima.savings({ days: 30, group_by: "task_type" });  // SavingsResponse
+await minima.calibration({ days: 30 });                     // CalibrationResponse
+await minima.policyValue({ days: 30 });                     // doubly-robust regret-vs-oracle
+await minima.strategies({ namespace: "team-payments" });    // promoted rules
+await minima.diagnose({ error_text: "TypeError: …" });      // failure lessons
+await minima.memoryHealth({ namespace: "team-payments" });  // memory hygiene
+await minima.models({ provider: "anthropic" });             // catalog with $/Mtok prices
+await minima.capabilities();                                // feature handshake
+await minima.health();
+```
+
+## Errors
+
+Non-2xx responses throw a typed ladder: `MinimaRateLimited` (429, with `retryAfter` seconds when the server provides it), `MinimaUnavailable` (502/503/504), and `MinimaError` (everything else — carries `status` and the problem+json `body`).
+
+```ts
+import { MinimaError } from "@mubit-ai/minima-sdk";
+
+try {
+  const rec = await minima.recommend(task);
+} catch (exc) {
+  // fail open: fall back to your default model
+}
+```
+
+## Where to go next
+
+- [SDK architecture](/sdk/architecture) — how both SDKs encode the loop: the wire contract, retry discipline, label honesty, and the differences between TypeScript and Python.
+- [Using Minima correctly](/sdk/usage-guide) — the golden rules of the loop in one place.
+- [API Reference](/api-reference/endpoints) — every field on the wire.

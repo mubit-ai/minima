@@ -3,7 +3,7 @@ title: Examples
 description: Copy-paste recipes — from a single curl to a production routing wrapper.
 ---
 
-import { PageHeader, Tip } from '@components'
+import { PageHeader, Tip, Warning } from '@components'
 
 <PageHeader />
 
@@ -139,35 +139,61 @@ autocapture.disable()
 
 ## 6. Production routing wrapper
 
-The shape you'd ship: recommend a model, run it via the official **Anthropic SDK** (streaming, real token usage), then feed the realized cost/quality back.
+The shape you'd ship: recommend a model, run it via the official **Anthropic SDK** (streaming, real token usage), then feed the realized cost/quality back — computed from the provider's own `msg.usage`, priced with the catalog's per-Mtok rates.
+
+<Warning>
+**Never echo `est_cost_usd` back as `actual_cost_usd`.** Minima's `est_cost_usd` is its own *prediction* — feeding it back teaches the ranker nothing. `actual_cost_usd` must be the **realized** cost of the call (provider-billed, or provider token counts × your price table). Real numbers are what let the cost basis climb `estimate → observed → rescaled` — the single biggest accuracy lever of the loop.
+</Warning>
 
 ```python
+import time
+
 import anthropic
-from minima_client import AsyncMinimaClient
+from minima_client import AsyncMinimaClient, Usage
+
+def price_per_mtok(catalog, model_id: str) -> tuple[float, float]:
+    """(input $/Mtok, output $/Mtok) from the catalog; (0, 0) if unknown."""
+    for card in catalog.models:
+        if card.model_id == model_id:
+            return card.input_cost_per_mtok, card.output_cost_per_mtok
+    return 0.0, 0.0
 
 async def routed_call(minima: AsyncMinimaClient, client: anthropic.AsyncAnthropic,
                       prompt: str, *, cost_quality_tradeoff: float = 4) -> str:
     rec = await minima.recommend(prompt, cost_quality_tradeoff=cost_quality_tradeoff)
     model = rec.recommended_model.model_id
 
+    started = time.monotonic()
     async with client.messages.stream(
         model=model, max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         msg = await stream.get_final_message()
+    latency_ms = int((time.monotonic() - started) * 1000)
 
     text = "".join(b.text for b in msg.content if b.type == "text")
-    cost = rec.recommended_model.est_cost_usd  # or compute from msg.usage + your price table
+
+    # Realized cost: the provider's actual token counts priced at catalog rates.
+    catalog = await minima.models(provider=rec.recommended_model.provider)
+    in_p, out_p = price_per_mtok(catalog, model)
+    actual_cost = (msg.usage.input_tokens / 1e6 * in_p
+                   + msg.usage.output_tokens / 1e6 * out_p)
+
     await minima.feedback(
         rec.recommendation_id, model, "success",
-        quality_score=0.95,
-        input_tokens=msg.usage.input_tokens,
-        output_tokens=msg.usage.output_tokens,
-        actual_cost_usd=cost,
-        verified_in_production=True,
+        usage=Usage(
+            input_tokens=msg.usage.input_tokens,
+            output_tokens=msg.usage.output_tokens,
+            cost_usd=round(actual_cost, 8),
+            latency_ms=latency_ms,
+        ),
+        quality_score=0.95,          # your judge/eval score
+        evidence_source="human",     # or "gate" if a deterministic check passed
     )
     return text
 ```
+
+The runnable version — with graceful degradation and a real quality gate — is [`examples/06_routed_llm_call.py`](https://github.com/mubit-ai/minima/blob/main/examples/06_routed_llm_call.py).
 
 ## 7. Measure your savings
 
