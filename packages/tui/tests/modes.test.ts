@@ -191,6 +191,39 @@ describe("mode_prefs persistence", () => {
   });
 });
 
+describe("MUB-177 — /mode bypass ring membership (regression)", () => {
+  // The /mode bypass handler runs enableBypass() then setMode("bypass") (app.tsx). This
+  // replays that exact sequence at the module-store level: the manual-test report of
+  // bypass missing from the ring does not reproduce here.
+  test("/mode bypass sequence: the ring includes bypass exactly once and in order", async () => {
+    const { enableBypass } = await import("../src/agent/modes.ts");
+    enableBypass();
+    setMode("bypass");
+    expect(getMode()).toBe("bypass");
+    const lap = [cycleMode(), cycleMode(), cycleMode(), cycleMode()];
+    expect(lap).toEqual(["build", "acceptEdits", "plan", "bypass"]);
+    expect(lap.filter((m) => m === "bypass")).toHaveLength(1);
+  });
+
+  test("bypass is never persisted, even for a fresh project key", async () => {
+    const { mkdtempSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-bypass-persist-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const { loadPersistedMode, persistMode } = await import("../src/tui/mode_prefs.ts");
+      persistMode("github.com/fresh/key", "bypass");
+      expect(loadPersistedMode("github.com/fresh/key")).toBeNull();
+      expect(existsSync(join(dir, "ui-modes.json"))).toBe(false);
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
+});
+
 // Shift+Tab-over-a-permission-prompt (Claude Code parity): cycling into a mode whose
 // bundle pre-approves the pending call resolves the on-screen prompt; a mode that still
 // asks leaves it up. Pure policy resolution — the app arm consumes exactly this.
