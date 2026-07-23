@@ -119,6 +119,12 @@ class DecisionRecord:
     # (policy name -> model_id). The raw material for replay-matched off-policy value
     # estimates. None on rows logged before challengers existed.
     shadow_choices: dict[str, str] | None = None
+    # Assignment-function provenance: which classifier produced the labels behind this
+    # row's cluster, which key-space version it was keyed under, and whether a learned
+    # classifier abstained to the heuristic. None on legacy rows (JSON payload — additive).
+    classifier_id: str | None = None
+    cluster_key_version: str | None = None
+    abstained: bool | None = None
 
     @property
     def reconciled(self) -> bool:

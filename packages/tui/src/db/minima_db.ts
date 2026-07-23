@@ -442,6 +442,21 @@ const MIGRATIONS: string[][] = [
        updated_at REAL NOT NULL
      )`,
   ],
+  // v19 — classifier agreement telemetry (classifier program PR-1): the raw client-side
+  // label (pre-confidence-floor, telemetry only — the floor still gates overrides), the
+  // server's OWN heuristic opinion (reported even when a caller override won), their
+  // type-level disagreement (NULL = not comparable this rung), and the server's
+  // cluster-key-space version. The drift monitor and eval-set generator for the learned
+  // classifier; nothing here feeds routing or feedback.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN client_task_type TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN client_difficulty TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN client_confidence REAL",
+    "ALTER TABLE routing_decisions ADD COLUMN heuristic_task_type TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN heuristic_difficulty TEXT",
+    "ALTER TABLE routing_decisions ADD COLUMN classify_disagreement INTEGER",
+    "ALTER TABLE routing_decisions ADD COLUMN cluster_key_version TEXT",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -516,6 +531,14 @@ export interface DecisionWrite {
   lessonPromoted?: boolean | null;
   /** In-progress plan step at routing time (v9) — reporting provenance, not feedback. */
   stepId?: string | null;
+  /** Classifier agreement telemetry (v19) — never feeds routing or feedback. */
+  clientTaskType?: string | null;
+  clientDifficulty?: string | null;
+  clientConfidence?: number | null;
+  heuristicTaskType?: string | null;
+  heuristicDifficulty?: string | null;
+  classifyDisagreement?: 0 | 1 | null;
+  clusterKeyVersion?: string | null;
 }
 
 // ---------------------------------------------------------------- plan-ledger rows
@@ -1190,8 +1213,11 @@ export class MinimaDb {
          est_cost_usd, est_cost_low, est_cost_high, all_premium_cost_usd,
          configured_baseline_cost_usd, actual_cost_usd, quality, judged, outcome, routed,
          turns, latency_ms, step_id, reinforced_entry_ids, lesson_promoted,
-         harness_version, tool_schema_hash, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         harness_version, tool_schema_hash,
+         client_task_type, client_difficulty, client_confidence,
+         heuristic_task_type, heuristic_difficulty, classify_disagreement,
+         cluster_key_version, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
@@ -1235,6 +1261,13 @@ export class MinimaDb {
             : 0,
         this.stampHarnessVersion,
         this.stampToolSchemaHash,
+        d.clientTaskType ?? null,
+        d.clientDifficulty ?? null,
+        d.clientConfidence ?? null,
+        d.heuristicTaskType ?? null,
+        d.heuristicDifficulty ?? null,
+        d.classifyDisagreement ?? null,
+        d.clusterKeyVersion ?? null,
         Date.now() / 1000,
       ],
     );

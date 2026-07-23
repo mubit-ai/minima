@@ -47,6 +47,9 @@ def salient_signature(text: str, max_tokens: int = 4) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]  # noqa: S324
 
 
+CLUSTER_KEY_VERSION = "v1"
+
+
 def task_cluster(task_type: str, difficulty: str, signature: str | None = None) -> str:
     """Cluster used as the upsert grouping key, e.g. ``code:hard`` (coarse) or
     ``code:hard:1a2b3c4d`` (fine, when a keyword signature is supplied)."""

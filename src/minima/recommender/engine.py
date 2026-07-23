@@ -14,13 +14,13 @@ from minima.config import Settings
 from minima.logging import get_logger
 from minima.memory import threadpool
 from minima.memory.adapter import Memory
-from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.keys import CLUSTER_KEY_VERSION, build_content, task_cluster, task_fingerprint
 from minima.memory.recall_utility import RecallUtilityStore, apply_recall_utility
 from minima.memory.records import RecalledEvidence, label_score
 from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
 from minima.recommender import contextual, escalation, score
 from minima.recommender.aggregate import aggregate_by_model
-from minima.recommender.classify import classify_details
+from minima.recommender.classify import CLASSIFIER_ID, classify_details
 from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
@@ -525,6 +525,8 @@ class Recommender:
             est_cost_premium=est_cost_premium,
             task_type_source=class_profile.task_type_source,
             shadow_choices=shadow_choices,
+            classifier_id=CLASSIFIER_ID,
+            cluster_key_version=CLUSTER_KEY_VERSION,
         )
         profile.mark("decision_log")
 
@@ -548,6 +550,7 @@ class Recommender:
             selection_policy=selection_policy,
             recommended_actions=_actions_for(recommended.card),
             stage_latency_ms=profile.as_dict(),
+            cluster_key_version=CLUSTER_KEY_VERSION,
         )
 
     async def _recall_with_fastpath(
@@ -628,6 +631,8 @@ class Recommender:
         est_cost_premium: float,
         task_type_source: str | None = None,
         shadow_choices: dict[str, str] | None = None,
+        classifier_id: str | None = None,
+        cluster_key_version: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
@@ -697,6 +702,8 @@ class Recommender:
                     task_type_source=task_type_source,
                     task_type_confidence=req.task.task_type_confidence,
                     shadow_choices=shadow_choices,
+                    classifier_id=classifier_id,
+                    cluster_key_version=cluster_key_version,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path
