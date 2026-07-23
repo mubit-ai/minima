@@ -43,6 +43,7 @@ import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
+import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
@@ -558,10 +559,11 @@ function toolsFor(
   todoState?: TodoTask[],
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void,
   artifacts?: ToolArtifacts,
+  seen?: SeenLedger,
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts });
+    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -684,12 +686,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
   let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
+  // P3 edit guard: the ledger exists from tool construction but stays fail-open (inert)
+  // until the DB + run id attach below — the same late-bind pattern as bookSearchFee.
+  const seenLedger = config.editGuard ? new SeenLedger() : undefined;
   const tools = toolsFor(
     args,
     config.bigPlan === true,
     todoState,
     (usd, id) => bookSearchFee(usd, id),
     artifactStore ?? undefined,
+    seenLedger,
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -829,6 +835,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     artifactStore?.attach(db, runId);
+    seenLedger?.attach(db, runId);
     sink = attachDbSink(agent, db, { runId });
     if (resumeFrom) {
       // Same shape as the interactive /resume path: context + meter + judge cadence,

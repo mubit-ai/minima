@@ -53,11 +53,25 @@ export function readTool(opts: FsToolOptions = {}): AgentTool {
         return errorResult(
           `read: binary file (${st.size} bytes): ${p} — use bash to inspect binary content`,
         );
-      const { body, n } = await readLines(p, {
+      const seen = opts.seen;
+      const hasher = seen?.enabled ? new Bun.CryptoHasher("sha256") : null;
+      const { body, n, eof } = await readLines(p, {
         offset: params.offset as number,
         limit: params.limit as number,
+        hasher: hasher ? (chunk) => hasher.update(chunk) : undefined,
       });
-      return { content: [text(body || "(empty)")], details: { lines_read: n } };
+      let out = body || "(empty)";
+      const details: Record<string, unknown> = { lines_read: n };
+      if (seen && hasher && eof) {
+        const hash = hasher.digest("hex");
+        const off = Math.max(1, Math.floor(params.offset as number) || 1);
+        const range = n > 0 ? { start: off, end: off + n - 1 } : { start: 1, end: 1 };
+        if (seen.record(p, hash, [range], "read")) {
+          out += `\n[snap:${hash.slice(0, 8)}]`;
+          details.snap = hash.slice(0, 8);
+        }
+      }
+      return { content: [text(out)], details };
     },
   };
 }

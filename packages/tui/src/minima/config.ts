@@ -144,6 +144,12 @@ export interface HarnessConfig {
    * memoryLedger flag shape. Gates tool REGISTRATION only: rehydrate honors persisted
    * context_rewind markers regardless of this flag. */
   contextRewind: boolean;
+  /** Edit guard (P3, default ON): read/grep stamp [snap:…] tags and record seen-lines
+   * evidence (SQLite `seen_lines`); edit rejects stale or unseen targets with a
+   * deterministic re-read recovery message. Opt out with MINIMA_TUI_EDIT_GUARD=0 —
+   * mirrors the bigPlan flag shape. Fail-open: without an attached DB the ledger stays
+   * inert and tools behave exactly as flag-off. */
+  editGuard: boolean;
   /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
    * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
    * always win; consent gates and diagnostic switches are never covered. */
@@ -212,6 +218,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     artifacts: true,
     steer: true,
     contextRewind: true,
+    editGuard: true,
     experimental: false,
     autoEffort: false,
     classify: false,
@@ -253,6 +260,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
+  cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);
