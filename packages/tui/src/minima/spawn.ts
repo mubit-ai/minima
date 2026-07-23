@@ -17,6 +17,7 @@ import { attachDbSink } from "../db/sink.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
+import { makeBashSteerHook } from "./bash_steer.ts";
 import { bigPlanAttributionSink, recordOpaqueMarker } from "./big_plan.ts";
 import { MinimaError } from "./errors.ts";
 import { CostMeter } from "./meter.ts";
@@ -177,6 +178,9 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     child.runId = parent.runId;
     child.agentId = childId;
     child.memory = parent.memory;
+    // Hook-order contract (P2): bash-steer registers FIRST on the child's beforeToolCall
+    // stack too — first block wins (same contract as main.ts's lead-agent registration).
+    child.addBeforeToolCall(makeBashSteerHook(parent.config));
 
     const unsubscribe = opts.onChildEvent
       ? child.subscribe((event) =>
