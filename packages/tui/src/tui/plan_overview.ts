@@ -52,17 +52,27 @@ export interface PlanOverview {
   steps: PlanOverviewStepRow[];
   driftCount: number;
   totalCostUsd: number;
+  /** R8: the footer's session $ (meter actual + overhead + tool fees) at build time. */
+  sessionTotalUsd: number;
+  /** R8: run-wide routed $ beyond the stamped-step Σ — spend no step can claim
+   * (plan-verification-off turns, planning turns, council researchers, off-plan detours). */
+  unattributedUsd: number;
   /** Latest gate rows per step, newest last — the detail card's evidence list. */
   gatesByStep: Map<string, GateRow[]>;
 }
 
 /** Read the active (else latest) plan into the overview model; null = no plan recorded. */
-export function buildPlanOverview(db: MinimaDb, sessionId: string): PlanOverview | null {
+export function buildPlanOverview(
+  db: MinimaDb,
+  sessionId: string,
+  sessionTotalUsd = 0,
+): PlanOverview | null {
   const plan =
     db.getActivePlan(sessionId) ?? db.getLatestPlan(sessionId, { excludeCancelled: true });
   if (!plan) return null;
   const steps = db.getPlanSteps(plan.id);
   const { perStep, totalUsd } = db.stepCosts(plan.id);
+  const unattributedUsd = Math.max(0, db.runRoutedTotal(sessionId) - totalUsd);
 
   const gatesByStep = new Map<string, GateRow[]>();
   for (const gate of db.getGates(plan.id)) {
@@ -116,8 +126,16 @@ export function buildPlanOverview(db: MinimaDb, sessionId: string): PlanOverview
     steps: rows,
     driftCount,
     totalCostUsd: totalUsd,
+    sessionTotalUsd,
+    unattributedUsd,
     gatesByStep,
   };
+}
+
+/** R8: the display-only line under Σ; null when both figures are 0 (nothing to report). */
+function sessionCostLine(overview: PlanOverview): string | null {
+  if (overview.sessionTotalUsd <= 0 && overview.unattributedUsd <= 0) return null;
+  return `session total ${fmtUsd(overview.sessionTotalUsd)} · unattributed ${fmtUsd(overview.unattributedUsd)}`;
 }
 
 const fmtUsd = (v: number | null) => (v === null ? "—" : `$${v.toFixed(4)}`);
@@ -196,6 +214,8 @@ export function planOverviewRows(
     stepIdx: null,
     isTitle: false,
   });
+  const session = sessionCostLine(overview);
+  if (session) rows.push({ text: fit(session, innerWidth), stepIdx: null, isTitle: false });
   return rows;
 }
 
@@ -255,5 +275,7 @@ export function renderPlanOverviewText(overview: PlanOverview | null, width: num
     for (const path of s.driftPaths) lines.push(fit(`     ⚠ drift: ${path}`, width));
   }
   lines.push(fit(`Σ ${fmtUsd(overview.totalCostUsd)} realized (stamped steps)`, width));
+  const session = sessionCostLine(overview);
+  if (session) lines.push(fit(session, width));
   return lines.join("\n");
 }

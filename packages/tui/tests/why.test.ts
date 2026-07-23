@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { DecisionWrite } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
 import { whyReportFor } from "../src/minima/why.ts";
@@ -16,6 +17,27 @@ const GREEN: Factors = {
 
 function db(): MinimaDb {
   return new MinimaDb(":memory:");
+}
+
+function decision(
+  overrides: Partial<DecisionWrite> & { recId: string; runId: string },
+): DecisionWrite {
+  return {
+    taskLabel: "t",
+    chosenModel: "m",
+    decisionBasis: "estimate",
+    confidence: 0.5,
+    thresholdUsed: 0.5,
+    ranked: [],
+    estCostUsd: 0.01,
+    actualCostUsd: 0,
+    quality: null,
+    judged: false,
+    outcome: "success",
+    turns: 1,
+    latencyMs: 10,
+    ...overrides,
+  };
 }
 
 describe("whyReportFor", () => {
@@ -140,6 +162,32 @@ describe("whyReportFor", () => {
       "Plan verification - Empty\nNo plan steps recorded.",
     );
   });
+
+  test("R8: cost block — stamped Σ, session total, unattributed", () => {
+    const d = db();
+    d.ensureProject("p");
+    const runId = d.startRun({ projectKey: "p" });
+    const { stepIds } = d.upsertPlanFromTodos(
+      runId,
+      [{ content: "Costed step", status: "completed", verify: "bun test costed" }],
+      "Costed",
+    );
+    d.writeDecision(decision({ recId: "r1", runId, stepId: stepIds[0], actualCostUsd: 0.02 }));
+    d.writeDecision(decision({ recId: "r2", runId, actualCostUsd: 0.03 })); // unstamped
+    const report = whyReportFor(d, runId, 0.1);
+    expect(report).toContain("Σ $0.0200 realized (stamped steps)");
+    expect(report).toContain("session total $0.1000 · unattributed $0.0300");
+  });
+
+  test("R8: the cost block is omitted when every figure is 0", () => {
+    const d = db();
+    d.ensureProject("p");
+    const runId = d.startRun({ projectKey: "p" });
+    d.upsertPlanFromTodos(runId, [{ content: "Free step", status: "pending" }], "Free");
+    const report = whyReportFor(d, runId);
+    expect(report).not.toContain("session total");
+    expect(report).not.toContain("Σ $");
+  });
 });
 
 describe("the TUI wires /why", () => {
@@ -148,7 +196,7 @@ describe("the TUI wires /why", () => {
   test("lists the command and gates ledger inspection behind plan verification", () => {
     expect(src).toContain('{ name: "why"');
     expect(src).toContain('case "why":');
-    expect(src).toContain("whyReportFor(agent.db, agent.runId)");
+    expect(src).toContain("whyReportFor(agent.db, agent.runId, sessionTotalUsd())");
     expect(src).toContain("agent.config.bigPlan !== true");
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentTool } from "../src/agent/tools.ts";
 import {
   AssistantMessage,
@@ -81,7 +83,12 @@ function mockService() {
   return { fetchLike, recommendCalls };
 }
 
-function setup(stopStrikes: number, askUser: AskUserRef | null, tools: AgentTool[] = []) {
+function setup(
+  stopStrikes: number,
+  askUser: AskUserRef | null,
+  tools: AgentTool[] = [],
+  stepCap = 0,
+) {
   resetRegistry();
   resetProviderRegistration();
   resetModelRegistry();
@@ -95,6 +102,7 @@ function setup(stopStrikes: number, askUser: AskUserRef | null, tools: AgentTool
     minimaApiKey: "k",
     bigPlan: true,
     stopStrikes,
+    stepCap,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const db = new MinimaDb(":memory:");
@@ -168,6 +176,40 @@ describe("A2 stop-gate — runtime integration", () => {
     expect(reg.state.pendingResponseCount).toBe(1);
     const stale = db.getActivePlan(runId)!;
     expect(db.getGates(stale.id).filter((g) => g.kind === "stop")).toHaveLength(0);
+  });
+
+  test("the step-cap wrap and the stop-gate never whipsaw in one rung (R5c)", async () => {
+    // stepCap=2, strikes available: turn 1 bail → one pre-cap ⛔ strike; turn 2 the cap fires
+    // ("wrap up NOW"); turn 3 stops. After the wrap fires the gate must never strike again —
+    // no ⛔ may follow the ⚠ wrap in the transcript, and only the cap's audit gate is written.
+    const { agent, reg, db, runId } = setup(3, null, [], 2);
+    db.upsertPlanFromTodos(runId, [{ content: "wire it", status: "in_progress" }]);
+    reg.setResponses([bail(), bail(), bail()]);
+
+    await agent.promptRouted("do the thing");
+
+    const userTexts = agent.agentState.messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.textContent);
+    const strikes = userTexts.filter((t) => t.startsWith("⛔ You are ending the turn"));
+    const wrapIdx = userTexts.findIndex((t) => t.startsWith("⚠ You have used"));
+    expect(strikes).toHaveLength(1); // the pre-cap strike only
+    expect(wrapIdx).toBeGreaterThan(-1);
+    const lastStrikeIdx = userTexts.findLastIndex((t) => t.startsWith("⛔ You are ending the turn"));
+    expect(lastStrikeIdx).toBeLessThan(wrapIdx); // never a ⛔ after the wrap
+    const plan = db.getActivePlan(runId)!;
+    const stops = db.getGates(plan.id).filter((g) => g.kind === "stop");
+    expect(stops).toHaveLength(1); // the step_cap audit gate, not an A2 exhaustion
+    expect((JSON.parse(stops[0]!.factors_json ?? "{}") as { reason?: string }).reason).toBe(
+      "step_cap",
+    );
+  });
+
+  test("runtime threads ONE per-rung flag from the anti-spiral into the stop-gate (R5c)", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/minima/runtime.ts"), "utf8");
+    expect(src).toContain("const rungFlags = { capWrapFired: false }");
+    expect(src).toContain("capWrapFired: () => rungFlags.capWrapFired");
+    expect(src).toContain("flags: rungFlags");
   });
 
   test("a question answered mid-run suppresses the gate on the following reply (MUB-181)", async () => {

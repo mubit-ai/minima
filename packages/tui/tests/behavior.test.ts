@@ -475,7 +475,11 @@ describe("tui/app.tsx panel key routing", () => {
   });
 
   test("the composer suspends on the SAME expression (the leak fix)", () => {
-    expect(src).toContain("suspended={panelCapture}");
+    // LB-20 widened it: an armed permission/question prompt also suspends the composer
+    // (mounted, draft kept, zero key consumption) instead of unmounting it.
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
     expect(src).not.toContain("suspended={tocOpen}");
   });
 
@@ -500,8 +504,24 @@ describe("tui/app.tsx panel key routing", () => {
     const body = src.slice(idx, idx + 3200);
     expect(body).toContain("planOverviewPanelState(");
     expect(body).toContain("planOverviewRows(overview,");
-    expect(body).toContain("whyReportFor(agent.db, agent.runId)");
+    expect(body).toContain("whyReportFor(agent.db, agent.runId, sessionTotalUsd())");
     expect(body).toContain("observerWhySection(agent.db, agent.runId)");
+  });
+});
+
+// LB-21: the recovery ladder re-issues super.prompt(runContent) on every rung, so rung >= 1
+// emits another message_start(user) with the SAME task text — pre-fix the retry duplicated
+// the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
+// pendingEcho dedupe (which only covers the optimistic first echo).
+describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
+    const idx = src.indexOf('case "message_start":');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 700);
+    expect(body).toContain("ladder_reprompt");
+    expect(body.indexOf("ladder_reprompt")).toBeLessThan(body.indexOf("pendingEchoRef"));
   });
 });
 
@@ -569,14 +589,17 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   test("Enter on the permission overlay ACCEPTS (Yes once) — it can never cancel", () => {
     // 2026-07-21: an approved-then-gate-blocked todowrite read as "Enter cancelled it".
     // Pin the actual mapping: return sits in the ALLOW branch (escape in deny), and the
-    // overlay is the only Enter consumer while it is up — the composer unmounts entirely.
+    // overlay is the only Enter consumer while it is up — the composer stays MOUNTED but
+    // SUSPENDED (LB-20), and a suspended TextInput consumes nothing.
     const idx = src.indexOf('if (input === "y" || input === "Y" || key.return) {');
     expect(idx).toBeGreaterThan(-1);
     const handler = src.slice(idx, idx + 300);
     const allowAt = handler.indexOf('prompt.resolve("allow");');
     expect(allowAt).toBeGreaterThan(-1);
     expect(allowAt).toBeLessThan(handler.indexOf('prompt.resolve("deny");'));
-    expect(src).toContain("permPrompt || questionPrompt ? null : (");
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
   });
 
   test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {
@@ -585,6 +608,28 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
     expect(messages).toContain("isGateBlockReason(msg.text)");
     expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
+  });
+
+  test("guard denials and harness steers are tagged at ingestion and render dim, never red (R3b)", () => {
+    // app.tsx tags at the event seam (full text still reaches the model — only the
+    // transcript projection compacts); MessageRow's calm branches return BEFORE the red
+    // isError path, so a guard deny structurally cannot render red.
+    expect(src).toContain("isGuardDenyReason");
+    expect(src).toContain("isHarnessSteerText");
+    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    const deny = messages.indexOf('msg.guardKind === "deny"');
+    expect(deny).toBeGreaterThan(-1);
+    expect(deny).toBeLessThan(messages.indexOf('msg.isError ? "red"'));
+    const denyBranch = messages.slice(deny, deny + 400);
+    expect(denyBranch).toContain("dimColor");
+    expect(denyBranch).toContain("guardDenyLine");
+    expect(denyBranch).not.toContain('"red"');
+    const harness = messages.indexOf('msg.guardKind === "harness"');
+    expect(harness).toBeGreaterThan(-1);
+    expect(harness).toBeLessThan(messages.indexOf('"▸ you"'));
+    const harnessBranch = messages.slice(harness, harness + 400);
+    expect(harnessBranch).toContain("dimColor");
+    expect(harnessBranch).toContain("harnessNoiseLine");
   });
 
   test("one shared ON notice: definition + auto-heal (dedupe + push) + /plan", () => {
@@ -605,6 +650,27 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     const guard = branch.indexOf("planSessionRef.current");
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+  });
+
+  test("/plan start with no live session supersedes the stale ACTIVE plan of record (R5a)", () => {
+    // Post-finalize exitPlanMode nulls planSessionRef, so a second /plan start bypasses the
+    // live-session guard — it must supersede the old ACTIVE plan explicitly (status flip,
+    // never DELETE) before entering the fresh session, or the next todowrite franken-merges
+    // the divergent goal's steps into the old row.
+    const idx = src.indexOf('if (sub === "start")');
+    expect(idx).toBeGreaterThan(-1);
+    const branch = src.slice(idx, idx + 1200);
+    const supersede = branch.indexOf("supersedePriorPlanOnStart()");
+    expect(supersede).toBeGreaterThan(-1);
+    expect(supersede).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+    expect(branch).toContain("superseded — planning fresh");
+    // The helper reads the ACTIVE plan only (a completed plan needs no supersede) and flips
+    // status via supersedeActivePlans — never a DELETE, never 'cancelled'.
+    const helper = src.indexOf("const supersedePriorPlanOnStart");
+    expect(helper).toBeGreaterThan(-1);
+    const body = src.slice(helper, helper + 900);
+    expect(body).toContain("getActivePlan");
+    expect(body).toContain("supersedeActivePlans");
   });
 
   test("enterPlanMode seeds the planner prompt with the goal snapshot (MUB-180)", () => {
@@ -695,11 +761,13 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   test("the loop's message_start(user) is deduped, not double-posted", () => {
     const idx = src.indexOf('case "message_start":');
     expect(idx).toBeGreaterThan(-1);
-    const handler = src.slice(idx, idx + 500);
+    const handler = src.slice(idx, idx + 800);
     expect(handler).toContain("if (pendingEchoRef.current) {");
     expect(handler).toContain("pendingEchoRef.current = false;");
-    // The event echo survives for non-optimistic user messages (finalize handoff, replays).
-    expect(handler).toContain('{ role: "user", text: ev.message!.textContent }');
+    // The event echo survives for non-optimistic user messages (finalize handoff, replays);
+    // R3b only TAGS harness steers on the same echo object — it never swallows one.
+    expect(handler).toContain('{ role: "user", text: utext }');
+    expect(handler).toContain("setMessages((m) => [...m, echo]);");
   });
 
   test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {

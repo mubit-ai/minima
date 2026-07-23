@@ -44,14 +44,12 @@ describe("mode bundles (B2)", () => {
 });
 
 describe("mode store (B2)", () => {
-  test("defaults to build; cycleMode walks the ring (bypass leg iff latched)", async () => {
-    // enableBypass() is a one-way module-global latch and bun shares one process
-    // across test files — whether the bypass leg exists here depends on file order.
-    const { isBypassEnabled } = await import("../src/agent/modes.ts");
+  test("defaults to build; cycleMode walks build → acceptEdits → plan → bypass → build", () => {
+    // MUB-177 R2 (user decision): bypass is a permanent ring member — no latch.
     expect(getMode()).toBe("build");
     expect(cycleMode()).toBe("acceptEdits");
     expect(cycleMode()).toBe("plan");
-    if (isBypassEnabled()) expect(cycleMode()).toBe("bypass");
+    expect(cycleMode()).toBe("bypass");
     expect(cycleMode()).toBe("build");
   });
 
@@ -118,18 +116,17 @@ describe("mode bundles + ring (Claude Code-style modes)", () => {
     expect(bfm("bypass")).toBe(BYPASS_BUNDLE);
   });
 
-  test("bypass joins the Shift+Tab ring only after enableBypass()", async () => {
-    const { enableBypass, isBypassEnabled } = await import("../src/agent/modes.ts");
-    // NOTE: enableBypass is one-way and module-global; this test runs it last-ish by
-    // asserting the pre-state first (beforeEach resets mode, not the bypass latch).
-    if (!isBypassEnabled()) {
-      setMode("plan");
-      expect(cycleMode()).toBe("build"); // plan wraps to build while bypass is off
-      enableBypass();
-    }
+  test("bypass reachable via Shift+Tab with NO prior /mode bypass and NO relaunch", () => {
+    // MUB-177 R2: no enableBypass() latch exists — plan cycles straight into bypass.
     setMode("plan");
-    expect(cycleMode()).toBe("bypass"); // plan → bypass once enabled
+    expect(cycleMode()).toBe("bypass");
     expect(cycleMode()).toBe("build"); // bypass wraps to build
+  });
+
+  test("fresh boot still lands in build (bypass never the default mode)", async () => {
+    setMode("bypass"); // dirty the shared store first — the fresh copy must not see it
+    const fresh = await import("../src/agent/modes.ts?fresh-boot=1");
+    expect(fresh.getMode()).toBe("build");
   });
 
   test("every mode has a badge slot entry (null allowed only for build)", async () => {
@@ -196,12 +193,10 @@ describe("mode_prefs persistence", () => {
 });
 
 describe("MUB-177 — /mode bypass ring membership (regression)", () => {
-  // The /mode bypass handler runs enableBypass() then setMode("bypass") (app.tsx). This
-  // replays that exact sequence at the module-store level: the manual-test report of
-  // bypass missing from the ring does not reproduce here.
-  test("/mode bypass sequence: the ring includes bypass exactly once and in order", async () => {
-    const { enableBypass } = await import("../src/agent/modes.ts");
-    enableBypass();
+  // The /mode bypass handler runs setMode("bypass") (app.tsx); bypass is a permanent ring
+  // member (R2 user decision — no latch), so a full lap from bypass must include it
+  // exactly once and in order.
+  test("/mode bypass sequence: the ring includes bypass exactly once and in order", () => {
     setMode("bypass");
     expect(getMode()).toBe("bypass");
     const lap = [cycleMode(), cycleMode(), cycleMode(), cycleMode()];

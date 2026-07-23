@@ -23,7 +23,6 @@ import {
   MODE_BADGES,
   bundleForMode,
   cycleMode,
-  enableBypass,
   getMode,
   setMode,
   subscribeMode,
@@ -78,6 +77,7 @@ import {
   taskTypeScoreboard,
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { isHarnessSteerText } from "../minima/stop_gate.ts";
 import { whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
@@ -94,6 +94,7 @@ import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
+import { VERSION } from "../version.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
@@ -107,7 +108,6 @@ import { footerStatsFromMessages } from "./footer.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
-  bannerRowCount,
   childTreeHeight,
   computeMsgHeight,
   markdownBodyHeight,
@@ -124,13 +124,7 @@ import {
   tailToFit,
   wrappedLineCount,
 } from "./layout.ts";
-import {
-  BannerBlock,
-  type ChatMessage,
-  MessageRow,
-  StreamingReply,
-  StreamingThoughts,
-} from "./messages.tsx";
+import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
@@ -148,6 +142,7 @@ import {
   createPermissionState,
   finalizeAutoAcceptLanding,
   formatActionLabel,
+  isGuardDenyReason,
   makeModeGatedBeforeToolCall,
   modeAutoApproves,
   planModeBlockReason,
@@ -171,6 +166,7 @@ import {
   releaseOnPrompt,
   takeNext,
 } from "./prompt_queue.ts";
+import { QueueList, queueListRowCount } from "./queue_list.tsx";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
 import {
@@ -303,6 +299,7 @@ const COMMANDS = [
   { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
   { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
   { name: "help", desc: "Show available commands list" },
+  { name: "version", desc: "Show the Minima harness version" },
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
@@ -475,8 +472,14 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
  * Approval overlay for a gated tool call. Its height math lives in permOverlayHeight() in
  * layout.ts — component and reservation consume the same permToolLabel/permPreviewLines/
  * permHiddenMarker helpers, so the estimate can never drift from the render.
+ * `minimal` (LB-20): the too-small notice renders a one-line form so the SAME useInput stays
+ * mounted — an armed prompt must stay answerable at any terminal size.
  */
-export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; cols: number }) {
+export function PermissionOverlay({
+  prompt,
+  cols,
+  minimal = false,
+}: { prompt: PermissionPrompt; cols: number; minimal?: boolean }) {
   const isReadTool = prompt.toolName === "read" || prompt.toolName === "ls";
 
   useInput((input, key) => {
@@ -488,6 +491,14 @@ export function PermissionOverlay({ prompt, cols }: { prompt: PermissionPrompt; 
       prompt.resolve("deny");
     }
   });
+
+  if (minimal) {
+    return (
+      <Text color="yellow" wrap="truncate">
+        {permToolLabel(prompt.toolName)} {prompt.argsSummary || prompt.promptText} · [y/a/n]
+      </Text>
+    );
+  }
 
   return (
     <Box
@@ -1054,6 +1065,22 @@ export function HarnessApp({
     },
     [agent],
   );
+  // R5a: /plan start with NO live session (post-finalize, planSessionRef already nulled) must
+  // not leave a stale ACTIVE plan of record behind — the next todowrite would franken-merge the
+  // divergent goal's steps into the old row. Supersede it explicitly (status flip via
+  // supersedeActivePlans, never DELETE) and return the old title for the notice. A completed
+  // plan needs no supersede — null. Fail-open: a ledger error never blocks /plan start.
+  const supersedePriorPlanOnStart = useCallback((): string | null => {
+    try {
+      if (!agent.db || !agent.runId) return null;
+      const active = agent.db.getActivePlan(agent.runId);
+      if (!active) return null;
+      agent.db.supersedeActivePlans(agent.runId);
+      return active.title?.trim() || "untitled";
+    } catch {
+      return null;
+    }
+  }, [agent]);
   const exitPlanMode = useCallback(() => {
     setMode("build");
     planSessionRef.current = null;
@@ -1356,15 +1383,12 @@ export function HarnessApp({
   const liveHeightRef = useRef(0);
   const committedLenRef = useRef(0);
   const anchorGenRef = useRef<{ gen: number; rows: number; cols: number } | null>(null);
-  // The transcript generation whose LIVE banner has rendered — only that generation commits
-  // the banner into <Static> with its first message (MUB-167). /new and resume bump the gen
-  // with messages already present, so their transcripts never gain a banner row.
+  // The transcript generation that OWNS the banner — a generation that STARTS with an empty
+  // transcript (boot, /clear) commits the banner into <Static> at its reset frame, so it
+  // prints at the TOP of the fresh screen (R1; MUB-167's commit moved from first-message to
+  // gen-start). /new and resume bump the gen with messages already present, so their
+  // transcripts never gain a banner row. Latched during render at the gen-start frame.
   const bannerGenRef = useRef<number | null>(null);
-  // MUB-169: set by reseatFreshScreen (/clear, /new) after it physically clears the screen
-  // and re-writes the bottom-mount reserve; the next ledger reset cap-seeds instead of
-  // seeding 0, so the fresh frame outruns ANY previous frame height and the reserve write
-  // re-anchors it at the terminal bottom. Consumed (cleared) by the ledger effect.
-  const reseatPendingRef = useRef(false);
   // D3a task panel (MP5): gen bumps on tool_execution_end (todowrite mutates `todos` in
   // place); hidden = the per-project explicit override (Ctrl+B / /tasks), persisted.
   const [todoGen, setTodoGen] = useState(0);
@@ -1537,11 +1561,18 @@ export function HarnessApp({
       switch (ev.type) {
         case "message_start":
           if (ev.message?.role === "user") {
+            // LB-21: a recovery-ladder rung >= 1 re-issues the SAME task — the flagged
+            // re-prompt must never re-echo (the original already printed at submit).
+            if (ev.message.ladder_reprompt) break;
             if (pendingEchoRef.current) {
               pendingEchoRef.current = false;
               break;
             }
-            setMessages((m) => [...m, { role: "user", text: ev.message!.textContent }]);
+            // R3b: harness steers render as a dim line (guardKind); the model saw the full text.
+            const utext = ev.message!.textContent;
+            const echo: ChatMessage = { role: "user", text: utext };
+            if (isHarnessSteerText(utext)) echo.guardKind = "harness";
+            setMessages((m) => [...m, echo]);
           }
           break;
         case "message_update": {
@@ -1637,6 +1668,9 @@ export function HarnessApp({
               setMessages((m) => [...m, { role: "assistant", text }]);
             }
           } else if (ev.message?.role === "toolResult") {
+            // R3b: guard/mode denials (stable prefixes owned by permissions.ts) are the
+            // harness working as designed — tag them so the renderer's calm dim branch,
+            // never the red error path, picks them up. Wire content is untouched.
             setMessages((m) => [
               ...m,
               {
@@ -1644,6 +1678,9 @@ export function HarnessApp({
                 text: ev.message!.textContent,
                 toolName: ev.message!.tool_name,
                 isError: ev.message!.is_error,
+                ...(ev.message!.is_error && isGuardDenyReason(ev.message!.textContent)
+                  ? { guardKind: "deny" as const }
+                  : {}),
               },
             ]);
           }
@@ -1750,6 +1787,13 @@ export function HarnessApp({
       },
     ]);
   };
+  // R8: the footer's session $ — meter-only figures (actual + judge/finalize overhead + tool
+  // fees) live on the in-memory CostMeter, never in the DB, so the overview and /why are
+  // handed the number at build time.
+  const sessionTotalUsd = () => {
+    const t = agent.meter?.totals();
+    return t ? t.actualCostUsd + t.overheadUsd + t.toolFeesUsd : 0;
+  };
   // Ctrl+G: plan verification off → one-line notice (the flag-off contract); on → one-shot overview block.
   const requestPlanOverview = () => {
     // MP16: a live plan session's cannot-render fallback is a terse draft summary —
@@ -1770,7 +1814,8 @@ export function HarnessApp({
       ]);
       return;
     }
-    const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+    const overview =
+      agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd()) : null;
     setMessages((m) => [
       ...m,
       { role: "tool", text: renderPlanOverviewText(overview, cols - 6), toolName: "bp" },
@@ -1802,13 +1847,18 @@ export function HarnessApp({
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
       const next = cycleMode();
-      // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
-      // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
+      // A pending permission prompt re-evaluates under the new mode: accept-edits
+      // auto-approves the waiting call (one-time allow — no "always" grant recorded, with
       // the same mode-auto guard event the hook's no-prompt path emits); a mode that
       // still asks leaves the prompt up. accept-edits auto is cwd-scoped, so the pending
       // call's raw args ride along for the same target-path check the dispatcher applies.
+      // Landing on bypass by RING TRANSIT is excluded: bypass auto-approves only calls
+      // made while it is already the standing mode — a prompt armed under a stricter
+      // mode keeps waiting for an explicit answer, so cycling the ring can never fire a
+      // held call as a side effect.
       if (
         permPrompt &&
+        next !== "bypass" &&
         modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary, {
           args: permPrompt.args ?? null,
           cwd: permStateRef.current.cwd,
@@ -1914,7 +1964,10 @@ export function HarnessApp({
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+        const overview =
+          agent.db && agent.runId
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
+            : null;
         if (overview) {
           setPanel(
             planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),
@@ -1958,7 +2011,7 @@ export function HarnessApp({
         if (input === "v") {
           let report: string;
           try {
-            report = whyReportFor(bigPlanDb, agent.runId);
+            report = whyReportFor(bigPlanDb, agent.runId, sessionTotalUsd());
           } catch (exc) {
             report = `⚠ /why unavailable: ${errText(exc)}`;
           }
@@ -2296,13 +2349,12 @@ export function HarnessApp({
 
   // MUB-169: a transcriptGen bump alone remounts <Static> but leaves the old transcript in
   // the terminal's scrollback, and the fresh banner repaints over whatever rows the previous
-  // frame occupied. Replay the boot physics instead (main.ts): margin reset + full clear
-  // (2J screen + 3J scrollback) + home, then the rows-1 bottom-mount reserve — and arm the
-  // ledger's cap-seed so the next frame re-anchors at the bottom for ANY prior frame height.
+  // frame occupied. Replay the boot physics instead (main.ts, R1 top-anchor): margin reset +
+  // full clear (2J screen + 3J scrollback) + home — the fresh generation then reprints from
+  // the TOP (banner into <Static>, booked against the ledger's cap-seeded remount frame), so
+  // the banner holds row 1 and the composer re-seats at the bottom of the frame.
   function reseatFreshScreen() {
-    reseatPendingRef.current = true;
     process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
-    process.stdout.write("\n".repeat(Math.max(0, rows - 1)));
   }
 
   async function handleCommand(name: string, args: string) {
@@ -2999,7 +3051,7 @@ export function HarnessApp({
             setMode(next ? "plan" : "build");
             pushPlan(
               next
-                ? "Plan mode ON — write/edit/bash/apply_patch ask first. Shift+Tab or /plan to exit."
+                ? "Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; Shift+Tab cycles on to bypass."
                 : "Build mode — standard permissions.",
             );
           } else {
@@ -3043,9 +3095,14 @@ export function HarnessApp({
             }
             break;
           }
+          const prior = supersedePriorPlanOnStart();
           enterPlanMode(rest);
           pushPlan(
-            rest ? `Plan mode ON — goal: ${rest}` : "Plan mode ON — describe the goal to begin.",
+            prior
+              ? `previous plan '${prior}' superseded — planning fresh${rest ? `: ${rest}` : ""}`
+              : rest
+                ? `Plan mode ON — goal: ${rest}`
+                : "Plan mode ON — describe the goal to begin.",
           );
           break;
         }
@@ -3125,7 +3182,6 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (want === "bypass") enableBypass(); // explicit consent: joins the ring for this session
         setMode(want);
         setMessages((m) => [
           ...m,
@@ -3134,7 +3190,7 @@ export function HarnessApp({
             role: "tool",
             text:
               want === "bypass"
-                ? "⚠ BYPASS mode — every tool call runs without prompting for the rest of this session's bypass mode. Shift+Tab now includes it in the cycle; it is never persisted."
+                ? "⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the Shift+Tab cycle; it is never persisted."
                 : want === "acceptEdits"
                   ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
                   : want === "plan"
@@ -3156,6 +3212,17 @@ export function HarnessApp({
             role: "tool",
             text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
+          },
+        ]);
+        break;
+      case "version":
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: `minima ${VERSION}${agent.config.experimental ? " · experimental features on" : ""}`,
+            toolName: "version",
           },
         ]);
         break;
@@ -3721,7 +3788,7 @@ export function HarnessApp({
         // only path headless runs ever had (no slash commands there).
         const overview =
           agent.config.bigPlan === true && agent.db && agent.runId
-            ? buildPlanOverview(agent.db, agent.runId)
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
             : null;
         // PR-E: the observer's projection — verdict count + last 3, muted (dim tool
         // output), only when the flag is on and verdicts exist.
@@ -3772,7 +3839,7 @@ export function HarnessApp({
               ? `No step ${n} — the plan has ${overview.steps.length} step(s).`
               : stepCardLines(row, overview.gatesByStep.get(row.stepId) ?? []).join("\n");
         } else {
-          text = whyReportFor(agent.db, agent.runId);
+          text = whyReportFor(agent.db, agent.runId, sessionTotalUsd());
         }
         if (obsSection) text = `${text}\n\n${obsSection}`;
         setMessages((m) => [
@@ -4368,10 +4435,12 @@ export function HarnessApp({
   const suggestionsHeight =
     matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
-  // The prompt/plan input box only renders when no overlay/picker/permission prompt owns the
-  // bottom region (see the render tree). Plan mode adds its banner (+3). A long typed prompt wraps
-  // inside the box, so grow the reserve by the extra wrapped lines.
-  const inputHidden = overlayOpen || permPrompt || questionPrompt;
+  // The prompt/plan input box only hides for the pickers/overlays that replace it in the
+  // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
+  // unmounting zeroed its booked rows AND dropped the draft's keyboard home, and the prompt
+  // box vanishing under an overlay read as a lost composer. Plan mode adds its banner (+3).
+  // A long typed prompt wraps inside the box, so grow the reserve by the extra wrapped lines.
+  const inputHidden = overlayOpen;
   // The trailing "▋" accounts for the cursor cell: a draft line exactly at the interior
   // width wraps the cursor onto a fresh row, which the reserve must include.
   const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
@@ -4465,7 +4534,10 @@ export function HarnessApp({
           setPanel(draftPanelState(draftStore, Math.max(20, cols - 6)));
           return;
         }
-        const overview = agent.db && agent.runId ? buildPlanOverview(agent.db, agent.runId) : null;
+        const overview =
+          agent.db && agent.runId
+            ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
+            : null;
         if (overview) {
           setPanel(
             planOverviewPanelState(overview, planOverviewRows(overview, Math.max(20, cols - 6))),
@@ -4536,19 +4608,32 @@ export function HarnessApp({
   const busyIndicatorVisible =
     busy && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
   const busyIndicatorHeight = busyIndicatorVisible ? 2 : 0;
-  // The question overlay owns the bottom region when no permission prompt does (matching the
-  // render gate below). Its rows must be reserved like permPrompt's — AND its model-supplied
-  // content must be made to fit: the question text is clamped (questionDisplayText) and the
-  // option list is windowed to the rows actually left after the safety margin, footer,
-  // suggestions, and the overlay's own chrome (border 2 + question + 2 window markers + hint).
-  // Component and reservation use the same numbers, so estimate == render.
+  // The visual prompt queue (QueueList) stacks dim single-height rows directly above the
+  // prompt box whenever items wait. Same suppression gate as the busy indicator (an overlay
+  // or the panel owns the bottom region), and its exact row count is booked below in
+  // contentRows/streamReserved/treeMaxRows — an unbooked row would top-clip the composer.
+  const queueListVisible =
+    promptQueue.items.length > 0 && !overlayOpen && !permPrompt && !questionPrompt && !panelVisible;
+  const queueListHeight = queueListVisible ? queueListRowCount(promptQueue) : 0;
+  // The question overlay renders when no permission prompt does (matching the render gate
+  // below). Its rows must be reserved like permPrompt's — AND its model-supplied content
+  // must be made to fit: the question text is clamped (questionDisplayText) and the option
+  // list is windowed to the rows actually left after the safety margin, footer, suggestions,
+  // the still-mounted composer (LB-20), and the overlay's own chrome (border 2 + question +
+  // 2 window markers + hint). Component and reservation use the same numbers, so
+  // estimate == render.
   const questionChrome = questionPrompt
     ? 5 +
       wrappedLineCount(questionDisplayText(questionPrompt.question, cols), Math.max(1, cols - 4))
     : 0;
   const questionMaxOptionRows = Math.max(
     1,
-    rows - SCROLLBACK_SAFETY_ROWS - footerHeight - suggestionsHeight - questionChrome,
+    rows -
+      SCROLLBACK_SAFETY_ROWS -
+      footerHeight -
+      suggestionsHeight -
+      inputBoxHeight -
+      questionChrome,
   );
   const questionPromptHeight =
     questionPrompt && !permPrompt
@@ -4569,6 +4654,7 @@ export function HarnessApp({
       permPromptHeight -
       questionPromptHeight -
       busyIndicatorHeight -
+      queueListHeight -
       TREE_CHROME,
   );
   const treeVisible = treeOpen && treeMaxRows > 0 && !panelVisible;
@@ -4583,6 +4669,7 @@ export function HarnessApp({
     questionPromptHeight +
     treeHeight +
     busyIndicatorHeight +
+    queueListHeight +
     streamingThoughtsHeight +
     2; // "◆ assistant" header + marginTop
   const streamTail = streaming
@@ -4597,14 +4684,18 @@ export function HarnessApp({
     if (panel && !panelVisible) closePanelReseat();
   });
 
-  // Bottom-mount the prompt section (THE RULE, 2026-07-16; anchor ledger 2026-07-20): the
-  // startup newline reserve in main.ts seats the FIRST paint at the terminal bottom, and the
-  // ledger keeps every later frame there by giving the live frame an EXPLICIT height that
-  // never shrinks faster than the rows committed to <Static> above it (floor) and never
-  // reaches the terminal height (cap) — nextLiveFrameHeight in layout.ts states the
-  // invariant and the telescoping argument. Estimate errors degrade to transient padding
-  // (over-count) or a top-clip under overflow="hidden" (under-count) — never a stranded
-  // composer, never Ink's scrollback-wiping clearTerminal. Enforced by tui-verify's
+  // Top-anchored transcript, bottom-seated composer (R1 2026-07-22; anchor ledger
+  // 2026-07-20): boot clears to HOME and every ledger reset seeds the CAP, so <Static>
+  // prints from the TOP (banner first, echo directly under it) while the full-height
+  // flex-end live frame owns the middle gap with the composer at its bottom. The ledger
+  // keeps it there by giving the live frame an EXPLICIT height that never shrinks faster
+  // than the rows committed to <Static> above it (floor) and never reaches the terminal
+  // height (cap) — nextLiveFrameHeight in layout.ts states the invariant and the
+  // telescoping argument. The floor decay does the rest: each commit shrinks the frame
+  // from the top, the transcript fills downward, and once it exceeds the screen native
+  // scrolling takes over. Estimate errors degrade to transient padding (over-count) or a
+  // top-clip under overflow="hidden" (under-count) — never a stranded composer, never
+  // Ink's scrollback-wiping clearTerminal. Enforced by tui-verify's first-prompt +
   // bottom-anchor checks and tests/anchor-ledger.test.ts.
   //
   // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1): the estimate-decay flex-end minHeight — inert once
@@ -4628,14 +4719,16 @@ export function HarnessApp({
   // THIS render — every conditional footer element must be booked here (an uncounted element
   // top-clips under the explicit height). While the panel renders, the frame is the MP4
   // identity: panelOuter + PANEL_STATUS_ROWS + inputBoxHeight ≡ rows − SCROLLBACK_SAFETY_ROWS.
-  const bannerShown = messages.length === 0 && matchingCommands.length === 0 && !overlayOpen;
   const bannerTip = tipsEnabled && startupTip ? startupTip : null;
-  const bannerRows = bannerShown ? bannerRowCount(bannerTip, cols) : 0;
-  // MUB-167: once this generation's transcript starts, the live banner COMMITS into <Static>
-  // ahead of the first message — the first flush then prints the banner + echo where the
-  // banner stood, instead of leaving its vanished rows as dead live-frame padding with the
-  // echo stranded at the old banner top, mid-screen.
-  const bannerCommitted = messages.length > 0 && bannerGenRef.current === transcriptGen;
+  // R1: a generation that STARTS empty owns the banner — it commits into <Static> at the
+  // reset frame itself, so the banner prints at the TOP of the fresh screen and the first
+  // echo lands directly under it (MUB-167's commit moved from first-message to gen-start).
+  // Latched during render: the gen-start frame must already carry the banner in its
+  // staticItems, and the latch is idempotent for the rest of the generation.
+  const anchorPrev = anchorGenRef.current;
+  const anchorGenStart = anchorPrev === null || anchorPrev.gen !== transcriptGen;
+  if (anchorGenStart && messages.length === 0) bannerGenRef.current = transcriptGen;
+  const bannerCommitted = bannerGenRef.current === transcriptGen;
   const bannerItem = useMemo<ChatMessage>(
     () => ({ role: "banner", text: bannerTip ?? "" }),
     [bannerTip],
@@ -4657,10 +4750,10 @@ export function HarnessApp({
   const contentRows =
     panelVisible && panelTop
       ? Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
-      : bannerRows +
-        streamingThoughtsHeight +
+      : streamingThoughtsHeight +
         streamTailRows +
         busyIndicatorHeight +
+        queueListHeight +
         suggestionsHeight +
         inputBoxHeight +
         permPromptHeight +
@@ -4668,42 +4761,32 @@ export function HarnessApp({
         treeHeight +
         footerHeight +
         pickerRows;
-  // Ledger resets: a <Static> remount (startup, rewind, resume) reprints the transcript
-  // and seats itself → content-sized frame. A resize seeds one full-height frame instead:
-  // it writes past the last row and re-anchors — including after Ink's one unavoidable
-  // old-tree-vs-new-rows resize wipe (within SCROLLBACK_SAFETY_ROWS at worst until the
-  // next commit scrolls it home). The /clear//new reseat (MUB-169) also cap-seeds: it has
-  // just cleared the screen and re-written the reserve, and the full-height frame outruns
-  // any previous frame height so the reserve write re-pins the bottom. The mount
-  // deliberately does NOT cap-seed: a full-height first frame parks the early transcript
-  // at the screen TOP, 40+ rows from the composer, for several turns (tried 2026-07-20,
-  // PNG-refuted). Boot seating is the reserve's job, made trustworthy by the CSI r margin
-  // reset in main.ts — the live failure mode was a stale DECSTBM region eating the
-  // reserve, not the reserve itself.
-  const anchorPrev = anchorGenRef.current;
-  const anchorRemounted =
-    anchorPrev === null ||
-    anchorPrev.gen !== transcriptGen ||
-    messages.length < committedLenRef.current;
+  // Ledger resets (R1): EVERY reset — mount, remount (rewind, resume, /clear, /new), resize
+  // — seeds one full-height frame. On a gen-start with a banner (boot, /clear) the banner
+  // prints into <Static> with the same flush and its rows are booked as this frame's
+  // commit: banner + frame = rows − SCROLLBACK_SAFETY_ROWS, so nothing scrolls, the banner
+  // holds the top, and the composer seats at the frame's flex-end bottom. Resets that
+  // reprint an existing transcript (resume, rewind) book nothing — the cap frame writes
+  // past the last row and the terminal scroll re-anchors the composer at the bottom (the
+  // same physics the resize reseat has always used, including after Ink's one unavoidable
+  // old-tree-vs-new-rows resize wipe).
+  const anchorRemounted = anchorGenStart || messages.length < committedLenRef.current;
   const anchorResized =
     anchorPrev !== null && (anchorPrev.rows !== rows || anchorPrev.cols !== cols);
   const anchorReset = anchorRemounted || anchorResized;
   let committedRows = 0;
-  if (!anchorReset) {
-    if (bannerCommitted && committedLenRef.current === 0) {
-      committedRows += computeMsgHeight(bannerItem, cols);
+  if (anchorReset) {
+    if (anchorGenStart && bannerCommitted) {
+      committedRows = computeMsgHeight(bannerItem, cols);
     }
+  } else {
     for (let i = committedLenRef.current; i < messages.length; i++) {
       const m = messages[i];
       if (m) committedRows += computeMsgHeight(m, cols);
     }
   }
   const liveHeight = nextLiveFrameHeight(
-    anchorReset
-      ? anchorRemounted && !reseatPendingRef.current
-        ? 0
-        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)
-      : liveHeightRef.current,
+    anchorReset ? Math.max(1, rows - SCROLLBACK_SAFETY_ROWS) : liveHeightRef.current,
     committedRows,
     contentRows,
     rows,
@@ -4712,8 +4795,6 @@ export function HarnessApp({
     liveHeightRef.current = liveHeight;
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
-    if (bannerShown) bannerGenRef.current = transcriptGen;
-    if (anchorReset) reseatPendingRef.current = false;
     if (ANCHOR_DEBUG) {
       try {
         appendFileSync(
@@ -4742,7 +4823,10 @@ export function HarnessApp({
   });
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
-  // show a single resize notice instead of a clipped, garbled UI.
+  // show a single resize notice instead of a clipped, garbled UI. An armed permission prompt
+  // must stay ANSWERABLE here (LB-20): unmounting PermissionOverlay strips its useInput and
+  // wedges the run until a blind resize, so the notice carries a one-line minimal overlay
+  // whose key handling is the same hook.
   if (rows < 10 || cols < 40) {
     return (
       <Box
@@ -4757,19 +4841,30 @@ export function HarnessApp({
           Terminal too small
         </Text>
         <Text color="gray">{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
+        {permPrompt && (
+          <PermissionOverlay
+            prompt={{
+              ...permPrompt,
+              resolve: (decision) => {
+                setPermPrompt(null);
+                permPrompt.resolve(decision);
+              },
+            }}
+            cols={cols}
+            minimal
+          />
+        )}
       </Box>
     );
   }
 
-  const bannerBlock = bannerShown ? <BannerBlock tip={bannerTip} /> : null;
-
-  // The chat region — the live rows ABOVE the footer. The <Static> transcript mounts at the
-  // ROOT (never under the flex-end box below: <Static> is position-absolute, and a flex-end
-  // ancestor offsets it past its own render canvas — the static output silently clips to
-  // nothing and committed messages vanish).
+  // The chat region — the live rows ABOVE the footer. The banner is NOT here: it commits
+  // into <Static> at gen-start (R1), printing once at the top of the fresh screen. The
+  // <Static> transcript mounts at the ROOT (never under the flex-end box below: <Static> is
+  // position-absolute, and a flex-end ancestor offsets it past its own render canvas — the
+  // static output silently clips to nothing and committed messages vanish).
   const chatRegion = (
     <>
-      {bannerBlock}
       {/* Live region: reasoning peek + streaming reply, tail-bounded so the re-diffed region
             never reaches `rows` (which would make Ink clearTerminal and wipe scrollback). */}
       {busy && streamingThoughts && showThinkingRef.current ? (
@@ -4846,12 +4941,14 @@ export function HarnessApp({
         />
       ) : configOverlayOpen ? (
         <ConfigOverlay onDismiss={() => setConfigOverlayOpen(false)} />
-      ) : permPrompt || questionPrompt ? null : ( // permission/question prompt owns the bottom region (rendered below)
+      ) : (
+        // The composer stays MOUNTED under a permission/question prompt (LB-20) — suspended
+        // so the overlay below owns the keys, its rows still booked (inputBoxHeight).
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold wrap="truncate">
-                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
+                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab cycles (next: bypass) "}
               </Text>
             </Box>
           )}
@@ -4888,6 +4985,7 @@ export function HarnessApp({
               )}
             </Box>
           )}
+          {queueListVisible && <QueueList queue={promptQueue} />}
           <Box
             borderStyle="round"
             borderColor={planMode ? "magenta" : "yellow"}
@@ -4914,7 +5012,7 @@ export function HarnessApp({
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
               disabled={gateFocus !== null && !gateFocus.noteEntry}
-              suspended={panelCapture}
+              suspended={panelCapture || permPrompt !== null || questionPrompt !== null}
               disabledLabel={
                 gateFocus && !busy
                   ? "🔴 [a]ccept · [r]eject · [s]teer · [v]iew · esc to type"

@@ -3,6 +3,7 @@ import { AgentState } from "../src/agent/state.ts";
 import { AssistantMessage, text } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { DoomLoopRing, makeAntiSpiral, toolCallFailed } from "../src/minima/anti_spiral.ts";
+import { isHarnessSteerText } from "../src/minima/stop_gate.ts";
 
 const turn = () => new AssistantMessage({ content: [text("...")] });
 
@@ -173,6 +174,27 @@ describe("makeAntiSpiral", () => {
     const stops = db.getGates(plan.id).filter((g) => g.kind === "stop");
     expect(stops).toHaveLength(1);
     expect(JSON.parse(stops[0]!.factors_json ?? "{}")).toMatchObject({ reason: "step_cap" });
+  });
+
+  test("both real steer texts match the R3b dim-line predicate (producer lockstep)", async () => {
+    // The transcript's harness-noise predicate keys on stable prefixes owned here; feed it
+    // the ACTUAL doom-loop nudge and step-cap wrap so a copy edit can't silently unlink them.
+    const ring = new DoomLoopRing();
+    ring.push("bash", { cmd: "x" }, true);
+    ring.push("bash", { cmd: "x" }, true);
+    ring.push("bash", { cmd: "x" }, true);
+    const doomGate = makeAntiSpiral(deps(ring, { repeats: 3 }));
+    const doomState = new AgentState();
+    expect(await doomGate(turn(), [], doomState)).toBe("handled");
+    expect(isHarnessSteerText((doomState.steering[0]!.content[0] as { text: string }).text)).toBe(
+      true,
+    );
+    const capGate = makeAntiSpiral(deps(new DoomLoopRing(), { repeats: 0, stepCap: 1 }));
+    const capState = new AgentState();
+    expect(await capGate(turn(), [], capState)).toBe("handled");
+    expect(isHarnessSteerText((capState.steering[0]!.content[0] as { text: string }).text)).toBe(
+      true,
+    );
   });
 
   test("step cap takes precedence over a concurrent doom loop", async () => {

@@ -10,6 +10,7 @@ import {
   editTargetsWithinCwd,
   formatActionLabel,
   formatToolArgs,
+  isGuardDenyReason,
   planModeBlockReason,
   planModeBlockedTools,
 } from "../src/tui/permissions.ts";
@@ -742,17 +743,16 @@ describe("MUB-179 — finalizeAutoAcceptLanding ('Finalize & auto-accept edits')
     expect(res?.block).toBe(true);
   });
 
-  test("bypass becomes ring-reachable, but the mode is NOT switched", async () => {
+  test("the landing only seeds allowedDirs — the mode is NOT switched", async () => {
+    // MUB-177 R2: bypass is a permanent Shift+Tab ring member, so the landing no longer
+    // needs (or has) a latch to flip — it seeds the cwd and nothing else.
     const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
-    const { cycleMode, getMode, isBypassEnabled, setMode } = await import(
-      "../src/agent/modes.ts"
-    );
+    const { getMode, setMode } = await import("../src/agent/modes.ts");
     setMode("acceptEdits");
-    finalizeAutoAcceptLanding(createPermissionState("/repo"));
+    const state = createPermissionState("/repo");
+    finalizeAutoAcceptLanding(state);
     expect(getMode()).toBe("acceptEdits");
-    expect(isBypassEnabled()).toBe(true);
-    setMode("plan");
-    expect(cycleMode()).toBe("bypass");
+    expect(state.allowedDirs.has("/repo")).toBe(true);
     setMode("build");
   });
 
@@ -788,6 +788,24 @@ describe("MP18 — mode interaction with verify consent", () => {
     expect(src).toContain(
       'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
     );
+  });
+});
+
+// MUB-177 R2: with bypass a permanent ring member, cycling the ring must stay consent-safe.
+// Landing on bypass via Shift+Tab may not fire a permission prompt armed under a stricter
+// mode, and no UI copy may still claim Shift+Tab returns from plan to build (the ring now
+// continues to bypass). Source pins on app.tsx wiring — the handler has no seam.
+describe("MUB-177 R2 — ring transit through bypass is consent-safe (source pins)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the Shift+Tab handler never auto-resolves a pending prompt when the cycle lands on bypass", () => {
+    expect(src).toContain('next !== "bypass" &&');
+  });
+
+  test("no plan-mode copy still claims shift+tab exits to build", () => {
+    expect(src).not.toContain("shift+tab to build");
+    expect(src).not.toContain("Shift+Tab or /plan to exit");
+    expect(src).toContain("shift+tab cycles (next: bypass)");
   });
 });
 
@@ -920,5 +938,35 @@ describe("persisted per-command bash grants", () => {
       if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
       else process.env.MINIMA_HARNESS_DIR = prevEnv;
     }
+  });
+});
+
+// R3b: guard denials (plan-mode dispatcher block, mode-policy deny) are the harness working
+// as designed — the transcript renders them as calm dim one-liners. The predicate keys on the
+// STABLE prefixes both producers in permissions.ts own; a USER decline stays a real denial.
+describe("isGuardDenyReason (R3b)", () => {
+  test("matches the plan-mode dispatcher block (all variants)", () => {
+    expect(isGuardDenyReason(planModeBlockReason("write", true))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("task", true))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("write", false))).toBe(true);
+    expect(isGuardDenyReason(planModeBlockReason("task", false))).toBe(true);
+  });
+
+  test("matches the mode-policy deny reason", () => {
+    expect(
+      isGuardDenyReason(
+        "The bash call is denied by the plan mode policy — a user setting, not an environment restriction. Continue without it or ask the user to switch modes.",
+      ),
+    ).toBe(true);
+  });
+
+  test("a USER decline is NOT a guard deny — it must stay a real (red) denial", () => {
+    expect(isGuardDenyReason(denialReason("the bash call"))).toBe(false);
+    expect(isGuardDenyReason(denialReason("read access to /repo/src"))).toBe(false);
+  });
+
+  test("ordinary tool errors do not match", () => {
+    expect(isGuardDenyReason("Error: ENOENT no such file or directory")).toBe(false);
+    expect(isGuardDenyReason("tasks: expected string")).toBe(false);
   });
 });

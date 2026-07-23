@@ -68,6 +68,7 @@ export const sidebar: Record<string, SidebarGroup[]> = {
     {
       text: 'Using the harness',
       items: [
+        { text: 'Usage flows', link: '/harness/usage-flows' },
         { text: 'Interactive TUI', link: '/harness/interactive' },
         { text: 'CLI usage', link: '/harness/cli' },
         { text: 'Tools & permissions', link: '/harness/tools' },

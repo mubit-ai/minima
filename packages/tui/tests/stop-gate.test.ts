@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AgentState } from "../src/agent/state.ts";
 import { AssistantMessage, Message, text } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { assessStop, makeStopGate } from "../src/minima/stop_gate.ts";
+import { assessStop, isHarnessSteerText, makeStopGate } from "../src/minima/stop_gate.ts";
 import type { AskUserRef } from "../src/tools/question.ts";
 
 const SESSION = "run-1";
@@ -184,6 +184,31 @@ describe("makeStopGate", () => {
     expect(state.followUp.length).toBeGreaterThanOrEqual(3);
   });
 
+  test("once the step-cap wrap fired, a stop attempt is SKIPPED — no ⛔, no stop (R5c)", async () => {
+    // The anti-spiral just told the model "wrap up NOW"; a ⛔ "keep working" the same rung
+    // would whipsaw it. The shared per-rung flag (threaded in runtime.ts) suppresses the strike.
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate({ ...deps(d, 3), capWrapFired: () => true });
+    const state = new AgentState();
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(0);
+  });
+
+  test("a cap-skipped stop attempt is not COUNTED as a strike (R5c)", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    let fired = true;
+    const gate = makeStopGate({ ...deps(d, 3), capWrapFired: () => fired });
+    const state = new AgentState();
+    expect(await gate(terminalTurn(), [], state)).toBe(false); // skipped, not spent
+    expect(state.followUp).toHaveLength(0);
+    fired = false;
+    expect(await gate(terminalTurn(), [], state)).toBe(false);
+    expect(state.followUp).toHaveLength(1);
+    expect((state.followUp[0]!.content[0] as { text: string }).text).toContain("attempt 1 of 3");
+  });
+
   test("strikes spent, user 'accept as done' → stops", async () => {
     const d = db();
     seed(d, [{ status: "in_progress" }]);
@@ -292,5 +317,35 @@ describe("makeStopGate", () => {
     // Even though strikes==maxStrikes-worth of headroom exists, queued steering short-circuits.
     expect(await gate(terminalTurn(), [], state)).toBe(false);
     expect(state.followUp).toHaveLength(0); // no continuation pushed; strike not spent
+  });
+});
+
+// R3b: harness-authored user-role steering renders as a dim compact system line — the model
+// still sees the FULL text; only the transcript projection compacts. The predicate must stay
+// in lockstep with the actual producers, so it is fed their real output here.
+describe("isHarnessSteerText (R3b)", () => {
+  const deps = (d: MinimaDb, maxStrikes: number) => ({
+    db: d,
+    sessionId: SESSION,
+    agentId: null,
+    maxStrikes,
+    askUser: null,
+  });
+
+  test("matches the stop-gate's real continuation message", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const gate = makeStopGate(deps(d, 3));
+    const state = new AgentState();
+    await gate(terminalTurn(), [], state); // strike 1 → ⛔ follow-up
+    const text = (state.followUp[0]!.content[0] as { text: string }).text;
+    expect(isHarnessSteerText(text)).toBe(true);
+  });
+
+  test("does NOT match ordinary user text or the user-steer relay (user words stay a ▸ you bubble)", () => {
+    expect(isHarnessSteerText("please fix the footer first")).toBe(false);
+    expect(
+      isHarnessSteerText("The user reviewed the unfinished plan and steered:\nfocus on auth"),
+    ).toBe(false);
   });
 });

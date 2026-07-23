@@ -93,6 +93,23 @@ describe("stepCosts + v8 step_id stamp (U3.2)", () => {
   });
 });
 
+describe("runRoutedTotal (R8, MUB-173)", () => {
+  test("counts stamped AND NULL-step rows, scoped by run", () => {
+    const { db, runId, stepIds } = seededDb();
+    db.writeDecision(decision({ recId: "r1", runId, stepId: stepIds[0], actualCostUsd: 0.02 }));
+    db.writeDecision(decision({ recId: "r2", runId, actualCostUsd: 0.05 }));
+    const otherRun = db.startRun({ projectKey: "p" });
+    db.writeDecision(decision({ recId: "r3", runId: otherRun, actualCostUsd: 1 }));
+    expect(db.runRoutedTotal(runId)).toBeCloseTo(0.07);
+    expect(db.runRoutedTotal(otherRun)).toBeCloseTo(1);
+  });
+
+  test("no decisions → 0, never NULL", () => {
+    const { db, runId } = seededDb();
+    expect(db.runRoutedTotal(runId)).toBe(0);
+  });
+});
+
 describe("buildPlanOverview (U3.1)", () => {
   test("no plan → null; renderPlanOverviewText says so", () => {
     const db = new MinimaDb(":memory:");
@@ -267,6 +284,32 @@ describe("planOverviewRows / stepCardLines / renderPlanOverviewText (U3.1 + U3.3
     expect(flipped.some((l) => l.includes("red→green vs the captured baseline"))).toBe(true);
     const preSat = stepCardLines(o.steps[1]!, o.gatesByStep.get(o.steps[1]!.stepId) ?? []);
     expect(preSat.some((l) => l.includes("pre-satisfied"))).toBe(true);
+  });
+
+  test("R8: session total + unattributed render under the Σ line (panel and text)", () => {
+    const { db, runId, stepIds } = seededDb();
+    db.writeDecision(decision({ recId: "r1", runId, stepId: stepIds[0], actualCostUsd: 0.25 }));
+    db.writeDecision(decision({ recId: "r2", runId, actualCostUsd: 0.05 })); // unstamped
+    const o = buildPlanOverview(db, runId, 0.42);
+    if (!o) throw new Error("expected overview");
+    expect(o.sessionTotalUsd).toBeCloseTo(0.42);
+    expect(o.unattributedUsd).toBeCloseTo(0.05);
+    const texts = planOverviewRows(o, 80).map((r) => r.text);
+    expect(texts[texts.length - 2]).toContain("Σ $0.2500 realized (stamped steps)");
+    expect(texts[texts.length - 1]).toContain("session total $0.4200 · unattributed $0.0500");
+    const text = renderPlanOverviewText(o, 100);
+    expect(text).toContain("Σ $0.2500 realized (stamped steps)");
+    expect(text).toContain("session total $0.4200 · unattributed $0.0500");
+  });
+
+  test("R8: the session/unattributed line is omitted when both figures are 0", () => {
+    const { db, runId } = seededDb();
+    const o = buildPlanOverview(db, runId);
+    if (!o) throw new Error("expected overview");
+    const rows = planOverviewRows(o, 80);
+    expect(rows[rows.length - 1]!.text).toContain("Σ");
+    expect(rows.some((r) => r.text.includes("session total"))).toBe(false);
+    expect(renderPlanOverviewText(o, 100)).not.toContain("session total");
   });
 
   test("one-shot text render carries steps, tiers and the Σ line", () => {

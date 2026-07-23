@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { type AgentMode, bundleForMode, enableBypass } from "../agent/modes.ts";
+import { type AgentMode, bundleForMode } from "../agent/modes.ts";
 import { type PolicyBundle, emitGuardEvent, resolvePolicy } from "../agent/policy.ts";
 import type { BeforeToolCallContext, BeforeToolCallResult } from "../agent/tools.ts";
 import { expand } from "../tools/_io.ts";
@@ -72,6 +72,20 @@ export function planModeBlockReason(toolName: string, bigPlan: boolean): string 
     "(todowrite can run `verify` shell checks). When the user asks to proceed with the plan, " +
     "call the exit_plan tool to request approval to finalize and exit plan mode; otherwise " +
     "continue planning."
+  );
+}
+
+/**
+ * R3b: a HARNESS-authored guard denial — the plan-mode dispatcher block above or the mode
+ * policy deny (makeModeGatedBeforeToolCall below); both producers live in this module and own
+ * these stable prefixes. The transcript renders a match as a calm dim one-liner: the guard
+ * working as designed, not a failure. A USER decline (denialReason) deliberately does NOT
+ * match — a user choice stays a real denial. The full text always reaches the model.
+ */
+export function isGuardDenyReason(text: string): boolean {
+  return (
+    text.startsWith("Plan mode is ON —") ||
+    /^The \S+ call is denied by the \S+ mode policy/.test(text)
   );
 }
 
@@ -185,13 +199,12 @@ export function createPermissionState(
 
 /**
  * "Finalize & auto-accept edits" landing (MUB-179): approving a plan with auto-accept is
- * consent to work the project — in-cwd reads run silent (out-of-cwd reads still prompt)
- * and bypass joins the Shift+Tab ring for the rest of the process. The mode is NOT
- * switched to bypass, and bypass stays never-persisted (mode_prefs.ts).
+ * consent to work the project — in-cwd reads run silent (out-of-cwd reads still prompt).
+ * The mode is NOT switched to bypass; bypass is a permanent Shift+Tab ring member
+ * (MUB-177 R2) and stays never-persisted (mode_prefs.ts).
  */
 export function finalizeAutoAcceptLanding(state: PermissionState): void {
   state.allowedDirs.add(state.cwd);
-  enableBypass();
 }
 
 function extractPath(args: Record<string, unknown>): string | null {

@@ -11,7 +11,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
-import { enableBypass, setMode } from "../agent/modes.ts";
+import { setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -413,7 +413,12 @@ export interface CliArgs {
   resume?: string;
   /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
   bypassPermissions?: boolean;
+  /** Turn on the experimental umbrella (same as MINIMA_TUI_EXPERIMENTAL=1). */
+  experimental?: boolean;
 }
+
+/** What -v/--version prints (single line, stdout — scripts parse this). */
+export const VERSION_LINE = `minima ${VERSION}`;
 
 export function parseArgs(argv: string[]): CliArgs {
   const opts: CliArgs = {
@@ -458,6 +463,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--dangerously-bypass-permissions":
         opts.bypassPermissions = true;
         break;
+      case "--experimental":
+        opts.experimental = true;
+        break;
       case "-t":
       case "--tools":
         opts.tools = take(i++);
@@ -496,6 +504,11 @@ export function parseArgs(argv: string[]): CliArgs {
         process.stdout.write(HELP);
         process.exit(0);
         break;
+      case "-v":
+      case "--version":
+        process.stdout.write(`${VERSION_LINE}\n`);
+        process.exit(0);
+        break;
       default:
         if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
         opts.prompt.push(a);
@@ -519,6 +532,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --offline            bypass Minima routing
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
+      --experimental       turn on experimental features (same as MINIMA_TUI_EXPERIMENTAL=1)
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -526,6 +540,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
+  -v, --version            print the version and exit
   -h, --help
 
   Plan verification headless note (MINIMA_TUI_BIG_PLAN=1 + -p/--mode json): plan-step
@@ -551,7 +566,11 @@ function toolsFor(
   return tools;
 }
 
-function buildConfig(args: CliArgs): HarnessConfig {
+export function buildConfig(args: CliArgs): HarnessConfig {
+  // The flag IS the env var: setting it here (before any configFromEnv) reaches every
+  // later resolution site and inherits to spawned sub-agents. An explicit env "0" on a
+  // per-feature flag still wins inside optInFlag.
+  if (args.experimental) process.env.MINIMA_TUI_EXPERIMENTAL = "1";
   const cfg = configFromEnv();
   if (args.offline) cfg.minimaUrl = "";
   if (args.model) {
@@ -1122,10 +1141,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
-  // this project's last persisted mode (build when none). Bypass is never persisted — it
-  // must be re-consented each session via the flag or /mode bypass.
+  // this project's last persisted mode (build when none). Bypass is never persisted — a
+  // session always boots into a non-bypass mode unless the flag asks for it.
   if (args.bypassPermissions) {
-    enableBypass();
     setMode("bypass");
   } else {
     const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
@@ -1174,21 +1192,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // input render from the TOP and grow downward; Ink commits finished output to native
   // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
   process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
-  // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
-  // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
-  // so the composer + footer sit at the bottom from frame 1 instead of under the banner at
-  // the top. Plain stdout BEFORE render(), not part of Ink's live frame, so it cannot trip
-  // Ink's overflow-clear. Enforced by render-buffer.test.ts + tui-verify's bottom-anchor
-  // check. Then hide the cursor (TextInput draws its own).
-  // MINIMA_TUI_DEBUG_ANCHOR=<file>: record what the reserve saw — the one number the whole
-  // bottom-mount hangs on. Pairs with the per-render ledger probe in app.tsx.
+  // Top-anchored transcript (R1, 2026-07-22 — reverses THE RULE's rows-1 newline reserve):
+  // the cursor stays at HOME after the clear, so <Static> prints the banner from the TOP of
+  // the fresh screen and the transcript grows DOWNWARD under it, Claude-Code-style. The
+  // composer still seats at the bottom: the anchor ledger cap-seeds every reset frame
+  // (app.tsx) — a full-height flex-end live frame owns the middle gap, and the floor decays
+  // as commits land so the frame shrinks from the top until native scrolling takes over.
+  // Enforced by render-buffer.test.ts + tui-verify's first-prompt/bottom-anchor checks.
+  // Then hide the cursor (TextInput draws its own).
+  // MINIMA_TUI_DEBUG_ANCHOR=<file>: record what the boot clear saw. Pairs with the
+  // per-render ledger probe in app.tsx.
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
     try {
       appendFileSync(
         process.env.MINIMA_TUI_DEBUG_ANCHOR,
         `${JSON.stringify({
           t: Date.now(),
-          phase: "reserve",
+          phase: "boot",
           rows: process.stdout.rows ?? null,
           cols: process.stdout.columns ?? null,
           tty: process.stdout.isTTY === true,
@@ -1197,7 +1217,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       );
     } catch {}
   }
-  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
   process.stdout.write("\u001b[?25l");
 
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {

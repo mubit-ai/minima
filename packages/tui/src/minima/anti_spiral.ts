@@ -143,11 +143,16 @@ function steer(body: string): Message {
   return new Message({ role: "user", content: [text(body)] });
 }
 
+/** R3b: stable prefixes of the two harness steers below — stop_gate.ts's isHarnessSteerText
+ * (the transcript's dim-line predicate) keys on them; keep prefix and message in lockstep. */
+export const DOOM_LOOP_PREFIX = "⚠ You have called";
+export const STEP_CAP_WRAP_PREFIX = "⚠ You have used";
+
 /** The doom-loop recovery nudge. */
 function doomLoopMessage(ring: DoomLoopRing, hit: { name: string; count: number }): Message {
   return steer(
     [
-      `⚠ You have called \`${hit.name}\` with the same arguments ${hit.count} times and it keeps FAILING — you are stuck in a loop. Stop repeating it.`,
+      `${DOOM_LOOP_PREFIX} \`${hit.name}\` with the same arguments ${hit.count} times and it keeps FAILING — you are stuck in a loop. Stop repeating it.`,
       "Recent actions:",
       ring.digest(),
       "",
@@ -163,7 +168,7 @@ function stepCapMessage(deps: AntiSpiralDeps, ring: DoomLoopRing, turns: number)
   const progress = planProgress(deps.db, deps.sessionId);
   return steer(
     [
-      `⚠ You have used ${turns} turns (turn budget ${deps.stepCap}). Wrap up NOW — do not start new work.`,
+      `${STEP_CAP_WRAP_PREFIX} ${turns} turns (turn budget ${deps.stepCap}). Wrap up NOW — do not start new work.`,
       progress ? progress : null,
       "Recent actions:",
       ring.digest(),
@@ -212,6 +217,10 @@ export interface AntiSpiralDeps {
   db: MinimaDb | null;
   sessionId: string | null;
   agentId: string | null;
+  /** R5c: shared per-rung flag, written when the step-cap wrap fires. runtime.ts threads the
+   * SAME object into the A2 stop-gate (as `capWrapFired`), so once the harness has said
+   * "wrap up NOW" the gate can never answer a stop attempt with "keep going". */
+  flags?: { capWrapFired: boolean };
 }
 
 /** `pass` → no action (fall through to the next stop check); `handled` → injected a steer, continue
@@ -248,6 +257,7 @@ export function makeAntiSpiral(deps: AntiSpiralDeps): AntiSpiralGate {
     if (deps.stepCap > 0 && turnCount >= deps.stepCap) {
       state.steering.push(stepCapMessage(deps, deps.ring, turnCount));
       capWrapInjected = true;
+      if (deps.flags) deps.flags.capWrapFired = true; // R5c: the stop-gate reads this
       return "handled"; // one wrap-up turn, then stop
     }
 

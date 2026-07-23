@@ -18,6 +18,8 @@ import {
   clampToolText,
   classifyMarkdownLines,
   getAsciiBanner,
+  guardDenyLine,
+  harnessNoiseLine,
   toolHiddenMarker,
 } from "./layout.ts";
 
@@ -157,10 +159,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
  * (transcriptGen bumps on /clear and resume).
  */
 /**
- * The MINIMA banner block. Lives in the live frame while the transcript is empty (it hides
- * for overlays/autocomplete), then commits INTO <Static> with the first message so its rows
- * leave the live frame as printed scrollback instead of dead padding (MUB-167). One JSX for
- * both forms; bannerRowCount in layout.ts is its row ruler.
+ * The MINIMA banner block. Commits INTO <Static> at the start of a fresh generation (boot,
+ * /clear), so it prints once at the TOP of the cleared screen and the transcript grows
+ * downward under it (R1; MUB-167's commit moved from first-message to gen-start).
+ * bannerRowCount in layout.ts is its row ruler.
  */
 export function BannerBlock({ tip, width }: { tip: string | null; width?: number }) {
   return (
@@ -191,6 +193,15 @@ export const MessageRow = memo(function MessageRow({
   }
 
   if (msg.role === "user") {
+    // R3b: a harness-authored steer (stop-gate continuation, anti-spiral nudge) is not the
+    // user speaking — one calm dim line, not a full user bubble. The model saw the full text.
+    if (msg.guardKind === "harness") {
+      return (
+        <Box marginTop={1}>
+          <Text dimColor>{harnessNoiseLine(msg.text)}</Text>
+        </Box>
+      );
+    }
     return (
       <Box flexDirection="column" marginTop={1}>
         <Text color="green">{"▸ you"}</Text>
@@ -202,6 +213,15 @@ export const MessageRow = memo(function MessageRow({
   }
 
   if (msg.role === "tool") {
+    // R3b: a guard/mode denial is the harness working as designed, not a failure — dim
+    // one-liner, structurally before (and thus never on) the red isError path below.
+    if (msg.guardKind === "deny") {
+      return (
+        <Box marginTop={1}>
+          <Text dimColor>{guardDenyLine(msg.toolName)}</Text>
+        </Box>
+      );
+    }
     const { text: body, hiddenLines } = clampToolText(msg.text, cols);
     // A done-gate block is NOT a denial/cancellation — the call was approved and the gate
     // then refused the completion flip. Red error styling here read as "todowrite was

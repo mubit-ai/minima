@@ -1,0 +1,140 @@
+---
+title: Usage flows
+description: The major flows of the minima CLI — routing, plans, recovery, memory, budgets, delegation — what each one does and how to benefit from it.
+---
+
+import { PageHeader, Note, Tip, Warning } from '@components'
+
+<PageHeader />
+
+# Usage flows
+
+Everything the harness does hangs off one idea: **honest outcomes make the next turn better**. Each flow below either earns an honest outcome (plans, gates, the judge), acts on one (recovery, memory, routing), or keeps you in control while it happens (budgets, checkpoints, permission modes). This page walks the major flows — what each does, how to drive it, and what you get out of it. For the one-line reference of every command and key, see [Interactive TUI](/harness/interactive).
+
+## 1. The loop — every turn makes the next one cheaper
+
+```
+        ┌────────────────────────────────────────────────┐
+        ▼                                                │
+  recommend ──▶ run the model ──▶ judge / gate ──▶ feedback
+  (pick the      (your provider     (earn an honest    (real tokens, real
+   cheapest       keys, streamed     quality label)     cost, real outcome)
+   capable
+   model)
+```
+
+Every prompt is routed by the recommender, run against your own provider keys, graded (a sampled LLM judge covers ~15% of ungated turns; plan gates grade deterministically), and reported back with **realized** token counts, cost, and latency. The server learns which models clear which task types in *your* repos — so over weeks, routine work drifts to cheaper models while hard work keeps the strong ones.
+
+Drive it with:
+
+| What | How |
+|---|---|
+| Cost/quality bias | `--slider N` (0 = cheapest acceptable, 10 = highest quality; default 5) or `/profile set slider N` |
+| Pin a model | `/model <id>` or `--model <id>` — `/model auto` returns to routing |
+| Skip routing entirely | `--offline` (local/pinned only, no feedback sent) |
+| Reject the last pick | `/redo` — see [recovery](#3-when-a-turn-goes-wrong) |
+
+<Warning>
+Pinning a model with `/model` removes the session from learning — no routing, no feedback while pinned. It's the right escape hatch for a one-off, but leave it pinned and your history stops improving.
+</Warning>
+
+## 2. Plans that prove themselves
+
+The plan verification spine (on by default; `MINIMA_TUI_BIG_PLAN=0` opts out) is how the harness stops taking the model's word for "done". The full flow:
+
+1. **Draft** — enter plan mode (<kbd>Shift</kbd>+<kbd>Tab</kbd> or `/plan`) and talk the task through; the design council convenes on substantive turns. Or just let the agent `todowrite` a plan mid-run.
+2. **Finalize** — `/plan finalize` writes `BigPlan.md`: steps with `verify` shell commands, reviewed by a planning critic that flags non-discriminative checks and hidden dependencies (advisory, never blocking).
+3. **Work** — before a step starts, its verify runs once to capture a **red baseline**. The done-gate then refuses to mark the step complete until the same check goes **green** — a pass that proves the change, not the pre-existing state.
+4. **Grade** — every verdict carries a confidence tier: 🟢 a trusted pre-existing check went red→green with the changed code covered · 🟡 weaker evidence (self-written test, no baseline, unattributed writes) · 🔴 tampering or a fabricated check. Only 🟢 may report `evidence_source="gate"` to the server.
+5. **Close** — when a plan completes fully, a **zero-context diff reviewer** reads the run's whole diff with fresh eyes; an objection lands as a 🟡 gate, never silently.
+
+Inspect and challenge it any time:
+
+| Command | What it does |
+|---|---|
+| `/bp` or <kbd>Ctrl</kbd>+<kbd>G</kbd> | Plan Overview — steps, gates, tiers, and a learned per-task-type scoreboard |
+| `/why [n]` | The evidence card: which check ran, what it proved, why the tier |
+| `/verify` | Adversarial refutation — a read-only subagent re-runs the checks trying to *disprove* completion |
+| `/audit` | Static plan lint: missing checks, vague steps, allowlist gaps |
+
+<Note>
+In headless runs (`-p` / `--mode json`) plan verify commands **fail closed** — they're LLM-authored shell, so they don't execute without `MINIMA_TUI_ALLOW_VERIFY=1`.
+</Note>
+
+The benefit: completion claims you can trust, and a routing history built on verified outcomes instead of self-reports.
+
+## 3. When a turn goes wrong
+
+Two flows, one principle — a failure becomes evidence, not just a retry:
+
+- **Automatic — the recovery ladder.** On a provider hard failure, a failed plan check, or a judge grade below the rung's quality threshold, the harness asks the server to re-route with the failed model **excluded**, up to 2 rungs by default. With plans on, a failure matcher picks the cheapest sensible move instead: back off (same model, transient error), escalate (exclude the failed model and re-route), or replan (steer the next attempt).
+- **Manual — `/redo [note]`.** When *you* can see the agent isn't doing what you asked, `/redo` rejects the last routed turn: it sends a human-evidence failure label for that model, excludes it for the rest of the session, and re-submits your original task through routing. No fabricated numbers — just your verdict, recorded where the router learns from it.
+
+<Tip>
+`/redo` is the habit worth building. Retyping the prompt teaches the router nothing; `/redo` turns your dissatisfaction into a label and a different model in one step.
+</Tip>
+
+And when the *code* went wrong rather than the routing: every prompt's first mutating tool call snapshots the worktree to a git-shadow checkpoint your real git never sees. `/undo` restores the last one (and stacks), `/rewind <n>` targets any earlier prompt (conversation, code, or both), `/ckpt` lists what's held. See [Sessions](/harness/sessions#rewind-and-checkpoints).
+
+## 4. Memory that compounds
+
+The memory ledger (on by default; `MINIMA_TUI_MEMORY=0` opts out) is curated, cross-session project knowledge — injected into every turn's system prompt, ranked **pinned → gate-cited → recent**, hard-capped so it never crowds out your task.
+
+Writes are deliberately conservative. The model has **no memory-write tool**. A background scribe mines the ledger (gate flips, verified failures, your corrections — never the raw transcript), and a pattern must recur before it earns an extraction. Only gate-cited candidates activate on their own; everything else waits, `pending`, for you:
+
+```
+/memory              list — status, kind, provenance
+/memory add <text>   your own note, active immediately
+/memory confirm <n>  activate a pending scribe candidate
+/memory reject <n>   never inject it (and never resurrect it)
+/memory pin <n>      always ranked first
+/memory dream        distill green-verified closed plans into workflow candidates (offline, no LLM)
+```
+
+The benefit: the agent stops re-learning your repo's quirks every session — and what it "knows" is exactly the list you can read, confirm, and reject.
+
+## 5. Spend control
+
+- **The meter** — `/cost` shows realized spend, cost-of-pass (dollars per verified success), and savings for the session; `/cost fleet` pulls org-level savings truth from the server (last 30 days).
+- **The budget ledger** — `--budget 5` (or `/budget set 5`) creates a real ledger: a padded reservation is held before each turn and reconciled to realized cost after, so parallel sub-agents can't jointly overshoot. Warnings fire once each at 50 / 75 / 90 / 100%. Modes: `shadow` (track), `warn` (default), `enforce` (`--budget-enforce` — refuses new runs once exhausted, always finishing the current turn cleanly).
+- **Overhead is booked honestly** — judge, planning-council, and scribe spend land in the meter as overhead, never inside a turn's reported `actual_cost_usd`.
+
+## 6. Delegation — parallel, cost-routed sub-agents
+
+The `task` tool spawns sub-agents (up to depth 2), each **routed independently** — a simple search child lands on a cheap model while the lead stays strong — with its own budget stop, a toolset confined to the parent's working directory (or an isolated throwaway git worktree when the step asks for isolation), and abort that cascades from the parent. Watch the tree live with `/tree` or the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>); `/tasks cancel` clears the todo list and cancels active plans. Deep dive: [Tools & permissions](/harness/tools#sub-agents-the-task-tool).
+
+## 7. A repo that remembers how you like to work
+
+`/profile` persists per-repo routing preferences — slider, `min_quality`, `max_cost_per_call`, candidate pools per task type — applied to every recommend from this repo, with provenance on every change:
+
+```
+/profile show
+/profile set slider 7
+/profile set min_quality 0.75
+/profile set pool.code claude-sonnet-5,gemini-2.5-pro
+/profile clear
+```
+
+Precedence is explicit per-call options → profile → config default.
+
+## 8. Experimental features
+
+Opt-in features ship dark behind the experimental umbrella. Turn on everything with `MINIMA_TUI_EXPERIMENTAL=1`, or one feature at a time; an explicit `=0` always wins over the umbrella.
+
+| Flag | What it enables |
+|---|---|
+| `MINIMA_AUTO_EFFORT` | Server-classified difficulty picks each prompt's thinking level — routing becomes model × effort |
+| `MINIMA_TUI_CLASSIFY` | Client-side task classification sent as a caller override before routing (fail-open) |
+| `MINIMA_TUI_INTERVIEW` | After a `/plan` council round, up to 3 gated questions that persist verify commands + a budget/quality profile |
+| `MINIMA_TUI_TUNER` | After a plan closes fully, one bounded A/B probe nudges the repo's slider toward what you actually prefer |
+| `MINIMA_TUI_OBSERVER` | A non-blocking watcher over the event stream: advisory steers and audit verdicts — never blocks a tool, never feeds a label; at most, repeated ignored call-outs earn one yellow milestone gate |
+
+## Where to go from here
+
+| You want… | Go to |
+|---|---|
+| Every command and keybinding | [Interactive TUI](/harness/interactive) |
+| Flags, print/json modes, `minima auth` | [CLI usage](/harness/cli) |
+| How routing decides, judging, offline | [Model routing](/harness/routing) |
+| The mechanics under each flow | [Under the hood](/harness/architecture) |
+| The service-side loop and golden rules | [Using Minima correctly](/sdk/usage-guide) |
