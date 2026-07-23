@@ -26,6 +26,32 @@ from minima.schemas.recommend import ClassificationProfile, ClassificationRulePr
 CLASSIFIER_ID = "regex-v1"
 
 
+# High-precision vocabulary signals that short-circuit the learned head (PR-5 tiered
+# dispatch): on prompts naming a code file or asking for a TL;DR the regex is
+# near-perfect while subword embeddings barely see the token — measured on the frozen
+# set, every learned configuration traded these exact rows against semantic accuracy.
+_HIGH_PRECISION = (
+    (
+        re.compile(
+            r"\b[\w./-]+\.(?:py|rs|js|jsx|ts|tsx|go|java|rb|c|cc|cpp|h|hpp|cs|php|swift|kt|"
+            r"sql|sh|bash|zsh|yml|yaml|toml|json|css|scss|sass|less|html|htm|vue|svelte)\b",
+            re.IGNORECASE,
+        ),
+        TaskType.code,
+    ),
+    (re.compile(r"\btl;?dr\b", re.IGNORECASE), TaskType.summarization),
+)
+
+
+def high_precision_type(text: str) -> TaskType | None:
+    """The vocabulary tier of the dispatcher: a TaskType when a near-zero-false-positive
+    signal fired, else None (the learned head or heuristic decides)."""
+    for pattern, task_type in _HIGH_PRECISION:
+        if pattern.search(text):
+            return task_type
+    return None
+
+
 @dataclass(slots=True, frozen=True)
 class TaskFeatureVector:
     reasoning: float = 0.0
@@ -537,15 +563,21 @@ def classify_details(
     if embed is not None:
         classifier_id = embed.classifier_id
         if task.task_type is None:
-            result = embed.classify(task.task)
-            profiler.mark("embed")
-            abstained = result.abstained
-            if result.abstained:
-                task_type_source = "embedding_abstain"
+            precise = high_precision_type(task.task)
+            if precise is not None:
+                task_type = precise
+                task_type_source = "vocabulary_precise"
+                profiler.mark("embed")
             else:
-                task_type = result.task_type
-                task_type_source = "embedding"
-                embed_confidence = result.confidence
+                result = embed.classify(task.task, regex_hint=heuristic_task_type)
+                profiler.mark("embed")
+                abstained = result.abstained
+                if result.abstained:
+                    task_type_source = "embedding_abstain"
+                else:
+                    task_type = result.task_type
+                    task_type_source = "embedding"
+                    embed_confidence = result.confidence
     if neighbor_votes is not None:
         neighbor_estimate = _neighbor_classification_estimate(neighbor_votes)
         if neighbor_estimate is not None:

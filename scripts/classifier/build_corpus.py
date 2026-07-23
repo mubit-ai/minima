@@ -17,7 +17,16 @@ import random
 from collections import Counter
 from pathlib import Path
 
-from common import CLINC_CAP_PER_TYPE, CLINC_MAP, RB_CAP_PER_TYPE, RB_EVAL_MAP, dedupe, norm
+from common import (
+    CLINC_CAP_PER_TYPE,
+    CLINC_MAP,
+    CLINC_TYPE_CAPS,
+    RB_CAP_PER_TYPE,
+    RB_EVAL_MAP,
+    RB_TYPE_CAPS,
+    dedupe,
+    norm,
+)
 from seeds import SEEDS
 
 
@@ -41,7 +50,7 @@ def collect_clinc(rng: random.Random) -> tuple[list[dict], list[str]]:
     for e in examples:
         intent = names[e["intent"]]
         label = CLINC_MAP.get(intent)
-        if label is None or per_type.get(label, 0) >= CLINC_CAP_PER_TYPE:
+        if label is None or per_type.get(label, 0) >= CLINC_TYPE_CAPS.get(label, CLINC_CAP_PER_TYPE):
             continue
         per_type[label] = per_type.get(label, 0) + 1
         rows.append({"text": norm(e["text"]), "label": label, "source": f"clinc:{intent}"})
@@ -61,7 +70,7 @@ def collect_routerbench() -> list[dict]:
     for _, r in df.iterrows():
         ev = str(r["eval_name"]).lower()
         label = next((lab for key, lab in RB_EVAL_MAP if key in ev), None)
-        if label is None or counts.get(label, 0) >= RB_CAP_PER_TYPE:
+        if label is None or counts.get(label, 0) >= RB_TYPE_CAPS.get(label, RB_CAP_PER_TYPE):
             continue
         text = r["prompt"]
         if isinstance(text, list):
