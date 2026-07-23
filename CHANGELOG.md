@@ -4,10 +4,16 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.2] - 2026-07-23
+
+The task classifier goes live: regex is no longer the primary classifier on the
+hosted service. Nine PRs (#268–#275, #281) replace it with a trained embedding
+head — telemetry, key versioning, dual-read plumbing, the training pipeline, the
+serving path, eval gates, harness alignment, corpus iteration to all-green gates,
+and activation.
 
 ### Added
-- **Hosted task classifier ON** (server, #268–#275 + activation): the trained
+- **Hosted task classifier ON** (server, #268–#275 + #281 activation): the trained
   potion-base-32M embedding classifier (`potion-base-32M-c18e819c6c6d`, all G1
   gates green) ships in the repo under `models/classifier/`, is baked into the
   service image, and the hosted deploy (prod + staging) now runs with
