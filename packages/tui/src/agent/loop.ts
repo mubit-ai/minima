@@ -450,14 +450,19 @@ async function runOneTool(
     updates.push(toolExecutionUpdate(p.tc.id, partial));
   };
 
+  const scope = new AbortController();
+  state.toolAbortScopes.set(p.tc.id, scope);
   let result: ToolResult;
   let isError: boolean;
   try {
-    result = await p.tool.execute(p.tc.id, p.params, config.signal, onUpdate);
+    const signal = config.signal ? AbortSignal.any([config.signal, scope.signal]) : scope.signal;
+    result = await p.tool.execute(p.tc.id, p.params, signal, onUpdate);
     isError = false;
   } catch (exc) {
     result = errorResult(String(exc));
     isError = true;
+  } finally {
+    state.toolAbortScopes.delete(p.tc.id);
   }
 
   if (config.afterToolCall) {

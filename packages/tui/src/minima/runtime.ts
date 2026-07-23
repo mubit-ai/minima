@@ -58,6 +58,7 @@ import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memo
 import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
+import { classifyRungOutput } from "./replay_guard.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
 import { minDefinedCap, perTaskTypeEntry, resolveProfilePool } from "./routing_profile.ts";
 import type { StepOutcome } from "./schemas.ts";
@@ -449,7 +450,6 @@ export class MinimaAgent extends Agent {
       // server's logged propensities). Triggers: a provider hard failure, or a REAL judge
       // grade below the rung's τ. Never retries on a null judge. Max attempts = 1 + rungs.
       const excluded = [...(opts.excludedModels ?? [])];
-      const preRunIdx = this.agentState.messages.length;
       let firstRecId: string | null = null;
       let lastError: unknown = null;
       let lastRouting: RoutingResult | null = null;
@@ -783,8 +783,13 @@ export class MinimaAgent extends Agent {
               ? "transient"
               : "hard_error";
         // Roll back this rung's messages so the retry starts from the same context the failed rung
-        // saw (no confusing half-answers in the next rung's prompt).
-        this.agentState.messages.length = preRunIdx;
+        // saw (no confusing half-answers in the next rung's prompt) — UNLESS the rung dispatched
+        // tool calls (steer on): an effectful rung is never erased-and-replayed, its evidence stays
+        // and the LB-21-flagged re-prompt continues on top. Rolling back to the rung's OWN start
+        // (not the prompt's) keeps a retained earlier rung's evidence safe from a later rollback.
+        const rungClass = classifyRungOutput(this.agentState.messages, runStartIdx);
+        if (!this.config.steer || rungClass !== "effectful")
+          this.agentState.messages.length = runStartIdx;
         if (intervention === "escalate") {
           // Exclude the failed model → the next recommend re-routes to a stronger/different rung.
           excluded.push(failedModel);

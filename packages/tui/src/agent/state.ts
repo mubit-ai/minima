@@ -26,6 +26,7 @@ export class AgentState {
   isStreaming = false;
   streamingMessage: AssistantMessage | null = null;
   pendingToolCalls = new Set<string>();
+  readonly toolAbortScopes = new Map<string, AbortController>();
   errorMessage: string | null = null;
   turnsTaken = 0;
   // Queues the Agent pushes into mid-run; drained between turns by the loop.

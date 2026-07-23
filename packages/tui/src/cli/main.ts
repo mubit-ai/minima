@@ -22,6 +22,7 @@ import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/mini
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
@@ -737,6 +738,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  // Hook-order contract (P2): bash-steer registers FIRST on the beforeToolCall stack —
+  // ahead of the TUI permission hook (app.tsx) and the headless checkpoint/done-gate
+  // hooks below. First block wins, so a steered command never raises a pointless
+  // permission overlay. Keep this line immediately after agent construction.
+  agent.addBeforeToolCall(makeBashSteerHook(config));
   // agent.budget is attached later (--budget) — read it at call time. Children share this
   // judge instance (spawn.ts), so their grading books here too, never into their own
   // meter rows (which the parent reads as the child's routed cost).

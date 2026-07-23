@@ -133,6 +133,11 @@ export interface HarnessConfig {
    * path so the model can page it back via read. Opt out with MINIMA_TUI_ARTIFACTS=0 —
    * mirrors the memoryLedger flag shape. */
   artifacts: boolean;
+  /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
+   * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
+   * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
+   * tool calls. Opt out with MINIMA_TUI_STEER=0 — mirrors the bigPlan flag shape. */
+  steer: boolean;
   /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
    * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
    * always win; consent gates and diagnostic switches are never covered. */
@@ -199,6 +204,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     gradedOutcome: true,
     memoryLedger: true,
     artifacts: true,
+    steer: true,
     experimental: false,
     autoEffort: false,
     classify: false,
@@ -238,6 +244,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
+  cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);
