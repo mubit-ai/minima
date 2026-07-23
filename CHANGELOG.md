@@ -4,10 +4,10 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.3] - 2026-07-23
 
 ### Changed
-- **Client classifier defers to the live server head** (TUI): with
+- **Client classifier defers to the live server head** (TUI, #283): with
   `MINIMA_TUI_CLASSIFY=1`, the harness now probes `/v1/health` once per session and,
   when the server reports its trained embedding classifier loaded, skips the
   client-side classify completion entirely — no caller override preempts the head,
