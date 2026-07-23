@@ -761,7 +761,7 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   test("the loop's message_start(user) is deduped, not double-posted", () => {
     const idx = src.indexOf('case "message_start":');
     expect(idx).toBeGreaterThan(-1);
-    const handler = src.slice(idx, idx + 600);
+    const handler = src.slice(idx, idx + 800);
     expect(handler).toContain("if (pendingEchoRef.current) {");
     expect(handler).toContain("pendingEchoRef.current = false;");
     // The event echo survives for non-optimistic user messages (finalize handoff, replays);
