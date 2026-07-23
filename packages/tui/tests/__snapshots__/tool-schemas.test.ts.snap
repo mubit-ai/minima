@@ -1,0 +1,712 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`tool schema surface (model-agnostic gate) builtin roster is pinned 1`] = `
+[
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "bash",
+  "ls",
+  "glob",
+  "grep",
+  "todowrite",
+  "web_search",
+  "web_fetch",
+]
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: read 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "limit": {
+        "default": 2000,
+        "description": "Max lines to return.",
+        "type": "integer",
+      },
+      "offset": {
+        "default": 1,
+        "description": "1-based line to start at.",
+        "type": "integer",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "path",
+    ],
+    "type": "object",
+  },
+  "description": "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "limit": {
+        "default": 2000,
+        "description": "Max lines to return.",
+        "type": "INTEGER",
+      },
+      "offset": {
+        "default": 1,
+        "description": "1-based line to start at.",
+        "type": "INTEGER",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "path",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "limit": {
+        "default": 2000,
+        "description": "Max lines to return.",
+        "type": "integer",
+      },
+      "offset": {
+        "default": 1,
+        "description": "1-based line to start at.",
+        "type": "integer",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "path",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: write 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "content": {
+        "description": "The full intended file contents.",
+        "type": "string",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "path",
+      "content",
+    ],
+    "type": "object",
+  },
+  "description": "Create or overwrite a file. Overwrites entirely — prefer edit for targeted changes. Parent directories are created automatically. Pass the full intended file contents.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "content": {
+        "description": "The full intended file contents.",
+        "type": "STRING",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "path",
+      "content",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "content": {
+        "description": "The full intended file contents.",
+        "type": "string",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "path",
+      "content",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: edit 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "new_string": {
+        "description": "The replacement string.",
+        "type": "string",
+      },
+      "old_string": {
+        "description": "The exact string to replace.",
+        "type": "string",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+      "replace_all": {
+        "default": false,
+        "description": "Replace every occurrence.",
+        "type": "boolean",
+      },
+    },
+    "required": [
+      "path",
+      "old_string",
+      "new_string",
+    ],
+    "type": "object",
+  },
+  "description": "Replace an exact string in a file. Read the file first to get exact strings. Errors if old_string is absent or (without replace_all) appears more than once — add context to disambiguate.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "new_string": {
+        "description": "The replacement string.",
+        "type": "STRING",
+      },
+      "old_string": {
+        "description": "The exact string to replace.",
+        "type": "STRING",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "STRING",
+      },
+      "replace_all": {
+        "default": false,
+        "description": "Replace every occurrence.",
+        "type": "BOOLEAN",
+      },
+    },
+    "required": [
+      "path",
+      "old_string",
+      "new_string",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "new_string": {
+        "description": "The replacement string.",
+        "type": "string",
+      },
+      "old_string": {
+        "description": "The exact string to replace.",
+        "type": "string",
+      },
+      "path": {
+        "description": "Absolute or relative file path.",
+        "type": "string",
+      },
+      "replace_all": {
+        "default": false,
+        "description": "Replace every occurrence.",
+        "type": "boolean",
+      },
+    },
+    "required": [
+      "path",
+      "old_string",
+      "new_string",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: apply_patch 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "patch": {
+        "description": "The patch text.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "patch",
+    ],
+    "type": "object",
+  },
+  "description": 
+"Apply a multi-file patch atomically in one call — add, update, delete, or move files together. Prefer this over multiple \`edit\` calls for any change touching more than one file or more than one region. Every hunk is resolved before anything is written; if any hunk fails to match, NO file is changed.
+
+Format:
+*** Begin Patch
+*** Add File: path/new.ts
++full contents, each line prefixed with +
+*** Update File: path/existing.ts
+*** Move to: path/renamed.ts   (optional; omit to edit in place)
+@@ optional anchor line for large files
+ unchanged context line (leading space)
+-removed line
++added line
+*** Delete File: path/old.ts
+*** End Patch
+
+Include a few unchanged context lines (leading space) around each change so the hunk can be located. Paths are relative to the working directory."
+,
+  "google_function_declaration_parameters": {
+    "properties": {
+      "patch": {
+        "description": "The patch text.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "patch",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "patch": {
+        "description": "The patch text.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "patch",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: bash 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+  "description": "Run a shell command and return combined stdout/stderr and exit code. Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "command": {
+        "description": "The shell command to run.",
+        "type": "STRING",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "INTEGER",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: ls 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "path": {
+        "default": ".",
+        "description": "Directory to list.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+  "description": "List entries in a directory. Includes hidden files. Directories suffixed with /, sorted first. Use glob for pattern matching.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "path": {
+        "default": ".",
+        "description": "Directory to list.",
+        "type": "STRING",
+      },
+    },
+    "required": [],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "path": {
+        "default": ".",
+        "description": "Directory to list.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: glob 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "boolean",
+      },
+      "path": {
+        "default": ".",
+        "description": "Base directory to search from.",
+        "type": "string",
+      },
+      "pattern": {
+        "description": "Glob pattern (e.g. **/*.ts, src/*.py).",
+        "type": "string",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "object",
+  },
+  "description": "Find files matching a glob pattern (e.g. **/*.ts, src/**/test_*.py). Hidden files excluded; .gitignore'd files (plus node_modules/ and .git/) are excluded when ripgrep is available, unless include_ignored=true. Max 200 results shown. Use grep for content search.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "BOOLEAN",
+      },
+      "path": {
+        "default": ".",
+        "description": "Base directory to search from.",
+        "type": "STRING",
+      },
+      "pattern": {
+        "description": "Glob pattern (e.g. **/*.ts, src/*.py).",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "include_ignored": {
+        "default": false,
+        "description": "Include files ignored by .gitignore (and node_modules).",
+        "type": "boolean",
+      },
+      "path": {
+        "default": ".",
+        "description": "Base directory to search from.",
+        "type": "string",
+      },
+      "pattern": {
+        "description": "Glob pattern (e.g. **/*.ts, src/*.py).",
+        "type": "string",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: grep 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "case_insensitive": {
+        "default": false,
+        "description": "Case-insensitive match.",
+        "type": "boolean",
+      },
+      "glob": {
+        "description": "File pattern to include (e.g. *.ts). Omit to search all files.",
+        "type": "string",
+      },
+      "path": {
+        "default": ".",
+        "description": "File or directory to search in.",
+        "type": "string",
+      },
+      "pattern": {
+        "description": "Regular expression to search for.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "object",
+  },
+  "description": "Search file contents (ripgrep if available, else grep). Returns file:line:content matches. .gitignore respected when ripgrep is available. Use 'glob' to filter file types. Max 200 matches shown.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "case_insensitive": {
+        "default": false,
+        "description": "Case-insensitive match.",
+        "type": "BOOLEAN",
+      },
+      "glob": {
+        "description": "File pattern to include (e.g. *.ts). Omit to search all files.",
+        "type": "STRING",
+      },
+      "path": {
+        "default": ".",
+        "description": "File or directory to search in.",
+        "type": "STRING",
+      },
+      "pattern": {
+        "description": "Regular expression to search for.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "case_insensitive": {
+        "default": false,
+        "description": "Case-insensitive match.",
+        "type": "boolean",
+      },
+      "glob": {
+        "description": "File pattern to include (e.g. *.ts). Omit to search all files.",
+        "type": "string",
+      },
+      "path": {
+        "default": ".",
+        "description": "File or directory to search in.",
+        "type": "string",
+      },
+      "pattern": {
+        "description": "Regular expression to search for.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "pattern",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: todowrite 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "tasks": {
+        "description": "JSON array of tasks. Each task: {content, status, priority, verify?}. verify = a shell command that proves the task is done (e.g. \`bun test tests/foo.test.ts\`). Optional \`tools\` = a JSON array naming the tools this task is allowed to use (e.g. ["read","edit","bash"]); while the task is in progress the harness blocks any other mutating tool. Both verify and tools are sticky: omitting keeps the previous value, resending overwrites, neither can be cleared.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "tasks",
+    ],
+    "type": "object",
+  },
+  "description": "Track a task list for multi-step coding work. Pass a JSON array: [{"content":"add tests","status":"pending","priority":"high"}]. status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "tasks": {
+        "description": "JSON array of tasks. Each task: {content, status, priority, verify?}. verify = a shell command that proves the task is done (e.g. \`bun test tests/foo.test.ts\`). Optional \`tools\` = a JSON array naming the tools this task is allowed to use (e.g. ["read","edit","bash"]); while the task is in progress the harness blocks any other mutating tool. Both verify and tools are sticky: omitting keeps the previous value, resending overwrites, neither can be cleared.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "tasks",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "tasks": {
+        "description": "JSON array of tasks. Each task: {content, status, priority, verify?}. verify = a shell command that proves the task is done (e.g. \`bun test tests/foo.test.ts\`). Optional \`tools\` = a JSON array naming the tools this task is allowed to use (e.g. ["read","edit","bash"]); while the task is in progress the harness blocks any other mutating tool. Both verify and tools are sticky: omitting keeps the previous value, resending overwrites, neither can be cleared.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "tasks",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: web_search 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "num_results": {
+        "default": 5,
+        "description": "How many results to return (1–10).",
+        "type": "integer",
+      },
+      "query": {
+        "description": "The search query.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "query",
+    ],
+    "type": "object",
+  },
+  "description": "Search the web for current information. Returns a numbered list of results with titles and URLs. Use this when you need facts you don't know or that may have changed. To read a result, pass its URL to web_fetch.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "num_results": {
+        "default": 5,
+        "description": "How many results to return (1–10).",
+        "type": "INTEGER",
+      },
+      "query": {
+        "description": "The search query.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "query",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "num_results": {
+        "default": 5,
+        "description": "How many results to return (1–10).",
+        "type": "integer",
+      },
+      "query": {
+        "description": "The search query.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "query",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: web_fetch 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "max_chars": {
+        "default": 8000,
+        "description": "Maximum characters of page text to return (output is truncated past this). 500–50000.",
+        "type": "integer",
+      },
+      "url": {
+        "description": "The URL to fetch and read.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "url",
+    ],
+    "type": "object",
+  },
+  "description": "Fetch a single URL and return its main readable text (not raw HTML). Use after web_search to read a result, or on any URL you already have. Long pages are truncated; raise max_chars if you need more.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "max_chars": {
+        "default": 8000,
+        "description": "Maximum characters of page text to return (output is truncated past this). 500–50000.",
+        "type": "INTEGER",
+      },
+      "url": {
+        "description": "The URL to fetch and read.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "url",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "max_chars": {
+        "default": 8000,
+        "description": "Maximum characters of page text to return (output is truncated past this). 500–50000.",
+        "type": "integer",
+      },
+      "url": {
+        "description": "The URL to fetch and read.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "url",
+    ],
+    "type": "object",
+  },
+}
+`;

@@ -37,6 +37,8 @@ your real LLM call.
 - **[Classifier Redesign Research](classifier-redesign-research.md)** — the regex/word-count
   classifier's measured failure mode, router-industry prior art (OpenRouter, NVIDIA,
   Arch-Router, semantic-router, UniRoute), method tiers, and the phased upgrade plan.
+- **[Harness Boosting](boosting/boosting-roadmap.md)** — the tool-hardening program:
+  bounded-output seam, per-tool audits, and the P0 design rationale (`boosting/research/`).
 
 ## Guides
 
