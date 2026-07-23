@@ -682,3 +682,82 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
 }
 `;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: checkpoint 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+  "google_function_declaration_parameters": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "STRING",
+      },
+    },
+    "required": [],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: rewind 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "object",
+  },
+  "google_function_declaration_parameters": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "object",
+  },
+}
+`;

@@ -10,6 +10,7 @@
 import { stream as defaultStream } from "../ai/stream.ts";
 import { AssistantMessage, Message, text } from "../ai/types.ts";
 import type { Context, Tool, ToolCall } from "../ai/types.ts";
+import { applyPendingContextRewind } from "./context_prune.ts";
 import {
   type AgentEvent,
   agentEnd,
@@ -157,6 +158,8 @@ export async function* agentLoop(
         yield messageEnd(tr);
       }
     }
+
+    applyPendingContextRewind(state);
 
     yield turnEnd(
       assistant,

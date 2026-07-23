@@ -138,6 +138,12 @@ export interface HarnessConfig {
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
    * tool calls. Opt out with MINIMA_TUI_STEER=0 — mirrors the bigPlan flag shape. */
   steer: boolean;
+  /** Checkpoint/rewind context pruning (P4, default ON): the model-callable
+   * checkpoint/rewind tool pair that prunes exploration from the projection while the
+   * DB transcript keeps every row. Opt out with MINIMA_TUI_REWIND=0 — mirrors the
+   * memoryLedger flag shape. Gates tool REGISTRATION only: rehydrate honors persisted
+   * context_rewind markers regardless of this flag. */
+  contextRewind: boolean;
   /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
    * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
    * always win; consent gates and diagnostic switches are never covered. */
@@ -205,6 +211,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     memoryLedger: true,
     artifacts: true,
     steer: true,
+    contextRewind: true,
     experimental: false,
     autoEffort: false,
     classify: false,
@@ -245,6 +252,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
+  cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);

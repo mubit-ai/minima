@@ -8,6 +8,7 @@
  */
 
 import type { AssistantMessage, Message, Model } from "../ai/types.ts";
+import type { PendingContextRewind } from "./context_prune.ts";
 import type {
   AfterToolCall,
   AgentTool,
@@ -34,6 +35,8 @@ export class AgentState {
   followUp: Message[] = [];
   steeringMode: QueueMode = "one-at-a-time";
   followUpMode: QueueMode = "one-at-a-time";
+  // Staged by the rewind tool; applied and cleared by the loop at the turn boundary.
+  pendingContextRewind: PendingContextRewind | null = null;
 
   constructor(
     init?: Partial<
