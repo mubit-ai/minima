@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # to the historical unversioned key; flipping to "v2"+ rides the signature slot of
     # task_cluster (classifier program PR-2; the flip itself is PR-9).
     minima_cluster_key_version: str = "v1"
+    # Dual-read window (PR-3): extra key-space versions the keyed lookup may read, comma
+    # list newest-first (e.g. "v2,v1"; empty = active version only). Legacy-version
+    # evidence enters aggregation only when the active-version cell is thin
+    # (< minima_dual_key_min_n rows for that model) and at a discounted weight.
+    minima_cluster_key_read_versions: str = ""
+    minima_dual_key_min_n: int = 3
+    minima_legacy_evidence_weight: float = 0.7
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types

@@ -18,6 +18,7 @@ from minima.memory.keys import (
     lesson_upsert_key,
     outcome_idempotency_key,
     outcome_upsert_key,
+    strip_cluster_version,
 )
 from minima.memory.records import (
     EVIDENCE_GATE,
@@ -90,8 +91,27 @@ def _supplied_quality(req: FeedbackRequest) -> tuple[float | None, str | None]:
     return reconcile_quality(req.outcome.value, clamp01(float(req.quality_score)))
 
 
+def _read_clusters(cluster: str, settings: Settings) -> list[str]:
+    """Active cluster first, then the configured legacy-version siblings (PR-3 dual
+    read) — the read-modify-write base must not reset to n=1 across a key-space flip."""
+    core = strip_cluster_version(cluster)
+    out = [cluster]
+    for v in settings.minima_cluster_key_read_versions.split(","):
+        v = v.strip()
+        if not v:
+            continue
+        sibling = core if v == "v1" else f"{core}:{v}"
+        if sibling not in out:
+            out.append(sibling)
+    return out
+
+
 async def _previous_record(
-    tenant: TenantContext, lane: str, cluster: str, model_id: str
+    tenant: TenantContext,
+    lane: str,
+    cluster: str,
+    model_id: str,
+    fallback_clusters: list[str] | None = None,
 ) -> OutcomeRecord | None:
     """Read the current durable (cluster, model) record so counters can accumulate.
 
@@ -111,14 +131,15 @@ async def _previous_record(
                 if ev is not None and ev.record is not None:
                     return ev.record
                 break
-        hits = await tenant.memory.lookup(
-            lane=lane,
-            match=[{"kind": "outcome", "task_cluster": cluster, "model_id": model_id}],
-            limit=4,
-        )
-        for ev in hits or []:
-            if ev.record is not None:
-                return ev.record
+        for key in [cluster, *(fallback_clusters or [])]:
+            hits = await tenant.memory.lookup(
+                lane=lane,
+                match=[{"kind": "outcome", "task_cluster": key, "model_id": model_id}],
+                limit=4,
+            )
+            for ev in hits or []:
+                if ev.record is not None:
+                    return ev.record
     except Exception as exc:  # noqa: BLE001 — accumulation is additive; never fail feedback
         log.warning("previous_record_read_failed", cluster=cluster, error=str(exc))
     return None
@@ -223,7 +244,7 @@ async def feedback(
         if settings.minima_late_feedback_enabled and tenant.decision_log is not None:
             decision = tenant.decision_log.get(req.recommendation_id)
             if decision is not None:
-                return await _late_feedback(req, tenant, decision)
+                return await _late_feedback(req, tenant, decision, settings)
         return FeedbackResponse(accepted=False, warnings=["unknown_recommendation"])
 
     source = _resolve_evidence_source(req)
@@ -299,7 +320,11 @@ async def feedback(
     # upsert carries HISTORY, not just the latest outcome. A replayed rec_id returns
     # the previous record unchanged — skip the write and reinforcement entirely.
     prev = await _previous_record(
-        tenant, stored.lane, stored.task_cluster, req.chosen_model_id
+        tenant,
+        stored.lane,
+        stored.task_cluster,
+        req.chosen_model_id,
+        fallback_clusters=_read_clusters(stored.task_cluster, settings)[1:],
     )
     record = merged_outcome(prev, record)
     if record is prev:
@@ -632,6 +657,7 @@ async def _late_feedback(
     req: FeedbackRequest,
     tenant: TenantContext,
     decision: DecisionRecord,
+    settings: Settings,
 ) -> FeedbackResponse:
     """Accept feedback after recstore expiry: write the outcome, skip attribution."""
     source = _resolve_evidence_source(req)
@@ -683,7 +709,13 @@ async def _late_feedback(
         recorded_at=time.time(),
         signals=req.signals,
     )
-    prev = await _previous_record(tenant, decision.lane, decision.cluster, req.chosen_model_id)
+    prev = await _previous_record(
+        tenant,
+        decision.lane,
+        decision.cluster,
+        req.chosen_model_id,
+        fallback_clusters=_read_clusters(decision.cluster, settings)[1:],
+    )
     record = merged_outcome(prev, record)
     if record is prev:
         warnings.append("duplicate_feedback_ignored")
