@@ -279,7 +279,6 @@ SEEDS: dict[str, list[str]] = {
         "the app works in chrome but breaks in safari, why",
         "optimize this function, it's called a million times",
         "hook up the payment webhook to update order status",
-        "build me a website for my bakery",
         "Make me a simple app to track my workouts.",
         "Create a landing page with a signup form for my newsletter.",
         "I want an online store for my handmade candles, set it up.",

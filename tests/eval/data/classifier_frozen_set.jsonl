@@ -1,0 +1,165 @@
+{"text": "the deploy script exits 1 on the staging box, logs attached", "label": "code", "slice": "typed"}
+{"text": "wire up oauth login to our existing user table", "label": "code", "slice": "typed"}
+{"text": "port this bash script to powershell", "label": "code", "slice": "typed"}
+{"text": "my react component rerenders forever, find the loop", "label": "code", "slice": "typed"}
+{"text": "add rate limiting to the public api", "label": "code", "slice": "typed"}
+{"text": "the cron job silently stopped writing rows last tuesday, investigate", "label": "code", "slice": "typed"}
+{"text": "turn this jupyter notebook into a proper module with tests", "label": "code", "slice": "typed"}
+{"text": "implement pagination for the orders endpoint", "label": "code", "slice": "typed"}
+{"text": "what's the difference between arbitration and mediation", "label": "qa", "slice": "typed"}
+{"text": "how do heat pumps perform below freezing", "label": "qa", "slice": "typed"}
+{"text": "why do some vaccines need boosters and others don't", "label": "qa", "slice": "typed"}
+{"text": "what does a title company actually do in a home sale", "label": "qa", "slice": "typed"}
+{"text": "how is decaf coffee made", "label": "qa", "slice": "typed"}
+{"text": "what's the point of a standing rib roast resting after cooking", "label": "qa", "slice": "typed"}
+{"text": "why are manhole covers round", "label": "qa", "slice": "typed"}
+{"text": "how do noise ordinances usually work in apartments", "label": "qa", "slice": "typed"}
+{"text": "we can hire one senior or two juniors, argue it out for our stage", "label": "reasoning", "slice": "typed"}
+{"text": "is the extended warranty worth it on a $700 appliance, show the math", "label": "reasoning", "slice": "typed"}
+{"text": "sequence these five errands to minimize backtracking across town", "label": "reasoning", "slice": "typed"}
+{"text": "our churn rose 2% after the price change, was it worth it overall", "label": "reasoning", "slice": "typed"}
+{"text": "three roommates, different incomes, one rent: propose a fair split and defend it", "label": "reasoning", "slice": "typed"}
+{"text": "estimate how many piano tuners work in Chicago and show your steps", "label": "reasoning", "slice": "typed"}
+{"text": "should we self-host the database or stay managed at 10x growth", "label": "reasoning", "slice": "typed"}
+{"text": "pick the better of these two job offers for someone optimizing for learning", "label": "reasoning", "slice": "typed"}
+{"text": "crunch this 90-minute deposition transcript into the key admissions", "label": "summarization", "slice": "typed"}
+{"text": "give me the elevator version of this grant application", "label": "summarization", "slice": "typed"}
+{"text": "what did this earnings call actually say about layoffs, in two lines", "label": "summarization", "slice": "typed"}
+{"text": "trim these sprawling meeting notes into decisions and owners only", "label": "summarization", "slice": "typed"}
+{"text": "abstract this 12-page whitepaper for the landing page", "label": "summarization", "slice": "typed"}
+{"text": "reduce this saga of a bug ticket to a clean postmortem paragraph", "label": "summarization", "slice": "typed"}
+{"text": "digest the attached three RFCs into one comparison brief", "label": "summarization", "slice": "typed"}
+{"text": "shrink my 2000-word cover letter draft to 250 words", "label": "summarization", "slice": "typed"}
+{"text": "pull the terminating clauses and notice periods from these vendor contracts", "label": "extraction", "slice": "typed"}
+{"text": "list each API endpoint and its auth requirement from this swagger dump", "label": "extraction", "slice": "typed"}
+{"text": "get all the court dates and judge names out of the docket text", "label": "extraction", "slice": "typed"}
+{"text": "harvest the model numbers and firmware versions from these support logs", "label": "extraction", "slice": "typed"}
+{"text": "extract every dosage change from this patient history", "label": "extraction", "slice": "typed"}
+{"text": "grab the account numbers and routing numbers from these remittance advices", "label": "extraction", "slice": "typed"}
+{"text": "pick out each speaker's affiliation from the panel transcript", "label": "extraction", "slice": "typed"}
+{"text": "collect the GPS coordinates mentioned across these field reports", "label": "extraction", "slice": "typed"}
+{"text": "sort these vendor emails into invoice, marketing, and support", "label": "classification", "slice": "typed"}
+{"text": "label each pull request as feature, fix, or chore", "label": "classification", "slice": "typed"}
+{"text": "grade these essays pass or fail against the rubric", "label": "classification", "slice": "typed"}
+{"text": "flag which of these transactions look like subscriptions", "label": "classification", "slice": "typed"}
+{"text": "mark each survey comment as about pricing, quality, or shipping", "label": "classification", "slice": "typed"}
+{"text": "bucket these error messages by subsystem", "label": "classification", "slice": "typed"}
+{"text": "tag each headline as local, national, or international news", "label": "classification", "slice": "typed"}
+{"text": "decide for each photo caption whether it's product or lifestyle", "label": "classification", "slice": "typed"}
+{"text": "put this safety data sheet into Polish", "label": "translation", "slice": "typed"}
+{"text": "how would a native speaker say 'no worries, take your time' in French", "label": "translation", "slice": "typed"}
+{"text": "translate the toast I wrote into Italian for the wedding in Florence", "label": "translation", "slice": "typed"}
+{"text": "render these app store screenshots' captions in Korean", "label": "translation", "slice": "typed"}
+{"text": "convert this old German church record into English", "label": "translation", "slice": "typed"}
+{"text": "translate our refund policy to Spanish, keep the legal meaning exact", "label": "translation", "slice": "typed"}
+{"text": "what's the Japanese equivalent of 'the ball is in your court'", "label": "translation", "slice": "typed"}
+{"text": "localize this push notification into Indonesian and Thai", "label": "translation", "slice": "typed"}
+{"text": "write the menu blurb for a smoked brisket sandwich", "label": "creative", "slice": "typed"}
+{"text": "give my newsletter a wittier sign-off line", "label": "creative", "slice": "typed"}
+{"text": "draft a warm rejection note for a vendor pitch we liked but can't fund", "label": "creative", "slice": "typed"}
+{"text": "invent three team names for a rowing club of accountants", "label": "creative", "slice": "typed"}
+{"text": "make this product changelog sound human", "label": "creative", "slice": "typed"}
+{"text": "write a two-line bio for my conference badge", "label": "creative", "slice": "typed"}
+{"text": "punch up my toast for my sister's graduation", "label": "creative", "slice": "typed"}
+{"text": "rewrite this press release so it doesn't read like a press release", "label": "creative", "slice": "typed"}
+{"text": "using the attached bylaws, can the board vote by email", "label": "rag", "slice": "typed"}
+{"text": "per the pasted spec sheet, does this charger support 240V input", "label": "rag", "slice": "typed"}
+{"text": "from the provided minutes, what budget line was cut", "label": "rag", "slice": "typed"}
+{"text": "based on these three support docs, why would exports come out blank", "label": "rag", "slice": "typed"}
+{"text": "according to the included policy, how many sick days carry over", "label": "rag", "slice": "typed"}
+{"text": "from the pasted API changelog, when was cursor pagination introduced", "label": "rag", "slice": "typed"}
+{"text": "using only this rental agreement, who pays for pest control", "label": "rag", "slice": "typed"}
+{"text": "per the attached syllabus, what percent of the grade is the final", "label": "rag", "slice": "typed"}
+{"text": "move my 3pm with legal to friday and send the new invite", "label": "tool_use", "slice": "typed"}
+{"text": "order two more of the ergonomic keyboards from the last purchase order", "label": "tool_use", "slice": "typed"}
+{"text": "set the office thermostat schedule to 66 overnight", "label": "tool_use", "slice": "typed"}
+{"text": "text the plumber that the leak is back", "label": "tool_use", "slice": "typed"}
+{"text": "add a recurring reminder to water the plants every thursday", "label": "tool_use", "slice": "typed"}
+{"text": "book the conference room with the projector for tomorrow at 10", "label": "tool_use", "slice": "typed"}
+{"text": "pay the electric bill from checking", "label": "tool_use", "slice": "typed"}
+{"text": "start my running playlist and set a timer for 30 minutes", "label": "tool_use", "slice": "typed"}
+{"text": "good night", "label": "other", "slice": "typed"}
+{"text": "haha nice one", "label": "other", "slice": "typed"}
+{"text": "you still there?", "label": "other", "slice": "typed"}
+{"text": "pretend to be a sommelier and describe tap water", "label": "other", "slice": "typed"}
+{"text": "let's play rock paper scissors", "label": "other", "slice": "typed"}
+{"text": "be my rubber duck while I think out loud", "label": "other", "slice": "typed"}
+{"text": "what's your favorite color", "label": "other", "slice": "typed"}
+{"text": "tell me something weird about octopuses", "label": "other", "slice": "typed"}
+{"text": "rewrite this text to sound less formal", "label": "creative", "slice": "conversational"}
+{"text": "draft a follow-up email after my job interview", "label": "creative", "slice": "conversational"}
+{"text": "make this announcement friendlier", "label": "creative", "slice": "conversational"}
+{"text": "write a caption for my hiking photo", "label": "creative", "slice": "conversational"}
+{"text": "help me word a condolence message for a coworker", "label": "creative", "slice": "conversational"}
+{"text": "draft a polite decline to this wedding invitation", "label": "creative", "slice": "conversational"}
+{"text": "help me name my new puppy, something mythological", "label": "creative", "slice": "conversational"}
+{"text": "proofread this paragraph for typos", "label": "creative", "slice": "conversational"}
+{"text": "explain how mortgages work", "label": "qa", "slice": "conversational"}
+{"text": "what's the difference between a virus and bacteria", "label": "qa", "slice": "conversational"}
+{"text": "why do cats purr", "label": "qa", "slice": "conversational"}
+{"text": "explain blockchain to my dad", "label": "qa", "slice": "conversational"}
+{"text": "how does the stock market actually work", "label": "qa", "slice": "conversational"}
+{"text": "what does carbon neutral really mean", "label": "qa", "slice": "conversational"}
+{"text": "what should I cook tonight with chicken and rice", "label": "qa", "slice": "conversational"}
+{"text": "suggest a gift for my dad who likes woodworking", "label": "qa", "slice": "conversational"}
+{"text": "should I do a masters or start working, help me decide", "label": "reasoning", "slice": "conversational"}
+{"text": "compare renting vs buying in a city I might leave in 3 years", "label": "reasoning", "slice": "conversational"}
+{"text": "help me plan a budget for a 2 week europe trip under 3k", "label": "reasoning", "slice": "conversational"}
+{"text": "which laptop should I get for video editing under $1500", "label": "reasoning", "slice": "conversational"}
+{"text": "is it worth commuting 90 minutes for a 20% raise", "label": "reasoning", "slice": "conversational"}
+{"text": "plan my week so I can fit in gym, study and a side project", "label": "reasoning", "slice": "conversational"}
+{"text": "give me feedback on my business idea", "label": "reasoning", "slice": "conversational"}
+{"text": "pretend you're a pirate and describe your day", "label": "other", "slice": "conversational"}
+{"text": "let's do a mock interview, you be the hiring manager", "label": "other", "slice": "conversational"}
+{"text": "roleplay as a customer angry about a late delivery", "label": "other", "slice": "conversational"}
+{"text": "you're my debate opponent, argue against remote work", "label": "other", "slice": "conversational"}
+{"text": "act as my Spanish conversation partner", "label": "other", "slice": "conversational"}
+{"text": "make me a packing list for a ski trip", "label": "other", "slice": "conversational"}
+{"text": "turn my notes into a study guide", "label": "summarization", "slice": "conversational"}
+{"text": "There is a failing test in this project. Run the tests with: python3 -m pytest -q, find the bug, fix it, and re-run the tests to confirm they all pass. Then summarize the fix in one sentence.", "label": "code", "slice": "pin"}
+{"text": "Fix the bug in stats.py so the tests pass", "label": "code", "slice": "pin"}
+{"text": "Why does src/main.rs not compile?", "label": "code", "slice": "pin"}
+{"text": "Summarize what utils.py does, refactor notes welcome", "label": "code", "slice": "pin"}
+{"text": "build me a website for my bakery", "label": "code", "slice": "pin"}
+{"text": "fix my landing page, the layout is broken", "label": "code", "slice": "pin"}
+{"text": "fix our checkout flow bug", "label": "code", "slice": "pin"}
+{"text": "tweak styles.css so the header sticks", "label": "code", "slice": "pin"}
+{"text": "update index.html with the new nav", "label": "code", "slice": "pin"}
+{"text": "create a landing page for the product launch", "label": "code", "slice": "pin"}
+{"text": "add some html and css for the hero section", "label": "code", "slice": "pin"}
+{"text": "Design a lock-free concurrent LRU cache eviction strategy for a multi-tenant inference gateway where tenants have different SLAs. Explain the memory-ordering constraints and the ABA-problem mitigation in under 150 words.", "label": "reasoning", "slice": "pin"}
+{"text": "Summarize this article in three sentences.", "label": "summarization", "slice": "pin"}
+{"text": "TL;DR of the meeting notes please", "label": "summarization", "slice": "pin"}
+{"text": "What is the capital of France?", "label": "qa", "slice": "pin"}
+{"text": "asdkfj qwerlkj zxcmvn", "label": "other", "slice": "oos"}
+{"text": "\ud83c\udf89\ud83c\udf89\ud83c\udf89", "label": "other", "slice": "oos"}
+{"text": "test test test 123", "label": "other", "slice": "oos"}
+{"text": "aaaaaaaaaaaaaaaaaa", "label": "other", "slice": "oos"}
+{"text": "hello?", "label": "other", "slice": "oos"}
+{"text": "u there", "label": "other", "slice": "oos"}
+{"text": "kk", "label": "other", "slice": "oos"}
+{"text": "hmmmm", "label": "other", "slice": "oos"}
+{"text": ".", "label": "other", "slice": "oos"}
+{"text": "??", "label": "other", "slice": "oos"}
+{"text": "nvm", "label": "other", "slice": "oos"}
+{"text": "wait", "label": "other", "slice": "oos"}
+{"text": "lorem ipsum dolor sit amet consectetur", "label": "other", "slice": "oos"}
+{"text": "9f8a7b6c5d4e3f2a1b0c", "label": "other", "slice": "oos"}
+{"text": "the quick brown fox jumps over the lazy dog", "label": "other", "slice": "oos"}
+{"text": "purple monkey dishwasher banana telescope", "label": "other", "slice": "oos"}
+{"text": "continue", "label": "other", "slice": "oos"}
+{"text": "go on", "label": "other", "slice": "oos"}
+{"text": "and then?", "label": "other", "slice": "oos"}
+{"text": "same as before", "label": "other", "slice": "oos"}
+{"text": "do it again but better", "label": "other", "slice": "oos"}
+{"text": "that's not what I meant", "label": "other", "slice": "oos"}
+{"text": "you already said that", "label": "other", "slice": "oos"}
+{"text": "try again", "label": "other", "slice": "oos"}
+{"text": "why did you stop", "label": "other", "slice": "oos"}
+{"text": "make it pop", "label": "other", "slice": "oos"}
+{"text": "no not like that", "label": "other", "slice": "oos"}
+{"text": "the other one", "label": "other", "slice": "oos"}
+{"text": "undo that", "label": "other", "slice": "oos"}
+{"text": "as discussed earlier", "label": "other", "slice": "oos"}
+{"text": "per my last message", "label": "other", "slice": "oos"}
+{"text": "see above", "label": "other", "slice": "oos"}

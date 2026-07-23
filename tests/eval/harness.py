@@ -25,6 +25,7 @@ Requires the ``seed`` extra (pandas/huggingface-hub) and a running Mubit + MUBIT
 from __future__ import annotations
 
 import math
+import os
 import random
 import re
 import time
@@ -426,8 +427,15 @@ async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidat
         # Fresh engine per call → cold (uniform) propensity, matching the factored path.
         engine = Recommender(settings, memory, catalog, RecommendationStore())
         factored = _pick(aggs, cards, row.task_type, slider, _est_in_tokens(row.prompt), settings)
+        # Classifier-in-loop mode (MINIMA_EVAL_USE_CLASSIFIER=1): drop the caller
+        # overrides so the engine's own classifier (regex or embed head) assigns the
+        # cluster — classification quality then shows up in the crosscheck instead of
+        # being bypassed by the eval's ground-truth type mapping.
+        in_loop = os.environ.get("MINIMA_EVAL_USE_CLASSIFIER") == "1"
         resp = await engine.recommend(RecommendRequest(
-            task=TaskInput(task=row.prompt, task_type=row.task_type, difficulty="medium",
+            task=TaskInput(task=row.prompt,
+                           task_type=None if in_loop else row.task_type,
+                           difficulty=None if in_loop else "medium",
                            expected_input_tokens=_est_in_tokens(row.prompt),
                            expected_output_tokens=_OUT_TOKENS),
             namespace=ns, cost_quality_tradeoff=slider,
