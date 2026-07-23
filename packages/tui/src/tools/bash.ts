@@ -15,7 +15,7 @@ import { killProcessGroup } from "../minima/check.ts";
 import { BoundedBuffer, boundDetails } from "./_bounds.ts";
 import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
-import type { FsToolOptions } from "./types.ts";
+import type { ArtifactStream, FsToolOptions, ToolArtifacts } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -32,6 +32,7 @@ async function pumpStream(
   stream: ReadableStream<Uint8Array> | null,
   buffer: BoundedBuffer,
   emit: () => void,
+  tee?: (chunk: string) => void,
 ): Promise<void> {
   if (!stream) return;
   const reader = stream.getReader();
@@ -39,15 +40,37 @@ async function pumpStream(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    buffer.push(decoder.decode(value, { stream: true }));
+    const chunk = decoder.decode(value, { stream: true });
+    buffer.push(chunk);
+    tee?.(chunk);
     emit();
   }
   const rest = decoder.decode();
-  if (rest) buffer.push(rest);
+  if (rest) {
+    buffer.push(rest);
+    tee?.(rest);
+  }
+}
+
+async function commitStream(s: ArtifactStream): Promise<{ ref: string } | null> {
+  try {
+    return await s.commit();
+  } catch {
+    return null; // spill is best-effort; the command result never depends on it
+  }
+}
+
+async function discardStream(s: ArtifactStream): Promise<void> {
+  try {
+    await s.discard();
+  } catch {
+    // spill is best-effort; the command result never depends on it
+  }
 }
 
 async function execute(
   base: string | undefined,
+  artifacts: ToolArtifacts | undefined,
   _id: string,
   params: Record<string, unknown>,
   signal: AbortSignal | null,
@@ -88,6 +111,22 @@ async function execute(
   }
 
   const buffer = new BoundedBuffer({ maxChars: 50_000, headChars: 10_000 });
+  // Tee for the artifact spill (P1): the buffer discards the middle while streaming, so
+  // the full output only exists as the teed file. A tee failure disables the spill for
+  // this call; the command result never depends on it.
+  let artifactStream = artifacts?.beginStream("bash") ?? null;
+  const tee = artifactStream
+    ? (chunk: string) => {
+        if (!artifactStream) return;
+        try {
+          artifactStream.write(chunk);
+        } catch {
+          const dead = artifactStream;
+          artifactStream = null;
+          void discardStream(dead);
+        }
+      }
+    : undefined;
   let lastUpdate = 0;
   const emit = () => {
     if (!onUpdate) return;
@@ -118,8 +157,8 @@ async function execute(
 
   const winner = await Promise.race([
     Promise.all([
-      pumpStream(proc.stdout ?? null, buffer, emit),
-      pumpStream(proc.stderr ?? null, buffer, emit),
+      pumpStream(proc.stdout ?? null, buffer, emit, tee),
+      pumpStream(proc.stderr ?? null, buffer, emit, tee),
       proc.exited,
     ]).then(() => ({ kind: "done" as const })),
     timer.then((kind) => ({ kind })),
@@ -133,13 +172,38 @@ async function execute(
     killProcessGroup(proc);
     const prefix =
       winner.kind === "timeout" ? `bash: timed out after ${timeoutMs} ms` : "bash: aborted";
-    return errorResult(`${prefix}\n--- partial output ---\n${buffer.snapshot()}`);
+    const b = buffer.finish();
+    let ref: string | null = null;
+    const stream = artifactStream;
+    artifactStream = null;
+    if (stream) {
+      if (b.truncated) ref = (await commitStream(stream))?.ref ?? null;
+      else await discardStream(stream);
+    }
+    const partial = `${prefix}\n--- partial output ---\n${b.body}`;
+    const res = errorResult(ref ? `${partial}\n[full output saved: ${ref}]` : partial);
+    if (ref) res.details = { ...res.details, spill_ref: ref };
+    return res;
   }
 
   const code = await proc.exited;
   const b = buffer.finish();
-  const body = b.body ? `${b.body}\n[exit ${code}]` : `[exit ${code}]`;
-  return { content: [text(body)], details: { exit_code: code, ...boundDetails(b) } };
+  let body = b.body ? `${b.body}\n[exit ${code}]` : `[exit ${code}]`;
+  const details: Record<string, unknown> = { exit_code: code, ...boundDetails(b) };
+  const stream = artifactStream;
+  artifactStream = null;
+  if (stream) {
+    if (b.truncated) {
+      const committed = await commitStream(stream);
+      if (committed) {
+        body += `\n[full output saved: ${committed.ref}]`;
+        details.spill_ref = committed.ref;
+      }
+    } else {
+      await discardStream(stream);
+    }
+  }
+  return { content: [text(body)], details };
 }
 
 export function bashTool(opts: FsToolOptions = {}): AgentTool {
@@ -150,6 +214,7 @@ export function bashTool(opts: FsToolOptions = {}): AgentTool {
       "Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. " +
       "Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
     parameters,
-    execute: (id, params, signal, onUpdate) => execute(opts.workdir, id, params, signal, onUpdate),
+    execute: (id, params, signal, onUpdate) =>
+      execute(opts.workdir, opts.artifacts, id, params, signal, onUpdate),
   };
 }

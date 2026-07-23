@@ -4,7 +4,7 @@ import { boundDetails, boundText } from "./_bounds.ts";
 import { resolveWithin, truncateLine } from "./_io.ts";
 import { resolveRg } from "./_rg.ts";
 import { objectSchema } from "./schema.ts";
-import type { FsToolOptions } from "./types.ts";
+import type { FsToolOptions, ToolArtifacts } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -52,6 +52,7 @@ export function buildGrepArgs(p: GrepArgsInput): string[] {
 async function executeWithin(
   workdir: string | undefined,
   rgCmd: string | null | undefined,
+  artifacts: ToolArtifacts | undefined,
   params: Record<string, unknown>,
 ): Promise<ToolResult> {
   const r = resolveWithin(String(params.path ?? "."), workdir);
@@ -89,6 +90,7 @@ async function executeWithin(
     maxLines: MAX_MATCHES,
     maxChars: MAX_CHARS,
     unit: "matches",
+    spill: artifacts?.sink("grep") ?? null,
   });
   let body = b.body;
   if (b.notice) body += `\n${b.notice}`;
@@ -107,6 +109,6 @@ export function grepTool(opts: FsToolOptions & { rgCmd?: string | null } = {}): 
       ".gitignore respected when ripgrep is available. Use 'glob' to filter file types. " +
       "Max 200 matches shown.",
     parameters,
-    execute: (_id, params) => executeWithin(opts.workdir, opts.rgCmd, params),
+    execute: (_id, params) => executeWithin(opts.workdir, opts.rgCmd, opts.artifacts, params),
   };
 }

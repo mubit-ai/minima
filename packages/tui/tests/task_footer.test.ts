@@ -139,7 +139,7 @@ describe("todoState threading — sub-agents stay isolated", () => {
   test("main.ts hands ONE array to both the toolset and the TUI", () => {
     const main = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
     expect(main).toContain("const todoState: TodoTask[] = [];");
-    expect(main).toContain("toolsFor(args, config.bigPlan === true, todoState, (usd, id) =>");
+    expect(main).toMatch(/toolsFor\(\s*args,\s*config\.bigPlan === true,\s*todoState,/);
     expect(main).toContain("todos: todoState,");
   });
 });
