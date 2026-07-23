@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     minima_cluster_key_read_versions: str = ""
     minima_dual_key_min_n: int = 3
     minima_legacy_evidence_weight: float = 0.7
+    # Embed classifier (PR-5): serve task_type from the trained static-embedding head
+    # (scripts/classifier artifact) instead of the regex, falling back to the regex on
+    # abstention or any load problem. minima_classifier_required makes a missing/broken
+    # artifact refuse to START rather than silently degrade to regex quality in prod.
+    minima_embed_classifier: bool = False
+    minima_classifier_artifact: str = ""
+    minima_classifier_required: bool = False
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types

@@ -20,7 +20,8 @@ from minima.memory.records import RecalledEvidence, label_score
 from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
 from minima.recommender import contextual, escalation, score
 from minima.recommender.aggregate import aggregate_by_model
-from minima.recommender.classify import CLASSIFIER_ID, classify_details
+from minima.recommender.classify import classify_details
+from minima.recommender.classify_embed import EmbedClassifier
 from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
@@ -91,6 +92,7 @@ class Recommender:
         resets: ResetRegistry | None = None,
         contextual: ContextualStore | None = None,
         recall_utility: RecallUtilityStore | None = None,
+        embed_classifier: EmbedClassifier | None = None,
     ):
         self._settings = settings
         self._memory = memory
@@ -103,6 +105,7 @@ class Recommender:
         self._resets = resets
         self._contextual = contextual
         self._recall_utility = recall_utility
+        self._embed_classifier = embed_classifier
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
         argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
         self._thompson_enabled = (
@@ -134,7 +137,7 @@ class Recommender:
         settings = self._settings
         warnings: list[str] = []
 
-        classification = classify_details(req.task)
+        classification = classify_details(req.task, embed=self._embed_classifier)
         # classify_details always populates `profile`; bind it locally so the type
         # checker sees a non-None ClassificationProfile (narrowing on the attribute
         # is otherwise dropped across the awaits below). Mutations still apply to the
@@ -209,6 +212,7 @@ class Recommender:
         ):
             refined = classify_details(
                 req.task,
+                embed=self._embed_classifier,
                 neighbor_votes=[
                     (ev.record.task_type, ev.score) for ev in evidence if ev.record is not None
                 ],
@@ -533,7 +537,8 @@ class Recommender:
             est_cost_premium=est_cost_premium,
             task_type_source=class_profile.task_type_source,
             shadow_choices=shadow_choices,
-            classifier_id=CLASSIFIER_ID,
+            classifier_id=classification.classifier_id,
+            abstained=classification.abstained,
             cluster_key_version=settings.minima_cluster_key_version,
         )
         profile.mark("decision_log")
@@ -675,6 +680,7 @@ class Recommender:
         task_type_source: str | None = None,
         shadow_choices: dict[str, str] | None = None,
         classifier_id: str | None = None,
+        abstained: bool | None = None,
         cluster_key_version: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
@@ -746,6 +752,7 @@ class Recommender:
                     task_type_confidence=req.task.task_type_confidence,
                     shadow_choices=shadow_choices,
                     classifier_id=classifier_id,
+                    abstained=abstained,
                     cluster_key_version=cluster_key_version,
                 )
             )
