@@ -62,6 +62,11 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      # The default engine for grep/glob is ripgrep; without it the rg-path tests
+      # (test.if(RG !== null)) silently skip and CI only ever exercises the fallbacks.
+      - name: Install ripgrep
+        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+
       - name: Install deps
         run: bun install --frozen-lockfile
 

@@ -40,6 +40,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).",
   "google_function_declaration_parameters": {
     "properties": {
       "limit": {
@@ -106,6 +107,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Create or overwrite a file. Overwrites entirely — prefer edit for targeted changes. Parent directories are created automatically. Pass the full intended file contents.",
   "google_function_declaration_parameters": {
     "properties": {
       "content": {
@@ -172,6 +174,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Replace an exact string in a file. Read the file first to get exact strings. Errors if old_string is absent or (without replace_all) appears more than once — add context to disambiguate.",
   "google_function_declaration_parameters": {
     "properties": {
       "new_string": {
@@ -243,6 +246,24 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": 
+"Apply a multi-file patch atomically in one call — add, update, delete, or move files together. Prefer this over multiple \`edit\` calls for any change touching more than one file or more than one region. Every hunk is resolved before anything is written; if any hunk fails to match, NO file is changed.
+
+Format:
+*** Begin Patch
+*** Add File: path/new.ts
++full contents, each line prefixed with +
+*** Update File: path/existing.ts
+*** Move to: path/renamed.ts   (optional; omit to edit in place)
+@@ optional anchor line for large files
+ unchanged context line (leading space)
+-removed line
++added line
+*** Delete File: path/old.ts
+*** End Patch
+
+Include a few unchanged context lines (leading space) around each change so the hunk can be located. Paths are relative to the working directory."
+,
   "google_function_declaration_parameters": {
     "properties": {
       "patch": {
@@ -293,6 +314,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Run a shell command and return combined stdout/stderr and exit code. Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
   "google_function_declaration_parameters": {
     "properties": {
       "command": {
@@ -351,6 +373,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     "required": [],
     "type": "object",
   },
+  "description": "List entries in a directory. Includes hidden files. Directories suffixed with /, sorted first. Use glob for pattern matching.",
   "google_function_declaration_parameters": {
     "properties": {
       "path": {
@@ -400,6 +423,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Find files matching a glob pattern (e.g. **/*.ts, src/**/test_*.py). Hidden files excluded; .gitignore'd files (plus node_modules/ and .git/) are excluded when ripgrep is available, unless include_ignored=true. Max 200 results shown. Use grep for content search.",
   "google_function_declaration_parameters": {
     "properties": {
       "include_ignored": {
@@ -475,6 +499,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Search file contents (ripgrep if available, else grep). Returns file:line:content matches. .gitignore respected when ripgrep is available. Use 'glob' to filter file types. Max 200 matches shown.",
   "google_function_declaration_parameters": {
     "properties": {
       "case_insensitive": {
@@ -544,6 +569,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Track a task list for multi-step coding work. Pass a JSON array: [{"content":"add tests","status":"pending","priority":"high"}]. status: pending|in_progress|completed. priority: high|medium|low. Replaces entire list.",
   "google_function_declaration_parameters": {
     "properties": {
       "tasks": {
@@ -590,6 +616,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Search the web for current information. Returns a numbered list of results with titles and URLs. Use this when you need facts you don't know or that may have changed. To read a result, pass its URL to web_fetch.",
   "google_function_declaration_parameters": {
     "properties": {
       "num_results": {
@@ -646,6 +673,7 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
     ],
     "type": "object",
   },
+  "description": "Fetch a single URL and return its main readable text (not raw HTML). Use after web_search to read a result, or on any URL you already have. Long pages are truncated; raise max_chars if you need more.",
   "google_function_declaration_parameters": {
     "properties": {
       "max_chars": {

@@ -137,6 +137,15 @@ async function execute(
   }
 
   const code = await proc.exited;
+  // Trailing flush: the throttle above is leading-edge only, so output arriving in the
+  // last window would otherwise never reach a live view before the result lands.
+  if (onUpdate) {
+    try {
+      onUpdate(buffer.snapshot());
+    } catch {
+      // progress must never break the run
+    }
+  }
   const b = buffer.finish();
   const body = b.body ? `${b.body}\n[exit ${code}]` : `[exit ${code}]`;
   return { content: [text(body)], details: { exit_code: code, ...boundDetails(b) } };

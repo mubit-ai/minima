@@ -1,6 +1,8 @@
 /**
- * The one bounded-output helper. Every tool's truncation flows through here so the
- * model-visible notice format stays uniform and P1 can wire a SpillSink in one place.
+ * The one bounded-output helper. Every seam-backed tool's truncation (grep, glob, ls,
+ * bash, apply_patch) flows through here so the model-visible notice format stays uniform
+ * and P1 can wire a SpillSink in one place. read's offset/limit windowing keeps its own
+ * trailers in _io.ts — its window semantics don't fit the head/headTail model.
  *
  * Cap interaction (pinned by tests/bounds.test.ts B7): maxLines and maxChars compose —
  * whole lines are emitted until adding the next would exceed either cap; a single line
@@ -69,6 +71,20 @@ export function boundDetails(b: BoundedOutput): Record<string, unknown> {
   return out;
 }
 
+// Mid-string cuts operate on UTF-16 code units; a boundary inside a surrogate pair would
+// put a lone surrogate in the model-visible body (invalid Unicode some provider APIs
+// reject). endBeforePair backs a cut end off a dangling high surrogate; startAfterPair
+// advances a cut start past a dangling low surrogate.
+function endBeforePair(s: string, end: number): number {
+  const c = s.charCodeAt(end - 1);
+  return c >= 0xd800 && c <= 0xdbff ? end - 1 : end;
+}
+
+function startAfterPair(s: string, start: number): number {
+  const c = s.charCodeAt(start);
+  return c >= 0xdc00 && c <= 0xdfff ? start + 1 : start;
+}
+
 function countLines(textLen: number, s: string): number {
   if (textLen === 0) return 0;
   let n = 1;
@@ -106,7 +122,7 @@ function boundHead(
       if (line.length > maxChars) {
         const room = maxChars - used - sep;
         if (room > 0) {
-          kept.push(line.slice(0, room));
+          kept.push(line.slice(0, endBeforePair(line, room)));
           shown += 1;
         }
       }
@@ -129,7 +145,7 @@ function boundHead(
 
 function cutHead(s: string, budget: number): string {
   if (s.length <= budget) return s;
-  const slice = s.slice(0, budget);
+  const slice = s.slice(0, endBeforePair(s, budget));
   const nl = slice.lastIndexOf("\n");
   return nl > 0 ? slice.slice(0, nl) : slice;
 }
@@ -137,7 +153,7 @@ function cutHead(s: string, budget: number): string {
 function cutTail(s: string, budget: number): string {
   if (budget <= 0) return "";
   if (s.length <= budget) return s;
-  const slice = s.slice(s.length - budget);
+  const slice = s.slice(startAfterPair(s, s.length - budget));
   const nl = slice.indexOf("\n");
   return nl >= 0 && nl < slice.length - 1 ? slice.slice(nl + 1) : slice;
 }
@@ -184,8 +200,13 @@ export class BoundedBuffer {
 
   constructor(opts: { maxChars?: number; headChars?: number } = {}) {
     this.maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
-    this.headChars = opts.headChars ?? DEFAULT_HEAD_CHARS;
-    this.tailChars = Math.max(0, this.maxChars - this.headChars - MARKER_RESERVE);
+    // headChars must leave tail room: with tailChars clamped to 0, the trim below would
+    // silently empty in-cap tail content while finish() reports truncated: false.
+    this.headChars = Math.min(
+      opts.headChars ?? DEFAULT_HEAD_CHARS,
+      Math.max(1, this.maxChars - MARKER_RESERVE - 1),
+    );
+    this.tailChars = Math.max(1, this.maxChars - this.headChars - MARKER_RESERVE);
   }
 
   push(chunk: string): void {
@@ -193,14 +214,17 @@ export class BoundedBuffer {
     for (let i = chunk.indexOf("\n"); i !== -1; i = chunk.indexOf("\n", i + 1)) this.newlines += 1;
     let rest = chunk;
     if (this.head.length < this.headChars) {
-      const take = Math.min(this.headChars - this.head.length, rest.length);
+      const take = endBeforePair(rest, Math.min(this.headChars - this.head.length, rest.length));
       this.head += rest.slice(0, take);
       rest = rest.slice(take);
     }
     if (rest) {
       this.tail += rest;
-      if (this.tail.length > this.tailChars * 2) {
-        this.tail = this.tail.slice(this.tail.length - this.tailChars);
+      // Trim only once the cap is exceeded — under-cap content must survive intact for
+      // snapshot()'s head+tail fast path (any headChars/maxChars config, not just the
+      // defaults where tail > 2*tailChars implies total > maxChars).
+      if (this.total > this.maxChars && this.tail.length > this.tailChars * 2) {
+        this.tail = this.tail.slice(startAfterPair(this.tail, this.tail.length - this.tailChars));
       }
     }
   }
@@ -209,7 +233,7 @@ export class BoundedBuffer {
     if (this.total <= this.maxChars) return this.head + this.tail;
     const tail =
       this.tail.length > this.tailChars
-        ? this.tail.slice(this.tail.length - this.tailChars)
+        ? this.tail.slice(startAfterPair(this.tail, this.tail.length - this.tailChars))
         : this.tail;
     const elided = this.total - this.head.length - tail.length;
     return `${this.head}\n${omissionMarker(elided)}\n${tail}`;

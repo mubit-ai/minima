@@ -41,8 +41,14 @@ export function readTool(opts: FsToolOptions = {}): AgentTool {
       }
       if (st.isDirectory()) return errorResult(`read: is a directory: ${p}`);
       if (IMAGE_EXTS.has(extname(p).toLowerCase()))
-        return errorResult(`read: image file not supported yet: ${p}`);
+        return errorResult(`read: image file not supported: ${p}`);
       const head = await Bun.file(p).slice(0, BINARY_SNIFF_BYTES).bytes();
+      // UTF-16 text has a NUL in every other byte — without the BOM check the sniff
+      // would misreport a readable text file as binary.
+      if ((head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff))
+        return errorResult(
+          `read: UTF-16 encoded file not supported: ${p} — convert with iconv or read via bash`,
+        );
       if (head.includes(0))
         return errorResult(
           `read: binary file (${st.size} bytes): ${p} — use bash to inspect binary content`,
