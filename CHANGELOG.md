@@ -4,6 +4,45 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] - 2026-07-23
+
+The launch-bug round-2 wave: the renderer goes top-anchored Claude-Code style, the
+plan ledger closes two franken-plan holes, and the queue/cost/bypass UX lands —
+plus `/version`, the `--experimental` flag, and a docs-site usage-flows page.
+
+### Added
+- **Visual prompt queue** (TUI, #252): queued prompts render as dim single-height
+  rows directly above the composer (last 3 + "+N more", held-state suffix), with
+  exact row parity against the anchor ledger.
+- **Session cost in `/why` + Plan Overview** (TUI, #254): both surfaces show the
+  footer's session total and the unattributed remainder (run-routed spend no step
+  of the displayed plan claims).
+- **`/version`, `minima --version`/`-v`** (TUI, #263): the harness version from the
+  build-time package.json embed, in-session and on the CLI.
+- **`minima --experimental`** (TUI, #263): CLI door to `MINIMA_TUI_EXPERIMENTAL=1`;
+  an explicit per-feature env `0` still wins.
+- **Docs: usage flows** (site, #264): `/harness/usage-flows` walks every major flow
+  benefits-first; `/redo`, `/cost fleet`, `/memory dream`, and the experimental
+  cluster are documented for the first time.
+
+### Changed
+- **Top-anchored transcript** (TUI, #256): boot/reseat clears to HOME (no bottom
+  newline reserve), the banner commits into the static region with its rows booked,
+  the composer stays mounted (and answerable) under permission/question overlays at
+  any terminal size, and the recovery ladder's rung>=1 prompt re-echo is deduped.
+- **Bypass joins the Shift+Tab ring** (TUI, #253): the mode ring is now
+  build -> accept-edits -> plan -> bypass with no enable latch. Ring transit onto
+  bypass never auto-approves a pending permission prompt (a prompt armed under a
+  stricter mode waits for an explicit answer), and the plan-mode banner/notice copy
+  reflects the new ring.
+
+### Fixed
+- **Plan supersede semantics** (TUI, #255): `/plan` start after finalize and a fully
+  disjoint `todowrite` now supersede the stale active plan instead of franken-merging
+  old title + new steps; `todowrite` array args survive pre-execute validation; and
+  harness noise (guard denials, stop-gate/anti-spiral steers) renders as calm dim
+  one-liners, never red error bubbles.
+
 ## [0.14.0] - 2026-07-22
 
 One release, three programs: the July 2026 model lineup, the interview program
