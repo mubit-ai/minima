@@ -14,6 +14,11 @@ export interface PropSpec {
   description?: string;
   default?: unknown;
   enum?: (string | number)[];
+  /** Normalize a present raw value BEFORE the type check (R3a: e.g. todowrite re-encodes an
+   * unencoded array into its string-of-JSON contract, so array args survive the loop's
+   * pre-execute validation). Never runs on missing values — defaults/required come first —
+   * and is NOT serialized into the model-visible JSON Schema. */
+  coerce?: (v: unknown) => unknown;
 }
 
 export type ObjectSchemaSpec = Record<string, PropSpec>;
@@ -61,6 +66,7 @@ export function objectSchema(props: ObjectSchemaSpec, required: string[]): ToolS
             continue;
           }
         }
+        if (spec.coerce) v = spec.coerce(v);
         if (typeOk(spec.type, v)) {
           if (spec.enum && !spec.enum.includes(v as string | number)) {
             errors.push(`${name}: must be one of ${spec.enum.join(", ")}`);

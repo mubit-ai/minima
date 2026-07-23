@@ -25,6 +25,22 @@ export interface ChatMessage {
   toolName?: string;
   isError?: boolean;
   thoughtDurationSecs?: number;
+  /** R3b: harness-noise tag stamped at ingestion (app.tsx). "deny" = a guard/mode denial on a
+   * tool row; "harness" = a harness-authored user-role steer (stop-gate continuation,
+   * anti-spiral nudge). Tagged rows render as ONE calm dim line — the full text still went
+   * to the model; only the transcript projection compacts. */
+  guardKind?: "deny" | "harness";
+}
+
+/** R3b single producer for the dim guard-deny one-liner — MessageRow paints it and
+ * computeMsgHeight measures the SAME string, so render == estimate stays an identity. */
+export function guardDenyLine(toolName: string | undefined): string {
+  return `  ⊘ ${toolName ?? "tool"} — blocked in plan mode`;
+}
+
+/** R3b single producer for the dim harness-steer one-liner (first line only). */
+export function harnessNoiseLine(text: string): string {
+  return `  ⟳ ${(text.split("\n", 1)[0] ?? "").trim()}`;
 }
 
 const BANNER_GLYPHS: Record<string, string[]> = {
@@ -568,10 +584,14 @@ export function computeMsgHeight(msg: ChatMessage, cols: number): number {
     return bannerRowCount(msg.text || null, cols);
   }
   if (msg.role === "user") {
+    // R3b harness steer: marginTop(1) + the single dim line (same producer MessageRow paints).
+    if (msg.guardKind === "harness") return 1 + wrappedLineCount(harnessNoiseLine(msg.text), cols);
     // marginTop(1) + "▸ you" header(1) + body (` ${text} ` — pad 2 cols; wrap at &lt;= cols-2).
     return 2 + wrappedLineCount(msg.text, cols - 2);
   }
   if (msg.role === "tool") {
+    // R3b guard deny: marginTop(1) + the single dim line (same producer MessageRow paints).
+    if (msg.guardKind === "deny") return 1 + wrappedLineCount(guardDenyLine(msg.toolName), cols);
     // marginTop(1) + wrapped "⚙ tool:" header (a long MCP tool name can wrap at narrow
     // cols — a flat 1 under-counted) + body + optional hint. The inline MessageRow paints
     // the body unindented at the full box width, so the ruler must wrap at `cols` — counting

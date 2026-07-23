@@ -78,6 +78,7 @@ import {
   taskTypeScoreboard,
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { isHarnessSteerText } from "../minima/stop_gate.ts";
 import { whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
@@ -141,6 +142,7 @@ import {
   createPermissionState,
   finalizeAutoAcceptLanding,
   formatActionLabel,
+  isGuardDenyReason,
   makeModeGatedBeforeToolCall,
   modeAutoApproves,
   planModeBlockReason,
@@ -1061,6 +1063,22 @@ export function HarnessApp({
     },
     [agent],
   );
+  // R5a: /plan start with NO live session (post-finalize, planSessionRef already nulled) must
+  // not leave a stale ACTIVE plan of record behind — the next todowrite would franken-merge the
+  // divergent goal's steps into the old row. Supersede it explicitly (status flip via
+  // supersedeActivePlans, never DELETE) and return the old title for the notice. A completed
+  // plan needs no supersede — null. Fail-open: a ledger error never blocks /plan start.
+  const supersedePriorPlanOnStart = useCallback((): string | null => {
+    try {
+      if (!agent.db || !agent.runId) return null;
+      const active = agent.db.getActivePlan(agent.runId);
+      if (!active) return null;
+      agent.db.supersedeActivePlans(agent.runId);
+      return active.title?.trim() || "untitled";
+    } catch {
+      return null;
+    }
+  }, [agent]);
   const exitPlanMode = useCallback(() => {
     setMode("build");
     planSessionRef.current = null;
@@ -1548,7 +1566,11 @@ export function HarnessApp({
               pendingEchoRef.current = false;
               break;
             }
-            setMessages((m) => [...m, { role: "user", text: ev.message!.textContent }]);
+            // R3b: harness steers render as a dim line (guardKind); the model saw the full text.
+            const utext = ev.message!.textContent;
+            const echo: ChatMessage = { role: "user", text: utext };
+            if (isHarnessSteerText(utext)) echo.guardKind = "harness";
+            setMessages((m) => [...m, echo]);
           }
           break;
         case "message_update": {
@@ -1644,6 +1666,9 @@ export function HarnessApp({
               setMessages((m) => [...m, { role: "assistant", text }]);
             }
           } else if (ev.message?.role === "toolResult") {
+            // R3b: guard/mode denials (stable prefixes owned by permissions.ts) are the
+            // harness working as designed — tag them so the renderer's calm dim branch,
+            // never the red error path, picks them up. Wire content is untouched.
             setMessages((m) => [
               ...m,
               {
@@ -1651,6 +1676,9 @@ export function HarnessApp({
                 text: ev.message!.textContent,
                 toolName: ev.message!.tool_name,
                 isError: ev.message!.is_error,
+                ...(ev.message!.is_error && isGuardDenyReason(ev.message!.textContent)
+                  ? { guardKind: "deny" as const }
+                  : {}),
               },
             ]);
           }
@@ -3049,9 +3077,14 @@ export function HarnessApp({
             }
             break;
           }
+          const prior = supersedePriorPlanOnStart();
           enterPlanMode(rest);
           pushPlan(
-            rest ? `Plan mode ON — goal: ${rest}` : "Plan mode ON — describe the goal to begin.",
+            prior
+              ? `previous plan '${prior}' superseded — planning fresh${rest ? `: ${rest}` : ""}`
+              : rest
+                ? `Plan mode ON — goal: ${rest}`
+                : "Plan mode ON — describe the goal to begin.",
           );
           break;
         }

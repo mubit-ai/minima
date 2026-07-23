@@ -13,6 +13,9 @@ const parameters = objectSchema(
   {
     tasks: {
       type: "string",
+      // R3a: models sometimes emit the array unencoded; the loop validates BEFORE execute,
+      // so without this coercion the execute-level tolerance below is unreachable.
+      coerce: (v) => (Array.isArray(v) ? JSON.stringify(v) : v),
       description:
         "JSON array of tasks. Each task: {content, status, priority, verify?}. " +
         "verify = a shell command that proves the task is done " +
@@ -88,7 +91,9 @@ export function todowriteTool(state: TodoTask[] = [], opts: { bigPlan?: boolean 
           details: { count: state.length },
         };
       } catch (exc) {
-        return { content: [text(`Invalid JSON: ${String(exc)}`)] };
+        // Short labeled one-liner — never echo a multi-line parser dump into the transcript.
+        const brief = String(exc).replaceAll("\n", " ").slice(0, 120);
+        return { content: [text(`todowrite: Invalid JSON in tasks — ${brief}`)] };
       }
     },
   };

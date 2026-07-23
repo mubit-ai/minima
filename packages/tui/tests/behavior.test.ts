@@ -610,6 +610,28 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
   });
 
+  test("guard denials and harness steers are tagged at ingestion and render dim, never red (R3b)", () => {
+    // app.tsx tags at the event seam (full text still reaches the model — only the
+    // transcript projection compacts); MessageRow's calm branches return BEFORE the red
+    // isError path, so a guard deny structurally cannot render red.
+    expect(src).toContain("isGuardDenyReason");
+    expect(src).toContain("isHarnessSteerText");
+    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    const deny = messages.indexOf('msg.guardKind === "deny"');
+    expect(deny).toBeGreaterThan(-1);
+    expect(deny).toBeLessThan(messages.indexOf('msg.isError ? "red"'));
+    const denyBranch = messages.slice(deny, deny + 400);
+    expect(denyBranch).toContain("dimColor");
+    expect(denyBranch).toContain("guardDenyLine");
+    expect(denyBranch).not.toContain('"red"');
+    const harness = messages.indexOf('msg.guardKind === "harness"');
+    expect(harness).toBeGreaterThan(-1);
+    expect(harness).toBeLessThan(messages.indexOf('"▸ you"'));
+    const harnessBranch = messages.slice(harness, harness + 400);
+    expect(harnessBranch).toContain("dimColor");
+    expect(harnessBranch).toContain("harnessNoiseLine");
+  });
+
   test("one shared ON notice: definition + auto-heal (dedupe + push) + /plan", () => {
     expect(src.split("PLAN_ON_NOTICE").length - 1).toBe(4);
   });
@@ -628,6 +650,27 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     const guard = branch.indexOf("planSessionRef.current");
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+  });
+
+  test("/plan start with no live session supersedes the stale ACTIVE plan of record (R5a)", () => {
+    // Post-finalize exitPlanMode nulls planSessionRef, so a second /plan start bypasses the
+    // live-session guard — it must supersede the old ACTIVE plan explicitly (status flip,
+    // never DELETE) before entering the fresh session, or the next todowrite franken-merges
+    // the divergent goal's steps into the old row.
+    const idx = src.indexOf('if (sub === "start")');
+    expect(idx).toBeGreaterThan(-1);
+    const branch = src.slice(idx, idx + 1200);
+    const supersede = branch.indexOf("supersedePriorPlanOnStart()");
+    expect(supersede).toBeGreaterThan(-1);
+    expect(supersede).toBeLessThan(branch.indexOf("enterPlanMode(rest)"));
+    expect(branch).toContain("superseded — planning fresh");
+    // The helper reads the ACTIVE plan only (a completed plan needs no supersede) and flips
+    // status via supersedeActivePlans — never a DELETE, never 'cancelled'.
+    const helper = src.indexOf("const supersedePriorPlanOnStart");
+    expect(helper).toBeGreaterThan(-1);
+    const body = src.slice(helper, helper + 900);
+    expect(body).toContain("getActivePlan");
+    expect(body).toContain("supersedeActivePlans");
   });
 
   test("enterPlanMode seeds the planner prompt with the goal snapshot (MUB-180)", () => {
@@ -718,11 +761,13 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   test("the loop's message_start(user) is deduped, not double-posted", () => {
     const idx = src.indexOf('case "message_start":');
     expect(idx).toBeGreaterThan(-1);
-    const handler = src.slice(idx, idx + 500);
+    const handler = src.slice(idx, idx + 800);
     expect(handler).toContain("if (pendingEchoRef.current) {");
     expect(handler).toContain("pendingEchoRef.current = false;");
-    // The event echo survives for non-optimistic user messages (finalize handoff, replays).
-    expect(handler).toContain('{ role: "user", text: ev.message!.textContent }');
+    // The event echo survives for non-optimistic user messages (finalize handoff, replays);
+    // R3b only TAGS harness steers on the same echo object — it never swallows one.
+    expect(handler).toContain('{ role: "user", text: utext }');
+    expect(handler).toContain("setMessages((m) => [...m, echo]);");
   });
 
   test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {

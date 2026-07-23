@@ -389,6 +389,70 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     expect(d.getPlanSteps(planId)[0]!.verify).toBe("npm test");
   });
 
+  test("a fully disjoint todo list supersedes the active plan and starts a NEW one (R5b)", () => {
+    // The franken-plan: a divergent goal's todowrite used to merge into the still-active
+    // plan row (old title + new steps). Zero content overlap now means a NEW plan; the old
+    // one is superseded — a status flip, its steps survive.
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Alpha", status: "completed" },
+      { content: "Beta", status: "in_progress" },
+    ]);
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "Gamma", status: "in_progress" },
+      { content: "Delta", status: "pending" },
+    ]);
+    expect(second.planId).not.toBe(first.planId);
+    expect(d.getPlan(first.planId)!.status).toBe("superseded");
+    expect(d.getPlanSteps(first.planId).map((s) => s.content)).toEqual(["Alpha", "Beta"]);
+    const plan = d.getActivePlan("run1")!;
+    expect(plan.id).toBe(second.planId);
+    expect(plan.title).toBe("Gamma");
+    expect(d.getPlanSteps(second.planId).map((s) => s.content)).toEqual(["Gamma", "Delta"]);
+  });
+
+  test("partial overlap keeps today's reconcile — same plan id (R5b)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Alpha", status: "completed" },
+      { content: "Beta", status: "in_progress" },
+    ]);
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "Alpha", status: "completed" },
+      { content: "Gamma", status: "pending" },
+    ]);
+    expect(second.planId).toBe(first.planId);
+    expect(d.getPlanSteps(first.planId).map((s) => s.content)).toEqual(["Alpha", "Gamma"]);
+    expect(d.getPlan(first.planId)!.status).toBe("active");
+  });
+
+  test("a reworded-but-similar list still reuses the plan (Jaccard rescue counts as overlap)", () => {
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "add the footer width tests", status: "in_progress" },
+    ]);
+    const second = d.upsertPlanFromTodos("run1", [
+      { content: "add the footer width tests now", status: "in_progress" },
+    ]);
+    expect(second.planId).toBe(first.planId);
+  });
+
+  test("wholesale step replacement on a reused plan refreshes the title (R5b)", () => {
+    // An empty todowrite prunes every step but keeps the plan active; the next list then
+    // reuses the row (nothing left to diverge from) — the stale title must follow the steps.
+    const d = db();
+    const first = d.upsertPlanFromTodos("run1", [
+      { content: "Alpha", status: "in_progress" },
+      { content: "Beta", status: "pending" },
+    ]);
+    expect(d.getPlan(first.planId)!.title).toBe("Alpha");
+    d.upsertPlanFromTodos("run1", []);
+    expect(d.getPlanSteps(first.planId)).toHaveLength(0);
+    const third = d.upsertPlanFromTodos("run1", [{ content: "Gamma", status: "in_progress" }]);
+    expect(third.planId).toBe(first.planId);
+    expect(d.getPlan(first.planId)!.title).toBe("Gamma");
+  });
+
   test("started is [] on a pure-pending upsert (M3.3)", () => {
     const d = db();
     const { started } = d.upsertPlanFromTodos("run1", [
@@ -508,11 +572,15 @@ describe("MinimaDb.upsertPlanFromTodos", () => {
     const second = d.upsertPlanFromTodos("run1", [
       { content: "Write the deployment docs", status: "pending" },
     ]);
-    const steps = d.getPlanSteps(first.planId);
-    expect(steps).toHaveLength(1);
+    // R5b: fully disjoint, so the fresh step lands on a NEW plan (the old one superseded) —
+    // the old verify/baseline can never be misattributed to it.
+    expect(second.planId).not.toBe(first.planId);
     expect(second.stepIds[0]).not.toBe(first.stepIds[0]);
+    const steps = d.getPlanSteps(second.planId);
+    expect(steps).toHaveLength(1);
     expect(steps[0]!.verify).toBeNull();
     expect(steps[0]!.baseline).toBeNull();
+    expect(d.getPlan(first.planId)!.status).toBe("superseded");
   });
 
   test("started reports an in_progress step gaining its first verify, once-only (M3.3)", () => {
