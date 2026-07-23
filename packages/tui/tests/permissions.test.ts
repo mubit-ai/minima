@@ -791,6 +791,24 @@ describe("MP18 — mode interaction with verify consent", () => {
   });
 });
 
+// MUB-177 R2: with bypass a permanent ring member, cycling the ring must stay consent-safe.
+// Landing on bypass via Shift+Tab may not fire a permission prompt armed under a stricter
+// mode, and no UI copy may still claim Shift+Tab returns from plan to build (the ring now
+// continues to bypass). Source pins on app.tsx wiring — the handler has no seam.
+describe("MUB-177 R2 — ring transit through bypass is consent-safe (source pins)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the Shift+Tab handler never auto-resolves a pending prompt when the cycle lands on bypass", () => {
+    expect(src).toContain('next !== "bypass" &&');
+  });
+
+  test("no plan-mode copy still claims shift+tab exits to build", () => {
+    expect(src).not.toContain("shift+tab to build");
+    expect(src).not.toContain("Shift+Tab or /plan to exit");
+    expect(src).toContain("shift+tab cycles (next: bypass)");
+  });
+});
+
 describe("bashCommandFamilies", () => {
   test("plain, env-prefixed, and pathed commands reduce to their leading word", async () => {
     const { bashCommandFamilies } = await import("../src/tui/permissions.ts");
