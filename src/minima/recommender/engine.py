@@ -14,7 +14,7 @@ from minima.config import Settings
 from minima.logging import get_logger
 from minima.memory import threadpool
 from minima.memory.adapter import Memory
-from minima.memory.keys import CLUSTER_KEY_VERSION, build_content, task_cluster, task_fingerprint
+from minima.memory.keys import build_content, task_fingerprint, versioned_cluster
 from minima.memory.recall_utility import RecallUtilityStore, apply_recall_utility
 from minima.memory.records import RecalledEvidence, label_score
 from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
@@ -146,7 +146,7 @@ class Recommender:
         profile.mark("classify")
         class_profile.final_task_type = task_type
         class_profile.final_difficulty = difficulty
-        cluster = task_cluster(task_type, difficulty)
+        cluster = versioned_cluster(task_type, difficulty, settings.minima_cluster_key_version)
         fingerprint = task_fingerprint(req.task.task)
         lane = settings.lane(req.namespace)
 
@@ -214,7 +214,9 @@ class Recommender:
                 assert class_profile is not None
                 task_type = refined.task_type
                 difficulty = refined.difficulty
-                cluster = task_cluster(task_type, difficulty)
+                cluster = versioned_cluster(
+                    task_type, difficulty, settings.minima_cluster_key_version
+                )
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
 
@@ -526,7 +528,7 @@ class Recommender:
             task_type_source=class_profile.task_type_source,
             shadow_choices=shadow_choices,
             classifier_id=CLASSIFIER_ID,
-            cluster_key_version=CLUSTER_KEY_VERSION,
+            cluster_key_version=settings.minima_cluster_key_version,
         )
         profile.mark("decision_log")
 
@@ -550,7 +552,7 @@ class Recommender:
             selection_policy=selection_policy,
             recommended_actions=_actions_for(recommended.card),
             stage_latency_ms=profile.as_dict(),
-            cluster_key_version=CLUSTER_KEY_VERSION,
+            cluster_key_version=settings.minima_cluster_key_version,
         )
 
     async def _recall_with_fastpath(

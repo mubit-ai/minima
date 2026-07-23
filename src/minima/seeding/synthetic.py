@@ -10,7 +10,8 @@ from __future__ import annotations
 import random
 
 from minima.catalog.store import load_snapshot_cards
-from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.config import get_settings
+from minima.memory.keys import build_content, task_fingerprint, versioned_cluster
 from minima.memory.records import EVIDENCE_DATASET, OutcomeRecord
 from minima.schemas.common import Difficulty, TaskType
 from minima.seeding.items import SeedItem
@@ -51,7 +52,9 @@ def generate(n: int, seed: int = 42) -> list[SeedItem]:
             task_type=task_type.value,
             difficulty=difficulty.value,
             task_fingerprint=task_fingerprint(text),
-            task_cluster=task_cluster(task_type.value, difficulty.value),
+            task_cluster=versioned_cluster(
+                task_type.value, difficulty.value, get_settings().minima_cluster_key_version
+            ),
             input_tokens=1200,
             output_tokens=400,
             cost_usd=round(cost, 6),
