@@ -82,9 +82,8 @@ describe("glob ignore filtering", () => {
     const d = ignoreTree();
     const res = await run(globTool(), { pattern: "**/*", path: d });
     const b = body(res);
-    expect(b.split("\n")[0]).toBe("keep.txt");
-    expect(b).not.toContain("dist/out.js");
-    expect(b).not.toContain("node_modules");
+    const matchLines = b.split("\n").filter((l) => !l.startsWith("[note:"));
+    expect(matchLines).toEqual(["keep.txt"]);
     // the exclusion is announced on the partial-match path, not only on zero matches
     expect(b).toContain("include_ignored=true");
   });
