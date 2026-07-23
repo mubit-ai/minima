@@ -121,11 +121,28 @@ export class MinimaRouter {
   private readonly client: MinimaClient;
   /** Cached per-session; fetched once on first use. */
   private _capabilities: CapabilitiesResponse | null = null;
+  /** Whether the server's trained embedding classifier is loaded (/v1/health
+   * `classifier.embed_loaded`). Cached on first successful probe; a failed probe is NOT
+   * cached (fail-open false, re-probed next ask) so a transient blip never sticks. */
+  private _embedClassifierActive: boolean | null = null;
 
   constructor(opts: MinimaRouterOptions) {
     this.client = opts.client;
     this.config = opts.config;
     this.mapping = opts.mapping ?? new ModelMapping();
+  }
+
+  async embedClassifierActive(): Promise<boolean> {
+    if (!(this.config.minimaUrl || "").trim()) return false;
+    if (this._embedClassifierActive !== null) return this._embedClassifierActive;
+    try {
+      const health = await this.client.health();
+      const classifier = health.classifier as { embed_loaded?: boolean } | undefined;
+      this._embedClassifierActive = classifier?.embed_loaded === true;
+      return this._embedClassifierActive;
+    } catch {
+      return false;
+    }
   }
 
   static forConfig(config: HarnessConfig, mapping?: ModelMapping): MinimaRouter {

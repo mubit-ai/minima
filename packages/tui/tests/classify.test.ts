@@ -41,11 +41,27 @@ const CLS: Model = {
   max_tokens: 4096,
 };
 
-function mockService() {
+function mockService(opts: { embedLoaded?: boolean } = {}) {
   const recommendCalls: Record<string, unknown>[] = [];
   const feedbackCalls: Record<string, unknown>[] = [];
+  const healthCalls: number[] = [];
   const fetchLike = async (url: string, init?: { method?: string; body?: string }) => {
     const u = new URL(url);
+    if ((init?.method ?? "GET") === "GET" && u.pathname === "/v1/health") {
+      healthCalls.push(1);
+      if (opts.embedLoaded === undefined) return { status: 404, json: async () => ({}) };
+      return {
+        status: 200,
+        json: async () => ({
+          status: "ok",
+          classifier: {
+            id: opts.embedLoaded ? "potion-base-32M-c18e819c6c6d" : "regex-v1",
+            embed_loaded: opts.embedLoaded,
+            required: false,
+          },
+        }),
+      };
+    }
     if ((init?.method ?? "GET") === "POST" && u.pathname === "/v1/recommend") {
       recommendCalls.push(init?.body ? JSON.parse(init.body) : {});
       return {
@@ -94,17 +110,24 @@ function mockService() {
     }
     return { status: 404, json: async () => ({ detail: "nope" }) };
   };
-  return { fetchLike, recommendCalls, feedbackCalls };
+  return { fetchLike, recommendCalls, feedbackCalls, healthCalls };
 }
 
-function setup(opts: { classify?: boolean; onCostUsd?: (usd: number) => void } = {}) {
+function setup(
+  opts: {
+    classify?: boolean;
+    classifyForce?: boolean;
+    embedLoaded?: boolean;
+    onCostUsd?: (usd: number) => void;
+  } = {},
+) {
   resetRegistry();
   resetProviderRegistration();
   resetModelRegistry();
   registerModel(MAIN);
   registerModel(CLS);
   const reg = registerFauxProvider([MAIN, CLS]);
-  const svc = mockService();
+  const svc = mockService({ embedLoaded: opts.embedLoaded });
   const client = new MinimaClient({ baseUrl: "http://svc.local", fetch: svc.fetchLike });
   const config = harnessConfig({
     judgeSampleRate: 1,
@@ -114,6 +137,7 @@ function setup(opts: { classify?: boolean; onCostUsd?: (usd: number) => void } =
     bigPlan: false,
     stopStrikes: 0,
     classify: opts.classify ?? true,
+    classifyForce: opts.classifyForce ?? false,
   });
   const router = new MinimaRouter({ client, config, mapping: new ModelMapping() });
   const agent = new MinimaAgent({
@@ -296,6 +320,77 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
   });
 });
 
+describe("server embedding head defers the client override", () => {
+  test("head loaded → classify call skipped, bare task on the wire", async () => {
+    const { agent, reg, svc } = setup({ embedLoaded: true });
+    reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
+    await agent.promptRouted("write a parser");
+    expect(classifierCalls(reg)).toBe(0);
+    const task = (svc.recommendCalls[0] as { task: unknown }).task;
+    expect(typeof task === "string" || (task as Record<string, unknown>).task_type === undefined)
+      .toBe(true);
+    reg.unregister();
+  });
+
+  test("head loaded → one health probe serves the whole session", async () => {
+    const { agent, reg, svc } = setup({ embedLoaded: true });
+    reg.setResponses([
+      new AssistantMessage({ content: [text("answer one")] }),
+      new AssistantMessage({ content: [text("answer two")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    await agent.promptRouted("summarize this thread");
+    expect(svc.healthCalls.length).toBe(1);
+    expect(classifierCalls(reg)).toBe(0);
+    reg.unregister();
+  });
+
+  test("head reported unloaded → client classify runs as before", async () => {
+    const { agent, reg, svc } = setup({ embedLoaded: false });
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.9}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    expect(classifierCalls(reg)).toBe(1);
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBe("code");
+    reg.unregister();
+  });
+
+  test("MINIMA_TUI_CLASSIFY_FORCE keeps the override despite a live head", async () => {
+    const { agent, reg, svc } = setup({ embedLoaded: true, classifyForce: true });
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.9}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    expect(classifierCalls(reg)).toBe(1);
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBe("code");
+    expect(svc.healthCalls.length).toBe(0);
+    reg.unregister();
+  });
+
+  test("health probe failure (404) → fail-open, classify runs", async () => {
+    const { agent, reg, svc } = setup();
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.9}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    expect(classifierCalls(reg)).toBe(1);
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBe("code");
+    reg.unregister();
+  });
+});
 
 describe("agreement telemetry (classifier program PR-1)", () => {
   function withDb(agent: MinimaAgent) {

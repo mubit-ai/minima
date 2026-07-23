@@ -4,6 +4,16 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Client classifier defers to the live server head** (TUI): with
+  `MINIMA_TUI_CLASSIFY=1`, the harness now probes `/v1/health` once per session and,
+  when the server reports its trained embedding classifier loaded, skips the
+  client-side classify completion entirely — no caller override preempts the head,
+  and the per-prompt classify spend is saved. Offline and head-less servers keep the
+  old behavior; `MINIMA_TUI_CLASSIFY_FORCE=1` keeps the override regardless.
+
 ## [0.14.2] - 2026-07-23
 
 The task classifier goes live: regex is no longer the primary classifier on the
