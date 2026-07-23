@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 from minima.schemas.common import Difficulty, TaskInput, TaskType
 from minima.schemas.recommend import ClassificationProfile, ClassificationRuleProfile
 
+# Identity of the active assignment function, stamped on decision rows so mixed-classifier
+# windows stay sliceable. A learned classifier derives this from its artifact hash.
+CLASSIFIER_ID = "regex-v1"
+
 
 @dataclass(slots=True, frozen=True)
 class TaskFeatureVector:

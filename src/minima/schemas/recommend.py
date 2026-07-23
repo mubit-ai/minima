@@ -147,3 +147,6 @@ class RecommendResponse(BaseModel):
     stage_latency_ms: dict[str, float] = Field(
         default_factory=dict, description="per-stage latency breakdown in milliseconds"
     )
+    cluster_key_version: str = Field(
+        "v1", description="version of the cluster-key space this decision was keyed under"
+    )

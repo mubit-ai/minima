@@ -119,6 +119,38 @@ export interface RankedModel {
   success_interval_width?: number;
 }
 
+/**
+ * Classification diagnostics — always present on RecommendResponse. The heuristic_*
+ * fields are the server's OWN opinion even when a caller override won, which is what
+ * makes client-vs-server agreement telemetry measurable.
+ */
+export interface ClassificationRuleProfile {
+  task_type: TaskType;
+  pattern: string;
+  matched: boolean;
+  feature_boosts?: Record<string, number>;
+}
+
+export interface ClassificationProfile {
+  task_type_source: string;
+  difficulty_source: string;
+  caller_task_type?: TaskType | null;
+  caller_difficulty?: Difficulty | null;
+  heuristic_task_type: TaskType;
+  heuristic_difficulty: Difficulty;
+  final_task_type: TaskType;
+  final_difficulty: Difficulty;
+  selected_rule?: string | null;
+  rule_checks?: ClassificationRuleProfile[];
+  extracted_features?: Record<string, number>;
+  uncertainty: number;
+  confidence: number;
+  easy_route?: boolean;
+  neighbor_support?: number;
+  neighbor_count?: number;
+  timings_ms?: Record<string, number>;
+}
+
 export interface RecommendResponse {
   recommendation_id: string;
   recommended_model: RankedModel;
@@ -135,6 +167,9 @@ export interface RecommendResponse {
   warnings?: string[];
   selection_policy?: string;
   recommended_actions?: string[];
+  classification_profile?: ClassificationProfile | null;
+  stage_latency_ms?: Record<string, number>;
+  cluster_key_version?: string;
 }
 
 // ---------------------------------------------------------------------------

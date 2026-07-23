@@ -65,6 +65,12 @@ export interface RoutingResult {
   classifiedTaskType: string;
   /** Server-classified difficulty — the seam for per-prompt effort routing. */
   classifiedDifficulty: string;
+  /** The server's OWN heuristic opinion, reported even when a caller override won —
+   * the comparison target for client-vs-server agreement telemetry. */
+  heuristicTaskType: string;
+  heuristicDifficulty: string;
+  /** Cluster-key-space version the server keyed this decision under (v1 today). */
+  clusterKeyVersion: string;
 }
 
 function needsAuth(url: string): boolean {
@@ -224,6 +230,9 @@ export class MinimaRouter {
       selectionPolicy: rec.selection_policy ?? "argmin",
       classifiedTaskType: String(rec.classified_task_type ?? ""),
       classifiedDifficulty: String(rec.classified_difficulty ?? ""),
+      heuristicTaskType: String(rec.classification_profile?.heuristic_task_type ?? ""),
+      heuristicDifficulty: String(rec.classification_profile?.heuristic_difficulty ?? ""),
+      clusterKeyVersion: String(rec.cluster_key_version ?? ""),
     };
   }
 

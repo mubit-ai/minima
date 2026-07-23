@@ -991,3 +991,23 @@ def test_feedback_signals_key_too_long_rejected(client, fake_memory):
         },
     )
     assert resp.status_code == 422
+
+
+def test_decision_rows_carry_assignment_provenance(client, fake_memory):
+    """PR-1 of the classifier program: every decision row and response is stamped with
+    the active classifier identity and cluster-key-space version, so mixed-classifier
+    windows stay sliceable when a learned head ships."""
+    from tests.conftest import TEST_MUBIT_KEY
+
+    rec = _recommend_haiku(client, fake_memory)
+    assert rec["cluster_key_version"] == "v1"
+    profile = rec["classification_profile"]
+    assert profile["heuristic_task_type"]
+    assert profile["heuristic_difficulty"]
+
+    tenant = client.app.state.passthrough_runtime.resolve(TEST_MUBIT_KEY)
+    row = tenant.decision_log.get(rec["recommendation_id"])
+    assert row is not None
+    assert row.classifier_id == "regex-v1"
+    assert row.cluster_key_version == "v1"
+    assert row.abstained is None
