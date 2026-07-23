@@ -16,6 +16,7 @@ import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 import { bigPlanAttributionSink, recordOpaqueMarker } from "./big_plan.ts";
 import { MinimaError } from "./errors.ts";
 import { CostMeter } from "./meter.ts";
@@ -36,6 +37,9 @@ export interface CreateSpawnOptions {
   onChildEvent?: (e: ChildEvent) => void;
   /** Wall-clock caps per effort level, ms. */
   timeouts?: { light?: number; standard?: number; deep?: number };
+  /** Artifact spill store shared with the lead (P1): children spill to the same dir and
+   * their confined read gains the artifact-root allowance. */
+  artifacts?: ToolArtifacts;
 }
 
 const TURNS_BY_EFFORT = { light: 6, standard: 12, deep: 24 } as const;
@@ -118,7 +122,11 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       }
     }
 
-    let tools = builtinTools({ workdir: childWorkdir, exclude: ["task"] });
+    let tools = builtinTools({
+      workdir: childWorkdir,
+      exclude: ["task"],
+      artifacts: opts.artifacts,
+    });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
       tools = tools.filter((t) => allowed.has(t.name));

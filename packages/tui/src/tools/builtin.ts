@@ -15,6 +15,7 @@ import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { readTool } from "./read.ts";
 import { type TodoTask, todowriteTool } from "./todowrite.ts";
+import type { ToolArtifacts } from "./types.ts";
 import { webFetchTool } from "./web_fetch.ts";
 import { webSearchTool } from "./web_search.ts";
 import { writeTool } from "./write.ts";
@@ -56,11 +57,16 @@ export interface BuiltinToolsOptions {
    * wires it to the meter + budget so real search spend never vanishes from the wallet.
    */
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void;
+  /**
+   * Artifact spill store (P1): threaded into every FS tool so oversized output spills to
+   * content-addressed files the model can page back via read. Absent = feature off.
+   */
+  artifacts?: ToolArtifacts;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
 export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
-  const fs = { workdir: opts.workdir };
+  const fs = { workdir: opts.workdir, artifacts: opts.artifacts };
   const all: AgentTool[] = [
     readTool(fs),
     writeTool(fs),

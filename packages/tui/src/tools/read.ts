@@ -30,7 +30,13 @@ export function readTool(opts: FsToolOptions = {}): AgentTool {
       "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).",
     parameters,
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
-      const r = resolveWithin(String(params.path), opts.workdir);
+      let r = resolveWithin(String(params.path), opts.workdir);
+      if (!r.ok && opts.artifacts) {
+        // Artifact-root allowance (P1): spill refs live outside every workdir; the jail
+        // opens toward exactly one extra root, only when the feature is on.
+        const retry = resolveWithin(String(params.path), opts.artifacts.dir);
+        if (retry.ok) r = retry;
+      }
       if (!r.ok) return errorResult(`read: ${r.error}`);
       const p = r.path;
       let st: Stats;

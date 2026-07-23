@@ -8,7 +8,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { setMode } from "../agent/modes.ts";
@@ -18,7 +18,7 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { MinimaDb, type RunRow, toolSchemaHash } from "../db/minima_db.ts";
+import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
@@ -41,9 +41,11 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
+import { ArtifactStore } from "../tools/_artifacts.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -553,8 +555,11 @@ function toolsFor(
   bigPlan: boolean,
   todoState?: TodoTask[],
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void,
+  artifacts?: ToolArtifacts,
 ) {
-  let tools = args.noTools ? [] : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd });
+  let tools = args.noTools
+    ? []
+    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -667,11 +672,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
   const todoState: TodoTask[] = [];
+  // Artifact spill store (P1): one instance shared by the lead's tools and every spawned
+  // child; attach() late-binds the DB index once the run row exists (bookSearchFee pattern).
+  const dbPath = defaultDbPath();
+  const artifactStore =
+    config.artifacts && dbPath !== ":memory:"
+      ? new ArtifactStore({ dir: join(dirname(dbPath), "artifacts") })
+      : null;
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
   let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
-  const tools = toolsFor(args, config.bigPlan === true, todoState, (usd, id) =>
-    bookSearchFee(usd, id),
+  const tools = toolsFor(
+    args,
+    config.bigPlan === true,
+    todoState,
+    (usd, id) => bookSearchFee(usd, id),
+    artifactStore ?? undefined,
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -805,6 +821,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     agent.db = db;
     agent.runId = runId;
+    artifactStore?.attach(db, runId);
     sink = attachDbSink(agent, db, { runId });
     if (resumeFrom) {
       // Same shape as the interactive /resume path: context + meter + judge cadence,
@@ -925,6 +942,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     parent: agent,
     workdir: process.cwd(),
     onChildEvent: (e) => childEventRef.handler?.(e),
+    artifacts: artifactStore ?? undefined,
   });
   agent.agentState.tools.push(
     taskTool({

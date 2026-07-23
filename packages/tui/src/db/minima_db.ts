@@ -442,6 +442,22 @@ const MIGRATIONS: string[][] = [
        updated_at REAL NOT NULL
      )`,
   ],
+  // artifacts index — model-visible spill tier (P1). Files live beside the DB under
+  // artifacts/<sha256>.txt; rows are provenance + future-GC bookkeeping. run_id is a soft
+  // join key to runs(run_id) — deliberately no FK so this batch stays self-contained.
+  [
+    `CREATE TABLE IF NOT EXISTS artifacts (
+       sha        TEXT PRIMARY KEY,
+       path       TEXT NOT NULL,
+       run_id     TEXT,
+       tool_name  TEXT,
+       bytes      INTEGER NOT NULL,
+       line_count INTEGER NOT NULL,
+       created    REAL NOT NULL,
+       last_used  REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_artifacts_run ON artifacts(run_id, created)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -1167,6 +1183,25 @@ export class MinimaDb {
     } catch {
       return null;
     }
+  }
+
+  /** Upsert the artifact index row (P1) — content-addressed on sha; a re-spill of the
+   * same content bumps last_used and keeps the original created/provenance. */
+  recordArtifact(r: {
+    sha: string;
+    path: string;
+    runId: string | null;
+    toolName: string;
+    bytes: number;
+    lineCount: number;
+  }): void {
+    const now = Date.now() / 1000;
+    this.db.run(
+      `INSERT INTO artifacts (sha, path, run_id, tool_name, bytes, line_count, created, last_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(sha) DO UPDATE SET last_used = excluded.last_used`,
+      [r.sha, r.path, r.runId, r.toolName, r.bytes, r.lineCount, now, now],
+    );
   }
 
   /** Run a batch of writes in one transaction (per-turn atomicity for the sink). */
