@@ -56,9 +56,12 @@ server = [
   "redis>=5.0",
 ]
 seed = ["datasets>=2.20", "huggingface-hub>=0.24"]
+# Serve the trained static-embedding task classifier (scripts/classifier artifact).
+classifier = ["numpy>=1.26", "tokenizers>=0.15"]
 # dev pulls every runtime extra so the full test suite (server API tests) runs.
 dev = [
   "minima-cli[server]",
+  "minima-cli[classifier]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "respx>=0.21",

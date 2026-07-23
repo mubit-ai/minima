@@ -13,8 +13,10 @@ from threading import Lock
 
 from minima.catalog.store import CatalogStore
 from minima.config import Settings
+from minima.logging import get_logger
 from minima.memory.adapter import Memory, MubitMemory
 from minima.memory.recall_utility import RecallUtilityStore
+from minima.recommender.classify_embed import load_embed_classifier
 from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
 from minima.recommender.durablerefs import (
@@ -37,6 +39,9 @@ def _org_id(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+log = get_logger("minima.tenancy")
+
+
 class PassthroughRuntime:
     """One process-wide runtime; per-key TenantContexts are lazily built and cached."""
 
@@ -53,6 +58,22 @@ class PassthroughRuntime:
         pair_store_backend: MemoryPairStore | None = None,
     ):
         self._settings = settings
+        self._embed_classifier = None
+        if settings.minima_embed_classifier or settings.minima_classifier_required:
+            self._embed_classifier = load_embed_classifier(
+                settings.minima_classifier_artifact,
+                required=settings.minima_classifier_required,
+            )
+            if self._embed_classifier is None:
+                log.warning(
+                    "embed_classifier_unavailable_running_regex",
+                    artifact=settings.minima_classifier_artifact,
+                )
+            else:
+                log.info(
+                    "embed_classifier_loaded",
+                    classifier_id=self._embed_classifier.classifier_id,
+                )
         self._catalog_store = catalog_store
         self._recstore_backend = recstore_backend
         self._lane_counter = lane_counter
@@ -100,6 +121,7 @@ class PassthroughRuntime:
             resets=resets,
             contextual=contextual,
             recall_utility=recall_utility,
+            embed_classifier=self._embed_classifier,
         )
         ctx = TenantContext(
             org_id=org_id,
