@@ -743,17 +743,16 @@ describe("MUB-179 — finalizeAutoAcceptLanding ('Finalize & auto-accept edits')
     expect(res?.block).toBe(true);
   });
 
-  test("bypass becomes ring-reachable, but the mode is NOT switched", async () => {
+  test("the landing only seeds allowedDirs — the mode is NOT switched", async () => {
+    // MUB-177 R2: bypass is a permanent Shift+Tab ring member, so the landing no longer
+    // needs (or has) a latch to flip — it seeds the cwd and nothing else.
     const { finalizeAutoAcceptLanding } = await import("../src/tui/permissions.ts");
-    const { cycleMode, getMode, isBypassEnabled, setMode } = await import(
-      "../src/agent/modes.ts"
-    );
+    const { getMode, setMode } = await import("../src/agent/modes.ts");
     setMode("acceptEdits");
-    finalizeAutoAcceptLanding(createPermissionState("/repo"));
+    const state = createPermissionState("/repo");
+    finalizeAutoAcceptLanding(state);
     expect(getMode()).toBe("acceptEdits");
-    expect(isBypassEnabled()).toBe(true);
-    setMode("plan");
-    expect(cycleMode()).toBe("bypass");
+    expect(state.allowedDirs.has("/repo")).toBe(true);
     setMode("build");
   });
 
@@ -789,6 +788,24 @@ describe("MP18 — mode interaction with verify consent", () => {
     expect(src).toContain(
       'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
     );
+  });
+});
+
+// MUB-177 R2: with bypass a permanent ring member, cycling the ring must stay consent-safe.
+// Landing on bypass via Shift+Tab may not fire a permission prompt armed under a stricter
+// mode, and no UI copy may still claim Shift+Tab returns from plan to build (the ring now
+// continues to bypass). Source pins on app.tsx wiring — the handler has no seam.
+describe("MUB-177 R2 — ring transit through bypass is consent-safe (source pins)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("the Shift+Tab handler never auto-resolves a pending prompt when the cycle lands on bypass", () => {
+    expect(src).toContain('next !== "bypass" &&');
+  });
+
+  test("no plan-mode copy still claims shift+tab exits to build", () => {
+    expect(src).not.toContain("shift+tab to build");
+    expect(src).not.toContain("Shift+Tab or /plan to exit");
+    expect(src).toContain("shift+tab cycles (next: bypass)");
   });
 });
 

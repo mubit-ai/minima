@@ -23,7 +23,6 @@ import {
   MODE_BADGES,
   bundleForMode,
   cycleMode,
-  enableBypass,
   getMode,
   setMode,
   subscribeMode,
@@ -1845,13 +1844,18 @@ export function HarnessApp({
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
       const next = cycleMode();
-      // A pending permission prompt re-evaluates under the new mode: accept-edits/bypass
-      // auto-approve the waiting call (one-time allow — no "always" grant recorded, with
+      // A pending permission prompt re-evaluates under the new mode: accept-edits
+      // auto-approves the waiting call (one-time allow — no "always" grant recorded, with
       // the same mode-auto guard event the hook's no-prompt path emits); a mode that
       // still asks leaves the prompt up. accept-edits auto is cwd-scoped, so the pending
       // call's raw args ride along for the same target-path check the dispatcher applies.
+      // Landing on bypass by RING TRANSIT is excluded: bypass auto-approves only calls
+      // made while it is already the standing mode — a prompt armed under a stricter
+      // mode keeps waiting for an explicit answer, so cycling the ring can never fire a
+      // held call as a side effect.
       if (
         permPrompt &&
+        next !== "bypass" &&
         modeAutoApproves(next, permPrompt.toolName, permPrompt.argsSummary, {
           args: permPrompt.args ?? null,
           cwd: permStateRef.current.cwd,
@@ -3044,7 +3048,7 @@ export function HarnessApp({
             setMode(next ? "plan" : "build");
             pushPlan(
               next
-                ? "Plan mode ON — write/edit/bash/apply_patch ask first. Shift+Tab or /plan to exit."
+                ? "Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; Shift+Tab cycles on to bypass."
                 : "Build mode — standard permissions.",
             );
           } else {
@@ -3175,7 +3179,6 @@ export function HarnessApp({
           ]);
           break;
         }
-        if (want === "bypass") enableBypass(); // explicit consent: joins the ring for this session
         setMode(want);
         setMessages((m) => [
           ...m,
@@ -3184,7 +3187,7 @@ export function HarnessApp({
             role: "tool",
             text:
               want === "bypass"
-                ? "⚠ BYPASS mode — every tool call runs without prompting for the rest of this session's bypass mode. Shift+Tab now includes it in the cycle; it is never persisted."
+                ? "⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the Shift+Tab cycle; it is never persisted."
                 : want === "acceptEdits"
                   ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
                   : want === "plan"
@@ -4921,7 +4924,7 @@ export function HarnessApp({
           {planMode && (
             <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
               <Text color="magenta" bold wrap="truncate">
-                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab to build "}
+                {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab cycles (next: bypass) "}
               </Text>
             </Box>
           )}
