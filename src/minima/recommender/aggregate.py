@@ -101,6 +101,7 @@ def aggregate_by_model(
     reset_epochs: dict[str, float] | None = None,
     now: float | None = None,
     label_model_scores: dict[str, float] | None = None,
+    extra_weights: dict[str, float] | None = None,
 ) -> dict[str, ModelAggregate]:
     """Group neighbors by model and accumulate weighted success statistics.
 
@@ -168,6 +169,10 @@ def aggregate_by_model(
             weight *= max(RECALL_WEIGHT_FLOOR, rec.recall_success_mass / rec.recall_n)
         if rec.evidence_source == EVIDENCE_HUMAN and human_weight != 1.0:
             weight *= clamp01(human_weight)
+        # Dual-read legacy discount (PR-3): evidence admitted from a previous cluster
+        # key-space enters at reduced weight, keyed by entry_id.
+        if extra_weights:
+            weight *= extra_weights.get(ev.entry_id, 1.0)
         if rec.source_dataset is not None and seed_weight != 1.0:
             weight *= seed_factor(
                 n_live.get(model_id, 0), seed_weight=seed_weight, crowdout_n=seed_crowdout_n

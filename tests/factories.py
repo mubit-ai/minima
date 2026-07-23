@@ -113,12 +113,13 @@ def make_evidence(
     source_dataset: str | None = None,
     referenceable: bool = False,
     evidence_source: str | None = None,
+    task_cluster: str | None = None,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
         task_type=task_type,
         difficulty=difficulty,
-        task_cluster=f"{task_type}:{difficulty}",
+        task_cluster=task_cluster or f"{task_type}:{difficulty}",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         quality_score=quality,

@@ -91,3 +91,18 @@ def test_preference_pairs_match_across_key_space_versions():
     for query in ("code:hard", "code:hard:v2"):
         rates = store.win_rates(query)
         assert rates, f"no pairs surfaced for {query}"
+
+
+def test_aggregate_extra_weights_discount_evidence():
+    from minima.recommender.aggregate import aggregate_by_model
+    from tests.factories import make_evidence
+
+    ev = [
+        make_evidence("m", 0.9, entry_id="active-1"),
+        make_evidence("m", 0.9, entry_id="legacy-1"),
+    ]
+    full = aggregate_by_model(ev, {"m"})["m"]
+    discounted = aggregate_by_model(ev, {"m"}, extra_weights={"legacy-1": 0.7})["m"]
+    assert discounted.n == full.n == 2  # counts are untouched — only weight mass shifts
+    assert discounted.weight_sum < full.weight_sum
+    assert abs((full.weight_sum - discounted.weight_sum) - 0.3 * (full.weight_sum / 2)) < 1e-9

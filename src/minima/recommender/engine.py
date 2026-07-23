@@ -157,7 +157,12 @@ class Recommender:
             raise NoCandidatesError("no models match the supplied constraints")
         candidate_ids = {c.model_id for c in candidates}
 
-        recall, fastpath_evidence, lookup_degraded = await self._recall_with_fastpath(
+        (
+            recall,
+            fastpath_evidence,
+            lookup_degraded,
+            legacy_weights,
+        ) = await self._recall_with_fastpath(
             req=req,
             lane=lane,
             cluster=cluster,
@@ -293,6 +298,7 @@ class Recommender:
             ),
             reset_epochs=reset_epochs if discounting else None,
             label_model_scores=label_scores,
+            extra_weights=legacy_weights or None,
         )
         profile.mark("aggregate")
 
@@ -570,7 +576,8 @@ class Recommender:
         The lookup (POST /v2/core/lookup) fetches outcome records for all candidate
         models in this cluster straight from storage — no ANN, no flicker. Records
         already returned by ANN are deduped by entry_id so they are never double-counted.
-        Returns ``(recall, extra_evidence, lookup_degraded)``.
+        Returns ``(recall, extra_evidence, lookup_degraded, legacy_weights)`` — the
+        last maps legacy-key entry_ids to their aggregation discount.
 
         The old dereference-based fastpath (MINIMA_DURABLE_FASTPATH=on/shadow) is
         retained for backward compatibility and runs concurrently when configured.
@@ -590,10 +597,25 @@ class Recommender:
 
         # Keyed lookup: one filter clause per candidate model in this cluster.
         # OR-combined on the server; returns all matching non-deleted records.
+        # Dual-read window (PR-3): during a key-space migration the SAME single round
+        # trip also matches the configured legacy-version keys — no second lookup, no
+        # stacked timeout. Legacy rows are admitted per model only when the active-key
+        # cell is thin, and at a discounted weight applied in aggregation.
+        read_versions = [
+            v.strip()
+            for v in settings.minima_cluster_key_read_versions.split(",")
+            if v.strip()
+        ]
+        legacy_keys = [
+            key
+            for v in read_versions
+            if (key := versioned_cluster(task_type.value, difficulty.value, v)) != cluster
+        ]
         lookup_coro = self._memory.lookup(
             lane=lane,
             match=[
-                {"kind": "outcome", "task_cluster": cluster, "model_id": mid}
+                {"kind": "outcome", "task_cluster": key, "model_id": mid}
+                for key in [cluster, *legacy_keys]
                 for mid in candidate_ids
             ],
         )
@@ -602,14 +624,33 @@ class Recommender:
         lookup_degraded = lookup_evidence is None
         ann_ids = {ev.entry_id for ev in recall.evidence}
         extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
+        legacy_weights: dict[str, float] = {}
+        if legacy_keys:
+            active_n: dict[str, int] = {}
+            for ev in [*recall.evidence, *extra]:
+                rec = ev.record
+                if rec is not None and rec.task_cluster == cluster:
+                    active_n[rec.model_id] = active_n.get(rec.model_id, 0) + 1
+            kept: list[RecalledEvidence] = []
+            for ev in extra:
+                rec = ev.record
+                if rec is None or rec.task_cluster == cluster:
+                    kept.append(ev)
+                    continue
+                if active_n.get(rec.model_id, 0) >= settings.minima_dual_key_min_n:
+                    continue
+                legacy_weights[ev.entry_id] = settings.minima_legacy_evidence_weight
+                kept.append(ev)
+            extra = kept
         if extra:
             log.info(
                 "keyed_lookup_delta",
                 cluster=cluster,
                 added=len(extra),
+                legacy=len(legacy_weights),
                 models=[ev.record.model_id for ev in extra if ev.record],
             )
-        return recall, extra, lookup_degraded
+        return recall, extra, lookup_degraded, legacy_weights
 
     def _log_decision(
         self,
