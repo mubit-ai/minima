@@ -34,7 +34,7 @@ def _mixed_evidence():
 def test_discount_is_monotone_in_weight(weight):
     evidence, legacy_ids = _mixed_evidence()
     lighter = aggregate_by_model(
-        evidence, {"m"}, extra_weights={k: weight for k in legacy_ids}
+        evidence, {"m"}, extra_weights=dict.fromkeys(legacy_ids, weight)
     )["m"]
     heavier = aggregate_by_model(
         evidence, {"m"}, extra_weights={k: min(1.0, weight + 0.2) for k in legacy_ids}
@@ -47,7 +47,7 @@ def test_discount_is_monotone_in_weight(weight):
 def test_sweep_report():
     evidence, legacy_ids = _mixed_evidence()
     rates = {
-        w: aggregate_by_model(evidence, {"m"}, extra_weights={k: w for k in legacy_ids})[
+        w: aggregate_by_model(evidence, {"m"}, extra_weights=dict.fromkeys(legacy_ids, w))[
             "m"
         ].weighted_success_rate
         for w in SWEEP
