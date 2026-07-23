@@ -437,16 +437,17 @@ export class MinimaAgent extends Agent {
     // reuses it. Below the confidence floor the override is dropped entirely (the
     // server's heuristic classification applies). Fail-open throughout.
     let classifiedType: string | null = null;
-    let classifiedDifficulty: string | null = null;
     let classifiedConfidence: number | null = null;
     // Raw client label regardless of the floor — telemetry only, never an override.
     let clientClassification: TaskClassification | null = null;
     if (this.config.classify && this.classifier && this.agentId === null && !effectiveTaskType) {
-      clientClassification = await this.classifier.classify(content);
+      clientClassification = await this.classifier.classify(
+        content,
+        this.estimateContextTokens(content),
+      );
       const cls = clientClassification;
       if (cls && cls.confidence >= CLASSIFY_CONFIDENCE_FLOOR) {
         classifiedType = cls.taskType;
-        classifiedDifficulty = opts.difficulty ? null : cls.difficulty;
         classifiedConfidence = cls.confidence;
       }
     }
@@ -490,7 +491,10 @@ export class MinimaAgent extends Agent {
             taskType: effectiveTaskType ?? classifiedType,
             slider: opts.slider ?? null,
             tags: routeTags,
-            difficulty: opts.difficulty ?? classifiedDifficulty ?? undefined,
+            // PR-7: the LLM difficulty grade never rides the wire (Spearman <= 0.35
+            // against empirical difficulty) — type-only overrides; the raw grade still
+            // lands in routing_decisions as telemetry via clientClassification.
+            difficulty: opts.difficulty ?? undefined,
             taskTypeConfidence: classifiedConfidence ?? undefined,
             // Explicit per-call cap only; route() folds in the profile/budget ceilings.
             maxCostPerCall: opts.maxCostPerCall,

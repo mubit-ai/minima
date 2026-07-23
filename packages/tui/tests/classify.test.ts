@@ -170,7 +170,7 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     reg.unregister();
   });
 
-  test("flag on, confident label → task_type/difficulty/confidence ride the request", async () => {
+  test("flag on, confident label → task_type + confidence ride; difficulty NEVER does (PR-7)", async () => {
     const { agent, reg, svc } = setup();
     reg.setResponses([
       new AssistantMessage({
@@ -182,8 +182,22 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     expect(classifierCalls(reg)).toBe(1);
     const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
     expect(task.task_type).toBe("code");
-    expect(task.difficulty).toBe("hard");
+    expect(task.difficulty).toBeUndefined();
     expect(task.task_type_confidence).toBe(0.9);
+    reg.unregister();
+  });
+
+  test("0.7 confidence sits below the raised 0.75 floor → no override", async () => {
+    const { agent, reg, svc } = setup();
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.7}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBeUndefined();
     reg.unregister();
   });
 
