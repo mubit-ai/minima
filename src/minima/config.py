@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # direct_bypass is faster but requires enable_direct_search=true on the Mubit instance
     # (off by default on hosted api.mubit.ai). agent_routed works on all instance types.
     minima_recall_mode: str = "agent_routed"  # agent_routed | direct_bypass
+    # Cluster-key-space version stamped on every minted cluster key. "v1" is byte-identical
+    # to the historical unversioned key; flipping to "v2"+ rides the signature slot of
+    # task_cluster (classifier program PR-2; the flip itself is PR-9).
+    minima_cluster_key_version: str = "v1"
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types

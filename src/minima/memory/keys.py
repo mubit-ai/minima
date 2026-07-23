@@ -57,6 +57,20 @@ def task_cluster(task_type: str, difficulty: str, signature: str | None = None) 
     return f"{base}:{signature}" if signature else base
 
 
+def versioned_cluster(task_type: str, difficulty: str, version: str = CLUSTER_KEY_VERSION) -> str:
+    """Mint the active key-space's cluster key. ``v1`` is BYTE-IDENTICAL to the historical
+    unversioned key (``code:hard``); later versions ride the signature slot
+    (``code:hard:v2``) so every downstream join flips atomically with no consumer change."""
+    return task_cluster(task_type, difficulty, None if version == CLUSTER_KEY_VERSION else version)
+
+
+def strip_cluster_version(cluster: str) -> str:
+    """The version-free ``type:difficulty`` core of a cluster key — the join key for
+    cross-version comparisons (preference pairs must survive a key-space flip)."""
+    parts = cluster.split(":")
+    return ":".join(parts[:2]) if len(parts) >= 2 else cluster
+
+
 def build_content(task_type: str, difficulty: str, text: str, max_chars: int = 512) -> str:
     """The text Mubit embeds: a task gist prefixed with type/difficulty tags."""
     return f"[{task_type}/{difficulty}] {normalize_task_text(text, max_chars)}"

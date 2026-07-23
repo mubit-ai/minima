@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.config import get_settings
+from minima.memory.keys import build_content, task_fingerprint, versioned_cluster
 from minima.memory.records import EVIDENCE_DATASET, OutcomeRecord
 from minima.seeding.items import SeedItem
 
@@ -127,7 +128,9 @@ def load_records(
         task_type = _task_type_for(str(rowd.get("eval_name", "")))
         difficulty = "medium"
         fingerprint = task_fingerprint(prompt)
-        cluster = task_cluster(task_type, difficulty)
+        cluster = versioned_cluster(
+            task_type, difficulty, get_settings().minima_cluster_key_version
+        )
         content = build_content(task_type, difficulty, prompt)
 
         for score_col, cost_col in model_columns.items():
