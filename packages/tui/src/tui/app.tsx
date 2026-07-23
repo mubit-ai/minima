@@ -94,6 +94,7 @@ import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
+import { VERSION } from "../version.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
@@ -298,6 +299,7 @@ const COMMANDS = [
   { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
   { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
   { name: "help", desc: "Show available commands list" },
+  { name: "version", desc: "Show the Minima harness version" },
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
@@ -3210,6 +3212,17 @@ export function HarnessApp({
             role: "tool",
             text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
+          },
+        ]);
+        break;
+      case "version":
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: `minima ${VERSION}${agent.config.experimental ? " · experimental features on" : ""}`,
+            toolName: "version",
           },
         ]);
         break;
