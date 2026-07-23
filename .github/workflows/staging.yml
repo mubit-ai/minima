@@ -80,7 +80,7 @@ jobs:
             --network=${{ env.NETWORK }} \
             --subnet=${{ env.SUBNET }} \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash" \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_REASONER_PROVIDER=gemini,MINIMA_REASONER_MODEL=gemini-3.5-flash,MINIMA_EMBED_CLASSIFIER=1,MINIMA_CLASSIFIER_REQUIRED=1" \
             --set-secrets="GEMINI_API_KEY=minima-staging-gemini-key:latest,ANTHROPIC_API_KEY=minima-staging-anthropic-key:latest,OPENROUTER_API_KEY=minima-staging-openrouter-key:latest,MINIMA_DATABASE_URL=minima-staging-db-url:latest,MINIMA_REDIS_URL=minima-staging-redis-url:latest" \
             --quiet
 

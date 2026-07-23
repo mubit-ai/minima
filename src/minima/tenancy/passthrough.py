@@ -16,7 +16,7 @@ from minima.config import Settings
 from minima.logging import get_logger
 from minima.memory.adapter import Memory, MubitMemory
 from minima.memory.recall_utility import RecallUtilityStore
-from minima.recommender.classify_embed import load_embed_classifier
+from minima.recommender.classify_embed import EmbedClassifier, load_embed_classifier
 from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import DecisionLog, MemoryDecisionLog, OrgScopedDecisionLog
 from minima.recommender.durablerefs import (
@@ -88,6 +88,10 @@ class PassthroughRuntime:
         self._cache: dict[str, TenantContext] = {}
         self._resets_by_org: dict[str, ResetRegistry] = {}
         self._lock = Lock()
+
+    @property
+    def embed_classifier(self) -> EmbedClassifier | None:
+        return self._embed_classifier
 
     def resolve(self, mubit_api_key: str) -> TenantContext:
         key_hash = hashlib.sha256(mubit_api_key.encode()).hexdigest()

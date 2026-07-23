@@ -9,10 +9,15 @@ from minima.config import Settings
 from minima.memory.adapter import Memory
 from minima.recommender.engine import Recommender
 from minima.recommender.recstore import LaneCounter, RecStore
+from minima.tenancy.passthrough import PassthroughRuntime
 
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_passthrough_runtime(request: Request) -> PassthroughRuntime:
+    return request.app.state.passthrough_runtime
 
 
 def get_memory(request: Request) -> Memory:
