@@ -141,7 +141,11 @@ export async function readLines(
   if (capped) numbered.length = cut;
   let body = numbered.join("\n");
   if (capped) body += `\n…(output capped at ${READ_BODY_CAP} chars; use offset/limit)`;
-  if (stopped) body += "\n…(stopped after 100MB scanned; file too large for this offset)";
+  // A completed window on a >100MB file is a success, not a failure — the "too large"
+  // trailer is reserved for windows the scan ceiling actually cut short.
+  if (stopped && selected.length >= limit)
+    body += "\n…(more lines follow; use a larger offset to continue)";
+  else if (stopped) body += "\n…(stopped after 100MB scanned; file too large for this offset)";
   else if (!capped && more > 0) body += `\n…(${more} more lines; use a larger offset to continue)`;
   return { body, n: numbered.length, eof: !stopped };
 }

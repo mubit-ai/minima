@@ -47,11 +47,28 @@ def salient_signature(text: str, max_tokens: int = 4) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]  # noqa: S324
 
 
+CLUSTER_KEY_VERSION = "v1"
+
+
 def task_cluster(task_type: str, difficulty: str, signature: str | None = None) -> str:
     """Cluster used as the upsert grouping key, e.g. ``code:hard`` (coarse) or
     ``code:hard:1a2b3c4d`` (fine, when a keyword signature is supplied)."""
     base = f"{task_type}:{difficulty}"
     return f"{base}:{signature}" if signature else base
+
+
+def versioned_cluster(task_type: str, difficulty: str, version: str = CLUSTER_KEY_VERSION) -> str:
+    """Mint the active key-space's cluster key. ``v1`` is BYTE-IDENTICAL to the historical
+    unversioned key (``code:hard``); later versions ride the signature slot
+    (``code:hard:v2``) so every downstream join flips atomically with no consumer change."""
+    return task_cluster(task_type, difficulty, None if version == CLUSTER_KEY_VERSION else version)
+
+
+def strip_cluster_version(cluster: str) -> str:
+    """The version-free ``type:difficulty`` core of a cluster key — the join key for
+    cross-version comparisons (preference pairs must survive a key-space flip)."""
+    parts = cluster.split(":")
+    return ":".join(parts[:2]) if len(parts) >= 2 else cluster
 
 
 def build_content(task_type: str, difficulty: str, text: str, max_chars: int = 512) -> str:

@@ -16,8 +16,11 @@ import { complete } from "../ai/stream.ts";
 import { Message, type Model } from "../ai/types.ts";
 import { DIFFICULTIES, type Difficulty, TASK_TYPES, type TaskType } from "./schemas.ts";
 
-/** Overrides below this confidence are dropped (the server heuristic applies). */
-export const CLASSIFY_CONFIDENCE_FLOOR = 0.6;
+/** Overrides below this confidence are dropped (the server heuristic applies).
+ * Raised 0.6 -> 0.75 (classifier program PR-7): with the server embed head shipping,
+ * a caller override stomps a calibrated classifier — only high-confidence client
+ * labels should win. */
+export const CLASSIFY_CONFIDENCE_FLOOR = 0.75;
 
 /** Bounded: a slow classifier must never stall the routing phase. */
 const CLASSIFY_TIMEOUT_S = 5;
@@ -93,16 +96,20 @@ export class TaskClassifier {
     }
   }
 
-  async classify(task: string): Promise<TaskClassification | null> {
+  async classify(task: string, contextTokens?: number): Promise<TaskClassification | null> {
     const key = Bun.hash(task).toString(36);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit;
+    const sizeHint =
+      contextTokens && contextTokens > 0
+        ? `\n\n[session context: ~${contextTokens} tokens already in play — scope, not prompt length, drives difficulty]`
+        : "";
     try {
       const resp = await complete(
         this.model,
         {
           system_prompt: CLASSIFY_SYSTEM,
-          messages: [new Message({ role: "user", content: task.slice(0, 8000) })],
+          messages: [new Message({ role: "user", content: task.slice(0, 8000) + sizeHint })],
           tools: [],
         },
         { options: { timeout: this.opts.timeout ?? CLASSIFY_TIMEOUT_S, prompt_cache: false } },

@@ -20,6 +20,7 @@ describe("tool schema surface (model-agnostic gate)", () => {
   for (const t of [...tools, ...conditionalTools]) {
     test(`jsonSchema pinned across all provider conversions: ${t.name}`, () => {
       expect({
+        description: t.description,
         anthropic_input_schema: toJsonSchema(t.parameters),
         openai_function_parameters: toJsonSchema(t.parameters),
         google_function_declaration_parameters: toGeminiSchema(t.parameters),

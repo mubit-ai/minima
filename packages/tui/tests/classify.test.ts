@@ -73,6 +73,17 @@ function mockService() {
           threshold_used: 0.5,
           classified_task_type: "code",
           classified_difficulty: "easy",
+          classification_profile: {
+            task_type_source: "heuristic",
+            difficulty_source: "heuristic",
+            heuristic_task_type: "qa",
+            heuristic_difficulty: "easy",
+            final_task_type: "code",
+            final_difficulty: "easy",
+            uncertainty: 0.2,
+            confidence: 0.8,
+          },
+          cluster_key_version: "v1",
           catalog_version: "v1",
         }),
       };
@@ -159,7 +170,7 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     reg.unregister();
   });
 
-  test("flag on, confident label → task_type/difficulty/confidence ride the request", async () => {
+  test("flag on, confident label → task_type + confidence ride; difficulty NEVER does (PR-7)", async () => {
     const { agent, reg, svc } = setup();
     reg.setResponses([
       new AssistantMessage({
@@ -171,8 +182,22 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     expect(classifierCalls(reg)).toBe(1);
     const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
     expect(task.task_type).toBe("code");
-    expect(task.difficulty).toBe("hard");
+    expect(task.difficulty).toBeUndefined();
     expect(task.task_type_confidence).toBe(0.9);
+    reg.unregister();
+  });
+
+  test("0.7 confidence sits below the raised 0.75 floor → no override", async () => {
+    const { agent, reg, svc } = setup();
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.7}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBeUndefined();
     reg.unregister();
   });
 
@@ -268,5 +293,69 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     expect(spendRow?.note).toBe("classify");
     reg.unregister();
     db.close();
+  });
+});
+
+
+describe("agreement telemetry (classifier program PR-1)", () => {
+  function withDb(agent: MinimaAgent) {
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    agent.db = db;
+    agent.runId = db.startRun({ projectKey: "p" });
+    return db;
+  }
+
+  test("confident client label vs server heuristic → disagreement row stamped", async () => {
+    const { agent, reg } = setup();
+    const db = withDb(agent);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"code","difficulty":"hard","confidence":0.9}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    const row = db.getRunDecisions(agent.runId!)[0] as Record<string, unknown>;
+    expect(row.client_task_type).toBe("code");
+    expect(row.client_difficulty).toBe("hard");
+    expect(row.client_confidence).toBe(0.9);
+    expect(row.heuristic_task_type).toBe("qa");
+    expect(row.heuristic_difficulty).toBe("easy");
+    expect(row.classify_disagreement).toBe(1);
+    expect(row.cluster_key_version).toBe("v1");
+    reg.unregister();
+  });
+
+  test("below-floor label is telemetry, not an override: stamped but not on the wire", async () => {
+    const { agent, reg, svc } = setup();
+    const db = withDb(agent);
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text('{"task_type":"qa","difficulty":"easy","confidence":0.4}')],
+      }),
+      new AssistantMessage({ content: [text("answer")] }),
+    ]);
+    await agent.promptRouted("write a parser");
+    const task = (svc.recommendCalls[0] as { task: Record<string, unknown> }).task;
+    expect(task.task_type).toBeUndefined();
+    const row = db.getRunDecisions(agent.runId!)[0] as Record<string, unknown>;
+    expect(row.client_task_type).toBe("qa");
+    expect(row.client_confidence).toBe(0.4);
+    expect(row.classify_disagreement).toBe(0); // agrees with the mock's heuristic "qa"
+    reg.unregister();
+  });
+
+  test("classify off → telemetry columns NULL, cluster_key_version still stamped", async () => {
+    const { agent, reg } = setup({ classify: false });
+    const db = withDb(agent);
+    reg.setResponses([new AssistantMessage({ content: [text("answer")] })]);
+    await agent.promptRouted("write a parser");
+    const row = db.getRunDecisions(agent.runId!)[0] as Record<string, unknown>;
+    expect(row.client_task_type).toBeNull();
+    expect(row.client_confidence).toBeNull();
+    expect(row.classify_disagreement).toBeNull();
+    expect(row.cluster_key_version).toBe("v1");
+    reg.unregister();
   });
 });

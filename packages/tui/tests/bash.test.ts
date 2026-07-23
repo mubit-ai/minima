@@ -53,3 +53,15 @@ describe("bash timeout partial output (H3)", () => {
     expect(body).toContain("partial-token-xyz");
   });
 });
+
+describe("bash trailing onUpdate (review fix)", () => {
+  test("H6: the last update always carries the complete output", async () => {
+    const updates: string[] = [];
+    const res = await run({ command: "printf first; sleep 0.05; printf ' last'" }, (s) =>
+      updates.push(String(s)),
+    );
+    expect(bodyOf(res as { content: unknown[] })).toContain("first last");
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.at(-1)).toContain("first last");
+  });
+});

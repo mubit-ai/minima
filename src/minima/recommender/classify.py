@@ -13,9 +13,43 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from minima.schemas.common import Difficulty, TaskInput, TaskType
+
+if TYPE_CHECKING:
+    from minima.recommender.classify_embed import EmbedClassifier
 from minima.schemas.recommend import ClassificationProfile, ClassificationRuleProfile
+
+# Identity of the active assignment function, stamped on decision rows so mixed-classifier
+# windows stay sliceable. A learned classifier derives this from its artifact hash.
+CLASSIFIER_ID = "regex-v1"
+
+
+# High-precision vocabulary signals that short-circuit the learned head (PR-5 tiered
+# dispatch): on prompts naming a code file or asking for a TL;DR the regex is
+# near-perfect while subword embeddings barely see the token — measured on the frozen
+# set, every learned configuration traded these exact rows against semantic accuracy.
+_HIGH_PRECISION = (
+    (
+        re.compile(
+            r"\b[\w./-]+\.(?:py|rs|js|jsx|ts|tsx|go|java|rb|c|cc|cpp|h|hpp|cs|php|swift|kt|"
+            r"sql|sh|bash|zsh|yml|yaml|toml|json|css|scss|sass|less|html|htm|vue|svelte)\b",
+            re.IGNORECASE,
+        ),
+        TaskType.code,
+    ),
+    (re.compile(r"\btl;?dr\b", re.IGNORECASE), TaskType.summarization),
+)
+
+
+def high_precision_type(text: str) -> TaskType | None:
+    """The vocabulary tier of the dispatcher: a TaskType when a near-zero-false-positive
+    signal fired, else None (the learned head or heuristic decides)."""
+    for pattern, task_type in _HIGH_PRECISION:
+        if pattern.search(text):
+            return task_type
+    return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -39,6 +73,10 @@ class ClassificationEstimate:
     neighbor_support: float = 0.0
     neighbor_count: int = 0
     profile: ClassificationProfile | None = None
+    # Assignment-function provenance (PR-5): the active classifier deployment and, when
+    # the embed head ran, whether it abstained to the regex. None = the head never ran.
+    classifier_id: str = CLASSIFIER_ID
+    abstained: bool | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -502,7 +540,10 @@ def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
 
 
 def classify_details(
-    task: TaskInput, *, neighbor_votes: Iterable[tuple[str, float]] | None = None
+    task: TaskInput,
+    *,
+    neighbor_votes: Iterable[tuple[str, float]] | None = None,
+    embed: EmbedClassifier | None = None,
 ) -> ClassificationEstimate:
     profiler = _ClassificationProfiler()
     profiler.mark("start")
@@ -516,6 +557,27 @@ def classify_details(
     neighbor_count = 0
     task_type = task.task_type or heuristic_task_type
     task_type_source = "caller" if task.task_type is not None else "heuristic"
+    classifier_id = CLASSIFIER_ID
+    abstained: bool | None = None
+    embed_confidence: float | None = None
+    if embed is not None:
+        classifier_id = embed.classifier_id
+        if task.task_type is None:
+            precise = high_precision_type(task.task)
+            if precise is not None:
+                task_type = precise
+                task_type_source = "vocabulary_precise"
+                profiler.mark("embed")
+            else:
+                result = embed.classify(task.task, regex_hint=heuristic_task_type)
+                profiler.mark("embed")
+                abstained = result.abstained
+                if result.abstained:
+                    task_type_source = "embedding_abstain"
+                else:
+                    task_type = result.task_type
+                    task_type_source = "embedding"
+                    embed_confidence = result.confidence
     if neighbor_votes is not None:
         neighbor_estimate = _neighbor_classification_estimate(neighbor_votes)
         if neighbor_estimate is not None:
@@ -536,6 +598,8 @@ def classify_details(
     confidence = _classification_confidence(
         task, task_type, heuristic_task_type, uncertainty, selected_rule=selected_rule
     )
+    if embed_confidence is not None:
+        confidence = embed_confidence
     easy_route = task_type in _EASY_TYPES and confidence >= 0.72 and selected_rule is not None
     profile = ClassificationProfile(
         task_type_source=task_type_source,
@@ -565,6 +629,8 @@ def classify_details(
         neighbor_support=neighbor_support,
         neighbor_count=neighbor_count,
         profile=profile,
+        classifier_id=classifier_id,
+        abstained=abstained,
     )
 
 

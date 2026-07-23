@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolResult } from "../src/agent/tools.ts";
@@ -81,7 +81,11 @@ describe("glob ignore filtering", () => {
   test.if(RG !== null)("L2: rg path drops .gitignore'd dirs and node_modules", async () => {
     const d = ignoreTree();
     const res = await run(globTool(), { pattern: "**/*", path: d });
-    expect(body(res)).toBe("keep.txt");
+    const b = body(res);
+    const matchLines = b.split("\n").filter((l) => !l.startsWith("[note:"));
+    expect(matchLines).toEqual(["keep.txt"]);
+    // the exclusion is announced on the partial-match path, not only on zero matches
+    expect(b).toContain("include_ignored=true");
   });
 
   test("L3: fallback excludes node_modules; dist/ present (documented asymmetry)", async () => {
@@ -114,7 +118,8 @@ describe("glob pattern semantics", () => {
     mkdirSync(join(d, "sub"));
     writeFileSync(join(d, "sub", "b.ts"), "x");
     const res = await run(globTool(), { pattern: "*.ts", path: d });
-    expect(body(res)).toBe("a.ts");
+    expect(body(res).split("\n")[0]).toBe("a.ts");
+    expect(body(res)).not.toContain("sub/b.ts");
   });
 
   test("L5b: *.ts stays top-level on the fallback path", async () => {
@@ -133,5 +138,55 @@ describe("glob zero matches", () => {
     writeFileSync(join(d, "a.txt"), "x");
     const res = await run(globTool(), { pattern: "*.zzz", path: d });
     expect(body(res)).toContain("include_ignored");
+  });
+});
+
+// Review fixes: fake-rg scripts pin the rg-engine branches deterministically on machines
+// without ripgrep (the rgCmd seam forces the binary).
+describe("glob rg engine via fake rg", () => {
+  test("L7: non-empty rg results carry the exclusion note", async () => {
+    const d = newTmp();
+    writeFileSync(join(d, "keep.txt"), "x");
+    const fake = join(d, "fake-rg.sh");
+    writeFileSync(fake, "#!/bin/sh\nprintf 'keep.txt\\n'\nexit 0\n", { mode: 0o755 });
+    const res = await run(globTool({ rgCmd: fake }), { pattern: "*.txt", path: d });
+    const b = body(res);
+    expect(b.split("\n")[0]).toBe("keep.txt");
+    expect(b).toContain("include_ignored=true");
+  });
+
+  test("L8: rg failure falls back to the scan engine instead of reporting no matches", async () => {
+    const d = newTmp();
+    writeFileSync(join(d, "real.txt"), "x");
+    const fake = join(d, "fake-rg.sh");
+    writeFileSync(fake, "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+    const res = await run(globTool({ rgCmd: fake }), { pattern: "*.txt", path: d });
+    const b = body(res);
+    expect(b).toContain("real.txt");
+    expect(b).not.toContain("include_ignored=true");
+  });
+
+  test("L9: rg is spawned with --no-config", async () => {
+    const d = newTmp();
+    writeFileSync(join(d, "keep.txt"), "x");
+    const fake = join(d, "fake-rg.sh");
+    const argsFile = join(d, "args.txt");
+    writeFileSync(fake, `#!/bin/sh\necho "$@" > ${JSON.stringify(argsFile)}\nprintf 'keep.txt\\n'\n`, {
+      mode: 0o755,
+    });
+    await run(globTool({ rgCmd: fake }), { pattern: "*.txt", path: d });
+    expect(readFileSync(argsFile, "utf8")).toContain("--no-config");
+  });
+
+  test("L10: leading ./ patterns match on both engines", async () => {
+    const d = newTmp();
+    mkdirSync(join(d, "src"));
+    writeFileSync(join(d, "src", "a.ts"), "x");
+    const fake = join(d, "fake-rg.sh");
+    writeFileSync(fake, "#!/bin/sh\nprintf 'src/a.ts\\n'\nexit 0\n", { mode: 0o755 });
+    const viaRg = await run(globTool({ rgCmd: fake }), { pattern: "./src/*.ts", path: d });
+    const viaScan = await run(globTool({ rgCmd: null }), { pattern: "./src/*.ts", path: d });
+    expect(body(viaRg)).toContain("src/a.ts");
+    expect(body(viaScan)).toContain("src/a.ts");
   });
 });

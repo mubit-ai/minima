@@ -16,6 +16,7 @@ from threading import Lock
 from typing import Protocol, runtime_checkable
 
 from minima.logging import get_logger
+from minima.memory.keys import strip_cluster_version
 from minima.memory.records import TRUSTED_LABEL_SOURCES, clamp01
 from minima.recommender.decisionlog import DecisionRecord
 from minima.schemas.common import OutcomeLabel
@@ -61,7 +62,7 @@ def assemble_pair(
         return None
     if child_evidence_source not in PAIR_EVIDENCE_SOURCES:
         return None
-    if parent.cluster != child_cluster:
+    if strip_cluster_version(parent.cluster) != strip_cluster_version(child_cluster):
         return None
     loser = parent.realized_model_id or parent.chosen_model_id
     winner = child_req.chosen_model_id
@@ -114,7 +115,13 @@ class MemoryPairStore:
                 buckets = [self._data.get(org_id)] if org_id in self._data else []
             else:
                 buckets = list(self._data.values())
-            pairs = [p for dq in buckets if dq is not None for p in dq if p.cluster == cluster]
+            pairs = [
+                p
+                for dq in buckets
+                if dq is not None
+                for p in dq
+                if strip_cluster_version(p.cluster) == strip_cluster_version(cluster)
+            ]
         wins: dict[tuple[str, str], int] = {}
         for p in pairs:
             key = (p.winner_model_id, p.loser_model_id)

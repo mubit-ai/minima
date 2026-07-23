@@ -41,6 +41,7 @@ describe("grep args builders", () => {
     const rgArgs = buildRgArgs?.({ pattern: "foo", path: ".", caseInsensitive: false }) ?? [];
     expect(rgArgs).toContain("-n");
     expect(rgArgs).not.toContain("-N");
+    expect(rgArgs[0]).toBe("--no-config");
     const si = rgArgs.indexOf("--sort");
     expect(si).toBeGreaterThan(-1);
     expect(rgArgs[si + 1]).toBe("path");
@@ -179,5 +180,24 @@ describe("grep bounding", () => {
     const b = body(res);
     expect(b).toContain("…(truncated)");
     expect(b.length).toBeLessThan(2500);
+  });
+});
+
+// Review fixes: the rg-path branches are deterministic on any machine via a fake rg
+// script forced through the rgCmd seam — no test.if(RG) gate needed.
+describe("grep exit-2 stderr bounding (fake rg)", () => {
+  test("G11: a huge stderr on exit 2 reaches the model bounded, not verbatim", async () => {
+    const d = newTmp();
+    const fake = join(d, "fake-rg.sh");
+    writeFileSync(
+      fake,
+      `#!/bin/sh\ni=0\nwhile [ $i -lt 5000 ]; do echo "rg: fixture/$i: Permission denied" >&2; i=$((i+1)); done\nexit 2\n`,
+      { mode: 0o755 },
+    );
+    const res = await run(grepTool({ rgCmd: fake }), { pattern: "x", path: d });
+    expect(res.details?.error).toBeDefined();
+    const b = body(res);
+    expect(b.length).toBeLessThan(4_000);
+    expect(b).toContain("[output truncated");
   });
 });

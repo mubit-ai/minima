@@ -40,7 +40,11 @@ import {
 } from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
 import { runCheck, wasAborted } from "./check.ts";
-import { CLASSIFY_CONFIDENCE_FLOOR, type TaskClassifier } from "./classify.ts";
+import {
+  CLASSIFY_CONFIDENCE_FLOOR,
+  type TaskClassification,
+  type TaskClassifier,
+} from "./classify.ts";
 import { type HarnessConfig, refreshRoutingEnv } from "./config.ts";
 import { isBudgetInfeasible } from "./errors.ts";
 import {
@@ -434,13 +438,17 @@ export class MinimaAgent extends Agent {
     // reuses it. Below the confidence floor the override is dropped entirely (the
     // server's heuristic classification applies). Fail-open throughout.
     let classifiedType: string | null = null;
-    let classifiedDifficulty: string | null = null;
     let classifiedConfidence: number | null = null;
+    // Raw client label regardless of the floor — telemetry only, never an override.
+    let clientClassification: TaskClassification | null = null;
     if (this.config.classify && this.classifier && this.agentId === null && !effectiveTaskType) {
-      const cls = await this.classifier.classify(content);
+      clientClassification = await this.classifier.classify(
+        content,
+        this.estimateContextTokens(content),
+      );
+      const cls = clientClassification;
       if (cls && cls.confidence >= CLASSIFY_CONFIDENCE_FLOOR) {
         classifiedType = cls.taskType;
-        classifiedDifficulty = opts.difficulty ? null : cls.difficulty;
         classifiedConfidence = cls.confidence;
       }
     }
@@ -483,7 +491,10 @@ export class MinimaAgent extends Agent {
             taskType: effectiveTaskType ?? classifiedType,
             slider: opts.slider ?? null,
             tags: routeTags,
-            difficulty: opts.difficulty ?? classifiedDifficulty ?? undefined,
+            // PR-7: the LLM difficulty grade never rides the wire (Spearman <= 0.35
+            // against empirical difficulty) — type-only overrides; the raw grade still
+            // lands in routing_decisions as telemetry via clientClassification.
+            difficulty: opts.difficulty ?? undefined,
             taskTypeConfidence: classifiedConfidence ?? undefined,
             // Explicit per-call cap only; route() folds in the profile/budget ceilings.
             maxCostPerCall: opts.maxCostPerCall,
@@ -718,6 +729,7 @@ export class MinimaAgent extends Agent {
           reinforcedEntryIds,
           lessonPromoted,
           stepAtStart,
+          clientClassification,
         });
 
         // Recover? Only with a rung left, a routed (non-pinned) decision to learn from, and a REAL
@@ -854,6 +866,8 @@ export class MinimaAgent extends Agent {
       lessonPromoted?: boolean | null;
       /** MUB-173: plan attribution captured at rung START (stepAttributionAtStart). */
       stepAtStart?: StepAttribution | null;
+      /** Raw client classifier output (pre-floor) — agreement telemetry, never an override. */
+      clientClassification?: TaskClassification | null;
     },
   ): void {
     if (!this.db || !this.runId) return;
@@ -904,6 +918,18 @@ export class MinimaAgent extends Agent {
         taskLabel: shortLabel(taskText),
         taskType: routing?.classifiedTaskType || o.taskType,
         difficulty: routing?.classifiedDifficulty || o.difficulty,
+        clientTaskType: o.clientClassification?.taskType ?? null,
+        clientDifficulty: o.clientClassification?.difficulty ?? null,
+        clientConfidence: o.clientClassification?.confidence ?? null,
+        heuristicTaskType: routing?.heuristicTaskType || null,
+        heuristicDifficulty: routing?.heuristicDifficulty || null,
+        classifyDisagreement:
+          o.clientClassification && routing?.heuristicTaskType
+            ? o.clientClassification.taskType === routing.heuristicTaskType
+              ? 0
+              : 1
+            : null,
+        clusterKeyVersion: routing?.clusterKeyVersion || null,
         chosenModel: routing?.chosenModelId ?? this.agentState.model?.id ?? null,
         decisionBasis: routing?.decisionBasis ?? "offline",
         selectionPolicy: routing?.selectionPolicy ?? null,
@@ -1453,6 +1479,9 @@ function pinnedResult(model: Model): RoutingResult {
     selectionPolicy: "pinned",
     classifiedTaskType: "",
     classifiedDifficulty: "",
+    heuristicTaskType: "",
+    heuristicDifficulty: "",
+    clusterKeyVersion: "",
   };
 }
 

@@ -14,13 +14,14 @@ from minima.config import Settings
 from minima.logging import get_logger
 from minima.memory import threadpool
 from minima.memory.adapter import Memory
-from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.keys import build_content, task_fingerprint, versioned_cluster
 from minima.memory.recall_utility import RecallUtilityStore, apply_recall_utility
 from minima.memory.records import RecalledEvidence, label_score
 from minima.metrics.calibration import CalibratorSet, cusum_flags, fit_calibrators
 from minima.recommender import contextual, escalation, score
 from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.classify import classify_details
+from minima.recommender.classify_embed import EmbedClassifier
 from minima.recommender.contextual import ContextualStore
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionLog, DecisionRecord
 from minima.recommender.durablerefs import DurableRefs
@@ -91,6 +92,7 @@ class Recommender:
         resets: ResetRegistry | None = None,
         contextual: ContextualStore | None = None,
         recall_utility: RecallUtilityStore | None = None,
+        embed_classifier: EmbedClassifier | None = None,
     ):
         self._settings = settings
         self._memory = memory
@@ -103,6 +105,7 @@ class Recommender:
         self._resets = resets
         self._contextual = contextual
         self._recall_utility = recall_utility
+        self._embed_classifier = embed_classifier
         self._rng = rng or random.Random()  # noqa: S311 — exploration sampling, not crypto
         argmin_orgs = {o.strip() for o in settings.minima_argmin_orgs.split(",") if o.strip()}
         self._thompson_enabled = (
@@ -134,7 +137,7 @@ class Recommender:
         settings = self._settings
         warnings: list[str] = []
 
-        classification = classify_details(req.task)
+        classification = classify_details(req.task, embed=self._embed_classifier)
         # classify_details always populates `profile`; bind it locally so the type
         # checker sees a non-None ClassificationProfile (narrowing on the attribute
         # is otherwise dropped across the awaits below). Mutations still apply to the
@@ -146,7 +149,7 @@ class Recommender:
         profile.mark("classify")
         class_profile.final_task_type = task_type
         class_profile.final_difficulty = difficulty
-        cluster = task_cluster(task_type, difficulty)
+        cluster = versioned_cluster(task_type, difficulty, settings.minima_cluster_key_version)
         fingerprint = task_fingerprint(req.task.task)
         lane = settings.lane(req.namespace)
 
@@ -157,7 +160,12 @@ class Recommender:
             raise NoCandidatesError("no models match the supplied constraints")
         candidate_ids = {c.model_id for c in candidates}
 
-        recall, fastpath_evidence, lookup_degraded = await self._recall_with_fastpath(
+        (
+            recall,
+            fastpath_evidence,
+            lookup_degraded,
+            legacy_weights,
+        ) = await self._recall_with_fastpath(
             req=req,
             lane=lane,
             cluster=cluster,
@@ -204,6 +212,7 @@ class Recommender:
         ):
             refined = classify_details(
                 req.task,
+                embed=self._embed_classifier,
                 neighbor_votes=[
                     (ev.record.task_type, ev.score) for ev in evidence if ev.record is not None
                 ],
@@ -214,7 +223,9 @@ class Recommender:
                 assert class_profile is not None
                 task_type = refined.task_type
                 difficulty = refined.difficulty
-                cluster = task_cluster(task_type, difficulty)
+                cluster = versioned_cluster(
+                    task_type, difficulty, settings.minima_cluster_key_version
+                )
                 warnings.append("neighbor_classified")
         profile.mark("neighbor_classify")
 
@@ -291,6 +302,7 @@ class Recommender:
             ),
             reset_epochs=reset_epochs if discounting else None,
             label_model_scores=label_scores,
+            extra_weights=legacy_weights or None,
         )
         profile.mark("aggregate")
 
@@ -525,6 +537,9 @@ class Recommender:
             est_cost_premium=est_cost_premium,
             task_type_source=class_profile.task_type_source,
             shadow_choices=shadow_choices,
+            classifier_id=classification.classifier_id,
+            abstained=classification.abstained,
+            cluster_key_version=settings.minima_cluster_key_version,
         )
         profile.mark("decision_log")
 
@@ -548,6 +563,7 @@ class Recommender:
             selection_policy=selection_policy,
             recommended_actions=_actions_for(recommended.card),
             stage_latency_ms=profile.as_dict(),
+            cluster_key_version=settings.minima_cluster_key_version,
         )
 
     async def _recall_with_fastpath(
@@ -565,7 +581,8 @@ class Recommender:
         The lookup (POST /v2/core/lookup) fetches outcome records for all candidate
         models in this cluster straight from storage — no ANN, no flicker. Records
         already returned by ANN are deduped by entry_id so they are never double-counted.
-        Returns ``(recall, extra_evidence, lookup_degraded)``.
+        Returns ``(recall, extra_evidence, lookup_degraded, legacy_weights)`` — the
+        last maps legacy-key entry_ids to their aggregation discount.
 
         The old dereference-based fastpath (MINIMA_DURABLE_FASTPATH=on/shadow) is
         retained for backward compatibility and runs concurrently when configured.
@@ -585,10 +602,25 @@ class Recommender:
 
         # Keyed lookup: one filter clause per candidate model in this cluster.
         # OR-combined on the server; returns all matching non-deleted records.
+        # Dual-read window (PR-3): during a key-space migration the SAME single round
+        # trip also matches the configured legacy-version keys — no second lookup, no
+        # stacked timeout. Legacy rows are admitted per model only when the active-key
+        # cell is thin, and at a discounted weight applied in aggregation.
+        read_versions = [
+            v.strip()
+            for v in settings.minima_cluster_key_read_versions.split(",")
+            if v.strip()
+        ]
+        legacy_keys = [
+            key
+            for v in read_versions
+            if (key := versioned_cluster(task_type.value, difficulty.value, v)) != cluster
+        ]
         lookup_coro = self._memory.lookup(
             lane=lane,
             match=[
-                {"kind": "outcome", "task_cluster": cluster, "model_id": mid}
+                {"kind": "outcome", "task_cluster": key, "model_id": mid}
+                for key in [cluster, *legacy_keys]
                 for mid in candidate_ids
             ],
         )
@@ -597,14 +629,33 @@ class Recommender:
         lookup_degraded = lookup_evidence is None
         ann_ids = {ev.entry_id for ev in recall.evidence}
         extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
+        legacy_weights: dict[str, float] = {}
+        if legacy_keys:
+            active_n: dict[str, int] = {}
+            for ev in [*recall.evidence, *extra]:
+                rec = ev.record
+                if rec is not None and rec.task_cluster == cluster:
+                    active_n[rec.model_id] = active_n.get(rec.model_id, 0) + 1
+            kept: list[RecalledEvidence] = []
+            for ev in extra:
+                rec = ev.record
+                if rec is None or rec.task_cluster == cluster:
+                    kept.append(ev)
+                    continue
+                if active_n.get(rec.model_id, 0) >= settings.minima_dual_key_min_n:
+                    continue
+                legacy_weights[ev.entry_id] = settings.minima_legacy_evidence_weight
+                kept.append(ev)
+            extra = kept
         if extra:
             log.info(
                 "keyed_lookup_delta",
                 cluster=cluster,
                 added=len(extra),
+                legacy=len(legacy_weights),
                 models=[ev.record.model_id for ev in extra if ev.record],
             )
-        return recall, extra, lookup_degraded
+        return recall, extra, lookup_degraded, legacy_weights
 
     def _log_decision(
         self,
@@ -628,6 +679,9 @@ class Recommender:
         est_cost_premium: float,
         task_type_source: str | None = None,
         shadow_choices: dict[str, str] | None = None,
+        classifier_id: str | None = None,
+        abstained: bool | None = None,
+        cluster_key_version: str | None = None,
     ) -> None:
         """Persist the decision row (best-effort — never breaks a recommendation)."""
         if self._decision_log is None:
@@ -697,6 +751,9 @@ class Recommender:
                     task_type_source=task_type_source,
                     task_type_confidence=req.task.task_type_confidence,
                     shadow_choices=shadow_choices,
+                    classifier_id=classifier_id,
+                    abstained=abstained,
+                    cluster_key_version=cluster_key_version,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — analytics must never break the hot path

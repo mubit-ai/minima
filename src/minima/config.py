@@ -31,6 +31,24 @@ class Settings(BaseSettings):
     # direct_bypass is faster but requires enable_direct_search=true on the Mubit instance
     # (off by default on hosted api.mubit.ai). agent_routed works on all instance types.
     minima_recall_mode: str = "agent_routed"  # agent_routed | direct_bypass
+    # Cluster-key-space version stamped on every minted cluster key. "v1" is byte-identical
+    # to the historical unversioned key; flipping to "v2"+ rides the signature slot of
+    # task_cluster (classifier program PR-2; the flip itself is PR-9).
+    minima_cluster_key_version: str = "v1"
+    # Dual-read window (PR-3): extra key-space versions the keyed lookup may read, comma
+    # list newest-first (e.g. "v2,v1"; empty = active version only). Legacy-version
+    # evidence enters aggregation only when the active-version cell is thin
+    # (< minima_dual_key_min_n rows for that model) and at a discounted weight.
+    minima_cluster_key_read_versions: str = ""
+    minima_dual_key_min_n: int = 3
+    minima_legacy_evidence_weight: float = 0.7
+    # Embed classifier (PR-5): serve task_type from the trained static-embedding head
+    # (scripts/classifier artifact) instead of the regex, falling back to the regex on
+    # abstention or any load problem. minima_classifier_required makes a missing/broken
+    # artifact refuse to START rather than silently degrade to regex quality in prod.
+    minima_embed_classifier: bool = False
+    minima_classifier_artifact: str = ""
+    minima_classifier_required: bool = False
     minima_lane_prefix: str = "minima"
     minima_seed_lane: str = "minima:default"
     # LTM entry-type filter on recall. Minima evidence lives under exactly two types

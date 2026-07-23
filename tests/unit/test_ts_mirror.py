@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from minima.schemas.feedback import FeedbackRequest, FeedbackResponse
-from minima.schemas.recommend import RecommendRequest
+from minima.schemas.recommend import ClassificationProfile, RecommendRequest, RecommendResponse
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MIRRORS = {
@@ -25,6 +25,8 @@ _MIRRORS = {
 # Diagnostics deliberately not mirrored (explain-only payload weight, no TS consumer).
 _EXEMPT = {
     "RecommendRequest": set(),
+    "RecommendResponse": set(),
+    "ClassificationProfile": set(),
     "FeedbackRequest": set(),
     "FeedbackResponse": set(),
 }
@@ -41,6 +43,8 @@ def _ts_interface_fields(mirror: Path, name: str) -> set[str]:
     ("model", "interface"),
     [
         (RecommendRequest, "RecommendRequest"),
+        (RecommendResponse, "RecommendResponse"),
+        (ClassificationProfile, "ClassificationProfile"),
         (FeedbackRequest, "FeedbackRequest"),
         (FeedbackResponse, "FeedbackResponse"),
     ],

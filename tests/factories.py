@@ -113,12 +113,13 @@ def make_evidence(
     source_dataset: str | None = None,
     referenceable: bool = False,
     evidence_source: str | None = None,
+    task_cluster: str | None = None,
 ) -> RecalledEvidence:
     record = OutcomeRecord(
         model_id=model_id,
         task_type=task_type,
         difficulty=difficulty,
-        task_cluster=f"{task_type}:{difficulty}",
+        task_cluster=task_cluster or f"{task_type}:{difficulty}",
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         quality_score=quality,
@@ -139,3 +140,53 @@ def make_evidence(
         record=record,
         referenceable=referenceable,
     )
+
+
+def make_classifier_artifact(dirpath, *, classifier_id: str = "fixture-classifier-0001"):
+    """Tiny embed-classifier artifact for hermetic tests: a 6-token word-level vocab in a
+    4-dim space with three linearly separable classes (code / creative / other) and a
+    distance threshold tight enough that unknown vocabulary abstains."""
+    import json as _json
+    from pathlib import Path
+
+    import numpy as np
+    from tokenizers import Tokenizer, models, pre_tokenizers
+
+    dirpath = Path(dirpath)
+    dirpath.mkdir(parents=True, exist_ok=True)
+    vocab = {"def": 0, "bug": 1, "poem": 2, "story": 3, "hello": 4, "thanks": 5, "[UNK]": 6}
+    axes = np.array(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.1, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.1, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 0.1],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    scales = np.clip(np.abs(axes).max(axis=1), 1e-6, None) / 127.0
+    q = np.clip(np.round(axes / scales[:, None]), -127, 127).astype(np.int8)
+    np.savez_compressed(dirpath / "embeddings.npz", q=q, scales=scales.astype(np.float32))
+    anchors = np.array(
+        [[1.0, 0.05, 0.0, 0.0], [0.05, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.05]], dtype=np.float32
+    )
+    anchors /= np.linalg.norm(anchors, axis=1, keepdims=True)
+    np.savez_compressed(
+        dirpath / "head.npz",
+        coef=(anchors * 8.0).astype(np.float32),
+        intercept=np.zeros(3, dtype=np.float32),
+        anchors=anchors,
+        classes=np.array(["code", "creative", "other"]),
+        tau_dist=np.float32(0.35),
+        tau_margin=np.float32(0.05),
+    )
+    tok = Tokenizer(models.WordLevel(vocab, unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    tok.save(str(dirpath / "tokenizer.json"))
+    (dirpath / "manifest.json").write_text(
+        _json.dumps({"classifier_id": classifier_id, "backbone": "fixture", "dim": 4})
+    )
+    return dirpath

@@ -37,7 +37,9 @@ export interface GrepArgsInput {
 }
 
 export function buildRgArgs(p: GrepArgsInput): string[] {
-  const args = ["-n", "--no-heading", "--color=never", "--sort", "path"];
+  // --no-config: rg honors RIPGREP_CONFIG_PATH, whose file can inject --pre <cmd> —
+  // arbitrary exec through a no-prompt read tool if the env is poisoned.
+  const args = ["--no-config", "-n", "--no-heading", "--color=never", "--sort", "path"];
   if (p.caseInsensitive) args.push("-i");
   if (p.glob) args.push("-g", p.glob);
   args.push("--", p.pattern, p.path);
@@ -116,7 +118,10 @@ async function executeWithin(
   }
 
   if (exitCode === 2 && !output.trim()) {
-    return errorResult(`grep error: ${stderr.trim() || "unknown"}`);
+    // stderr can be one line per unreadable file over a large tree — bound it like any
+    // other model-visible output.
+    const e = boundText(stderr.trim() || "unknown", { maxLines: 20, maxChars: 2_000 });
+    return errorResult(`grep error: ${e.body}${e.notice ? `\n${e.notice}` : ""}`);
   }
   if (!output.trim()) return { content: [text("(no matches)")] };
 

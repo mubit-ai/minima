@@ -139,3 +139,27 @@ describe("spill hook (P1 seam)", () => {
     expect(boundDetails(declined).spill_ref).toBeUndefined();
   });
 });
+
+describe("surrogate-safe cuts (review fix)", () => {
+  test("B8: a hard cut mid-emoji never emits a lone surrogate", () => {
+    const line = "\u{1F600}".repeat(30_000);
+    const b = boundText(line, { maxLines: 10, maxChars: 50_001 });
+    expect(b.body.isWellFormed()).toBe(true);
+    expect(b.truncated).toBe(true);
+  });
+
+  test("B9: BoundedBuffer head/tail boundaries stay well-formed under emoji chunks", () => {
+    const buf = new BoundedBuffer({ maxChars: 2_001, headChars: 501 });
+    for (let i = 0; i < 40; i++) buf.push("\u{1F680}".repeat(50));
+    expect(buf.snapshot().isWellFormed()).toBe(true);
+    expect(buf.finish().body.isWellFormed()).toBe(true);
+  });
+
+  test("B10: under-cap content survives intact for any headChars config", () => {
+    const buf = new BoundedBuffer({ maxChars: 1_000, headChars: 100 });
+    const input = "a".repeat(900);
+    buf.push(input);
+    expect(buf.snapshot()).toBe(input);
+    expect(buf.finish().truncated).toBe(false);
+  });
+});
