@@ -124,7 +124,7 @@ Opt-in features ship dark behind the experimental umbrella. Turn on everything w
 | Flag | What it enables |
 |---|---|
 | `MINIMA_AUTO_EFFORT` | Server-classified difficulty picks each prompt's thinking level — routing becomes model × effort |
-| `MINIMA_TUI_CLASSIFY` | Client-side task classification sent as a caller override before routing (fail-open) |
+| `MINIMA_TUI_CLASSIFY` | Client-side task classification sent as a caller override before routing (fail-open). Auto-defers when the server reports its trained embedding classifier loaded — the head is the better classifier and the skipped completion is saved spend (`MINIMA_TUI_CLASSIFY_FORCE=1` keeps the override anyway) |
 | `MINIMA_TUI_INTERVIEW` | After a `/plan` council round, up to 3 gated questions that persist verify commands + a budget/quality profile |
 | `MINIMA_TUI_TUNER` | After a plan closes fully, one bounded A/B probe nudges the repo's slider toward what you actually prefer |
 | `MINIMA_TUI_OBSERVER` | A non-blocking watcher over the event stream: advisory steers and audit verdicts — never blocks a tool, never feeds a label; at most, repeated ignored call-outs earn one yellow milestone gate |
