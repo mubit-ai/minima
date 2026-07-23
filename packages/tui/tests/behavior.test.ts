@@ -504,7 +504,7 @@ describe("tui/app.tsx panel key routing", () => {
     const body = src.slice(idx, idx + 3200);
     expect(body).toContain("planOverviewPanelState(");
     expect(body).toContain("planOverviewRows(overview,");
-    expect(body).toContain("whyReportFor(agent.db, agent.runId)");
+    expect(body).toContain("whyReportFor(agent.db, agent.runId, sessionTotalUsd())");
     expect(body).toContain("observerWhySection(agent.db, agent.runId)");
   });
 });

@@ -1269,6 +1269,21 @@ export class MinimaDb {
     return { perStep, totalUsd };
   }
 
+  /**
+   * R8: realized $ across ALL of a run's routed decisions — stamped or step_id-NULL alike
+   * (plan-verification-off turns, planning turns, council researchers, off-plan detours). The gap
+   * between this and stepCosts' Σ is the overview's "unattributed" remainder.
+   */
+  runRoutedTotal(runId: string): number {
+    const row = this.db
+      .query(
+        `SELECT SUM(COALESCE(actual_cost_usd, 0)) AS total
+         FROM routing_decisions WHERE run_id = ?`,
+      )
+      .get(runId) as { total: number | null } | null;
+    return row?.total ?? 0;
+  }
+
   // ================================================================ checkpoints (B3)
 
   insertCheckpoint(opts: {
