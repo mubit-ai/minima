@@ -204,3 +204,18 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     expect(optInFlag(undefined, true)).toBe(true);
   });
 });
+
+describe("artifact spill store flag (P1)", () => {
+  test("MINIMA_TUI_ARTIFACTS defaults on; =0 opts out", () => {
+    expect(harnessConfig().artifacts).toBe(true);
+    withEnv({ MINIMA_TUI_ARTIFACTS: undefined }, () => {
+      expect(configFromEnv().artifacts).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_ARTIFACTS: "0" }, () => {
+      expect(configFromEnv().artifacts).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_ARTIFACTS: "1" }, () => {
+      expect(configFromEnv().artifacts).toBe(true);
+    });
+  });
+});
