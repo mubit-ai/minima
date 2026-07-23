@@ -458,6 +458,24 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_artifacts_run ON artifacts(run_id, created)",
   ],
+  // seen-lines ledger (P3 edit guard) — per-run read/grep/write/edit evidence: which lines
+  // of which file, at which content hash, this session has actually seen. State here;
+  // the context only carries the [snap:…] projection. run_id soft-joins runs(run_id)
+  // (no FK — batch stays self-contained); agent_id reserved for sub-agent scoping (NULL in v1).
+  [
+    `CREATE TABLE IF NOT EXISTS seen_lines (
+       id         INTEGER PRIMARY KEY AUTOINCREMENT,
+       run_id     TEXT NOT NULL,
+       agent_id   TEXT,
+       path       TEXT NOT NULL,
+       start_line INTEGER NOT NULL,
+       end_line   INTEGER NOT NULL,
+       file_hash  TEXT NOT NULL,
+       tool       TEXT NOT NULL,
+       created    REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_seen_lines_key ON seen_lines(run_id, path, created)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -498,6 +516,18 @@ export interface EventRow {
   type: string;
   ts: number;
   payload: string;
+}
+
+export interface SeenLineRow {
+  id: number;
+  run_id: string;
+  agent_id: string | null;
+  path: string;
+  start_line: number;
+  end_line: number;
+  file_hash: string;
+  tool: string;
+  created: number;
 }
 
 export interface DecisionWrite {
@@ -1207,6 +1237,37 @@ export class MinimaDb {
   /** Run a batch of writes in one transaction (per-turn atomicity for the sink). */
   transact(fn: () => void): void {
     this.db.transaction(fn)();
+  }
+
+  // ---------------------------------------------------------------- seen-lines ledger (P3)
+  listSeenLines(runId: string, path: string): SeenLineRow[] {
+    return this.db
+      .query("SELECT * FROM seen_lines WHERE run_id = ? AND path = ? ORDER BY start_line, end_line")
+      .all(runId, path) as SeenLineRow[];
+  }
+
+  /** Replace the whole evidence set for (run, path) — the SeenLedger passes the coalesced
+   * union of surviving + new ranges, so this delete IS the supersede-on-new-hash. */
+  replaceSeenLines(
+    runId: string,
+    path: string,
+    fileHash: string,
+    rows: { start: number; end: number; tool: string }[],
+  ): void {
+    this.db.transaction(() => {
+      this.deleteSeenLines(runId, path);
+      for (const r of rows) {
+        this.db.run(
+          `INSERT INTO seen_lines (run_id, agent_id, path, start_line, end_line, file_hash, tool, created)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+          [runId, path, r.start, r.end, fileHash, r.tool, Date.now() / 1000],
+        );
+      }
+    })();
+  }
+
+  private deleteSeenLines(runId: string, path: string): void {
+    this.db.run("DELETE FROM seen_lines WHERE run_id = ? AND path = ?", [runId, path]);
   }
 
   // ---------------------------------------------------------------- routing decisions

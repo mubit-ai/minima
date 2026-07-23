@@ -7,6 +7,7 @@
  */
 
 import type { AgentTool } from "../agent/tools.ts";
+import type { SeenLedger } from "./_seen.ts";
 import { applyPatchTool } from "./apply_patch.ts";
 import { bashTool } from "./bash.ts";
 import { editTool } from "./edit.ts";
@@ -62,11 +63,17 @@ export interface BuiltinToolsOptions {
    * content-addressed files the model can page back via read. Absent = feature off.
    */
   artifacts?: ToolArtifacts;
+  /**
+   * Seen-lines ledger (P3 edit guard), shared by read/grep/edit/write. The LEAD agent's
+   * main.ts constructs it when config.editGuard and late-binds the DB; sub-agents
+   * (spawn.ts) never pass one, so their edits stay unguarded by design.
+   */
+  seen?: SeenLedger;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
 export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
-  const fs = { workdir: opts.workdir, artifacts: opts.artifacts };
+  const fs = { workdir: opts.workdir, artifacts: opts.artifacts, seen: opts.seen };
   const all: AgentTool[] = [
     readTool(fs),
     writeTool(fs),

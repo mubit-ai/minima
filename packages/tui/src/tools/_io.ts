@@ -43,11 +43,13 @@ export function truncateLine(line: string): string {
 const READ_SCAN_LIMIT = 100 * 1024 * 1024;
 const READ_BODY_CAP = 200_000;
 
-/** Return { numberedBody, nSelected } for lines [offset, offset+limit). 1-based offset. */
+/** Return { numberedBody, nSelected, eof } for lines [offset, offset+limit). 1-based offset.
+ * `hasher` sees every raw chunk pre-decode (the whole file streams regardless of the
+ * window); `eof` is false only when the 100MB scan stop truncated the stream. */
 export async function readLines(
   path: string,
-  opts: { offset: number; limit: number },
-): Promise<{ body: string; n: number }> {
+  opts: { offset: number; limit: number; hasher?: (chunk: Uint8Array) => void },
+): Promise<{ body: string; n: number; eof: boolean }> {
   const start = Math.max(0, opts.offset - 1);
   const limit = Math.max(0, opts.limit);
   const selected: string[] = [];
@@ -103,6 +105,7 @@ export async function readLines(
       const { done, value } = await reader.read();
       if (done) break;
       scanned += value.byteLength;
+      opts.hasher?.(value);
       consume(decoder.decode(value, { stream: true }));
       if (scanned > READ_SCAN_LIMIT) {
         stopped = true;
@@ -140,7 +143,7 @@ export async function readLines(
   if (capped) body += `\n…(output capped at ${READ_BODY_CAP} chars; use offset/limit)`;
   if (stopped) body += "\n…(stopped after 100MB scanned; file too large for this offset)";
   else if (!capped && more > 0) body += `\n…(${more} more lines; use a larger offset to continue)`;
-  return { body, n: numbered.length };
+  return { body, n: numbered.length, eof: !stopped };
 }
 
 export async function writeText(path: string, content: string): Promise<number> {

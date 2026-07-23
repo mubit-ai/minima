@@ -1,4 +1,5 @@
 import type { SpillSink } from "./_bounds.ts";
+import type { SeenLedger } from "./_seen.ts";
 
 /** Incremental artifact writer for streaming tools (bash tee): chunks pushed into the
  * bounded buffer are teed here in push order; commit() lands the content-addressed file,
@@ -32,4 +33,11 @@ export interface FsToolOptions {
    * and read's confinement allowance stays closed.
    */
   artifacts?: ToolArtifacts;
+  /**
+   * Seen-lines ledger (P3 edit guard): read/grep stamp [snap:…] tags and record line
+   * evidence, edit verifies its target against it, write records silently. Omit — or
+   * leave the ledger unattached — for the historical behavior: tool output stays
+   * byte-identical and no rejection can fire (fail-open).
+   */
+  seen?: SeenLedger;
 }

@@ -219,3 +219,18 @@ describe("artifact spill store flag (P1)", () => {
     });
   });
 });
+
+describe("edit guard flag (P3)", () => {
+  test("MINIMA_TUI_EDIT_GUARD is ON by default; =0 opts out", () => {
+    expect(harnessConfig().editGuard).toBe(true);
+    withEnv({ MINIMA_TUI_EDIT_GUARD: undefined }, () => {
+      expect(configFromEnv().editGuard).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_EDIT_GUARD: "0" }, () => {
+      expect(configFromEnv().editGuard).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_EDIT_GUARD: "1" }, () => {
+      expect(configFromEnv().editGuard).toBe(true);
+    });
+  });
+});
