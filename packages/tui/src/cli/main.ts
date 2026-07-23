@@ -43,6 +43,7 @@ import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
+import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -1035,6 +1036,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
   const askUserRef: AskUserRef = { current: null };
   agent.agentState.tools.push(questionTool(askUserRef));
+  // P4 checkpoint/rewind: flag gates REGISTRATION only — rehydrate honors persisted
+  // context_rewind markers regardless (they are data about what the model saw).
+  registerContextRewindTools(agent.agentState.tools, config.contextRewind, {
+    getState: () => agent.agentState,
+    db,
+    getRunId: () => agent.runId,
+  });
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
