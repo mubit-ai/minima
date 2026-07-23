@@ -96,6 +96,7 @@ ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/minima/recommender/classify.py" = ["E501"] # regex pattern tables
+"scripts/classifier/seeds.py" = ["E501"]        # curated corpus data — natural-language rows
 "tests/eval/*" = [
   "E501",
   "E702",
