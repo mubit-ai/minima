@@ -4,6 +4,22 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Hosted task classifier ON** (server, #268–#275 + activation): the trained
+  potion-base-32M embedding classifier (`potion-base-32M-c18e819c6c6d`, all G1
+  gates green) ships in the repo under `models/classifier/`, is baked into the
+  service image, and the hosted deploy (prod + staging) now runs with
+  `MINIMA_EMBED_CLASSIFIER=1` and `MINIMA_CLASSIFIER_REQUIRED=1` — task types come
+  from the embedding head (vocabulary tier first, regex on abstention), and a
+  broken artifact refuses to start rather than silently serving regex. Memory
+  cluster keys stay `v1`; the key-space flip is the next release.
+- **`/v1/health` classifier block**: reports the active `classifier.id`,
+  `embed_loaded`, and `required`, so a mixed fleet is attributable during rollout.
+- **Classifier config documented**: `docs/configuration.md` + `.env.example` gain
+  the classifier and cluster-key-migration variables.
+
 ## [0.14.1] - 2026-07-23
 
 The launch-bug round-2 wave: the renderer goes top-anchored Claude-Code style, the

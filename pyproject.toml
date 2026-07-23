@@ -79,6 +79,10 @@ minima-calibration-report = "minima.metrics.report:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/minima", "client_sdk/minima_client"]
 
+[tool.hatch.build.targets.sdist]
+# The classifier artifact ships in the Docker image, never on PyPI.
+exclude = ["models/"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
