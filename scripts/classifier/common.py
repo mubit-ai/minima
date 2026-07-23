@@ -55,7 +55,7 @@ CLINC_MAP = {
     "calculator": "reasoning",
     "greeting": "other", "goodbye": "other", "thank_you": "other",
     "what_is_your_name": "other", "who_made_you": "other", "how_old_are_you": "other",
-    "do_you_have_pets": "other", "are_you_a_bot": "other", "meaning_of_life": "other",
+    "are_you_a_bot": "other", "meaning_of_life": "other",
     "tell_joke": "other", "fun_fact": "other", "what_are_your_hobbies": "other",
     "what_can_i_ask_you": "other", "whisper_mode": "other",
 }
@@ -72,7 +72,12 @@ RB_EVAL_MAP = (
 )
 
 RB_CAP_PER_TYPE = 350
+# Measured 2026-07-23: capping RouterBench's qa/reasoning mass HURT across the board
+# (macro-F1 0.80 -> 0.69) — benchmark rows carry real signal; keep them. The one
+# genuine magnet is CLINC's imperative command register (tool_use), capped below.
+RB_TYPE_CAPS: dict[str, int] = {}
 CLINC_CAP_PER_TYPE = 300
+CLINC_TYPE_CAPS = {"tool_use": 200}
 
 # Minima-scoped true-OOS eval set: nothing here fits any of the 11 types. Benchmark OOS
 # splits (CLINC oos) are NOT valid here — under an open taxonomy most of their rows are

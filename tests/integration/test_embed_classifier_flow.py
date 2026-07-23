@@ -48,7 +48,7 @@ def test_abstain_serves_regex_with_provenance(fake_memory, artifact):
     )
     with _client(fake_memory, settings) as client:
         rec = client.post(
-            "/v1/recommend", json={"task": {"task": "Fix the flaky test in stats.py"}}
+            "/v1/recommend", json={"task": {"task": "Fix the flaky test in the stats module"}}
         ).json()
         assert rec["classified_task_type"] == "code"  # regex assigned after abstain
         assert rec["classification_profile"]["task_type_source"] == "embedding_abstain"

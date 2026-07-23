@@ -58,11 +58,16 @@ class EmbedClassifier:
         if unknown:
             raise ClassifierUnavailable(f"artifact classes not in the TaskType enum: {unknown}")
         self._classes = [TaskType(c) for c in classes]
+        regex_classes = [str(c) for c in head["regex_classes"]] if "regex_classes" in head else []
+        if regex_classes and any(c not in valid for c in regex_classes):
+            raise ClassifierUnavailable("artifact regex-feature classes not in the TaskType enum")
+        self._regex_classes = regex_classes
+        self._regex_scale = float(head["regex_scale"]) if "regex_scale" in head else 1.0
         self._tokenizer = Tokenizer.from_file(str(artifact_dir / "tokenizer.json"))
         manifest = json.loads((artifact_dir / "manifest.json").read_text())
         self.classifier_id = str(manifest["classifier_id"])
 
-    def classify(self, text: str) -> EmbedResult:
+    def classify(self, text: str, regex_hint: TaskType | None = None) -> EmbedResult:
         np = self._np
         ids = self._tokenizer.encode(text[:_MAX_CLASSIFY_CHARS], add_special_tokens=False).ids
         if not ids:
@@ -72,7 +77,14 @@ class EmbedClassifier:
         if norm <= 0.0:
             return EmbedResult(TaskType.other, 0.0, True)
         v = v / norm
-        logits = self._coef @ v + self._intercept
+        if self._regex_classes:
+            onehot = np.zeros(len(self._regex_classes), dtype=np.float32)
+            if regex_hint is not None and regex_hint.value in self._regex_classes:
+                onehot[self._regex_classes.index(regex_hint.value)] = self._regex_scale
+            feats = np.concatenate([v, onehot])
+        else:
+            feats = v
+        logits = self._coef @ feats + self._intercept
         p = np.exp(logits - logits.max())
         p /= p.sum()
         order = np.argsort(p)

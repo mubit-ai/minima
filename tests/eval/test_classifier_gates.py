@@ -9,7 +9,7 @@ qa; rewrite/draft/tone work is creative; comparison/advice analysis is reasoning
 
 Gates:
   G1a  macro-F1 >= 0.80 on the typed slice
-  G1b  conversational other-rate <= 0.15 (regex baseline: ~0.77)
+  G1b  conversational sink-leakage <= 0.15 among non-other-gold rows (regex ~0.77)
   G1c  live-misroute pins: zero regressions
   G1d  true-OOS caught (other | abstain) >= 0.70
   G1e  false-abstain <= alpha + 0.03 on the typed slice
@@ -41,11 +41,25 @@ def rows():
 def clf():
     if not _ARTIFACT:
         pytest.skip("MINIMA_CLASSIFIER_ARTIFACT not set — gate suite needs a trained artifact")
-    from minima.recommender.classify_embed import load_embed_classifier
+    from minima.recommender.classify import high_precision_type, infer_task_type
+    from minima.recommender.classify_embed import EmbedResult, load_embed_classifier
 
     classifier = load_embed_classifier(_ARTIFACT, required=True)
     assert classifier is not None
-    return classifier
+
+    class Serving:
+        """Mirror of classify_details' tiered dispatch: vocabulary short-circuits,
+        then the head (with the regex hint), regex on abstain via the dispatcher."""
+
+        classifier_id = classifier.classifier_id
+
+        def classify(self, text):
+            precise = high_precision_type(text)
+            if precise is not None:
+                return EmbedResult(precise, 1.0, False)
+            return classifier.classify(text, regex_hint=infer_task_type(text))
+
+    return Serving()
 
 
 def _slice(rows, name):
@@ -71,11 +85,15 @@ def test_g1a_macro_f1_on_typed(clf, rows):
     assert macro >= 0.80, f"macro-F1 {macro:.3f} below the 0.80 gate"
 
 
-def test_g1b_conversational_other_rate(clf, rows):
-    conv = _slice(rows, "conversational")
-    other = sum(1 for r in conv if clf.classify(r["text"]).task_type.value == "other")
-    rate = other / len(conv)
-    assert rate <= 0.15, f"conversational other-rate {rate:.2f} above the 0.15 gate"
+def test_g1b_conversational_sink_leakage(clf, rows):
+    # Sink leakage: conversational rows whose gold label is NOT other, but the head
+    # sends to other anyway. (Rows gold-labeled other — roleplay, packing lists — are
+    # excluded from the denominator: predicting them other is CORRECT, and counting
+    # them made the old rate unpassable by construction.) Regex baseline: ~0.77.
+    conv = [r for r in _slice(rows, "conversational") if r["label"] != "other"]
+    leaked = sum(1 for r in conv if clf.classify(r["text"]).task_type.value == "other")
+    rate = leaked / len(conv)
+    assert rate <= 0.15, f"conversational sink-leakage {rate:.2f} above the 0.15 gate"
 
 
 def test_g1c_misroute_pins_zero_regressions(clf, rows):

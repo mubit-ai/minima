@@ -51,7 +51,7 @@ def test_dispatch_embedding_assigns_and_regex_opinion_survives(embed):
 
 def test_dispatch_abstain_falls_through_to_regex(embed):
     est = classify_details(
-        TaskInput(task="zzz unknown vocabulary asks to refactor stats.py"), embed=embed
+        TaskInput(task="zzz unknown vocabulary asks to refactor the stats module"), embed=embed
     )
     assert est.profile.task_type_source == "embedding_abstain"
     assert est.abstained is True
@@ -98,3 +98,12 @@ def test_load_rejects_unknown_class_names(tmp_path):
     assert load_embed_classifier(str(path), required=False) is None
     with pytest.raises(ClassifierUnavailable):
         load_embed_classifier(str(path), required=True)
+
+
+def test_vocabulary_tier_short_circuits_the_head(embed):
+    est = classify_details(TaskInput(task="why does stats.py crash on import"), embed=embed)
+    assert est.task_type == TaskType.code
+    assert est.profile.task_type_source == "vocabulary_precise"
+    tldr = classify_details(TaskInput(task="tldr of this thread please"), embed=embed)
+    assert tldr.task_type == TaskType.summarization
+    assert tldr.profile.task_type_source == "vocabulary_precise"
