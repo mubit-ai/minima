@@ -475,7 +475,11 @@ describe("tui/app.tsx panel key routing", () => {
   });
 
   test("the composer suspends on the SAME expression (the leak fix)", () => {
-    expect(src).toContain("suspended={panelCapture}");
+    // LB-20 widened it: an armed permission/question prompt also suspends the composer
+    // (mounted, draft kept, zero key consumption) instead of unmounting it.
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
     expect(src).not.toContain("suspended={tocOpen}");
   });
 
@@ -502,6 +506,22 @@ describe("tui/app.tsx panel key routing", () => {
     expect(body).toContain("planOverviewRows(overview,");
     expect(body).toContain("whyReportFor(agent.db, agent.runId)");
     expect(body).toContain("observerWhySection(agent.db, agent.runId)");
+  });
+});
+
+// LB-21: the recovery ladder re-issues super.prompt(runContent) on every rung, so rung >= 1
+// emits another message_start(user) with the SAME task text — pre-fix the retry duplicated
+// the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
+// pendingEcho dedupe (which only covers the optimistic first echo).
+describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
+  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+
+  test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
+    const idx = src.indexOf('case "message_start":');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 700);
+    expect(body).toContain("ladder_reprompt");
+    expect(body.indexOf("ladder_reprompt")).toBeLessThan(body.indexOf("pendingEchoRef"));
   });
 });
 
@@ -569,14 +589,17 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   test("Enter on the permission overlay ACCEPTS (Yes once) — it can never cancel", () => {
     // 2026-07-21: an approved-then-gate-blocked todowrite read as "Enter cancelled it".
     // Pin the actual mapping: return sits in the ALLOW branch (escape in deny), and the
-    // overlay is the only Enter consumer while it is up — the composer unmounts entirely.
+    // overlay is the only Enter consumer while it is up — the composer stays MOUNTED but
+    // SUSPENDED (LB-20), and a suspended TextInput consumes nothing.
     const idx = src.indexOf('if (input === "y" || input === "Y" || key.return) {');
     expect(idx).toBeGreaterThan(-1);
     const handler = src.slice(idx, idx + 300);
     const allowAt = handler.indexOf('prompt.resolve("allow");');
     expect(allowAt).toBeGreaterThan(-1);
     expect(allowAt).toBeLessThan(handler.indexOf('prompt.resolve("deny");'));
-    expect(src).toContain("permPrompt || questionPrompt ? null : (");
+    expect(src).toContain(
+      "suspended={panelCapture || permPrompt !== null || questionPrompt !== null}",
+    );
   });
 
   test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {

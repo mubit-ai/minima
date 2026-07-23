@@ -233,6 +233,39 @@ describe("recovery ladder", () => {
     db.close();
   });
 
+  test("gate: a ladder re-prompt is flagged — exactly ONE unflagged user echo per task (LB-21)", async () => {
+    // Every rung re-issues super.prompt(runContent), so rung >= 1 emits another
+    // message_start(user) with the SAME task text. The TUI appends each unflagged
+    // message_start(user) to the transcript — without the flag the retry duplicated
+    // the prompt echo.
+    const { agent, reg, svc } = setup(new ConstJudge(0.9));
+    reg.setResponses([
+      new AssistantMessage({
+        content: [text("")],
+        stop_reason: "error",
+        error_message: "upstream 500",
+      }),
+      new AssistantMessage({ content: [text("recovered answer")] }),
+    ]);
+    const userStarts: { text: string; reprompt: boolean }[] = [];
+    const unsub = agent.subscribe((ev) => {
+      if (ev.type === "message_start" && ev.message?.role === "user") {
+        userStarts.push({
+          text: ev.message.textContent,
+          reprompt: ev.message.ladder_reprompt === true,
+        });
+      }
+    });
+    await agent.promptRouted("do the thing");
+    unsub();
+    expect(svc.recommendCalls).toHaveLength(2); // the rung-2 retry really ran
+    expect(userStarts).toHaveLength(2);
+    expect(userStarts[0]).toEqual({ text: "do the thing", reprompt: false });
+    expect(userStarts[1]).toEqual({ text: "do the thing", reprompt: true });
+    expect(userStarts.filter((u) => !u.reprompt)).toHaveLength(1); // ONE transcript echo
+    reg.unregister();
+  });
+
   test("gate: a judged grade below τ escalates; a PASSING grade does not", async () => {
     // τ = 0.7 from the mock service. ConstJudge(0.3) fails it; ConstJudge(0.9) passes.
     {

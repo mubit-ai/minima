@@ -9,6 +9,7 @@ import {
   clampToolText,
   computeMsgHeight,
   markdownBodyHeight,
+  nextLiveFrameHeight,
   panelOuterHeight,
   permHiddenMarker,
   permOverlayHeight,
@@ -423,6 +424,41 @@ describe("permOverlayHeight — mirrors PermissionOverlay, estimate == render", 
     // itself must be shown in full (hidden = 0).
     expect(permPreviewLines(preview, 50).hidden).toBe(0);
     expect(permOverlayHeight(p, 50)).toBeGreaterThan(6);
+  });
+});
+
+describe("resize under an armed permission overlay re-clamps (LB-20)", () => {
+  test("the re-wrapped overlay + composer + footer stack never reaches the new terminal height", () => {
+    // A resize while the overlay is armed re-wraps every line at the new cols and can newly
+    // exceed the cap; the reset frame cap-seeds with a stale prev from the OLD geometry.
+    // The kernel must clamp both: the frame stays <= rows − SCROLLBACK_SAFETY_ROWS (excess
+    // top-clips under overflow="hidden"), and the bounded preview keeps the overlay's own
+    // rows finite so its bottom [y/a/n] hint survives the clip.
+    const preview = Array.from({ length: 40 }, (_, i) => `+ line ${i} ${"x".repeat(60)}`).join(
+      "\n",
+    );
+    const p = {
+      toolName: "edit",
+      promptText: "apply this edit?",
+      argsSummary: "src/foo.ts",
+      diffPreview: preview,
+    };
+    for (const rows of [12, 16, 24, 36, 50]) {
+      for (const cols of [40, 60, 80, 120, 200]) {
+        const overlay = permOverlayHeight(p, cols);
+        const stalePrev = 78; // the old geometry's cap-seeded frame (e.g. 80-row terminal)
+        const content = overlay + 4 /* composer stays booked (LB-20) */ + 6; /* footer */
+        const h = nextLiveFrameHeight(stalePrev, 0, content, rows);
+        expect(h).toBeLessThanOrEqual(rows - SCROLLBACK_SAFETY_ROWS);
+        const interior = Math.max(20, cols - 4);
+        const chrome =
+          2 +
+          wrappedLineCount(`${permToolLabel("edit")} apply this edit?`, interior) +
+          wrappedLineCount(permHiddenMarker(39), interior) +
+          1;
+        expect(overlay).toBeLessThanOrEqual(chrome + 12);
+      }
+    }
   });
 });
 

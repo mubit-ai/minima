@@ -1174,21 +1174,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // input render from the TOP and grow downward; Ink commits finished output to native
   // scrollback as the session runs, so scroll-up + click-drag select still work WITHIN it.
   process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
-  // Bottom-mount the prompt section (THE RULE, 2026-07-16): rows-1 newlines push the first
-  // paint to the terminal's bottom rows (a one-time reserve, like Codex's inline viewport),
-  // so the composer + footer sit at the bottom from frame 1 instead of under the banner at
-  // the top. Plain stdout BEFORE render(), not part of Ink's live frame, so it cannot trip
-  // Ink's overflow-clear. Enforced by render-buffer.test.ts + tui-verify's bottom-anchor
-  // check. Then hide the cursor (TextInput draws its own).
-  // MINIMA_TUI_DEBUG_ANCHOR=<file>: record what the reserve saw — the one number the whole
-  // bottom-mount hangs on. Pairs with the per-render ledger probe in app.tsx.
+  // Top-anchored transcript (R1, 2026-07-22 — reverses THE RULE's rows-1 newline reserve):
+  // the cursor stays at HOME after the clear, so <Static> prints the banner from the TOP of
+  // the fresh screen and the transcript grows DOWNWARD under it, Claude-Code-style. The
+  // composer still seats at the bottom: the anchor ledger cap-seeds every reset frame
+  // (app.tsx) — a full-height flex-end live frame owns the middle gap, and the floor decays
+  // as commits land so the frame shrinks from the top until native scrolling takes over.
+  // Enforced by render-buffer.test.ts + tui-verify's first-prompt/bottom-anchor checks.
+  // Then hide the cursor (TextInput draws its own).
+  // MINIMA_TUI_DEBUG_ANCHOR=<file>: record what the boot clear saw. Pairs with the
+  // per-render ledger probe in app.tsx.
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
     try {
       appendFileSync(
         process.env.MINIMA_TUI_DEBUG_ANCHOR,
         `${JSON.stringify({
           t: Date.now(),
-          phase: "reserve",
+          phase: "boot",
           rows: process.stdout.rows ?? null,
           cols: process.stdout.columns ?? null,
           tty: process.stdout.isTTY === true,
@@ -1197,7 +1199,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       );
     } catch {}
   }
-  process.stdout.write("\n".repeat(Math.max(0, (process.stdout.rows ?? 24) - 1)));
   process.stdout.write("\u001b[?25l");
 
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {

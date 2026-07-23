@@ -43,12 +43,12 @@ describe("nextLiveFrameHeight — the anchor-ledger kernel", () => {
  * Terminal simulator with log-update semantics: each flush erases the previous frame at its
  * TOP anchor, prints K static rows there, then the new frame below them; writes past the
  * last row scroll the terminal (which is the only thing that ever re-pins the bottom).
- * gap = rows below the frame bottom (0 = anchored, THE RULE).
+ * gap = rows below the frame bottom.
  */
 function makeTerm(rows: number) {
   return {
     rows,
-    top: rows, // startup newline reserve: the first frame writes at the bottom edge
+    top: 0, // R1 boot: clear + home — <Static> prints from the TOP, no newline reserve
     height: 0,
     flush(k: number, newHeight: number) {
       const bottom = this.top + k + newHeight;
@@ -60,11 +60,16 @@ function makeTerm(rows: number) {
 }
 
 describe("anchor-ledger invariant — simulated log-update terminal", () => {
-  test("steady state: the frame bottom IS the terminal bottom after every flush", () => {
+  test("steady state: the gap never exceeds the safety margin, never grows, and pins to 0 once saturated", () => {
     const rnd = lcg(0xa11c0);
     for (const rows of [24, 36, 50]) {
       const term = makeTerm(rows);
-      let ledger = 0; // liveHeightRef — per COMMIT, not per flush
+      // R1 boot: the banner commits into <Static> at mount, booked against the cap seed —
+      // banner + frame = rows − SCROLLBACK_SAFETY_ROWS, so the boot gap IS the safety margin.
+      const banner = Math.min(15, rows - SCROLLBACK_SAFETY_ROWS - 1);
+      let ledger = nextLiveFrameHeight(rows - SCROLLBACK_SAFETY_ROWS, banner, 10, rows);
+      let gap = term.flush(banner, ledger);
+      expect(gap).toBeLessThanOrEqual(SCROLLBACK_SAFETY_ROWS);
       let pendingK = 0;
       for (let i = 0; i < 2000; i++) {
         const k = rnd() < 0.4 ? Math.floor(rnd() * 12) : 0;
@@ -74,11 +79,15 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
         // Ink's 32ms write throttle: only some commits reach the terminal. The ledger's
         // telescoping floor must keep coalesced flushes anchored too.
         if (rnd() < 0.6) {
-          const gap = term.flush(pendingK, ledger);
+          const g = term.flush(pendingK, ledger);
           pendingK = 0;
-          expect(gap).toBe(0);
+          // The floor keeps the frame bottom monotone: the mid-screen gap only closes.
+          expect(g).toBeLessThanOrEqual(gap);
+          gap = g;
         }
       }
+      // A saturated transcript pins the composer to the terminal bottom for good.
+      expect(gap).toBe(0);
     }
   });
 
@@ -105,22 +114,23 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
     }
   });
 
-  test("MUB-167 first submit on a fresh session: banner + echo commit together, echo adjacent to the composer", () => {
-    // The banner is live-only until the first message exists. If the first flush commits
-    // only the ~2-row echo while the ~15-row banner unmounts, the floor keeps the vanished
-    // banner rows as dead padding and the echo prints at the old banner top, mid-screen.
-    // The fix commits the banner INTO <Static> with the echo, so the printed K covers the
-    // whole shrink: anchored (gap 0) AND content-sized (no padding hole above the composer).
+  test("R1 top-anchor boot: banner commits at mount, echo lands directly under it, composer stays at the bottom", () => {
+    // The banner joins <Static> at the reset frame itself and its rows are booked against
+    // the cap seed: banner + frame = rows − SCROLLBACK_SAFETY_ROWS, so nothing scrolls and
+    // the banner holds the top. The flex-end frame owns the middle gap; each commit prints
+    // at the frame top (directly under the transcript) while the floor keeps the bottom put.
     const rows = 36;
     const term = makeTerm(rows);
     const banner = 15;
-    const composer = 8;
+    const composer = 10;
     const echo = 3;
-    let ledger = nextLiveFrameHeight(0, 0, banner + composer, rows);
-    expect(term.flush(0, ledger)).toBe(0);
-    ledger = nextLiveFrameHeight(ledger, banner + echo, composer, rows);
-    expect(term.flush(banner + echo, ledger)).toBe(0);
-    expect(ledger).toBe(composer);
+    let ledger = nextLiveFrameHeight(rows - SCROLLBACK_SAFETY_ROWS, banner, composer, rows);
+    expect(ledger).toBe(rows - SCROLLBACK_SAFETY_ROWS - banner);
+    expect(term.flush(banner, ledger)).toBe(SCROLLBACK_SAFETY_ROWS);
+    expect(term.top).toBe(banner); // the echo will print right under the banner
+    ledger = nextLiveFrameHeight(ledger, echo, composer, rows);
+    expect(term.flush(echo, ledger)).toBe(SCROLLBACK_SAFETY_ROWS);
+    expect(term.top).toBe(banner + echo); // transcript grows DOWNWARD, bottom unmoved
   });
 
   test("the MP20 wide-terminal case: commit smaller than the stream-frame shrink stays anchored", () => {
@@ -128,9 +138,10 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
     // pre-ledger this floated the composer by the difference (before-evidence: low 42/50).
     const rows = 50;
     const term = makeTerm(rows);
-    let ledger = 0;
-    ledger = nextLiveFrameHeight(ledger, 0, 10, rows); // idle composer
-    expect(term.flush(0, ledger)).toBe(0);
+    // Mid-session: the transcript has saturated the screen and the composer is anchored.
+    term.top = rows - 10;
+    term.height = 10;
+    let ledger = 10;
     ledger = nextLiveFrameHeight(ledger, 0, 44, rows); // stream grows the live frame
     expect(term.flush(0, ledger)).toBe(0);
     ledger = nextLiveFrameHeight(ledger, 0, 10, rows); // teardown flush (MP20 order): K=0
@@ -180,22 +191,23 @@ describe("app.tsx wires the anchor ledger", () => {
     expect(staticMount).toBeLessThan(mount);
   });
 
-  test("MUB-167: the banner joins <Static> once the transcript starts, and its rows are credited", () => {
-    // Without this the first submit leaves the vanished banner rows as live-frame padding
-    // and the echo commits at the old banner top, mid-screen (fresh-session first prompt).
+  test("R1: the banner joins <Static> at the reset frame, and its rows are booked against the cap seed", () => {
+    // The banner commits at boot (and after /clear) so the transcript prints from the TOP;
+    // booking its rows keeps banner + frame = rows − SCROLLBACK_SAFETY_ROWS — nothing
+    // scrolls, the banner holds row 1 and the composer seats at the bottom of the frame.
     expect(src).toContain("items={staticItems}");
     expect(src).toContain("bannerCommitted ? [bannerItem, ...messages] : messages");
-    expect(src).toContain("committedRows += computeMsgHeight(bannerItem, cols)");
+    expect(src).toContain("committedRows = computeMsgHeight(bannerItem, cols)");
   });
 
-  test("remounts (incl. the mount) seed 0; only a resize or an explicit reseat cap-seeds", () => {
-    // A mount cap-seed was tried and PNG-refuted 2026-07-20: it parks the early transcript
-    // at the screen top, 40+ rows from the composer. Boot seating belongs to the reserve +
-    // the CSI r margin reset in main.ts. The /clear//new reseat (MUB-169) is the deliberate
-    // exception: it clears + re-reserves the screen itself, and the cap seed makes the
-    // fresh frame taller than ANY previous frame so the reserve write re-anchors it.
+  test("every ledger reset cap-seeds (mount, remount, resize) — the R1 top-anchor pivot", () => {
+    // The full-height flex-end frame owns the middle gap: composer at the bottom from
+    // frame 1, transcript growing downward from the top as the floor decays per commit.
+    // (The old mount seed-0 + rows−1 newline reserve was the bottom-stacked layout the
+    // user rejected in R1 — flipped deliberately with the PTY first-prompt scenario.)
     expect(src).toContain(
-      "anchorRemounted && !reseatPendingRef.current\n        ? 0\n        : Math.max(1, rows - SCROLLBACK_SAFETY_ROWS)",
+      "anchorReset ? Math.max(1, rows - SCROLLBACK_SAFETY_ROWS) : liveHeightRef.current",
     );
+    expect(src).not.toContain("reseatPendingRef");
   });
 });
