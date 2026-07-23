@@ -413,7 +413,12 @@ export interface CliArgs {
   resume?: string;
   /** Start in bypass mode: every tool call pre-approved (also adds bypass to the Shift+Tab ring). */
   bypassPermissions?: boolean;
+  /** Turn on the experimental umbrella (same as MINIMA_TUI_EXPERIMENTAL=1). */
+  experimental?: boolean;
 }
+
+/** What -v/--version prints (single line, stdout — scripts parse this). */
+export const VERSION_LINE = `minima ${VERSION}`;
 
 export function parseArgs(argv: string[]): CliArgs {
   const opts: CliArgs = {
@@ -458,6 +463,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--dangerously-bypass-permissions":
         opts.bypassPermissions = true;
         break;
+      case "--experimental":
+        opts.experimental = true;
+        break;
       case "-t":
       case "--tools":
         opts.tools = take(i++);
@@ -496,6 +504,11 @@ export function parseArgs(argv: string[]): CliArgs {
         process.stdout.write(HELP);
         process.exit(0);
         break;
+      case "-v":
+      case "--version":
+        process.stdout.write(`${VERSION_LINE}\n`);
+        process.exit(0);
+        break;
       default:
         if (a.startsWith("-")) throw new Error(`unknown flag: ${a}`);
         opts.prompt.push(a);
@@ -519,6 +532,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --offline            bypass Minima routing
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
+      --experimental       turn on experimental features (same as MINIMA_TUI_EXPERIMENTAL=1)
   -t, --tools LIST         comma-separated tool allowlist
   -xt, --exclude-tools LIST
   -nt, --no-tools
@@ -526,6 +540,7 @@ Usage: minima [prompt] [--print|--mode json] [options]
   -b, --budget USD         session budget (graduated warnings at 50/75/90/100%)
       --budget-enforce     refuse runs once the budget is exhausted (default: warn)
       --slider N           cost/quality 0..10 (0 = cheapest acceptable; default 5)
+  -v, --version            print the version and exit
   -h, --help
 
   Plan verification headless note (MINIMA_TUI_BIG_PLAN=1 + -p/--mode json): plan-step
@@ -551,7 +566,11 @@ function toolsFor(
   return tools;
 }
 
-function buildConfig(args: CliArgs): HarnessConfig {
+export function buildConfig(args: CliArgs): HarnessConfig {
+  // The flag IS the env var: setting it here (before any configFromEnv) reaches every
+  // later resolution site and inherits to spawned sub-agents. An explicit env "0" on a
+  // per-feature flag still wins inside optInFlag.
+  if (args.experimental) process.env.MINIMA_TUI_EXPERIMENTAL = "1";
   const cfg = configFromEnv();
   if (args.offline) cfg.minimaUrl = "";
   if (args.model) {
