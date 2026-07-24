@@ -764,6 +764,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // W3.3: a successful tool call whose `path` argument resolves into the artifact dir
   // bumps that row's last_used, so paged-back artifacts survive the LRU prune longest.
   if (artifactStore) agent.addAfterToolCall(makeArtifactReadTouchHook(artifactStore));
+  // W4.5: compaction spills the pruned window through this same store (null when artifacts
+  // are off → v1 byte-identical); attach()-ed below before any compaction can fire.
+  agent.artifacts = artifactStore;
   // agent.budget is attached later (--budget) — read it at call time. Children share this
   // judge instance (spawn.ts), so their grading books here too, never into their own
   // meter rows (which the parent reads as the child's routed cost).

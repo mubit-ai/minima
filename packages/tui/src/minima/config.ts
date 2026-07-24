@@ -146,6 +146,13 @@ export interface HarnessConfig {
    * MINIMA_TUI_BGJOBS=0 — mirrors the artifacts flag shape. Flag-off byte-identity: no
    * registry is wired, so bash carries no `background` prop and no `bgjob` tool exists. */
   bgJobs: boolean;
+  /** Compaction v2 (W4.5, default ON): when the artifact spill store is live, compaction
+   * serializes the pruned message window to one content-addressed artifact and names its
+   * absolute path in the summary so the model recovers any pruned message verbatim via
+   * read. Opt out with MINIMA_TUI_COMPACT2=0 — mirrors the artifacts flag shape. Inert
+   * whenever the store is absent (MINIMA_TUI_ARTIFACTS=0 or a :memory: DB): the summary
+   * stays byte-identical to v1. */
+  compact2: boolean;
   /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
    * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
@@ -257,6 +264,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     artifacts: true,
     artifactGcMb: 512,
     bgJobs: true,
+    compact2: true,
     steer: true,
     contextRewind: true,
     editGuard: true,
@@ -310,6 +318,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(n) && n >= 0) cfg.artifactGcMb = n;
   }
   cfg.bgJobs = process.env.MINIMA_TUI_BGJOBS !== "0";
+  cfg.compact2 = process.env.MINIMA_TUI_COMPACT2 !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
