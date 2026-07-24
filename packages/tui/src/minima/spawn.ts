@@ -15,6 +15,7 @@ import { AssistantMessage } from "../ai/types.ts";
 import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
 import { builtinTools } from "../tools/builtin.ts";
+import { extractJson, reaskMessage, validateAgainstSchema } from "../tools/output_schema.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
 import { makeBashSteerHook } from "./bash_steer.ts";
@@ -59,8 +60,17 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
     "You are a focused sub-agent executing ONE delegated subtask.",
     `## Objective\n${d.objective}`,
     `## Return exactly\n${d.output_format}`,
-    `## Boundaries (do NOT touch)\n${d.boundaries}`,
   ];
+  if (d.output_schema) {
+    lines.push(
+      `## Output schema (STRICT)\nYour final reply MUST be a single JSON value that validates against this JSON Schema. Reply with ONLY the JSON — no prose, no markdown fences.\n\`\`\`json\n${JSON.stringify(
+        d.output_schema,
+        null,
+        2,
+      )}\n\`\`\``,
+    );
+  }
+  lines.push(`## Boundaries (do NOT touch)\n${d.boundaries}`);
   if (d.tool_guidance) lines.push(`## Tool guidance\n${d.tool_guidance}`);
   const deps = (d.depends_on ?? [])
     .map((id) => ctx.priorResults.find((r) => r.step_id === id))
@@ -68,7 +78,11 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
   if (deps.length) {
     lines.push(
       `## Results from prerequisite steps\n${deps
-        .map((r) => `### ${r.step_id} [${r.outcome}]\n${r.text}`)
+        .map((r) =>
+          r.data !== undefined
+            ? `### ${r.step_id} [${r.outcome}] (validated JSON)\n${JSON.stringify(r.data, null, 2)}`
+            : `### ${r.step_id} [${r.outcome}]\n${r.text}`,
+        )
         .join("\n")}`,
     );
   }
@@ -94,6 +108,12 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
   return async (d: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
     const childId = `${d.step_id}-${newId().slice(0, 8)}`;
     const effort = d.effort ?? "standard";
+
+    // Typed outputs (W4.3): enforce a schema only when the flag is on AND the delegation
+    // carries one. Flag-off (or schema-less) strips the field before prompt-building so the
+    // schema-less path builds the byte-identical prompt/agent.
+    const typed = parent.config.typedTask === true && d.output_schema != null;
+    const promptDelegation = typed ? d : { ...d, output_schema: undefined };
 
     // Resolve per-child workdir: "workdir" isolation gets a fresh git worktree so
     // parallel children editing the same files can't clobber each other's writes.
@@ -164,7 +184,7 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       meter: new CostMeter(),
       tools,
       maxTurns: TURNS_BY_EFFORT[effort],
-      systemPrompt: delegationPrompt(d, ctx),
+      systemPrompt: delegationPrompt(promptDelegation, ctx),
       shouldStopAfterTurn:
         budget !== undefined
           ? async (assistant: AssistantMessage) => {
@@ -219,28 +239,72 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     }, timeoutMs);
 
     let runError: unknown = null;
+    // Typed enforcement bookkeeping (W4.3): `validated` present iff the schema was enforced
+    // and the reply passed; `typedFailure` set iff enforcement ran and the reply is still
+    // invalid after the single re-ask (or a re-ask was skipped by an exhausted budget).
+    let validated: { has: true; value: unknown } | { has: false } = { has: false };
+    let typedFailure: string | null = null;
     try {
-      await child.promptRouted(d.objective, {
-        difficulty: d.difficulty,
-        tags: ["phase:subtask"],
-      });
-    } catch (exc) {
-      // Route-failure fallback: a step pool the server cannot satisfy (422/no-candidates)
-      // degrades to the parent pool — retried ONCE; any other error (or a second failure)
-      // surfaces as this child's failure.
-      if (poolApplied && isNoCandidatesRouteError(exc)) {
-        child.config.candidates = [...parent.config.candidates];
-        try {
+      try {
+        await child.promptRouted(d.objective, {
+          difficulty: d.difficulty,
+          tags: ["phase:subtask"],
+        });
+      } catch (exc) {
+        // Route-failure fallback: a step pool the server cannot satisfy (422/no-candidates)
+        // degrades to the parent pool — retried ONCE; any other error (or a second failure)
+        // surfaces as this child's failure.
+        if (poolApplied && isNoCandidatesRouteError(exc)) {
+          child.config.candidates = [...parent.config.candidates];
           await child.promptRouted(d.objective, {
             difficulty: d.difficulty,
             tags: ["phase:subtask"],
           });
-        } catch (retryExc) {
-          runError = retryExc;
+        } else {
+          throw exc;
         }
-      } else {
-        runError = exc;
       }
+
+      // Schema enforcement runs dispatcher-side (createSpawn owns the live child that
+      // executeDag never sees), inside this try so the effort timer / abort / event
+      // forwarding / DB sink all cover the re-ask too. Skipped when the first run already
+      // failed/timed out/was aborted/replied BLOCKED.
+      if (typed && d.output_schema) {
+        const schema = d.output_schema;
+        const first = lastAssistantOf(child);
+        const firstText = first?.textContent ?? "";
+        const abortedNow = timedOut || Boolean(ctx.parentSignal?.aborted);
+        const failedNow = first?.stop_reason === "error";
+        const blockedNow = firstText.trimStart().startsWith("BLOCKED:");
+        if (!abortedNow && !failedNow && !blockedNow) {
+          const check = validateReply(firstText, schema);
+          if (check.ok) {
+            validated = { has: true, value: check.value };
+          } else if (budget !== undefined && spent >= budget) {
+            typedFailure = `output did not satisfy the schema and the step budget ($${budget}) is exhausted — the re-ask was skipped.\nViolations:\n${check.errors
+              .map((e) => `- ${e}`)
+              .join("\n")}`;
+          } else {
+            // The single re-ask: same call shape as the pool-fallback retry, continuing
+            // the same conversation (D3: tags stay ["phase:subtask"]).
+            await child.promptRouted(reaskMessage(schema, check.errors), {
+              difficulty: d.difficulty,
+              tags: ["phase:subtask"],
+            });
+            const second = lastAssistantOf(child);
+            const check2 = validateReply(second?.textContent ?? "", schema);
+            if (check2.ok) {
+              validated = { has: true, value: check2.value };
+            } else {
+              typedFailure = `output did not satisfy the required schema after one re-ask.\nViolations:\n${check2.errors
+                .map((e) => `- ${e}`)
+                .join("\n")}\n\nLast reply:\n${truncate(second?.textContent ?? "", 500)}`;
+            }
+          }
+        }
+      }
+    } catch (exc) {
+      runError = exc;
     } finally {
       clearTimeout(timer);
       ctx.parentSignal?.removeEventListener("abort", onAbort);
@@ -261,19 +325,29 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
     // "couldn't do it" (the judge is off by default).
     const blocked =
       !aborted && !failedRun && (last?.textContent ?? "").trimStart().startsWith("BLOCKED:");
+    // A typed failure (schema still unmet after the re-ask) is a real failure: dependents
+    // block off it exactly like any failed prerequisite. It cannot coexist with abort/failedRun
+    // (enforcement is skipped in those cases).
+    const typedFailed = !aborted && !failedRun && typedFailure !== null;
     const outcome: ChildResult["outcome"] = aborted
       ? "aborted"
       : failedRun
         ? "failure"
-        : blocked
-          ? "partial"
-          : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
+        : typedFailed
+          ? "failure"
+          : blocked
+            ? "partial"
+            : ((row?.outcome as ChildResult["outcome"] | undefined) ?? "success");
 
     const resultText = aborted
       ? `aborted after ${Math.round(timeoutMs / 1000)}s (${effort} cap)`
       : failedRun
         ? `error: ${last?.error_message ?? String(runError ?? "unknown")}`
-        : (last?.textContent ?? "");
+        : typedFailed
+          ? typedFailure!
+          : validated.has
+            ? JSON.stringify(validated.value, null, 2)
+            : (last?.textContent ?? "");
 
     return {
       step_id: d.step_id,
@@ -282,9 +356,26 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       costUsd: child.meter?.totals().actualCostUsd ?? 0,
       quality: row?.quality ?? null,
       outcome,
+      ...(validated.has ? { data: validated.value } : {}),
       workdir: childWorkdir,
     };
   };
+}
+
+/** Extract JSON from a child's reply and validate it against the subset schema. */
+function validateReply(
+  reply: string,
+  schema: Record<string, unknown>,
+): { ok: true; value: unknown } | { ok: false; errors: string[] } {
+  const extracted = extractJson(reply);
+  if (!extracted.ok) return { ok: false, errors: [extracted.error] };
+  const errors = validateAgainstSchema(extracted.value, schema);
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, value: extracted.value };
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max)}… [truncated ${s.length - max} chars]`;
 }
 
 function lastAssistantOf(agent: MinimaAgent): AssistantMessage | null {

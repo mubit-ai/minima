@@ -275,6 +275,25 @@ describe("typed sub-agent outputs (W4.3)", () => {
     rmSync(wd, { recursive: true, force: true });
   });
 
+  test("schema-less delegation is unaffected (no schema section, no data)", async () => {
+    const reg = reset();
+    reg.setResponses([reply("plain prose answer, no JSON")]);
+    const wd = mkdtempSync(join(tmpdir(), "typed-none-"));
+    const spawn = createSpawn({ parent: leadAgent(), workdir: wd });
+
+    const p = delegationPrompt(del({ step_id: "n" }), emptyCtx);
+    expect(p).not.toContain("## Output schema");
+
+    const r = await spawn(del({ step_id: "n" }), emptyCtx);
+    expect(r.outcome).toBe("success");
+    expect((r as ChildResult & { data?: unknown }).data).toBeUndefined();
+    expect(r.text).toBe("plain prose answer, no JSON");
+    expect(reg.state.callCount).toBe(1);
+
+    reg.unregister();
+    rmSync(wd, { recursive: true, force: true });
+  });
+
   test("a BLOCKED: reply with a schema is not re-asked", async () => {
     const reg = reset();
     reg.setResponses([reply("BLOCKED: objective conflicts with boundaries")]);

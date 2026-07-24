@@ -791,3 +791,45 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
 }
 `;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: task 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "object",
+  },
+  "description": "Delegate subtasks to child agents, each cost-routed to its own model. Independent subtasks run in parallel (bounded); depends_on chains run in order. Use for decomposable work (research a module, make an isolated change, verify a result). Each delegation MUST state objective, output_format, and boundaries — boundaries matter for parallel edits (workers must not touch each other's files). Prefer 1 subtask for a focused question; more only when genuinely independent. Every call spawns fresh agents and spends real money: if a child's result is insufficient, do NOT re-run the same delegations — finish the remaining work yourself with your own tools, or delegate ONE new, narrower subtask.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "object",
+  },
+}
+`;
