@@ -7,7 +7,7 @@ name: CI — PR checks
 # mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/boosting]
   push:
     branches: [main]
 
@@ -67,6 +67,9 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
 
+      - name: Verify ripgrep present
+        run: command -v rg && rg --version
+
       - name: Install deps
         run: bun install --frozen-lockfile
 
@@ -75,6 +78,9 @@ jobs:
 
       - name: Typecheck
         run: bun run check
+
+      - name: Lint
+        run: bun run lint
 
   sdk-ts:
     name: TS SDK — bun test + tsc
