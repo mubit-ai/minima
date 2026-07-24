@@ -81,6 +81,22 @@ def test_required_fails_loud_on_missing_artifact(fake_memory, tmp_path):
             pass
 
 
+def test_health_reports_loaded_classifier(fake_memory, artifact):
+    settings = Settings(
+        mubit_api_key="test-key",
+        minima_embed_classifier=True,
+        minima_classifier_required=True,
+        minima_classifier_artifact=str(artifact),
+    )
+    with _client(fake_memory, settings) as client:
+        body = client.get("/v1/health").json()
+        assert body["classifier"] == {
+            "id": "fixture-classifier-0001",
+            "embed_loaded": True,
+            "required": True,
+        }
+
+
 def test_unrequired_missing_artifact_degrades_to_regex(fake_memory, tmp_path):
     settings = Settings(
         mubit_api_key="test-key",

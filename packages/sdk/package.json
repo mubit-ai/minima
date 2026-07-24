@@ -1,6 +1,6 @@
 {
   "name": "@mubit-ai/minima-sdk",
-  "version": "0.14.1",
+  "version": "0.14.3",
   "description": "TypeScript SDK for the Minima recommender service (api.minima.sh) — typed /v1/* client for the recommend → run → judge → feedback loop.",
   "type": "module",
   "license": "FSL-1.1-Apache-2.0",

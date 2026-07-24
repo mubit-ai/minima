@@ -61,6 +61,22 @@ single-tenant mode). A complete annotated template ships as
 See [Cost-basis tiers](concepts.md#cost-basis-tiers-estimate--observed--rescaled) for what
 `MINIMA_USE_OBSERVED_COST` / `MIN_N` actually switch between.
 
+## Task classifier
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MINIMA_EMBED_CLASSIFIER` | `false` | Serve task types from the trained embedding classifier (regex fallback on abstention). The hosted service runs with this on; the artifact is baked into the Docker image. |
+| `MINIMA_CLASSIFIER_ARTIFACT` | *(empty)* | Directory holding the trained artifact (`embeddings.npz` / `head.npz` / `tokenizer.json` / `manifest.json`). The image sets it to `/app/models/classifier/<classifier_id>`. Needs the `classifier` extra (`numpy` + `tokenizers`). |
+| `MINIMA_CLASSIFIER_REQUIRED` | `false` | Fail loud: refuse to start when the classifier is enabled but the artifact is missing or broken, instead of silently degrading to regex. On in the hosted deploy. |
+| `MINIMA_CLUSTER_KEY_VERSION` | `v1` | Version suffix written into new memory cluster keys. Bumped only by the key-space flip release, never by hand. |
+| `MINIMA_CLUSTER_KEY_READ_VERSIONS` | *(empty)* | Comma-separated extra key versions to read during a migration window (e.g. `v2,v1`). Empty = read the write version only. |
+| `MINIMA_DUAL_KEY_MIN_N` | `3` | Per-model active-version evidence count at which legacy-version evidence is dropped from the aggregate. |
+| `MINIMA_LEGACY_EVIDENCE_WEIGHT` | `0.7` | Discount applied to legacy-version evidence while it is still consulted. |
+
+The `/v1/health` response reports the active classifier (`classifier.id`,
+`classifier.embed_loaded`, `classifier.required`); decision-log rows stamp
+`classifier_id` per request, so mixed fleets are attributable during a rollout.
+
 
 ## Selection-bias correction (inverse propensity weighting)
 

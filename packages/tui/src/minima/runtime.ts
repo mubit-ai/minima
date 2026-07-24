@@ -437,19 +437,26 @@ export class MinimaAgent extends Agent {
     // caller supplied no explicit taskType. Computed once per prompt; every ladder rung
     // reuses it. Below the confidence floor the override is dropped entirely (the
     // server's heuristic classification applies). Fail-open throughout.
+    // When the server reports its trained embedding classifier loaded, the client call
+    // is skipped entirely (unless MINIMA_TUI_CLASSIFY_FORCE=1): the head outclassifies
+    // the one-completion label, and a caller override would preempt it.
     let classifiedType: string | null = null;
     let classifiedConfidence: number | null = null;
     // Raw client label regardless of the floor — telemetry only, never an override.
     let clientClassification: TaskClassification | null = null;
     if (this.config.classify && this.classifier && this.agentId === null && !effectiveTaskType) {
-      clientClassification = await this.classifier.classify(
-        content,
-        this.estimateContextTokens(content),
-      );
-      const cls = clientClassification;
-      if (cls && cls.confidence >= CLASSIFY_CONFIDENCE_FLOOR) {
-        classifiedType = cls.taskType;
-        classifiedConfidence = cls.confidence;
+      const deferToServerHead =
+        !this.config.classifyForce && (await this.router.embedClassifierActive());
+      if (!deferToServerHead) {
+        clientClassification = await this.classifier.classify(
+          content,
+          this.estimateContextTokens(content),
+        );
+        const cls = clientClassification;
+        if (cls && cls.confidence >= CLASSIFY_CONFIDENCE_FLOOR) {
+          classifiedType = cls.taskType;
+          classifiedConfidence = cls.confidence;
+        }
       }
     }
     try {

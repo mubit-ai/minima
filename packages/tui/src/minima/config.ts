@@ -163,6 +163,11 @@ export interface HarnessConfig {
    * a diagnostic task_type_confidence. Fail-open: unparseable/low-confidence → the
    * server's heuristic applies unchanged. */
   classify: boolean;
+  /** Keep the client-side override even when the server reports its trained embedding
+   * classifier loaded (MINIMA_TUI_CLASSIFY_FORCE=1, default off). Without it, a live
+   * server head suppresses the client classify call entirely — the head is the better
+   * classifier and the skipped completion is saved spend. */
+  classifyForce: boolean;
   /** Explicit classifier model override (MINIMA_CLASSIFY_MODEL). null = the cheap
    * fallback ladder starting at claude-haiku-4-5. */
   classifyModel: string | null;
@@ -222,6 +227,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     experimental: false,
     autoEffort: false,
     classify: false,
+    classifyForce: false,
     classifyModel: null,
     interview: false,
     tuner: false,
@@ -313,6 +319,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   const judgeEnv = process.env.MINIMA_JUDGE_MODEL?.trim();
   if (judgeEnv) cfg.judgeModel = judgeEnv;
   cfg.classify = optInFlag(process.env.MINIMA_TUI_CLASSIFY, cfg.experimental);
+  if (process.env.MINIMA_TUI_CLASSIFY_FORCE === "1") cfg.classifyForce = true;
   const classifyModelEnv = process.env.MINIMA_CLASSIFY_MODEL?.trim();
   if (classifyModelEnv) cfg.classifyModel = classifyModelEnv;
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;

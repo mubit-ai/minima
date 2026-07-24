@@ -51,3 +51,4 @@ def test_health_endpoint(client):
     assert body["status"] == "ok"
     assert body["mubit"]["reachable"] is True
     assert body["catalog"]["models"] >= 1
+    assert body["classifier"] == {"id": "regex-v1", "embed_loaded": False, "required": False}

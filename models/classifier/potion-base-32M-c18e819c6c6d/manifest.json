@@ -1,0 +1,8 @@
+{
+ "classifier_id": "potion-base-32M-c18e819c6c6d",
+ "backbone": "minishlab/potion-base-32M",
+ "dim": 512,
+ "vocab": 63091,
+ "corpus_rows": 3627,
+ "alpha": 0.05
+}

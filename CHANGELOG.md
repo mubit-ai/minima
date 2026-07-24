@@ -4,6 +4,38 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.3] - 2026-07-23
+
+### Changed
+- **Client classifier defers to the live server head** (TUI, #283): with
+  `MINIMA_TUI_CLASSIFY=1`, the harness now probes `/v1/health` once per session and,
+  when the server reports its trained embedding classifier loaded, skips the
+  client-side classify completion entirely — no caller override preempts the head,
+  and the per-prompt classify spend is saved. Offline and head-less servers keep the
+  old behavior; `MINIMA_TUI_CLASSIFY_FORCE=1` keeps the override regardless.
+
+## [0.14.2] - 2026-07-23
+
+The task classifier goes live: regex is no longer the primary classifier on the
+hosted service. Nine PRs (#268–#275, #281) replace it with a trained embedding
+head — telemetry, key versioning, dual-read plumbing, the training pipeline, the
+serving path, eval gates, harness alignment, corpus iteration to all-green gates,
+and activation.
+
+### Added
+- **Hosted task classifier ON** (server, #268–#275 + #281 activation): the trained
+  potion-base-32M embedding classifier (`potion-base-32M-c18e819c6c6d`, all G1
+  gates green) ships in the repo under `models/classifier/`, is baked into the
+  service image, and the hosted deploy (prod + staging) now runs with
+  `MINIMA_EMBED_CLASSIFIER=1` and `MINIMA_CLASSIFIER_REQUIRED=1` — task types come
+  from the embedding head (vocabulary tier first, regex on abstention), and a
+  broken artifact refuses to start rather than silently serving regex. Memory
+  cluster keys stay `v1`; the key-space flip is the next release.
+- **`/v1/health` classifier block**: reports the active `classifier.id`,
+  `embed_loaded`, and `required`, so a mixed fleet is attributable during rollout.
+- **Classifier config documented**: `docs/configuration.md` + `.env.example` gain
+  the classifier and cluster-key-migration variables.
+
 ## [0.14.1] - 2026-07-23
 
 The launch-bug round-2 wave: the renderer goes top-anchored Claude-Code style, the

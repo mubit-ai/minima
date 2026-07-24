@@ -88,7 +88,7 @@ jobs:
             --network=${{ env.NETWORK }} \
             --subnet=${{ env.SUBNET }} \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis" \
+            --set-env-vars="MUBIT_ENDPOINT=https://api.mubit.ai,MUBIT_TRANSPORT=http,MINIMA_RECALL_MODE=agent_routed,MINIMA_LOG_LEVEL=info,MINIMA_RECOMMENDATION_STORE=cloudsql,MINIMA_RECSTORE_BACKEND=redis,MINIMA_EMBED_CLASSIFIER=1,MINIMA_CLASSIFIER_REQUIRED=1" \
             --set-secrets="OPENROUTER_API_KEY=minima-prod-openrouter-key:latest,MINIMA_DATABASE_URL=minima-prod-db-url:latest,MINIMA_REDIS_URL=minima-prod-redis-url:latest" \
             --quiet
 
