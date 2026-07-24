@@ -220,6 +220,21 @@ describe("artifact spill store flag (P1)", () => {
   });
 });
 
+describe("background jobs flag (W4.1)", () => {
+  test("MINIMA_TUI_BGJOBS is ON by default; =0 opts out", () => {
+    expect(harnessConfig().bgJobs).toBe(true);
+    withEnv({ MINIMA_TUI_BGJOBS: undefined }, () => {
+      expect(configFromEnv().bgJobs).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_BGJOBS: "0" }, () => {
+      expect(configFromEnv().bgJobs).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_BGJOBS: "1" }, () => {
+      expect(configFromEnv().bgJobs).toBe(true);
+    });
+  });
+});
+
 describe("edit guard flag (P3)", () => {
   test("MINIMA_TUI_EDIT_GUARD is ON by default; =0 opts out", () => {
     expect(harnessConfig().editGuard).toBe(true);

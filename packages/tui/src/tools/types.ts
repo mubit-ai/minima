@@ -1,3 +1,4 @@
+import type { BgJobRegistry } from "./_bgjobs.ts";
 import type { SpillSink } from "./_bounds.ts";
 import type { SeenLedger } from "./_seen.ts";
 
@@ -40,4 +41,10 @@ export interface FsToolOptions {
    * byte-identical and no rejection can fire (fail-open).
    */
   seen?: SeenLedger;
+  /**
+   * Background-job registry (W4.1). Present = bash gains an additive `background: true`
+   * that launches detached and returns a job handle in <1s. Absent = feature off: bash's
+   * schema is byte-identical to the historical surface and no background launch is possible.
+   */
+  bgJobs?: BgJobRegistry;
 }

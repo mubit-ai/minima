@@ -833,3 +833,177 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
 }
 `;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions (bgjobs): bash 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "boolean",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+  "description": "Run a shell command and return combined stdout/stderr and exit code. Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. Avoid destructive commands (rm -rf, etc.) without explicit user intent. Set background:true to start a long-running command detached and get a job handle back immediately (poll/kill it with the bgjob tool).",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "BOOLEAN",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "STRING",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "INTEGER",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "boolean",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions (bgjobs): bgjob 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "integer",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+  "description": "Manage background bash jobs (started with bash background:true). Actions: status, wait (block for exit), output (current bounded output), kill, list. Pass the job id returned by the bash launch for every action except list.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "STRING",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "STRING",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "INTEGER",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "integer",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+}
+`;

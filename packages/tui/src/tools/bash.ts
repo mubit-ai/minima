@@ -12,19 +12,46 @@ import { stat } from "node:fs/promises";
 import { type AgentTool, type ToolResult, type ToolUpdate, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
 import { killProcessGroup } from "../minima/check.ts";
+import type { BgJobRegistry } from "./_bgjobs.ts";
 import { BoundedBuffer, boundDetails } from "./_bounds.ts";
 import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
 import type { ArtifactStream, FsToolOptions, ToolArtifacts } from "./types.ts";
 
-const parameters = objectSchema(
+const BASE_PROPS = {
+  command: { type: "string" as const, description: "The shell command to run." },
+  timeout: {
+    type: "integer" as const,
+    description: "Max runtime in milliseconds.",
+    default: 120_000,
+  },
+  workdir: { type: "string" as const, description: "Working directory." },
+};
+
+// Registry-less (feature off): today's exact schema, byte-identical.
+const parameters = objectSchema(BASE_PROPS, ["command"]);
+
+// Registry-wired (W4.1): the same schema plus an additive `background` flag.
+const bgParameters = objectSchema(
   {
-    command: { type: "string", description: "The shell command to run." },
-    timeout: { type: "integer", description: "Max runtime in milliseconds.", default: 120_000 },
-    workdir: { type: "string", description: "Working directory." },
+    ...BASE_PROPS,
+    background: {
+      type: "boolean" as const,
+      description:
+        "Run detached and return a job handle immediately instead of waiting for exit; " +
+        "manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+      default: false,
+    },
   },
   ["command"],
 );
+
+const BASH_DESCRIPTION =
+  "Run a shell command and return combined stdout/stderr and exit code. " +
+  "Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. " +
+  "Avoid destructive commands (rm -rf, etc.) without explicit user intent.";
+
+const BASH_BG_DESCRIPTION = `${BASH_DESCRIPTION} Set background:true to start a long-running command detached and get a job handle back immediately (poll/kill it with the bgjob tool).`;
 
 const UPDATE_THROTTLE_MS = 250;
 
@@ -71,6 +98,7 @@ async function discardStream(s: ArtifactStream): Promise<void> {
 async function execute(
   base: string | undefined,
   artifacts: ToolArtifacts | undefined,
+  bgJobs: BgJobRegistry | undefined,
   _id: string,
   params: Record<string, unknown>,
   signal: AbortSignal | null,
@@ -95,6 +123,13 @@ async function execute(
     } catch {
       return errorResult(`bash: workdir does not exist: ${wd}`);
     }
+  }
+
+  // W4.1: hand a backgrounded command to the registry, which spawns it detached and
+  // returns a job handle in <1s. The composed per-call signal already reaches here, so
+  // the registry's abort listener kills the job's group on Esc during this run.
+  if (bgJobs && params.background === true) {
+    return bgJobs.launch({ command, cwd: wd, signal, artifacts });
   }
 
   let proc: import("bun").Subprocess<"ignore", "pipe", "pipe">;
@@ -218,12 +253,9 @@ async function execute(
 export function bashTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "bash",
-    description:
-      "Run a shell command and return combined stdout/stderr and exit code. " +
-      "Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. " +
-      "Avoid destructive commands (rm -rf, etc.) without explicit user intent.",
-    parameters,
+    description: opts.bgJobs ? BASH_BG_DESCRIPTION : BASH_DESCRIPTION,
+    parameters: opts.bgJobs ? bgParameters : parameters,
     execute: (id, params, signal, onUpdate) =>
-      execute(opts.workdir, opts.artifacts, id, params, signal, onUpdate),
+      execute(opts.workdir, opts.artifacts, opts.bgJobs, id, params, signal, onUpdate),
   };
 }
