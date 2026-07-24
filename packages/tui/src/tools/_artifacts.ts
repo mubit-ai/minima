@@ -9,10 +9,13 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileSink } from "bun";
+import { type ArtifactSql, claimArtifact, pruneArtifacts, touchArtifact } from "./_artifact_gc.ts";
 import type { SpillSink } from "./_bounds.ts";
 import type { ArtifactStream, ToolArtifacts } from "./types.ts";
 
-/** Structural index seam — the store never imports MinimaDb (db-layer style). */
+/** Structural index seam — the store never imports MinimaDb (db-layer style). The
+ * optional raw `db` handle (MinimaDb exposes it publicly) is the GC/claim/touch seam;
+ * absent — e.g. a fake index — those paths stay inert, fail-open. */
 export interface ArtifactIndex {
   recordArtifact(r: {
     sha: string;
@@ -22,6 +25,7 @@ export interface ArtifactIndex {
     bytes: number;
     lineCount: number;
   }): void;
+  db?: ArtifactSql;
 }
 
 function lineCountOf(chars: number, newlines: number, endsWithNewline: boolean): number {
@@ -122,17 +126,34 @@ class ArtifactFileStream implements ArtifactStream {
 
 export class ArtifactStore implements ToolArtifacts {
   readonly dir: string;
+  private readonly gcBudgetBytes: number;
   private index: ArtifactIndex | null = null;
   private runId: string | null = null;
 
-  constructor(opts: { dir: string }) {
+  constructor(opts: { dir: string; gcBudgetBytes?: number }) {
     this.dir = opts.dir;
+    this.gcBudgetBytes = opts.gcBudgetBytes ?? 0;
   }
 
-  /** Late-bound like main.ts's bookSearchFee — tools are built before the DB opens. */
+  /** Late-bound like main.ts's bookSearchFee — tools are built before the DB opens.
+   * Attaching also runs the startup GC pass with the new run protected. */
   attach(index: ArtifactIndex, runId: string): void {
     this.index = index;
     this.runId = runId;
+    this.gc();
+  }
+
+  /** Re-read touch (W3.3): a path inside the artifact dir bumps its row's last_used
+   * so paged-back artifacts sink to the back of the LRU eviction order. */
+  noteRead(path: string): void {
+    const sql = this.index?.db;
+    if (sql) touchArtifact(sql, this.dir, path);
+  }
+
+  private gc(): void {
+    const sql = this.index?.db;
+    if (!sql) return;
+    pruneArtifacts(sql, { budgetBytes: this.gcBudgetBytes, protectRunId: this.runId });
   }
 
   sink(tool: string): SpillSink {
@@ -189,6 +210,11 @@ export class ArtifactStore implements ToolArtifacts {
         bytes,
         lineCount,
       });
+      // Content-addressed re-spill upserts last_used only — the current run must also
+      // claim the row, or an old-run row would shield nothing from GC (W3.3).
+      const sql = this.index?.db;
+      if (sql && this.runId) claimArtifact(sql, sha, this.runId);
+      this.gc();
     } catch {
       // index failure never blocks the spill — the file stands on its own
     }
