@@ -72,6 +72,13 @@ const GREP_STEER =
   "Re-issue this as a `grep` tool call. Ordinary shell commands (builds, tests, git, " +
   "pipelines) are never blocked. (Opt out: MINIMA_TUI_STEER=0.)";
 
+const CD_CAT_STEER =
+  "bash steer: `cat` was blocked before executing — use the native `read` tool instead of " +
+  "shelling out. read(offset, limit) pages any window with numbered, bounded output. " +
+  "Re-issue this as a `read` tool call, resolving relative paths against `/x` (the `cd` " +
+  "target). Ordinary shell commands (builds, tests, git, pipelines) are never blocked. " +
+  "(Opt out: MINIMA_TUI_STEER=0.)";
+
 describe("bashSteerDecision — blocking matrix", () => {
   const blocked: [string, string][] = [
     ["grep foo src/", "grep"],
@@ -147,6 +154,69 @@ describe("bashSteerDecision — pass-through (negative matrix)", () => {
   }
 });
 
+describe("bashSteerDecision — cd-extraction (cd <path> && <simple command>)", () => {
+  const blocked: [string, string, string][] = [
+    ["cd /x && cat f", "read", "/x"],
+    ["cd src && grep foo lib/", "grep", "src"],
+    ["cd /tmp/logs && tail -n 100 app.log", "read", "/tmp/logs"],
+    ["cd a/b.c && head -n 5 f.txt", "read", "a/b.c"],
+    ["cd pkg && find . -name '*.ts'", "glob", "pkg"],
+    ["cd pkg && sed -i 's/a/b/' f.txt", "edit", "pkg"],
+    ["cd /x&&cat f", "read", "/x"],
+  ];
+  for (const [cmd, tool, path] of blocked) {
+    test(`blocks: ${JSON.stringify(cmd)} -> ${tool} @ ${path}`, () => {
+      const d = bashSteerDecision(cmd);
+      expect(d).not.toBeNull();
+      expect(d!.block).toBe(true);
+      expect(d!.nativeTool).toBe(tool);
+      expect(d!.reason).toContain(`resolving relative paths against \`${path}\``);
+      expect(d!.reason).toContain("(the `cd` target)");
+      expect(d!.reason).toContain("(Opt out: MINIMA_TUI_STEER=0.)");
+    });
+  }
+
+  test("blocks: the cd+cat steer message is pinned verbatim", () => {
+    expect(bashSteerDecision("cd /x && cat f")!.reason).toBe(CD_CAT_STEER);
+  });
+
+  const passThrough: string[] = [
+    "cd /x && make build",
+    "cd /x && git status",
+    "cd /x && bun test",
+    "cd /x && cat f && make test",
+    "cd /x && cat f | wc -l",
+    "cd /x && cat f > g",
+    "cd /x && cat a.txt b.txt",
+    "cd /x && grep foo",
+    "cd /x && FOO=1 cat f",
+    "cd /x && /usr/bin/cat f",
+    'cd "$DIR" && cat f',
+    "cd $HOME && cat f",
+    "cd ~/proj && cat f",
+    "cd 'my dir' && cat f",
+    "cd my dir && cat f",
+    "cd -P /x && cat f",
+    "cd - && cat f",
+    "cd && cat f",
+    "cd /x &&",
+    "cd /x & cat f",
+    "cd /x &&& cat f",
+    "cd /x || cat f",
+    "cd /x; cat f",
+    "cd /x\ncat f",
+    "cd\n/x && cat f",
+    "pushd /x && cat f",
+    "cd /x && cd /y && cat f",
+    "echo hi && cat f",
+  ];
+  for (const cmd of passThrough) {
+    test(`pass-through: ${JSON.stringify(cmd)}`, () => {
+      expect(bashSteerDecision(cmd)).toBeNull();
+    });
+  }
+});
+
 describe("bash-steer hook — dispatcher enforcement", () => {
   test("blocks: bash('grep foo src/') never spawns and returns the steer as a tool error", async () => {
     resetAll();
@@ -164,6 +234,26 @@ describe("bash-steer hook — dispatcher enforcement", () => {
     expect(ends[0]!.isError).toBe(true);
     const body = (ends[0]!.result?.content[0] as { text: string }).text;
     expect(body).toBe(GREP_STEER);
+    expect(spawned()).toBe(false);
+    reg.unregister();
+  });
+
+  test("blocks: bash('cd /x && cat f') never spawns and the steer carries the cd path", async () => {
+    resetAll();
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    reg.setResponses([bashTurn("b1", "cd /x && cat f"), doneTurn()]);
+    const { tool, spawned } = spiedBash();
+    const agent = new Agent({ model: reg.getModel(), tools: [tool] });
+    agent.addBeforeToolCall(makeBashSteerHook(harnessConfig()));
+
+    const events = collect(agent);
+    await agent.prompt("go");
+
+    const ends = toolEnds(events);
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.isError).toBe(true);
+    const body = (ends[0]!.result?.content[0] as { text: string }).text;
+    expect(body).toBe(CD_CAT_STEER);
     expect(spawned()).toBe(false);
     reg.unregister();
   });
