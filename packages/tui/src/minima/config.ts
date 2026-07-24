@@ -139,6 +139,13 @@ export interface HarnessConfig {
    * MINIMA_TUI_ARTIFACT_GC_MB overrides; 0 disables GC (unbounded dir); unset or
    * unparseable → 512. */
   artifactGcMb: number;
+  /** Background bash jobs (W4.1, default ON): bash gains an additive `background: true`
+   * that spawns the command detached and returns a job handle in <1s; a `bgjob` tool
+   * (status/wait/output/kill/list) manages it, output streams to a bounded buffer plus
+   * the P1 artifact tee, and live jobs are killed at session end. Opt out with
+   * MINIMA_TUI_BGJOBS=0 — mirrors the artifacts flag shape. Flag-off byte-identity: no
+   * registry is wired, so bash carries no `background` prop and no `bgjob` tool exists. */
+  bgJobs: boolean;
   /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
    * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
@@ -239,6 +246,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     memoryLedger: true,
     artifacts: true,
     artifactGcMb: 512,
+    bgJobs: true,
     steer: true,
     contextRewind: true,
     editGuard: true,
@@ -289,6 +297,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(artifactGcEnv);
     if (Number.isFinite(n) && n >= 0) cfg.artifactGcMb = n;
   }
+  cfg.bgJobs = process.env.MINIMA_TUI_BGJOBS !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";

@@ -44,6 +44,7 @@ import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
+import { BgJobRegistry } from "../tools/_bgjobs.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
@@ -561,10 +562,11 @@ function toolsFor(
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void,
   artifacts?: ToolArtifacts,
   seen?: SeenLedger,
+  bgJobs?: BgJobRegistry,
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen });
+    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -687,6 +689,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
           gcBudgetBytes: Math.floor(config.artifactGcMb * 1024 * 1024),
         })
       : null;
+  // Background bash jobs (W4.1): in-memory Subprocess handles + a durable bg_jobs row.
+  // attach() late-binds the DB + run below (artifactStore pattern) and runs the reaper;
+  // shutdown() at closeDb kills live jobs at session end (orphan policy).
+  const bgJobRegistry = config.bgJobs ? new BgJobRegistry() : null;
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
   let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
@@ -700,6 +706,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     (usd, id) => bookSearchFee(usd, id),
     artifactStore ?? undefined,
     seenLedger,
+    bgJobRegistry ?? undefined,
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -842,6 +849,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     agent.db = db;
     agent.runId = runId;
     artifactStore?.attach(db, runId);
+    bgJobRegistry?.attach(db, runId);
     seenLedger?.attach(db, runId);
     sink = attachDbSink(agent, db, { runId });
     if (resumeFrom) {
@@ -923,6 +931,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   const closeDb = (status: "done" | "aborted" = "done"): void => {
     try {
+      // Orphan policy (W4.1): kill every live background job's group and durably mark it
+      // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
+      bgJobRegistry?.shutdown();
       sink?.detach();
       if (db && agent.runId) db.finishRun(agent.runId, status);
       db?.close();

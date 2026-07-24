@@ -7,9 +7,11 @@
  */
 
 import type { AgentTool } from "../agent/tools.ts";
+import type { BgJobRegistry } from "./_bgjobs.ts";
 import type { SeenLedger } from "./_seen.ts";
 import { applyPatchTool } from "./apply_patch.ts";
 import { bashTool } from "./bash.ts";
+import { bgJobTool } from "./bgjob.ts";
 import { editTool } from "./edit.ts";
 import { globTool } from "./glob.ts";
 import { grepTool } from "./grep.ts";
@@ -69,11 +71,22 @@ export interface BuiltinToolsOptions {
    * (spawn.ts) never pass one, so their edits stay unguarded by design.
    */
   seen?: SeenLedger;
+  /**
+   * Background-job registry (W4.1): the LEAD agent's main.ts constructs one when
+   * config.bgJobs, giving bash its `background: true` launch path and adding the `bgjob`
+   * control tool. Sub-agents (spawn.ts) never pass one, so their bash stays foreground-only.
+   */
+  bgJobs?: BgJobRegistry;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
 export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
-  const fs = { workdir: opts.workdir, artifacts: opts.artifacts, seen: opts.seen };
+  const fs = {
+    workdir: opts.workdir,
+    artifacts: opts.artifacts,
+    seen: opts.seen,
+    bgJobs: opts.bgJobs,
+  };
   const all: AgentTool[] = [
     readTool(fs),
     writeTool(fs),
@@ -87,6 +100,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     webSearchTool({ onFeeUsd: opts.onWebSearchFeeUsd }),
     webFetchTool(),
   ];
+  if (opts.bgJobs) all.push(bgJobTool(opts.bgJobs));
   const exclude = new Set(opts.exclude ?? []);
   return all.filter((t) => !exclude.has(t.name));
 }

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ToolResult } from "../src/agent/tools.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { configFromEnv } from "../src/minima/config.ts";
+import { BgJobRegistry } from "../src/tools/_bgjobs.ts";
 import { bashTool } from "../src/tools/bash.ts";
 import { builtinTools } from "../src/tools/index.ts";
 
@@ -15,21 +16,27 @@ function body(res: ToolResult): string {
 
 describe("bgjobs schema/config (W4.1)", () => {
   test("AC1: bash background:true returns a job handle in <1.5s", async () => {
-    const bash = builtinTools().find((t) => t.name === "bash");
-    if (!bash) throw new Error("bash tool missing");
+    // Green form: bash wired to a real registry (the red used builtinTools()'s plain bash,
+    // where the unknown `background` prop is dropped and the call blocks to timeout).
+    const registry = new BgJobRegistry();
+    const bash = bashTool({ bgJobs: registry });
     const parsed = bash.parameters.validate({
       command: "sleep 30; echo late",
       background: true,
       timeout: 2000,
     });
     if (!parsed.ok) throw new Error(parsed.errors.join("; "));
-    const t0 = performance.now();
-    const res = await bash.execute("t", parsed.value, null, null);
-    const elapsed = performance.now() - t0;
-    expect(body(res)).toContain("background job");
-    expect(elapsed).toBeLessThan(1500);
-    expect(res.details?.job_id).toBeDefined();
-    expect(res.details?.background).toBe(true);
+    try {
+      const t0 = performance.now();
+      const res = await bash.execute("t", parsed.value, null, null);
+      const elapsed = performance.now() - t0;
+      expect(body(res)).toContain("background job");
+      expect(elapsed).toBeLessThan(1500);
+      expect(res.details?.job_id).toBeDefined();
+      expect(res.details?.background).toBe(true);
+    } finally {
+      registry.shutdown();
+    }
   }, 20000);
 
   test("AC2: a fresh DB has the bg_jobs table", () => {

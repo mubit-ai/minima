@@ -491,6 +491,34 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_seen_lines_key ON seen_lines(run_id, path, created)",
   ],
+  // background bash jobs registry (W4.1) — the durable record for a job launched with
+  // bash background:true: identity (pid/pgid + the harness pid that started it), the
+  // command, and a terminal state that survives restart so a startup reaper can
+  // identity-verify and clean up crash leftovers. Live Subprocess handles + output live
+  // in the in-memory BgJobRegistry; only this row is durable. run_id soft-joins
+  // runs(run_id) (no FK — batch stays self-contained, artifacts/seen_lines precedent).
+  [
+    `CREATE TABLE IF NOT EXISTS bg_jobs (
+       id           TEXT PRIMARY KEY,
+       run_id       TEXT NOT NULL,
+       agent_id     TEXT,
+       pid          INTEGER,
+       pgid         INTEGER,
+       harness_pid  INTEGER,
+       command      TEXT NOT NULL,
+       cwd          TEXT,
+       state        TEXT NOT NULL,
+       exit_code    INTEGER,
+       output_chars INTEGER,
+       truncated    INTEGER,
+       spill_ref    TEXT,
+       started      REAL NOT NULL,
+       ended        REAL,
+       updated      REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_bg_jobs_run ON bg_jobs(run_id, started)",
+    "CREATE INDEX IF NOT EXISTS ix_bg_jobs_state ON bg_jobs(state)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
