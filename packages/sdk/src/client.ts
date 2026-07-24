@@ -7,7 +7,7 @@
  * the cost basis climb estimate → observed → rescaled for your org.
  */
 
-import { MinimaUnavailable, raiseForStatus } from "./errors.ts";
+import { MinimaRateLimited, MinimaUnavailable, raiseForStatus } from "./errors.ts";
 import type {
   CalibrationResponse,
   CapabilitiesResponse,
@@ -25,12 +25,11 @@ import type {
   SavingsResponse,
   StrategiesResponse,
   TaskInput,
+  TaskLike,
   WorkflowRequest,
   WorkflowResponse,
 } from "./schemas.ts";
 import { VERSION } from "./version.ts";
-
-export type TaskLike = string | TaskInput;
 
 /** Minimal fetch-like transport. Real callers omit this (uses global fetch). */
 export type FetchLike = (
@@ -137,6 +136,21 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Upper bound on an honored `retry-after` so a bad header can't stall feedback. */
+const RETRY_AFTER_CAP_MS = 10_000;
+
+/**
+ * Delay before the next feedback retry: a 429's `retry-after` (capped) wins over the
+ * backoff schedule; every other retryable fault uses `backoff`. Exported for direct unit
+ * testing — not part of the package's public surface (not re-exported from index.ts).
+ */
+export function retryDelayMs(exc: unknown, backoff: number): number {
+  if (exc instanceof MinimaRateLimited && exc.retryAfter != null) {
+    return Math.min(exc.retryAfter * 1000, RETRY_AFTER_CAP_MS);
+  }
+  return backoff;
 }
 
 export class MinimaClient {
@@ -248,10 +262,11 @@ export class MinimaClient {
       } catch (exc) {
         lastError = exc;
         const transport = !(exc instanceof Error && exc.name.startsWith("Minima"));
-        const retryable = exc instanceof MinimaUnavailable || transport;
-        const delay = this.feedbackRetryDelaysMs[attempt];
-        if (!retryable || delay === undefined || signal?.aborted) throw exc;
-        await sleep(delay);
+        const retryable =
+          exc instanceof MinimaUnavailable || exc instanceof MinimaRateLimited || transport;
+        const backoff = this.feedbackRetryDelaysMs[attempt];
+        if (!retryable || backoff === undefined || signal?.aborted) throw exc;
+        await sleep(retryDelayMs(exc, backoff));
       }
     }
     throw lastError;
