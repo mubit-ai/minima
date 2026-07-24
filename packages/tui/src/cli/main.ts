@@ -45,6 +45,7 @@ import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
 import { BgJobRegistry } from "../tools/_bgjobs.ts";
+import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
@@ -693,6 +694,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // attach() late-binds the DB + run below (artifactStore pattern) and runs the reaper;
   // shutdown() at closeDb kills live jobs at session end (orphan policy).
   const bgJobRegistry = config.bgJobs ? new BgJobRegistry() : null;
+  // LSP diagnostics (W5.1, opt-in): a hand-rolled stdio JSON-RPC client that surfaces a
+  // locally-installed language server's diagnostics ADDITIVELY in edit/write/apply_patch
+  // results via one afterToolCall hook; killed at session end (closeDb). Flag-off →
+  // null → hook never registered → results byte-identical. Lead agent uses ambient cwd.
+  const lspManager = config.lsp
+    ? new LspManager({
+        workdir: process.cwd(),
+        ...(config.lspTimeoutMs > 0 ? { timeoutMs: config.lspTimeoutMs } : {}),
+      })
+    : null;
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
   let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
@@ -764,6 +775,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // W3.3: a successful tool call whose `path` argument resolves into the artifact dir
   // bumps that row's last_used, so paged-back artifacts survive the LRU prune longest.
   if (artifactStore) agent.addAfterToolCall(makeArtifactReadTouchHook(artifactStore));
+  // W5.1: an edit/write/apply_patch success appends the just-edited file's LSP diagnostics
+  // (opt-in; null when config.lsp is off, so the hook is never in the fold).
+  if (lspManager)
+    agent.addAfterToolCall(makeLspDiagnosticsHook(lspManager, { workdir: process.cwd() }));
   // W4.5: compaction spills the pruned window through this same store (null when artifacts
   // are off → v1 byte-identical); attach()-ed below before any compaction can fire.
   agent.artifacts = artifactStore;
@@ -937,6 +952,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // Orphan policy (W4.1): kill every live background job's group and durably mark it
       // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
       bgJobRegistry?.shutdown();
+      // W5.1: kill every spawned language server (idempotent) before the DB closes.
+      lspManager?.shutdown();
       sink?.detach();
       if (db && agent.runId) db.finishRun(agent.runId, status);
       db?.close();

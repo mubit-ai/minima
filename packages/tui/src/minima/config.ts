@@ -230,6 +230,18 @@ export interface HarnessConfig {
   /** Global per-rule retry-cap override for TTSR (MINIMA_TUI_TTSR_CAP). 0 = unset (each rule's
    * own retryCap, default 1). Only consulted when `ttsr` is on. */
   ttsrCap: number;
+  /** LSP diagnostics (W5.1 / MUB-208; MINIMA_TUI_LSP, default OFF/opt-in, umbrella-covered):
+   * spawn a locally-installed stdio language server and surface its `publishDiagnostics` for
+   * the just-edited file ADDITIVELY in edit/write/apply_patch results. Ships opt-in — it is a
+   * new long-lived external-process surface that adds up to the timeout budget to every
+   * mutating call — promote to default-ON only after field-validating latency + lifecycle on
+   * real servers. Fail-open + flag-off byte-identity: off → no server constructed, no hook
+   * registered, results byte-for-byte unchanged. */
+  lsp: boolean;
+  /** LSP per-file diagnostics timeout override in ms (MINIMA_TUI_LSP_TIMEOUT_MS, diagnostic
+   * switch — NOT umbrella-covered). 0 = unset (the built-in 1500ms ceiling). Only consulted
+   * when `lsp` is on. */
+  lspTimeoutMs: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -280,6 +292,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     observer: false,
     ttsr: false,
     ttsrCap: 0,
+    lsp: false,
+    lspTimeoutMs: 0,
     ...overrides,
   };
 }
@@ -332,6 +346,12 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (ttsrCapEnv !== undefined) {
     const n = Number(ttsrCapEnv);
     if (Number.isInteger(n) && n >= 0) cfg.ttsrCap = n;
+  }
+  cfg.lsp = optInFlag(process.env.MINIMA_TUI_LSP, cfg.experimental);
+  const lspTimeoutEnv = process.env.MINIMA_TUI_LSP_TIMEOUT_MS;
+  if (lspTimeoutEnv !== undefined) {
+    const n = Number(lspTimeoutEnv);
+    if (Number.isInteger(n) && n > 0) cfg.lspTimeoutMs = n;
   }
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {

@@ -13,6 +13,7 @@ import {
   type LspServerSpec,
   type LspSpawn,
   LspManager,
+  type SpawnedConnection,
   makeLspDiagnosticsHook,
 } from "../src/tools/_lsp.ts";
 import { applyPatchTool } from "../src/tools/apply_patch.ts";
@@ -20,8 +21,12 @@ import { editTool } from "../src/tools/edit.ts";
 
 const STUB = join(import.meta.dir, "fixtures", "lsp-stub-server.ts");
 
-function stubSpec(): LspServerSpec {
-  return { id: "tsserver", bin: process.execPath, args: [STUB], extensions: new Set([".ts"]) };
+// Mode + pidfile ride argv (not env): Bun.spawn does not reflect a parent's runtime-mutated
+// process.env into the child, so the stub reads --mode=/--pidfile= flags deterministically.
+function stubSpec(mode: string, pidfile?: string): LspServerSpec {
+  const args = [STUB, `--mode=${mode}`];
+  if (pidfile) args.push(`--pidfile=${pidfile}`);
+  return { id: "tsserver", bin: process.execPath, args, extensions: new Set([".ts"]) };
 }
 
 const cleanups: (() => void)[] = [];
@@ -33,8 +38,15 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-function manager(dir: string, timeoutMs?: number): LspManager {
-  const m = new LspManager({ workdir: dir, resolve: () => stubSpec(), timeoutMs });
+function manager(
+  dir: string,
+  opts: { mode: string; timeoutMs?: number; pidfile?: string },
+): LspManager {
+  const m = new LspManager({
+    workdir: dir,
+    resolve: () => stubSpec(opts.mode, opts.pidfile),
+    timeoutMs: opts.timeoutMs,
+  });
   managers.push(m);
   return m;
 }
@@ -54,8 +66,6 @@ afterEach(() => {
       // best-effort
     }
   }
-  delete process.env.LSP_STUB_MODE;
-  delete process.env.LSP_STUB_PIDFILE;
 });
 
 function ctx(
@@ -92,7 +102,6 @@ async function waitFor(cond: () => boolean, ms: number): Promise<boolean> {
 
 describe("LSP diagnostics hook (W5.1)", () => {
   test("AC1: surfaces a type error in the same turn", async () => {
-    process.env.LSP_STUB_MODE = "error";
     const dir = tempDir("lsp-ac1-");
     const file = join(dir, "bad.ts");
     await writeFile(file, "const x: number = 1;\n", "utf8");
@@ -105,7 +114,7 @@ describe("LSP diagnostics hook (W5.1)", () => {
     );
     expect(result.details?.error).toBeUndefined();
 
-    const hook = makeLspDiagnosticsHook(manager(dir), { workdir: dir });
+    const hook = makeLspDiagnosticsHook(manager(dir, { mode: "error" }), { workdir: dir });
     const ar = await hook(ctx("edit", { path: file }, result));
     expect(ar).not.toBeNull();
     const lsp = ar?.details?.lsp as DiagnosticsResult;
@@ -138,7 +147,6 @@ describe("LSP diagnostics hook (W5.1)", () => {
   });
 
   test("AC3: slow server times out and skips", async () => {
-    process.env.LSP_STUB_MODE = "slow";
     const dir = tempDir("lsp-ac3-");
     const file = join(dir, "s.ts");
     await writeFile(file, "const s = 1;\n");
@@ -151,7 +159,9 @@ describe("LSP diagnostics hook (W5.1)", () => {
     );
     const baseline = structuredClone(result);
     const timeoutMs = 400;
-    const hook = makeLspDiagnosticsHook(manager(dir, timeoutMs), { workdir: dir });
+    const hook = makeLspDiagnosticsHook(manager(dir, { mode: "slow", timeoutMs }), {
+      workdir: dir,
+    });
     const started = Date.now();
     const ar = await hook(ctx("edit", { path: file }, result));
     const elapsed = Date.now() - started;
@@ -161,7 +171,6 @@ describe("LSP diagnostics hook (W5.1)", () => {
   });
 
   test("AC4: clean file appends nothing", async () => {
-    process.env.LSP_STUB_MODE = "clean";
     const dir = tempDir("lsp-ac4-");
     const file = join(dir, "clean.ts");
     await writeFile(file, "const c = 1;\n");
@@ -173,14 +182,13 @@ describe("LSP diagnostics hook (W5.1)", () => {
       null,
     );
     const baseline = structuredClone(result);
-    const hook = makeLspDiagnosticsHook(manager(dir), { workdir: dir });
+    const hook = makeLspDiagnosticsHook(manager(dir, { mode: "clean" }), { workdir: dir });
     const ar = await hook(ctx("edit", { path: file }, result));
     expect(ar).toBeNull();
     expect(result).toEqual(baseline);
   });
 
   test("AC5: apply_patch surfaces diagnostics", async () => {
-    process.env.LSP_STUB_MODE = "error";
     const dir = tempDir("lsp-ac5-");
     const f1 = join(dir, "one.ts");
     const f2 = join(dir, "two.ts");
@@ -201,7 +209,7 @@ describe("LSP diagnostics hook (W5.1)", () => {
     const ap = applyPatchTool({ workdir: dir });
     const result = await ap.execute("t", { patch }, null, null);
     expect(result.details?.writes).toBeDefined();
-    const hook = makeLspDiagnosticsHook(manager(dir), { workdir: dir });
+    const hook = makeLspDiagnosticsHook(manager(dir, { mode: "error" }), { workdir: dir });
     const ar = await hook(ctx("apply_patch", { patch }, result));
     expect(ar).not.toBeNull();
     const lsp = ar?.details?.lsp as DiagnosticsResult[];
@@ -211,13 +219,11 @@ describe("LSP diagnostics hook (W5.1)", () => {
   });
 
   test("AC6: shutdown kills the server", async () => {
-    process.env.LSP_STUB_MODE = "error";
     const dir = tempDir("lsp-ac6-");
     const pidfile = join(dir, "stub.pid");
-    process.env.LSP_STUB_PIDFILE = pidfile;
     const file = join(dir, "k.ts");
     await writeFile(file, "const k = 1;\n");
-    const mgr = manager(dir);
+    const mgr = manager(dir, { mode: "error", pidfile });
     await mgr.diagnosticsFor(file);
     expect(await waitFor(() => existsSync(pidfile), 4000)).toBe(true);
     const pid = Number(readFileSync(pidfile, "utf8").trim());
@@ -288,7 +294,7 @@ describe("LSP diagnostics hook (W5.1)", () => {
     const dir = tempDir("lsp-inproc-");
     const file = join(dir, "p.ts");
     await writeFile(file, "const p = 1;\n");
-    const spawn: LspSpawn = () => {
+    const spawn: LspSpawn = (): SpawnedConnection => {
       let listener: ((m: unknown) => void) | null = null;
       return {
         alive: true,
@@ -332,7 +338,6 @@ describe("LSP diagnostics hook (W5.1)", () => {
   });
 
   test("crash mid-handshake stays byte-identical (fail-open)", async () => {
-    process.env.LSP_STUB_MODE = "crash";
     const dir = tempDir("lsp-crash-");
     const file = join(dir, "c.ts");
     await writeFile(file, "const c = 1;\n");
@@ -344,7 +349,9 @@ describe("LSP diagnostics hook (W5.1)", () => {
       null,
     );
     const baseline = structuredClone(result);
-    const hook = makeLspDiagnosticsHook(manager(dir, 600), { workdir: dir });
+    const hook = makeLspDiagnosticsHook(manager(dir, { mode: "crash", timeoutMs: 600 }), {
+      workdir: dir,
+    });
     const ar = await hook(ctx("edit", { path: file }, result));
     expect(ar).toBeNull();
     expect(result).toEqual(baseline);

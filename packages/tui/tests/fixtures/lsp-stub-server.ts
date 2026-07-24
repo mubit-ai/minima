@@ -1,19 +1,27 @@
 /**
  * Hermetic LSP stub server (W5.1) — a Bun script speaking REAL Content-Length framed
  * JSON-RPC over stdio, with its OWN byte parser (independent of the client's framer, so
- * both directions exercise real framing). Scripted via env LSP_STUB_MODE:
+ * both directions exercise real framing). Scripted via `--mode=` argv (or LSP_STUB_MODE
+ * env as a fallback — Bun.spawn does not reflect a parent's runtime-mutated process.env
+ * into the child, so tests drive it through argv):
  *
  *   error  — one error diagnostic on didOpen/didChange
  *   clean  — one empty-diagnostics publish
  *   slow   — never publishes (client must time out)
  *   crash  — process.exit(1) on the initialize request
  *
- * LSP_STUB_PIDFILE (optional): the stub writes its own pid there at startup so a
- * lifecycle test can assert the child is dead after the manager's shutdown().
+ * `--pidfile=` (optional): the stub writes its own pid there at startup so a lifecycle
+ * test can assert the child is dead after the manager's shutdown().
  */
 
-const mode = process.env.LSP_STUB_MODE ?? "error";
-const pidfile = process.env.LSP_STUB_PIDFILE;
+function argFlag(name: string): string | undefined {
+  const prefix = `--${name}=`;
+  const hit = process.argv.find((a) => a.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : undefined;
+}
+
+const mode = argFlag("mode") ?? process.env.LSP_STUB_MODE ?? "error";
+const pidfile = argFlag("pidfile") ?? process.env.LSP_STUB_PIDFILE;
 
 if (pidfile) await Bun.write(pidfile, String(process.pid));
 
