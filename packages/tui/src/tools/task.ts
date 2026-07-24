@@ -4,10 +4,11 @@
  * The model calls `task` with a JSON array of Delegations (the hard subtask contract:
  * objective/output_format/boundaries REQUIRED — Anthropic's delegation-prompt discipline
  * as a schema, not a convention). The tool validates the graph (missing fields, duplicate
- * step_ids, dangling depends_on, cycles), then executes nodes SEQUENTIALLY in dependency
- * order via the injected SpawnFn — each child is its own agent with its own routed model,
- * tool scope, workdir, and budget slice. Parallel frontiers land later (M-G); the
- * loop/agent are untouched — this is just a tool.
+ * step_ids, dangling depends_on, cycles), then executes the DAG via the injected SpawnFn:
+ * independent frontier nodes run CONCURRENTLY under the fan-out semaphore, dependents
+ * wait for their prerequisites — each child is its own agent with its own routed model,
+ * tool scope, workdir, and budget slice. The loop/agent are untouched — this is just a
+ * tool.
  *
  * Registered conditionally: only when spawnDepth < maxDepth, so a child at the depth
  * limit sees an explicit "depth exhausted" rather than a silently missing tool.
