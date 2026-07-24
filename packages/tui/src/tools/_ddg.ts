@@ -14,6 +14,8 @@
  * No API key, no HTML-parsing dependency: parsing is done with small local regex helpers.
  */
 
+import { NetGuardError, assertPublicUrl } from "./_net_guard.ts";
+
 const DDG_LITE_URL = "https://lite.duckduckgo.com/lite/";
 
 /**
@@ -224,14 +226,48 @@ export async function ddgSearch(
   });
 }
 
+const MAX_REDIRECT_HOPS = 5;
+
+/** Run the SSRF guard, converting a policy rejection into a clean non-retryable DdgError. */
+async function guardUrl(url: string): Promise<void> {
+  try {
+    await assertPublicUrl(url);
+  } catch (exc) {
+    if (exc instanceof NetGuardError) throw new DdgError(exc.message);
+    throw exc;
+  }
+}
+
+/** GET with redirects followed manually so every hop — not just the first URL — passes
+ * the SSRF guard before a connection is opened. */
+async function fetchGuarded(url: string, timeoutMs: number): Promise<Response> {
+  let target = url;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    await guardUrl(target);
+    const resp = await requestOnce(
+      target,
+      {
+        method: "GET",
+        headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*" },
+        redirect: "manual",
+      },
+      timeoutMs,
+    );
+    const location = resp.headers.get("location");
+    if (resp.status < 300 || resp.status >= 400 || !location) return resp;
+    try {
+      target = new URL(location, target).toString();
+    } catch {
+      throw new DdgError(`invalid redirect location from ${target}`);
+    }
+  }
+  throw new DdgError(`too many redirects (>${MAX_REDIRECT_HOPS}) fetching ${url}`);
+}
+
 /** Fetch one URL directly and return its main text (raw GET + HTML→text strip). */
 export async function ddgFetch(url: string, timeoutMs = 20_000): Promise<DdgResponse> {
   return withRetry(async () => {
-    const resp = await requestOnce(
-      url,
-      { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*" } },
-      timeoutMs,
-    );
+    const resp = await fetchGuarded(url, timeoutMs);
     checkStatus(resp.status);
     const ctype = (resp.headers.get("content-type") ?? "").toLowerCase();
     if (ctype && !/text\/html|text\/plain|application\/xhtml/.test(ctype)) {

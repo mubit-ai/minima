@@ -150,6 +150,10 @@ export interface HarnessConfig {
    * mirrors the bigPlan flag shape. Fail-open: without an attached DB the ledger stays
    * inert and tools behave exactly as flag-off. */
   editGuard: boolean;
+  /** SSRF guard opt-out (W3.1): allow the raw web-fetch path to target loopback/private/
+   * link-local addresses (MINIMA_TUI_FETCH_LOCAL=1). Default DENY. Consent gate — never
+   * covered by the experimental umbrella; non-http(s) schemes stay blocked regardless. */
+  fetchLocal: boolean;
   /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
    * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
    * always win; consent gates and diagnostic switches are never covered. */
@@ -224,6 +228,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     steer: true,
     contextRewind: true,
     editGuard: true,
+    fetchLocal: false,
     experimental: false,
     autoEffort: false,
     classify: false,
@@ -267,6 +272,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
+  cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);
