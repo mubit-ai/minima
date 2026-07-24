@@ -25,12 +25,11 @@ import type {
   SavingsResponse,
   StrategiesResponse,
   TaskInput,
+  TaskLike,
   WorkflowRequest,
   WorkflowResponse,
 } from "./schemas.ts";
 import { VERSION } from "./version.ts";
-
-export type TaskLike = string | TaskInput;
 
 /** Minimal fetch-like transport. Real callers omit this (uses global fetch). */
 export type FetchLike = (
