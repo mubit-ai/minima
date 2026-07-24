@@ -35,9 +35,10 @@ export interface FsToolOptions {
    */
   artifacts?: ToolArtifacts;
   /**
-   * Seen-lines ledger (P3 edit guard): read/grep stamp [snap:…] tags and record line
-   * evidence, edit verifies its target against it, write records silently. Omit — or
-   * leave the ledger unattached — for the historical behavior: tool output stays
+   * Seen-lines ledger (P3 edit guard + v2 apply_patch coverage): read/grep stamp [snap:…]
+   * tags and record line evidence, edit and apply_patch verify their targets against it
+   * (per-hunk for apply_patch) and remap evidence post-write, write records silently. Omit —
+   * or leave the ledger unattached — for the historical behavior: tool output stays
    * byte-identical and no rejection can fire (fail-open).
    */
   seen?: SeenLedger;

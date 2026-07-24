@@ -14,6 +14,7 @@ import type { AgentEvent } from "../agent/events.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
+import { SeenLedger } from "../tools/_seen.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import { extractJson, reaskMessage, validateAgainstSchema } from "../tools/output_schema.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
@@ -143,10 +144,19 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       }
     }
 
+    // Edit guard (P3/v2): each child gets its own agent-scoped ledger (agent_id=childId),
+    // so a child's read/edit evidence never poisons the lead's or a sibling's. Gated on the
+    // lead's flag + a persisted run; fail-open otherwise (undefined seen = unguarded).
+    let childSeen: SeenLedger | undefined;
+    if (parent.config.editGuard && parent.db && parent.runId) {
+      childSeen = new SeenLedger();
+      childSeen.attach(parent.db, parent.runId, childId);
+    }
     let tools = builtinTools({
       workdir: childWorkdir,
       exclude: ["task"],
       artifacts: opts.artifacts,
+      seen: childSeen,
     });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
