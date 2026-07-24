@@ -133,6 +133,12 @@ export interface HarnessConfig {
    * path so the model can page it back via read. Opt out with MINIMA_TUI_ARTIFACTS=0 —
    * mirrors the memoryLedger flag shape. */
   artifacts: boolean;
+  /** Artifact GC byte budget in MB (W3.3, default ON at 512): at store attach and after
+   * each spill, LRU-by-last_used prune of artifacts/ down to this budget — rows owned by
+   * the CURRENT run are never pruned, and index rows are deleted with their files.
+   * MINIMA_TUI_ARTIFACT_GC_MB overrides; 0 disables GC (unbounded dir); unset or
+   * unparseable → 512. */
+  artifactGcMb: number;
   /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
    * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
@@ -225,6 +231,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     gradedOutcome: true,
     memoryLedger: true,
     artifacts: true,
+    artifactGcMb: 512,
     steer: true,
     contextRewind: true,
     editGuard: true,
@@ -269,6 +276,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
+  const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;
+  if (artifactGcEnv !== undefined) {
+    const n = Number(artifactGcEnv);
+    if (Number.isFinite(n) && n >= 0) cfg.artifactGcMb = n;
+  }
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";

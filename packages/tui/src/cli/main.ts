@@ -42,6 +42,7 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
+import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
@@ -681,7 +682,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const dbPath = defaultDbPath();
   const artifactStore =
     config.artifacts && dbPath !== ":memory:"
-      ? new ArtifactStore({ dir: join(dirname(dbPath), "artifacts") })
+      ? new ArtifactStore({
+          dir: join(dirname(dbPath), "artifacts"),
+          gcBudgetBytes: Math.floor(config.artifactGcMb * 1024 * 1024),
+        })
       : null;
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
@@ -750,6 +754,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // hooks below. First block wins, so a steered command never raises a pointless
   // permission overlay. Keep this line immediately after agent construction.
   agent.addBeforeToolCall(makeBashSteerHook(config));
+  // W3.3: a successful tool call whose `path` argument resolves into the artifact dir
+  // bumps that row's last_used, so paged-back artifacts survive the LRU prune longest.
+  if (artifactStore) agent.addAfterToolCall(makeArtifactReadTouchHook(artifactStore));
   // agent.budget is attached later (--budget) — read it at call time. Children share this
   // judge instance (spawn.ts), so their grading books here too, never into their own
   // meter rows (which the parent reads as the child's routed cost).
