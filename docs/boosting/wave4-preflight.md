@@ -87,10 +87,12 @@ Each merge: rebase on the current tip → re-run all gates → regenerate the sn
 - **bgjobs × session-end**: orphan policy enforced at session end per the approved decision.
 - **PTY smoke**: `make tui-verify` harness with all new flags on.
 
-## Owner decisions surfaced (→ checkpoint, before fork)
+## Owner decisions — RESOLVED 2026-07-24 (binding on the implementers)
 
-1. **bgjobs orphan policy** (W4.1): (a) KILL live jobs at session end [RECOMMENDED — pipes into the dead harness wedge/SIGPIPE a survivor anyway; `nohup … & disown` via foreground bash remains the deliberate escape hatch] vs (b) leave running. Related sub-choices the orchestrator will default unless overridden: single `bgjob` action-enum tool (not separate tools); Esc kills jobs launched under that run's signal; startup reaper MARKS orphans (identity-verified kill only, never blind).
-2. **TTSR accounting** (W4.2): (a) book the aborted partial's tokens (needs estimation — no authoritative count on mid-stream abort) vs (b) discard, only the successful retry books [RECOMMENDED — zero-touch, no fabricated numbers in the honest-cost substrate].
-3. **TTSR default** (W4.2): OFF/opt-in [RECOMMENDED — a mis-firing tripwire aborts real turns; validate the rule table in the field before promoting] vs default-ON (matches the arc convention but ships an unproven regex table hot).
+1. **bgjobs orphan policy** = **(a) KILL live jobs at session end** via `registry.shutdown()` in `closeDb`; startup reaper marks/identity-verified-kills crash leftovers only. Sub-choices confirmed: single `bgjob` action-enum tool; Esc kills jobs launched under that run's signal; reaper never blind-kills.
+2. **TTSR accounting** = **(b) discard the aborted partial's usage** — only the successful retry books. Zero-touch on `usageSince`; no fabricated numbers in the honest-cost substrate. AC4 asserts it.
+3. **TTSR default** = **OFF / opt-in** via `optInFlag(MINIMA_TUI_TTSR, experimental)`. Deliberate deviation from the arc's default-ON convention (a mis-firing tripwire aborts real turns; promote to default-ON in a follow-up after field-validating the rule table).
+
+Orchestrator-decided (recorded, not owner-blocking): typed-task D1 (pin the task tool surface now) · D2 (strict authoring-time schema allowlist) · D3 (keep `phase:subtask` re-ask tag) · editguard2 sub-agent enablement IN scope · bgjobs single-tool roster.
 
 Orchestrator-decided (recorded, not owner-blocking): typed-task D1 (pin the task tool surface now) · D2 (strict authoring-time schema allowlist) · D3 (keep `phase:subtask` re-ask tag) · editguard2 sub-agent enablement IN scope · bgjobs single-tool roster.
