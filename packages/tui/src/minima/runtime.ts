@@ -23,6 +23,7 @@ import { AssistantMessage, Message } from "../ai/types.ts";
 import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 import {
   type AntiSpiralGate,
   DoomLoopRing,
@@ -188,6 +189,10 @@ export class MinimaAgent extends Agent {
    * durable DecisionRecord — the replay buffer + provenance substrate. */
   db: MinimaDb | null = null;
   runId: string | null = null;
+  /** Artifact spill store (P1): late-bound by main.ts so compaction (W4.5) can serialize the
+   * pruned message window through the same content-addressed store the tools spill to,
+   * inheriting the current-run GC exemption. Null → compaction stays byte-identical to v1. */
+  artifacts: ToolArtifacts | null = null;
   /** Set for sub-agents so their rows demux from the lead's. */
   agentId: string | null = null;
   /** Late-bound ask channel (A2 stop-gate). The TUI populates `.current` on mount; null in
