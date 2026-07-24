@@ -142,6 +142,18 @@ describe("feedback", () => {
 });
 
 describe("errors", () => {
+  test("non-JSON 503 body still throws MinimaUnavailable, not a parse error", async () => {
+    const fetchLike = async () => ({
+      status: 503,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON");
+      },
+      headers: { get: () => null },
+    });
+    const c = new MinimaClient({ baseUrl: "http://minima.test", fetch: fetchLike });
+    await expect(c.health()).rejects.toBeInstanceOf(MinimaUnavailable);
+  });
+
   test("429 carries retry-after", async () => {
     const t = mockTransport([{ status: 429, body: { detail: "slow down" }, retryAfter: "7" }]);
     try {
