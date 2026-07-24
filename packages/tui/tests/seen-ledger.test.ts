@@ -231,3 +231,86 @@ describe("helpers", () => {
     expect(occurrenceSpans(body, "zzz", true)).toEqual([]);
   });
 });
+
+describe("applyEdits / forget / agent scope (edit-guard v2)", () => {
+  test("applyEdits remaps prior evidence through a per-hunk delta (in place)", () => {
+    const { db, led } = attached();
+    const p = "/tmp/v2/a.txt";
+    led.record(p, "h1", [{ start: 1, end: 2 }], "read");
+    led.record(p, "h1", [{ start: 8, end: 12 }], "read");
+    led.record(p, "h1", [{ start: 20, end: 22 }], "read");
+    // one hunk: original line 9 (before length 1) becomes 3 lines -> delta +2.
+    expect(
+      led.applyEdits(p, p, { edits: [{ span: { start: 9, end: 9 }, delta: 2 }], newHash: "h2" }),
+    ).toBe(true);
+    expect(shape(led, p)).toEqual([
+      { s: 1, e: 2, h: "h2", t: "read" },
+      { s: 8, e: 14, h: "h2", t: "read" },
+      { s: 22, e: 24, h: "h2", t: "read" },
+    ]);
+    db.db.close();
+  });
+
+  test("applyEdits composes multiple out-of-order per-hunk deltas", () => {
+    const { db, led } = attached();
+    const p = "/tmp/v2/b.txt";
+    led.record(p, "h1", [{ start: 1, end: 30 }], "read");
+    // hunks supplied out of file order; each carries its own delta.
+    led.applyEdits(p, p, {
+      edits: [
+        { span: { start: 20, end: 21 }, delta: 1 },
+        { span: { start: 5, end: 5 }, delta: 3 },
+      ],
+      newHash: "h2",
+    });
+    // [1,30] shifted: everything past line 21 gains 3+1=4, past line 5 gains 3 -> end 30 -> 34.
+    expect(shape(led, p)).toEqual([{ s: 1, e: 34, h: "h2", t: "read" }]);
+    db.db.close();
+  });
+
+  test("applyEdits with src != dest remaps to dest and clears src (the move case)", () => {
+    const { db, led } = attached();
+    const src = "/tmp/v2/src.txt";
+    const dst = "/tmp/v2/dst.txt";
+    led.record(src, "h1", [{ start: 1, end: 5 }], "read");
+    led.applyEdits(src, dst, { edits: [{ span: { start: 2, end: 2 }, delta: 0 }], newHash: "h2" });
+    expect(shape(led, src)).toEqual([]);
+    expect(shape(led, dst)).toEqual([{ s: 1, e: 5, h: "h2", t: "read" }]);
+    db.db.close();
+  });
+
+  test("forget clears a path's evidence", () => {
+    const { db, led } = attached();
+    const p = "/tmp/v2/c.txt";
+    led.record(p, "h1", [{ start: 1, end: 5 }], "read");
+    expect(led.forget(p)).toBe(true);
+    expect(shape(led, p)).toEqual([]);
+    db.db.close();
+  });
+
+  test("agent-scoped ledgers on one run do not cross-see or cross-clobber", () => {
+    const db = new MinimaDb(":memory:");
+    const a = new SeenLedger();
+    a.attach(db, "r1", "A");
+    const b = new SeenLedger();
+    b.attach(db, "r1", "B");
+    const p = "/tmp/v2/shared.txt";
+    a.record(p, "h1", [{ start: 1, end: 3 }], "read");
+    expect(shape(a, p)).toEqual([{ s: 1, e: 3, h: "h1", t: "read" }]);
+    expect(shape(b, p)).toEqual([]);
+    // B replacing its own scope must not delete A's rows for the same path.
+    b.record(p, "h9", [{ start: 8, end: 9 }], "read");
+    expect(shape(a, p)).toEqual([{ s: 1, e: 3, h: "h1", t: "read" }]);
+    expect(shape(b, p)).toEqual([{ s: 8, e: 9, h: "h9", t: "read" }]);
+    const lead = new SeenLedger();
+    lead.attach(db, "r1");
+    expect(shape(lead, p)).toEqual([]);
+    db.db.close();
+  });
+
+  test("applyEdits/forget on an unattached ledger are inert", () => {
+    const led = new SeenLedger();
+    expect(led.applyEdits("/tmp/x", "/tmp/y", { edits: [], newHash: "h" })).toBe(false);
+    expect(led.forget("/tmp/x")).toBe(false);
+  });
+});

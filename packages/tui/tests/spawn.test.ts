@@ -11,6 +11,7 @@ import {
   resetProviderRegistration,
   resetRegistry,
   text,
+  toolCall,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
@@ -313,6 +314,70 @@ describe("createSpawn (default child factory)", () => {
     expect(p).toContain("verify");
     expect(p).toContain('"BLOCKED: "');
     expect(p).toContain("Boundaries override the objective");
+  });
+
+  async function runChildRead(
+    stepId: string,
+    editGuard: boolean,
+  ): Promise<{ db: MinimaDb; wd: string }> {
+    resetRegistry();
+    resetProviderRegistration();
+    resetModelRegistry();
+    registerModel(FAUX_MODEL);
+    const reg = registerFauxProvider([FAUX_MODEL]);
+    const wd = mkdtempSync(join(tmpdir(), "minima-seen-child-"));
+    const file = join(wd, "seen.txt");
+    writeFileSync(file, "alpha\nbeta\ngamma\n");
+    reg.setResponses([
+      new AssistantMessage({ content: [toolCall("c1", "read", { path: file })] }),
+      new AssistantMessage({ content: [text("done")] }),
+    ]);
+
+    const db = new MinimaDb(":memory:");
+    db.ensureProject("p");
+    const runId = db.startRun({ projectKey: "p" });
+    const lead = leadAgent(db, runId);
+    lead.config = { ...lead.config, editGuard };
+    const spawn = createSpawn({ parent: lead, workdir: wd });
+    const tool = taskTool({ spawn, spawnDepth: 0, maxDepth: 2 });
+    await tool.execute(
+      "1",
+      {
+        delegations: JSON.stringify([
+          {
+            step_id: stepId,
+            objective: "read the file and report",
+            output_format: "one line",
+            boundaries: "read-only",
+            difficulty: "easy",
+            effort: "light",
+          },
+        ]),
+      },
+      null,
+      null,
+    );
+    reg.unregister();
+    return { db, wd };
+  }
+
+  test("seen: an editGuard child records seen_lines under its own agent_id", async () => {
+    const { db, wd } = await runChildRead("seenon", true);
+    const rows = db.db.query("SELECT * FROM seen_lines WHERE agent_id LIKE 'seenon-%'").all();
+    expect(rows.length).toBeGreaterThan(0);
+    // No lead-scoped (NULL agent_id) rows leaked from the child's read.
+    const leadRows = db.db.query("SELECT * FROM seen_lines WHERE agent_id IS NULL").all();
+    expect(leadRows.length).toBe(0);
+    db.close();
+    rmSync(wd, { recursive: true, force: true });
+  });
+
+  test("seen: with editGuard off the child records nothing", async () => {
+    const { db, wd } = await runChildRead("seenoff", false);
+    const rows = db.db.query("SELECT * FROM seen_lines").all();
+    expect(rows.length).toBe(0);
+    db.close();
+    rmSync(wd, { recursive: true, force: true });
   });
 
   test("a BLOCKED: reply maps to outcome=partial, not success", async () => {
