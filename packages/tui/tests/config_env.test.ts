@@ -234,3 +234,18 @@ describe("edit guard flag (P3)", () => {
     });
   });
 });
+
+describe("typed sub-agent output flag (W4.3)", () => {
+  test("MINIMA_TUI_TYPED_TASK is ON by default; =0 opts out", () => {
+    expect(harnessConfig().typedTask).toBe(true);
+    withEnv({ MINIMA_TUI_TYPED_TASK: undefined }, () => {
+      expect(configFromEnv().typedTask).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_TYPED_TASK: "0" }, () => {
+      expect(configFromEnv().typedTask).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_TYPED_TASK: "1" }, () => {
+      expect(configFromEnv().typedTask).toBe(true);
+    });
+  });
+});

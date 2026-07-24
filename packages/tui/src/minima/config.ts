@@ -156,6 +156,13 @@ export interface HarnessConfig {
    * mirrors the bigPlan flag shape. Fail-open: without an attached DB the ledger stays
    * inert and tools behave exactly as flag-off. */
   editGuard: boolean;
+  /** Typed sub-agent outputs (W4.3, default ON): a `task` delegation's optional
+   *  `output_schema` (JSON-Schema subset) is enforced dispatcher-side in createSpawn —
+   *  the child's final reply is extracted, validated, re-asked ONCE on failure, then a
+   *  typed failure is reported and the validated object rides ChildResult.data to
+   *  dependents. Opt out with MINIMA_TUI_TYPED_TASK=0 — mirrors the editGuard flag shape.
+   *  Flag-off: output_schema is ignored end-to-end (no shape-check, no enforcement). */
+  typedTask: boolean;
   /** SSRF guard opt-out (W3.1): allow the raw web-fetch path to target loopback/private/
    * link-local addresses (MINIMA_TUI_FETCH_LOCAL=1). Default DENY. Consent gate — never
    * covered by the experimental umbrella; non-http(s) schemes stay blocked regardless. */
@@ -235,6 +242,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     steer: true,
     contextRewind: true,
     editGuard: true,
+    typedTask: true,
     fetchLocal: false,
     experimental: false,
     autoEffort: false,
@@ -284,6 +292,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
+  cfg.typedTask = process.env.MINIMA_TUI_TYPED_TASK !== "0";
   cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
