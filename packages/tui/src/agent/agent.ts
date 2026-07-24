@@ -18,6 +18,7 @@ import {
   type QueueMode,
   type StreamFnLike,
   type TransformContext,
+  type TtsrController,
   defaultConvertToLlm,
 } from "./state.ts";
 import type {
@@ -52,6 +53,8 @@ export interface AgentOptions {
   streamFn?: StreamFnLike;
   /** Abort a turn whose model stream goes silent for this many ms. Undefined/0 disables. */
   streamIdleTimeoutMs?: number;
+  /** Stream tripwire controller (W4.2). null/undefined → not installed. */
+  ttsr?: TtsrController | null;
 }
 
 export class Agent {
@@ -68,6 +71,7 @@ export class Agent {
   private shouldStopAfterTurn: AgentLoopConfig["shouldStopAfterTurn"] | null;
   private readonly streamFn: StreamFnLike | null;
   private readonly streamIdleTimeoutMs: number | null;
+  private readonly ttsr: TtsrController | null;
   private readonly listeners: Listener[] = [];
   private controller: AbortController | null = null;
   private idleResolvers: (() => void)[] = [];
@@ -95,6 +99,7 @@ export class Agent {
     this.shouldStopAfterTurn = opts.shouldStopAfterTurn ?? null;
     this.streamFn = opts.streamFn ?? null;
     this.streamIdleTimeoutMs = opts.streamIdleTimeoutMs ?? null;
+    this.ttsr = opts.ttsr ?? null;
   }
 
   get agentState(): AgentState {
@@ -301,6 +306,7 @@ export class Agent {
       streamOptions: this.streamOptions,
       signal,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
+      ttsr: this.ttsr,
     };
   }
 

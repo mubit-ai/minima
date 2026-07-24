@@ -9,6 +9,7 @@
 import type { Message } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage, text } from "../ai/types.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import { isTtsrReminder } from "../minima/ttsr.ts";
 
 const KEEP_RECENT = 6;
 
@@ -23,8 +24,14 @@ export function compactMessages(_agent: MinimaAgent, messages: Message[]): Messa
   const oldMessages = messages.slice(0, messages.length - KEEP_RECENT);
   const recentMessages = messages.slice(-KEEP_RECENT);
 
+  // TTSR (W4.2): harness-injected tripwire reminders in the old window are preserved verbatim
+  // as active context rather than truncated into the summary — they are enforcement steers the
+  // model must keep seeing across compaction.
+  const preserved = oldMessages.filter((m) => isTtsrReminder(m.textContent));
+  const summarizable = oldMessages.filter((m) => !isTtsrReminder(m.textContent));
+
   const summaryParts: string[] = [];
-  for (const m of oldMessages) {
+  for (const m of summarizable) {
     if (m.role === "user") {
       summaryParts.push(`User: ${m.textContent.slice(0, 200)}`);
     } else if (m.role === "assistant") {
@@ -34,13 +41,13 @@ export function compactMessages(_agent: MinimaAgent, messages: Message[]): Messa
     }
   }
 
-  const summaryText = `[Compacted ${oldMessages.length} messages]\n${summaryParts.join("\n")}`;
+  const summaryText = `[Compacted ${summarizable.length} messages]\n${summaryParts.join("\n")}`;
   const summaryMsg = new AgentMessage({
     role: "user",
     content: summaryText,
   });
 
-  return [summaryMsg, ...recentMessages];
+  return [summaryMsg, ...preserved, ...recentMessages];
 }
 
 /** Estimated context tokens of a message list (chars/4 — the auto-threshold's own basis). */
