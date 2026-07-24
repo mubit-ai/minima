@@ -329,7 +329,10 @@ describe("createSpawn (default child factory)", () => {
     const file = join(wd, "seen.txt");
     writeFileSync(file, "alpha\nbeta\ngamma\n");
     reg.setResponses([
-      new AssistantMessage({ content: [toolCall("c1", "read", { path: file })] }),
+      new AssistantMessage({
+        content: [toolCall("c1", "read", { path: file })],
+        stop_reason: "toolUse",
+      }),
       new AssistantMessage({ content: [text("done")] }),
     ]);
 

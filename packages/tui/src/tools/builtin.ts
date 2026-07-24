@@ -66,9 +66,10 @@ export interface BuiltinToolsOptions {
    */
   artifacts?: ToolArtifacts;
   /**
-   * Seen-lines ledger (P3 edit guard), shared by read/grep/edit/write. The LEAD agent's
-   * main.ts constructs it when config.editGuard and late-binds the DB; sub-agents
-   * (spawn.ts) never pass one, so their edits stay unguarded by design.
+   * Seen-lines ledger (P3 edit guard + v2 apply_patch coverage), shared by
+   * read/grep/edit/write/apply_patch. The LEAD agent's main.ts constructs it when
+   * config.editGuard and late-binds the DB (agent_id NULL); sub-agents (spawn.ts) pass an
+   * agent-scoped ledger (agent_id=childId) so their evidence can't cross-poison the lead's.
    */
   seen?: SeenLedger;
   /**

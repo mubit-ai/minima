@@ -28,6 +28,16 @@ import { dirname } from "node:path";
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
 import { resolveWithin } from "./_io.ts";
+import {
+  type SeenRange,
+  type SpanEdit,
+  coalesce,
+  countNewlines,
+  intersects,
+  sha256Hex,
+  staleMessage,
+  unseenMessage,
+} from "./_seen.ts";
 import { objectSchema } from "./schema.ts";
 import type { FsToolOptions } from "./types.ts";
 
@@ -56,10 +66,19 @@ interface FileChange {
   hunks: Hunk[]; // for "update"
 }
 
+/** One update/move: source path, destination path, and the per-hunk footprints (original
+ * 1-based coords + line delta) the seen-ledger remaps evidence through. */
+export interface PatchUpdate {
+  src: string;
+  dest: string;
+  edits: SpanEdit[];
+}
+
 export interface PatchPlan {
   writes: Map<string, string>; // path -> full new content
   deletes: string[]; // paths to remove
   summary: string[]; // one human-readable line per change
+  updates: PatchUpdate[]; // update/move hunk footprints (for the seen-ledger)
 }
 
 /** relative-or-absolute path -> file text, or null if it doesn't exist. */
@@ -176,6 +195,7 @@ export function planPatch(changes: FileChange[], readFile: ReadFile): PatchPlan 
   const writes = new Map<string, string>();
   const deletes: string[] = [];
   const summary: string[] = [];
+  const updates: PatchUpdate[] = [];
   for (const ch of changes) {
     if (ch.kind === "add") {
       if (readFile(ch.path) !== null) throw new PatchError(`Add File: ${ch.path} already exists`);
@@ -191,7 +211,7 @@ export function planPatch(changes: FileChange[], readFile: ReadFile): PatchPlan 
     } else {
       const original = readFile(ch.path);
       if (original === null) throw new PatchError(`Update File: ${ch.path} does not exist`);
-      const newText = applyHunks(original, ch.hunks, ch.path);
+      const { text: newText, edits } = applyHunks(original, ch.hunks, ch.path);
       const dest = ch.moveTo || ch.path;
       if (ch.moveTo) {
         deletes.push(ch.path);
@@ -200,17 +220,37 @@ export function planPatch(changes: FileChange[], readFile: ReadFile): PatchPlan 
         summary.push(`update ${ch.path}`);
       }
       writes.set(dest, newText);
+      updates.push({ src: ch.path, dest, edits });
     }
   }
-  return { writes, deletes, summary };
+  return { writes, deletes, summary, updates };
 }
 
-function applyHunks(original: string, hunks: Hunk[], path: string): string {
+/** Last non-null original line number strictly before array index `idx`, else 0 — the
+ * anchor a pure insertion sits just after. */
+function origLineBefore(origLine: (number | null)[], idx: number): number {
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const o = origLine[i];
+    if (o !== null && o !== undefined) return o;
+  }
+  return 0;
+}
+
+function applyHunks(
+  original: string,
+  hunks: Hunk[],
+  path: string,
+): { text: string; edits: SpanEdit[] } {
   const hadFinalNl = original.endsWith("\n");
   const out = original.split("\n");
   // A trailing newline produces a spurious empty final element; drop it so line
   // indices match the file's real lines (re-added below if present).
   if (hadFinalNl && out.length && out[out.length - 1] === "") out.pop();
+  // Parallel map from current-array index to its ORIGINAL 1-based line (null once a hunk
+  // overwrites a slot). Splicing it alongside `out` keeps original coords correct even
+  // when a hunk's context matched before the cursor (the find-from-0 fallback).
+  const origLine: (number | null)[] = out.map((_, i) => i + 1);
+  const edits: SpanEdit[] = [];
   let cursor = 0;
   for (const h of hunks) {
     let start = cursor;
@@ -224,12 +264,22 @@ function applyHunks(original: string, hunks: Hunk[], path: string): string {
       const ctx = h.before.slice(0, 6).join("\n") || "(no context lines)";
       throw new PatchError(`Update File: ${path}: could not locate hunk context:\n${ctx}`);
     }
+    const removed = origLine
+      .slice(idx, idx + h.before.length)
+      .filter((o): o is number => o !== null);
+    const delta = h.after.length - h.before.length;
+    const span: SeenRange =
+      removed.length > 0
+        ? { start: Math.min(...removed), end: Math.max(...removed) }
+        : { start: origLineBefore(origLine, idx) + 1, end: origLineBefore(origLine, idx) };
+    edits.push({ span, delta });
     out.splice(idx, h.before.length, ...h.after);
+    origLine.splice(idx, h.before.length, ...h.after.map(() => null));
     cursor = idx + h.after.length;
   }
   let out_text = out.join("\n");
   if (hadFinalNl && !out_text.endsWith("\n")) out_text += "\n";
-  return out_text;
+  return { text: out_text, edits };
 }
 
 /**
@@ -279,6 +329,13 @@ function makeResolver(workdir?: string): (rel: string) => string {
   };
 }
 
+/** Preloaded file: decoded text (for planning) + a hash of the RAW bytes (the stale-check
+ * basis — same bytes read.ts streams, so a non-UTF8 file doesn't spuriously mismatch). */
+interface Preloaded {
+  text: string;
+  hash: string;
+}
+
 /**
  * Pre-read every file the parsed changes reference so planPatch can stay sync.
  * Mirrors the old disk reader exactly: unreadable or missing files map to null
@@ -288,8 +345,8 @@ function makeResolver(workdir?: string): (rel: string) => string {
 async function preloadFiles(
   changes: FileChange[],
   resolve: (rel: string) => string,
-): Promise<Map<string, string | null | PatchError>> {
-  const files = new Map<string, string | null | PatchError>();
+): Promise<Map<string, Preloaded | null | PatchError>> {
+  const files = new Map<string, Preloaded | null | PatchError>();
   for (const ch of changes) {
     if (files.has(ch.path)) continue;
     let abs: string;
@@ -303,7 +360,8 @@ async function preloadFiles(
       throw exc;
     }
     try {
-      files.set(ch.path, await readFile(abs, "utf8"));
+      const buf = await readFile(abs);
+      files.set(ch.path, { text: buf.toString("utf8"), hash: sha256Hex(buf) });
     } catch {
       files.set(ch.path, null);
     }
@@ -311,12 +369,21 @@ async function preloadFiles(
   return files;
 }
 
-function mapReader(files: Map<string, string | null | PatchError>): ReadFile {
+function mapReader(files: Map<string, Preloaded | null | PatchError>): ReadFile {
   return (rel: string) => {
     const cached = files.get(rel);
     if (cached instanceof PatchError) throw cached;
-    return cached ?? null;
+    return cached == null ? null : cached.text;
   };
+}
+
+/** The current-bytes hash of a successfully preloaded (existing) file, else null. */
+function preloadedHash(
+  files: Map<string, Preloaded | null | PatchError>,
+  rel: string,
+): string | null {
+  const cached = files.get(rel);
+  return cached && !(cached instanceof PatchError) ? cached.hash : null;
 }
 
 /** Flush a resolved plan to disk: writes (with mkdir) first, then deletes. */
@@ -363,17 +430,84 @@ export function applyPatchTool(opts: FsToolOptions = {}): AgentTool {
       const resolve = makeResolver(opts.workdir);
       let plan: PatchPlan;
       let changeCount: number;
+      let files: Map<string, Preloaded | null | PatchError>;
       try {
         const changes = parsePatch(String(params.patch));
         if (!changes.length) return errorResult("apply_patch: empty patch (no file sections)");
         changeCount = changes.length;
-        const files = await preloadFiles(changes, resolve);
+        files = await preloadFiles(changes, resolve);
         plan = planPatch(changes, mapReader(files));
       } catch (exc) {
         if (exc instanceof PatchError) return errorResult(`apply_patch: ${exc.message}`);
         throw exc;
       }
+
+      // Edit-guard (P3 seen-ledger, in-execute so sub-agent workdirs resolve correctly):
+      // check every Update-File hunk against read evidence BEFORE writing. Fail-open per
+      // file — a disabled/unattached ledger or a file with no rows skips silently. Stale
+      // or unseen hunks across all files aggregate into ONE rejection; no file is touched.
+      const seen = opts.seen;
+      if (seen?.enabled) {
+        const stale: { message: string; reread: string[] }[] = [];
+        const unseen: { message: string; reread: string[] }[] = [];
+        for (const u of plan.updates) {
+          const p = resolve(u.src);
+          const rows = seen.rows(p);
+          if (rows === null) continue;
+          const nowHash = preloadedHash(files, u.src);
+          if (nowHash === null) continue;
+          if (rows.length > 0 && rows[0]!.file_hash !== nowHash) {
+            const ranges = coalesce(rows.map((s) => ({ start: s.start_line, end: s.end_line })));
+            stale.push(staleMessage(p, rows[0]!.file_hash, nowHash, ranges, "apply_patch"));
+            continue;
+          }
+          const covered = rows
+            .filter((s) => s.file_hash === nowHash)
+            .map((s) => ({ start: s.start_line, end: s.end_line }));
+          const targets = u.edits.map((e) => e.span).filter((sp) => sp.end >= sp.start);
+          const missed = targets.filter((sp) => !covered.some((c) => intersects(sp, c)));
+          if (missed.length > 0) unseen.push(unseenMessage(p, coalesce(missed), "apply_patch"));
+        }
+        if (stale.length > 0 || unseen.length > 0) {
+          const all = [...stale, ...unseen];
+          return {
+            content: [text(all.map((r) => r.message).join("\n"))],
+            details: {
+              error: true,
+              edit_guard: stale.length > 0 ? "stale" : "unseen",
+              reread: all.flatMap((r) => r.reread),
+            },
+          };
+        }
+      }
+
       await writePlan(plan, resolve);
+
+      // Record post-write state so the next edit/patch sees fresh evidence: updates/moves
+      // remap prior evidence through the hunk deltas (moves clear the src), adds record
+      // full-file, deletes forget the path. Fail-open (each call swallows on a broken ledger).
+      if (seen?.enabled) {
+        const updateDests = new Set(plan.updates.map((u) => u.dest));
+        const updateSrcs = new Set(plan.updates.map((u) => u.src));
+        for (const u of plan.updates) {
+          const newContent = plan.writes.get(u.dest) ?? "";
+          seen.applyEdits(resolve(u.src), resolve(u.dest), {
+            edits: u.edits,
+            newHash: sha256Hex(newContent),
+          });
+        }
+        for (const [rel, content] of plan.writes) {
+          if (updateDests.has(rel)) continue;
+          const n = countNewlines(content);
+          if (n > 0)
+            seen.record(resolve(rel), sha256Hex(content), [{ start: 1, end: n }], "apply_patch");
+        }
+        for (const rel of plan.deletes) {
+          if (updateSrcs.has(rel) || plan.writes.has(rel)) continue;
+          seen.forget(resolve(rel));
+        }
+      }
+
       const summary = plan.summary.join("\n");
       return {
         content: [text(`applied patch (${changeCount} change(s)):\n${summary}`)],

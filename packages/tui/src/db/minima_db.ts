@@ -1291,34 +1291,43 @@ export class MinimaDb {
   }
 
   // ---------------------------------------------------------------- seen-lines ledger (P3)
-  listSeenLines(runId: string, path: string): SeenLineRow[] {
+  // agent_id scopes evidence per agent (lead = NULL, sub-agent = child id). `IS ?` binds
+  // NULL or a string, so a NULL-scoped read never sees a child's rows and vice versa.
+  listSeenLines(runId: string, path: string, agentId: string | null = null): SeenLineRow[] {
     return this.db
-      .query("SELECT * FROM seen_lines WHERE run_id = ? AND path = ? ORDER BY start_line, end_line")
-      .all(runId, path) as SeenLineRow[];
+      .query(
+        "SELECT * FROM seen_lines WHERE run_id = ? AND path = ? AND agent_id IS ? ORDER BY start_line, end_line",
+      )
+      .all(runId, path, agentId) as SeenLineRow[];
   }
 
-  /** Replace the whole evidence set for (run, path) — the SeenLedger passes the coalesced
-   * union of surviving + new ranges, so this delete IS the supersede-on-new-hash. */
+  /** Replace the whole evidence set for (run, agent, path) — the SeenLedger passes the
+   * coalesced union of surviving + new ranges, so this delete IS the supersede-on-new-hash. */
   replaceSeenLines(
     runId: string,
     path: string,
     fileHash: string,
     rows: { start: number; end: number; tool: string }[],
+    agentId: string | null = null,
   ): void {
     this.db.transaction(() => {
-      this.deleteSeenLines(runId, path);
+      this.deleteSeenLines(runId, path, agentId);
       for (const r of rows) {
         this.db.run(
           `INSERT INTO seen_lines (run_id, agent_id, path, start_line, end_line, file_hash, tool, created)
-           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-          [runId, path, r.start, r.end, fileHash, r.tool, Date.now() / 1000],
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [runId, agentId, path, r.start, r.end, fileHash, r.tool, Date.now() / 1000],
         );
       }
     })();
   }
 
-  private deleteSeenLines(runId: string, path: string): void {
-    this.db.run("DELETE FROM seen_lines WHERE run_id = ? AND path = ?", [runId, path]);
+  private deleteSeenLines(runId: string, path: string, agentId: string | null = null): void {
+    this.db.run("DELETE FROM seen_lines WHERE run_id = ? AND path = ? AND agent_id IS ?", [
+      runId,
+      path,
+      agentId,
+    ]);
   }
 
   // ---------------------------------------------------------------- routing decisions
