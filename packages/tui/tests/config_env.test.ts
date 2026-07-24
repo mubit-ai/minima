@@ -235,6 +235,21 @@ describe("background jobs flag (W4.1)", () => {
   });
 });
 
+describe("compaction v2 flag (W4.5)", () => {
+  test("MINIMA_TUI_COMPACT2 defaults on; =0 opts out", () => {
+    expect(harnessConfig().compact2).toBe(true);
+    withEnv({ MINIMA_TUI_COMPACT2: undefined }, () => {
+      expect(configFromEnv().compact2).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_COMPACT2: "0" }, () => {
+      expect(configFromEnv().compact2).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_COMPACT2: "1" }, () => {
+      expect(configFromEnv().compact2).toBe(true);
+    });
+  });
+});
+
 describe("edit guard flag (P3)", () => {
   test("MINIMA_TUI_EDIT_GUARD is ON by default; =0 opts out", () => {
     expect(harnessConfig().editGuard).toBe(true);
