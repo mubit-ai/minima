@@ -1,8 +1,17 @@
 """Classifier program PR-6 — the G1 gate suite over the frozen eval set.
 
-Runs against a REAL trained artifact (scripts/classifier/train.py output) named by
-MINIMA_CLASSIFIER_ARTIFACT; skipped when unset so `make eval` stays runnable without
-one. Label judgment calls baked into the frozen set (documented here, adjudicated
+Runs in CI against the committed artifact under models/classifier/ (the one the Docker
+image bakes), so a re-train that regresses quality — even a self-consistent one that
+still passes the content-hash check in test_committed_artifact.py — turns a gate red on
+the PR instead of shipping silently. Point MINIMA_CLASSIFIER_ARTIFACT at a candidate to
+gate it during a re-train:
+  MINIMA_CLASSIFIER_ARTIFACT=<dir> uv run pytest tests/eval/test_classifier_gates.py
+
+The quality gates are deterministic (numpy matmul over frozen rows) and run every PR;
+only the latency gate (G1f) is eval-marked, since ms/prompt is a property of the runner
+hardware, not the artifact, and would flake on shared CI runners.
+
+Label judgment calls baked into the frozen set (documented here, adjudicated
 2026-07-23): tool_use = "perform an action in an external system", so text-only list
 generation ("make me a packing list") is other/creative; explanation-imperatives are
 qa; rewrite/draft/tone work is creative; comparison/advice analysis is reasoning.
@@ -13,7 +22,7 @@ Gates:
   G1c  live-misroute pins: zero regressions
   G1d  true-OOS caught (other | abstain) >= 0.70
   G1e  false-abstain <= alpha + 0.03 on the typed slice
-  G1f  p50 latency <= 5 ms
+  G1f  p50 latency <= 5 ms  (eval-only — hardware-dependent)
   G1g  beats the regex baseline macro-F1 on the same rows
 """
 
@@ -21,15 +30,24 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.eval
-
-_ARTIFACT = os.environ.get("MINIMA_CLASSIFIER_ARTIFACT", "")
 _FROZEN = Path(__file__).parent / "data" / "classifier_frozen_set.jsonl"
+_COMMITTED = Path(__file__).resolve().parents[2] / "models" / "classifier"
+
+
+def _artifact_dir() -> str:
+    """The env override (a re-train candidate) wins; otherwise the single committed
+    bundle. No skip: the committed artifact is git-tracked and the [classifier] extra
+    rides in `dev`, so a missing artifact is a real failure, not a reason to go green."""
+    env = os.environ.get("MINIMA_CLASSIFIER_ARTIFACT", "")
+    if env:
+        return env
+    matches = sorted(p.parent for p in _COMMITTED.glob("*/manifest.json"))
+    assert len(matches) == 1, f"expected exactly one committed artifact, found {matches}"
+    return str(matches[0])
 
 
 @pytest.fixture(scope="module")
@@ -39,12 +57,10 @@ def rows():
 
 @pytest.fixture(scope="module")
 def clf():
-    if not _ARTIFACT:
-        pytest.skip("MINIMA_CLASSIFIER_ARTIFACT not set — gate suite needs a trained artifact")
     from minima.recommender.classify import high_precision_type, infer_task_type
     from minima.recommender.classify_embed import EmbedResult, load_embed_classifier
 
-    classifier = load_embed_classifier(_ARTIFACT, required=True)
+    classifier = load_embed_classifier(_artifact_dir(), required=True)
     assert classifier is not None
 
     class Serving:
@@ -122,7 +138,10 @@ def test_g1e_false_abstain_bounded(clf, rows):
     assert rate <= 0.08, f"false-abstain {rate:.3f} above alpha + slack (0.08)"
 
 
+@pytest.mark.eval
 def test_g1f_latency(clf, rows):
+    import time
+
     texts = [r["text"] for r in rows]
     t0 = time.time()
     for t in texts:
