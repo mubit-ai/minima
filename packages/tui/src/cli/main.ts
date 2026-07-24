@@ -8,7 +8,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { setMode } from "../agent/modes.ts";
@@ -18,10 +18,11 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
-import { MinimaDb, type RunRow, toolSchemaHash } from "../db/minima_db.ts";
+import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import { BudgetLedger } from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
@@ -41,9 +42,16 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
+import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
+import { ArtifactStore } from "../tools/_artifacts.ts";
+import { BgJobRegistry } from "../tools/_bgjobs.ts";
+import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
+import { SeenLedger } from "../tools/_seen.ts";
+import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -553,8 +561,13 @@ function toolsFor(
   bigPlan: boolean,
   todoState?: TodoTask[],
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void,
+  artifacts?: ToolArtifacts,
+  seen?: SeenLedger,
+  bgJobs?: BgJobRegistry,
 ) {
-  let tools = args.noTools ? [] : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd });
+  let tools = args.noTools
+    ? []
+    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -667,11 +680,44 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (mapping?.namespace) config.namespace = mapping.namespace;
   }
   const todoState: TodoTask[] = [];
+  // Artifact spill store (P1): one instance shared by the lead's tools and every spawned
+  // child; attach() late-binds the DB index once the run row exists (bookSearchFee pattern).
+  const dbPath = defaultDbPath();
+  const artifactStore =
+    config.artifacts && dbPath !== ":memory:"
+      ? new ArtifactStore({
+          dir: join(dirname(dbPath), "artifacts"),
+          gcBudgetBytes: Math.floor(config.artifactGcMb * 1024 * 1024),
+        })
+      : null;
+  // Background bash jobs (W4.1): in-memory Subprocess handles + a durable bg_jobs row.
+  // attach() late-binds the DB + run below (artifactStore pattern) and runs the reaper;
+  // shutdown() at closeDb kills live jobs at session end (orphan policy).
+  const bgJobRegistry = config.bgJobs ? new BgJobRegistry() : null;
+  // LSP diagnostics (W5.1, opt-in): a hand-rolled stdio JSON-RPC client that surfaces a
+  // locally-installed language server's diagnostics ADDITIVELY in edit/write/apply_patch
+  // results via one afterToolCall hook; killed at session end (closeDb). Flag-off →
+  // null → hook never registered → results byte-identical. Lead agent uses ambient cwd.
+  const lspManager = config.lsp
+    ? new LspManager({
+        workdir: process.cwd(),
+        ...(config.lspTimeoutMs > 0 ? { timeoutMs: config.lspTimeoutMs } : {}),
+      })
+    : null;
   // web_search provider fees (MUB-172) book like judge spend: wallet (meter + budget), never
   // feedback's actual_cost_usd. Late-bound — the agent doesn't exist yet at tool construction.
   let bookSearchFee: (usd: number, toolCallId: string) => void = () => {};
-  const tools = toolsFor(args, config.bigPlan === true, todoState, (usd, id) =>
-    bookSearchFee(usd, id),
+  // P3 edit guard: the ledger exists from tool construction but stays fail-open (inert)
+  // until the DB + run id attach below — the same late-bind pattern as bookSearchFee.
+  const seenLedger = config.editGuard ? new SeenLedger() : undefined;
+  const tools = toolsFor(
+    args,
+    config.bigPlan === true,
+    todoState,
+    (usd, id) => bookSearchFee(usd, id),
+    artifactStore ?? undefined,
+    seenLedger,
+    bgJobRegistry ?? undefined,
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -721,6 +767,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  // Hook-order contract (P2): bash-steer registers FIRST on the beforeToolCall stack —
+  // ahead of the TUI permission hook (app.tsx) and the headless checkpoint/done-gate
+  // hooks below. First block wins, so a steered command never raises a pointless
+  // permission overlay. Keep this line immediately after agent construction.
+  agent.addBeforeToolCall(makeBashSteerHook(config));
+  // W3.3: a successful tool call whose `path` argument resolves into the artifact dir
+  // bumps that row's last_used, so paged-back artifacts survive the LRU prune longest.
+  if (artifactStore) agent.addAfterToolCall(makeArtifactReadTouchHook(artifactStore));
+  // W5.1: an edit/write/apply_patch success appends the just-edited file's LSP diagnostics
+  // (opt-in; null when config.lsp is off, so the hook is never in the fold).
+  if (lspManager)
+    agent.addAfterToolCall(makeLspDiagnosticsHook(lspManager, { workdir: process.cwd() }));
+  // W4.5: compaction spills the pruned window through this same store (null when artifacts
+  // are off → v1 byte-identical); attach()-ed below before any compaction can fire.
+  agent.artifacts = artifactStore;
   // agent.budget is attached later (--budget) — read it at call time. Children share this
   // judge instance (spawn.ts), so their grading books here too, never into their own
   // meter rows (which the parent reads as the child's routed cost).
@@ -805,6 +866,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
     agent.db = db;
     agent.runId = runId;
+    artifactStore?.attach(db, runId);
+    bgJobRegistry?.attach(db, runId);
+    seenLedger?.attach(db, runId);
     sink = attachDbSink(agent, db, { runId });
     if (resumeFrom) {
       // Same shape as the interactive /resume path: context + meter + judge cadence,
@@ -885,6 +949,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   const closeDb = (status: "done" | "aborted" = "done"): void => {
     try {
+      // Orphan policy (W4.1): kill every live background job's group and durably mark it
+      // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
+      bgJobRegistry?.shutdown();
+      // W5.1: kill every spawned language server (idempotent) before the DB closes.
+      lspManager?.shutdown();
       sink?.detach();
       if (db && agent.runId) db.finishRun(agent.runId, status);
       db?.close();
@@ -925,12 +994,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     parent: agent,
     workdir: process.cwd(),
     onChildEvent: (e) => childEventRef.handler?.(e),
+    artifacts: artifactStore ?? undefined,
   });
   agent.agentState.tools.push(
     taskTool({
       spawn: spawnFactory,
       spawnDepth: 0,
       maxDepth: 2,
+      typedTask: config.typedTask,
     }),
   );
 
@@ -1011,6 +1082,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
   const askUserRef: AskUserRef = { current: null };
   agent.agentState.tools.push(questionTool(askUserRef));
+  // P4 checkpoint/rewind: flag gates REGISTRATION only — rehydrate honors persisted
+  // context_rewind markers regardless (they are data about what the model saw).
+  registerContextRewindTools(agent.agentState.tools, config.contextRewind, {
+    getState: () => agent.agentState,
+    db,
+    getRunId: () => agent.runId,
+  });
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;

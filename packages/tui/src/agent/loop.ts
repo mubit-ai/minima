@@ -10,6 +10,7 @@
 import { stream as defaultStream } from "../ai/stream.ts";
 import { AssistantMessage, Message, text } from "../ai/types.ts";
 import type { Context, Tool, ToolCall } from "../ai/types.ts";
+import { applyPendingContextRewind } from "./context_prune.ts";
 import {
   type AgentEvent,
   agentEnd,
@@ -23,7 +24,7 @@ import {
   turnEnd,
   turnStart,
 } from "./events.ts";
-import type { AgentLoopConfig, AgentState, QueueMode } from "./state.ts";
+import type { AgentLoopConfig, AgentState, QueueMode, TtsrHit } from "./state.ts";
 import {
   type AfterToolCallContext,
   type BeforeToolCallContext,
@@ -90,44 +91,81 @@ export async function* agentLoop(
         ? AbortSignal.any([config.signal, watchdog.signal])
         : watchdog.signal
       : (config.signal ?? undefined);
-    const s = streamFn(state.model, ctx, { options, signal: streamSignal });
-    yield messageStart(null);
+    // TTSR (W4.2): arm a per-turn tripwire matcher (null → not installed; zero regex work).
+    const tripwire = config.ttsr?.arm() ?? null;
     let aborted = false;
-    let partialText = "";
-    const source = watchdog ? withIdleTimeout(s, idleMs, () => watchdog.abort()) : s;
-    try {
-      // Race each stream step against the abort signal so Esc stops the run
-      // instantly — without this, `for await` only checks between chunks and a
-      // mid-token or slow-first-token stream keeps going after abort.
-      for await (const streamEvent of raceAbort(source, config.signal ?? undefined)) {
-        if ((streamEvent as { type?: string }).type === "text_delta") {
-          partialText += (streamEvent as { delta?: string }).delta ?? "";
+    let assistant: AssistantMessage | null = null;
+    for (;;) {
+      // A per-attempt trap composed with streamSignal tears down the provider request the
+      // instant a tripwire fires — without disturbing the pure user signal raceAbort watches.
+      const trap = tripwire ? new AbortController() : null;
+      const attemptSignal = trap
+        ? streamSignal
+          ? AbortSignal.any([streamSignal, trap.signal])
+          : trap.signal
+        : streamSignal;
+      const s = streamFn(state.model, ctx, { options, signal: attemptSignal });
+      yield messageStart(null);
+      let partialText = "";
+      let hit: TtsrHit | null = null;
+      const source = watchdog ? withIdleTimeout(s, idleMs, () => watchdog.abort()) : s;
+      try {
+        // Race each stream step against the abort signal so Esc stops the run
+        // instantly — without this, `for await` only checks between chunks and a
+        // mid-token or slow-first-token stream keeps going after abort.
+        for await (const streamEvent of raceAbort(source, config.signal ?? undefined)) {
+          if ((streamEvent as { type?: string }).type === "text_delta") {
+            partialText += (streamEvent as { delta?: string }).delta ?? "";
+            if (tripwire) hit = tripwire.test(partialText);
+          }
+          yield messageUpdate(streamEvent as never);
+          if (hit) {
+            trap?.abort();
+            break;
+          }
         }
-        yield messageUpdate(streamEvent as never);
+      } catch (err) {
+        if (config.signal?.aborted) aborted = true;
+        else throw err;
       }
-    } catch (err) {
-      if (config.signal?.aborted) aborted = true;
-      else throw err;
-    }
-    if (aborted) {
-      // Commit a well-formed assistant turn so history stays user→assistant→user.
-      // Without this the aborted turn leaves a dangling user message; the NEXT
-      // prompt then appends a second user message, the provider merges the two,
-      // and the model answers both. Text-only (never partial tool calls, which
-      // would dangle without a tool_result and 400 the provider).
-      const marker = partialText ? `${partialText}\n\n[aborted by user]` : "[aborted by user]";
-      const stub = new AssistantMessage({
-        content: [text(marker)],
-        model: state.model.id,
-        stop_reason: "aborted",
-      });
-      state.messages.push(stub);
-      state.streamingMessage = null;
-      state.errorMessage = "aborted";
-      yield messageEnd(stub);
+      if (aborted) {
+        // Commit a well-formed assistant turn so history stays user→assistant→user.
+        // Without this the aborted turn leaves a dangling user message; the NEXT
+        // prompt then appends a second user message, the provider merges the two,
+        // and the model answers both. Text-only (never partial tool calls, which
+        // would dangle without a tool_result and 400 the provider).
+        const marker = partialText ? `${partialText}\n\n[aborted by user]` : "[aborted by user]";
+        const stub = new AssistantMessage({
+          content: [text(marker)],
+          model: state.model.id,
+          stop_reason: "aborted",
+        });
+        state.messages.push(stub);
+        state.streamingMessage = null;
+        state.errorMessage = "aborted";
+        yield messageEnd(stub);
+        break;
+      }
+      if (hit && tripwire) {
+        // Tripwire fired: discard the un-committed partial (never pushed, result() never
+        // drained → nothing to roll back), inject the rule's reminder as a harness user
+        // message, and retry the turn with it in context. The abort happens strictly BEFORE
+        // any tool dispatch, so the discarded rung is non-effectful and legal to replay.
+        yield messageEnd(null);
+        tripwire.onFired(hit);
+        state.ttsrRetries += 1;
+        const reminder = tripwire.reminder(hit);
+        state.messages.push(reminder);
+        yield messageStart(reminder);
+        yield messageEnd(reminder);
+        ctx.messages = await prepareMessages(state, config);
+        continue;
+      }
+      assistant = await s.result();
       break;
     }
-    const assistant = await s.result();
+    if (aborted) break;
+    if (!assistant) break;
     state.streamingMessage = assistant;
     state.messages.push(assistant);
     yield messageEnd(assistant);
@@ -157,6 +195,8 @@ export async function* agentLoop(
         yield messageEnd(tr);
       }
     }
+
+    applyPendingContextRewind(state);
 
     yield turnEnd(
       assistant,
@@ -450,14 +490,19 @@ async function runOneTool(
     updates.push(toolExecutionUpdate(p.tc.id, partial));
   };
 
+  const scope = new AbortController();
+  state.toolAbortScopes.set(p.tc.id, scope);
   let result: ToolResult;
   let isError: boolean;
   try {
-    result = await p.tool.execute(p.tc.id, p.params, config.signal, onUpdate);
+    const signal = config.signal ? AbortSignal.any([config.signal, scope.signal]) : scope.signal;
+    result = await p.tool.execute(p.tc.id, p.params, signal, onUpdate);
     isError = false;
   } catch (exc) {
     result = errorResult(String(exc));
     isError = true;
+  } finally {
+    state.toolAbortScopes.delete(p.tc.id);
   }
 
   if (config.afterToolCall) {

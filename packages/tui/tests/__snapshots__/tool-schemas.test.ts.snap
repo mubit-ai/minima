@@ -710,3 +710,300 @@ exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all 
   },
 }
 `;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: checkpoint 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+  "description": "Set a context checkpoint before an exploration burst (broad searching, reading, trial-and-error). Later, call the rewind tool with a report of what you learned: everything between this checkpoint and the rewind is pruned from your working context, keeping only the report. The full transcript stays in the session ledger. A rewind consumes its checkpoint; set a fresh one for each burst.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "STRING",
+      },
+    },
+    "required": [],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "label": {
+        "default": "",
+        "description": "Optional short note on why this checkpoint exists.",
+        "type": "string",
+      },
+    },
+    "required": [],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: rewind 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "object",
+  },
+  "description": "Prune your working context back to the most recent checkpoint, replacing the exploration in between with your report. The report is REQUIRED and is all you will remember of the pruned work afterwards. Pruned tool traffic is preserved in the session ledger, never deleted. A rewind consumes its checkpoint — set a new checkpoint before rewinding again — and the checkpoint must come from an earlier turn, not this one.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "report": {
+        "description": "A complete summary of what you learned since the checkpoint (file paths, findings, decisions). After the rewind this report is all you will remember of the pruned work, so include everything you still need.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "report",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions: task 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "object",
+  },
+  "description": "Delegate subtasks to child agents, each cost-routed to its own model. Independent subtasks run in parallel (bounded); depends_on chains run in order. Use for decomposable work (research a module, make an isolated change, verify a result). Each delegation MUST state objective, output_format, and boundaries — boundaries matter for parallel edits (workers must not touch each other's files). Prefer 1 subtask for a focused question; more only when genuinely independent. Every call spawns fresh agents and spends real money: if a child's result is insufficient, do NOT re-run the same delegations — finish the remaining work yourself with your own tools, or delegate ONE new, narrower subtask.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "delegations": {
+        "description": "JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "delegations",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions (bgjobs): bash 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "boolean",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+  "description": "Run a shell command and return combined stdout/stderr and exit code. Prefer read/grep/glob over cat/sed/find. Use for running tests, builds, and git. Avoid destructive commands (rm -rf, etc.) without explicit user intent. Set background:true to start a long-running command detached and get a job handle back immediately (poll/kill it with the bgjob tool).",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "BOOLEAN",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "STRING",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "INTEGER",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "STRING",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "background": {
+        "default": false,
+        "description": "Run detached and return a job handle immediately instead of waiting for exit; manage it with the bgjob tool (status/wait/output/kill). timeout is ignored when true.",
+        "type": "boolean",
+      },
+      "command": {
+        "description": "The shell command to run.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 120000,
+        "description": "Max runtime in milliseconds.",
+        "type": "integer",
+      },
+      "workdir": {
+        "description": "Working directory.",
+        "type": "string",
+      },
+    },
+    "required": [
+      "command",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`tool schema surface (model-agnostic gate) jsonSchema pinned across all provider conversions (bgjobs): bgjob 1`] = `
+{
+  "anthropic_input_schema": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "integer",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+  "description": "Manage background bash jobs (started with bash background:true). Actions: status, wait (block for exit), output (current bounded output), kill, list. Pass the job id returned by the bash launch for every action except list.",
+  "google_function_declaration_parameters": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "STRING",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "STRING",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "INTEGER",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "OBJECT",
+  },
+  "openai_function_parameters": {
+    "properties": {
+      "action": {
+        "description": "status: current state/exit. wait: block up to timeout ms for exit. output: current bounded stdout/stderr snapshot. kill: signal the job's process group. list: all jobs this session.",
+        "enum": [
+          "status",
+          "wait",
+          "output",
+          "kill",
+          "list",
+        ],
+        "type": "string",
+      },
+      "id": {
+        "description": "Job id (bg_…). Required for status/wait/output/kill; omit for list.",
+        "type": "string",
+      },
+      "timeout": {
+        "default": 30000,
+        "description": "wait only: max ms to block (default 30000, clamped 50–300000).",
+        "type": "integer",
+      },
+    },
+    "required": [
+      "action",
+    ],
+    "type": "object",
+  },
+}
+`;

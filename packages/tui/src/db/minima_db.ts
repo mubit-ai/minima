@@ -457,6 +457,68 @@ const MIGRATIONS: string[][] = [
     "ALTER TABLE routing_decisions ADD COLUMN classify_disagreement INTEGER",
     "ALTER TABLE routing_decisions ADD COLUMN cluster_key_version TEXT",
   ],
+  // artifacts index — model-visible spill tier (P1). Files live beside the DB under
+  // artifacts/<sha256>.txt; rows are provenance + future-GC bookkeeping. run_id is a soft
+  // join key to runs(run_id) — deliberately no FK so this batch stays self-contained.
+  [
+    `CREATE TABLE IF NOT EXISTS artifacts (
+       sha        TEXT PRIMARY KEY,
+       path       TEXT NOT NULL,
+       run_id     TEXT,
+       tool_name  TEXT,
+       bytes      INTEGER NOT NULL,
+       line_count INTEGER NOT NULL,
+       created    REAL NOT NULL,
+       last_used  REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_artifacts_run ON artifacts(run_id, created)",
+  ],
+  // seen-lines ledger (P3 edit guard) — per-run read/grep/write/edit evidence: which lines
+  // of which file, at which content hash, this session has actually seen. State here;
+  // the context only carries the [snap:…] projection. run_id soft-joins runs(run_id)
+  // (no FK — batch stays self-contained); agent_id reserved for sub-agent scoping (NULL in v1).
+  [
+    `CREATE TABLE IF NOT EXISTS seen_lines (
+       id         INTEGER PRIMARY KEY AUTOINCREMENT,
+       run_id     TEXT NOT NULL,
+       agent_id   TEXT,
+       path       TEXT NOT NULL,
+       start_line INTEGER NOT NULL,
+       end_line   INTEGER NOT NULL,
+       file_hash  TEXT NOT NULL,
+       tool       TEXT NOT NULL,
+       created    REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_seen_lines_key ON seen_lines(run_id, path, created)",
+  ],
+  // background bash jobs registry (W4.1) — the durable record for a job launched with
+  // bash background:true: identity (pid/pgid + the harness pid that started it), the
+  // command, and a terminal state that survives restart so a startup reaper can
+  // identity-verify and clean up crash leftovers. Live Subprocess handles + output live
+  // in the in-memory BgJobRegistry; only this row is durable. run_id soft-joins
+  // runs(run_id) (no FK — batch stays self-contained, artifacts/seen_lines precedent).
+  [
+    `CREATE TABLE IF NOT EXISTS bg_jobs (
+       id           TEXT PRIMARY KEY,
+       run_id       TEXT NOT NULL,
+       agent_id     TEXT,
+       pid          INTEGER,
+       pgid         INTEGER,
+       harness_pid  INTEGER,
+       command      TEXT NOT NULL,
+       cwd          TEXT,
+       state        TEXT NOT NULL,
+       exit_code    INTEGER,
+       output_chars INTEGER,
+       truncated    INTEGER,
+       spill_ref    TEXT,
+       started      REAL NOT NULL,
+       ended        REAL,
+       updated      REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_bg_jobs_run ON bg_jobs(run_id, started)",
+    "CREATE INDEX IF NOT EXISTS ix_bg_jobs_state ON bg_jobs(state)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -497,6 +559,18 @@ export interface EventRow {
   type: string;
   ts: number;
   payload: string;
+}
+
+export interface SeenLineRow {
+  id: number;
+  run_id: string;
+  agent_id: string | null;
+  path: string;
+  start_line: number;
+  end_line: number;
+  file_hash: string;
+  tool: string;
+  created: number;
 }
 
 export interface DecisionWrite {
@@ -1192,9 +1266,68 @@ export class MinimaDb {
     }
   }
 
+  /** Upsert the artifact index row (P1) — content-addressed on sha; a re-spill of the
+   * same content bumps last_used and keeps the original created/provenance. */
+  recordArtifact(r: {
+    sha: string;
+    path: string;
+    runId: string | null;
+    toolName: string;
+    bytes: number;
+    lineCount: number;
+  }): void {
+    const now = Date.now() / 1000;
+    this.db.run(
+      `INSERT INTO artifacts (sha, path, run_id, tool_name, bytes, line_count, created, last_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(sha) DO UPDATE SET last_used = excluded.last_used`,
+      [r.sha, r.path, r.runId, r.toolName, r.bytes, r.lineCount, now, now],
+    );
+  }
+
   /** Run a batch of writes in one transaction (per-turn atomicity for the sink). */
   transact(fn: () => void): void {
     this.db.transaction(fn)();
+  }
+
+  // ---------------------------------------------------------------- seen-lines ledger (P3)
+  // agent_id scopes evidence per agent (lead = NULL, sub-agent = child id). `IS ?` binds
+  // NULL or a string, so a NULL-scoped read never sees a child's rows and vice versa.
+  listSeenLines(runId: string, path: string, agentId: string | null = null): SeenLineRow[] {
+    return this.db
+      .query(
+        "SELECT * FROM seen_lines WHERE run_id = ? AND path = ? AND agent_id IS ? ORDER BY start_line, end_line",
+      )
+      .all(runId, path, agentId) as SeenLineRow[];
+  }
+
+  /** Replace the whole evidence set for (run, agent, path) — the SeenLedger passes the
+   * coalesced union of surviving + new ranges, so this delete IS the supersede-on-new-hash. */
+  replaceSeenLines(
+    runId: string,
+    path: string,
+    fileHash: string,
+    rows: { start: number; end: number; tool: string }[],
+    agentId: string | null = null,
+  ): void {
+    this.db.transaction(() => {
+      this.deleteSeenLines(runId, path, agentId);
+      for (const r of rows) {
+        this.db.run(
+          `INSERT INTO seen_lines (run_id, agent_id, path, start_line, end_line, file_hash, tool, created)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [runId, agentId, path, r.start, r.end, fileHash, r.tool, Date.now() / 1000],
+        );
+      }
+    })();
+  }
+
+  private deleteSeenLines(runId: string, path: string, agentId: string | null = null): void {
+    this.db.run("DELETE FROM seen_lines WHERE run_id = ? AND path = ? AND agent_id IS ?", [
+      runId,
+      path,
+      agentId,
+    ]);
   }
 
   // ---------------------------------------------------------------- routing decisions

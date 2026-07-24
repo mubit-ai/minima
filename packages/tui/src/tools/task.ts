@@ -4,10 +4,15 @@
  * The model calls `task` with a JSON array of Delegations (the hard subtask contract:
  * objective/output_format/boundaries REQUIRED — Anthropic's delegation-prompt discipline
  * as a schema, not a convention). The tool validates the graph (missing fields, duplicate
- * step_ids, dangling depends_on, cycles), then executes nodes SEQUENTIALLY in dependency
- * order via the injected SpawnFn — each child is its own agent with its own routed model,
- * tool scope, workdir, and budget slice. Parallel frontiers land later (M-G); the
- * loop/agent are untouched — this is just a tool.
+ * step_ids, dangling depends_on, cycles), then executes the DAG via the injected SpawnFn:
+ * independent frontier nodes run CONCURRENTLY under the fan-out semaphore, dependents
+ * wait for their prerequisites — each child is its own agent with its own routed model,
+ * tool scope, workdir, and budget slice. The loop/agent are untouched — this is just a
+ * tool.
+ *
+ * A delegation may also carry an optional `output_schema` (a JSON-Schema subset): when typed
+ * outputs are on, the dispatcher (createSpawn) validates the child's final reply against it,
+ * re-asks once on failure, and the validated object rides ChildResult.data to dependents.
  *
  * Registered conditionally: only when spawnDepth < maxDepth, so a child at the depth
  * limit sees an explicit "depth exhausted" rather than a silently missing tool.
@@ -15,6 +20,7 @@
 
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
+import { schemaShapeErrors } from "./output_schema.ts";
 import { objectSchema } from "./schema.ts";
 
 export interface Delegation {
@@ -36,6 +42,11 @@ export interface Delegation {
    *  Validated + applied in createSpawn (registry-filtered; empty-after-filter falls back
    *  to the parent pool) — pre-request candidate assembly, never a post-hoc re-rank. */
   candidates?: string[];
+  /** Optional JSON-Schema SUBSET (type/properties/required/items/enum) the child's final
+   *  reply MUST validate against. Enforced dispatcher-side in createSpawn (extract → validate
+   *  → one re-ask → typed failure) when config.typedTask is on. Shape-checked at authoring
+   *  time (see validateDelegations); unsupported keywords are rejected. */
+  output_schema?: Record<string, unknown>;
 }
 
 export interface ChildResult {
@@ -46,6 +57,10 @@ export interface ChildResult {
   quality: number | null;
   outcome: "success" | "partial" | "failure" | "aborted";
   workdir: string | null;
+  /** The validated object, present ONLY when an output_schema was enforced and the child's
+   *  reply satisfied it. `null`/`false` are legitimate validated values, so presence is
+   *  keyed on the field existing, not on truthiness. */
+  data?: unknown;
 }
 
 export interface SpawnContext {
@@ -58,10 +73,15 @@ export interface SpawnContext {
 
 export type SpawnFn = (d: Delegation, ctx: SpawnContext) => Promise<ChildResult>;
 
-/** Validate a parsed delegation array: required fields, unique ids, resolvable DAG. */
+/** Validate a parsed delegation array: required fields, unique ids, resolvable DAG. When
+ *  `opts.typed` (default true), a present `output_schema` is shape-checked against the
+ *  supported subset and the WHOLE batch is rejected on any violation — the LEAD authored the
+ *  schema, so re-asking the child can never fix a malformed one. Typed-off: field untouched. */
 export function validateDelegations(
   parsed: unknown,
+  opts: { typed?: boolean } = {},
 ): { ok: true; value: Delegation[] } | { ok: false; error: string } {
+  const typed = opts.typed ?? true;
   if (!Array.isArray(parsed) || parsed.length === 0) {
     return { ok: false, error: "delegations must be a non-empty JSON array" };
   }
@@ -78,6 +98,22 @@ export function validateDelegations(
     }
     if (ids.has(d.step_id)) return { ok: false, error: `duplicate step_id "${d.step_id}"` };
     ids.add(d.step_id);
+    if (typed && d.output_schema !== undefined) {
+      if (
+        !d.output_schema ||
+        typeof d.output_schema !== "object" ||
+        Array.isArray(d.output_schema)
+      ) {
+        return { ok: false, error: `step "${d.step_id}" output_schema must be a JSON object` };
+      }
+      const shapeErrors = schemaShapeErrors(d.output_schema);
+      if (shapeErrors.length) {
+        return {
+          ok: false,
+          error: `step "${d.step_id}" output_schema is invalid: ${shapeErrors.join("; ")}`,
+        };
+      }
+    }
   }
   for (const d of ds) {
     for (const dep of d.depends_on ?? []) {
@@ -126,10 +162,16 @@ const parameters = objectSchema(
         '"output_format": "what to return", "boundaries": "what NOT to touch", ' +
         '"depends_on": ["other-step-ids"], "effort": "light|standard|deep", ' +
         '"difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, ' +
-        '"candidates": ["exact-model-id"]}. ' +
+        '"candidates": ["exact-model-id"], ' +
+        '"output_schema": {"type": "object", "properties": {...}, "required": [...]}}. ' +
         "objective/output_format/boundaries are REQUIRED per subtask. candidates is an " +
         "OPTIONAL model pool for this subtask's routing — use only when the plan or " +
-        "observed data justifies it.",
+        "observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET " +
+        "(supported: type, properties, required, items, enum) the child's final reply MUST " +
+        "validate against: the harness extracts JSON from the reply, validates it, re-asks " +
+        "ONCE quoting the errors on failure, then reports a typed failure and the validated " +
+        "object reaches dependent steps as data. Use it when a dependent needs a " +
+        "machine-readable object rather than prose.",
     },
   },
   ["delegations"],
@@ -143,6 +185,10 @@ export interface TaskToolOptions {
   maxDepth?: number;
   /** Max children running at once (fan-out semaphore; default 4). */
   concurrency?: number;
+  /** Typed outputs (W4.3, MINIMA_TUI_TYPED_TASK): when on (default), a delegation's
+   *  output_schema is shape-checked at authoring time here and enforced dispatcher-side in
+   *  createSpawn. Off → output_schema is authoring-inspected leniently and never enforced. */
+  typedTask?: boolean;
 }
 
 /**
@@ -263,7 +309,7 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
       } catch (exc) {
         return errorResult(`task: delegations is not valid JSON: ${String(exc)}`);
       }
-      const v = validateDelegations(parsed);
+      const v = validateDelegations(parsed, { typed: opts.typedTask });
       if (!v.ok) return errorResult(`task: ${v.error}`);
 
       const results = await executeDag(v.value, opts.spawn, {

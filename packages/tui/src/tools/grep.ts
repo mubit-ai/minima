@@ -1,10 +1,12 @@
+import { resolve } from "node:path";
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
 import { boundDetails, boundText } from "./_bounds.ts";
 import { resolveWithin, truncateLine } from "./_io.ts";
 import { resolveRg } from "./_rg.ts";
+import { type SeenLedger, type SeenRange, coalesce, hashFile, sha256Hex } from "./_seen.ts";
 import { objectSchema } from "./schema.ts";
-import type { FsToolOptions } from "./types.ts";
+import type { FsToolOptions, ToolArtifacts } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -25,6 +27,7 @@ const parameters = objectSchema(
 
 const MAX_MATCHES = 200;
 const MAX_CHARS = 50_000;
+const SNAP_MAX_FILES = 50;
 
 export interface GrepArgsInput {
   pattern: string;
@@ -51,9 +54,42 @@ export function buildGrepArgs(p: GrepArgsInput): string[] {
   return args;
 }
 
+/** Hash + record every file behind the SHOWN matches; the aggregate snap tag is the only
+ * projection (per-file hashes live in the ledger). Unparseable lines, over-cap or
+ * unhashable files are silently skipped; any ledger error suppresses the tag entirely. */
+async function snapShownMatches(seen: SeenLedger, shown: string): Promise<string | null> {
+  const perFile = new Map<string, SeenRange[]>();
+  for (const line of shown.split("\n")) {
+    const m = /^(.+?):(\d+):/.exec(line);
+    if (!m) continue;
+    const file = resolve(m[1]!);
+    const ln = Number(m[2]);
+    if (!Number.isInteger(ln) || ln < 1) continue;
+    let ranges = perFile.get(file);
+    if (!ranges) {
+      if (perFile.size >= SNAP_MAX_FILES) continue;
+      ranges = [];
+      perFile.set(file, ranges);
+    }
+    ranges.push({ start: ln, end: ln });
+  }
+  const hashed: string[] = [];
+  for (const [file, ranges] of perFile) {
+    const hash = await hashFile(file);
+    if (!hash) continue;
+    if (!seen.record(file, hash, coalesce(ranges), "grep")) return null;
+    hashed.push(`${file}:${hash}\n`);
+  }
+  if (hashed.length === 0) return null;
+  const agg = sha256Hex(hashed.sort().join(""));
+  return `[snap:${agg.slice(0, 8)} ${hashed.length} files]`;
+}
+
 async function executeWithin(
   workdir: string | undefined,
   rgCmd: string | null | undefined,
+  artifacts: ToolArtifacts | undefined,
+  seen: SeenLedger | undefined,
   params: Record<string, unknown>,
 ): Promise<ToolResult> {
   const r = resolveWithin(String(params.path ?? "."), workdir);
@@ -94,10 +130,15 @@ async function executeWithin(
     maxLines: MAX_MATCHES,
     maxChars: MAX_CHARS,
     unit: "matches",
+    spill: artifacts?.sink("grep") ?? null,
   });
   let body = b.body;
   if (b.notice) body += `\n${b.notice}`;
   if (exitCode === 2) body += "\n[note: some paths could not be searched]";
+  if (seen?.enabled) {
+    const tag = await snapShownMatches(seen, b.body);
+    if (tag) body += `\n${tag}`;
+  }
   return {
     content: [text(body)],
     details: { count: b.totalLines, ...boundDetails(b) },
@@ -112,6 +153,7 @@ export function grepTool(opts: FsToolOptions & { rgCmd?: string | null } = {}): 
       ".gitignore respected when ripgrep is available. Use 'glob' to filter file types. " +
       "Max 200 matches shown.",
     parameters,
-    execute: (_id, params) => executeWithin(opts.workdir, opts.rgCmd, params),
+    execute: (_id, params) =>
+      executeWithin(opts.workdir, opts.rgCmd, opts.artifacts, opts.seen, params),
   };
 }
