@@ -264,3 +264,18 @@ describe("typed sub-agent output flag (W4.3)", () => {
     });
   });
 });
+
+describe("stream tripwire flag (W4.2 / TTSR)", () => {
+  test("MINIMA_TUI_TTSR is OFF by default (opt-in); =1 opts in; =0 stays off", () => {
+    expect(harnessConfig().ttsr).toBe(false);
+    withEnv({ MINIMA_TUI_TTSR: undefined, MINIMA_TUI_EXPERIMENTAL: undefined }, () => {
+      expect(configFromEnv().ttsr).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_TTSR: "1" }, () => {
+      expect(configFromEnv().ttsr).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_TTSR: "0", MINIMA_TUI_EXPERIMENTAL: "1" }, () => {
+      expect(configFromEnv().ttsr).toBe(false);
+    });
+  });
+});

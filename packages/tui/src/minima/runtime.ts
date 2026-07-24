@@ -67,6 +67,7 @@ import { MinimaRouter, type RoutingResult } from "./router.ts";
 import { minDefinedCap, perTaskTypeEntry, resolveProfilePool } from "./routing_profile.ts";
 import type { StepOutcome } from "./schemas.ts";
 import { makeStopGate } from "./stop_gate.ts";
+import { DEFAULT_TTSR_RULES, compileTtsr } from "./ttsr.ts";
 
 /** Inspect/override a recommendation before the model runs. Return a result to override;
  * null to accept as-is; a result with recommendationId=null to veto (no feedback attribution). */
@@ -271,6 +272,9 @@ export class MinimaAgent extends Agent {
       ...agentOpts,
       model: initial,
       streamIdleTimeoutMs: agentOpts.streamIdleTimeoutMs ?? config.streamIdleTimeoutMs,
+      ttsr:
+        agentOpts.ttsr ??
+        (config.ttsr ? compileTtsr(DEFAULT_TTSR_RULES, config.ttsrCap || undefined) : null),
     });
     this.config = config;
     this.mapping = map;

@@ -30,6 +30,8 @@ export class AgentState {
   readonly toolAbortScopes = new Map<string, AbortController>();
   errorMessage: string | null = null;
   turnsTaken = 0;
+  /** TTSR telemetry: how many turns were aborted-and-retried by a stream tripwire this run. */
+  ttsrRetries = 0;
   // Queues the Agent pushes into mid-run; drained between turns by the loop.
   steering: Message[] = [];
   followUp: Message[] = [];
@@ -65,6 +67,32 @@ export class AgentState {
 }
 
 export type QueueMode = "one-at-a-time" | "all";
+
+// ---------------------------------------------------------------------------
+// TTSR — stream tripwire interfaces (W4.2). Declared HERE so loop.ts depends only
+// on its own layer; the concrete implementation lives in minima/ttsr.ts.
+// ---------------------------------------------------------------------------
+
+/** A match of a dormant harness tripwire rule against the live token stream. */
+export interface TtsrHit {
+  ruleId: string;
+  reminder: string;
+}
+/** Per-turn matcher: tests the growing partial (bounded window), tracks per-rule fire counts,
+ * and builds the harness-authored reminder for a hit. */
+export interface TtsrTurnMatcher {
+  /** First firing hit for the current partial text, or null. Cap-exhausted rules are skipped. */
+  test(partialText: string): TtsrHit | null;
+  /** Record that `hit` fired (per-rule cap bookkeeping). */
+  onFired(hit: TtsrHit): void;
+  /** The harness user-role reminder Message to inject before the retry. */
+  reminder(hit: TtsrHit): Message;
+}
+/** Installed controller: arm() yields a fresh per-turn matcher. Null on AgentLoopConfig.ttsr
+ * means TTSR is not installed (flag off / no rules) — the loop does zero regex work. */
+export interface TtsrController {
+  arm(): TtsrTurnMatcher;
+}
 
 /** (messages) -> messages to send to the LLM (filter custom types, prune, etc.) */
 export type ConvertToLlm = (messages: Message[]) => Message[];
@@ -110,6 +138,9 @@ export interface AgentLoopConfig {
   /** Abort the turn when the model stream emits nothing for this many ms
    * (StreamIdleTimeoutError). 0/null/undefined disables the watchdog. */
   streamIdleTimeoutMs?: number | null;
+  /** Stream tripwire controller (W4.2). null/undefined → not installed: the loop does zero
+   * regex work and the retry loop runs exactly once (flag-off byte-identity). */
+  ttsr?: TtsrController | null;
 }
 
 /** Drop anything the LLM can't ingest (keeps user/assistant/toolResult). */

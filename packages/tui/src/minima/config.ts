@@ -213,6 +213,16 @@ export interface HarnessConfig {
    * ignored call-outs — at most one yellow milestone gate. Never blocks a tool, never
    * feeds a feedback label. */
   observer: boolean;
+  /** Stream tripwire rules (W4.2 / MUB-204; MINIMA_TUI_TTSR, default OFF/opt-in,
+   * umbrella-covered): dormant harness regex rules matched against the LIVE assistant token
+   * stream; on a match the turn aborts mid-generation, discards the partial, injects the
+   * rule's reminder as a harness user message, and retries. Ships opt-in — a mis-firing rule
+   * aborts real turns and burns a retry's tokens — promote to default-ON after field-validating
+   * the rule table. */
+  ttsr: boolean;
+  /** Global per-rule retry-cap override for TTSR (MINIMA_TUI_TTSR_CAP). 0 = unset (each rule's
+   * own retryCap, default 1). Only consulted when `ttsr` is on. */
+  ttsrCap: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -260,6 +270,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     interview: false,
     tuner: false,
     observer: false,
+    ttsr: false,
+    ttsrCap: 0,
     ...overrides,
   };
 }
@@ -306,6 +318,12 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);
+  cfg.ttsr = optInFlag(process.env.MINIMA_TUI_TTSR, cfg.experimental);
+  const ttsrCapEnv = process.env.MINIMA_TUI_TTSR_CAP;
+  if (ttsrCapEnv !== undefined) {
+    const n = Number(ttsrCapEnv);
+    if (Number.isInteger(n) && n >= 0) cfg.ttsrCap = n;
+  }
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);
