@@ -131,9 +131,11 @@ Diagnostics are ephemeral — they live only in the turn's tool-result `content`
 3. **Real-server framing validation** (out-of-CI, manual): run against real `typescript-language-server --stdio`/`pyright-langserver`/`gopls` once, and CONFIRM the TS-lane binary name (the flagged `tsserver` vs `typescript-language-server` question, §6).
 4. **Flag promotion OFF→ON** — only after field-validating latency + lifecycle on real servers.
 5. **Advisory gate/signal graduation** — whether diagnostics become an explicit advisory YELLOW signal (observer `observer_flagged` / at-most-one-yellow pattern); touches feedback-truth, must never reach `evidence_source="gate"`/`verified_in_production`. Deferred by design.
+6. **Server-process teardown at session end, against a REAL server** (added 2026-07-25 after the owner's manual pass). `lspManager?.shutdown()` in `closeDb` is unit-proven against the stub (AC6), but the manual T11 run only exercised the absent-server no-op (no `typescript-language-server` installed locally) — a real server's process tree surviving harness exit has never been observed either way. bgjobs' kill-at-session-end IS manually verified; the LSP client spawns its own long-lived external process and that path is not.
 
 ## Flagged knowledge claims (validate at seam-freeze, non-blocking — stub makes them so)
 
 - **`tsserver` binary naming (§6):** raw `tsserver` speaks the TSServer protocol (newline-delimited), NOT LSP Content-Length; the LSP TS server is `typescript-language-server --stdio`. No in-repo evidence (greenfield) — production discovery must resolve `typescript-language-server` and confirm before default-ON.
 - **Push-vs-pull (§6):** the claim that tsserver/pyright/gopls push `publishDiagnostics` on didOpen/didChange without a pull is LSP knowledge, not repo evidence. The stub encodes push; real-server confirmation is a seam-freeze item.
+- **Real-server teardown (§11.6):** whether a real language server's process (and any children) actually dies at session end via `closeDb → shutdown()` — stub-proven only; the manual pass covered just the absent-server no-op.
 - Everything else (hook fold, result shapes, discovery/lifecycle, feedback-truth, flag plumbing) is verified against opened files in §0.
