@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MinimaClient } from "../src/client.ts";
+import { MinimaClient, retryDelayMs } from "../src/client.ts";
 import { MinimaError, MinimaRateLimited, MinimaUnavailable } from "../src/errors.ts";
 
 interface Recorded {
@@ -126,6 +126,16 @@ describe("feedback", () => {
     expect(resp.accepted).toBe(true);
   });
 
+  test("retries on 429 then succeeds", async () => {
+    const t = mockTransport([
+      { status: 429, body: { detail: "slow down" }, retryAfter: "0" },
+      { status: 200, body: FEEDBACK_OK },
+    ]);
+    const resp = await client(t).feedback("rec-1", "m", "success");
+    expect(resp.accepted).toBe(true);
+    expect(t.calls.length).toBe(2);
+  });
+
   test("does NOT retry client errors", async () => {
     const t = mockTransport([{ status: 422, body: { detail: "bad" } }]);
     await expect(client(t).feedback("rec-1", "m", "success")).rejects.toBeInstanceOf(MinimaError);
@@ -141,7 +151,41 @@ describe("feedback", () => {
   });
 });
 
+describe("retryDelayMs", () => {
+  test("honors a 429 retry-after over the backoff schedule", () => {
+    const exc = new MinimaRateLimited("slow", 429, {}, 2);
+    expect(retryDelayMs(exc, 5000)).toBe(2000); // 2s honored, NOT the 5s backoff
+  });
+
+  test("caps a pathological retry-after at 10s", () => {
+    const exc = new MinimaRateLimited("slow", 429, {}, 3600);
+    expect(retryDelayMs(exc, 500)).toBe(10_000); // never ~1h
+  });
+
+  test("falls back to backoff when a 429 carries no retry-after", () => {
+    const exc = new MinimaRateLimited("slow", 429, {}, null);
+    expect(retryDelayMs(exc, 500)).toBe(500);
+  });
+
+  test("non-429 retryable faults use the backoff schedule", () => {
+    const exc = new MinimaUnavailable("down", 503, {});
+    expect(retryDelayMs(exc, 500)).toBe(500);
+  });
+});
+
 describe("errors", () => {
+  test("non-JSON 503 body still throws MinimaUnavailable, not a parse error", async () => {
+    const fetchLike = async () => ({
+      status: 503,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON");
+      },
+      headers: { get: () => null },
+    });
+    const c = new MinimaClient({ baseUrl: "http://minima.test", fetch: fetchLike });
+    await expect(c.health()).rejects.toBeInstanceOf(MinimaUnavailable);
+  });
+
   test("429 carries retry-after", async () => {
     const t = mockTransport([{ status: 429, body: { detail: "slow down" }, retryAfter: "7" }]);
     try {
