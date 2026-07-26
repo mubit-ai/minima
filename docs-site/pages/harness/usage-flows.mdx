@@ -76,6 +76,8 @@ Two flows, one principle — a failure becomes evidence, not just a retry:
 
 And when the *code* went wrong rather than the routing: every prompt's first mutating tool call snapshots the worktree to a git-shadow checkpoint your real git never sees. `/undo` restores the last one (and stacks), `/rewind <n>` targets any earlier prompt (conversation, code, or both), `/ckpt` lists what's held. See [Sessions](/harness/sessions#rewind-and-checkpoints).
 
+Some failures never get that far, because the harness catches them inside the turn: a shell command repeated verbatim after failing gets steered instead of looped, and an `edit` aimed at content this session never actually read is answered with a re-read instead of a blind write. The model also has its own `checkpoint` / `rewind` pair for abandoning a dead-end line of work — that one trims *its* context only and never touches your files (distinct from the `/rewind` command above). All three are on by default; see [Harness features](/harness/configuration#harness-features).
+
 ## 4. Memory that compounds
 
 The memory ledger (on by default; `MINIMA_TUI_MEMORY=0` opts out) is curated, cross-session project knowledge — injected into every turn's system prompt, ranked **pinned → gate-cited → recent**, hard-capped so it never crowds out your task.
@@ -128,6 +130,10 @@ Opt-in features ship dark behind the experimental umbrella. Turn on everything w
 | `MINIMA_TUI_INTERVIEW` | After a `/plan` council round, up to 3 gated questions that persist verify commands + a budget/quality profile |
 | `MINIMA_TUI_TUNER` | After a plan closes fully, one bounded A/B probe nudges the repo's slider toward what you actually prefer |
 | `MINIMA_TUI_OBSERVER` | A non-blocking watcher over the event stream: advisory steers and audit verdicts — never blocks a tool, never feeds a label; at most, repeated ignored call-outs earn one yellow milestone gate |
+| `MINIMA_TUI_TTSR` | Stream tripwires: rules that catch a turn going wrong mid-stream and steer it, capped per rule (`MINIMA_TUI_TTSR_CAP` overrides the cap) |
+| `MINIMA_TUI_LSP` | Language-server diagnostics after an edit, surfaced back to the model — zero-dependency stdio client, per-file timeout via `MINIMA_TUI_LSP_TIMEOUT_MS` |
+
+Features that are **on** by default (and the variables that turn them off) are listed under [Harness features](/harness/configuration#harness-features).
 
 ## Where to go from here
 

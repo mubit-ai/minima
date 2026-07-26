@@ -5,6 +5,11 @@
  */
 
 import {
+  CONTEXT_REWIND_EVENT,
+  applyContextRewindMarker,
+  parseContextRewindMarker,
+} from "../agent/context_prune.ts";
+import {
   AssistantMessage,
   type ContentBlock,
   Message,
@@ -132,6 +137,14 @@ export function rehydrateRun(db: MinimaDb, runId: string): RehydratedRun {
       // (Meter rows and promptsRun stay full below: the spend happened — feedback truth.)
       const marker = parseRewindMarker(payload);
       if (marker) messages = truncateBeforePrompt(messages, marker.keep_prompts);
+      continue;
+    }
+    if (ev.type === CONTEXT_REWIND_EVENT) {
+      // P4: replay the projection prune (anchor missing -> no-op, conservative).
+      // Honored regardless of the contextRewind flag — the marker is data about
+      // what the model saw; ignoring it would resurrect pruned spam on resume.
+      const marker = parseContextRewindMarker(payload);
+      if (marker) messages = applyContextRewindMarker(messages, marker) ?? messages;
       continue;
     }
     const text = String(payload.text ?? "");

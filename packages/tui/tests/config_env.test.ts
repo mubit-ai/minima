@@ -204,3 +204,93 @@ describe("experimental umbrella (MINIMA_TUI_EXPERIMENTAL)", () => {
     expect(optInFlag(undefined, true)).toBe(true);
   });
 });
+
+describe("artifact spill store flag (P1)", () => {
+  test("MINIMA_TUI_ARTIFACTS defaults on; =0 opts out", () => {
+    expect(harnessConfig().artifacts).toBe(true);
+    withEnv({ MINIMA_TUI_ARTIFACTS: undefined }, () => {
+      expect(configFromEnv().artifacts).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_ARTIFACTS: "0" }, () => {
+      expect(configFromEnv().artifacts).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_ARTIFACTS: "1" }, () => {
+      expect(configFromEnv().artifacts).toBe(true);
+    });
+  });
+});
+
+describe("background jobs flag (W4.1)", () => {
+  test("MINIMA_TUI_BGJOBS is ON by default; =0 opts out", () => {
+    expect(harnessConfig().bgJobs).toBe(true);
+    withEnv({ MINIMA_TUI_BGJOBS: undefined }, () => {
+      expect(configFromEnv().bgJobs).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_BGJOBS: "0" }, () => {
+      expect(configFromEnv().bgJobs).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_BGJOBS: "1" }, () => {
+      expect(configFromEnv().bgJobs).toBe(true);
+    });
+  });
+});
+
+describe("compaction v2 flag (W4.5)", () => {
+  test("MINIMA_TUI_COMPACT2 defaults on; =0 opts out", () => {
+    expect(harnessConfig().compact2).toBe(true);
+    withEnv({ MINIMA_TUI_COMPACT2: undefined }, () => {
+      expect(configFromEnv().compact2).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_COMPACT2: "0" }, () => {
+      expect(configFromEnv().compact2).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_COMPACT2: "1" }, () => {
+      expect(configFromEnv().compact2).toBe(true);
+    });
+  });
+});
+
+describe("edit guard flag (P3)", () => {
+  test("MINIMA_TUI_EDIT_GUARD is ON by default; =0 opts out", () => {
+    expect(harnessConfig().editGuard).toBe(true);
+    withEnv({ MINIMA_TUI_EDIT_GUARD: undefined }, () => {
+      expect(configFromEnv().editGuard).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_EDIT_GUARD: "0" }, () => {
+      expect(configFromEnv().editGuard).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_EDIT_GUARD: "1" }, () => {
+      expect(configFromEnv().editGuard).toBe(true);
+    });
+  });
+});
+
+describe("typed sub-agent output flag (W4.3)", () => {
+  test("MINIMA_TUI_TYPED_TASK is ON by default; =0 opts out", () => {
+    expect(harnessConfig().typedTask).toBe(true);
+    withEnv({ MINIMA_TUI_TYPED_TASK: undefined }, () => {
+      expect(configFromEnv().typedTask).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_TYPED_TASK: "0" }, () => {
+      expect(configFromEnv().typedTask).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_TYPED_TASK: "1" }, () => {
+      expect(configFromEnv().typedTask).toBe(true);
+    });
+  });
+});
+
+describe("stream tripwire flag (W4.2 / TTSR)", () => {
+  test("MINIMA_TUI_TTSR is OFF by default (opt-in); =1 opts in; =0 stays off", () => {
+    expect(harnessConfig().ttsr).toBe(false);
+    withEnv({ MINIMA_TUI_TTSR: undefined, MINIMA_TUI_EXPERIMENTAL: undefined }, () => {
+      expect(configFromEnv().ttsr).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_TTSR: "1" }, () => {
+      expect(configFromEnv().ttsr).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_TTSR: "0", MINIMA_TUI_EXPERIMENTAL: "1" }, () => {
+      expect(configFromEnv().ttsr).toBe(false);
+    });
+  });
+});

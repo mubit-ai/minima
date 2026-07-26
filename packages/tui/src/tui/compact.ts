@@ -9,6 +9,8 @@
 import type { Message } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage, text } from "../ai/types.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
+import { isTtsrReminder } from "../minima/ttsr.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 
 const KEEP_RECENT = 6;
 
@@ -17,30 +19,73 @@ export interface CompactResult {
   summary: string;
 }
 
-export function compactMessages(_agent: MinimaAgent, messages: Message[]): Message[] {
+/** Serialize the pruned window to the parser-recoverable `compact/v1` framing: a header
+ * line, then per message a delimiter line carrying role/tool/error/byte-length followed by
+ * the verbatim textContent and a single newline. Recovery consumes exactly `bytes` per
+ * body (never delimiter-scanning), so header-lookalike text, missing trailing newlines, and
+ * multi-byte unicode all round-trip byte-exactly. */
+function serializeCompaction(messages: Message[]): string {
+  const lines: string[] = [`compact/v1 messages=${messages.length}`];
+  messages.forEach((m, i) => {
+    const tool = m.tool_name ? ` tool=${m.tool_name}` : "";
+    const error = m.is_error ? " error" : "";
+    const bytes = Buffer.byteLength(m.textContent, "utf8");
+    lines.push(`--- msg ${i} role=${m.role}${tool}${error} bytes=${bytes} ---`);
+    lines.push(m.textContent);
+  });
+  return `${lines.join("\n")}\n`;
+}
+
+/** Spill the serialized window through the attached artifact store as tool_name="compact",
+ * inheriting the current-run GC exemption (the claim happens before any post-spill prune).
+ * Fail-open: a null ref (store degraded) returns null so the caller emits the v1 summary —
+ * never a pointer to an unwritten file. */
+function spillCompaction(artifacts: ToolArtifacts, messages: Message[]): string | null {
+  return artifacts.sink("compact")(serializeCompaction(messages))?.ref ?? null;
+}
+
+export function compactMessages(agent: MinimaAgent, messages: Message[]): Message[] {
   if (messages.length <= KEEP_RECENT + 2) return messages;
 
   const oldMessages = messages.slice(0, messages.length - KEEP_RECENT);
   const recentMessages = messages.slice(-KEEP_RECENT);
 
-  const summaryParts: string[] = [];
-  for (const m of oldMessages) {
-    if (m.role === "user") {
-      summaryParts.push(`User: ${m.textContent.slice(0, 200)}`);
-    } else if (m.role === "assistant") {
-      summaryParts.push(`Assistant: ${m.textContent.slice(0, 200)}`);
-    } else if (m.role === "toolResult") {
-      summaryParts.push(`Tool(${m.tool_name}): ${m.textContent.slice(0, 100)}`);
-    }
-  }
+  // TTSR (W4.2): harness-injected tripwire reminders in the old window are preserved verbatim
+  // as active context rather than truncated into the summary — they are enforcement steers the
+  // model must keep seeing across compaction.
+  const preserved = oldMessages.filter((m) => isTtsrReminder(m.textContent));
+  const summarizable = oldMessages.filter((m) => !isTtsrReminder(m.textContent));
 
-  const summaryText = `[Compacted ${oldMessages.length} messages]\n${summaryParts.join("\n")}`;
+  // Compaction v2 (W4.5): with the artifact store live and the flag on, spill the summarized
+  // (lossy) window to a content-addressed artifact and name its path in the summary so any
+  // pruned message is recoverable verbatim via read. Preserved TTSR reminders are kept in
+  // context, so only `summarizable` needs artifact backing. A null store/flag-off/degraded
+  // spill keeps the ref null → the summary is byte-identical to v1.
+  const artifacts = agent.config?.compact2 !== false ? agent.artifacts : null;
+  const ref = artifacts ? spillCompaction(artifacts, summarizable) : null;
+
+  const summaryParts: string[] = [];
+  summarizable.forEach((m, i) => {
+    const tag = ref ? `${i}. ` : "";
+    if (m.role === "user") {
+      summaryParts.push(`${tag}User: ${m.textContent.slice(0, 200)}`);
+    } else if (m.role === "assistant") {
+      summaryParts.push(`${tag}Assistant: ${m.textContent.slice(0, 200)}`);
+    } else if (m.role === "toolResult") {
+      summaryParts.push(`${tag}Tool(${m.tool_name}): ${m.textContent.slice(0, 100)}`);
+    }
+  });
+
+  const header = ref
+    ? `[Compacted ${summarizable.length} messages — full transcript at ${ref}; read it with offset/limit to recover any message verbatim]`
+    : `[Compacted ${summarizable.length} messages]`;
+  const summaryText = `${header}\n${summaryParts.join("\n")}`;
   const summaryMsg = new AgentMessage({
     role: "user",
     content: summaryText,
   });
 
-  return [summaryMsg, ...recentMessages];
+  return [summaryMsg, ...preserved, ...recentMessages];
 }
 
 /** Estimated context tokens of a message list (chars/4 — the auto-threshold's own basis). */

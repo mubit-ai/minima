@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager, SessionStore, formatAge, newId } from "../src/session/index.ts";
@@ -107,6 +107,30 @@ describe("SessionManager", () => {
     expect(reloaded.entries.map((e) => (e.payload as { text?: string }).text)).not.toContain(
       "first",
     );
+  });
+
+  test("mostRecent breaks mtime ties toward the later write, regardless of filename order", async () => {
+    const base = freshDir();
+    const mgr = new SessionManager(base);
+    const cwd = "/tmp/project-x";
+    const sA = await mgr.new(cwd);
+    await sA.append("user", { text: "a" });
+    const pathA = (await mgr.listSessions(cwd))[0]!.path;
+    const sB = await mgr.new(cwd);
+    await sB.append("user", { text: "b" });
+    const pathB = (await mgr.listSessions(cwd)).map((s) => s.path).find((p) => p !== pathA)!;
+
+    const target = [pathA, pathB].sort()[1]!;
+    if (target === pathA) await sA.append("user", { text: "latest" });
+    else await sB.append("user", { text: "latest" });
+
+    const pinned = new Date();
+    utimesSync(pathA, pinned, pinned);
+    utimesSync(pathB, pinned, pinned);
+
+    const recent = await mgr.mostRecent(cwd);
+    expect(recent!.path).toBe(target);
+    expect((await mgr.listSessions(cwd))[0]!.path).toBe(target);
   });
 
   test("new creates a file under the cwd-slug dir; resumeMostRecent opts in to most-recent", async () => {

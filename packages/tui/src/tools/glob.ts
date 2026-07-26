@@ -4,7 +4,7 @@ import { boundDetails, boundText } from "./_bounds.ts";
 import { resolveWithin } from "./_io.ts";
 import { resolveRg } from "./_rg.ts";
 import { objectSchema } from "./schema.ts";
-import type { FsToolOptions } from "./types.ts";
+import type { FsToolOptions, ToolArtifacts } from "./types.ts";
 
 const parameters = objectSchema(
   {
@@ -64,6 +64,7 @@ async function listWithScan(
 async function executeWithin(
   workdir: string | undefined,
   rgCmd: string | null | undefined,
+  artifacts: ToolArtifacts | undefined,
   params: Record<string, unknown>,
 ): Promise<ToolResult> {
   // Both engines get the same normalized pattern — rg emits bare relative paths, and the
@@ -103,6 +104,7 @@ async function executeWithin(
     maxLines: MAX_SHOWN,
     unit: "matches",
     totalIsLowerBound,
+    spill: artifacts?.sink("glob") ?? null,
   });
   let body = b.body;
   if (b.notice) body += `\n${b.notice}`;
@@ -124,6 +126,6 @@ export function globTool(opts: FsToolOptions & { rgCmd?: string | null } = {}): 
       "excluded when ripgrep is available, unless include_ignored=true. " +
       "Max 200 results shown. Use grep for content search.",
     parameters,
-    execute: (_id, params) => executeWithin(opts.workdir, opts.rgCmd, params),
+    execute: (_id, params) => executeWithin(opts.workdir, opts.rgCmd, opts.artifacts, params),
   };
 }

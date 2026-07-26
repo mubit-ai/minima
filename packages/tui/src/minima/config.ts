@@ -128,6 +128,59 @@ export interface HarnessConfig {
    * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
    * writes memories unless the user (or a later curator) does. */
   memoryLedger: boolean;
+  /** Artifact spill store (P1, default ON): truncated tool output is content-addressed
+   * to artifacts/<sha256>.txt beside the DB and the truncation notice names the absolute
+   * path so the model can page it back via read. Opt out with MINIMA_TUI_ARTIFACTS=0 —
+   * mirrors the memoryLedger flag shape. */
+  artifacts: boolean;
+  /** Artifact GC byte budget in MB (W3.3, default ON at 512): at store attach and after
+   * each spill, LRU-by-last_used prune of artifacts/ down to this budget — rows owned by
+   * the CURRENT run are never pruned, and index rows are deleted with their files.
+   * MINIMA_TUI_ARTIFACT_GC_MB overrides; 0 disables GC (unbounded dir); unset or
+   * unparseable → 512. */
+  artifactGcMb: number;
+  /** Background bash jobs (W4.1, default ON): bash gains an additive `background: true`
+   * that spawns the command detached and returns a job handle in <1s; a `bgjob` tool
+   * (status/wait/output/kill/list) manages it, output streams to a bounded buffer plus
+   * the P1 artifact tee, and live jobs are killed at session end. Opt out with
+   * MINIMA_TUI_BGJOBS=0 — mirrors the artifacts flag shape. Flag-off byte-identity: no
+   * registry is wired, so bash carries no `background` prop and no `bgjob` tool exists. */
+  bgJobs: boolean;
+  /** Compaction v2 (W4.5, default ON): when the artifact spill store is live, compaction
+   * serializes the pruned message window to one content-addressed artifact and names its
+   * absolute path in the summary so the model recovers any pruned message verbatim via
+   * read. Opt out with MINIMA_TUI_COMPACT2=0 — mirrors the artifacts flag shape. Inert
+   * whenever the store is absent (MINIMA_TUI_ARTIFACTS=0 or a :memory: DB): the summary
+   * stays byte-identical to v1. */
+  compact2: boolean;
+  /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
+   * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
+   * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
+   * tool calls. Opt out with MINIMA_TUI_STEER=0 — mirrors the bigPlan flag shape. */
+  steer: boolean;
+  /** Checkpoint/rewind context pruning (P4, default ON): the model-callable
+   * checkpoint/rewind tool pair that prunes exploration from the projection while the
+   * DB transcript keeps every row. Opt out with MINIMA_TUI_REWIND=0 — mirrors the
+   * memoryLedger flag shape. Gates tool REGISTRATION only: rehydrate honors persisted
+   * context_rewind markers regardless of this flag. */
+  contextRewind: boolean;
+  /** Edit guard (P3, default ON): read/grep stamp [snap:…] tags and record seen-lines
+   * evidence (SQLite `seen_lines`); edit rejects stale or unseen targets with a
+   * deterministic re-read recovery message. Opt out with MINIMA_TUI_EDIT_GUARD=0 —
+   * mirrors the bigPlan flag shape. Fail-open: without an attached DB the ledger stays
+   * inert and tools behave exactly as flag-off. */
+  editGuard: boolean;
+  /** Typed sub-agent outputs (W4.3, default ON): a `task` delegation's optional
+   *  `output_schema` (JSON-Schema subset) is enforced dispatcher-side in createSpawn —
+   *  the child's final reply is extracted, validated, re-asked ONCE on failure, then a
+   *  typed failure is reported and the validated object rides ChildResult.data to
+   *  dependents. Opt out with MINIMA_TUI_TYPED_TASK=0 — mirrors the editGuard flag shape.
+   *  Flag-off: output_schema is ignored end-to-end (no shape-check, no enforcement). */
+  typedTask: boolean;
+  /** SSRF guard opt-out (W3.1): allow the raw web-fetch path to target loopback/private/
+   * link-local addresses (MINIMA_TUI_FETCH_LOCAL=1). Default DENY. Consent gate — never
+   * covered by the experimental umbrella; non-http(s) schemes stay blocked regardless. */
+  fetchLocal: boolean;
   /** Experimental umbrella (MINIMA_TUI_EXPERIMENTAL=1, default off): turns on every
    * default-off opt-in FEATURE flag at once via `optInFlag`. Explicit per-flag values
    * always win; consent gates and diagnostic switches are never covered. */
@@ -167,6 +220,28 @@ export interface HarnessConfig {
    * ignored call-outs — at most one yellow milestone gate. Never blocks a tool, never
    * feeds a feedback label. */
   observer: boolean;
+  /** Stream tripwire rules (W4.2 / MUB-204; MINIMA_TUI_TTSR, default OFF/opt-in,
+   * umbrella-covered): dormant harness regex rules matched against the LIVE assistant token
+   * stream; on a match the turn aborts mid-generation, discards the partial, injects the
+   * rule's reminder as a harness user message, and retries. Ships opt-in — a mis-firing rule
+   * aborts real turns and burns a retry's tokens — promote to default-ON after field-validating
+   * the rule table. */
+  ttsr: boolean;
+  /** Global per-rule retry-cap override for TTSR (MINIMA_TUI_TTSR_CAP). 0 = unset (each rule's
+   * own retryCap, default 1). Only consulted when `ttsr` is on. */
+  ttsrCap: number;
+  /** LSP diagnostics (W5.1 / MUB-208; MINIMA_TUI_LSP, default OFF/opt-in, umbrella-covered):
+   * spawn a locally-installed stdio language server and surface its `publishDiagnostics` for
+   * the just-edited file ADDITIVELY in edit/write/apply_patch results. Ships opt-in — it is a
+   * new long-lived external-process surface that adds up to the timeout budget to every
+   * mutating call — promote to default-ON only after field-validating latency + lifecycle on
+   * real servers. Fail-open + flag-off byte-identity: off → no server constructed, no hook
+   * registered, results byte-for-byte unchanged. */
+  lsp: boolean;
+  /** LSP per-file diagnostics timeout override in ms (MINIMA_TUI_LSP_TIMEOUT_MS, diagnostic
+   * switch — NOT umbrella-covered). 0 = unset (the built-in 1500ms ceiling). Only consulted
+   * when `lsp` is on. */
+  lspTimeoutMs: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -198,6 +273,15 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     backoffMs: 0,
     gradedOutcome: true,
     memoryLedger: true,
+    artifacts: true,
+    artifactGcMb: 512,
+    bgJobs: true,
+    compact2: true,
+    steer: true,
+    contextRewind: true,
+    editGuard: true,
+    typedTask: true,
+    fetchLocal: false,
     experimental: false,
     autoEffort: false,
     classify: false,
@@ -206,6 +290,10 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     interview: false,
     tuner: false,
     observer: false,
+    ttsr: false,
+    ttsrCap: 0,
+    lsp: false,
+    lspTimeoutMs: 0,
     ...overrides,
   };
 }
@@ -237,9 +325,34 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
+  cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
+  const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;
+  if (artifactGcEnv !== undefined) {
+    const n = Number(artifactGcEnv);
+    if (Number.isFinite(n) && n >= 0) cfg.artifactGcMb = n;
+  }
+  cfg.bgJobs = process.env.MINIMA_TUI_BGJOBS !== "0";
+  cfg.compact2 = process.env.MINIMA_TUI_COMPACT2 !== "0";
+  cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
+  cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
+  cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
+  cfg.typedTask = process.env.MINIMA_TUI_TYPED_TASK !== "0";
+  cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";
   cfg.interview = optInFlag(process.env.MINIMA_TUI_INTERVIEW, cfg.experimental);
   cfg.tuner = optInFlag(process.env.MINIMA_TUI_TUNER, cfg.experimental);
   cfg.observer = optInFlag(process.env.MINIMA_TUI_OBSERVER, cfg.experimental);
+  cfg.ttsr = optInFlag(process.env.MINIMA_TUI_TTSR, cfg.experimental);
+  const ttsrCapEnv = process.env.MINIMA_TUI_TTSR_CAP;
+  if (ttsrCapEnv !== undefined) {
+    const n = Number(ttsrCapEnv);
+    if (Number.isInteger(n) && n >= 0) cfg.ttsrCap = n;
+  }
+  cfg.lsp = optInFlag(process.env.MINIMA_TUI_LSP, cfg.experimental);
+  const lspTimeoutEnv = process.env.MINIMA_TUI_LSP_TIMEOUT_MS;
+  if (lspTimeoutEnv !== undefined) {
+    const n = Number(lspTimeoutEnv);
+    if (Number.isInteger(n) && n > 0) cfg.lspTimeoutMs = n;
+  }
   const judgeSampleEnv = process.env.MINIMA_JUDGE_SAMPLE;
   if (judgeSampleEnv) {
     const s = Number(judgeSampleEnv);

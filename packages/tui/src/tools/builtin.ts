@@ -7,14 +7,18 @@
  */
 
 import type { AgentTool } from "../agent/tools.ts";
+import type { BgJobRegistry } from "./_bgjobs.ts";
+import type { SeenLedger } from "./_seen.ts";
 import { applyPatchTool } from "./apply_patch.ts";
 import { bashTool } from "./bash.ts";
+import { bgJobTool } from "./bgjob.ts";
 import { editTool } from "./edit.ts";
 import { globTool } from "./glob.ts";
 import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { readTool } from "./read.ts";
 import { type TodoTask, todowriteTool } from "./todowrite.ts";
+import type { ToolArtifacts } from "./types.ts";
 import { webFetchTool } from "./web_fetch.ts";
 import { webSearchTool } from "./web_search.ts";
 import { writeTool } from "./write.ts";
@@ -56,11 +60,34 @@ export interface BuiltinToolsOptions {
    * wires it to the meter + budget so real search spend never vanishes from the wallet.
    */
   onWebSearchFeeUsd?: (usd: number, toolCallId: string) => void;
+  /**
+   * Artifact spill store (P1): threaded into every FS tool so oversized output spills to
+   * content-addressed files the model can page back via read. Absent = feature off.
+   */
+  artifacts?: ToolArtifacts;
+  /**
+   * Seen-lines ledger (P3 edit guard + v2 apply_patch coverage), shared by
+   * read/grep/edit/write/apply_patch. The LEAD agent's main.ts constructs it when
+   * config.editGuard and late-binds the DB (agent_id NULL); sub-agents (spawn.ts) pass an
+   * agent-scoped ledger (agent_id=childId) so their evidence can't cross-poison the lead's.
+   */
+  seen?: SeenLedger;
+  /**
+   * Background-job registry (W4.1): the LEAD agent's main.ts constructs one when
+   * config.bgJobs, giving bash its `background: true` launch path and adding the `bgjob`
+   * control tool. Sub-agents (spawn.ts) never pass one, so their bash stays foreground-only.
+   */
+  bgJobs?: BgJobRegistry;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
 export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
-  const fs = { workdir: opts.workdir };
+  const fs = {
+    workdir: opts.workdir,
+    artifacts: opts.artifacts,
+    seen: opts.seen,
+    bgJobs: opts.bgJobs,
+  };
   const all: AgentTool[] = [
     readTool(fs),
     writeTool(fs),
@@ -74,6 +101,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     webSearchTool({ onFeeUsd: opts.onWebSearchFeeUsd }),
     webFetchTool(),
   ];
+  if (opts.bgJobs) all.push(bgJobTool(opts.bgJobs));
   const exclude = new Set(opts.exclude ?? []);
   return all.filter((t) => !exclude.has(t.name));
 }

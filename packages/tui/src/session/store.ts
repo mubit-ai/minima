@@ -31,6 +31,21 @@ export function nowTs(): number {
   return Date.now() / 1000;
 }
 
+/** Same-process recency tiebreak: filesystem mtimes tie at timestamp granularity under
+ * load, and UUID filenames sort arbitrarily, so mtime alone cannot order two sessions
+ * written back-to-back in one process. Every persisted write stamps a monotonic sequence;
+ * mostRecent/listSessions consult it ONLY on an mtime tie (cross-process recency stays
+ * pure mtime — the counter does not survive restarts and unknown paths rank 0). */
+let writeSeqCounter = 0;
+const lastWriteSeq = new Map<string, number>();
+function noteWrite(path: string): void {
+  writeSeqCounter += 1;
+  lastWriteSeq.set(path, writeSeqCounter);
+}
+function writeSeqOf(path: string): number {
+  return lastWriteSeq.get(path) ?? 0;
+}
+
 /** Compact relative age: just now / 5m ago / 2h ago / 3d ago / 5w ago. */
 export function formatAge(ts: number, now: number = nowTs()): string {
   if (!ts || ts <= 0) return "?";
@@ -92,6 +107,7 @@ export class SessionStore {
     if (this.path) {
       try {
         await appendFile(this.path, `${JSON.stringify(entry)}\n`, "utf8");
+        noteWrite(this.path);
       } catch {
         // disk failure must not kill the turn
       }
@@ -171,6 +187,7 @@ async function writeEntries(dest: string, entries: SessionEntry[]): Promise<void
   await mkdir(dirname(dest), { recursive: true });
   const body = entries.map((e) => JSON.stringify(e)).join("\n");
   await writeFile(dest, entries.length ? `${body}\n` : "", "utf8");
+  noteWrite(dest);
 }
 
 export interface SessionSummary {
@@ -234,10 +251,11 @@ export class SessionManager {
 
   async mostRecent(directory: string): Promise<SessionSummary | null> {
     const sessions = await this.listSessions(directory);
-    return sessions.reduce<SessionSummary | null>(
-      (acc, s) => (acc === null || s.mtime > acc.mtime ? s : acc),
-      null,
-    );
+    return sessions.reduce<SessionSummary | null>((acc, s) => {
+      if (acc === null) return s;
+      if (s.mtime !== acc.mtime) return s.mtime > acc.mtime ? s : acc;
+      return writeSeqOf(s.path) > writeSeqOf(acc.path) ? s : acc;
+    }, null);
   }
 
   async listSessions(directory: string): Promise<SessionSummary[]> {
@@ -267,7 +285,7 @@ export class SessionManager {
         // skip unreadable
       }
     }
-    return out.sort((a, b) => b.mtime - a.mtime); // most-recently-used first
+    return out.sort((a, b) => b.mtime - a.mtime || writeSeqOf(b.path) - writeSeqOf(a.path)); // most-recently-used first
   }
 }
 

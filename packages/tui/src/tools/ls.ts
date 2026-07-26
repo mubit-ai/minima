@@ -8,7 +8,7 @@ import { text } from "../ai/types.ts";
 import { boundDetails, boundText } from "./_bounds.ts";
 import { resolveWithin } from "./_io.ts";
 import { objectSchema } from "./schema.ts";
-import type { FsToolOptions } from "./types.ts";
+import type { FsToolOptions, ToolArtifacts } from "./types.ts";
 
 const parameters = objectSchema(
   { path: { type: "string", description: "Directory to list.", default: "." } },
@@ -19,6 +19,7 @@ const MAX_ENTRIES = 500;
 
 async function executeWithin(
   workdir: string | undefined,
+  artifacts: ToolArtifacts | undefined,
   params: Record<string, unknown>,
 ): Promise<ToolResult> {
   const r = resolveWithin((params.path as string) ?? ".", workdir);
@@ -53,7 +54,11 @@ async function executeWithin(
   });
   if (!entries.length) return { content: [text("(empty)")] };
   const lines = entries.map((e) => (e.isDir ? `${e.name}/` : e.name));
-  const b = boundText(lines.join("\n"), { maxLines: MAX_ENTRIES, unit: "entries" });
+  const b = boundText(lines.join("\n"), {
+    maxLines: MAX_ENTRIES,
+    unit: "entries",
+    spill: artifacts?.sink("ls") ?? null,
+  });
   let body = b.body;
   if (b.notice) body += `\n${b.notice}`;
   return {
@@ -68,6 +73,6 @@ export function lsTool(opts: FsToolOptions = {}): AgentTool {
     description:
       "List entries in a directory. Includes hidden files. Directories suffixed with /, sorted first. Use glob for pattern matching.",
     parameters,
-    execute: (_id, params) => executeWithin(opts.workdir, params),
+    execute: (_id, params) => executeWithin(opts.workdir, opts.artifacts, params),
   };
 }

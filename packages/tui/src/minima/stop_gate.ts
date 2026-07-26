@@ -33,6 +33,7 @@ import { Message, text } from "../ai/types.ts";
 import type { GateRow, MinimaDb } from "../db/minima_db.ts";
 import type { AskUserRef } from "../tools/question.ts";
 import { DOOM_LOOP_PREFIX, STEP_CAP_WRAP_PREFIX } from "./anti_spiral.ts";
+import { isTtsrReminder } from "./ttsr.ts";
 
 /** How many step reasons to spell out in a message before collapsing to "+N more". */
 const MAX_REASONS_SHOWN = 5;
@@ -122,15 +123,17 @@ export const STOP_GATE_CONTINUATION_PREFIX = "⛔ You are ending the turn";
 
 /**
  * R3b: harness-authored user-role steering (the continuation below, the anti-spiral's
- * doom-loop/step-cap nudges). The FULL text always stays model-visible; the transcript
- * projection compacts a match to one dim system line instead of a "▸ you" bubble. The
- * user-steer relay ("The user reviewed…") carries the user's own words and does not match.
+ * doom-loop/step-cap nudges, the W4.2 stream-tripwire reminder). The FULL text always stays
+ * model-visible; the transcript projection compacts a match to one dim system line instead of a
+ * "▸ you" bubble. The user-steer relay ("The user reviewed…") carries the user's own words and
+ * does not match.
  */
 export function isHarnessSteerText(text: string): boolean {
   return (
     text.startsWith(STOP_GATE_CONTINUATION_PREFIX) ||
     text.startsWith(STEP_CAP_WRAP_PREFIX) ||
-    text.startsWith(DOOM_LOOP_PREFIX)
+    text.startsWith(DOOM_LOOP_PREFIX) ||
+    isTtsrReminder(text)
   );
 }
 

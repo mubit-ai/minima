@@ -23,6 +23,7 @@ import { AssistantMessage, Message } from "../ai/types.ts";
 import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
+import type { ToolArtifacts } from "../tools/types.ts";
 import {
   type AntiSpiralGate,
   DoomLoopRing,
@@ -62,10 +63,12 @@ import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memo
 import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
+import { classifyRungOutput } from "./replay_guard.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
 import { minDefinedCap, perTaskTypeEntry, resolveProfilePool } from "./routing_profile.ts";
 import type { StepOutcome } from "./schemas.ts";
 import { makeStopGate } from "./stop_gate.ts";
+import { DEFAULT_TTSR_RULES, compileTtsr } from "./ttsr.ts";
 
 /** Inspect/override a recommendation before the model runs. Return a result to override;
  * null to accept as-is; a result with recommendationId=null to veto (no feedback attribution). */
@@ -186,6 +189,10 @@ export class MinimaAgent extends Agent {
    * durable DecisionRecord — the replay buffer + provenance substrate. */
   db: MinimaDb | null = null;
   runId: string | null = null;
+  /** Artifact spill store (P1): late-bound by main.ts so compaction (W4.5) can serialize the
+   * pruned message window through the same content-addressed store the tools spill to,
+   * inheriting the current-run GC exemption. Null → compaction stays byte-identical to v1. */
+  artifacts: ToolArtifacts | null = null;
   /** Set for sub-agents so their rows demux from the lead's. */
   agentId: string | null = null;
   /** Late-bound ask channel (A2 stop-gate). The TUI populates `.current` on mount; null in
@@ -270,6 +277,9 @@ export class MinimaAgent extends Agent {
       ...agentOpts,
       model: initial,
       streamIdleTimeoutMs: agentOpts.streamIdleTimeoutMs ?? config.streamIdleTimeoutMs,
+      ttsr:
+        agentOpts.ttsr ??
+        (config.ttsr ? compileTtsr(DEFAULT_TTSR_RULES, config.ttsrCap || undefined) : null),
     });
     this.config = config;
     this.mapping = map;
@@ -464,7 +474,6 @@ export class MinimaAgent extends Agent {
       // server's logged propensities). Triggers: a provider hard failure, or a REAL judge
       // grade below the rung's τ. Never retries on a null judge. Max attempts = 1 + rungs.
       const excluded = [...(opts.excludedModels ?? [])];
-      const preRunIdx = this.agentState.messages.length;
       let firstRecId: string | null = null;
       let lastError: unknown = null;
       let lastRouting: RoutingResult | null = null;
@@ -802,8 +811,13 @@ export class MinimaAgent extends Agent {
               ? "transient"
               : "hard_error";
         // Roll back this rung's messages so the retry starts from the same context the failed rung
-        // saw (no confusing half-answers in the next rung's prompt).
-        this.agentState.messages.length = preRunIdx;
+        // saw (no confusing half-answers in the next rung's prompt) — UNLESS the rung dispatched
+        // tool calls (steer on): an effectful rung is never erased-and-replayed, its evidence stays
+        // and the LB-21-flagged re-prompt continues on top. Rolling back to the rung's OWN start
+        // (not the prompt's) keeps a retained earlier rung's evidence safe from a later rollback.
+        const rungClass = classifyRungOutput(this.agentState.messages, runStartIdx);
+        if (!this.config.steer || rungClass !== "effectful")
+          this.agentState.messages.length = runStartIdx;
         if (intervention === "escalate") {
           // Exclude the failed model → the next recommend re-routes to a stronger/different rung.
           excluded.push(failedModel);

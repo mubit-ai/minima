@@ -5,6 +5,7 @@
 import { type AgentTool, type ToolResult, errorResult } from "../agent/tools.ts";
 import { text } from "../ai/types.ts";
 import { resolveWithin, writeText } from "./_io.ts";
+import { sha256Hex } from "./_seen.ts";
 import { objectSchema } from "./schema.ts";
 import type { FsToolOptions } from "./types.ts";
 
@@ -28,6 +29,9 @@ export function writeTool(opts: FsToolOptions = {}): AgentTool {
       if (!r.ok) return errorResult(`write: ${r.error}`);
       const content = String(params.content);
       const n = await writeText(r.path, content);
+      if (opts.seen?.enabled) {
+        opts.seen.record(r.path, sha256Hex(content), [{ start: 1, end: n }], "write");
+      }
       return {
         content: [text(`wrote ${n} lines to ${r.path}`)],
         details: { bytes: content.length },
