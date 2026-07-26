@@ -4,6 +4,51 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+The harness-boosting arc (#280, Waves 2–5): ten features that make a turn harder to
+derail and cheaper to recover, each behind its own kill switch. Three append-only
+migration batches (`artifacts`, `seen_lines`, `bg_jobs`).
+
+### Added
+- **Artifact spill store** (`MINIMA_TUI_ARTIFACTS=0` opts out): oversized tool output
+  is written to a content-addressed file the model can page back with `read` instead of
+  being truncated into the transcript. LRU-capped at 512 MB
+  (`MINIMA_TUI_ARTIFACT_GC_MB`, `0` disables), current run exempt.
+- **Edit guard** (`MINIMA_TUI_EDIT_GUARD=0`): `read`/`grep` stamp `[snap:…]` tags and
+  record which lines were actually seen; an `edit` or `apply_patch` against unseen or
+  stale content gets a deterministic re-read instead of a blind write. Sub-agents carry
+  their own agent-scoped ledger so their evidence can't cross-poison the lead's.
+- **Bash steering + replay guard** (`MINIMA_TUI_STEER=0`): a command repeated verbatim
+  after failing is steered rather than looped.
+- **Context checkpoint / rewind tools** (`MINIMA_TUI_REWIND=0`): the model can abandon a
+  dead-end line of work. Context only — the SQLite transcript keeps every row, and this
+  is distinct from the `/rewind` command's git-shadow code checkpoints.
+- **Background bash jobs** (`MINIMA_TUI_BGJOBS=0`): `bash` gains `background: true` plus
+  a `bgjob` control tool (poll / read output / kill). Jobs are killed at session end, and
+  a startup reaper identity-verifies crash leftovers before cleaning them up.
+- **Typed sub-agent output** (`MINIMA_TUI_TYPED_TASK=0`): `output_schema` on a `task`
+  delegation, shape-checked on return.
+- **Lossless compaction** (`MINIMA_TUI_COMPACT2=0`): the pre-compaction transcript is
+  kept as an artifact the summary points at, so compaction is no longer lossy. Inert
+  when the artifact store is off.
+- **Stream tripwires** (`MINIMA_TUI_TTSR`, opt-in): rules that catch a turn going wrong
+  mid-stream and steer it, capped per rule (`MINIMA_TUI_TTSR_CAP`).
+- **LSP diagnostics** (`MINIMA_TUI_LSP`, opt-in): language-server diagnostics after an
+  edit, surfaced back to the model. Zero-dependency stdio JSON-RPC client,
+  `MINIMA_TUI_LSP_TIMEOUT_MS` per-file timeout.
+- **Harness feature reference**: `docs-site` now documents every default-ON harness
+  variable and its opt-out, the new tools, and the two consent-gated variables.
+
+### Changed
+- **`web_fetch` denies private address space by default**: loopback, link-local, and
+  private ranges are blocked, so a model-authored URL can't reach your local network or
+  a cloud metadata endpoint. `MINIMA_TUI_FETCH_LOCAL=1` re-allows it.
+- **CI gates lint and pins ripgrep**: the TUI job now runs `bun run lint` and verifies
+  `rg` is present.
+- **Session recency is deterministic on mtime ties** (#298), removing a resume-order
+  flake.
+
 ## [0.14.3] - 2026-07-23
 
 ### Changed

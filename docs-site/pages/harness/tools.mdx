@@ -24,9 +24,14 @@ The agent gets things done by calling **tools**. Each tool call passes through a
 | `write` | Create a new file | write |
 | `edit` | Modify an existing file | write |
 | `apply_patch` | Apply a multi-file patch | write |
-| `bash` | Run a shell command (with timeout + abort) | dangerous |
+| `bash` | Run a shell command (with timeout + abort). `background: true` launches it detached and returns a job handle (`MINIMA_TUI_BGJOBS=0` removes that option) | dangerous |
 | `todowrite` | Maintain the plan/todo list — when [plan verification](/harness/architecture#plan-verification) is active, marking a step complete is **gated on its verify check passing** | write |
 | `task` | Delegate subtasks to cost-routed sub-agents (see [Sub-agents](#sub-agents-the-task-tool)) | orchestration |
+| `bgjob` | Poll, read output from, or kill a background `bash` job. Every background job is killed at session end (`MINIMA_TUI_BGJOBS=0` removes the tool) | orchestration |
+| `checkpoint` | Mark a point in the conversation a later `rewind` can return to (`MINIMA_TUI_REWIND=0` removes the pair) | orchestration |
+| `rewind` | Drop context back to a checkpoint when a line of work turns out to be a dead end. Only the model's context is trimmed — the session transcript in SQLite keeps every row | orchestration |
+
+Large tool results don't get truncated into oblivion: output over the inline budget spills to a content-addressed artifact file and the result carries a reference the model can `read` back (`MINIMA_TUI_ARTIFACTS=0` opts out; see [Harness features](/harness/configuration#harness-features)). `read` and `grep` also stamp the lines they showed, so an `edit` aimed at content this session never actually saw is rejected with a re-read instruction instead of writing blind.
 
 ## The permission model
 

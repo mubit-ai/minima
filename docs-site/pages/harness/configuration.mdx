@@ -67,6 +67,32 @@ Put shared, non-secret settings (like `MINIMA_URL` for a local recommender) in a
 **Per-repo memory isolation.** If `MINIMA_NAMESPACE` is set it wins; otherwise the harness uses the namespace of the Mubit project that `minima auth` provisioned for this repo (stored in `~/.minima-harness/projects.json`). This keeps each project's `task → model → outcome` history separate.
 </Note>
 
+### Harness features
+
+These are on by default — set the variable to `0` to opt out. Every one fails open: with the feature off the harness behaves exactly as it did before it existed.
+
+| Variable | Default | What it turns off |
+|----------|---------|-------------------|
+| `MINIMA_TUI_BIG_PLAN` | on | [Plan verification](/harness/architecture#plan-verification) — verify commands, gates, confidence tiers. |
+| `MINIMA_TUI_MEMORY` | on | The [memory ledger](/harness/usage-flows#4-memory-that-compounds) and its per-turn injection. |
+| `MINIMA_TUI_ARTIFACTS` | on | Artifact spill: oversized tool output is written to a content-addressed file the model can page back with `read`, instead of being truncated into the transcript. |
+| `MINIMA_TUI_ARTIFACT_GC_MB` | `512` | LRU cap (in MB) on the artifact directory; the current run is exempt. `0` disables GC entirely. |
+| `MINIMA_TUI_COMPACT2` | on | Lossless compaction: the pre-compaction transcript is kept as an artifact the summary points at, so nothing is unrecoverable. Inert when `MINIMA_TUI_ARTIFACTS=0`. |
+| `MINIMA_TUI_EDIT_GUARD` | on | Edit guard: `read`/`grep` stamp `[snap:…]` tags and record which lines were actually seen, so an edit against unseen or stale content gets a deterministic re-read instead of a blind write. |
+| `MINIMA_TUI_STEER` | on | Bash steering + replay guard — a command repeated verbatim after failing is steered rather than looped. |
+| `MINIMA_TUI_REWIND` | on | The `checkpoint` / `rewind` tool pair (context rewind; the DB transcript always keeps every row). |
+| `MINIMA_TUI_BGJOBS` | on | `bash` background jobs (`background: true`) and the `bgjob` control tool. Background jobs are killed at session end. |
+| `MINIMA_TUI_TYPED_TASK` | on | `output_schema` on the `task` tool — typed sub-agent results with a shape check. |
+
+Two variables work the other way — they grant something the harness refuses by default:
+
+| Variable | Default | What setting it does |
+|----------|---------|---------------------|
+| `MINIMA_TUI_FETCH_LOCAL` | unset (deny) | `=1` lets `web_fetch` reach loopback, link-local, and private addresses. Default is DENY, so a model-authored URL cannot reach your local network or a cloud metadata endpoint. |
+| `MINIMA_TUI_ALLOW_VERIFY` | unset (deny) | `=1` lets plan verify commands run in headless (`-p` / `--mode json`) runs, where they otherwise fail closed. |
+
+Opt-in features live behind the experimental umbrella — see [Experimental features](/harness/usage-flows#8-experimental-features).
+
 ### LLM provider keys
 
 Set a key for any provider you want the harness to be able to run. The first environment variable listed for a provider wins.
