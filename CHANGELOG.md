@@ -4,7 +4,7 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.4] - 2026-07-26
 
 The harness-boosting arc (#280, Waves 2–5): ten features that make a turn harder to
 derail and cheaper to recover, each behind its own kill switch. Three append-only
@@ -48,6 +48,17 @@ migration batches (`artifacts`, `seen_lines`, `bg_jobs`).
   `rg` is present.
 - **Session recency is deterministic on mtime ties** (#298), removing a resume-order
   flake.
+
+### Fixed
+- **TS SDK: a non-JSON error body no longer masks the typed error** (#285): the response
+  was parsed before the status check, so a proxy's HTML 502/503 page or an empty body
+  threw an opaque `SyntaxError` instead of `MinimaUnavailable` — defeating fail-open on
+  exactly the transient upstream faults the typed errors exist for.
+- **TS SDK: feedback retries on 429** (#290), honoring `retry-after` capped at 10s (a
+  pathological header can't stall the caller). 429 was terminal, so a rate-limited label
+  was silently lost — and a dropped label is lost learning. `recommend`/GET still never
+  retry. `TaskLike` is also no longer declared twice (kept in `schemas.ts`; the public
+  type still resolves from the package entry).
 
 ## [0.14.3] - 2026-07-23
 
