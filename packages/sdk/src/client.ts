@@ -169,7 +169,7 @@ export class MinimaClient {
       method: "GET",
       headers: headers(this.apiKey),
     });
-    const body = await resp.json();
+    const body = await readBody(resp);
     raiseForStatus(resp.status, body, retryAfterOf(resp));
     return body as T;
   }
@@ -181,7 +181,7 @@ export class MinimaClient {
       body: JSON.stringify(payload),
       signal,
     });
-    const body = await resp.json();
+    const body = await readBody(resp);
     raiseForStatus(resp.status, body, retryAfterOf(resp));
     return body as T;
   }
@@ -309,6 +309,19 @@ export class MinimaClient {
 
   capabilities(): Promise<CapabilitiesResponse> {
     return this.get<CapabilitiesResponse>("/v1/capabilities");
+  }
+}
+
+/**
+ * Parse the JSON body, tolerating a non-JSON one (proxy HTML on a 502/503, empty
+ * body). Returning null lets raiseForStatus throw the typed error (MinimaUnavailable
+ * &c.) instead of an opaque SyntaxError, so callers can still fail open on status.
+ */
+async function readBody(resp: { json(): Promise<unknown> }): Promise<unknown> {
+  try {
+    return await resp.json();
+  } catch {
+    return null;
   }
 }
 
