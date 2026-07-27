@@ -354,7 +354,7 @@ export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: 
   <section class="card">
     <h2>Verification gate tiers</h2>
     ${tiers}
-    <p class="note">Green counts only deterministic gate verdicts — a judge's green is not a green.</p>
+    ${gateReasons(payload.gates)}
   </section>
 </div>
 <section class="card">
@@ -366,6 +366,28 @@ export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: 
   <h2>Recent sessions</h2>
   ${runsTable(runs.slice(0, 10), now)}
 </section>`;
+}
+
+/** Why gates landed where they did — a tier chart without this is not actionable. */
+function gateReasons(gates: OverviewPayload["gates"]): string {
+  if (gates.reasons.length === 0) return "";
+  const cls: Record<string, string> = { red: "bad", yellow: "warn", green: "good" };
+  const rows = gates.reasons
+    .map(
+      (r) =>
+        `<tr><td><span class="pill ${cls[r.tier] ?? ""}">${escapeHtml(r.tier)}</span></td>
+         <td class="wrap">${escapeHtml(r.reason)}</td>
+         <td class="num">${r.n}</td>
+         <td class="num">${gates.total > 0 ? Math.round((r.n / gates.total) * 100) : 0}%</td></tr>`,
+    )
+    .join("");
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Tier</th><th>Reason</th><th class="num">Gates</th><th class="num">Share</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  <p class="note">Tier is derived the same way <span class="mono">/why</span> derives it — the stored
+  <span class="mono">confidence</span> column when set, else recomputed from
+  <span class="mono">factors_json</span>. Step checks are written with no stored tier by design, so
+  reading the column alone would report them all as ungraded.</p>`;
 }
 
 function runsTable(runs: RunSummary[], now: number): string {

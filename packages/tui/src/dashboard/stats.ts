@@ -13,7 +13,9 @@
  */
 
 import { optimalCostRatio, qualityPerDollar, savings } from "../db/metrics.ts";
+import type { GateRow } from "../db/minima_db.ts";
 import { SCOREBOARD_MIN_N } from "../minima/scoreboard.ts";
+import { gateVerdictFor } from "../minima/why.ts";
 import type {
   DashboardStore,
   DayRow,
@@ -21,7 +23,6 @@ import type {
   ModelMixRow,
   Scope,
   ScoreboardRow,
-  TierRow,
 } from "./queries.ts";
 
 /** A headline number for a stat tile. `raw` is null when there is nothing to report. */
@@ -52,13 +53,22 @@ export interface ModelStat extends ModelMixRow {
   costPerCall: number | null;
 }
 
+export interface GateReason {
+  tier: string;
+  reason: string;
+  n: number;
+}
+
 export interface GateTiers {
   green: number;
   yellow: number;
   red: number;
+  /** No tier even after deriving from factors_json — genuinely unverified. */
   ungraded: number;
   total: number;
   greenRate: number | null;
+  /** Why gates landed where they did, worst-first — the actionable part of the chart. */
+  reasons: GateReason[];
 }
 
 export interface OverviewPayload {
@@ -94,18 +104,45 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-export function gateTiers(rows: TierRow[]): GateTiers {
-  const out: GateTiers = { green: 0, yellow: 0, red: 0, ungraded: 0, total: 0, greenRate: null };
-  for (const r of rows) {
-    const n = r.n ?? 0;
-    out.total += n;
-    if (r.tier === "green") out.green += n;
-    else if (r.tier === "yellow") out.yellow += n;
-    else if (r.tier === "red") out.red += n;
-    else out.ungraded += n;
+/**
+ * Tier distribution over gate rows, derived exactly as `/why` derives it: prefer the tier
+ * stamped on the row, else recompute it from `factors_json`.
+ *
+ * Reading the raw `confidence` column instead would be wrong — a `step_check` gate is
+ * written with `confidence: null` by design (the stored tier is a milestone-level rollup),
+ * so the column reports every step check as ungraded even when it carries a real
+ * deterministic outcome.
+ */
+export function gateTiers(rows: GateRow[]): GateTiers {
+  const out: GateTiers = {
+    green: 0,
+    yellow: 0,
+    red: 0,
+    ungraded: 0,
+    total: rows.length,
+    greenRate: null,
+    reasons: [],
+  };
+  const tally = new Map<string, GateReason>();
+  for (const row of rows) {
+    const verdict = gateVerdictFor(row);
+    const tier = verdict.tier;
+    if (tier === "green") out.green += 1;
+    else if (tier === "yellow") out.yellow += 1;
+    else if (tier === "red") out.red += 1;
+    else out.ungraded += 1;
+
+    const key = `${tier ?? "ungraded"}::${verdict.reason}`;
+    const seen = tally.get(key);
+    if (seen) seen.n += 1;
+    else tally.set(key, { tier: tier ?? "ungraded", reason: verdict.reason, n: 1 });
   }
   const graded = out.green + out.yellow + out.red;
   out.greenRate = graded > 0 ? out.green / graded : null;
+  const badness: Record<string, number> = { red: 0, yellow: 1, ungraded: 2, green: 3 };
+  out.reasons = [...tally.values()].sort(
+    (a, b) => (badness[a.tier] ?? 9) - (badness[b.tier] ?? 9) || b.n - a.n,
+  );
   return out;
 }
 
@@ -247,7 +284,7 @@ export function kpis(decisions: DecisionRecord[], runs: number, tiers: GateTiers
 /** Assemble the full overview payload — the shape `/api/v1/overview` returns verbatim. */
 export function overview(store: DashboardStore, scope: Scope): OverviewPayload {
   const decisions = store.decisions(scope);
-  const tiers = gateTiers(store.gateTiers(scope));
+  const tiers = gateTiers(store.gateRows(scope));
   return {
     scope,
     ledger: { path: store.path, schemaVersion: store.schemaVersion() },

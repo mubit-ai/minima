@@ -81,6 +81,25 @@ and `taskTypeScoreboard` exactly:
   be **negative** — the tile then says *overspent this anchor by …* rather than showing a bare
   minus sign under a label that reads "Saved".
 - **Green means a deterministic gate said green.** A judge's green is not a green.
+- **Gate tiers are derived through `gateVerdictFor`**, exactly as `/why` derives them: the
+  stored `confidence` column when set, else recomputed from `factors_json`. Reading the raw
+  column is wrong — `step_check` gates are written with `confidence: null` by design (the
+  stored tier is a milestone-level rollup), so the column alone reported 81% of a real
+  ledger's gates as "ungraded" when only 3 of 180 genuinely had no verdict. The tier chart
+  also renders the **reason** breakdown; a tier distribution without reasons isn't actionable.
+
+### Known metric caveat: estimate vs realized
+
+`est_cost_usd` (and `all_premium_cost_usd`, which is `max(ranked[].estCostUsd)`) price roughly
+**one model call**. `actual_cost_usd` is the **realized total for the whole agent turn**, which
+is many calls once the tool loop runs. So "saved vs all-premium" and the optimal-cost ratio
+compare a per-call estimate against a per-turn actual, and both look far worse than reality. On
+a 489-decision ledger the overrun tracked turn count almost perfectly — 1.4× at one turn, 26.6×
+at sixteen — giving 10.8× overall, a negative "saved vs all-premium", and a 4% cost ratio.
+
+This lives upstream in `src/db/metrics.ts`, not in the dashboard; the dashboard reports it
+faithfully. Fixing it means either pricing the anchor per-turn or comparing estimate-to-estimate
+and realized-to-realized. Until then, treat both numbers as directional at best.
 - **Cells under `SCOREBOARD_MIN_N` (3) are suppressed**, not rendered as weak signal.
 - **No coverage → "no data"**, never `0`. A fabricated zero reads as a real measurement.
 - Every derived rate ships the n it was computed from.

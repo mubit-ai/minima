@@ -16,10 +16,16 @@ export type {
   RunSummary,
   Scope,
   ScoreboardRow,
-  TierRow,
   ToolRow,
 } from "./queries.ts";
 export { DEFAULT_PORT, createDashboard, createHandler, startDashboard } from "./server.ts";
 export type { DashboardHandle, DashboardOptions } from "./server.ts";
 export { gateTiers, kpis, modelStats, overview, scoreboardCells } from "./stats.ts";
-export type { GateTiers, Kpi, ModelStat, OverviewPayload, ScoreboardCell } from "./stats.ts";
+export type {
+  GateReason,
+  GateTiers,
+  Kpi,
+  ModelStat,
+  OverviewPayload,
+  ScoreboardCell,
+} from "./stats.ts";

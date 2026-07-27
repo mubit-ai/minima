@@ -13,7 +13,7 @@
 
 import { Database } from "bun:sqlite";
 import type { DecisionRowLike } from "../db/metrics.ts";
-import { defaultDbPath } from "../db/minima_db.ts";
+import { type GateRow, defaultDbPath } from "../db/minima_db.ts";
 
 /** A project_key to scope to, or null for the whole ledger. */
 export type Scope = string | null;
@@ -67,11 +67,6 @@ export interface DayRow {
   day: string;
   n: number;
   cost_usd: number;
-}
-
-export interface TierRow {
-  tier: string | null;
-  n: number;
 }
 
 export interface ScoreboardRow {
@@ -182,13 +177,18 @@ const SPEND_BY_DAY_SQL = `
   GROUP BY day
   ORDER BY day ASC`;
 
-const GATE_TIERS_SQL = `
-  SELECT g.confidence AS tier, COUNT(*) AS n
+// Full rows, NOT a GROUP BY on `confidence`: a step_check gate is written with
+// confidence=NULL on purpose (the stored tier is a milestone-level rollup), so its tier has
+// to be derived from factors_json the way /why does it. Grouping on the raw column reports
+// every step check as "ungraded".
+const GATE_ROWS_SQL = `
+  SELECT g.*
   FROM gates g
   LEFT JOIN plans p ON p.id = g.plan_id
   LEFT JOIN runs r ON r.run_id = p.session_id
   WHERE (?1 IS NULL OR r.project_key = ?1)
-  GROUP BY g.confidence`;
+  ORDER BY g.created_at DESC
+  LIMIT 5000`;
 
 // Each decision labeled once, by its LATEST gate — the same newest-gate semantics the
 // scoreboard and /why use, so the dashboard cannot disagree with the TUI.
@@ -291,8 +291,8 @@ export class DashboardStore {
     return this.db.query(SPEND_BY_DAY_SQL).all(scope) as DayRow[];
   }
 
-  gateTiers(scope: Scope): TierRow[] {
-    return this.db.query(GATE_TIERS_SQL).all(scope) as TierRow[];
+  gateRows(scope: Scope): GateRow[] {
+    return this.db.query(GATE_ROWS_SQL).all(scope) as GateRow[];
   }
 
   scoreboardRows(scope: Scope): ScoreboardRow[] {

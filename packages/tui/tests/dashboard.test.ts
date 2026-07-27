@@ -165,15 +165,49 @@ describe("stats honesty", () => {
     store.close();
   });
 
-  test("gate tiers exclude ungraded rows from the green rate", () => {
+  test("a step check with no stored tier is graded from factors, not counted ungraded", () => {
+    // Regression: step_check gates are written with confidence=NULL by design (the stored
+    // tier is a milestone rollup). Reading the raw column reported them all as "ungraded" —
+    // on a real ledger that was 81% of gates.
+    const store = new DashboardStore(dbPath);
+    const rows = store.gateRows(PROJECT);
+    expect(rows.length).toBeGreaterThan(0);
+    const tiers = gateTiers(rows);
+    expect(tiers.total).toBe(rows.length);
+    expect(tiers.ungraded).toBe(0);
+    expect(tiers.green + tiers.yellow + tiers.red).toBe(rows.length);
+    store.close();
+  });
+
+  test("gate reasons explain every tier and sum to the gate count", () => {
+    const store = new DashboardStore(dbPath);
+    const tiers = gateTiers(store.gateRows(PROJECT));
+    expect(tiers.reasons.length).toBeGreaterThan(0);
+    expect(tiers.reasons.reduce((s, r) => s + r.n, 0)).toBe(tiers.total);
+    // Worst-first: a red reason never sorts below a yellow one.
+    const order = tiers.reasons.map((r) => r.tier);
+    expect(order.indexOf("red")).toBeLessThanOrEqual(
+      order.includes("yellow") ? order.indexOf("yellow") : order.length,
+    );
+    store.close();
+  });
+
+  test("a gate with neither a stored tier nor parseable factors stays ungraded", () => {
     const tiers = gateTiers([
-      { tier: "green", n: 3 },
-      { tier: "red", n: 1 },
-      { tier: null, n: 5 },
-    ]);
-    expect(tiers.total).toBe(9);
-    expect(tiers.ungraded).toBe(5);
-    expect(tiers.greenRate).toBeCloseTo(0.75, 6);
+      {
+        id: "g1",
+        plan_id: null,
+        step_id: null,
+        kind: "stop",
+        outcome: "unchecked",
+        confidence: null,
+        verified_by: null,
+        factors_json: null,
+        created_at: null,
+      },
+    ] as unknown as Parameters<typeof gateTiers>[0]);
+    expect(tiers.ungraded).toBe(1);
+    expect(tiers.greenRate).toBeNull();
   });
 
   test("model shares sum to 1 and quality averages over judged rows only", () => {
