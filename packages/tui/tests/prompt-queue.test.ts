@@ -12,6 +12,7 @@ import {
   releaseOnPrompt,
   takeNext,
 } from "../src/tui/prompt_queue.ts";
+import { readSource } from "./_source.ts";
 
 describe("decideBusySubmit — what Enter does while a turn is running", () => {
   test("a plain prompt enqueues (it must NOT reach the agent mid-turn)", () => {
@@ -147,7 +148,7 @@ describe("queueNote — the footer indicator", () => {
 });
 
 describe("app wiring (source pins, the behavior.test.ts pattern)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("busy Enter routes through decideBusySubmit: dispatch runs handleCommand now, everything else enqueues — nothing reaches the agent mid-turn", () => {
     expect(src).toContain("if (busy || drainBusyRef.current) {");

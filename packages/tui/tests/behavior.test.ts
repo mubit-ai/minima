@@ -10,6 +10,7 @@ import {
   tierBehavior,
 } from "../src/minima/behavior.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
+import { code, readSource } from "./_source.ts";
 
 // Factors that land on each confidence tier (see confidence.ts):
 //   GREEN  → trusted check passed
@@ -298,7 +299,7 @@ describe("ledgerBehavior", () => {
 // is refreshed alongside the plan strip, the 🟡 note and 🔴 block each cost one truncated footer
 // row, and /bp-seed exercises all three tiers so the three snapshots (quiet / note / prompt) exist.
 describe("tui/app.tsx wires tier→behavior", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("refreshes bigPlanBehavior from the same helper on mount and tool_execution_end", () => {
     const refreshes =
@@ -381,7 +382,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
   });
 
   test("the modal's key seams hold: TextInput ignores keys while disabled and ctrl/meta combos", () => {
-    const input = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
+    const input = readSource("tui/text-input.tsx");
     expect(input).toContain("if (disabled || suspended) return;");
     // Ctrl combos are either readline edits handled locally or fall through to the app
     // handlers — either way the branch returns before the draft-insert path, and meta
@@ -408,7 +409,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
 // re-applies the build prompt after a mid-turn exit (promptRouted's finally would otherwise
 // restore the planner persona it captured at entry — permanently).
 describe("tui/app.tsx wires exit_plan", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("persona tells the planner to call exit_plan, not to name slash commands", () => {
     const personaIdx = src.indexOf("const PLANNER_PERSONA");
@@ -459,7 +460,7 @@ describe("tui/app.tsx wires exit_plan", () => {
 // letters grew the draft, Enter could submit a prompt). MP2 (MUB-145) removed the docked
 // sidebars; since MP4 (MUB-147) the expanded live-region panel is the only populator.
 describe("tui/app.tsx panel key routing", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("panelCapture derives from the expanded-panel state — the only capturing panel", () => {
     expect(src).toContain("const panelCapture = panel !== null;");
@@ -514,7 +515,7 @@ describe("tui/app.tsx panel key routing", () => {
 // the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
 // pendingEcho dedupe (which only covers the optimistic first echo).
 describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
     const idx = src.indexOf('case "message_start":');
@@ -530,7 +531,7 @@ describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
 // (mode flipped, session null → prompts ran the NORMAL loop and the model executed with
 // per-call approval instead of planning; bare /plan then EXITED instead of recovering).
 describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("Shift+Tab ALWAYS just cycles the ring — silent CC-style exit, never a dialog", () => {
     // Claude Code parity: the chord lives in app.tsx's global useInput ABOVE the
@@ -554,7 +555,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     expect(src).not.toContain("planTurnSeenRef");
     expect(src).not.toContain("toggleMode");
     expect(src).not.toContain("onShiftTab");
-    const composer = readFileSync(join(import.meta.dir, "../src/tui/text-input.tsx"), "utf8");
+    const composer = readSource("tui/text-input.tsx");
     expect(composer).not.toContain("onShiftTab");
   });
 
@@ -605,7 +606,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   test("a gate-blocked todowrite renders as ⊘ verify gate, not a red denial", () => {
     // The done-gate refusing a completion flip is NOT a cancellation — the renderer keys
     // on isGateBlockReason so the block can never be confused with a permission denial.
-    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    const messages = readSource("tui/messages.tsx");
     expect(messages).toContain("isGateBlockReason(msg.text)");
     expect(messages).toContain("⊘ verify gate — completion blocked, statuses unchanged:");
   });
@@ -616,7 +617,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     // isError path, so a guard deny structurally cannot render red.
     expect(src).toContain("isGuardDenyReason");
     expect(src).toContain("isHarnessSteerText");
-    const messages = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+    const messages = readSource("tui/messages.tsx");
     const deny = messages.indexOf('msg.guardKind === "deny"');
     expect(deny).toBeGreaterThan(-1);
     expect(deny).toBeLessThan(messages.indexOf('msg.isError ? "red"'));
@@ -720,7 +721,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
 // fails (truncated output was silently costing every seeded step), the user sees it and the
 // agent is told to rebuild the ledger via todowrite as its first move.
 describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the user-facing note warns when synthesis failed and nothing was seeded", () => {
     expect(src).toContain("synthFailed: boolean");
@@ -744,7 +745,7 @@ describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
 // (and before any council round), and the loop's message_start(user) — which carries the
 // @file-expanded/replan-prefixed run content — is deduped via pendingEchoRef.
 describe("tui/app.tsx echoes the prompt optimistically", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("verbatim echo lands in onSubmit between the slash dispatch and setBusy", () => {
     const echo = 'setMessages((m) => [...m, { role: "user", text: trimmed }]);';
@@ -777,14 +778,14 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   });
 
   test("the finally clear keeps a failed turn from muting a later echo", () => {
-    expect(src).toContain("} finally {\n      pendingEchoRef.current = false;");
+    expect(src).toContain(code("} finally {\n      pendingEchoRef.current = false;"));
   });
 });
 
 // MP2 (MUB-145): the docked/overlay sidebar system is deleted. These pins keep it deleted
 // and protect the survivors (rewind overlay geometry, one-shot text blocks).
 describe("tui/app.tsx sidebar removal", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("no sidebar system: geometry, panels and auto-open are gone", () => {
     expect(src).not.toContain("sidebarGeometry");

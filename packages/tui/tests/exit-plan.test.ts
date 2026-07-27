@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { ToolResult } from "../src/agent/tools.ts";
 import { type ExitPlanDeps, exitPlanTool } from "../src/tools/exit_plan.ts";
 import type { QuestionParams } from "../src/tools/question.ts";
+import { readSource } from "./_source.ts";
 
 function resultText(r: ToolResult): string {
   return r.content
@@ -160,7 +161,7 @@ describe("MUB-179 — auto-accept landing wiring (source pin)", () => {
   test("both exitPlanFinalize paths (sessionless + store) apply the landing", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    const src = readSource("tui/app.tsx");
     const hits = src.match(/finalizeAutoAcceptLanding\(permStateRef\.current\)/g) ?? [];
     expect(hits).toHaveLength(2);
   });

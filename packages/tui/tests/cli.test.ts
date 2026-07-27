@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseArgs } from "../src/cli/main.ts";
+import { readSource } from "./_source.ts";
 
 describe("parseArgs --resume (B1)", () => {
   test("--resume captures the name-or-id and composes with other flags", () => {
@@ -75,7 +76,7 @@ describe("tui/app.tsx /version command (source pins)", () => {
   test("registered in COMMANDS, dispatched, and prints the harness version", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    const src = readSource("tui/app.tsx");
     expect(src).toContain('{ name: "version", desc: "Show the Minima harness version" }');
     expect(src).toContain('case "version":');
     expect(src).toContain("minima ${VERSION}");
