@@ -1,0 +1,486 @@
+{
+ "lane": "minima:recallprobe-76cb4f9a",
+ "seeded": 60,
+ "limit": 25,
+ "p2_query_independence": {
+  "per_query": {
+   "python": {
+    "n": 25,
+    "ids": [
+     "3f4717e5-bc31-4ae6-bd81-48ce2965ae3d",
+     "763587f0-deaf-47bf-ad38-360f712ca1de",
+     "d35fb7d3-e9db-4a73-b1bd-4a37f37ebfae",
+     "4a5ea606-412b-4eb8-b593-33e84fc11c56",
+     "c9582996-fe4d-4c40-acc1-265c84f95e27",
+     "57d2c5bf-6cff-4570-87f6-3dbce29065be",
+     "6bae9cef-951d-4800-afb0-68bfdf190ca6",
+     "eb2adc3d-4667-42f2-83e6-c37306cda50c",
+     "dc1e9265-e928-4ba6-b6ee-80eefaeb68e6",
+     "533c7190-424a-4032-a2c8-6c109ec2cef6",
+     "7e1e1b88-019e-47db-bc58-0a1266cc3502",
+     "8e3ea433-236e-4fdf-8419-e3649e493e76",
+     "78110b34-4c85-4740-a244-b03374049cf4",
+     "47ca10af-7770-4d28-a892-8e34a6b6eb82",
+     "dd90f133-ef34-405c-a5b6-c50682cbd139",
+     "bdfe8a16-7a8f-49d9-94b8-a83bb6ddce8c",
+     "dbd23984-aaa8-4e89-8bf5-3f33d6099eb8",
+     "1b84e900-bd3c-46e6-981e-2182b89f41c4",
+     "5141dae2-ec06-432d-89cd-1f0348bd00aa",
+     "991ba5d9-d3fd-4a93-92e0-a5af05d2f20f",
+     "7ac6c40d-4eac-49ef-b4af-c2e2550e6047",
+     "0d4d7579-cc38-4ed9-afe9-7e48344d5d19",
+     "f425a6dd-46dc-4410-b658-8f5163ddcce1",
+     "22d50c29-ad76-49f2-9581-d818ea1abb2e",
+     "4c79c093-4b49-4522-82f5-b6ee8532855b"
+    ],
+    "scores": [
+     0.661022,
+     0.660781,
+     0.660702,
+     0.660676,
+     0.465184,
+     0.46305,
+     0.460217,
+     0.460082,
+     0.437458,
+     0.433322,
+     0.433034,
+     0.432025,
+     0.395712,
+     0.390727,
+     0.389222,
+     0.383839,
+     0.378521,
+     0.37748,
+     0.374348,
+     0.374,
+     0.358509,
+     0.356558,
+     0.350305,
+     0.34464,
+     0.343043
+    ],
+    "family_mix": {
+     "python": 4,
+     "unknown": 21
+    },
+    "degraded": false,
+    "timed_out": false,
+    "error": null
+   },
+   "cooking": {
+    "n": 25,
+    "ids": [
+     "18f7612c-3e48-489c-b6fc-f1d63e893c4e",
+     "09bbf1de-0f8a-4151-8eb3-944f61b92f9e",
+     "1731c125-37e5-4e5c-858b-cce3ed92f4a2",
+     "62f8cfc8-0dc9-49ed-89be-761ea9321454",
+     "41bd85fc-7a3b-40af-a7e3-e596757784f5",
+     "76e6218e-516b-469d-abfc-5babc3bee5fd",
+     "6ddf05d2-d2bf-4d7d-80dc-3a99aef5a6e2",
+     "44420c2f-f469-4d34-ac75-3cd37a5c1a53",
+     "dbd23984-aaa8-4e89-8bf5-3f33d6099eb8",
+     "08271b5d-1682-41ee-b445-921fdb52b061",
+     "0625e4f6-83f6-4754-8ed0-f6b7e77b0c81",
+     "5141dae2-ec06-432d-89cd-1f0348bd00aa",
+     "f3a1a6f8-6cae-4444-a458-bd8edc210479",
+     "1b84e900-bd3c-46e6-981e-2182b89f41c4",
+     "991ba5d9-d3fd-4a93-92e0-a5af05d2f20f",
+     "eb8590aa-d01f-4d54-8a88-1acd886869ab",
+     "4dd38987-6a0d-448f-a4f1-a5e9e8135acf",
+     "227dc0d5-b18a-4aa0-8579-6c24452e18ad",
+     "0d4d7579-cc38-4ed9-afe9-7e48344d5d19",
+     "1f594576-c8ac-408b-a87c-2c21a1a52ebd",
+     "f425a6dd-46dc-4410-b658-8f5163ddcce1",
+     "7ac6c40d-4eac-49ef-b4af-c2e2550e6047",
+     "22d50c29-ad76-49f2-9581-d818ea1abb2e",
+     "cfbbb0da-e593-44bd-b4e7-662e5ac05823",
+     "533c7190-424a-4032-a2c8-6c109ec2cef6"
+    ],
+    "scores": [
+     0.670384,
+     0.670209,
+     0.669055,
+     0.669055,
+     0.452634,
+     0.452073,
+     0.448397,
+     0.447827,
+     0.384863,
+     0.383707,
+     0.382218,
+     0.381555,
+     0.381389,
+     0.380559,
+     0.379561,
+     0.374709,
+     0.368921,
+     0.365578,
+     0.3606,
+     0.36028,
+     0.356464,
+     0.355946,
+     0.352306,
+     0.351157,
+     0.350916
+    ],
+    "family_mix": {
+     "unknown": 25
+    },
+    "degraded": false,
+    "timed_out": false,
+    "error": null
+   },
+   "finance": {
+    "n": 25,
+    "ids": [
+     "3b551644-662a-4348-81f2-30a5dda67e9b",
+     "a5fc347c-9f29-4620-baa6-5a3c3bea38f7",
+     "7c050c9f-b96d-450a-8d70-7db1ecb12df8",
+     "b9ce06db-367d-42e4-bebc-6d46f652b7e3",
+     "b5695329-425e-4799-8155-1b5ea2bb5577",
+     "2b0b3d6b-b72d-4b2b-935d-d462757baef6",
+     "5701237d-fe1b-4c3d-b4cb-be862bf96baf",
+     "5ca6cd4d-9dc7-4760-835e-5eb88b6b6be9",
+     "417268af-552a-4fb4-9a40-a98b9c99f044",
+     "f1dad762-ec3f-4d26-9d42-d9fb325f17e2",
+     "0d4d7579-cc38-4ed9-afe9-7e48344d5d19",
+     "d9f44a7b-888b-4ad1-93b4-e5085f712bd5",
+     "7ac6c40d-4eac-49ef-b4af-c2e2550e6047",
+     "f425a6dd-46dc-4410-b658-8f5163ddcce1",
+     "1bd542d1-ea71-42cd-9982-bde6d03c404b",
+     "22d50c29-ad76-49f2-9581-d818ea1abb2e",
+     "78110b34-4c85-4740-a244-b03374049cf4",
+     "bdfe8a16-7a8f-49d9-94b8-a83bb6ddce8c",
+     "47ca10af-7770-4d28-a892-8e34a6b6eb82",
+     "08271b5d-1682-41ee-b445-921fdb52b061",
+     "dd90f133-ef34-405c-a5b6-c50682cbd139",
+     "41bd85fc-7a3b-40af-a7e3-e596757784f5",
+     "6ddf05d2-d2bf-4d7d-80dc-3a99aef5a6e2",
+     "f3a1a6f8-6cae-4444-a458-bd8edc210479",
+     "0625e4f6-83f6-4754-8ed0-f6b7e77b0c81"
+    ],
+    "scores": [
+     0.695668,
+     0.695397,
+     0.695286,
+     0.694819,
+     0.445673,
+     0.444987,
+     0.444575,
+     0.443334,
+     0.398021,
+     0.398021,
+     0.396373,
+     0.395877,
+     0.395546,
+     0.392061,
+     0.39106,
+     0.389389,
+     0.379228,
+     0.378727,
+     0.377893,
+     0.376219,
+     0.371339,
+     0.370831,
+     0.370493,
+     0.369816,
+     0.368968
+    ],
+    "family_mix": {
+     "unknown": 25
+    },
+    "degraded": false,
+    "timed_out": false,
+    "error": null
+   }
+  },
+  "overlaps": {
+   "python|cooking": {
+    "jaccard": 0.21951219512195122,
+    "identical_order": false
+   },
+   "python|finance": {
+    "jaccard": 0.19047619047619047,
+    "identical_order": false
+   },
+   "cooking|finance": {
+    "jaccard": 0.21951219512195122,
+    "identical_order": false
+   }
+  }
+ },
+ "p3_repeat_stability": {
+  "counts": [
+   25,
+   25,
+   25
+  ],
+  "all_identical": false
+ },
+ "p1_score_signature": {
+  "n": 25,
+  "scores": [
+   0.710634,
+   0.710562,
+   0.710228,
+   0.71019,
+   0.468743,
+   0.458317,
+   0.458317,
+   0.453346,
+   0.428975,
+   0.427951,
+   0.42707,
+   0.423074,
+   0.387656,
+   0.383707,
+   0.379422,
+   0.377893,
+   0.376236,
+   0.374205,
+   0.370555,
+   0.364523,
+   0.356824,
+   0.356297,
+   0.351718,
+   0.348361,
+   0.347653
+  ],
+  "distinct_scores": 24,
+  "all_half": false,
+  "explain_events": [
+   {
+    "lane": "minima:recallprobe-76cb4f9a",
+    "items": [
+     {
+      "entry_id": "3f4717e5-bc31-4ae6-bd81-48ce2965ae3d",
+      "semantic": 0.9899448752403259,
+      "lexical": 0.7777777910232544,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "4a5ea606-412b-4eb8-b593-33e84fc11c56",
+      "semantic": 0.9898253083229065,
+      "lexical": 0.7777777910232544,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "d35fb7d3-e9db-4a73-b1bd-4a37f37ebfae",
+      "semantic": 0.9892695546150208,
+      "lexical": 0.7777777910232544,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "763587f0-deaf-47bf-ad38-360f712ca1de",
+      "semantic": 0.989206075668335,
+      "lexical": 0.7777777910232544,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "6bae9cef-951d-4800-afb0-68bfdf190ca6",
+      "semantic": 0.7562382817268372,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "57d2c5bf-6cff-4570-87f6-3dbce29065be",
+      "semantic": 0.7638609409332275,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "c9582996-fe4d-4c40-acc1-265c84f95e27",
+      "semantic": 0.7638609409332275,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "eb2adc3d-4667-42f2-83e6-c37306cda50c",
+      "semantic": 0.7555772066116333,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "dc1e9265-e928-4ba6-b6ee-80eefaeb68e6",
+      "semantic": 0.7149577140808105,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "533c7190-424a-4032-a2c8-6c109ec2cef6",
+      "semantic": 0.7132508754730225,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "7e1e1b88-019e-47db-bc58-0a1266cc3502",
+      "semantic": 0.7117831707000732,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "8e3ea433-236e-4fdf-8419-e3649e493e76",
+      "semantic": 0.705123245716095,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "78110b34-4c85-4740-a244-b03374049cf4",
+      "semantic": 0.6460933089256287,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "47ca10af-7770-4d28-a892-8e34a6b6eb82",
+      "semantic": 0.6395124793052673,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "1b84e900-bd3c-46e6-981e-2182b89f41c4",
+      "semantic": 0.5573697686195374,
+      "lexical": 0.30000001192092896,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "dd90f133-ef34-405c-a5b6-c50682cbd139",
+      "semantic": 0.6298210620880127,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "5141dae2-ec06-432d-89cd-1f0348bd00aa",
+      "semantic": 0.5520597100257874,
+      "lexical": 0.30000001192092896,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "bdfe8a16-7a8f-49d9-94b8-a83bb6ddce8c",
+      "semantic": 0.6236746907234192,
+      "lexical": 0.0,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "991ba5d9-d3fd-4a93-92e0-a5af05d2f20f",
+      "semantic": 0.5425915718078613,
+      "lexical": 0.30000001192092896,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "b5695329-425e-4799-8155-1b5ea2bb5577",
+      "semantic": 0.5825378894805908,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "5701237d-fe1b-4c3d-b4cb-be862bf96baf",
+      "semantic": 0.5697062611579895,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "5ca6cd4d-9dc7-4760-835e-5eb88b6b6be9",
+      "semantic": 0.5688278079032898,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "2b0b3d6b-b72d-4b2b-935d-d462757baef6",
+      "semantic": 0.561196506023407,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "4c79c093-4b49-4522-82f5-b6ee8532855b",
+      "semantic": 0.5556010603904724,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     },
+     {
+      "entry_id": "7ac6c40d-4eac-49ef-b4af-c2e2550e6047",
+      "semantic": 0.5544211864471436,
+      "lexical": 0.10000000149011612,
+      "recency": 0.0,
+      "temporal_decay": 1.0,
+      "stale_penalty": false,
+      "rank_by": "balanced"
+     }
+    ],
+    "event": "recall_explain"
+   }
+  ]
+ }
+}
