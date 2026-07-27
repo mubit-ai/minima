@@ -9,7 +9,7 @@ import {
 import { SEED_MODELS } from "../src/cli/main.ts";
 import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
 import { DEFAULT_CANDIDATES, PREMIUM_CANDIDATES } from "../src/minima/config.ts";
-import { ModelMapping } from "../src/minima/mapping.ts";
+import { ModelMapping, syncCatalog } from "../src/minima/mapping.ts";
 import type { ModelCard } from "../src/minima/schemas.ts";
 
 const ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] as const;
@@ -163,5 +163,57 @@ describe("populateFromOpenRouter", () => {
       json: async () => ({}),
     })) as unknown as typeof fetch);
     expect(added).toBe(0);
+  });
+});
+
+describe("syncCatalog preserves long-context price tiers", () => {
+  test("a server price refresh does not silently drop the tier", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    const seed: Model = {
+      id: "tiered-x",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      name: "Tiered",
+      cost: {
+        input: 1.25,
+        output: 10,
+        cache_read: 0.125,
+        long_context: { above_prompt_tokens: 200_000, input: 2.5, output: 15, cache_read: 0.25 },
+      },
+      context_window: 2_000_000,
+      max_tokens: 8192,
+    };
+    registerModel(seed);
+
+    const updated = await syncCatalog(
+      { models: async () => ({ models: [card("tiered-x", "anthropic")] }) },
+      new ModelMapping(),
+    );
+    expect(updated).toBe(1);
+
+    const m = tryGetModel("anthropic", "tiered-x")!;
+    expect(m.cost.input).toBe(1); // base rates DID refresh from the card
+    // ...and the tier the wire format cannot express survived.
+    expect(m.cost.long_context).toBeDefined();
+    expect(m.cost.long_context!.above_prompt_tokens).toBe(200_000);
+    expect(m.cost.long_context!.input).toBe(2.5);
+  });
+
+  test("a model with no tier stays untiered after a refresh", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    registerModel({
+      id: "flat-x",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      name: "Flat",
+      cost: { input: 1, output: 2 },
+      context_window: 1000,
+      max_tokens: 100,
+    });
+    await syncCatalog(
+      { models: async () => ({ models: [card("flat-x", "anthropic")] }) },
+      new ModelMapping(),
+    );
+    expect(tryGetModel("anthropic", "flat-x")!.cost.long_context).toBeUndefined();
   });
 });

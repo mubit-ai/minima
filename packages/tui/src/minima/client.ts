@@ -7,7 +7,7 @@
  */
 
 import { VERSION } from "../version.ts";
-import { raiseForStatus } from "./errors.ts";
+import { MinimaRateLimited, MinimaUnavailable, raiseForStatus } from "./errors.ts";
 import type {
   CalibrationResponse,
   CapabilitiesResponse,
@@ -38,7 +38,12 @@ export type FetchLike = (
     body?: string;
     signal?: AbortSignal;
   },
-) => Promise<{ status: number; json(): Promise<unknown> }>;
+) => Promise<{
+  status: number;
+  json(): Promise<unknown>;
+  /** Optional so existing test fakes stay valid; real Responses always have it. */
+  headers?: { get(name: string): string | null };
+}>;
 
 function coerceTask(task: TaskLike): TaskInput {
   if (typeof task === "string") return { task };
@@ -68,6 +73,13 @@ export interface MinimaClientOptions {
   baseUrl: string;
   apiKey?: string;
   timeoutMs?: number;
+  /**
+   * Backoff schedule for feedback retries (ms). Feedback is safe to retry (the server's
+   * reconcile replay guard dedupes) and a lost label is a silent, permanent learning loss —
+   * runtime.ts swallows the error, so nothing ever sends it again. recommend never retries:
+   * fail fast, fail open in the caller.
+   */
+  feedbackRetryDelaysMs?: number[];
   /** Inject a fetch transport for hermetic tests. */
   fetch?: FetchLike;
 }
@@ -77,11 +89,13 @@ export class MinimaClient {
   private readonly apiKey?: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number | null;
+  private readonly feedbackRetryDelaysMs: number[];
 
   constructor(opts: MinimaClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : null;
+    this.feedbackRetryDelaysMs = opts.feedbackRetryDelaysMs ?? [500, 2000];
     // Global fetch bound to avoid `Illegal invocation` in some runtimes.
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init as RequestInit));
   }
@@ -111,8 +125,8 @@ export class MinimaClient {
       headers: headers(this.apiKey),
       signal: this.withTimeout(undefined),
     });
-    const body = await resp.json();
-    raiseForStatus(resp.status, body);
+    const body = await readBody(resp);
+    raiseForStatus(resp.status, body, retryAfterOf(resp));
     return body as T;
   }
 
@@ -123,8 +137,8 @@ export class MinimaClient {
       body: JSON.stringify(payload),
       signal: this.withTimeout(signal),
     });
-    const body = await resp.json();
-    raiseForStatus(resp.status, body);
+    const body = await readBody(resp);
+    raiseForStatus(resp.status, body, retryAfterOf(resp));
     return body as T;
   }
 
@@ -168,8 +182,28 @@ export class MinimaClient {
 
   // --- Feedback --------------------------------------------------------------
 
-  feedback(req: FeedbackRequest): Promise<FeedbackResponse> {
-    return this.post<FeedbackResponse>("/v1/feedback", req);
+  /**
+   * Feedback, retried on transient faults. A dropped label is a PERMANENT learning loss:
+   * runtime.ts's feedbackSafely logs-and-swallows, so nothing ever re-sends it, and a
+   * gate-verified outcome — the harness's only honest label source — is gone. Safe to
+   * retry: the server's reconcile replay guard dedupes on recommendation_id.
+   *
+   * Diverges from packages/sdk deliberately: that client retries ANY transport fault, but
+   * here feedbackSafely is awaited in the turn's critical path (runtime.ts:700), so
+   * retrying a 30s timeout would stall the user up to 90s at end of turn. Retry only faults
+   * that come back FAST — the server answered 429/502/503/504, or the connection was
+   * refused/reset. An abort or a deadline is never retried.
+   */
+  async feedback(req: FeedbackRequest): Promise<FeedbackResponse> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.post<FeedbackResponse>("/v1/feedback", req);
+      } catch (exc) {
+        const backoff = this.feedbackRetryDelaysMs[attempt];
+        if (backoff === undefined || !isFastRetryable(exc)) throw exc;
+        await sleep(retryDelayMs(exc, backoff));
+      }
+    }
   }
 
   // --- Reporting -------------------------------------------------------------
@@ -219,6 +253,64 @@ export class MinimaClient {
   capabilities(): Promise<CapabilitiesResponse> {
     return this.get<CapabilitiesResponse>("/v1/capabilities");
   }
+}
+
+/**
+ * Parse the JSON body, tolerating a non-JSON one (proxy HTML on a 502/503/504, empty
+ * body). Returning null lets raiseForStatus throw the typed MinimaError carrying the real
+ * status instead of an opaque SyntaxError — otherwise the parse throws FIRST, the status
+ * is lost, and the routing banner reads "routing offline: Unexpected token '<'" while
+ * lastFeedbackError surfaces the same noise as "ℹ learning loop: …".
+ * Ported from packages/sdk/src/client.ts (the SDK fixed this in dce63eb; the TUI, which is
+ * the shipping product, never picked it up).
+ */
+async function readBody(resp: { json(): Promise<unknown> }): Promise<unknown> {
+  try {
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+function retryAfterOf(resp: { headers?: { get(name: string): string | null } }): number | null {
+  const raw = resp.headers?.get("retry-after");
+  if (raw == null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Upper bound on an honored `retry-after` so a bad header can't stall the turn. */
+const RETRY_AFTER_CAP_MS = 10_000;
+
+/**
+ * Delay before the next feedback retry: a 429's `retry-after` (capped) wins over the
+ * backoff schedule; every other retryable fault uses `backoff`.
+ */
+export function retryDelayMs(exc: unknown, backoff: number): number {
+  if (exc instanceof MinimaRateLimited && exc.retryAfter != null) {
+    return Math.min(exc.retryAfter * 1000, RETRY_AFTER_CAP_MS);
+  }
+  return backoff;
+}
+
+/**
+ * Retryable AND fast to fail: a 429/502/503/504 the server actually answered, or a
+ * connection-level fault. Deliberately excludes AbortError/TimeoutError — those already
+ * cost a full deadline, and this runs while the user waits for the turn to end.
+ */
+export function isFastRetryable(exc: unknown): boolean {
+  if (exc instanceof MinimaRateLimited || exc instanceof MinimaUnavailable) return true;
+  if (exc instanceof Error) {
+    if (exc.name === "AbortError" || exc.name === "TimeoutError") return false;
+    // Any other MinimaError is a real answer (4xx) — retrying re-sends a request the
+    // server already rejected on its merits.
+    return !exc.name.startsWith("Minima");
+  }
+  return false;
 }
 
 /** Convenience: validate an outcome string against the wire enum. */
