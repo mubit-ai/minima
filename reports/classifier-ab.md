@@ -179,9 +179,61 @@ produce a head with demonstrated value on this distribution.
 
 ---
 
-## 6. Leg B — downstream routing impact
+## 6. Leg B — downstream routing impact: **blocked, not null**
 
-*(RouterBench, home-field/contaminated. Pending — see §8.)*
+The seam works. The infrastructure did not hold. Reporting this as inconclusive rather than
+dressing a partial run as a result.
+
+**What was built.** `prepare_rows()` now takes a `classify` hook (`tests/eval/harness.py`), so
+an arm's classifier assigns `task_type` from the prompt text instead of the dataset name. That
+propagates into the cluster key — and therefore into seeding and recall — and into the
+per-task-type capability priors. Each arm gets its own Mubit lane, seeded with its own keys,
+because memory seeded under A1's keys is invisible to A3a.
+
+**What happened.**
+
+| Arm | Result |
+|---|---|
+| A1 regex | completed — cost $0.0592, accuracy 0.692, 57.9 % savings vs premium, 81.8 % retention, 46.7 evidence/prompt (11.7 per model ✓), leakage 0 % |
+| A3a head | **failed** — Mubit `ServerError: request could not be processed` |
+| A5 oracle | **failed** — same |
+
+**A1's own run is invalid anyway: the V5 crosscheck came in at 50 %**, against the harness's
+own ≥ 0.8 floor. So there is no arm here whose numbers clear the pre-registered guards, and
+therefore no downstream claim in either direction.
+
+**Why the crosscheck fails, and it is not the classifier.** Hosted Mubit recall is
+**non-deterministic**: identical query, identical lane, repeated back-to-back returned 16, 13,
+16 evidence rows (and 1, 3, 7 on the seed lane). The crosscheck compares a pick made from
+recall cached once against a pick the engine makes from a *fresh* recall. When the two recalls
+differ, the picks differ — so V5 cannot reach 0.8 regardless of which classifier is in the
+loop. That is an evaluation-infrastructure defect, and it blocks *any* downstream routing
+experiment, not just this one.
+
+The failure is also load-shaped: the first arm of a process succeeds, subsequent arms get
+`ServerError`. Seeding ~800–1200 records per lane appears to exhaust something server-side.
+Recall latency is ~4–5 s per call, so a 4-arm run is ~30 min of almost pure network wait.
+
+### Deviation from pre-registration (§7 guard 3)
+
+The pre-registration required asserting `decision_basis == "memory"` on every request. **That
+guard is not implementable on the path it was written for**: the harness's headline runs
+through `_score_picks`/`_pick`, the factored scorer, which never constructs a
+`RecommendResponse` and so never produces `decision_basis`. Only `_crosscheck` invokes the real
+engine. The applicable substitutes were used instead — evidence/model ≥ 8 (**met**, 11.7) and
+the V5 crosscheck ≥ 0.8 (**failed**, 0.50). This was my specification error, not a silent skip.
+
+### What Leg B would need to be conclusive
+
+1. Fix or characterize recall non-determinism, or make the crosscheck compare like with like
+   (score the engine against the *same* recall the factored path used).
+2. One arm per process, with a cooldown between lanes, or a local Mubit instead of hosted.
+3. Only then is a head-vs-regex downstream comparison meaningful.
+
+**Consequence for the verdict:** the pre-registered **PULL** rule requires "Leg B shows no cost
+or quality gain". Leg B shows *nothing* either way, so PULL cannot be discharged and the
+actionable verdict stands at **RETUNE**, with the Leg A evidence that the head has no
+demonstrated value on out-of-corpus data recorded against any future keep decision.
 
 ---
 
@@ -198,7 +250,14 @@ produce a head with demonstrated value on this distribution.
    no `regex_hint` and no vocabulary tier. Fixed here with `--no-regex-hint` / `--no-vocab`,
    both defaulting to the production path. (For this artifact the difference is 0.1 pp,
    because of §2 — but that is luck, not design.)
-3. **Latent: the leakage primitives are ASCII-only.** `harness.py:_toks` uses `[a-z0-9]+`.
+3. **The V5 crosscheck cannot pass while hosted recall is non-deterministic.** It scores a pick
+   made from cached recall against a pick the engine makes from a fresh recall; identical
+   queries return different evidence sets (16/13/16 on one lane, 1/3/7 on another), so the two
+   disagree for reasons unrelated to what is being tested. Measured at 0.50 against a 0.8 floor.
+   Either compare the engine against the *same* recall the factored path used, or treat V5 as a
+   noisy diagnostic rather than a gate. **This blocks every downstream routing experiment**, not
+   just this one.
+4. **Latent: the leakage primitives are ASCII-only.** `harness.py:_toks` uses `[a-z0-9]+`.
    That is correct for its English RouterBench prompts, but any non-Latin text tokenizes to
    the **empty set**, so every such row shares the empty fingerprint and "matches" every
    other. My first contamination run hit exactly this and silently deleted 70 % of the
@@ -235,7 +294,11 @@ produce a head with demonstrated value on this distribution.
    and discarded on every call (§2).
 4. **Get a `code`-bearing clean eval set** before any keep/pull decision is final — `code` is
    plausibly the highest-traffic type and this evaluation cannot see it.
-5. **Investigate `→ translation` and `→ reasoning` as attractor classes** — 419 `other→reasoning`
+5. **Unblock downstream evaluation.** Until the V5 crosscheck stops failing for reasons
+   unrelated to the thing under test (§7.3), no routing experiment — this one or any other —
+   can produce a defensible cost or quality number. Fix that before spending more on
+   downstream work.
+6. **Investigate `→ translation` and `→ reasoning` as attractor classes** — 419 `other→reasoning`
    moves and a paraphrase→translation confusion look like a class-prior or anchor problem, and
    they are the specific defects a retrain would need to target.
 
