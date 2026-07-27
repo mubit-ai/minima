@@ -14,28 +14,24 @@ minima dashboard --allow-writes      # enable the one audited write control
 minima dashboard --db /path/to.db    # read a specific ledger
 ```
 
-## Running this worktree from anywhere — `minima-loc`
+## Running it from another repo — `minima-loc --wt`
 
-`packages/tui/scripts/minima-loc` runs **this worktree's** build with credentials loaded, from
-any working directory, under a distinct process name so a name-based `pkill minima` in another
-session cannot take it down.
-
-It exists because the harness resolves `.env.harness`/`.env` **relative to the current
-directory** — so a worktree build invoked from some other repo picks up that repo's env, not
-your credentials. The per-user store (OS keychain + `~/.minima-harness/config.env`) is hydrated
-from any cwd but holds only the core keys, so extras like `EXA_API_KEY` would go missing.
-
-Precedence matches the harness's own, deliberately: **an already-set shell variable always
-wins**, then `.env.harness`, then `.env`, then keychain/`config.env`. Nothing is ever printed.
-
-Paths are derived from the script's own location, so the worktree can be moved or renamed.
-Overrides: `MINIMA_LOC_ENV_DIR` (where the env files live; default auto-detects this worktree
-then the sibling `minima` checkout), `MINIMA_LOC_FROM_SOURCE=1` (run TS via `bun` instead of the
-compiled binary — always current, no rebuild needed).
+The harness resolves `.env.harness`/`.env` **relative to the current directory**, so a worktree
+build invoked from some other repo picks up that repo's env rather than your credentials. The
+`minima-loc` shell function (in `~/.zshrc`, not part of this repo) handles that: it resolves a
+worktree by name via `git worktree list`, sources that worktree's `.env.harness` — falling back
+to the main checkout, since the file is gitignored and usually only lives there — inside a
+subshell so the credentials never leak into the interactive shell, and preserves cwd so per-repo
+routing and memory still key off wherever you invoked it.
 
 ```bash
-MINIMA_OUTFILE=dist/minima-loc bun run scripts/build.ts   # rebuild after changes
+minima-loc --wt minima-dashboard dashboard          # this branch's dashboard
+minima-loc --wt minima-dashboard dashboard --open
 ```
+
+No extra wrapper is needed: the dashboard reads a local SQLite file and makes **no model or
+service calls**, so it runs fine even with no credentials at all — they only matter when the
+same build is used for an actual agent session.
 
 ## Why it reads the harness ledger, not the service
 
