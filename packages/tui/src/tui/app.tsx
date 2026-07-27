@@ -3900,6 +3900,9 @@ export function HarnessApp({
             spawn: planSpawn,
             signal: controller.signal,
           });
+          // The refutation child runs on its own meter and was never reserved — book its
+          // realized spend or /verify is free money against the ledger.
+          if (outcome) agent.budget?.bookSpend(outcome.childCostUsd, "verify");
           const text = !outcome
             ? "Nothing to verify — no plan with steps (or the pass was aborted)."
             : outcome.verdict.refuted

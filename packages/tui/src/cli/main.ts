@@ -1002,6 +1002,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       spawnDepth: 0,
       maxDepth: 2,
       typedTask: config.typedTask,
+      onSpend: (usd) => agent.budget?.bookSpend(usd, "subagent"),
     }),
   );
 
