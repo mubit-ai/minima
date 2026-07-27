@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TodoTask } from "../src/tools/todowrite.ts";
 import { grantTaskRows, taskFooterRows } from "../src/tui/task_footer.ts";
+import { readSource } from "./_source.ts";
 
 function task(content: string, status: TodoTask["status"]): TodoTask {
   return { content, status, priority: "medium" };
@@ -130,14 +131,14 @@ describe("grantTaskRows — alert wins, then header, then next (display order ke
 
 describe("todoState threading — sub-agents stay isolated", () => {
   test("builtinTools passes the observable array; spawn.ts never provides one", () => {
-    const builtin = readFileSync(join(import.meta.dir, "../src/tools/builtin.ts"), "utf8");
+    const builtin = readSource("tools/builtin.ts");
     expect(builtin).toContain("todowriteTool(opts.todoState ?? [], {");
-    const spawn = readFileSync(join(import.meta.dir, "../src/minima/spawn.ts"), "utf8");
+    const spawn = readSource("minima/spawn.ts");
     expect(spawn).not.toContain("todoState");
   });
 
   test("main.ts hands ONE array to both the toolset and the TUI", () => {
-    const main = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
+    const main = readSource("cli/main.ts");
     expect(main).toContain("const todoState: TodoTask[] = [];");
     expect(main).toMatch(/toolsFor\(\s*args,\s*config\.bigPlan === true,\s*todoState,/);
     expect(main).toContain("todos: todoState,");
@@ -145,7 +146,7 @@ describe("todoState threading — sub-agents stay isolated", () => {
 });
 
 describe("tui/app.tsx wires the D3a task panel", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("visibility matches the perm/question suppression rule and defers to the panel", () => {
     const idx = src.indexOf("const taskVisible =");

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SCROLLBACK_SAFETY_ROWS, nextLiveFrameHeight } from "../src/tui/layout.ts";
+import { readSource } from "./_source.ts";
 
 // Deterministic PRNG (LCG) — property tests must not flake run-to-run.
 function lcg(seed: number): () => number {
@@ -152,7 +153,7 @@ describe("anchor-ledger invariant — simulated log-update terminal", () => {
 });
 
 describe("MarkdownRenderer keeps estimate == render (empty-line armor)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/messages.tsx"), "utf8");
+  const src = readSource("tui/messages.tsx");
 
   test("every per-line branch armors empty text — an empty <Text> collapses to 0 rows while the ruler counts 1", () => {
     // The plain-line armor: without it a blank-line-heavy reply printed 6+ rows fewer than
@@ -164,7 +165,7 @@ describe("MarkdownRenderer keeps estimate == render (empty-line armor)", () => {
 });
 
 describe("app.tsx wires the anchor ledger", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the live box carries an explicit ledger height + overflow clip (wipe unreachable)", () => {
     expect(src).toContain("height={ANCHOR_LEGACY ? undefined : liveHeight}");

@@ -5,6 +5,7 @@ import type { DecisionWrite } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
 import { whyReportFor } from "../src/minima/why.ts";
+import { readSource } from "./_source.ts";
 
 const GREEN: Factors = {
   pass: true,
@@ -191,7 +192,7 @@ describe("whyReportFor", () => {
 });
 
 describe("the TUI wires /why", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("lists the command and gates ledger inspection behind plan verification", () => {
     expect(src).toContain('{ name: "why"');

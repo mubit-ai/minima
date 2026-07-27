@@ -13,6 +13,7 @@ import {
   holdOnAbort,
 } from "../src/tui/prompt_queue.ts";
 import { QueueList, queueListLines, queueListRowCount } from "../src/tui/queue_list.tsx";
+import { code, readSource } from "./_source.ts";
 
 function queued(...items: string[]): PromptQueue {
   return items.reduce(enqueuePrompt, EMPTY_QUEUE);
@@ -140,7 +141,7 @@ describe("QueueList — rendered output", () => {
 });
 
 describe("app wiring (source pins, the prompt-queue.test.ts pattern)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the list mounts in the composer column directly above the prompt box", () => {
     expect(src).toContain("{queueListVisible && <QueueList queue={promptQueue} />}");
@@ -161,19 +162,19 @@ describe("app wiring (source pins, the prompt-queue.test.ts pattern)", () => {
 
   test("queueListHeight is booked in contentRows (an unbooked row top-clips the composer)", () => {
     expect(src).toContain(
-      "        busyIndicatorHeight +\n        queueListHeight +\n        suggestionsHeight +",
+      code("        busyIndicatorHeight +\n        queueListHeight +\n        suggestionsHeight +"),
     );
   });
 
   test("queueListHeight is booked in streamReserved (the streaming tail must shrink for it)", () => {
     expect(src).toContain(
-      "    busyIndicatorHeight +\n    queueListHeight +\n    streamingThoughtsHeight +",
+      code("    busyIndicatorHeight +\n    queueListHeight +\n    streamingThoughtsHeight +"),
     );
   });
 
   test("queueListHeight is booked in the treeMaxRows subtraction (/tree yields rows to it)", () => {
     expect(src).toContain(
-      "      busyIndicatorHeight -\n      queueListHeight -\n      TREE_CHROME,",
+      code("      busyIndicatorHeight -\n      queueListHeight -\n      TREE_CHROME,"),
     );
   });
 });
