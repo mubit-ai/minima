@@ -126,6 +126,23 @@ Diagnostics are ephemeral — they live only in the turn's tool-result `content`
 
 ## 11. Seam-freeze review (before any follow-up LSP op is planned)
 
+> **Why this gate exists — settled by its own first run (2026-07-27).** The review found a
+> defect no amount of stub testing could have surfaced: `initialize` can answer with a
+> JSON-RPC **error**, and the id-correlator resolved on `error` exactly as on `result`, so a
+> refused handshake reported success. The trigger is ordinary, not exotic — a workspace with
+> no local `typescript` gets `Could not find a valid TypeScript installation. Exiting.` The
+> client then talked to a server that had already quit, and every edit paid the full 1500 ms
+> budget and reported `timeout`: measured 1502/1501/1501 ms across three consecutive edits,
+> silently, for the rest of the session. Fail-open kept it from corrupting anything, which is
+> exactly why it could have shipped unnoticed at default-ON.
+>
+> Item 2 below had flagged the request/response correlator as the untested half of the seam.
+> That was the right call, and the defect was sitting in it. **The rule this establishes: a
+> seam may not widen — no second op, no promotion to default-ON — until every code path the
+> new ops depend on has been exercised against a real server, not only a stub.** A stub
+> encodes the behavior its author already believes in; it cannot tell you that a server will
+> refuse. Fixed in `fix/lsp-handshake`, red test in `tests/lsp-handshake.test.ts`.
+
 1. The frozen types + `diagnosticsFor` signature (§3) — confirm `LspClient` as an interface admits new ops without breaking callers.
 2. **Request/response correlation gap**: the pathfinder exercises only the NOTIFICATION correlator end-to-end; the id-correlated request/response path (only `initialize` here) is what every future op depends on. Decide it's proven, or require an id-correlator acceptance test first.
 3. **Real-server framing validation** (out-of-CI, manual): run against real `typescript-language-server --stdio`/`pyright-langserver`/`gopls` once, and CONFIRM the TS-lane binary name (the flagged `tsserver` vs `typescript-language-server` question, §6).
@@ -133,9 +150,34 @@ Diagnostics are ephemeral — they live only in the turn's tool-result `content`
 5. **Advisory gate/signal graduation** — whether diagnostics become an explicit advisory YELLOW signal (observer `observer_flagged` / at-most-one-yellow pattern); touches feedback-truth, must never reach `evidence_source="gate"`/`verified_in_production`. Deferred by design.
 6. **Server-process teardown at session end, against a REAL server** (added 2026-07-25 after the owner's manual pass). `lspManager?.shutdown()` in `closeDb` is unit-proven against the stub (AC6), but the manual T11 run only exercised the absent-server no-op (no `typescript-language-server` installed locally) — a real server's process tree surviving harness exit has never been observed either way. bgjobs' kill-at-session-end IS manually verified; the LSP client spawns its own long-lived external process and that path is not.
 
-## Flagged knowledge claims (validate at seam-freeze, non-blocking — stub makes them so)
+## Flagged knowledge claims — RESOLVED 2026-07-27 against typescript-language-server 5.3.0
 
-- **`tsserver` binary naming (§6):** raw `tsserver` speaks the TSServer protocol (newline-delimited), NOT LSP Content-Length; the LSP TS server is `typescript-language-server --stdio`. No in-repo evidence (greenfield) — production discovery must resolve `typescript-language-server` and confirm before default-ON.
-- **Push-vs-pull (§6):** the claim that tsserver/pyright/gopls push `publishDiagnostics` on didOpen/didChange without a pull is LSP knowledge, not repo evidence. The stub encodes push; real-server confirmation is a seam-freeze item.
-- **Real-server teardown (§11.6):** whether a real language server's process (and any children) actually dies at session end via `closeDb → shutdown()` — stub-proven only; the manual pass covered just the absent-server no-op.
+All three were driven from a throwaway script against a real server, deliberately not through
+the TUI (the PTY path is flaky, and the question was protocol truth, not UI truth).
+
+- **`tsserver` binary naming (§6): CONFIRMED CORRECT.** `resolveLspServer('.ts')` resolves
+  `typescript-language-server --stdio`; `Bun.which("tsserver")` is `null` — the wrapper is
+  required, and `SERVER_DEFS` already had it right.
+- **Push-vs-pull (§6): CONFIRMED, push is correct.** The server advertises no
+  `diagnosticProvider`, and a `textDocument/diagnostic` pull request comes back
+  `-32601 Unhandled method`. It pushes `publishDiagnostics` on didOpen/didChange, which is
+  exactly what the client listens for. Verified end-to-end: an edit introducing a type error
+  surfaces `Type 'string' is not assignable to type 'number'. (2322) [typescript]`.
+- **Real-server teardown (§11.6): CONFIRMED CORRECT.** Spawned pid observed via `pgrep`,
+  gone after `shutdown()`, no survivors, idempotent on a second call — the same path
+  `closeDb` invokes at session end.
+- **NEW, found by this review: refused-handshake defect.** See the callout at the head of
+  §11. Not on the flagged list because nobody suspected it — which is the point of the gate.
+
+## Open after the review
+
+- **Cold-start latency (§11.4 prerequisite).** First diagnostic of a session measures
+  1264–1421 ms against the 1500 ms budget (median 1304 ms over four cold starts; 1434 ms
+  after the handshake fix) — 6–16% headroom on an M-series Mac with a warm cache in a
+  ~160-file project. Warm calls are 364–558 ms, including on a file the server has not seen
+  before, so the cost is one-time project load, not per-file. A slower machine or a larger
+  repo pushes the first edit of every session over the line, where it now reports `timeout`
+  and returns nothing. Strategy (raise the budget / warm at session start / accept a
+  diagnostic-free first edit) is an owner decision and a **prerequisite for the promotion
+  bar**, not an optional extra.
 - Everything else (hook fold, result shapes, discovery/lifecycle, feedback-truth, flag plumbing) is verified against opened files in §0.
