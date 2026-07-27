@@ -68,6 +68,18 @@ export interface SpawnedConnection {
 }
 export type LspSpawn = (spec: LspServerSpec, cwd: string) => SpawnedConnection;
 
+/** One record per attempted diagnostics collection, emitted whether it succeeded, found
+ * nothing, timed out or was refused. `status` is the field the promotion bar is argued
+ * from: before the handshake fix a refused server reported `timeout` forever, and no
+ * amount of recollection would have distinguished that from a slow one. */
+export interface LspProbeRecord {
+  status: DiagnosticsStatus;
+  diagnostics: number;
+  latency_ms: number;
+  ext: string;
+}
+export type LspProbeSink = (probe: LspProbeRecord) => void;
+
 // ------------------------------------------------------------------------ discovery
 
 interface ServerDef {
@@ -584,8 +596,30 @@ function touchedPaths(ctx: AfterToolCallContext, workdir: string): string[] {
  * (each internally raced against the manager's timeout), and a single outer race caps the
  * batch, so apply_patch's N files never multiply latency. A timed-out batch drops → the
  * hook contributes nothing (byte-identical). */
-async function collectShared(client: LspClient, paths: string[]): Promise<DiagnosticsResult[]> {
-  const collection = Promise.all(paths.map((p) => client.diagnosticsFor(p)));
+async function collectShared(
+  client: LspClient,
+  paths: string[],
+  onProbe?: LspProbeSink,
+): Promise<DiagnosticsResult[]> {
+  const collection = Promise.all(
+    paths.map(async (p) => {
+      const started = performance.now();
+      const r = await client.diagnosticsFor(p);
+      if (onProbe) {
+        try {
+          onProbe({
+            status: r.status,
+            diagnostics: r.diagnostics.length,
+            latency_ms: Math.round(performance.now() - started),
+            ext: extname(p).toLowerCase(),
+          });
+        } catch {
+          // telemetry is fail-open — an audit write never reaches the tool result
+        }
+      }
+      return r;
+    }),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), DIAGNOSTICS_TIMEOUT_MS);
@@ -616,7 +650,7 @@ function renderDiagnostics(results: DiagnosticsResult[]): string {
  * one compact block. Fail-open on every axis — guarded like _artifact_gc's touch hook. */
 export function makeLspDiagnosticsHook(
   client: LspClient,
-  opts: { workdir: string },
+  opts: { workdir: string; onProbe?: LspProbeSink },
 ): AfterToolCall {
   return async (ctx) => {
     if (ctx.isError || ctx.result.details?.error) return null;
@@ -624,7 +658,7 @@ export function makeLspDiagnosticsHook(
     if (paths.length === 0) return null;
     let results: DiagnosticsResult[];
     try {
-      results = await collectShared(client, paths);
+      results = await collectShared(client, paths, opts.onProbe);
     } catch {
       return null;
     }
