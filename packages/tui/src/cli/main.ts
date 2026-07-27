@@ -366,7 +366,7 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Flash",
-    cost: { input: 0.3, output: 2.5, cache_read: 0.075 },
+    cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
     reasoning: true,
@@ -376,7 +376,10 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Pro",
-    cost: { input: 1.25, output: 10.0, cache_read: 0.3125 },
+    // Google prices 2.5 Pro in two tiers on prompt size; these are the <=200k rates.
+    // Above 200k it is input 2.50 / output 15.00 / cache_read 0.25 — a known undercharge
+    // on a 2M-context model that the flat Model.cost shape cannot express.
+    cost: { input: 1.25, output: 10.0, cache_read: 0.125 },
     context_window: 2_000_000,
     max_tokens: 8192,
     reasoning: true,
