@@ -3608,7 +3608,9 @@ export function HarnessApp({
                   `no session matching "${targetId}"${
                     near.length
                       ? `\n${near
-                          .map((r) => `  ${r.run_id.slice(0, 12)}  ${r.display_name ?? "(unnamed)"}`)
+                          .map(
+                            (r) => `  ${r.run_id.slice(0, 12)}  ${r.display_name ?? "(unnamed)"}`,
+                          )
                           .join("\n")}`
                       : " — run /resume with no argument to browse sessions"
                   }`,

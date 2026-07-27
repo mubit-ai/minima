@@ -111,7 +111,7 @@ export class MinimaClient {
       headers: headers(this.apiKey),
       signal: this.withTimeout(undefined),
     });
-    const body = await resp.json();
+    const body = await readBody(resp);
     raiseForStatus(resp.status, body);
     return body as T;
   }
@@ -123,7 +123,7 @@ export class MinimaClient {
       body: JSON.stringify(payload),
       signal: this.withTimeout(signal),
     });
-    const body = await resp.json();
+    const body = await readBody(resp);
     raiseForStatus(resp.status, body);
     return body as T;
   }
@@ -218,6 +218,23 @@ export class MinimaClient {
 
   capabilities(): Promise<CapabilitiesResponse> {
     return this.get<CapabilitiesResponse>("/v1/capabilities");
+  }
+}
+
+/**
+ * Parse the JSON body, tolerating a non-JSON one (proxy HTML on a 502/503/504, empty
+ * body). Returning null lets raiseForStatus throw the typed MinimaError carrying the real
+ * status instead of an opaque SyntaxError — otherwise the parse throws FIRST, the status
+ * is lost, and the routing banner reads "routing offline: Unexpected token '<'" while
+ * lastFeedbackError surfaces the same noise as "ℹ learning loop: …".
+ * Ported from packages/sdk/src/client.ts (the SDK fixed this in dce63eb; the TUI, which is
+ * the shipping product, never picked it up).
+ */
+async function readBody(resp: { json(): Promise<unknown> }): Promise<unknown> {
+  try {
+    return await resp.json();
+  } catch {
+    return null;
   }
 }
 
