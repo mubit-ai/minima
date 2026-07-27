@@ -48,7 +48,7 @@ Two things this does **not** say, both important:
 | **S3** A2 emits zero `embedding` sources; matches A1 off the vocabulary tier | ✅ PASS |
 | **S4** A3a ≡ A3b | ✅ PASS — **0.0000 delta, 0.000 disagreement** |
 | **S5** local head == prod head | ✅ PASS — **ID match, 100/100 agreement** with `api.minima.sh` |
-| **S6** re-run determinism | ✅ PASS |
+| **S6** re-run determinism | ✅ PASS — re-ran end to end; gates, primary, sensitivity and unmappable blocks bit-identical (latency excluded, wall-clock) |
 | Contamination | 3 rows of 2 810 dropped (0.1 %) |
 
 **Dataset.** Super-NaturalInstructions, 2 609 labelled prompts across 437 tasks and 7 Minima
@@ -198,6 +198,13 @@ produce a head with demonstrated value on this distribution.
    no `regex_hint` and no vocabulary tier. Fixed here with `--no-regex-hint` / `--no-vocab`,
    both defaulting to the production path. (For this artifact the difference is 0.1 pp,
    because of §2 — but that is luck, not design.)
+3. **Latent: the leakage primitives are ASCII-only.** `harness.py:_toks` uses `[a-z0-9]+`.
+   That is correct for its English RouterBench prompts, but any non-Latin text tokenizes to
+   the **empty set**, so every such row shares the empty fingerprint and "matches" every
+   other. My first contamination run hit exactly this and silently deleted 70 % of the
+   `translation` class before I caught it (285 false drops → 3 real ones after switching to
+   `\w+` plus a 5-token minimum). Worth fixing in `harness.py` before it is ever pointed at a
+   multilingual dataset.
 
 ---
 
