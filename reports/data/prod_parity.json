@@ -1,0 +1,14 @@
+{
+ "prod_classifier_id": "potion-base-32M-c18e819c6c6d",
+ "local_classifier_id": "potion-base-32M-c18e819c6c6d",
+ "id_match": true,
+ "compared": 100,
+ "requested": 100,
+ "agreement": 1.0,
+ "prod_source_mix": {
+  "embedding": 98,
+  "embedding_abstain": 2
+ },
+ "mismatches": [],
+ "gate_s5_pass": true
+}

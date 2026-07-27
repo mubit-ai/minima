@@ -31,7 +31,7 @@ _TASK_URL = _RAW + "/tasks/{name}.json"
 # first ~3 KB, so the index over all ~1.6k tasks costs 4 KB each; only the tasks actually
 # sampled pay the 400 KB read that reaches into `Instances`.
 _INDEX_BYTES = 4_000
-_HEAD_BYTES = 400_000
+_HEAD_BYTES = 120_000
 
 # SNI's official test split covers only 12 categories (~5 Minima types, no code/qa/
 # translation/tool_use). The head never trained on ANY SNI, so the train/test line is
@@ -189,7 +189,16 @@ def load_instances(name: str, cache_dir: Path, *, cap: int) -> tuple[TaskHeader,
 # Reuses the harness's own leakage primitives so the definition of "twin" is identical to
 # the one the savings eval already defends (tests/eval/harness.py:_toks/_jaccard).
 
-_WORD = re.compile(r"[a-z0-9]+")
+# Unicode-aware on purpose. The harness's own `[a-z0-9]+` is fine for English RouterBench
+# prompts, but SNI's translation slice is Tamil/Hindi/Japanese/…: an ASCII class tokenizes
+# every one of those to the EMPTY set, so they all share the empty fingerprint and
+# "exact-match" each other. That silently deleted 70% of the translation class on the
+# first run of this guard.
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+# Below this, Jaccard is dominated by chance — "Please hold on." shares 0.6+ with any
+# short corpus row. Fingerprint equality is likewise meaningless on a 1-2 token string.
+_MIN_TOKENS = 5
 
 
 def norm_fingerprint(text: str) -> str:
@@ -198,7 +207,11 @@ def norm_fingerprint(text: str) -> str:
 
 
 def toks(text: str) -> set[str]:
-    return set(_WORD.findall(text.lower()))
+    return set(_WORD.findall(unicodedata.normalize("NFKC", text).lower()))
+
+
+def comparable(text: str) -> bool:
+    return len(_WORD.findall(unicodedata.normalize("NFKC", text).lower())) >= _MIN_TOKENS
 
 
 def jaccard(a: set[str], b: set[str]) -> float:

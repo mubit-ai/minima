@@ -165,8 +165,15 @@ class EvalResult:
 
 
 def prepare_rows(df: Any, candidates: list[str], limit_rows: int,
-                 task_type_for=rb._task_type_for) -> list[Row]:
-    """Keep rows where every candidate has a usable (score, cost); de-dup by fingerprint."""
+                 task_type_for=rb._task_type_for, classify=None) -> list[Row]:
+    """Keep rows where every candidate has a usable (score, cost); de-dup by fingerprint.
+
+    `classify` is the classifier-in-loop seam. Without it `task_type` comes from the
+    dataset name — an ORACLE the shipping engine never has. With it, the arm's classifier
+    reads the prompt text, so classification quality propagates into the cluster key (and
+    therefore into seeding and recall) and into the per-task-type capability priors: into
+    the routing decision itself, not just the crosscheck.
+    """
     columns = list(df.columns)
     model_cols = rb.detect_model_columns(columns)
     missing = [c for c in candidates if c not in model_cols]
@@ -199,7 +206,8 @@ def prepare_rows(df: Any, candidates: list[str], limit_rows: int,
             continue
         seen.add(fp)
         en = str(rowd.get("eval_name", ""))
-        rows.append(Row(prompt, _task_type(en, task_type_for), scores, costs, fp, en))
+        tt = classify(prompt) if classify is not None else _task_type(en, task_type_for)
+        rows.append(Row(prompt, tt, scores, costs, fp, en))
         if limit_rows and len(rows) >= limit_rows:
             break
     return rows
@@ -495,13 +503,15 @@ async def evaluate(
     market_prices=None,
     provider_for=None,
     source_dataset: str = "routerbench",
+    classify=None,
 ) -> EvalResult:
     # Pluggable backend: defaults preserve the RouterBench path; pass these to point the same
     # eval machinery at another dataset (e.g. LLMRouterBench) that emits the wide contract.
     load_df = (lambda: rb.load_routerbench_df("0shot")) if load_df is None else load_df
     task_type_for = rb._task_type_for if task_type_for is None else task_type_for
     df = load_df()
-    full = prepare_rows(df, candidates, limit_rows=0, task_type_for=task_type_for)  # scan all; stratify below
+    full = prepare_rows(df, candidates, limit_rows=0, task_type_for=task_type_for,
+                        classify=classify)  # scan all; stratify below
     # Stratify the pool into an EASY-for-cheap majority (e.g. MMLU) and a HARD-for-cheap
     # minority (grade-school math, where weak/cheap models fail). This gives the router
     # genuinely different task families to route between — the test of per-prompt routing,

@@ -29,9 +29,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifact", type=Path, required=True)
     ap.add_argument("--corpus", type=Path, required=True, help="jsonl with a 'text' field")
+    # Serving passes the regex as a hint and short-circuits on the vocabulary tier BEFORE
+    # the head runs (classify.py:563-576). Replaying without these measures a config that
+    # is never served; both default ON so the diagnostic reflects production.
+    ap.add_argument("--no-regex-hint", action="store_true",
+                    help="drop the regex hint (no-op for artifacts with empty regex_classes)")
+    ap.add_argument("--no-vocab", action="store_true",
+                    help="skip the high-precision vocabulary tier")
     args = ap.parse_args()
 
-    from minima.recommender.classify import infer_task_type
+    from minima.recommender.classify import high_precision_type, infer_task_type
     from minima.recommender.classify_embed import load_embed_classifier
 
     clf = load_embed_classifier(str(args.artifact), required=True)
@@ -41,10 +48,15 @@ def main() -> None:
     total = non_other = non_other_moved = relabeled = abstained = 0
     for t in texts:
         old = infer_task_type(t).value
-        res = clf.classify(t)
-        new = old if res.abstained else res.task_type.value
+        precise = None if args.no_vocab else high_precision_type(t)
+        if precise is not None:
+            new = precise.value
+            res = None
+        else:
+            res = clf.classify(t, regex_hint=None if args.no_regex_hint else infer_task_type(t))
+            new = old if res.abstained else res.task_type.value
         total += 1
-        abstained += int(res.abstained)
+        abstained += int(res is not None and res.abstained)
         if new != old:
             relabeled += 1
             moved[f"{old}->{new}"] += 1

@@ -108,6 +108,10 @@ ignore = ["B008"]
   "E501",
   "E702",
 ] # dense report/format lines + compact numeric loops
+"scripts/eval/classifier_ab/*" = [
+  "E501",
+  "E702",
+] # same: one-off eval runners, dense report lines
 "tests/live/*" = [
   "E501",
 ] # inline request bodies + progress prints in live e2e demos

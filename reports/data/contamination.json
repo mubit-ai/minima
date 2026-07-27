@@ -1,0 +1,46 @@
+{
+ "eval_rows_in": 2810,
+ "corpus_rows": 61232,
+ "dropped": 3,
+ "kept": 2807,
+ "dropped_by_reason": {
+  "jaccard>=0.6 (input)": 2,
+  "jaccard>=0.6 (text)": 1
+ },
+ "dropped_by_class": {
+  "extraction": 1,
+  "~unmappable": 2
+ },
+ "examples": [
+  {
+   "category": "Speaker Identification",
+   "definition": "In this task, you are given an utterance, which is a part of a conversation between a user and an agent. Your job is to detect the speaker. The user usually commands the agent to schedule events, retrieve event information, and check the schedule. While the agent's response is an answer to the user's questions or follow-up questions on the user's command. Answer with \"User\" or \"Agent\".",
+   "input": "What day of the week is tomorrow?",
+   "instance_id": "task1599-270e5899f80147b6bf56831889bf2245",
+   "label": "extraction",
+   "task": "task1599_smcalflow_classification",
+   "text": "In this task, you are given an utterance, which is a part of a conversation between a user and an agent. Your job is to detect the speaker. The user usually commands the agent to schedule events, retrieve event information, and check the schedule. While the agent's response is an answer to the user's questions or follow-up questions on the user's command. Answer with \"User\" or \"Agent\".\n\nWhat day of the week is tomorrow?",
+   "_reason": "jaccard>=0.6 (input)"
+  },
+  {
+   "category": "Text Completion",
+   "definition": "In this task, you are given a context and four options. Each option is a suggested ending for the context. You should read the context and pick the best ending for the context. Please answer with \"A\", \"B\", \"C\", and \"D\". ",
+   "input": "[header] How to enjoy retirement [title] Manage your expectations. [step] To start, you'll want to manage your expectations. If you're anxious to get out of a stifling career, you may think retirement will be glorious. <sep> (A) However, your expectations may not be realistic based on certain circumstances. If you're a true retirement enthusiast, you may worry that retirement is unanticipated. (B) Consider defining your expectations as \" hard work, \" and what activities you'll enjoy doing. Deciding on what activities are fun, rewarding, and enjoyable for you will help you adapt to the unexpected. (C) Although this idea might seem like you're friends with benefits, you may not take your retirement in the immediate, immediate way that you want. If you're capable of being in a thriving career after you retire, it's important to identify and manage your expectations. (D) However, it's very normal for the transition into retirement to be stressful. Try to keep your expectations realistic, and expect some sadness in the early days of retirement.",
+   "instance_id": "task1389-781b910a82d64dd29b4cb003cf7a966f",
+   "label": null,
+   "task": "task1389_hellaswag_completion",
+   "text": "In this task, you are given a context and four options. Each option is a suggested ending for the context. You should read the context and pick the best ending for the context. Please answer with \"A\", \"B\", \"C\", and \"D\".\n\n[header] How to enjoy retirement [title] Manage your expectations. [step] To start, you'll want to manage your expectations. If you're anxious to get out of a stifling career, you may think retirement will be glorious. <sep> (A) However, your expectations may not be realistic based on certain circumstances. If you're a true retirement enthusiast, you may worry that retirement is unanticipated. (B) Consider defining your expectations as \" hard work, \" and what activities you'll enjoy doing. Deciding on what activities are fun, rewarding, and enjoyable for you will help you adapt to the unexpected. (C) Although this idea might seem like you're friends with benefits, you may not take your retirement in the immediate, immediate way that you want. If you're capable of being in a thriving career after you retire, it's important to identify and manage your expectations. (D) However, it's very normal for the transition into retirement to be stressful. Try to keep your expectations realistic, and expect some sadness in the early days of retirement.",
+   "_reason": "jaccard>=0.6 (text)"
+  },
+  {
+   "category": "Text Completion",
+   "definition": "In this task, you are given a context and four options. Each option is a suggested ending for the context. You should read the context and pick the best ending for the context. Please answer with \"A\", \"B\", \"C\", and \"D\". ",
+   "input": "We see an opening title screen. A man and boys standard sit on the snow and ice fish. we <sep> (A) see the cities and changes around them. (B) see the bock cartoon animation on the bottom. (C) then see the sport. (D) see a tittle screen and a plane flys overhead in the sky and we see the people on the ice and a truck in the distance.",
+   "instance_id": "task1389-b8862d4a4b3f4b7cba6cf54ed9d6f56d",
+   "label": null,
+   "task": "task1389_hellaswag_completion",
+   "text": "In this task, you are given a context and four options. Each option is a suggested ending for the context. You should read the context and pick the best ending for the context. Please answer with \"A\", \"B\", \"C\", and \"D\".\n\nWe see an opening title screen. A man and boys standard sit on the snow and ice fish. we <sep> (A) see the cities and changes around them. (B) see the bock cartoon animation on the bottom. (C) then see the sport. (D) see a tittle screen and a plane flys overhead in the sky and we see the people on the ice and a truck in the distance.",
+   "_reason": "jaccard>=0.6 (input)"
+  }
+ ]
+}
