@@ -1399,6 +1399,9 @@ Usage: minima dashboard [options]
       --host HOST        interface to bind (default 127.0.0.1 — loopback only)
       --db PATH          ledger to read (default ~/.minima-harness/minima.db)
       --allow-writes     enable the audited memory status controls (off by default)
+      --editor CMD       editor for the jump-to-source button (default: first found on PATH;
+                         one of code, cursor, windsurf, zed, subl, idea, webstorm, vim, nvim;
+                         pass "none" to disable the endpoint entirely)
       --open             open the printed URL in the default browser
   -h, --help
 
@@ -1431,6 +1434,7 @@ async function dashboardCli(args: string[]): Promise<number> {
       host: flagValue("--host"),
       dbPath: flagValue("--db"),
       allowWrites: args.includes("--allow-writes"),
+      editor: flagValue("--editor"),
     });
   } catch (exc) {
     if (exc instanceof LedgerUnavailableError) {
@@ -1445,6 +1449,9 @@ async function dashboardCli(args: string[]): Promise<number> {
   process.stdout.write(`minima dashboard — ${handle.url}\n`);
   process.stdout.write(`  ledger  ${handle.ledgerPath}\n`);
   process.stdout.write(`  mode    ${handle.readOnly ? "read-only" : "writes enabled"}\n`);
+  process.stdout.write(
+    `  editor  ${handle.editor ?? "none found — pass --editor CMD to enable jump-to-source"}\n`,
+  );
   process.stdout.write("  Ctrl+C to stop\n");
 
   if (args.includes("--open")) {

@@ -398,6 +398,34 @@ export class DashboardStore {
     return this.db.query(PLANS_SQL).all(scope, limit) as PlanSummary[];
   }
 
+  /**
+   * Look up ONE recorded write by (plan, exact recorded path), with the run's project root.
+   *
+   * This is the whole basis of the file viewer's safety: a request references a ledger row, not
+   * a filesystem path, so no caller-supplied string ever reaches the disk. A path that was
+   * never recorded simply has no row and the viewer 404s.
+   */
+  recordedFile(
+    planId: string,
+    path: string,
+  ): { path: string; project_key: string | null; kind: string; step_id: string | null } | null {
+    return this.db
+      .query(
+        `SELECT f.path, f.kind, f.step_id, r.project_key
+         FROM file_changes f
+         JOIN plans p ON p.id = f.plan_id
+         LEFT JOIN runs r ON r.run_id = p.session_id
+         WHERE f.plan_id = ?1 AND f.path = ?2
+         LIMIT 1`,
+      )
+      .get(planId, path) as {
+      path: string;
+      project_key: string | null;
+      kind: string;
+      step_id: string | null;
+    } | null;
+  }
+
   /** One plan and everything attached to it. null = no such plan. */
   planDetail(planId: string): PlanDetail | null {
     const plan = this.db

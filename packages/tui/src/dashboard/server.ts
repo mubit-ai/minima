@@ -18,11 +18,13 @@
  */
 
 import { MinimaDb, defaultDbPath } from "../db/minima_db.ts";
+import { detectEditor, openInEditor, readRecorded, resolveRecorded } from "./files.ts";
 import { DashboardStore, LedgerUnavailableError, type Scope } from "./queries.ts";
 import {
   type NavItem,
   type PaletteItem,
   costView,
+  fileView,
   memoryView,
   notFoundView,
   overviewView,
@@ -44,6 +46,8 @@ export interface DashboardOptions {
   host?: string;
   token?: string;
   allowWrites?: boolean;
+  /** Editor command for the jump-to-source button; null/"none" disables the endpoint. */
+  editor?: string | null;
 }
 
 export interface DashboardHandle {
@@ -52,6 +56,8 @@ export interface DashboardHandle {
   token: string;
   readOnly: boolean;
   ledgerPath: string;
+  /** The editor the jump-to-source button will launch, or null when none is available. */
+  editor: string | null;
   stop(): void;
 }
 
@@ -60,6 +66,8 @@ interface Ctx {
   writeDb: MinimaDb | null;
   token: string;
   allowWrites: boolean;
+  /** Resolved editor command, or null when none was found or `--editor none` was passed. */
+  editor: string | null;
 }
 
 const NAV: { path: string; label: string }[] = [
@@ -205,9 +213,13 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const scope = scopeOf(url);
     const now = Date.now() / 1000;
 
-    if (req.method === "POST") {
-      const match = /^\/api\/v1\/memories\/([^/]+)\/status$/.exec(path);
-      if (!match) return json({ error: "not_found" }, 404);
+    // Guarded on the match, NOT on the method: an unqualified `req.method === "POST"` here made
+    // every other POST route unreachable dead code, which is how /api/v1/open first shipped
+    // returning 404 for a cross-origin request instead of 403.
+    const memoryPost =
+      req.method === "POST" ? /^\/api\/v1\/memories\/([^/]+)\/status$/.exec(path) : null;
+    if (memoryPost) {
+      const match = memoryPost;
       if (!ctx.allowWrites || !ctx.writeDb) {
         return json({ error: "read_only", hint: "restart with --allow-writes" }, 403);
       }
@@ -227,7 +239,32 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       return json({ ok: changed, id, status });
     }
 
-    if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
+    // Hand a recorded file to the editor. Same posture as the write seam: POST + token +
+    // same-origin, so no cross-site page can drive it and it never lands in browser history.
+    // NOT gated on --allow-writes: that flag means "may mutate the ledger", and conflating it
+    // with "may open my editor" would deny read-only users the primary affordance. The guard
+    // that matters is that `path` is a LEDGER ROW REFERENCE — the spawn only ever receives a
+    // path the server resolved itself, via an argv array that is never a shell string.
+    if (req.method === "POST" && path === "/api/v1/open") {
+      if (!sameOrigin(req, url)) return json({ error: "cross_origin" }, 403);
+      if (!ctx.editor) return json({ ok: false, error: "no_editor" }, 403);
+      const body = (await req.json().catch(() => null)) as {
+        plan?: string;
+        path?: string;
+        line?: string | number | null;
+      } | null;
+      if (!body?.plan || !body?.path) return json({ error: "bad_request" }, 400);
+      const row = ctx.store.recordedFile(body.plan, body.path);
+      if (!row) return json({ error: "not_found" }, 404);
+      const resolved = resolveRecorded(row.project_key, row.path);
+      if (!resolved) return json({ ok: false, error: "unresolvable" }, 409);
+      const parsed = Number.parseInt(String(body.line ?? ""), 10);
+      const line = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      const result = await openInEditor(ctx.editor, resolved, line);
+      return json(result, result.ok ? 200 : 500);
+    }
+
+    if (req.method !== "GET") return json({ error: "not_found" }, 404);
 
     // ---- JSON contract (v1) ----
     if (path === "/api/v1/overview") return json(overview(ctx.store, scope));
@@ -249,6 +286,14 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     if (apiRun) {
       const detail = ctx.store.runDetail(decodeURIComponent(apiRun[1]!));
       return detail ? json(detail) : json({ error: "not_found" }, 404);
+    }
+    if (path === "/api/v1/file") {
+      const planId = url.searchParams.get("plan");
+      const wanted = url.searchParams.get("path");
+      if (!planId || !wanted) return json({ error: "bad_request" }, 400);
+      const row = ctx.store.recordedFile(planId, wanted);
+      if (!row) return json({ error: "not_found" }, 404);
+      return json(await readRecorded(row.project_key, row.path));
     }
     if (path.startsWith("/api/")) return json({ error: "not_found" }, 404);
 
@@ -299,6 +344,24 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         ? page("/plans", scope, detail.plan.title ?? "Plan", planDetailView(planView(detail), now))
         : page("/plans", scope, "Not found", notFoundView(path));
     }
+    if (path === "/files") {
+      const planId = url.searchParams.get("plan");
+      const wanted = url.searchParams.get("path");
+      const row = planId && wanted ? ctx.store.recordedFile(planId, wanted) : null;
+      if (!planId || !row) return page("/plans", scope, "Not found", notFoundView(path));
+      const detail = ctx.store.planDetail(planId);
+      return page(
+        "/plans",
+        scope,
+        row.path,
+        fileView(
+          await readRecorded(row.project_key, row.path),
+          planId,
+          detail?.plan.title ?? planId.slice(0, 8),
+          ctx.editor,
+        ),
+      );
+    }
     if (path === "/memory") {
       return page(
         path,
@@ -331,6 +394,7 @@ export function createDashboard(opts: DashboardOptions = {}): {
     writeDb: opts.allowWrites ? new MinimaDb(dbPath) : null,
     token: opts.token ?? crypto.randomUUID(),
     allowWrites: Boolean(opts.allowWrites),
+    editor: detectEditor(opts.editor),
   };
   return { handler: createHandler(ctx), ctx };
 }
@@ -350,6 +414,7 @@ export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
     token: ctx.token,
     readOnly: !ctx.allowWrites,
     ledgerPath: ctx.store.path,
+    editor: ctx.editor,
     stop() {
       server.stop(true);
       ctx.store.close();

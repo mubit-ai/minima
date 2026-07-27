@@ -5,12 +5,22 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seqStep, statusBar } from "../src/dashboard/charts.ts";
+import {
+  EDITOR_NAMES,
+  MAX_LINES,
+  detectEditor,
+  editorArgv,
+  isInside,
+  openInEditor,
+  readRecorded,
+  resolveRecorded,
+} from "../src/dashboard/files.ts";
 import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
-import { planDetailView, runsView } from "../src/dashboard/render.ts";
+import { fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
 import { createDashboard, createHandler } from "../src/dashboard/server.ts";
 import {
   claimRule,
@@ -430,7 +440,9 @@ describe("write seam", () => {
     ctx.store.close();
   });
 
-  test("POST to anything but the memory-status route is a 404", async () => {
+  test("POST to a route that does not accept one is a 404", async () => {
+    // The memory-status branch is matched on its PATH, not merely on the method — guarding it
+    // with a bare `req.method === "POST"` made every other POST route unreachable dead code.
     const { handler, ctx } = createDashboard({ dbPath, token: TOKEN, allowWrites: true });
     const res = await post(handler, "/api/v1/runs", "pinned");
     expect(res.status).toBe(404);
@@ -948,5 +960,247 @@ describe("plan detail", () => {
     );
     expect(missing.status).toBe(200);
     expect(await missing.text()).toContain("Not found");
+  });
+});
+
+describe("file viewer", () => {
+  function seedFile(rel: string, body: string): { planId: string; project: string } {
+    const project = join(dir, "proj");
+    mkdirSync(join(project, "sub"), { recursive: true });
+    writeFileSync(join(project, rel), body);
+    const db = new MinimaDb(dbPath);
+    db.ensureProject(project);
+    const runId = db.startRun({ projectKey: project });
+    const planId = db.insertPlan({ sessionId: runId, title: "file plan" });
+    db.insertFileChange({ planId, path: rel, kind: "created", origin: "on_plan" });
+    db.close();
+    return { planId, project };
+  }
+
+  test("a relative recorded path resolves against the run's project root", async () => {
+    const { planId, project } = seedFile("sub/a.ts", "one\ntwo\nthree");
+    const store = new DashboardStore(dbPath);
+    const row = store.recordedFile(planId, "sub/a.ts")!;
+    expect(row.project_key).toBe(project);
+    const file = await readRecorded(row.project_key, row.path);
+    expect(file.status).toBe("ok");
+    expect(file.lines).toBe(3);
+    expect(file.shown.map((l) => l.text)).toEqual(["one", "two", "three"]);
+    expect(file.shown[0]!.n).toBe(1);
+    store.close();
+  });
+
+  test("an absolute recorded path is used verbatim", () => {
+    // 7 of 241 rows on a real ledger are already absolute; they must not be re-joined.
+    expect(resolveRecorded("/repo", "/elsewhere/x.ts")).toBe("/elsewhere/x.ts");
+    expect(resolveRecorded("/repo", "sub/x.ts")).toBe("/repo/sub/x.ts");
+    expect(resolveRecorded(null, "sub/x.ts")).toBeNull();
+  });
+
+  test("a deleted file is an explained state, not a 500 or a dead link", async () => {
+    const { planId } = seedFile("sub/gone.ts", "x");
+    rmSync(join(dir, "proj", "sub", "gone.ts"));
+    const store = new DashboardStore(dbPath);
+    const row = store.recordedFile(planId, "sub/gone.ts")!;
+    const file = await readRecorded(row.project_key, row.path);
+    expect(file.status).toBe("missing");
+    expect(file.note).toContain("not in this checkout");
+    // The copy button must still work when the file is gone — an unusable gap is worse.
+    const html = fileView(file, planId, "file plan", "code");
+    expect(html).toContain('id="copypath"');
+    store.close();
+  });
+
+  test("a symlink escaping the project root is refused", async () => {
+    const { planId } = seedFile("sub/ok.ts", "x");
+    const outside = join(dir, "outside.txt");
+    writeFileSync(outside, "secret");
+    symlinkSync(outside, join(dir, "proj", "sub", "escape.ts"));
+    const db = new MinimaDb(dbPath);
+    db.insertFileChange({ planId, path: "sub/escape.ts", kind: "created", origin: "on_plan" });
+    db.close();
+
+    const store = new DashboardStore(dbPath);
+    const row = store.recordedFile(planId, "sub/escape.ts")!;
+    const file = await readRecorded(row.project_key, row.path);
+    expect(file.status).toBe("escaped");
+    expect(file.shown).toEqual([]);
+    store.close();
+  });
+
+  test("isInside is not fooled by a sibling directory sharing a prefix", () => {
+    expect(isInside("/a/proj", "/a/proj/x.ts")).toBe(true);
+    expect(isInside("/a/proj", "/a/proj")).toBe(true);
+    // The classic prefix bug: /a/project is NOT inside /a/proj.
+    expect(isInside("/a/proj", "/a/project/x.ts")).toBe(false);
+  });
+
+  test("an over-long file is excerpted with an explicit banner, never silently cut", async () => {
+    const lines = Array.from({ length: MAX_LINES + 500 }, (_, i) => `line ${i + 1}`);
+    const { planId } = seedFile("sub/big.ts", lines.join("\n"));
+    const store = new DashboardStore(dbPath);
+    const row = store.recordedFile(planId, "sub/big.ts")!;
+    const file = await readRecorded(row.project_key, row.path);
+    expect(file.status).toBe("truncated");
+    expect(file.lines).toBe(MAX_LINES + 500);
+    expect(file.shown.length).toBeLessThan(MAX_LINES);
+    expect(file.elided).toBeGreaterThan(0);
+    expect(file.note).toContain("render cap");
+    // Line numbers stay TRUE to the file — the tail is not renumbered from the head.
+    expect(file.shown[file.shown.length - 1]!.n).toBe(MAX_LINES + 500);
+    const html = fileView(file, planId, "file plan", null);
+    expect(html).toContain("lines not shown");
+    store.close();
+  });
+
+  test("a binary file is reported, not rendered as mojibake", async () => {
+    const { planId } = seedFile("sub/blob.bin", "ok binary");
+    const store = new DashboardStore(dbPath);
+    const row = store.recordedFile(planId, "sub/blob.bin")!;
+    const file = await readRecorded(row.project_key, row.path);
+    expect(file.status).toBe("binary");
+    expect(file.shown).toEqual([]);
+    store.close();
+  });
+
+  test("a path never recorded in the ledger has no row at all", () => {
+    const { planId } = seedFile("sub/a.ts", "x");
+    const store = new DashboardStore(dbPath);
+    // Traversal is not filtered — it is structurally impossible, because the lookup is by
+    // ledger row and these strings were never recorded.
+    expect(store.recordedFile(planId, "../../../../etc/passwd")).toBeNull();
+    expect(store.recordedFile(planId, "/etc/passwd")).toBeNull();
+    expect(store.recordedFile("no-such-plan", "sub/a.ts")).toBeNull();
+    store.close();
+  });
+
+  test("editor argv is an array with the line, never a shell string", () => {
+    const shellish = "/repo/a b;rm -rf $(pwd)/c.ts";
+    for (const editor of EDITOR_NAMES) {
+      const argv = editorArgv(editor, shellish, 42)!;
+      expect(Array.isArray(argv)).toBe(true);
+      expect(argv[0]).toBe(editor);
+      // The path arrives in its own argv slot — nothing is concatenated into a command line.
+      expect(argv.some((a) => a.includes(shellish))).toBe(true);
+      expect(argv.join(" ")).toContain("42");
+    }
+    expect(editorArgv("not-an-editor", "/a.ts", 1)).toBeNull();
+  });
+
+  test("--editor none disables detection and unknown names are refused", () => {
+    expect(detectEditor("none")).toBeNull();
+    expect(detectEditor("definitely-not-an-editor")).toBeNull();
+    expect(detectEditor("code")).toBe("code");
+  });
+
+  test("openInEditor refuses when no editor is configured", async () => {
+    const res = await openInEditor(null, "/repo/a.ts", 1);
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("no_editor");
+  });
+});
+
+describe("file routes", () => {
+  function handlerWith(editor: string | null): (req: Request) => Promise<Response> {
+    return createHandler({
+      store: new DashboardStore(dbPath),
+      writeDb: null,
+      token: TOKEN,
+      allowWrites: false,
+      editor,
+    });
+  }
+  function seedOne(): string {
+    const project = join(dir, "proj2");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "a.ts"), "alpha\nbeta");
+    const db = new MinimaDb(dbPath);
+    db.ensureProject(project);
+    const runId = db.startRun({ projectKey: project });
+    const planId = db.insertPlan({ sessionId: runId, title: "routed plan" });
+    db.insertFileChange({ planId, path: "a.ts", kind: "created", origin: "on_plan" });
+    db.close();
+    return planId;
+  }
+
+  test("GET /files renders the source with line numbers", async () => {
+    const planId = seedOne();
+    const res = await handlerWith("code")(
+      new Request(`http://127.0.0.1/files?plan=${planId}&path=a.ts`, {
+        headers: { "x-minima-token": TOKEN },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("alpha");
+    expect(body).toContain('<td class="ln">2</td>');
+    expect(body).toContain("Open in code");
+  });
+
+  test("GET /api/v1/file 404s a path the ledger never recorded", async () => {
+    const planId = seedOne();
+    const handler = handlerWith(null);
+    for (const attempt of ["../../../etc/passwd", "/etc/passwd", "nope.ts"]) {
+      const res = await handler(
+        new Request(
+          `http://127.0.0.1/api/v1/file?plan=${planId}&path=${encodeURIComponent(attempt)}`,
+          { headers: { "x-minima-token": TOKEN } },
+        ),
+      );
+      expect(res.status).toBe(404);
+    }
+  });
+
+  test("the open endpoint is reachable and refuses cross-origin with 403, not 404", async () => {
+    // Regression: the write-seam block was guarded on `req.method === "POST"` alone, which made
+    // this route dead code — a cross-origin POST returned the write seam's 404 instead.
+    const planId = seedOne();
+    const res = await handlerWith("code")(
+      new Request("http://127.0.0.1/api/v1/open", {
+        method: "POST",
+        headers: {
+          "x-minima-token": TOKEN,
+          "content-type": "application/json",
+          origin: "http://evil.example",
+        },
+        body: JSON.stringify({ plan: planId, path: "a.ts" }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("cross_origin");
+  });
+
+  test("the open endpoint 403s with no editor and 404s an unrecorded path", async () => {
+    const planId = seedOne();
+    const noEditor = await handlerWith(null)(
+      new Request("http://127.0.0.1/api/v1/open", {
+        method: "POST",
+        headers: { "x-minima-token": TOKEN, "content-type": "application/json" },
+        body: JSON.stringify({ plan: planId, path: "a.ts" }),
+      }),
+    );
+    expect(noEditor.status).toBe(403);
+    expect(((await noEditor.json()) as { error: string }).error).toBe("no_editor");
+
+    const unrecorded = await handlerWith("code")(
+      new Request("http://127.0.0.1/api/v1/open", {
+        method: "POST",
+        headers: { "x-minima-token": TOKEN, "content-type": "application/json" },
+        body: JSON.stringify({ plan: planId, path: "/etc/passwd" }),
+      }),
+    );
+    expect(unrecorded.status).toBe(404);
+  });
+
+  test("the open endpoint requires the token like every other route", async () => {
+    const planId = seedOne();
+    const res = await handlerWith("code")(
+      new Request("http://127.0.0.1/api/v1/open", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan: planId, path: "a.ts" }),
+      }),
+    );
+    expect(res.status).toBe(401);
   });
 });

@@ -26,6 +26,7 @@ import {
   seqStep,
   statusBar,
 } from "./charts.ts";
+import type { FileContent } from "./files.ts";
 import type {
   BudgetSummary,
   DecisionRecord,
@@ -392,6 +393,19 @@ ul.paths li.weak { border-style: dashed; color: hsl(var(--muted)); }
 .tier-yellow .g { color: hsl(var(--warning)); }
 .tier-red .g { color: hsl(var(--danger)); }
 .tier-none { color: hsl(var(--muted)); }
+/* File viewer. The gutter is a fixed column so long lines scroll the code, not the numbers. */
+.src { overflow-x: auto; border: 1px solid hsl(var(--border)); border-radius: var(--r-card); background: hsl(var(--panel-soft)); }
+table.code { width: 100%; border-collapse: collapse; font: 12px/1.55 var(--mono); }
+table.code td { border: 0; padding: 0 10px; white-space: pre; vertical-align: top; }
+table.code td.ln {
+  width: 1%; text-align: right; color: hsl(var(--muted)); user-select: none;
+  background: hsl(var(--panel)); border-right: 1px solid hsl(var(--border));
+  position: sticky; left: 0; font-variant-numeric: tabular-nums;
+}
+table.code tr:hover td { background: hsl(var(--accent) / 0.07); }
+table.code tr.gap td { color: hsl(var(--muted)); text-align: center; padding: 6px 10px; background: hsl(var(--panel)); }
+.fbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.fbar .fpath { font: 12px/1.5 var(--mono); color: hsl(var(--text-strong)); word-break: break-all; }
 .crumb { font-size: 12px; color: hsl(var(--muted)); margin: 0 0 12px; }
 .crumb a { color: hsl(var(--muted)); }
 .crumb a:hover { color: hsl(var(--accent)); }
@@ -501,6 +515,38 @@ const SCRIPT = `
   pal.querySelector(".scrim").addEventListener("click", close);
   var opener = document.getElementById("palopen");
   if (opener) opener.addEventListener("click", open);
+
+  function flash(btn, text) {
+    var was = btn.textContent;
+    btn.textContent = text;
+    setTimeout(function () { btn.textContent = was; }, 1400);
+  }
+  var copy = document.getElementById("copypath");
+  if (copy) copy.addEventListener("click", function () {
+    var value = copy.getAttribute("data-copy") || "";
+    if (navigator.clipboard) navigator.clipboard.writeText(value).then(
+      function () { flash(copy, "Copied"); },
+      function () { flash(copy, "Copy failed"); }
+    );
+    else flash(copy, value);
+  });
+  var openEdit = document.getElementById("openedit");
+  if (openEdit) openEdit.addEventListener("click", function () {
+    // POST, not GET: a GET that spawns a process lands in history and is fetchable by any
+    // same-origin <img src>. The body carries a ledger row reference, never a filesystem path.
+    fetch("/api/v1/open", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        plan: openEdit.getAttribute("data-plan"),
+        path: openEdit.getAttribute("data-path"),
+        line: openEdit.getAttribute("data-line") || null
+      })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      flash(openEdit, j && j.ok ? "Opened" : "Failed: " + ((j && j.error) || "unknown"));
+    }, function () { flash(openEdit, "Failed"); });
+  });
 })();
 `;
 
@@ -910,7 +956,12 @@ function checkLine(t: TaskRow): string {
   }</div>`;
 }
 
-function pathChips(items: ChangeClass[]): string {
+/**
+ * Path chips. Each one links straight into the in-page viewer — that is the default action,
+ * because zero friction beats any link that needs a scheme handler. The href carries the plan
+ * id and the exact recorded path, never a filesystem path.
+ */
+function pathChips(items: ChangeClass[], planId: string): string {
   if (items.length === 0) return "";
   return `<ul class="paths">${items
     .map((c) => {
@@ -921,9 +972,59 @@ function pathChips(items: ChangeClass[]): string {
           ? `claimed by step ${c.stepIdx + 1} (path)`
           : "off-plan";
       const ahead = c.workedAhead ? " · written ahead of the active step" : "";
-      return `<li class="${weak ? "weak" : ""}" title="${escapeHtml(`${c.change.kind} · ${why}${ahead}`)}">${escapeHtml(c.change.path)}</li>`;
+      const href = `/files?plan=${encodeURIComponent(planId)}&path=${encodeURIComponent(c.change.path)}`;
+      return `<li class="${weak ? "weak" : ""}" title="${escapeHtml(`${c.change.kind} · ${why}${ahead}`)}"><a href="${escapeHtml(href)}">${escapeHtml(c.change.path)}</a></li>`;
     })
     .join("")}</ul>`;
+}
+
+/** The viewer. Every failure is a state with an explanation, and copy always works. */
+export function fileView(
+  file: FileContent,
+  planId: string,
+  planTitle: string,
+  editor: string | null,
+): string {
+  const copyable = escapeHtml(file.absPath ?? file.path);
+  const bar = `<div class="fbar">
+  <span class="fpath">${escapeHtml(file.path)}</span>
+  <span class="spacer"></span>
+  ${
+    file.absPath && editor
+      ? `<button class="ghost" id="openedit" type="button" data-plan="${escapeHtml(planId)}" data-path="${escapeHtml(file.path)}">Open in ${escapeHtml(editor)}</button>`
+      : file.absPath
+        ? `<span class="pill" title="pass --editor to enable, or install one on PATH">no editor detected</span>`
+        : ""
+  }
+  <button class="ghost" id="copypath" type="button" data-copy="${copyable}">Copy path</button>
+</div>`;
+
+  const meta =
+    file.status === "ok" || file.status === "truncated"
+      ? `<p class="note">${file.lines} lines · ${Math.round((file.bytes ?? 0) / 1024) || "<1"}KB${
+          file.absPath ? ` · <span class="mono">${escapeHtml(file.absPath)}</span>` : ""
+        }</p>`
+      : "";
+
+  // The copy button keeps working in every failure state — a dead link with no way to grab the
+  // path is worse than the honest gap.
+  const body =
+    file.shown.length === 0
+      ? `<div class="banner">${escapeHtml(file.note ?? "nothing to show")}</div>`
+      : `${file.status === "truncated" ? `<div class="banner">${escapeHtml(file.note ?? "")}</div>` : ""}
+<div class="src"><table class="code"><tbody>${file.shown
+          .map((l, i) => {
+            const prev = file.shown[i - 1];
+            const gap =
+              prev && l.n !== prev.n + 1
+                ? `<tr class="gap"><td class="ln">⋯</td><td>${l.n - prev.n - 1} lines not shown</td></tr>`
+                : "";
+            return `${gap}<tr><td class="ln">${l.n}</td><td>${escapeHtml(l.text)}</td></tr>`;
+          })
+          .join("")}</tbody></table></div>`;
+
+  return `<p class="crumb"><a href="/plans">Plans</a> / <a href="/plans/${encodeURIComponent(planId)}">${escapeHtml(planTitle)}</a> / ${escapeHtml(file.path)}</p>
+<section class="card">${bar}${meta}${body}</section>`;
 }
 
 export function planDetailView(view: PlanView, now: number): string {
@@ -943,7 +1044,7 @@ export function planDetailView(view: PlanView, now: number): string {
           : ""
       }</div>
       ${checkLine(t)}
-      ${pathChips(t.claimed)}
+      ${pathChips(t.claimed, p.id)}
     </div>
     <div class="t-cost">${t.costUsd === null ? "—" : escapeHtml(fmtUsd(t.costUsd))}</div>
   </li>`,
@@ -1032,7 +1133,7 @@ function driftPanel(view: PlanView): string {
   heuristic either way — hover a path to see which step claimed it and how.</p>
   ${total === 0 ? emptyState("No file changes recorded against this plan.") : table}
   ${ahead}
-  ${view.offPlan.length > 0 ? `<h2 style="margin-top:16px">Off-plan paths</h2>${pathChips(view.offPlan)}` : ""}
+  ${view.offPlan.length > 0 ? `<h2 style="margin-top:16px">Off-plan paths</h2>${pathChips(view.offPlan, view.plan.id)}` : ""}
 </section>`;
 }
 
