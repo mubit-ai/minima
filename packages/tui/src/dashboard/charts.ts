@@ -214,9 +214,9 @@ export function statusBar(segments: StatusSegment[]): string {
 /** Sequential blue step for a 0..1 rate — heatmap cells only (magnitude, one hue). */
 export function seqStep(rate: number): string {
   const clamped = Math.max(0, Math.min(1, rate));
-  const steps = [100, 150, 200, 250, 300, 350, 400, 450, 500, 550];
-  const idx = Math.min(steps.length - 1, Math.floor(clamped * steps.length));
-  return `var(--seq-${steps[idx]})`;
+  const steps = 8;
+  const idx = Math.min(steps, Math.floor(clamped * steps) + 1);
+  return `hsl(var(--seq-${idx}))`;
 }
 
 export interface TableColumn<T> {

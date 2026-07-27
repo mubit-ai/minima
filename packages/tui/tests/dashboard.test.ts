@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DecisionWrite, MinimaDb } from "../src/db/minima_db.ts";
 import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
+import { seqStep, statusBar } from "../src/dashboard/charts.ts";
 import { createDashboard, createHandler } from "../src/dashboard/server.ts";
 import { gateTiers, kpis, modelStats, overview, scoreboardCells } from "../src/dashboard/stats.ts";
 
@@ -455,5 +456,63 @@ describe("rendering safety", () => {
     );
     expect(res.status).toBe(200);
     store.close();
+  });
+});
+
+describe("theming", () => {
+  // The dashboard promises that dropping in Mubit's real console tokens is a value-only edit
+  // inside render.ts's TOKENS block. That promise is only real if nothing else declares a
+  // color, so this test is the enforcement — not documentation of an intention.
+  const SRC = join(import.meta.dir, "..", "src", "dashboard");
+  const FILES = ["render.ts", "charts.ts", "server.ts", "queries.ts", "stats.ts", "index.ts"];
+  const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(\s*\d/;
+
+  test("no color literal outside the TOKENS block", async () => {
+    const offenders: string[] = [];
+    for (const name of FILES) {
+      const text = await Bun.file(join(SRC, name)).text();
+      // Everything after `const TOKENS = ` up to its closing backtick is the sanctioned block.
+      const start = text.indexOf("const TOKENS = `");
+      const end = start < 0 ? -1 : text.indexOf("`;", start);
+      const lines = text.split("\n");
+      let offset = 0;
+      for (const [i, line] of lines.entries()) {
+        const at = offset;
+        offset += line.length + 1;
+        if (start >= 0 && at > start && at < end) continue;
+        if (LITERAL.test(line)) offenders.push(`${name}:${i + 1}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("dark is the default and an explicit theme wins in both directions", async () => {
+    const css = await Bun.file(join(SRC, "render.ts")).text();
+    const tokens = css.slice(css.indexOf("const TOKENS = `"), css.indexOf("`;", css.indexOf("const TOKENS = `")));
+    // `:root` alone carries dark, so no OS preference is needed to get the default look.
+    expect(tokens).toContain("--mode: dark");
+    // Light applies on OS preference ONLY while untoggled, and via an explicit attribute.
+    expect(tokens).toContain("@media (prefers-color-scheme: light)");
+    expect(tokens).toContain(":root:where(:not([data-theme]))");
+    expect(tokens).toContain(':root[data-theme="light"]');
+  });
+
+  test("every status fill ships an icon and a label, never hue alone", () => {
+    const bar = statusBar([
+      { key: "green", label: "Green (deterministic)", icon: "✔", n: 3 },
+      { key: "red", label: "Red (stop)", icon: "✖", n: 1 },
+    ]);
+    expect(bar).toContain("Green (deterministic)");
+    expect(bar).toContain("✔");
+    expect(bar).toContain("Red (stop)");
+    expect(bar).toContain("✖");
+  });
+
+  test("the sequential ramp spans exactly the declared steps", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i <= 20; i++) seen.add(seqStep(i / 20));
+    for (const step of seen) expect(step).toMatch(/^hsl\(var\(--seq-[1-8]\)\)$/);
+    expect(seqStep(0)).toBe("hsl(var(--seq-1))");
+    expect(seqStep(1)).toBe("hsl(var(--seq-8))");
   });
 });
