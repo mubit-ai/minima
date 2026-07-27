@@ -4,6 +4,75 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Gemini cached tokens were billed twice** (#302). `promptTokenCount` is inclusive of
+  `cachedContentTokenCount`, but both were reported raw — every cached token was charged at
+  the full input rate *and* again at the cache-read rate. The inflated total was the realized
+  `actual_cost_usd` sent to `/v1/feedback`, so it skewed the observed cost basis for every
+  Gemini model, not just the local wallet. Gemini cache-read rates also corrected to Google's
+  published 10%, and Gemini 2.5 Pro's `>200k` long-context tier is now modeled (a flat price
+  on a 2M-context model undercharged by roughly half on exactly the largest calls).
+- **`/plan` finalize crashed on the auto-gates rollback.** A step the model gave no check for
+  carries `verify: null`, which auto-gates normally filled in first — so `MINIMA_TUI_AUTO_GATES=0`,
+  the documented opt-out, turned any finalize with an unverified step into a `TypeError`. The
+  same unguarded dereference sat on the plan-interview path (`applyUserVerifies`). Found by
+  running the flags-off matrix over the full switch set for the first time.
+- **A refused LSP `initialize` reported success** (#303). A JSON-RPC reply carries *either* a
+  result or an error, and the correlator resolved on both — so a server answering "no" (e.g.
+  `typescript-language-server` with no local `typescript`) looked handshaked, and every later
+  edit paid the full diagnostics budget and reported `timeout`. Refusals are now cached per
+  session; timeouts deliberately are not.
+- **Sub-agent spend was invisible to the `BudgetLedger`** (#302). One `task` fan-out could burn
+  the budget while `spent_usd` stayed flat and `--budget-enforce` never tripped. Child spend is
+  booked after the fan-out; children are still not pre-reserved, so the first over-budget
+  fan-out completes and the *next* call is what gets blocked.
+- **Feedback was never retried** (#302). `feedbackSafely` logs and swallows, so one transient
+  503 permanently destroyed the label — including gate-verified outcomes, the harness's only
+  honest label source. Retries now cover fast transport faults only; an abort or a deadline is
+  never retried, because feedback is awaited in the turn's critical path.
+- **Non-JSON error bodies masked the status** (#302, #285). A proxy's HTML 502 threw a
+  `SyntaxError` before `raiseForStatus`, so the banner read `routing offline: Unexpected token
+  '<'` instead of naming the 504.
+- **`/compact` could wedge a session** (#302). A fixed-offset slice could cut between a
+  `toolCall` and its `toolResult`, leaving a dangling `tool_use_id` the provider rejects on
+  every subsequent turn — `/clear` was the only escape, discarding exactly what the user
+  compacted to keep.
+- **`/resume <name>` and `/resume <prefix>` both failed** (#302) — every handle the UI itself
+  displays. Both now route through the resolver `--resume` uses.
+- **Plan mode no longer persists across sessions** (#302). One Shift+Tab left the harness
+  booting into a mode that denies all mutation, with no visible cause. Only `build` and
+  `acceptEdits` persist now; the restrictive modes are per-task state.
+- **openai-compat discarded the provider's error body** (#302), so a 400/429 arrived as a bare
+  status with no reason.
+
+### Added
+- **Kill-switch contract tests + a flags-off CI job** (#301). One table pins every documented
+  `MINIMA_TUI_*` switch: its shipped default, that `=0` disables it, and that
+  `MINIMA_TUI_EXPERIMENTAL=1` never overrides an explicit `=0`. A completeness check scans all
+  of `src/` — not just `config.ts` — and fails when a flag is read with no table row, which is
+  how three ambient default-ON switches (`PLAN_CRITIC`, `DIFF_REVIEW`, `AUTO_GATES`) had gone
+  uncovered while the guard reported full coverage. The `tui-flags-off` job runs the whole
+  suite with every switch engaged.
+- **Ledger telemetry for TTSR and LSP** (#304) via `events.payload`, so promotion off opt-in
+  can be argued from data rather than recollection. No migration.
+- **A request timeout in `@mubit-ai/minima-sdk`** (#302), defaulted **on** at 60s. Previously
+  there was none at all, so a black-holed call hung the caller forever. `timeoutMs: 0` restores
+  the old behavior.
+- **Dependency preflight for the test suite** (#306). A `node_modules` predating an override
+  keeps the old copy, and the only symptom was five failures blaming emoji width — six days of
+  runs misreported a stale install as broken code.
+
+### Changed
+- **Vendored catalog snapshot refreshed** (#300). `claude-sonnet-5` corrected to $2/$10 per
+  MTok, matching what the live feed already served. Note this is Anthropic's *introductory*
+  pricing, which reverts to $3/$15 on 2026-09-01.
+- **Test suite hardened** (#306): the `wave4-integration` flake fixed at its root (an unawaited
+  `Bun.write` racing the GC it then asserts against), 158 source-text assertions de-brittled
+  behind `tests/_source.ts`, mock payloads typed with a wire-enum guard, and 42 test files
+  renamed to kebab-case.
+
 ## [0.14.4] - 2026-07-26
 
 The harness-boosting arc (#280, Waves 2–5): ten features that make a turn harder to

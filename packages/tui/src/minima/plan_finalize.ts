@@ -86,7 +86,7 @@ export type PlanFinalizeOutcome =
  * them joined, so the done-gate ends the plan on the complete confirmed check set.
  * Returns the 1-based step numbers touched.
  */
-export function applyUserVerifies<T extends { verify: string }>(
+export function applyUserVerifies<T extends { verify: string | null }>(
   steps: T[],
   verifies: string[],
 ): { steps: T[]; attached: number[] } {
@@ -94,7 +94,10 @@ export function applyUserVerifies<T extends { verify: string }>(
   if (clean.length === 0) return { steps, attached: [] };
   const attached: number[] = [];
   const out = steps.map((st, i) => {
-    if (st.verify.trim()) return st;
+    // `verify` is null for a step the model named no check for — that is what this function
+    // exists to fill, so it is the COMMON case here, not an edge one. attachAutoGates has
+    // always guarded it; this deref did not.
+    if (st.verify?.trim()) return st;
     const isLast = i === steps.length - 1;
     const pick = isLast ? clean.join(" && ") : clean[0]!;
     attached.push(i + 1);
