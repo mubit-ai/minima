@@ -45,6 +45,31 @@ class NoHintClassifier:
         return self._inner.classify(text, regex_hint=None)
 
 
+class DenySetClassifier:
+    """The real head, but its verdict is accepted only for classes it is competent at (A6).
+
+    A prediction inside `deny` is converted to an abstain, so the dispatcher falls through to
+    the regex (classify.py:574-576) — "route by class competence" expressed entirely through
+    the existing seam, with no `src/minima/` change.
+
+    Denies on the PREDICTED class, the only thing available at serving time. That is what lets
+    it remove an attractor error (the head labelling `translation` on paraphrase prompts); a
+    vocabulary-pattern extension cannot, because those prompts carry no translation vocabulary
+    for a pattern to match.
+    """
+
+    def __init__(self, inner: EmbedClassifier, deny: frozenset[str]):
+        self._inner = inner
+        self._deny = deny
+        self.classifier_id = inner.classifier_id
+
+    def classify(self, text: str, regex_hint: TaskType | None = None) -> EmbedResult:
+        result = self._inner.classify(text, regex_hint=regex_hint)
+        if result.abstained or result.task_type.value in self._deny:
+            return EmbedResult(TaskType.other, 0.0, True)
+        return result
+
+
 @dataclass(slots=True, frozen=True)
 class Prediction:
     task_type: str
