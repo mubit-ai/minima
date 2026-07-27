@@ -21,10 +21,20 @@ function shaOf(content: string): string {
   return hasher.digest("hex");
 }
 
-function seedOldRow(db: MinimaDb, dir: string, content: string, runId: string, epoch: number): string {
+async function seedOldRow(
+  db: MinimaDb,
+  dir: string,
+  content: string,
+  runId: string,
+  epoch: number,
+): Promise<string> {
   const sha = shaOf(content);
   const path = join(dir, `${sha}.txt`);
-  Bun.write(path, content);
+  // MUST be awaited. Left unawaited this raced the GC: the seed file could land AFTER
+  // pruneArtifacts deleted it, resurrecting the path and failing
+  // `expect(existsSync(old1)).toBe(false)` roughly one run in six. Bun.write (not
+  // writeFileSync) because it creates the artifacts dir, which does not exist yet here.
+  await Bun.write(path, content);
   db.recordArtifact({
     sha,
     path,
@@ -60,8 +70,8 @@ describe("Wave 4 integration — two spill producers under one GC exemption", ()
     const artDir = join(base, "artifacts");
 
     // Two 400-byte old-run artifacts already on disk (800B) from a finished run.
-    const old1 = seedOldRow(db, artDir, "O".repeat(400), "run-old", 1);
-    const old2 = seedOldRow(db, artDir, "P".repeat(400), "run-old", 2);
+    const old1 = await seedOldRow(db, artDir, "O".repeat(400), "run-old", 1);
+    const old2 = await seedOldRow(db, artDir, "P".repeat(400), "run-old", 2);
 
     // Budget below the two old rows so GC must evict on attach, but the store protects run-cur.
     const store = new ArtifactStore({ dir: artDir, gcBudgetBytes: 500 });
