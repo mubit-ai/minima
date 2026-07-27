@@ -55,6 +55,9 @@ export interface CompatResponse {
   status: number;
   ok: boolean;
   body?: ReadableStream<Uint8Array> | null;
+  /** Optional so existing test fakes stay valid; real Responses always have it. Read only
+   *  on the error path, to recover the provider's own message. */
+  text?(): Promise<string>;
 }
 
 /** Injectable transport for hermetic tests; defaults to global fetch. */
@@ -102,7 +105,9 @@ export class OpenAICompatProvider {
         signal: opts.signal,
       });
       if (!resp.ok || !resp.body) {
-        throw new Error(`openai-compat request failed: HTTP ${resp.status}`);
+        throw new Error(
+          `openai-compat request failed: HTTP ${resp.status}${await errorDetail(resp)}`,
+        );
       }
       yield* consumeSse(resp, model);
     } catch (exc) {
@@ -114,6 +119,35 @@ export class OpenAICompatProvider {
       err.model = model.id;
       yield errorEv("error", err);
     }
+  }
+}
+
+/** Cap on the quoted provider message — enough to diagnose, not enough to flood the TUI. */
+const ERROR_DETAIL_CAP = 400;
+
+/**
+ * The provider's own explanation of a failed request. Without it a bare "HTTP 400" is
+ * undiagnosable — the body is where OpenAI-compatible servers put "this model does not
+ * exist", "context_length_exceeded", "insufficient_quota", "rate limit reached, try again
+ * in 20s". Prefers the standard {"error":{"message":...}} envelope and falls back to raw
+ * text. Never throws: a body that is unreadable, empty, or already consumed just yields
+ * the bare status, which is what the caller had before.
+ */
+async function errorDetail(resp: CompatResponse): Promise<string> {
+  try {
+    const raw = (await resp.text?.())?.trim();
+    if (!raw) return "";
+    let message = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: unknown }; message?: unknown };
+      const found = parsed?.error?.message ?? parsed?.message;
+      if (typeof found === "string" && found.trim()) message = found.trim();
+    } catch {
+      // Not JSON (an HTML error page from a proxy) — quote the raw text.
+    }
+    return ` — ${message.slice(0, ERROR_DETAIL_CAP)}${message.length > ERROR_DETAIL_CAP ? "…" : ""}`;
+  } catch {
+    return "";
   }
 }
 
