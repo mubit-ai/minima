@@ -90,9 +90,18 @@ export interface RecommendOptions {
   signal?: AbortSignal;
 }
 
+/** Per-request deadline when the caller sets none. Both /v1/* calls are short. */
+const DEFAULT_TIMEOUT_MS = 60_000;
+
 export interface MinimaClientOptions {
   baseUrl: string;
   apiKey?: string;
+  /**
+   * Per-request deadline in ms (default 60s; pass 0 to disable). Without one, a
+   * black-holed connection — a hung proxy, a dropped route, a server that accepts and
+   * never answers — hangs the caller forever, because fetch has no timeout of its own.
+   */
+  timeoutMs?: number;
   /**
    * Backoff schedule for feedback retries (ms). Feedback is safe to retry (the
    * server's reconcile replay guard dedupes) and a lost label is a silent learning
@@ -158,13 +167,42 @@ export class MinimaClient {
   private readonly apiKey?: string;
   private readonly fetchImpl: FetchLike;
   private readonly feedbackRetryDelaysMs: number[];
+  private readonly timeoutMs: number | null;
 
   constructor(opts: MinimaClientOptions) {
     this.base = opts.baseUrl.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.feedbackRetryDelaysMs = opts.feedbackRetryDelaysMs ?? [500, 2000];
+    this.timeoutMs =
+      opts.timeoutMs === undefined
+        ? DEFAULT_TIMEOUT_MS
+        : opts.timeoutMs > 0
+          ? opts.timeoutMs
+          : null;
     // Global fetch bound to avoid `Illegal invocation` in some runtimes.
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init as RequestInit));
+  }
+
+  /**
+   * The signal for one request: the deadline, composed with a caller signal when given.
+   * AbortSignal.any is Node 20.3+, and this package advertises a plain npm install with no
+   * stated floor — so compose by hand when it is missing rather than dropping either
+   * signal (dropping the caller's would break abort; dropping the timer's, the deadline).
+   */
+  private withTimeout(signal?: AbortSignal): AbortSignal | undefined {
+    if (this.timeoutMs === null) return signal;
+    const deadline = AbortSignal.timeout(this.timeoutMs);
+    if (!signal) return deadline;
+    if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, deadline]);
+    const ctl = new AbortController();
+    for (const s of [signal, deadline]) {
+      if (s.aborted) {
+        ctl.abort(s.reason);
+        break;
+      }
+      s.addEventListener("abort", () => ctl.abort(s.reason), { once: true });
+    }
+    return ctl.signal;
   }
 
   private url(path: string, params?: Record<string, unknown>): string {
@@ -182,6 +220,7 @@ export class MinimaClient {
     const resp = await this.fetchImpl(this.url(path, params), {
       method: "GET",
       headers: headers(this.apiKey),
+      signal: this.withTimeout(undefined),
     });
     const body = await readBody(resp);
     raiseForStatus(resp.status, body, retryAfterOf(resp));
@@ -193,7 +232,7 @@ export class MinimaClient {
       method: "POST",
       headers: headers(this.apiKey),
       body: JSON.stringify(payload),
-      signal,
+      signal: this.withTimeout(signal),
     });
     const body = await readBody(resp);
     raiseForStatus(resp.status, body, retryAfterOf(resp));
@@ -261,9 +300,15 @@ export class MinimaClient {
         return await this.post<FeedbackResponse>("/v1/feedback", req, signal);
       } catch (exc) {
         lastError = exc;
+        // A deadline or an abort is never retried: the request already spent its full
+        // timeout, so retrying would silently turn a 60s deadline into 3x that. Everything
+        // else keeps the old classification.
+        const spent =
+          exc instanceof Error && (exc.name === "TimeoutError" || exc.name === "AbortError");
         const transport = !(exc instanceof Error && exc.name.startsWith("Minima"));
         const retryable =
-          exc instanceof MinimaUnavailable || exc instanceof MinimaRateLimited || transport;
+          !spent &&
+          (exc instanceof MinimaUnavailable || exc instanceof MinimaRateLimited || transport);
         const backoff = this.feedbackRetryDelaysMs[attempt];
         if (!retryable || backoff === undefined || signal?.aborted) throw exc;
         await sleep(retryDelayMs(exc, backoff));
