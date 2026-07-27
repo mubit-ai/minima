@@ -189,6 +189,12 @@ export interface TaskToolOptions {
    *  output_schema is shape-checked at authoring time here and enforced dispatcher-side in
    *  createSpawn. Off → output_schema is authoring-inspected leniently and never enforced. */
   typedTask?: boolean;
+  /** Book realized child spend against the parent's wallet. Children run on their own
+   *  CostMeter and are never reserved against the BudgetLedger, so without this a single
+   *  fan-out spends unbounded money while spent_usd stays flat and enforce mode never
+   *  trips. A callback (not the ledger) keeps this module free of budget imports, mirroring
+   *  how it stays free of MinimaDb. */
+  onSpend?: (usd: number) => void;
 }
 
 /**
@@ -319,6 +325,10 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
       });
 
       const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
+      // Real money the wallet must see. Booked here rather than in createSpawn because the
+      // /plan council already reserves+reconciles its children (plan_turn.ts) — booking at
+      // the spawn seam would charge those twice.
+      opts.onSpend?.(totalCost);
       const summary = results
         .map(
           (r) =>

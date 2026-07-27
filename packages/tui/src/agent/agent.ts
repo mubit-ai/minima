@@ -19,6 +19,7 @@ import {
   type StreamFnLike,
   type TransformContext,
   type TtsrController,
+  type TtsrHit,
   defaultConvertToLlm,
 } from "./state.ts";
 import type {
@@ -72,6 +73,9 @@ export class Agent {
   private readonly streamFn: StreamFnLike | null;
   private readonly streamIdleTimeoutMs: number | null;
   private readonly ttsr: TtsrController | null;
+  /** Telemetry seam for tripwire firings. Assigned after construction — the DB and run id
+   * do not exist when the agent is built — and read per turn into the loop config. */
+  onTtsrFire: ((hit: TtsrHit) => void) | null = null;
   private readonly listeners: Listener[] = [];
   private controller: AbortController | null = null;
   private idleResolvers: (() => void)[] = [];
@@ -307,6 +311,7 @@ export class Agent {
       signal,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
       ttsr: this.ttsr,
+      onTtsrFire: this.onTtsrFire,
     };
   }
 
