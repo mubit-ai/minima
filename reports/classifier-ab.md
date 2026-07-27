@@ -6,21 +6,31 @@
 
 ---
 
-## Verdict — RETUNE, and the head does not currently earn its place
+## Verdict — the head does not earn its place, and no configuration of it does
+
+> **Superseded 2026-07-28.** The first round of this report closed at **RETUNE**. The follow-up
+> round (§10–§13) **falsified that verdict**: retuning was tested properly and there is no
+> reachable operating point where the head beats the stack it replaced, and class-competence
+> routing does not rescue it either. RETUNE is not an available remedy. The original §5 and §9
+> are left in place with correction notes, so what changed and why is auditable.
 
 On out-of-corpus benchmark data the shipped head is **significantly worse than the regex it
-replaced**, and the loss is caused by its abstention thresholds, not by the embedding.
+replaced**. Three independent remedies were pre-registered and tested; all three failed.
 
 | Pre-registered decision rule | Status |
 |---|---|
 | **KEEP AS-IS** | ❌ fails — `Δ` CI lies entirely below 0 |
-| **RETUNE tau** | ✅ **triggered** — held-out macro-F1 rises 0.279 → 0.363 by retuning alone |
-| **PULL** | ⚠️ first clause met (`Δ` CI upper bound = −0.065 ≤ 0); resolution depends on Leg B |
+| **RETUNE tau** | ❌ **falsified in round 2** (§10). Best reachable point: Δ = +0.0045, CI [−0.0073, +0.0170], P(Δ>0)=0.765 — indistinguishable from deleting the head |
+| **ROUTE, don't replace** (A6, §12) | ❌ every deny-set variant loses; primary Δ = −0.0595, CI [−0.0845, −0.0346] |
+| **PULL** | ⚠️ both clauses now met on this evidence; **still not dischargeable** — Leg B is blocked by an infrastructure defect (§13), and `code` is unmeasured (§8) |
 
-**Retune first — it is strictly necessary and cheap.** But do not read it as a rescue: the
-retuned head only *ties* the regex, and it does so by abstaining on 83 % of prompts. Its
-remaining confident predictions are half `translation`, a class the regex gets at F1 0.999
-(§5). On this distribution the head has **no demonstrated residual value** over the regex.
+**What the evidence supports today:** the head contributes nothing measurable over
+vocabulary+regex on out-of-corpus prose, and cannot be configured to. What it does **not**
+support is a final pull decision, for two stated reasons — 4 of 11 classes have no gold here,
+including `code`; and the downstream cost/quality question remains unanswerable until hosted
+recall is fixed. The honest position is **stop investing in this artifact, measure `code`, and
+decide** (§16). Scorecard of every pre-registered prediction, including the two of mine that
+failed: **§15**.
 
 ### The primary endpoint
 
@@ -35,7 +45,8 @@ Two things this does **not** say, both important:
   not making more mistakes — it is making *differently distributed* mistakes. Macro-F1 falls
   because the regex concentrates its correct answers in a few classes it fires on
   confidently, while the head spreads errors across all eleven.
-- **The embedding is not the problem.** See the retune result below.
+- **It is not simply "the thresholds".** Round 1 read the risk–coverage curve as implicating
+  abstention alone. §10 tests that directly and it does not hold up.
 
 ---
 
@@ -136,7 +147,13 @@ most contestable *widens* the gap: Δ = **−0.1166** [−0.1399, −0.0935].
 
 ---
 
-## 5. Why this is a RETUNE, not a PULL — the risk–coverage result
+## 5. The risk–coverage result — *and why round 2 overturned the conclusion I drew from it*
+
+> **Correction (2026-07-28).** This section's numbers stand; the verdict I drew from them does
+> not. "Retuning recovers the regression" was a point estimate with no CI. §10 re-ran the sweep
+> with an honest calibration/held-out split and a paired bootstrap: **Δ = +0.0045, CI
+> [−0.0073, +0.0170]** — the +0.007 below is inside noise. Read this section as the
+> *observation*; read §10 as the *test*.
 
 Thresholds selected on a validation half and reported on a held-out half, **split by task**
 (rows from one SNI task share a `Definition`; a row-level split would leak).
@@ -246,13 +263,19 @@ the V5 crosscheck ≥ 0.8 (**failed**, 0.50). This was my specification error, n
 3. Only then is a head-vs-regex downstream comparison meaningful.
 
 **Consequence for the verdict:** the pre-registered **PULL** rule requires "Leg B shows no cost
-or quality gain". Leg B shows *nothing* either way, so PULL cannot be discharged and the
-actionable verdict stands at **RETUNE**, with the Leg A evidence that the head has no
-demonstrated value on out-of-corpus data recorded against any future keep decision.
+or quality gain". Leg B shows *nothing* either way, so PULL cannot be discharged.
+
+> **Update (2026-07-28).** The "RETUNE" fallback recorded here was itself falsified in §10.
+> The root cause of the Leg B failure was probed directly and is **not** the classifier and
+> **not** the ricedb bug it was attributed to — see §13 and `reports/recall-blocker.md`.
 
 ---
 
-## 7. Two defects found along the way
+## 7. Defects found along the way
+
+*Status after round 2: 1 and 4 are **fixed** (§11, and the commit for the tokenizer); 2 was
+fixed in round 1; 3 is **re-diagnosed** in §13 — the "non-determinism" is real but its cause was
+misattributed here.*
 
 1. **The G1 gate suite passes while the head regresses.** All **7 of 7** gates pass against
    this artifact (`pytest -m eval tests/eval/test_classifier_gates.py`), including
@@ -272,13 +295,29 @@ demonstrated value on out-of-corpus data recorded against any future keep decisi
    Either compare the engine against the *same* recall the factored path used, or treat V5 as a
    noisy diagnostic rather than a gate. **This blocks every downstream routing experiment**, not
    just this one.
-4. **Latent: the leakage primitives are ASCII-only.** `harness.py:_toks` uses `[a-z0-9]+`.
-   That is correct for its English RouterBench prompts, but any non-Latin text tokenizes to
-   the **empty set**, so every such row shares the empty fingerprint and "matches" every
-   other. My first contamination run hit exactly this and silently deleted 70 % of the
-   `translation` class before I caught it (285 false drops → 3 real ones after switching to
-   `\w+` plus a 5-token minimum). Worth fixing in `harness.py` before it is ever pointed at a
-   multilingual dataset.
+4. **The leakage primitives are ASCII-only.** `harness.py:_toks` used `[a-z0-9]+`. Correct for
+   its English RouterBench prompts, but any non-Latin text tokenizes to the **empty set**. My
+   first contamination run hit this and silently deleted 70 % of the `translation` class before
+   I caught it (285 false drops → 3 real ones after switching to `\w+` plus a 5-token minimum).
+
+   **Fixed in round 2 — and the consequence in `harness.py` is the *inverse* of the one I hit.**
+   There, `_jaccard` returns 0.0 whenever either side is empty, so non-Latin rows scored 0.0
+   against everything: the V1 near-duplicate filter **failed open** (a verbatim train/test twin
+   in Tamil was never dropped) and the leaked-neighbor diagnostic read 0.0 on a corpus that
+   could be fully leaked. A guard that silently passes, not one that over-drops.
+
+   **Scope, stated precisely:** every prior result relying on `_toks` — `RESULTS.md`,
+   `BENCHMARKS.md`, `test_routerbench_savings.py` — ran on **English-only** corpora, where the
+   ASCII class is adequate. **Those "V1 leakage 0 %" claims stand.** Mixed-script corpora are
+   the only exposure, and the only one to date was this study's, caught and fixed.
+
+5. **The same class, in production: `memory/keys.py:30`.** `salient_signature` would have
+   collapsed every non-Latin task into the `"general"` bucket — one cluster signature for a
+   whole language. **Inert today** (`versioned_cluster` passes `signature=None` at v1, so
+   nothing in production calls it) but armed if fine-cluster keys turn on. Note `\w+` is *not*
+   a sufficient repair there: Python's `\w` excludes combining marks, so it shatters Tamil and
+   Devanagari into 1–2 char fragments that the `len >= 4` filter then discards — the empty-token
+   bug again. Fixed with a separator-based split; English tokenization is unchanged.
 
 ---
 
@@ -295,27 +334,241 @@ demonstrated value on out-of-corpus data recorded against any future keep decisi
 4. **Absolute numbers are not the point.** Every arm scores badly here (~0.32 accuracy). The
    *difference* between arms is the quantity of interest; the absolute level partly reflects
    the map and the register.
+5. **A4 — neighbour voting — was never evaluated, and remains untested.** It ships in the
+   serving path, but `engine.py:204-212` gates it on non-empty recall evidence, so it cannot be
+   measured intrinsically at all: it needs live memory, which §13 shows is unreliable. **Every
+   verdict in this report is about the head, not about the serving configuration.**
 
-## 9. Recommended next steps
+## 9. Recommended next steps *(round 1 — superseded by §16)*
 
-1. **Retune the conformal thresholds against a mixed-distribution calibration set**, not just
-   the training distribution — the shipped point is indefensible off-distribution. Treat this
-   as damage control, not a fix: §5 shows the retuned head only ties the regex.
-2. **Fix the gate suite before anything else.** 7/7 green while the head loses 8.7 macro-F1
-   points is a measurement failure, and it will hide the next regression too. Replace G1g with
-   a powered, CI-bearing, out-of-corpus comparison, and add a non-`translation` slice — the
-   head's aggregate numbers are propped up by one trivially-separable class.
-3. **Delete the `regex_hint` plumbing or start using it.** Right now it is computed, passed,
-   and discarded on every call (§2).
-4. **Get a `code`-bearing clean eval set** before any keep/pull decision is final — `code` is
-   plausibly the highest-traffic type and this evaluation cannot see it.
-5. **Unblock downstream evaluation.** Until the V5 crosscheck stops failing for reasons
-   unrelated to the thing under test (§7.3), no routing experiment — this one or any other —
-   can produce a defensible cost or quality number. Fix that before spending more on
-   downstream work.
-6. **Investigate `→ translation` and `→ reasoning` as attractor classes** — 419 `other→reasoning`
-   moves and a paraphrase→translation confusion look like a class-prior or anchor problem, and
-   they are the specific defects a retrain would need to target.
+Kept for audit. Item 1 ("retune the conformal thresholds") was **falsified** in round 2 (§10);
+items 2, 3 and 5 were acted on (§11, §13). The current list is §16.
+
+---
+
+# Round 2 — 2026-07-28
+
+Follow-up round, same $0 budget. Ordering was set by the reviewer: fix the measurement before
+believing any more of the measurements.
+
+## 10. Retuning tested properly — and falsified
+
+Round 1's retune claim rested on a point estimate. Re-run with a calibration/held-out split and
+a paired bootstrap (`scripts/eval/classifier_ab/recalibrate.py`,
+`reports/data/recalibrate.json`). Calibration mixture n = 1362 (SNI validation half + the
+frozen `oos` slice + the `conversational` seed-register slice — deliberately **not** the
+`typed` slice, so G1e stays an honest holdout). Held out: SNI test half n = 1309.
+
+| | tau_dist | tau_margin | G1e false-abstain | coverage | held-out macro-F1 |
+|---|---:|---:|---:|---:|---:|
+| shipped | 0.8599 | 0.008842 | 0.045 | 98.7 % | 0.2791 |
+| refit on the mixture, α = 0.05 | 0.7186 | 0.000018 | **0.409** | 98.2 % | 0.2848 |
+| **vocabulary + regex** | — | — | — | — | **0.3560** |
+
+Three findings, each of which independently kills the retune path:
+
+1. **Refitting on a mixture barely moves the number** (0.2791 → 0.2848) and still loses to
+   vocabulary+regex by 7 points — while blowing G1e's false-abstain from 0.045 to **0.409**,
+   five times its 0.08 gate. Out-of-corpus calibration and the G1e bound are incompatible for
+   this artifact.
+2. **The best reachable operating point is indistinguishable from deleting the head.** Joint
+   `(tau_dist, tau_margin)` sweep, selected on calibration, scored once on held-out:
+   > **Δ vs vocabulary+regex = +0.0045, 95 % CI [−0.0073, +0.0170], P(Δ>0) = 0.765**, at 15.6 %
+   > coverage.
+3. **The unconstrained optimum is unreachable by construction.**
+   `fit_joint_abstain_thresholds` (`scripts/classifier/common.py:126-158`) sweeps `qd` from
+   0.95 **upward**, so `tau_dist` can only land at or above the 95th percentile of calibration
+   distances — and since `abstained = dist > tau_dist`, a higher threshold abstains *less*. The
+   optimum needs **α ≥ 0.98**. The fitter cannot express it at any grid point.
+
+Also worth recording: on the in-corpus `typed` slice the head is *fine* — error among rows it
+commits on is **0.131** shipped, 0.135 refit. The ~70 % error is purely out-of-corpus. This is
+a generalization failure, not a broken model.
+
+**Nothing was shipped.** `derive_classifier_id` hashes the artifact directory, so any tau change
+mints a new `classifier_id` and cannot be swapped in silently.
+
+## 11. The gate suite — the governance fix
+
+**The G1 suite had never run in CI.** It carried `pytest.mark.eval`; `.github/workflows/ci.yml`
+runs `-m "not live and not eval"`. Seven green gates on a head losing 8.7 macro-F1 is what that
+gap bought. The suite is hermetic and costs 3 s, and the artifact was already committed, so:
+
+| Change | Effect |
+|---|---|
+| dropped the `eval` marker; artifact defaults to the in-repo dir | G1 now runs on every PR — **550 passed, 1 xfailed, 6.5 s** |
+| fixture calls `classify_details` instead of a hand-written mirror of it | the gate can no longer drift from the dispatcher it gates |
+| **G1g baseline: bare regex → vocabulary+regex** | removes a structural confound |
+| **G2 added**: out-of-corpus paired comparison, 2 609 SNI rows, content-hash pinned | `xfail(strict=True)` carrying Δ = −0.0865, CI [−0.1075, −0.0653] |
+
+Two honest notes on this:
+
+- **The G1g fix changed nothing numerically.** head 0.8251 · vocabulary+regex 0.2117 · old bare
+  regex 0.2117 — the vocabulary tier contributes **+0.0000** on that slice. The confound was
+  real but not outcome-changing, because the tier is nearly inert: it fires on **0.00 %** of the
+  G1g slice, 3.64 % of the frozen set, 0.54 % of SNI.
+- **The SNI gate set is committed untruncated.** Truncating to the head's own 4096-char limit
+  looked free, but the regex tiers scan the whole string and **9 of 2 609 baseline predictions
+  flip**. 2.5 MB.
+
+G2 as a strict xfail is deliberate: the suite stays green, the defect cannot be quietly
+deleted, and a retrain that fixes it XPASSes and forces the marker's removal.
+
+## 12. A6 — "route, don't replace" (pre-registered at `0b3e422`)
+
+Pre-registered prediction, committed before the run: *the primary CI will not exclude zero in
+A6's favour.* **It does not.** Held-out half, n = 1309, task-level split, Δ vs A2:
+
+| arm | macro-F1 | acc | Δ vs A2 (95 % CI, P>0) |
+|---|---:|---:|---|
+| A2 vocabulary+regex | 0.3560 | 0.302 | — |
+| A3b head as shipped | 0.2791 | 0.299 | −0.0770 [−0.1094, −0.0448] P=0.000 |
+| **A6** deny-set from validation | 0.2966 | 0.297 | **−0.0595 [−0.0845, −0.0346] P=0.000** |
+| A6-fixed deny {translation, summarization} | 0.2943 | 0.298 | −0.0617 [−0.0878, −0.0358] P=0.000 |
+| A6-oracle deny-set from held-out itself | 0.2868 | 0.283 | −0.0692 [−0.0935, −0.0458] P=0.000 |
+| A6′a patterns → head → regex | 0.2990 | **0.325** | −0.0570 [−0.0887, −0.0259] P=0.000 |
+| A6′b patterns → vocabulary → regex (**no head**) | 0.3617 | 0.303 | +0.0057 [−0.0012, +0.0142] P=0.924 |
+| A6-greedy keep only positive-contribution classes | **0.3628** | 0.316 | +0.0068 [−0.0026, +0.0162] P=0.923 |
+
+Wiring verified: deny-**all** reproduces A2 exactly, deny-**none** reproduces A3b exactly.
+
+**I had the mechanism backwards.** I argued the deny-set was the mechanism that could move the
+number and that the vocabulary-pattern variant was bounded and secondary. Inverted: every
+deny-set arm loses, and the only two arms that reach A2 lean on the regex — one of which
+**never calls the head at all**. Their CIs overlap each other, so the ~+0.006 is the patterns,
+not the head. (A6′ also had to be corrected mid-run: as first written it skipped the head
+entirely, so it was not the proposal it claimed to be. Both forms are now reported.)
+
+**A6-oracle being worse than the honestly-selected A6 is structural, not noise.** A deny set
+chosen by comparing per-class F1 is blind to classes with **no gold on the eval set** — `code`,
+`rag`, `tool_use`, `other` have no F1 to compare, so they are never denied, and they are
+exactly where the head's false positives land. Pricing each class's system-level contribution
+directly (deny everything else, held-out):
+
+| keep only | Δ vs A2 | | keep only | Δ vs A2 |
+|---|---:|---|---|---:|
+| reasoning | **+0.0061** | | summarization | −0.0058 |
+| creative | +0.0053 | | code | −0.0106 |
+| classification | +0.0016 | | qa | −0.0122 |
+| extraction | −0.0000 | | rag | −0.0175 |
+| tool_use | −0.0052 | | other | −0.0241 |
+| | | | **translation** | **−0.0322** |
+
+**Per-class F1 does not compose.** The table that motivated "route, don't replace" ranks
+`reasoning` first (+0.257 F1) and the system sweep agrees it is the best class to keep — but
+the four absent classes it structurally cannot see cost more than the three real ones gain.
+
+The A6′ patterns are genuinely high-precision — they fire on **16.4 %** of rows and are
+**97.9 %** correct when they fire, meeting the vocabulary tier's stated near-zero-false-positive
+contract. They are an argument for improving the regex stack, not for keeping the head.
+
+## 13. Leg B closeout — the ricedb attribution is **refuted**
+
+Full write-up: `reports/recall-blocker.md`. Probe: `scripts/eval/classifier_ab/recall_probe.py`.
+
+The hypothesis was that the 16/13/16 evidence-count instability matched
+`ricedb@fix/control-vector-search` (`c76f5eb`, 2026-07-14, unmerged) — a lane filter dropping
+untagged entries and silently falling through to a recency fallback with "a UUID-ordered,
+query-independent result set with a constant placeholder score of 0.5", naming Minima's
+`batch_insert` as affected. The dates bracket neatly. **Every signature is absent:**
+
+| predicted by that bug | observed |
+|---|---|
+| constant score ≈ 0.5 | **24 distinct scores of 25**, range 0.428–0.711 |
+| degenerate/absent semantic component | `semantic` = 0.99, 0.99, 0.99, 0.99, 0.76 … |
+| recency-ordered fallback | `rank_by: "balanced"`, `recency: 0.0` everywhere |
+| query-independent results | three orthogonal queries each return **5/5 own-family in the top 5** |
+
+Jaccard between *orthogonal* queries is 0.19–0.22 against 0.61–0.85 between *identical* ones —
+a clean separation, and the opposite of what the fallback would produce. Pre-registered
+commitment was not to backfill an attribution from a date; it is not backfilled.
+
+**What is actually broken, now quantified.** Five identical queries, same lane, same limit,
+index at rest: **0 of 10 pairs share an ordering**, **4 distinct top-5 orderings across 5
+calls**, and **33 distinct entry ids at a limit of 25** — ~24 % of the result set churns per
+call. The *head* of the ranking is stable and correct; the *tail* churns — which is exactly
+where evidence-per-model comes from once a fixed recall budget is split across N candidates,
+and exactly why `_crosscheck` (cached pick vs fresh pick) cannot reach its 0.80 floor.
+`RESULTS.md` recorded 100 % on 2026-06-12, so this is a regression, not a standing limit.
+
+The directive stands: **no classifier change can unblock V5**, and Leg B stops here.
+
+## 14. A `code`-bearing clean set — proposal, not built
+
+**Disqualified by contamination:** `seeding/routerbench.py:25-27` maps `mbpp`, `humaneval` and
+`code-llama` → `code`. RouterBench **is** the head's `code` training source, so HumanEval and
+MBPP cannot evaluate it. CLINC150 likewise. SNI has no `code` gold at all.
+
+| source | why | rows | $ | labels |
+|---|---|---:|---:|---|
+| **CoNaLa** (StackOverflow NL intents) | real developer phrasing, not in RouterBench/CLINC | 2.9k curated | 0 | `code` by construction |
+| **SWE-bench issue statements** | closest register to Minima's actual harness traffic | 2.3k | 0 | `code` by construction |
+| **Harness telemetry** (`routing_decisions`, TUI spine) | the only true serving distribution | thousands | 0 | **none — needs gold** |
+
+Compute is free. The cost is **gold labels**, and the choice matters: CoNaLa and SWE-bench are
+`code` by construction, so they measure **recall** on `code` but give no precision signal —
+they cannot catch the head *inventing* `code`, which it did on 171 SNI rows and which §12
+prices at −0.0106. A precision signal needs a mixed set with non-`code` gold.
+
+**Recommendation:** ~600 rows stratified across CoNaLa + SWE-bench + a non-code contrast slice,
+hand-labelled against the adjudication rules already written in `test_classifier_gates.py:6-8`
+(~2–3 h, $0), or an LLM label panel at ~$5–15.
+
+## 15. What got falsified, and what I retracted
+
+Pre-registered predictions, scored:
+
+| # | Prediction | Where | Outcome |
+|---|---|---|---|
+| P1 | The head consumes `regex_hint` as a feature | round 1 §2 | **FALSIFIED** — `regex_classes: []`; with-hint and no-hint agree on 2609/2609 |
+| P2 | A3b vs A2 CI will exclude zero in the head's favour | round 1 | **FALSIFIED** — Δ = −0.0865, CI entirely below zero |
+| P3 | Retuning tau is the actionable remedy | round 1 §5 | **FALSIFIED** in §10 — best reachable Δ = +0.0045, CI [−0.0073, +0.0170] |
+| P4 | The A6 primary CI will **not** exclude zero in A6's favour | `PREREG-A6.md` `0b3e422` | **HELD** — Δ = −0.0595, CI [−0.0845, −0.0346] |
+| P5 | The Leg B failure is `ricedb@fix/control-vector-search` | reviewer hypothesis | **REFUTED** in §13 — all four signatures absent |
+
+Retractions and corrections, mine:
+
+- **"Retune" as the verdict.** Round 1's headline rested on a point estimate with no CI. It
+  does not survive a paired bootstrap. §5 carries a correction banner.
+- **The A6 mechanism argument was backwards.** I claimed the deny-set was the mechanism that
+  could move the number and the vocabulary-pattern variant was bounded and secondary. Every
+  deny-set arm loses; the only arms reaching A2 lean on the regex, one of which never calls the
+  head. I also mis-specified A6′ on the first run — it skipped the head entirely, so it was not
+  the proposal it claimed to be. Both forms are now reported.
+- **"Bit-identical truncation."** I claimed committing the SNI set truncated to 4096 chars was
+  prediction-neutral because the head truncates there. The *regex* tiers do not — 9 of 2609
+  baseline predictions flip. Committed untruncated.
+- **The `harness.py` tokenizer's failure direction.** I described it as the same over-dropping
+  failure I hit in the SNI loader. It is the inverse: `_jaccard` guards against empty sets, so
+  the guard failed *open* rather than over-dropping. Different bug, same root cause.
+- **`\w+` as the fix for `salient_signature`.** Insufficient — `\w` excludes combining marks, so
+  it shatters Indic scripts into fragments the `len >= 4` filter discards. Caught by the
+  regression test I wrote for it, which failed on first run.
+
+Held from round 1, re-verified: the reviewer's claim that `test_classifier_gates.py:139` calls
+`clf.classify()` without a `regex_hint` is **incorrect** — `clf` is the `Serving` fixture and
+`:60` passes `regex_hint=infer_task_type(text)`. Checked a third time. The nearby defect that
+*is* real is different and larger, and is fixed in §11: G1g scored vocabulary+head against
+**bare** regex.
+
+## 16. Recommended next steps (current)
+
+1. **Stop investing in this artifact.** Three pre-registered remedies — retune (§10), class
+   routing (§12), and the regex-feature hypothesis (§2) — have all failed. Further tuning of
+   `potion-base-32M-c18e819c6c6d` is not indicated.
+2. **Build the `code`-bearing set** (§14) — it is the one piece of evidence that could change a
+   pull decision, and 4 of 11 classes are currently unmeasured.
+3. **Land the A6′ patterns into `_HIGH_PRECISION` on their own merit** — 16.4 % fire rate at
+   97.9 % precision, and they beat the head on every arm. This is a regex improvement, and it
+   should be evaluated and shipped as one, not as a rescue for the classifier.
+4. **Fix hosted recall's top-k instability** (§13, `reports/recall-blocker.md`). Until then no
+   routing experiment from this harness produces a defensible number, and A4 stays untestable.
+5. **Delete the `regex_hint` plumbing** — computed, passed, and discarded on every call (§2).
+6. **If a retrain happens, target the attractors**: `→ translation` on paraphrase prompts and
+   `→ reasoning` on science questions, plus the false-positive spray into the four classes with
+   no gold, which §12 shows is where the real system-level damage is.
+7. **Raise α or replace `fit_joint_abstain_thresholds`** if conformal abstention is kept at all
+   — its grid cannot express an operating point that abstains more than ~α (§10.3).
 
 ---
 
@@ -330,4 +583,13 @@ uv run python scripts/eval/classifier_ab/contamination.py --eval-set $S/eval_set
 uv run python scripts/eval/classifier_ab/intrinsic.py     --eval-set $S/sni_eval_set.jsonl --artifact models/classifier/potion-base-32M-c18e819c6c6d --out $S/intrinsic.json
 uv run python scripts/eval/classifier_ab/risk_coverage.py --eval-set $S/sni_eval_set.jsonl --artifact models/classifier/potion-base-32M-c18e819c6c6d --out $S/risk_coverage.json
 uv run python scripts/eval/classifier_ab/prod_parity.py   --eval-set $S/sni_eval_set.jsonl --artifact models/classifier/potion-base-32M-c18e819c6c6d --out $S/prod_parity.json
+
+# round 2 — §10 §12 §13. The gate set is committed, so these need no download.
+uv run python scripts/eval/classifier_ab/recalibrate.py --out $S/recalibrate.json
+uv run python scripts/eval/classifier_ab/a6.py          --out $S/a6.json
+uv run pytest -q tests/eval/test_classifier_gates.py -rx   # 8 passed, 1 xfailed (G2)
+
+# §13 needs hosted Mubit and writes to a throwaway lane
+set -a && . .env && set +a
+uv run python scripts/eval/classifier_ab/recall_probe.py --out $S/recall_probe.json
 ```

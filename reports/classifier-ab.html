@@ -144,7 +144,7 @@
     <span>pre-reg <b>58c020a</b></span>
     <span>n <b>2,609</b></span>
     <span>spend <b>$0.00</b></span>
-    <span>2026-07-27</span>
+    <span>2026-07-27 · <b>round 2 2026-07-28</b></span>
   </div>
 </header>
 
@@ -158,24 +158,31 @@
       </div>
     </div>
     <p style="max-width:70ch;">On out-of-corpus benchmark data the shipped head is
-    <strong>significantly worse</strong> than the regex it replaced. The cause is its
-    abstention thresholds, not the embedding — but retuning them only reaches parity.</p>
+    <strong>significantly worse</strong> than the regex it replaced. Three remedies were
+    pre-registered and tested. All three failed.</p>
     <div class="rules">
       <div class="rule-row"><span class="pill p-bad">KEEP ✕</span>
         <span>Fails. The confidence interval lies entirely below zero.</span></div>
-      <div class="rule-row"><span class="pill p-good">RETUNE ✓</span>
-        <span>Triggered. Held-out macro-F1 rises <span class="num">0.279 → 0.363</span>
-        from threshold changes alone — necessary, and cheap.</span></div>
+      <div class="rule-row"><span class="pill p-bad">RETUNE ✕</span>
+        <span><strong>Falsified in round 2.</strong> The best reachable operating point on the
+        abstention frontier is <span class="num">Δ = +0.0045</span>, 95% CI
+        <span class="num">[−0.0073, +0.0170]</span> — indistinguishable from deleting the head.
+        <a href="#round2">Details</a>.</span></div>
+      <div class="rule-row"><span class="pill p-bad">ROUTE ✕</span>
+        <span>Class-competence routing does not rescue it either.
+        <span class="num">Δ = −0.0595</span>, CI <span class="num">[−0.0845, −0.0346]</span>.
+        Every deny-set variant loses.</span></div>
       <div class="rule-row"><span class="pill p-warn">PULL ⚠</span>
-        <span>First clause met (CI upper bound <span class="num">−0.065</span> ≤ 0), but the
-        second requires downstream evidence — and the downstream leg is
-        <a href="#legb">blocked by evaluation infrastructure</a>, not merely null. Cannot be
-        discharged either way.</span></div>
+        <span>Both clauses now met on this evidence, but <strong>still not
+        dischargeable</strong>: the downstream leg is
+        <a href="#legb">blocked by evaluation infrastructure</a>, and <code>code</code> —
+        plausibly the highest-traffic type — has no gold here.</span></div>
     </div>
     <p style="max-width:70ch;font-size:14.5px;color:var(--ink-2);border-top:1px solid var(--rule-soft);padding-top:14px;">
-    <strong>Retune first, but don't read it as a rescue.</strong> The retuned head only
-    <em>ties</em> the regex, and does so by abstaining on 83% of prompts. Half of what it
-    still answers is <code>translation</code> — a class the regex already gets at F1 0.999.</p>
+    <strong>What the evidence supports today:</strong> the head contributes nothing measurable
+    over vocabulary+regex on out-of-corpus prose, and cannot be configured to. What it does
+    <em>not</em> support is a final pull decision — 4 of 11 classes are unmeasured. The honest
+    position is stop investing, measure <code>code</code>, then decide.</p>
   </div>
 </section>
 
@@ -208,6 +215,22 @@
     interval and no paired test. G1e passes at 1.8% measured false-abstain while real error is
     ~70%: the conformal calibration was fit on the training distribution and does not transfer.
     <strong>A green suite is currently not evidence that the head beats the regex.</strong></p>
+  </div>
+  <div class="callout" style="margin-top:16px;">
+    <p><strong>Fixed in round 2 — and the root cause was worse than it looked.</strong>
+    The suite had <em>never run in CI</em>: it carried the <code>eval</code> marker, and the CI
+    job runs <code>-m "not live and not eval"</code>. It is hermetic and costs 3 seconds, and
+    the artifact was already committed, so the marker is gone and G1 now runs on every pull
+    request — <span class="num">550 passed, 1 xfailed, 6.5 s</span>.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);">Also: the fixture called a hand-written
+    <em>mirror</em> of the dispatcher rather than the dispatcher, so it could drift silently;
+    G1g scored vocabulary+head against <strong>bare</strong> regex, crediting the vocabulary
+    tier's wins to the head; and a new out-of-corpus gate (2,609 rows, content-hash pinned)
+    lands as a <strong>strict xfail</strong> carrying Δ = −0.0865 — the suite stays green, the
+    defect cannot be quietly deleted, and a retrain that fixes it forces the marker's removal.
+    Honest footnote: the G1g baseline fix changed <em>nothing</em> numerically
+    <span class="num">(+0.0000)</span>, because the vocabulary tier fires on 0.00% of that
+    slice. The confound was structural, not outcome-changing.</p>
   </div>
 </section>
 
@@ -374,8 +397,156 @@
   evidence/model ≥ 8 (met, 11.7) and V5 ≥ 0.8 (failed, 0.50). My specification error, not a
   silent skip.</p>
   <p class="foot"><strong>Consequence for the verdict:</strong> the PULL rule requires “Leg B
-  shows no cost or quality gain”. Leg B shows nothing either way, so PULL cannot be discharged
-  and the actionable verdict stands at <strong>RETUNE</strong>.</p>
+  shows no cost or quality gain”. Leg B shows nothing either way, so PULL cannot be discharged.
+  <strong>Round 2 update:</strong> the RETUNE fallback recorded here was itself falsified, and
+  the cause of this blocker was probed directly — it is <em>not</em> the classifier and
+  <em>not</em> the bug it was attributed to. See below.</p>
+</section>
+
+<section id="round2">
+  <div class="sec-head"><div class="eyebrow">Round 2 · 2026-07-28</div>
+    <h2>Retuning tested properly — and falsified</h2></div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:14px;">
+    <p>Round 1's retune claim rested on a point estimate with no confidence interval. Re-run
+    with an honest calibration/held-out split and a paired bootstrap, it does not survive.</p>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>G1e false-abstain</th><th>coverage</th><th>held-out macro-F1</th></tr></thead>
+      <tbody>
+        <tr><td>shipped <span class="dim">τ<sub>dist</sub>=0.8599, τ<sub>margin</sub>=0.0088</span></td><td>0.045</td><td>98.7%</td><td>0.2791</td></tr>
+        <tr><td>refit on a mixed calibration set, α=0.05</td><td class="lose">0.409</td><td>98.2%</td><td>0.2848</td></tr>
+        <tr><td><strong>vocabulary + regex</strong></td><td class="dim">—</td><td class="dim">—</td><td class="win"><strong>0.3560</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>Three findings, each independently fatal to the retune path.</strong></p>
+    <p style="font-size:14.5px;color:var(--ink-2);"><b>1.</b> Refitting on a mixture barely
+    moves the number and still loses by 7 points — while blowing G1e's false-abstain to
+    <span class="num">0.409</span>, five times its 0.08 gate. Out-of-corpus calibration and the
+    G1e bound are incompatible for this artifact.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);"><b>2.</b> The best reachable point, joint
+    sweep selected on calibration and scored once on held-out:
+    <span class="num">Δ = +0.0045</span>, CI <span class="num">[−0.0073, +0.0170]</span>,
+    P(Δ&gt;0) = 0.765, at 15.6% coverage. Indistinguishable from deleting the head.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);"><b>3.</b> The unconstrained optimum is
+    <em>unreachable by construction</em>. <code>fit_joint_abstain_thresholds</code> sweeps its
+    distance quantile from 0.95 <em>upward</em>, and a higher threshold abstains <em>less</em> —
+    so it can never express an operating point that abstains more than ~α. The optimum needs
+    <span class="num">α ≥ 0.98</span>.</p>
+  </div>
+  <p class="foot">On the in-corpus slice the head is fine: error among rows it commits on is
+  <span class="num">0.131</span>. The ~70% error is purely out-of-corpus. This is a
+  generalization failure, not a broken model. Nothing was shipped —
+  <code>derive_classifier_id</code> hashes the artifact directory, so no τ can be swapped in
+  silently.</p>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Round 2 · pre-registered <code>0b3e422</code></div>
+    <h2>“Route, don't replace” — and the mechanism I had backwards</h2></div>
+  <p class="prose">Pre-registered prediction, committed before the run: <em>the primary CI will
+  not exclude zero in A6's favour.</em> It does not.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Arm</th><th>macro-F1</th><th>Δ vs vocabulary+regex (95% CI)</th></tr></thead>
+      <tbody>
+        <tr><td>vocabulary + regex</td><td>0.3560</td><td class="dim">—</td></tr>
+        <tr><td>head as shipped</td><td>0.2791</td><td class="lose">−0.0770 [−0.1094, −0.0448]</td></tr>
+        <tr><td><strong>A6 · deny-set from validation</strong></td><td>0.2966</td><td class="lose"><strong>−0.0595 [−0.0845, −0.0346]</strong></td></tr>
+        <tr><td>A6 · deny {translation, summarization}</td><td>0.2943</td><td class="lose">−0.0617 [−0.0878, −0.0358]</td></tr>
+        <tr><td>A6 · deny-set from held-out <span class="dim">(oracle)</span></td><td>0.2868</td><td class="lose">−0.0692 [−0.0935, −0.0458]</td></tr>
+        <tr><td>A6′a · patterns → head → regex</td><td>0.2990</td><td class="lose">−0.0570 [−0.0887, −0.0259]</td></tr>
+        <tr><td>A6′b · patterns → vocabulary → regex <span class="dim">(no head)</span></td><td>0.3617</td><td>+0.0057 [−0.0012, +0.0142]</td></tr>
+        <tr><td>A6 · keep only positive-contribution classes</td><td class="win"><strong>0.3628</strong></td><td>+0.0068 [−0.0026, +0.0162]</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>I had the mechanism backwards.</strong> I argued the deny-set was what could move
+    the number and the vocabulary-pattern variant was bounded and secondary. Inverted: every
+    deny-set arm loses, and the only two arms reaching parity lean on the regex — one of which
+    <strong>never calls the head at all</strong>. Their intervals overlap, so the ~+0.006 is the
+    patterns, not the head.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);">The oracle arm being <em>worse</em> than the
+    honestly-selected one is structural. A deny set chosen by comparing per-class F1 is blind to
+    classes with <strong>no gold on the eval set</strong> — <code>code</code>, <code>rag</code>,
+    <code>tool_use</code>, <code>other</code> have no F1 to compare, so they are never denied,
+    and they are exactly where the head's false positives land. Pricing each class's
+    system-level contribution directly: <code>reasoning</code> +0.0061, <code>creative</code>
+    +0.0053, <code>classification</code> +0.0016 — against <code>translation</code>
+    <span class="num">−0.0322</span>, <code>other</code> −0.0241, <code>rag</code> −0.0175.
+    <strong>Per-class F1 does not compose.</strong></p>
+  </div>
+  <p class="foot">The A6′ patterns are genuinely high-precision — they fire on
+  <span class="num">16.4%</span> of rows at <span class="num">97.9%</span> precision, meeting
+  the vocabulary tier's near-zero-false-positive contract. They are an argument for improving
+  the regex stack, not for keeping the head.</p>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Round 2 · attribution</div>
+    <h2>The downstream blocker is real — and it is not what it was blamed on</h2></div>
+  <p class="prose">The hypothesis was that the recall instability matched a known, root-caused
+  bug: a lane filter dropping untagged entries and falling through to a recency fallback with
+  “a UUID-ordered, query-independent result set with a constant placeholder score of 0.5”. The
+  dates bracket neatly. Every signature is absent.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Predicted by that bug</th><th>Observed</th></tr></thead>
+      <tbody>
+        <tr><td>constant score ≈ 0.5</td><td class="win">24 distinct scores of 25, range 0.428–0.711</td></tr>
+        <tr><td>degenerate / absent semantic component</td><td class="win">semantic = 0.99, 0.99, 0.99, 0.99, 0.76 …</td></tr>
+        <tr><td>recency-ordered fallback</td><td class="win"><code>rank_by: "balanced"</code>, recency 0.0 throughout</td></tr>
+        <tr><td>query-independent results</td><td class="win">3 orthogonal queries, each 5/5 own-family in the top 5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>What is actually broken.</strong> Five identical queries, same lane, same limit,
+    index at rest: <span class="num">0 of 10</span> pairs share an ordering,
+    <span class="num">4</span> distinct top-5 orderings across 5 calls, and
+    <span class="num">33</span> distinct entry ids at a limit of 25 — roughly a quarter of the
+    result set churns per call.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);">The <em>head</em> of the ranking is stable
+    and correct; the <em>tail</em> churns — exactly where evidence-per-model comes from once a
+    fixed recall budget is split across N candidates, and exactly why the crosscheck guard
+    (cached pick vs fresh pick) cannot reach its 0.80 floor. It measured 100% on 2026-06-12, so
+    this is a regression, not a standing limit.</p>
+  </div>
+  <p class="foot">The pre-registered commitment was not to backfill an attribution from a date.
+  It is not backfilled. No classifier change can unblock this guard, and the downstream leg
+  stops here.</p>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Round 2 · scorecard</div>
+    <h2>What got falsified, and what I retracted</h2></div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Prediction</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>The head consumes <code>regex_hint</code> as a feature</td><td class="lose">FALSIFIED</td></tr>
+        <tr><td>Head beats vocabulary+regex out of corpus</td><td class="lose">FALSIFIED</td></tr>
+        <tr><td>Retuning τ is the actionable remedy</td><td class="lose">FALSIFIED</td></tr>
+        <tr><td>The A6 CI will <em>not</em> favour A6 <span class="dim">(pre-reg <code>0b3e422</code>)</span></td><td class="win">HELD</td></tr>
+        <tr><td>The blocker is the known recall bug</td><td class="lose">REFUTED</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>Mine, retracted.</strong></p>
+    <p style="font-size:14.5px;color:var(--ink-2);">The <em>retune</em> verdict — a point
+    estimate that does not survive a bootstrap. The <em>A6 mechanism argument</em> — backwards,
+    and I mis-specified A6′ on the first run so it skipped the head entirely. <em>“Truncation is
+    bit-identical”</em> — the head stops at 4096 chars but the regex tiers scan the whole
+    string, and 9 of 2,609 baseline predictions flip. The <em>tokenizer failure direction</em> —
+    in the harness it fails <em>open</em> (a guard that silently passes), the inverse of the
+    over-dropping I hit earlier. <em><code>\w+</code> as the fix</em> for the production twin —
+    insufficient, because <code>\w</code> excludes combining marks; caught by the regression
+    test, which failed on its first run.</p>
+  </div>
 </section>
 
 <section>
@@ -427,6 +598,11 @@
       ran. Mitigated by the sensitivity analysis and per-category reporting, not eliminated.</li>
       <li><strong>Absolute numbers are not the point.</strong> Every arm scores badly here
       (~0.32 accuracy). The <em>difference</em> between arms is the quantity of interest.</li>
+      <li><strong>Neighbour voting was never evaluated, and remains untested.</strong> It ships
+      in the serving path, but it is gated on non-empty recall evidence — so it cannot be
+      measured intrinsically at all; it needs live memory, which is precisely what is broken.
+      <strong>Every verdict here is about the head, not about the serving
+      configuration.</strong></li>
     </ul>
   </div>
 </section>
@@ -435,18 +611,27 @@
   <div class="sec-head"><div class="eyebrow">Next</div><h2>Recommended actions</h2></div>
   <div class="prose">
     <ul>
-      <li><strong>Fix the gate suite first.</strong> 7/7 green during an 8.7-point regression is
-      a measurement failure, and it will hide the next one too. Replace G1g with a powered,
-      CI-bearing, out-of-corpus comparison and add a non-<code>translation</code> slice.</li>
-      <li><strong>Retune the conformal thresholds</strong> against a mixed-distribution
-      calibration set. Damage control, not a fix.</li>
-      <li><strong>Delete the <code>regex_hint</code> plumbing or start using it.</strong></li>
-      <li><strong>Get a <code>code</code>-bearing clean eval set</strong> before any keep/pull
-      decision is final.</li>
-      <li><strong>Investigate <code>→ translation</code> and <code>→ reasoning</code> as
-      attractor classes</strong> — 419 <code>other→reasoning</code> moves and a
-      paraphrase→translation confusion look like a class-prior or anchor problem, and they are
-      what a retrain would need to target.</li>
+      <li><strong>Stop investing in this artifact.</strong> Three pre-registered remedies —
+      retune, class routing, and the regex-feature hypothesis — have all failed. Further tuning
+      is not indicated.</li>
+      <li><strong>Build the <code>code</code>-bearing set.</strong> It is the one piece of
+      evidence that could change a pull decision, and 4 of 11 classes are unmeasured. Free
+      sources exist (StackOverflow intents, issue statements); the cost is ~600 hand-labelled
+      rows, 2–3 hours — or ~$5–15 for a label panel.</li>
+      <li><strong>Land the new vocabulary patterns on their own merit.</strong> 16.4% fire rate
+      at 97.9% precision, and they beat the head on every arm. Ship them as a regex improvement,
+      not as a rescue for the classifier.</li>
+      <li><strong>Fix hosted recall's top-k instability.</strong> Until then no routing
+      experiment from this harness produces a defensible number, and neighbour voting stays
+      untestable.</li>
+      <li><strong>Delete the <code>regex_hint</code> plumbing</strong> — computed, passed, and
+      discarded on every call.</li>
+      <li><strong>If a retrain happens, target the attractors</strong> — <code>→ translation</code>
+      on paraphrase prompts, <code>→ reasoning</code> on science questions, and the
+      false-positive spray into the four classes with no gold, which is where the real
+      system-level damage is.</li>
+      <li><strong>Raise α or replace the threshold fitter</strong> if conformal abstention is
+      kept at all — its grid cannot express an operating point that abstains more than ~α.</li>
     </ul>
   </div>
 </section>
