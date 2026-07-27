@@ -83,6 +83,13 @@ These are on by default — set the variable to `0` to opt out. Every one fails 
 | `MINIMA_TUI_REWIND` | on | The `checkpoint` / `rewind` tool pair (context rewind; the DB transcript always keeps every row). |
 | `MINIMA_TUI_BGJOBS` | on | `bash` background jobs (`background: true`) and the `bgjob` control tool. Background jobs are killed at session end. |
 | `MINIMA_TUI_TYPED_TASK` | on | `output_schema` on the `task` tool — typed sub-agent results with a shape check. |
+| `MINIMA_TUI_PLAN_CRITIC` | on | The planning critic: one cheap pass over the approved steps at `/plan` finalize, flagging non-discriminative checks and hidden dependencies. Advisory — it never blocks a plan. |
+| `MINIMA_TUI_DIFF_REVIEW` | on | The zero-context diff review that fires when a plan closes fully completed. An objection writes a yellow gate; it can never turn a plan green. |
+| `MINIMA_TUI_AUTO_GATES` | on | Auto-gates: steps the model gave no check for are filled with your repo's own commands, mined from `package.json` / `Makefile`. With it off those steps stay unverified. |
+| `MINIMA_TUI_PLAN_PREMIUM` | on | Premium models for plan synthesis and the design council. Off routes planning through the ordinary session pool. |
+| `MINIMA_TUI_TOOL_ALLOWLIST` | on | Per-step tool allowlists — a step naming its tools cannot use others while it is in progress. |
+| `MINIMA_TUI_FAILURE_MATCHER` | on | Failure classification on the recovery ladder. Off falls back to the blunt always-escalate behavior. |
+| `MINIMA_TUI_GRADED_OUTCOME` | on | Graded outcome labels, which report unverified-but-positive evidence distinctly from verified evidence. |
 
 Two variables work the other way — they grant something the harness refuses by default:
 

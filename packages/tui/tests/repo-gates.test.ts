@@ -86,7 +86,17 @@ describe("auto-gate attachment", () => {
 });
 
 describe("finalize integration", () => {
-  test("mined checks land on the seeded plan and the note; opt-out env respected", async () => {
+  /**
+   * One finalize over two verify-less steps with two mined gates injected.
+   *
+   * MINIMA_TUI_AUTO_GATES is read AMBIENTLY inside plan_finalize, so this pins it per case
+   * rather than inheriting it. It used to inherit: under the flags-off CI matrix the
+   * attach-case ran with the feature disabled and asserted the opposite of what it got.
+   */
+  async function finalizeWithGates(autoGates: "0" | "1"): Promise<{
+    outcome: Awaited<ReturnType<typeof import("../src/minima/plan_finalize.ts").finalizePlan>>;
+    seeded: { verify?: string | null }[][];
+  }> {
     const { finalizePlan } = await import("../src/minima/plan_finalize.ts");
     const { PlanSessionStore } = await import("../src/minima/plan_session.ts");
     const store = new PlanSessionStore("mine the checks");
@@ -113,28 +123,51 @@ describe("finalize integration", () => {
         return { planId: "p", stepIds: steps.map((_, i) => `s${i}`) };
       },
     };
-    const outcome = await finalizePlan(store, {
-      metaModel: { id: "m" } as never,
-      signal: null,
-      force: true,
-      transcript: "",
-      outPath: join(dir(), "BigPlan.md"),
-      db,
-      runId: "run-1",
-      synthesize,
-      answerQuestions: async () => [],
-      critic: async () => null,
-      repoDir: "unused-because-injected",
-      mineGates: () => [
-        { command: "bun test", kind: "test", source: "package.json" },
-        { command: "bun run check", kind: "typecheck", source: "package.json" },
-      ],
-    });
+    const saved = process.env.MINIMA_TUI_AUTO_GATES;
+    process.env.MINIMA_TUI_AUTO_GATES = autoGates;
+    try {
+      const outcome = await finalizePlan(store, {
+        metaModel: { id: "m" } as never,
+        signal: null,
+        force: true,
+        transcript: "",
+        outPath: join(dir(), "BigPlan.md"),
+        db,
+        runId: "run-1",
+        synthesize,
+        answerQuestions: async () => [],
+        critic: async () => null,
+        repoDir: "unused-because-injected",
+        mineGates: () => [
+          { command: "bun test", kind: "test", source: "package.json" },
+          { command: "bun run check", kind: "typecheck", source: "package.json" },
+        ],
+      });
+      return { outcome, seeded };
+    } finally {
+      if (saved === undefined) delete process.env.MINIMA_TUI_AUTO_GATES;
+      else process.env.MINIMA_TUI_AUTO_GATES = saved;
+    }
+  }
+
+  test("mined checks land on the seeded plan and the note", async () => {
+    const { outcome, seeded } = await finalizeWithGates("1");
     if (outcome.kind !== "ok") throw new Error(`finalize failed: ${JSON.stringify(outcome)}`);
     expect(outcome.auditNote).toContain("Auto-gates");
     expect(outcome.seededVerifies).toContain("bun run check");
     expect(outcome.seededVerifies).toContain("bun test");
     expect(seeded[0]![0]!.verify).toBe("bun run check");
     expect(seeded[0]![1]!.verify).toBe("bun test");
+  });
+
+  test("MINIMA_TUI_AUTO_GATES=0 attaches nothing and still finalizes", async () => {
+    // The opt-out half the old test's name promised but never exercised. Steps stay
+    // verify-less, the plan still lands, and the audit says so instead of throwing.
+    const { outcome, seeded } = await finalizeWithGates("0");
+    if (outcome.kind !== "ok") throw new Error(`finalize failed: ${JSON.stringify(outcome)}`);
+    expect(outcome.auditNote).not.toContain("Auto-gates");
+    expect(outcome.seededVerifies ?? []).toEqual([]);
+    expect(seeded[0]![0]!.verify ?? null).toBeNull();
+    expect(seeded[0]![1]!.verify ?? null).toBeNull();
   });
 });

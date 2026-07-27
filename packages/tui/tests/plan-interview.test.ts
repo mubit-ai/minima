@@ -269,6 +269,20 @@ describe("plan interview — verify answers reach seeded steps as user-origin ch
     ]);
     expect(applyUserVerifies(steps, []).attached).toEqual([]);
   });
+
+  test("applyUserVerifies handles a null verify — the synthesizer's actual gap value", () => {
+    // Regression: this function's whole job is filling verify-less steps, but it deref'd
+    // st.verify.trim() unguarded. The old case above used "" and passed; the synthesizer
+    // emits null, so a real interview run threw `null is not an object` instead.
+    const steps: { verify: string | null }[] = [
+      { verify: null },
+      { verify: "authored" },
+      { verify: null },
+    ];
+    const applied = applyUserVerifies(steps, ["make test"]);
+    expect(applied.attached).toEqual([1, 3]);
+    expect(applied.steps.map((s) => s.verify)).toEqual(["make test", "authored", "make test"]);
+  });
 });
 
 describe("plan interview — plan_turn hook", () => {

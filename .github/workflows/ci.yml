@@ -84,12 +84,12 @@ jobs:
 
   # `MINIMA_TUI_<X>=0` is the published rollback for every default-ON harness behavior, and
   # until now it was verified once by hand on one machine. This job runs the whole suite with
-  # every switch engaged, so "turn it off" keeps working. NOTE: because no src module reads
-  # ambient env (only configFromEnv does, once, in main.ts), most tests inject config
-  # explicitly and are unaffected by these variables — the durable gate is
-  # tests/kill-switches.test.ts, which pins the contract directly. This job is the
-  # belt-and-braces half: it catches any future ambient read, and proves the suite is green
-  # under the exact configuration an operator rolling back would be running.
+  # every switch engaged, so "turn it off" keeps working. NOTE: most switches resolve through
+  # configFromEnv, which main.ts calls once at startup, and most tests inject their own
+  # config — so for those the durable gate is tests/kill-switches.test.ts, which pins the
+  # contract directly, and this job is the belt-and-braces half. Three switches
+  # (PLAN_CRITIC, DIFF_REVIEW, AUTO_GATES) are read AMBIENTLY at their wiring sites, so for
+  # those this job is not redundant: it is the only place the suite runs with them off.
   tui-flags-off:
     name: TUI — kill-switch matrix (every switch off)
     runs-on: ubuntu-latest
@@ -107,6 +107,14 @@ jobs:
       MINIMA_TUI_REWIND: "0"
       MINIMA_TUI_EDIT_GUARD: "0"
       MINIMA_TUI_TYPED_TASK: "0"
+      MINIMA_TUI_PLAN_PREMIUM: "0"
+      MINIMA_TUI_FAILURE_MATCHER: "0"
+      MINIMA_TUI_TOOL_ALLOWLIST: "0"
+      MINIMA_TUI_GRADED_OUTCOME: "0"
+      # Ambient reads — not reachable through configFromEnv, so only this job covers them.
+      MINIMA_TUI_PLAN_CRITIC: "0"
+      MINIMA_TUI_DIFF_REVIEW: "0"
+      MINIMA_TUI_AUTO_GATES: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
