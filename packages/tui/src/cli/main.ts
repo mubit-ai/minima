@@ -530,6 +530,7 @@ const HELP = `minima — cost-aware model-routing coding agent.
 Usage: minima [prompt] [--print|--mode json] [options]
        minima auth              sign in to Mubit + provision this repo's project
        minima config [set|get]  manage stored credentials
+       minima dashboard         browse this machine's ledger at http://127.0.0.1:4180
 
   -p, --print              one-shot: print the reply and exit
       --mode {interactive|print|json}
@@ -646,6 +647,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   // `minima auth` — one-click browser login + per-repo project provisioning.
   if (argv[0] === "auth") return authCli(argv.slice(1));
+
+  // `minima dashboard` — localhost ledger dashboard (no TUI, no model calls).
+  if (argv[0] === "dashboard") return dashboardCli(argv.slice(1));
 
   let args: CliArgs;
   try {
@@ -1384,6 +1388,80 @@ async function configCli(args: string[]): Promise<number> {
     }
   }
   process.stdout.write("\nUse `minima config set <KEY> <value>` to store a credential.\n");
+  return 0;
+}
+
+const DASHBOARD_HELP = `minima dashboard — browse this machine's harness ledger in a browser.
+
+Usage: minima dashboard [options]
+
+      --port N           port to bind (default 4180)
+      --host HOST        interface to bind (default 127.0.0.1 — loopback only)
+      --db PATH          ledger to read (default ~/.minima-harness/minima.db)
+      --allow-writes     enable the audited memory status controls (off by default)
+      --open             open the printed URL in the default browser
+  -h, --help
+
+Read-only by default: the ledger is opened with a readonly SQLite handle, so no route can
+write. Every route is gated on a per-process token, handed over in the printed URL.
+`;
+
+/** `minima dashboard` — read-only localhost views over the ledger; no TUI, no model calls. */
+async function dashboardCli(args: string[]): Promise<number> {
+  if (args.includes("-h") || args.includes("--help")) {
+    process.stdout.write(DASHBOARD_HELP);
+    return 0;
+  }
+  const flagValue = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const portRaw = flagValue("--port");
+  const port = portRaw === undefined ? undefined : Number(portRaw);
+  if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
+    process.stderr.write(`minima dashboard: invalid --port ${portRaw}\n`);
+    return 2;
+  }
+
+  const { LedgerUnavailableError, startDashboard } = await import("../dashboard/index.ts");
+  let handle: Awaited<ReturnType<typeof startDashboard>>;
+  try {
+    handle = startDashboard({
+      port,
+      host: flagValue("--host"),
+      dbPath: flagValue("--db"),
+      allowWrites: args.includes("--allow-writes"),
+    });
+  } catch (exc) {
+    if (exc instanceof LedgerUnavailableError) {
+      process.stderr.write(`minima dashboard: ${exc.message}\n`);
+      process.stderr.write("Run `minima` once in a repo to create the ledger, then retry.\n");
+      return 1;
+    }
+    process.stderr.write(`minima dashboard: ${errText(exc)}\n`);
+    return 1;
+  }
+
+  process.stdout.write(`minima dashboard — ${handle.url}\n`);
+  process.stdout.write(`  ledger  ${handle.ledgerPath}\n`);
+  process.stdout.write(`  mode    ${handle.readOnly ? "read-only" : "writes enabled"}\n`);
+  process.stdout.write("  Ctrl+C to stop\n");
+
+  if (args.includes("--open")) {
+    const opener =
+      process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    try {
+      Bun.spawn([opener, handle.url], { stdout: "ignore", stderr: "ignore" });
+    } catch {
+      // A missing opener is not a reason to fail the server — the URL is already printed.
+    }
+  }
+
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", () => resolve());
+    process.once("SIGTERM", () => resolve());
+  });
+  handle.stop();
   return 0;
 }
 
