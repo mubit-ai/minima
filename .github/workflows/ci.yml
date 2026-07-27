@@ -7,7 +7,7 @@ name: CI — PR checks
 # mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/boosting]
   push:
     branches: [main]
 
