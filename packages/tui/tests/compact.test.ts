@@ -96,3 +96,59 @@ describe("compactReport (MUB-170: the /compact line is session-derived, not cann
     expect(report).toContain("5 messages");
   });
 });
+
+describe("compactMessages never orphans a tool_result", () => {
+  function toolResult(id: string): Message {
+    return new Message({
+      role: "toolResult",
+      content: `result ${id}`,
+      tool_call_id: id,
+      tool_name: "bash",
+    });
+  }
+
+  /** n plain turns, then one assistant that fanned out `fan` parallel tool calls. */
+  function convoEndingInToolRound(n: number, fan: number): Message[] {
+    return [
+      ...convo(n),
+      msg("assistant", "calling tools"),
+      ...Array.from({ length: fan }, (_, i) => toolResult(`call_${i}`)),
+    ];
+  }
+
+  test("the kept window never STARTS with a tool result (single call)", () => {
+    for (let fan = 1; fan <= 8; fan++) {
+      for (let n = 9; n <= 16; n++) {
+        const messages = convoEndingInToolRound(n, fan);
+        const out = compactMessages(agent, messages);
+        // out[0] is the summary; the replayed tail begins at out[1].
+        expect(out[1]!.role).not.toBe("toolResult");
+      }
+    }
+  });
+
+  test("the owning assistant is kept alongside its results, not summarized away", () => {
+    // 6 trailing messages = 1 assistant + 5 results: the naive slice(-6) lands mid-round.
+    const messages = convoEndingInToolRound(10, 6);
+    const out = compactMessages(agent, messages);
+    const tail = out.slice(1);
+    const firstResult = tail.findIndex((m) => m.role === "toolResult");
+    expect(firstResult).toBeGreaterThan(0);
+    expect(tail[firstResult - 1]!.role).toBe("assistant");
+    expect(tail.filter((m) => m.role === "toolResult")).toHaveLength(6);
+  });
+
+  test("the kept window is never emptied by a long parallel fan-out", () => {
+    const messages = convoEndingInToolRound(10, 20);
+    const out = compactMessages(agent, messages);
+    expect(out.length).toBeGreaterThan(1);
+    expect(out[1]!.role).toBe("assistant");
+  });
+
+  test("no message is lost: summary count + kept tail == input", () => {
+    const messages = convoEndingInToolRound(12, 4);
+    const out = compactMessages(agent, messages);
+    const compacted = Number(/\[Compacted (\d+) messages/.exec(out[0]!.textContent)![1]);
+    expect(compacted + (out.length - 1)).toBe(messages.length);
+  });
+});
