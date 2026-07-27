@@ -21,17 +21,19 @@ import { MinimaDb, defaultDbPath } from "../db/minima_db.ts";
 import { DashboardStore, LedgerUnavailableError, type Scope } from "./queries.ts";
 import {
   type NavItem,
+  type PaletteItem,
   costView,
   memoryView,
   notFoundView,
   overviewView,
+  planDetailView,
   plansView,
   routingView,
   runView,
   runsView,
   shell,
 } from "./render.ts";
-import { overview } from "./stats.ts";
+import { overview, planView, sessionList } from "./stats.ts";
 
 export const DEFAULT_PORT = 4180;
 const COOKIE = "minima_dash";
@@ -139,6 +141,24 @@ function json(payload: unknown, status = 200): Response {
 
 /** The full request handler. Exported so tests can exercise every route without listening. */
 export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
+  // cmd-K reaches the two things worth jumping to by name. Capped: the palette is a
+  // navigation aid, not a search index, and every row ships inside the HTML.
+  const paletteFor = (scope: Scope): PaletteItem[] => [
+    ...ctx.store.plans(scope, 40).map((p) => ({
+      kind: "plan",
+      label: p.title ?? p.id.slice(0, 8),
+      href: `/plans/${encodeURIComponent(p.id)}`,
+    })),
+    ...ctx.store
+      .runs(scope, 40)
+      .filter((r) => r.events > 0)
+      .map((r) => ({
+        kind: "session",
+        label: r.display_name ?? r.run_id.slice(0, 8),
+        href: `/runs/${encodeURIComponent(r.run_id)}`,
+      })),
+  ];
+
   const page = (path: string, scope: Scope, title: string, body: string): Response =>
     html(
       shell({
@@ -149,6 +169,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         ledgerPath: ctx.store.path,
         readOnly: !ctx.allowWrites,
         body,
+        commands: paletteFor(scope),
       }),
     );
 
@@ -216,6 +237,14 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     if (path === "/api/v1/plans") return json({ plans: ctx.store.plans(scope, 200) });
     if (path === "/api/v1/memories") return json({ memories: ctx.store.memories(scope, 200) });
     if (path === "/api/v1/budgets") return json({ budgets: ctx.store.budgets() });
+    if (path === "/api/v1/sessions") {
+      return json(sessionList(ctx.store.runs(scope, 200), now));
+    }
+    const apiPlan = /^\/api\/v1\/plans\/([^/]+)$/.exec(path);
+    if (apiPlan) {
+      const detail = ctx.store.planDetail(decodeURIComponent(apiPlan[1]!));
+      return detail ? json(planView(detail)) : json({ error: "not_found" }, 404);
+    }
     const apiRun = /^\/api\/v1\/runs\/([^/]+)$/.exec(path);
     if (apiRun) {
       const detail = ctx.store.runDetail(decodeURIComponent(apiRun[1]!));
@@ -241,7 +270,12 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       );
     }
     if (path === "/runs") {
-      return page(path, scope, "Sessions", runsView(ctx.store.runs(scope, 200), now));
+      return page(
+        path,
+        scope,
+        "Sessions",
+        runsView(sessionList(ctx.store.runs(scope, 200), now), now),
+      );
     }
     const runMatch = /^\/runs\/([^/]+)$/.exec(path);
     if (runMatch) {
@@ -255,8 +289,15 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         path,
         scope,
         "Plans & gates",
-        plansView(ctx.store.plans(scope, 200), overview(ctx.store, scope).gates),
+        plansView(ctx.store.plans(scope, 200), overview(ctx.store, scope).gates, now),
       );
+    }
+    const planMatch = /^\/plans\/([^/]+)$/.exec(path);
+    if (planMatch) {
+      const detail = ctx.store.planDetail(decodeURIComponent(planMatch[1]!));
+      return detail
+        ? page("/plans", scope, detail.plan.title ?? "Plan", planDetailView(planView(detail), now))
+        : page("/plans", scope, "Not found", notFoundView(path));
     }
     if (path === "/memory") {
       return page(

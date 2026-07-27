@@ -8,11 +8,24 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type DecisionWrite, MinimaDb } from "../src/db/minima_db.ts";
-import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
 import { seqStep, statusBar } from "../src/dashboard/charts.ts";
+import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
+import { planDetailView, runsView } from "../src/dashboard/render.ts";
 import { createDashboard, createHandler } from "../src/dashboard/server.ts";
-import { gateTiers, kpis, modelStats, overview, scoreboardCells } from "../src/dashboard/stats.ts";
+import {
+  claimRule,
+  classifyChanges,
+  gateTiers,
+  kpis,
+  modelStats,
+  overview,
+  planPosition,
+  planView,
+  resolveChangePath,
+  scoreboardCells,
+  sessionList,
+} from "../src/dashboard/stats.ts";
+import { type DecisionWrite, MinimaDb } from "../src/db/minima_db.ts";
 
 const PROJECT = "acme/widget";
 const TOKEN = "test-token-0123456789";
@@ -100,7 +113,9 @@ afterEach(() => {
 describe("read-only guarantee", () => {
   test("the store's handle physically cannot write", () => {
     const store = new DashboardStore(dbPath);
-    expect(() => store.db.run("INSERT INTO projects (project_key, created) VALUES ('x', 1)")).toThrow();
+    expect(() =>
+      store.db.run("INSERT INTO projects (project_key, created) VALUES ('x', 1)"),
+    ).toThrow();
     store.close();
   });
 
@@ -488,7 +503,10 @@ describe("theming", () => {
 
   test("dark is the default and an explicit theme wins in both directions", async () => {
     const css = await Bun.file(join(SRC, "render.ts")).text();
-    const tokens = css.slice(css.indexOf("const TOKENS = `"), css.indexOf("`;", css.indexOf("const TOKENS = `")));
+    const tokens = css.slice(
+      css.indexOf("const TOKENS = `"),
+      css.indexOf("`;", css.indexOf("const TOKENS = `")),
+    );
     // `:root` alone carries dark, so no OS preference is needed to get the default look.
     expect(tokens).toContain("--mode: dark");
     // Light applies on OS preference ONLY while untoggled, and via an explicit attribute.
@@ -514,5 +532,421 @@ describe("theming", () => {
     for (const step of seen) expect(step).toMatch(/^hsl\(var\(--seq-[1-8]\)\)$/);
     expect(seqStep(0)).toBe("hsl(var(--seq-1))");
     expect(seqStep(1)).toBe("hsl(var(--seq-8))");
+  });
+});
+
+describe("sessions: freshness, not liveness", () => {
+  // The core correction: runs.updated is written at create and close and NEVER per turn, and
+  // runs.status never closes on a crash. On a real ledger 134 of 135 'active' runs had
+  // updated-created < 1s while their events landed up to 5.5h later, so deriving recency from
+  // the stored column would mark a genuinely running session dead about a second after launch.
+  test("recency comes from MAX(events.ts), not runs.updated", () => {
+    const db = new MinimaDb(dbPath);
+    const runId = db.startRun({ projectKey: PROJECT });
+    const created = db.db
+      .query("SELECT created, updated FROM runs WHERE run_id = ?")
+      .get(runId) as {
+      created: number;
+      updated: number;
+    };
+    // Exactly the real-ledger shape: updated == created, but activity 5.5h later.
+    const late = created.created + 19_854;
+    db.appendEvent({ runId, type: "assistant", payload: {}, ts: late });
+    db.close();
+
+    const store = new DashboardStore(dbPath);
+    const list = sessionList(store.runs(PROJECT, 100), late + 30);
+    const row = list.rows.find((r) => r.run_id === runId);
+    expect(row).toBeDefined();
+    expect(row?.updated).toBe(created.updated);
+    // 30s since the event — NOT the ~19,884s that runs.updated would have implied.
+    expect(row?.ageSeconds).toBe(30);
+    expect(list.newest).toBe(late);
+    store.close();
+  });
+
+  test("runs with zero events are hidden as empty shells and counted", () => {
+    const db = new MinimaDb(dbPath);
+    const shell1 = db.startRun({ projectKey: PROJECT });
+    const shell2 = db.startRun({ projectKey: PROJECT });
+    const real = db.startRun({ projectKey: PROJECT });
+    db.appendEvent({ runId: real, type: "assistant", payload: {}, ts: 1_000_000 });
+    db.close();
+
+    const store = new DashboardStore(dbPath);
+    const list = sessionList(store.runs(PROJECT, 100), 1_000_010);
+    const ids = list.rows.map((r) => r.run_id);
+    expect(ids).toContain(real);
+    expect(ids).not.toContain(shell1);
+    expect(ids).not.toContain(shell2);
+    // The seeded run has no events either — the count must report every shell, not just mine.
+    expect(list.hidden).toBeGreaterThanOrEqual(2);
+    expect(list.rows.every((r) => r.events > 0)).toBe(true);
+    store.close();
+  });
+
+  test("a stored 'active' status never becomes a liveness claim", () => {
+    const db = new MinimaDb(dbPath);
+    const runId = db.startRun({ projectKey: PROJECT });
+    db.appendEvent({ runId, type: "assistant", payload: {}, ts: 1_999_990 });
+    expect(db.db.query("SELECT status FROM runs WHERE run_id = ?").get(runId)).toEqual({
+      status: "active",
+    });
+    db.close();
+    const store = new DashboardStore(dbPath);
+    const list = sessionList(store.runs(PROJECT, 100), 2_000_000);
+    // Every row exposes an age; nothing in the payload asserts live/not-live.
+    for (const row of list.rows) expect(typeof row.ageSeconds === "number").toBe(true);
+    const html = runsView(list, 2_000_000);
+    expect(html).toContain("Last activity");
+    expect(html).not.toContain("LIVE");
+    store.close();
+  });
+});
+
+describe("write attribution, recomputed", () => {
+  test("the claim rule takes a path match, then a filename, then nothing", () => {
+    expect(claimRule("Create weather-ui/src/App.jsx", "weather-ui/src/App.jsx")).toBe("path");
+    // A two-segment suffix counts — the step named a real portion of the path.
+    expect(claimRule("Wire up src/App.jsx", "weather-ui/src/App.jsx")).toBe("path");
+    expect(claimRule("Create the App.jsx component", "weather-ui/src/App.jsx")).toBe("filename");
+    // The harness's write-time rule accepts a bare basename anywhere; this one still does, but
+    // reports it as the WEAKER claim so the split stays visible.
+    expect(claimRule("Add the readonly option to the DB layer", "src/db/minima_db.ts")).toBeNull();
+    expect(claimRule("Update the index", "src/dashboard/index.ts")).toBeNull();
+    expect(claimRule(null, "a/b.ts")).toBeNull();
+  });
+
+  test("a write with no in-progress step is finally evaluated instead of auto-off-plan", () => {
+    // big_plan.ts:294 is `step && isPathClaimed(...)`, so a null step short-circuits straight
+    // to off_plan with no comparison at all — 73 of 208 off-plan rows on a real ledger. The
+    // recompute is the only thing that ever assesses them.
+    const steps = [
+      {
+        id: "s0",
+        plan_id: "p",
+        idx: 0,
+        content: "scaffold the project",
+        status: "completed",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+      {
+        id: "s1",
+        plan_id: "p",
+        idx: 1,
+        content: "add weather-ui/src/api.js",
+        status: "pending",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+    ];
+    const changes = [
+      {
+        id: "c0",
+        plan_id: "p",
+        step_id: null,
+        path: "weather-ui/src/api.js",
+        kind: "created",
+        origin: "off_plan",
+        created_at: null,
+      },
+    ];
+    const [got] = classifyChanges(steps, changes, "/repo");
+    expect(got?.verdict).toBe("on_plan");
+    expect(got?.stepId).toBe("s1");
+    expect(got?.rule).toBe("path");
+    expect(got?.absPath).toBe("/repo/weather-ui/src/api.js");
+  });
+
+  test("a path claim anywhere in the plan beats a filename claim", () => {
+    const steps = [
+      {
+        id: "s0",
+        plan_id: "p",
+        idx: 0,
+        content: "touch api.js",
+        status: "completed",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+      {
+        id: "s1",
+        plan_id: "p",
+        idx: 1,
+        content: "rewrite src/api.js properly",
+        status: "pending",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+    ];
+    const changes = [
+      {
+        id: "c0",
+        plan_id: "p",
+        step_id: "s0",
+        path: "app/src/api.js",
+        kind: "modified",
+        origin: "on_plan",
+        created_at: null,
+      },
+    ];
+    const [got] = classifyChanges(steps, changes, null);
+    expect(got?.rule).toBe("path");
+    expect(got?.stepId).toBe("s1");
+    // No project root recorded → no absolute path invented.
+    expect(got?.absPath).toBeNull();
+  });
+
+  test("an opaque write is unattributable, which is not the same as drift", () => {
+    const changes = [
+      {
+        id: "c0",
+        plan_id: "p",
+        step_id: null,
+        path: "",
+        kind: "opaque",
+        origin: "unknown",
+        created_at: null,
+      },
+    ];
+    const [got] = classifyChanges([], changes, "/repo");
+    expect(got?.verdict).toBe("unattributable");
+    expect(got?.rule).toBeNull();
+  });
+
+  test("worked-ahead is reported rather than lost to whole-plan matching", () => {
+    const steps = [
+      {
+        id: "s0",
+        plan_id: "p",
+        idx: 0,
+        content: "first, edit one/a.ts",
+        status: "in_progress",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+      {
+        id: "s1",
+        plan_id: "p",
+        idx: 1,
+        content: "later, edit two/b.ts",
+        status: "pending",
+        verify: null,
+        baseline: null,
+        check_origin: null,
+        verify_cwd: null,
+      },
+    ];
+    // Written while s0 was active, but the path belongs to the LATER step s1.
+    const changes = [
+      {
+        id: "c0",
+        plan_id: "p",
+        step_id: "s0",
+        path: "two/b.ts",
+        kind: "modified",
+        origin: "off_plan",
+        created_at: null,
+      },
+    ];
+    const [got] = classifyChanges(steps, changes, null);
+    expect(got?.verdict).toBe("on_plan");
+    expect(got?.stepIdx).toBe(1);
+    expect(got?.workedAhead).toBe(true);
+  });
+
+  test("absolute paths are used verbatim and relative ones resolve against the project root", () => {
+    expect(resolveChangePath("/repo", "src/a.ts")).toBe("/repo/src/a.ts");
+    expect(resolveChangePath("/repo/", "./src/a.ts")).toBe("/repo/src/a.ts");
+    // 7 of 241 rows on a real ledger are already absolute.
+    expect(resolveChangePath("/repo", "/elsewhere/b.ts")).toBe("/elsewhere/b.ts");
+    expect(resolveChangePath(null, "src/a.ts")).toBeNull();
+  });
+});
+
+describe("plan detail", () => {
+  function seedPlan(): string {
+    const db = new MinimaDb(dbPath);
+    const planId = db.insertPlan({ sessionId: seeded.runId, title: "add the widget" });
+    const s0 = db.insertStep({
+      planId,
+      idx: 0,
+      content: "write lib/widget.ts",
+      status: "completed",
+      verify: "bun test tests/widget.test.ts",
+      baseline: "red",
+      checkOrigin: "pre_existing",
+    });
+    const s1 = db.insertStep({
+      planId,
+      idx: 1,
+      content: "document it",
+      status: "in_progress",
+      verify: "bun run docs",
+    });
+    db.insertStep({ planId, idx: 2, content: "unverifiable scaffolding", status: "pending" });
+    // A step_check with confidence NULL — the by-design shape whose tier must be DERIVED.
+    db.insertGate({
+      planId,
+      stepId: s0,
+      kind: "step_check",
+      outcome: "verified",
+      confidence: null,
+      factors: {
+        pass: true,
+        redToGreen: true,
+        hasCheck: true,
+        coverageHit: true,
+        tamper: false,
+        checkOrigin: "pre_existing",
+      },
+    });
+    db.insertGate({
+      planId,
+      stepId: s1,
+      kind: "step_check",
+      outcome: "verified",
+      confidence: null,
+      factors: {
+        pass: true,
+        redToGreen: false,
+        hasCheck: true,
+        coverageHit: true,
+        tamper: false,
+        checkOrigin: "agent_new",
+      },
+    });
+    db.insertFileChange({
+      planId,
+      stepId: null,
+      path: "lib/widget.ts",
+      kind: "created",
+      origin: "off_plan",
+    });
+    db.insertFileChange({
+      planId,
+      stepId: s0,
+      path: "unrelated/thing.rs",
+      kind: "modified",
+      origin: "off_plan",
+    });
+    db.close();
+    return planId;
+  }
+
+  test("a step's tier is derived from factors, never read off the NULL column", () => {
+    const planId = seedPlan();
+    const store = new DashboardStore(dbPath);
+    const view = planView(store.planDetail(planId)!);
+    const first = view.tasks.find((t) => t.idx === 0)!;
+    expect(first.tier).not.toBeNull();
+    expect(first.gateCount).toBe(1);
+    // Nothing in this plan's gates carries a stored tier, yet nothing is ungraded.
+    expect(view.gates.ungraded).toBe(0);
+    store.close();
+  });
+
+  test("step position mirrors big_plan.ts: in-progress, else first open, else N", () => {
+    const step = (idx: number, status: string) => ({
+      id: `s${idx}`,
+      plan_id: "p",
+      idx,
+      content: "",
+      status,
+      verify: null,
+      baseline: null,
+      check_origin: null,
+      verify_cwd: null,
+    });
+    expect(planPosition([step(0, "completed"), step(1, "in_progress"), step(2, "pending")])).toBe(
+      2,
+    );
+    expect(planPosition([step(0, "completed"), step(1, "pending")])).toBe(2);
+    // All done reads N/N — never the contradictory 0/N.
+    expect(planPosition([step(0, "completed"), step(1, "completed")])).toBe(2);
+    expect(planPosition([])).toBe(0);
+  });
+
+  test("the recompute is shown against the stored column, not asserted", () => {
+    const planId = seedPlan();
+    const store = new DashboardStore(dbPath);
+    const view = planView(store.planDetail(planId)!);
+    // Both writes were stored off_plan; one is genuinely claimed by step 0's text.
+    expect(view.storedOffPlan).toBe(2);
+    expect(view.offPlan.length).toBe(1);
+    const html = planDetailView(view, 2_000_000);
+    expect(html).toContain("ledger column said 2");
+    store.close();
+  });
+
+  test("missing baseline and a non-flipping check are never the same sentence", () => {
+    const planId = seedPlan();
+    const store = new DashboardStore(dbPath);
+    const view = planView(store.planDetail(planId)!);
+    const html = planDetailView(view, 2_000_000);
+    const tasks = html.match(/<li class="task"[\s\S]*?<\/li>/g) ?? [];
+    expect(tasks.length).toBe(3);
+    for (const task of tasks) {
+      const missing = task.includes("no baseline captured");
+      const stuck = task.includes("never went red→green");
+      // Claiming "no baseline captured" for a step that HAS one is a false statement.
+      expect(missing && stuck).toBe(false);
+    }
+    // Step 0 captured a baseline and flipped; step 1 has a check but no baseline.
+    expect(html).toContain("no baseline captured");
+    store.close();
+  });
+
+  test("a step with no stamped decision renders an em dash, never $0.00", () => {
+    const planId = seedPlan();
+    const store = new DashboardStore(dbPath);
+    const view = planView(store.planDetail(planId)!);
+    expect(view.tasks.every((t) => t.costUsd === null)).toBe(true);
+    const html = planDetailView(view, 2_000_000);
+    expect(html).not.toContain(">$0.00<");
+    store.close();
+  });
+
+  test("a step with no check says so instead of implying an untested pass", () => {
+    const planId = seedPlan();
+    const store = new DashboardStore(dbPath);
+    const view = planView(store.planDetail(planId)!);
+    const html = planDetailView(view, 2_000_000);
+    expect(html).toContain("no check attached");
+    store.close();
+  });
+
+  test("GET /plans/:id renders, and an unknown id is a clean not-found", async () => {
+    const planId = seedPlan();
+    const handler = createHandler({
+      store: new DashboardStore(dbPath),
+      writeDb: null,
+      token: TOKEN,
+      allowWrites: false,
+    });
+    const ok = await handler(
+      new Request(`http://127.0.0.1/plans/${planId}`, { headers: { "x-minima-token": TOKEN } }),
+    );
+    expect(ok.status).toBe(200);
+    const body = await ok.text();
+    expect(body).toContain("add the widget");
+    expect(body).not.toContain("NaN");
+
+    const missing = await handler(
+      new Request("http://127.0.0.1/plans/nope", { headers: { "x-minima-token": TOKEN } }),
+    );
+    expect(missing.status).toBe(200);
+    expect(await missing.text()).toContain("Not found");
   });
 });

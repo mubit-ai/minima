@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolResult } from "../src/agent/tools.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { BgJobRegistry } from "../src/tools/_bgjobs.ts";
 import { ArtifactStore } from "../src/tools/_artifacts.ts";
+import { BgJobRegistry } from "../src/tools/_bgjobs.ts";
 import { bashTool } from "../src/tools/bash.ts";
 import { bgJobTool } from "../src/tools/bgjob.ts";
 

@@ -36,7 +36,7 @@ import type {
   RunSummary,
   Scope,
 } from "./queries.ts";
-import type { Kpi, OverviewPayload } from "./stats.ts";
+import type { ChangeClass, Kpi, OverviewPayload, PlanView, SessionList, TaskRow } from "./stats.ts";
 
 export interface NavItem {
   href: string;
@@ -348,6 +348,54 @@ p.note { color: hsl(var(--muted)); font-size: 11px; margin: 10px 0 0; }
   color: hsl(var(--text)); background: hsl(var(--warning) / 0.07);
 }
 
+/* Task list. A table would be wrong here — step content is prose and must wrap, so this is a
+   3-column grid: gutter (index + status), body (title, evidence, files), realized $. */
+ol.tasks { list-style: none; margin: 0; padding: 0; }
+li.task {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 12px;
+  padding: 11px 6px; border-bottom: 1px solid hsl(var(--border));
+}
+li.task:last-child { border-bottom: 0; }
+li.task:hover { background: hsl(var(--panel-soft)); }
+li.task[data-status="in_progress"] {
+  background: hsl(var(--accent) / 0.07); box-shadow: inset 2px 0 0 hsl(var(--accent));
+}
+.t-gutter {
+  display: flex; align-items: baseline; gap: 5px;
+  font: 11px/1.6 var(--mono); color: hsl(var(--muted)); font-variant-numeric: tabular-nums;
+}
+.t-title { color: hsl(var(--text-strong)); line-height: 1.5; }
+li.task[data-status="completed"] .t-title { color: hsl(var(--text)); }
+.t-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; align-items: center; }
+.t-check { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.t-check code {
+  font: 11px/1.5 var(--mono); background: hsl(var(--panel-soft));
+  border: 1px solid hsl(var(--border)); border-radius: var(--r-md); padding: 2px 6px;
+  color: hsl(var(--text)); word-break: break-all;
+}
+.t-evid { font-size: 11px; color: hsl(var(--muted)); }
+.t-cost {
+  font: 12px/1.6 var(--mono); color: hsl(var(--text));
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+ul.paths { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+ul.paths li {
+  font: 11px/1.5 var(--mono); border: 1px solid hsl(var(--border));
+  border-radius: var(--r-md); padding: 1px 6px; color: hsl(var(--text));
+}
+ul.paths li.weak { border-style: dashed; color: hsl(var(--muted)); }
+/* Tier text wears INK, never the status hue — the glyph alone carries color, so an 11px label
+   is never asked to be legible at the amber's 3.86:1 on the light surface. */
+.tier { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px; color: hsl(var(--text)); }
+.tier .g { font-size: 10px; }
+.tier-green .g { color: hsl(var(--success)); }
+.tier-yellow .g { color: hsl(var(--warning)); }
+.tier-red .g { color: hsl(var(--danger)); }
+.tier-none { color: hsl(var(--muted)); }
+.crumb { font-size: 12px; color: hsl(var(--muted)); margin: 0 0 12px; }
+.crumb a { color: hsl(var(--muted)); }
+.crumb a:hover { color: hsl(var(--accent)); }
+
 #pal { position: fixed; inset: 0; z-index: 50; display: none; }
 #pal[open] { display: block; }
 #pal .scrim { position: absolute; inset: 0; background: hsl(var(--bg) / 0.72); }
@@ -642,7 +690,13 @@ function runsTable(runs: RunSummary[], now: number): string {
         cell: (r) =>
           r.tool_errors > 0 ? `${r.tool_calls} (${r.tool_errors} err)` : String(r.tool_calls),
       },
-      { header: "Updated", numeric: true, cell: (r) => escapeHtml(fmtAgo(r.updated, now)) },
+      {
+        // MAX(events.ts), not runs.updated — see stats.ts:sessionList for why the stored
+        // column and the stored status are both unusable as recency.
+        header: "Last activity",
+        numeric: true,
+        cell: (r) => escapeHtml(fmtAgo(r.last_event ?? null, now)),
+      },
     ],
     "No sessions recorded yet — run `minima` in a repo to populate the ledger.",
   );
@@ -654,8 +708,17 @@ function statusPill(status: string): string {
   return `<span class="pill ${cls}">${escapeHtml(status)}</span>`;
 }
 
-export function runsView(runs: RunSummary[], now: number): string {
-  return `<section class="card"><h2>Sessions</h2>${runsTable(runs, now)}</section>`;
+export function runsView(list: SessionList, now: number): string {
+  const freshness =
+    list.newest === null
+      ? "No session has recorded any activity."
+      : `Newest recorded activity ${fmtAgo(list.newest, now)}. Ordered by real activity, not by <span class="mono">runs.updated</span> — that column is written only at create and close.`;
+  const hidden =
+    list.hidden > 0
+      ? ` ${list.hidden} run row${list.hidden === 1 ? "" : "s"} with zero recorded events hidden as empty shells.`
+      : "";
+  return `<section class="card"><h2>Sessions</h2>${runsTable(list.rows, now)}
+  <p class="note">${freshness}${escapeHtml(hidden)}</p></section>`;
 }
 
 export function runView(detail: RunDetail, now: number): string {
@@ -678,7 +741,7 @@ export function runView(detail: RunDetail, now: number): string {
 <section class="card"><h2>Routing decisions</h2>${decisionsTable(d.decisions, now)}</section>
 <div class="grid-2">
   <section class="card"><h2>Tool usage</h2>${barChart(tools)}</section>
-  <section class="card"><h2>Plans</h2>${plansTable(d.plans)}</section>
+  <section class="card"><h2>Plans</h2>${plansTable(d.plans, now)}</section>
 </div>`;
 }
 
@@ -758,31 +821,43 @@ export function routingView(
 <section class="card"><h2>Recent decisions</h2>${decisionsTable(decisions, now)}</section>`;
 }
 
-function plansTable(plans: PlanSummary[]): string {
+function plansTable(plans: PlanSummary[], now: number): string {
   return dataTable(
     plans,
     [
-      { header: "Plan", cell: (p) => escapeHtml(p.title ?? p.id.slice(0, 8)) },
-      { header: "Status", cell: (p) => `<span class="pill">${escapeHtml(p.status ?? "—")}</span>` },
       {
-        header: "Steps",
-        cell: (p) => (p.steps > 0 ? meter(p.done / p.steps) : "—"),
+        header: "Plan",
+        cell: (p) =>
+          `<a href="/plans/${encodeURIComponent(p.id)}">${escapeHtml(p.title ?? p.id.slice(0, 8))}</a>`,
       },
-      { header: "Done", numeric: true, cell: (p) => `${p.done}/${p.steps}` },
+      { header: "Status", cell: (p) => `<span class="pill">${escapeHtml(p.status ?? "—")}</span>` },
+      { header: "Progress", cell: (p) => (p.steps > 0 ? meter(p.done / p.steps) : "—") },
+      { header: "Steps", numeric: true, cell: (p) => `${p.done}/${p.steps}` },
       { header: "Gates", numeric: true, cell: (p) => String(p.gates) },
       {
-        header: "Session",
+        // Checks present vs checks that can actually prove a red→green transition. On a real
+        // ledger this reads 172 and 25 — the gap is why almost nothing reaches green.
+        header: "Checks",
+        numeric: true,
         cell: (p) =>
-          p.session_id
-            ? `<a href="/runs/${encodeURIComponent(p.session_id)}" class="mono">${escapeHtml(p.session_id.slice(0, 8))}</a>`
-            : "—",
+          p.verify_steps === 0 ? "—" : `${p.verify_steps} · ${p.baseline_steps} w/ baseline`,
+      },
+      { header: "Writes", numeric: true, cell: (p) => (p.changes > 0 ? String(p.changes) : "—") },
+      {
+        header: "Last activity",
+        numeric: true,
+        cell: (p) => escapeHtml(fmtAgo(p.last_event ?? null, now)),
       },
     ],
     "No plans recorded yet.",
   );
 }
 
-export function plansView(plans: PlanSummary[], gates: OverviewPayload["gates"]): string {
+export function plansView(
+  plans: PlanSummary[],
+  gates: OverviewPayload["gates"],
+  now: number,
+): string {
   return `<section class="card">
   <h2>Verification gate tiers</h2>
   ${statusBar([
@@ -791,8 +866,174 @@ export function plansView(plans: PlanSummary[], gates: OverviewPayload["gates"])
     { key: "red", label: "Red (stop)", icon: "✖", n: gates.red },
     { key: "ungraded", label: "Ungraded", icon: "•", n: gates.ungraded },
   ])}
+  <p class="note">Tiers derive through the same <span class="mono">gateVerdictFor</span> path
+  <span class="mono">/why</span> uses — the stored tier when set, else recomputed from
+  <span class="mono">factors_json</span>. Reading <span class="mono">gates.confidence</span>
+  directly would report most step checks as ungraded.</p>
 </section>
-<section class="card"><h2>Plans</h2>${plansTable(plans)}</section>`;
+<section class="card"><h2>Plans</h2>${plansTable(plans, now)}</section>`;
+}
+
+const TIER_GLYPH: Record<string, string> = { green: "✔", yellow: "▲", red: "✖" };
+const STATUS_GLYPH: Record<string, string> = {
+  pending: "○",
+  in_progress: "◑",
+  completed: "●",
+  unknown: "·",
+};
+
+function tierBadge(tier: string | null, reason: string | null): string {
+  if (!tier) {
+    return `<span class="tier tier-none"><span class="g">·</span>${escapeHtml(reason ?? "not verified")}</span>`;
+  }
+  return `<span class="tier tier-${escapeHtml(tier)}"><span class="g">${TIER_GLYPH[tier] ?? "·"}</span>${escapeHtml(tier)}${reason ? ` — ${escapeHtml(reason)}` : ""}</span>`;
+}
+
+/** The check line: the command, then what the ledger can and cannot prove about it. */
+function checkLine(t: TaskRow): string {
+  if (!t.verify) {
+    return `<div class="t-check"><span class="t-evid">no check attached — this step is flagged, never verified</span></div>`;
+  }
+  const bits: string[] = [];
+  if (t.pass === true) bits.push("check passed");
+  else if (t.pass === false) bits.push("check did not pass");
+  // Two DIFFERENT failures, and conflating them puts a false sentence on the page: a step can
+  // have captured a baseline and still not have flipped. The missing-baseline case is the
+  // common one — 147 of 172 checked steps on a real ledger never captured one, which is why
+  // almost nothing reaches green.
+  if (!t.hasBaseline) bits.push("no baseline captured — red→green cannot be proven");
+  else if (t.redToGreen === false)
+    bits.push("baseline captured, but the check never went red→green");
+  if (t.checkOrigin) bits.push(`origin ${t.checkOrigin}`);
+  return `<div class="t-check"><code>${escapeHtml(t.verify)}</code>${
+    bits.length > 0 ? `<span class="t-evid">${escapeHtml(bits.join(" · "))}</span>` : ""
+  }</div>`;
+}
+
+function pathChips(items: ChangeClass[]): string {
+  if (items.length === 0) return "";
+  return `<ul class="paths">${items
+    .map((c) => {
+      const weak = c.rule === "filename";
+      const why = weak
+        ? `claimed by step ${(c.stepIdx ?? 0) + 1} (filename only)`
+        : c.stepIdx !== null
+          ? `claimed by step ${c.stepIdx + 1} (path)`
+          : "off-plan";
+      const ahead = c.workedAhead ? " · written ahead of the active step" : "";
+      return `<li class="${weak ? "weak" : ""}" title="${escapeHtml(`${c.change.kind} · ${why}${ahead}`)}">${escapeHtml(c.change.path)}</li>`;
+    })
+    .join("")}</ul>`;
+}
+
+export function planDetailView(view: PlanView, now: number): string {
+  const p = view.plan;
+  const tasks =
+    view.tasks.length === 0
+      ? emptyState("This plan has no steps recorded.")
+      : `<ol class="tasks">${view.tasks
+          .map(
+            (t) => `<li class="task" data-status="${escapeHtml(t.status)}">
+    <div class="t-gutter"><span>${t.idx + 1}</span><span title="${escapeHtml(t.status)}">${STATUS_GLYPH[t.status] ?? "·"}</span></div>
+    <div class="t-body">
+      <div class="t-title">${escapeHtml(t.content || "(no description recorded)")}</div>
+      <div class="t-meta">${tierBadge(t.tier, t.tierReason)}${
+        t.gateCount > 0
+          ? `<span class="pill">${t.gateCount} gate${t.gateCount === 1 ? "" : "s"}</span>`
+          : ""
+      }</div>
+      ${checkLine(t)}
+      ${pathChips(t.claimed)}
+    </div>
+    <div class="t-cost">${t.costUsd === null ? "—" : escapeHtml(fmtUsd(t.costUsd))}</div>
+  </li>`,
+          )
+          .join("")}</ol>`;
+
+  const drift = driftPanel(view);
+  return `<p class="crumb"><a href="/plans">Plans</a> / ${escapeHtml(p.title ?? p.id.slice(0, 8))}</p>
+<div class="kpis">
+  <div class="kpi"><div class="label">Step</div><div class="value">${view.position}/${view.total}</div><div class="note">${p.done} completed${p.in_progress > 0 ? ` · ${p.in_progress} in progress` : ""}</div></div>
+  <div class="kpi"><div class="label">Checks</div><div class="value">${p.verify_steps}/${view.total}</div><div class="note">${view.verifyWithoutBaseline} with no baseline captured</div></div>
+  <div class="kpi"><div class="label">Off-plan writes</div><div class="value">${view.offPlan.length}/${p.changes}</div><div class="note">recomputed · ledger column said ${view.storedOffPlan}</div></div>
+  <div class="kpi${view.costUsd === 0 ? " nodata" : ""}"><div class="label">Step-attributed spend</div><div class="value">${view.costUsd === 0 ? "no data" : escapeHtml(fmtUsd(view.costUsd))}</div><div class="note">${escapeHtml(fmtUsd(view.unattributedUsd))} of this run's spend claims no step</div></div>
+</div>
+<section class="card">
+  <h2>Tasks</h2>
+  <p class="note">Status glyph is the stored step status; the tier beside it is derived, not the
+  <span class="mono">gates.confidence</span> column. Realized $ comes from the
+  <span class="mono">step_id</span> stamp — a step with no stamped decision shows
+  &ldquo;—&rdquo;, never $0.00.</p>
+  ${tasks}
+</section>
+${drift}
+<section class="card">
+  <h2>Session</h2>
+  <p class="note">${
+    p.session_id
+      ? `<a href="/runs/${encodeURIComponent(p.session_id)}" class="mono">${escapeHtml(p.session_id)}</a> · ${escapeHtml(p.project_key ?? "unknown project")} · last recorded activity ${escapeHtml(fmtAgo(p.last_event ?? null, now))}`
+      : "This plan is not attached to any session."
+  }</p>
+</section>`;
+}
+
+/**
+ * Off-plan writes, recomputed. Always shows what the stored column claimed next to the new
+ * number — the point is the difference, and asserting an improvement without showing the
+ * before is exactly as unhelpful as shipping the frozen column.
+ */
+function driftPanel(view: PlanView): string {
+  const total = view.plan.changes;
+  const rows: { label: string; n: number; note: string }[] = [
+    {
+      label: "Claimed by a step (path match)",
+      n: view.onPlanStrong,
+      note: "step text names the path or a ≥2-segment suffix of it",
+    },
+    {
+      label: "Claimed by a step (filename only)",
+      n: view.onPlanWeak,
+      note: "weaker rule — counted separately on purpose",
+    },
+    {
+      label: "Off-plan",
+      n: view.offPlan.length,
+      note: "no step in this plan lays claim to the path",
+    },
+    {
+      label: "Unattributable",
+      n: view.unattributable.length,
+      note: "opaque write — no path any rule could match",
+    },
+  ];
+  const table = `<div class="table-wrap"><table>
+  <thead><tr><th>Classification</th><th class="num">Writes</th><th class="num">Share</th><th>Rule</th></tr></thead>
+  <tbody>${rows
+    .map(
+      (r) =>
+        `<tr><td>${escapeHtml(r.label)}</td><td class="num">${r.n}</td><td class="num">${total > 0 ? fmtPct(r.n / total) : "—"}</td><td>${escapeHtml(r.note)}</td></tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+
+  const ahead =
+    view.workedAhead.length > 0
+      ? `<p class="note">${view.workedAhead.length} write${view.workedAhead.length === 1 ? "" : "s"} landed
+      before the claiming step became active — work done out of order, which is not drift but is
+      not nothing either.</p>`
+      : "";
+
+  return `<section class="card">
+  <h2>Write attribution</h2>
+  <p class="note">The stored <span class="mono">file_changes.origin</span> column is computed
+  once at write time against only the then-in-progress step, by a bare-basename substring match,
+  and short-circuits straight to off-plan whenever no step was in progress. It said
+  <strong>${view.storedOffPlan}</strong> of ${total} were off-plan. Recomputed against every step
+  in the plan with a stricter rule, it is <strong>${view.offPlan.length}</strong>. This is a
+  heuristic either way — hover a path to see which step claimed it and how.</p>
+  ${total === 0 ? emptyState("No file changes recorded against this plan.") : table}
+  ${ahead}
+  ${view.offPlan.length > 0 ? `<h2 style="margin-top:16px">Off-plan paths</h2>${pathChips(view.offPlan)}` : ""}
+</section>`;
 }
 
 export function memoryView(rows: MemorySummary[], now: number, allowWrites: boolean): string {

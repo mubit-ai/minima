@@ -316,9 +316,9 @@ describe("v18 observer signals-bridge migration (rec_id + coverage)", () => {
     expect(db.observerFlaggedForRec("rec-a")).toBe(true);
     // Coverage upsert is per-rung and idempotent across turns.
     db.markObserverCoverage("rec-c", runId);
-    const cov = db.db
-      .query("SELECT turns FROM observer_coverage WHERE rec_id = 'rec-c'")
-      .get() as { turns: number };
+    const cov = db.db.query("SELECT turns FROM observer_coverage WHERE rec_id = 'rec-c'").get() as {
+      turns: number;
+    };
     expect(cov.turns).toBe(2);
     db.db.close();
   });

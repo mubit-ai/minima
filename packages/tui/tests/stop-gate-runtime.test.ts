@@ -195,7 +195,9 @@ describe("A2 stop-gate — runtime integration", () => {
     const wrapIdx = userTexts.findIndex((t) => t.startsWith("⚠ You have used"));
     expect(strikes).toHaveLength(1); // the pre-cap strike only
     expect(wrapIdx).toBeGreaterThan(-1);
-    const lastStrikeIdx = userTexts.findLastIndex((t) => t.startsWith("⛔ You are ending the turn"));
+    const lastStrikeIdx = userTexts.findLastIndex((t) =>
+      t.startsWith("⛔ You are ending the turn"),
+    );
     expect(lastStrikeIdx).toBeLessThan(wrapIdx); // never a ⛔ after the wrap
     const plan = db.getActivePlan(runId)!;
     const stops = db.getGates(plan.id).filter((g) => g.kind === "stop");

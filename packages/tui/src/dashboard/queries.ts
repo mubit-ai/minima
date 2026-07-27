@@ -30,6 +30,7 @@ export interface RunSummary {
   run_id: string;
   project_key: string;
   display_name: string | null;
+  /** The STORED status. Never render this as liveness — see `last_event`. */
   status: string;
   created: number;
   updated: number;
@@ -37,6 +38,15 @@ export interface RunSummary {
   cost_usd: number;
   tool_calls: number;
   tool_errors: number;
+  /**
+   * MAX(events.ts) — the only trustworthy recency signal in the ledger. `runs.updated` is
+   * written at create and close and never per turn (134 of 135 'active' runs on a real
+   * ledger had updated-created < 1s while events landed up to 5.5h later), and
+   * `runs.status` never closes when a session crashes.
+   */
+  last_event: number | null;
+  /** Event count. 0 means an empty shell — a run row that never recorded any activity. */
+  events: number;
 }
 
 export interface DecisionRecord extends DecisionRowLike {
@@ -87,12 +97,61 @@ export interface PlanSummary {
   id: string;
   session_id: string | null;
   title: string | null;
+  /** The STORED plan status. 10 plans read 'active' on a real ledger whose runs are done. */
   status: string | null;
   created_at: string | null;
   closed_at: number | null;
   steps: number;
   done: number;
+  in_progress: number;
   gates: number;
+  /** Steps carrying a `verify` command, and of those how many captured a red baseline. */
+  verify_steps: number;
+  baseline_steps: number;
+  /** The run this plan belongs to — the root every relative file path resolves against. */
+  project_key: string | null;
+  last_event: number | null;
+  changes: number;
+}
+
+/** A plan step, verbatim. `verify` is the command; its OUTPUT is never captured anywhere. */
+export interface PlanStepRow {
+  id: string;
+  plan_id: string;
+  idx: number;
+  content: string | null;
+  status: string | null;
+  verify: string | null;
+  baseline: string | null;
+  check_origin: string | null;
+  verify_cwd: string | null;
+}
+
+/**
+ * A recorded write. `origin` is the FROZEN write-time classification — computed against only
+ * the then-in-progress step by a bare-basename substring match, and short-circuited straight
+ * to 'off_plan' whenever no step was in progress. `stats.ts` recomputes it; do not render
+ * this column directly.
+ */
+export interface FileChangeRow {
+  id: string;
+  plan_id: string;
+  step_id: string | null;
+  path: string;
+  kind: string;
+  origin: string;
+  created_at: string | null;
+}
+
+export interface PlanDetail {
+  plan: PlanSummary;
+  steps: PlanStepRow[];
+  gates: GateRow[];
+  changes: FileChangeRow[];
+  /** Realized $ per step from the step_id stamp. Absent = no attribution, render "—" not $0. */
+  stepCosts: { step_id: string; cost_usd: number }[];
+  /** Run-wide routed $, so the gap against Σ(stepCosts) is reportable rather than hidden. */
+  runRoutedUsd: number;
 }
 
 export interface MemorySummary {
@@ -133,10 +192,12 @@ const RUNS_SQL = `
            WHERE d.run_id = r.run_id) AS cost_usd,
          (SELECT COUNT(*) FROM tool_calls t WHERE t.run_id = r.run_id) AS tool_calls,
          (SELECT COALESCE(SUM(t.is_error), 0) FROM tool_calls t
-           WHERE t.run_id = r.run_id) AS tool_errors
+           WHERE t.run_id = r.run_id) AS tool_errors,
+         (SELECT MAX(e.ts) FROM events e WHERE e.run_id = r.run_id) AS last_event,
+         (SELECT COUNT(*) FROM events e WHERE e.run_id = r.run_id) AS events
   FROM runs r
   WHERE (?1 IS NULL OR r.project_key = ?1)
-  ORDER BY r.updated DESC
+  ORDER BY COALESCE(last_event, r.updated) DESC
   LIMIT ?2`;
 
 const DECISIONS_SQL = `
@@ -220,12 +281,42 @@ const PLANS_SQL = `
          (SELECT COUNT(*) FROM plan_steps s WHERE s.plan_id = p.id) AS steps,
          (SELECT COUNT(*) FROM plan_steps s WHERE s.plan_id = p.id
            AND s.status = 'completed') AS done,
-         (SELECT COUNT(*) FROM gates g WHERE g.plan_id = p.id) AS gates
+         (SELECT COUNT(*) FROM plan_steps s WHERE s.plan_id = p.id
+           AND s.status = 'in_progress') AS in_progress,
+         (SELECT COUNT(*) FROM gates g WHERE g.plan_id = p.id) AS gates,
+         (SELECT COUNT(*) FROM plan_steps s WHERE s.plan_id = p.id
+           AND s.verify IS NOT NULL AND TRIM(s.verify) <> '') AS verify_steps,
+         (SELECT COUNT(*) FROM plan_steps s WHERE s.plan_id = p.id
+           AND s.verify IS NOT NULL AND TRIM(s.verify) <> ''
+           AND s.baseline IS NOT NULL) AS baseline_steps,
+         r.project_key AS project_key,
+         (SELECT MAX(e.ts) FROM events e WHERE e.run_id = p.session_id) AS last_event,
+         (SELECT COUNT(*) FROM file_changes f WHERE f.plan_id = p.id) AS changes
   FROM plans p
   LEFT JOIN runs r ON r.run_id = p.session_id
   WHERE (?1 IS NULL OR r.project_key = ?1)
-  ORDER BY p.created_at DESC
+  ORDER BY COALESCE((SELECT MAX(e.ts) FROM events e WHERE e.run_id = p.session_id), 0) DESC,
+           p.created_at DESC
   LIMIT ?2`;
+
+const PLAN_STEPS_SQL = `
+  SELECT id, plan_id, idx, content, status, verify, baseline, check_origin, verify_cwd
+  FROM plan_steps WHERE plan_id = ?1 ORDER BY idx ASC`;
+
+// Every gate for the plan, oldest first, so a step's evidence reads as a history and the
+// newest verdict is simply the last one. Tiers are derived in stats.ts via gateVerdictFor.
+const PLAN_GATES_SQL = `
+  SELECT * FROM gates WHERE plan_id = ?1 ORDER BY created_at ASC, rowid ASC`;
+
+const PLAN_CHANGES_SQL = `
+  SELECT id, plan_id, step_id, path, kind, origin, created_at
+  FROM file_changes WHERE plan_id = ?1 ORDER BY created_at ASC`;
+
+const STEP_COSTS_SQL = `
+  SELECT step_id, SUM(COALESCE(actual_cost_usd, 0)) AS cost_usd
+  FROM routing_decisions
+  WHERE step_id IN (SELECT id FROM plan_steps WHERE plan_id = ?1)
+  GROUP BY step_id`;
 
 const MEMORIES_SQL = `
   SELECT id, project_key, kind, status, origin, evidence_source, content, trigger, updated
@@ -305,6 +396,33 @@ export class DashboardStore {
 
   plans(scope: Scope, limit = 50): PlanSummary[] {
     return this.db.query(PLANS_SQL).all(scope, limit) as PlanSummary[];
+  }
+
+  /** One plan and everything attached to it. null = no such plan. */
+  planDetail(planId: string): PlanDetail | null {
+    const plan = this.db
+      .query(PLANS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "p.id = ?1"))
+      .get(planId, 1) as PlanSummary | null;
+    if (!plan) return null;
+    const routed = plan.session_id
+      ? (this.db
+          .query(
+            `SELECT COALESCE(SUM(actual_cost_usd), 0) AS total
+             FROM routing_decisions WHERE run_id = ?1`,
+          )
+          .get(plan.session_id) as { total: number } | null)
+      : null;
+    return {
+      plan,
+      steps: this.db.query(PLAN_STEPS_SQL).all(planId) as PlanStepRow[],
+      gates: this.db.query(PLAN_GATES_SQL).all(planId) as GateRow[],
+      changes: this.db.query(PLAN_CHANGES_SQL).all(planId) as FileChangeRow[],
+      stepCosts: this.db.query(STEP_COSTS_SQL).all(planId) as {
+        step_id: string;
+        cost_usd: number;
+      }[],
+      runRoutedUsd: routed?.total ?? 0,
+    };
   }
 
   memories(scope: Scope, limit = 100): MemorySummary[] {

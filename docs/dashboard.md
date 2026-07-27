@@ -63,9 +63,13 @@ server growing a second data path.
   rate), realized spend per day, decisions by model, gate tiers, task-type × model scoreboard.
 - **Routing** — model mix with cost/call, avg quality (judged rows only), avg latency; recent
   decisions with basis, outcome, and quality.
-- **Sessions** — every run with decisions, spend, tool calls/errors; drill into one session for
-  its decisions, tool usage, and plans.
-- **Plans & gates** — plan progress and gate tier distribution.
+- **Sessions** — every run with **last recorded activity**, decisions, spend, tool calls/errors;
+  drill into one session for its decisions, tool usage, and plans. Runs that recorded zero events
+  are hidden as empty shells and counted in a note.
+- **Plans & tasks** — the plan list (progress, gates, checks vs baselines, writes, last activity)
+  and a per-plan detail view: every task with its stored status, its **derived** gate tier and
+  reason, its `verify` command and what the ledger can prove about it, the writes it claims, and
+  its realized $. Plus the recomputed write-attribution panel.
 - **Memory** — the curated memory ledger with origin and evidence source.
 - **Cost** — spend over time plus the budget ledger (limit / spent / reserved / mode).
 
@@ -87,6 +91,50 @@ and `taskTypeScoreboard` exactly:
   stored tier is a milestone-level rollup), so the column alone reported 81% of a real
   ledger's gates as "ungraded" when only 3 of 180 genuinely had no verdict. The tier chart
   also renders the **reason** breakdown; a tier distribution without reasons isn't actionable.
+
+- **Recency is derived, and rendered as a timestamp rather than a boolean.** `runs.status` is
+  not liveness — it never closes when a session crashes, so 135 of 268 runs on a real ledger read
+  `active`. `runs.updated` is not recency either: it is written at create and close and never per
+  turn, so 134 of those 135 had `updated - created < 1s` while their events landed up to 19,854s
+  (5.5h) later. Deriving from it would mark a genuinely running session dead about a second after
+  launch — a worse failure than the one it fixes. The only honest signal is `MAX(events.ts)`, and
+  87 of those 135 had **zero events at all**, so filtering empty shells removes most of the noise
+  before any heuristic applies. The UI shows *"last recorded activity 12s ago"*, never a green
+  dot: events are written at turn boundaries (89% of gaps under 10s, p95 34s, but 109 in the
+  60s–5m band), so a session mid-stream can read minutes stale. A timestamp degrades gracefully
+  under that; a boolean is simply wrong.
+- **Write attribution is recomputed, and always shown against the stored column.**
+  `file_changes.origin` is frozen at write time, compared against only the then-in-progress step
+  by a bare-basename substring match (`big_plan.ts:361`) — and because that check reads
+  `step && isPathClaimed(...)` (`big_plan.ts:294`), a write with no in-progress step
+  short-circuits straight to `off_plan` with **no comparison evaluated at all**. On a real ledger
+  that is 73 of 208 off-plan rows: 35% of all reported drift was a null check, not a measurement.
+  `stats.ts:classifyChanges` rematches every write against **every** step in the plan, so those
+  rows are assessed for the first time, and splits the result:
+  - **path claim** — the step names the full path or a ≥2-segment suffix of it;
+  - **filename claim** — basename only, the weak rule, **counted separately**;
+  - **off-plan** — no step in the plan claims it;
+  - **unattributable** — an opaque write with no path any rule could match; a third state, not drift.
+  Real-ledger effect: 208/241 (86.3%) stored → **158/241 (65.6%)** recomputed. The panel prints
+  both numbers, because asserting an improvement without showing the before is as unhelpful as
+  shipping the frozen column. It is still a heuristic; hovering a path names the claiming step
+  and which rule fired.
+
+  Worth knowing: of the 83 writes that a step does claim, **1 is a path claim and 66 are
+  filename-only**. Models write bare filenames into todos, essentially never path-qualified
+  ones — which is exactly why the split is rendered rather than summed into one "on-plan" figure.
+- **Worked-ahead is reported, not discarded.** Matching against every step would otherwise hide
+  writes that landed before their claiming step became active. Those are flagged separately —
+  work done out of order is not drift, but it is not nothing.
+- **A missing baseline and a check that never flipped are different sentences.** A step can have
+  captured a baseline and still not have gone red→green; printing "no baseline captured" for it
+  would be a false statement. 147 of 172 checked steps on a real ledger captured no baseline,
+  which is why almost nothing reaches green.
+- **The `verify` command is shown; its output does not exist.** `plan_steps.verify` holds the
+  command and `factors_json` holds `pass`/`redToGreen`/`hasCheck`/`coverageHit`/`tamper`, but the
+  run's **stdout/stderr/exit code is captured nowhere in the ledger**. So a task panel can say
+  *"`bun test tests/foo.test.ts` — check did not pass"* and can never say why. Capturing output is
+  an upstream change, not a dashboard one.
 
 ### Known metric caveat: estimate vs realized
 

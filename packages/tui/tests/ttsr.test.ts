@@ -98,7 +98,9 @@ describe("TTSR abort → inject → retry", () => {
     const agent = new Agent({
       model: MODEL,
       streamFn: scriptedStreamFn(attempts, rec),
-      ttsr: compileTtsr([{ id: "root", pattern: /rm -rf \//, reminder: "no destructive root deletes" }]),
+      ttsr: compileTtsr([
+        { id: "root", pattern: /rm -rf \//, reminder: "no destructive root deletes" },
+      ]),
     });
     const events = collect(agent);
     await agent.prompt("go");
@@ -127,7 +129,10 @@ describe("TTSR abort → inject → retry", () => {
   test("AC2 armed-but-non-matching is byte-identical to flag-off (differential)", async () => {
     const run = async (armed: boolean) => {
       const attempts: Attempt[] = [
-        { deltas: ["a", " perfectly", " ordinary", " answer"], result: asst("a perfectly ordinary answer") },
+        {
+          deltas: ["a", " perfectly", " ordinary", " answer"],
+          result: asst("a perfectly ordinary answer"),
+        },
       ];
       const rec: StreamRec = { calls: 0, returned: [], signals: [] };
       const agent = new Agent({
@@ -212,7 +217,12 @@ describe("TTSR abort → inject → retry", () => {
 
   test("AC6 an effectful rung is never replayed (replay-guard non-interference)", async () => {
     // (a) classifyRungOutput is unchanged — a toolResult in the window is still effectful.
-    const tr = new Message({ role: "toolResult", tool_call_id: "c1", tool_name: "t", content: [text("r")] });
+    const tr = new Message({
+      role: "toolResult",
+      tool_call_id: "c1",
+      tool_name: "t",
+      content: [text("r")],
+    });
     const asstText = new AssistantMessage({ content: [text("hi")] });
     const asstEmpty = new AssistantMessage({ content: [], stop_reason: "error" });
     expect(classifyRungOutput([asstText, tr], 0)).toBe("effectful");
@@ -237,11 +247,17 @@ describe("TTSR abort → inject → retry", () => {
     const attempts: Attempt[] = [
       {
         deltas: ["I will just rm -rf / to clean up first"],
-        result: new AssistantMessage({ content: [toolCall("c1", "danger", {})], stop_reason: "toolUse" }),
+        result: new AssistantMessage({
+          content: [toolCall("c1", "danger", {})],
+          stop_reason: "toolUse",
+        }),
       },
       {
         deltas: ["running the tool safely now"],
-        result: new AssistantMessage({ content: [toolCall("c2", "danger", {})], stop_reason: "toolUse" }),
+        result: new AssistantMessage({
+          content: [toolCall("c2", "danger", {})],
+          stop_reason: "toolUse",
+        }),
       },
       { deltas: ["final answer"], result: asst("final answer") },
     ];
@@ -264,8 +280,9 @@ describe("TTSR abort → inject → retry", () => {
     const messages: Message[] = [
       new Message({ role: "user", content: "start" }),
       new Message({ role: "user", content: longReminder }), // lands in the old (compacted) window
-      ...Array.from({ length: 10 }, (_, i) =>
-        new Message({ role: i % 2 === 0 ? "assistant" : "user", content: `turn ${i}` }),
+      ...Array.from(
+        { length: 10 },
+        (_, i) => new Message({ role: i % 2 === 0 ? "assistant" : "user", content: `turn ${i}` }),
       ),
     ];
     const out = compactMessages({} as unknown as MinimaAgent, messages);

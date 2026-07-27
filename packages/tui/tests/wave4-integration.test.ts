@@ -21,7 +21,13 @@ function shaOf(content: string): string {
   return hasher.digest("hex");
 }
 
-function seedOldRow(db: MinimaDb, dir: string, content: string, runId: string, epoch: number): string {
+function seedOldRow(
+  db: MinimaDb,
+  dir: string,
+  content: string,
+  runId: string,
+  epoch: number,
+): string {
   const sha = shaOf(content);
   const path = join(dir, `${sha}.txt`);
   Bun.write(path, content);
@@ -43,9 +49,9 @@ function seedOldRow(db: MinimaDb, dir: string, content: string, runId: string, e
 }
 
 function rowRunId(db: MinimaDb, path: string): string | null {
-  const r = db.db.query("SELECT run_id FROM artifacts WHERE path = ?").get(path) as
-    | { run_id: string | null }
-    | null;
+  const r = db.db.query("SELECT run_id FROM artifacts WHERE path = ?").get(path) as {
+    run_id: string | null;
+  } | null;
   return r ? r.run_id : null;
 }
 

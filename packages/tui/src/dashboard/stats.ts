@@ -15,12 +15,17 @@
 import { optimalCostRatio, qualityPerDollar, savings } from "../db/metrics.ts";
 import type { GateRow } from "../db/minima_db.ts";
 import { SCOREBOARD_MIN_N } from "../minima/scoreboard.ts";
-import { gateVerdictFor } from "../minima/why.ts";
+import { gateVerdictFor, parseFactors } from "../minima/why.ts";
 import type {
   DashboardStore,
   DayRow,
   DecisionRecord,
+  FileChangeRow,
   ModelMixRow,
+  PlanDetail,
+  PlanStepRow,
+  PlanSummary,
+  RunSummary,
   Scope,
   ScoreboardRow,
 } from "./queries.ts";
@@ -294,5 +299,295 @@ export function overview(store: DashboardStore, scope: Scope): OverviewPayload {
     gates: tiers,
     scoreboard: scoreboardCells(store.scoreboardRows(scope)),
     minN: SCOREBOARD_MIN_N,
+  };
+}
+
+/* ───────────────────────────── sessions: freshness, not liveness ──────────────────────────── */
+
+export interface SessionRow extends RunSummary {
+  /** Seconds since the newest recorded event, or null when the run recorded none. */
+  ageSeconds: number | null;
+}
+
+export interface SessionList {
+  rows: SessionRow[];
+  /** Runs with zero events — empty shells, not ambiguous sessions. Reported, never rendered. */
+  hidden: number;
+  /** Newest activity across every shown run; null when nothing has any. */
+  newest: number | null;
+}
+
+/**
+ * Sessions ordered by ACTUAL recorded activity, with empty shells dropped.
+ *
+ * `runs.status` is not liveness (it never closes on a crash: 135 of 268 runs read 'active' on
+ * a real ledger) and neither is `runs.updated` (written at create and close only). The single
+ * honest signal is MAX(events.ts), and 87 of those 135 'active' runs had zero events at all —
+ * filtering them removes most of the noise before any heuristic is applied.
+ *
+ * This deliberately returns an AGE, not a boolean. Events are written at turn boundaries, so
+ * the resolution is turn-granular: 89% of inter-event gaps are under 10s and p95 is 34s, but a
+ * session mid-way through one long model response can read minutes stale. A timestamp degrades
+ * gracefully under that; a green "live" dot would simply be wrong.
+ */
+export function sessionList(runs: RunSummary[], now: number): SessionList {
+  const shown = runs.filter((r) => r.events > 0);
+  const rows: SessionRow[] = shown.map((r) => ({
+    ...r,
+    ageSeconds: r.last_event === null ? null : Math.max(0, now - r.last_event),
+  }));
+  const stamps = shown.map((r) => r.last_event).filter((t): t is number => t !== null);
+  return {
+    rows,
+    hidden: runs.length - shown.length,
+    newest: stamps.length > 0 ? Math.max(...stamps) : null,
+  };
+}
+
+/* ──────────────────────────────── writes: recomputed attribution ───────────────────────────── */
+
+/** How a step laid claim to a path. `path` is a real path match; `filename` is basename-only. */
+export type ClaimRule = "path" | "filename";
+
+export type ChangeVerdict = "on_plan" | "off_plan" | "unattributable";
+
+export interface ChangeClass {
+  change: FileChangeRow;
+  verdict: ChangeVerdict;
+  /** The step that claims this path — searched across ALL steps, not just the active one. */
+  stepId: string | null;
+  stepIdx: number | null;
+  rule: ClaimRule | null;
+  /**
+   * The claiming step comes AFTER the step that was in progress when the write landed. This
+   * recovers the one signal that matching against every step would otherwise hide: work done
+   * out of order is not drift, but it is not nothing either.
+   */
+  workedAhead: boolean;
+  /** Absolute path, when the run's project root is known. */
+  absPath: string | null;
+}
+
+const normPath = (p: string): string => p.toLowerCase().replace(/\\/g, "/").replace(/^\.\//, "");
+
+/**
+ * Every path suffix of at least two segments, longest first. `src/dashboard/queries.ts` yields
+ * the full path, then `dashboard/queries.ts` — so a step naming any real portion of the path
+ * counts, while a step that merely happens to contain a common basename does not.
+ */
+function pathSuffixes(path: string): string[] {
+  const segs = normPath(path).split("/").filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i <= segs.length - 2; i++) out.push(segs.slice(i).join("/"));
+  return out;
+}
+
+/**
+ * Does this step's text lay claim to this path?
+ *
+ * Deliberately stricter than the harness's write-time `isPathClaimed`, which accepts a bare
+ * basename anywhere in the text — under that rule a step saying "add the readonly option to
+ * the DB layer" claims `minima_db.ts` only by accident, and a step mentioning `index.ts`
+ * claims every index in the tree. A two-segment suffix is reported as a `path` claim and a
+ * bare basename as the weaker `filename` claim, counted separately so the split is visible.
+ */
+export function claimRule(stepContent: string | null | undefined, path: string): ClaimRule | null {
+  if (!stepContent || !path) return null;
+  const hay = stepContent.toLowerCase().replace(/\\/g, "/");
+  for (const suffix of pathSuffixes(path)) if (hay.includes(suffix)) return "path";
+  const base = normPath(path).split("/").pop() ?? "";
+  return base.length > 0 && hay.includes(base) ? "filename" : null;
+}
+
+/** Absolute path for a recorded write. Relative rows resolve against the run's project root. */
+export function resolveChangePath(projectKey: string | null, path: string): string | null {
+  if (!path) return null;
+  if (path.startsWith("/")) return path;
+  if (!projectKey) return null;
+  return `${projectKey.replace(/\/+$/, "")}/${path.replace(/^\.?\//, "")}`;
+}
+
+/**
+ * Recompute write attribution across the WHOLE plan.
+ *
+ * `file_changes.origin` is frozen at write time and computed against only the then-in-progress
+ * step — and because that check short-circuits on a null step, 73 of 208 off-plan rows on a
+ * real ledger were labelled without any comparison being evaluated at all. Matching every step
+ * is the only way those rows get assessed even once. Rows whose path is opaque cannot be
+ * assessed by any rule and stay a third state rather than being counted as drift.
+ */
+export function classifyChanges(
+  steps: PlanStepRow[],
+  changes: FileChangeRow[],
+  projectKey: string | null,
+): ChangeClass[] {
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  return changes.map((change) => {
+    const absPath = resolveChangePath(projectKey, change.path);
+    if (change.origin === "unknown" || change.kind === "opaque") {
+      return {
+        change,
+        verdict: "unattributable" as const,
+        stepId: null,
+        stepIdx: null,
+        rule: null,
+        workedAhead: false,
+        absPath,
+      };
+    }
+    // A `path` claim always beats a `filename` claim, whichever step it came from.
+    let hit: { step: PlanStepRow; rule: ClaimRule } | null = null;
+    for (const step of steps) {
+      const rule = claimRule(step.content, change.path);
+      if (!rule) continue;
+      if (!hit || (hit.rule === "filename" && rule === "path")) hit = { step, rule };
+      if (rule === "path") break;
+    }
+    if (!hit) {
+      return {
+        change,
+        verdict: "off_plan" as const,
+        stepId: null,
+        stepIdx: null,
+        rule: null,
+        workedAhead: false,
+        absPath,
+      };
+    }
+    const atWrite = change.step_id ? byId.get(change.step_id) : undefined;
+    return {
+      change,
+      verdict: "on_plan" as const,
+      stepId: hit.step.id,
+      stepIdx: hit.step.idx,
+      rule: hit.rule,
+      workedAhead: atWrite !== undefined && hit.step.idx > atWrite.idx,
+      absPath,
+    };
+  });
+}
+
+/* ─────────────────────────────────── plans and their tasks ─────────────────────────────────── */
+
+export interface TaskRow {
+  stepId: string;
+  idx: number;
+  content: string;
+  /** pending | in_progress | completed | unknown — the stored step status. */
+  status: string;
+  /** Derived through gateVerdictFor, never read off gates.confidence. */
+  tier: string | null;
+  tierReason: string | null;
+  gateCount: number;
+  /** The check command. Its OUTPUT is not captured anywhere in the ledger. */
+  verify: string | null;
+  verifyCwd: string | null;
+  checkOrigin: string | null;
+  /** A red baseline was captured, so a red→green transition can actually be proven. */
+  hasBaseline: boolean;
+  /** Latest gate's deterministic result, from factors_json. */
+  pass: boolean | null;
+  redToGreen: boolean | null;
+  costUsd: number | null;
+  claimed: ChangeClass[];
+}
+
+export interface PlanView {
+  plan: PlanSummary;
+  /** 1-based active step, mirroring big_plan.ts so the browser and /bp cannot disagree. */
+  position: number;
+  total: number;
+  tasks: TaskRow[];
+  offPlan: ChangeClass[];
+  unattributable: ChangeClass[];
+  workedAhead: ChangeClass[];
+  onPlanStrong: number;
+  onPlanWeak: number;
+  /** Σ of step-attributed realized $, and the run-wide remainder no step can claim. */
+  costUsd: number;
+  unattributedUsd: number;
+  gates: GateTiers;
+  /** Steps with a check but no captured baseline — the honest test-evidence gap. */
+  verifyWithoutBaseline: number;
+  /** What the frozen column claimed, so the recompute's effect is visible, not asserted. */
+  storedOffPlan: number;
+}
+
+const STATUSES = new Set(["pending", "in_progress", "completed"]);
+
+/**
+ * Active step position, mirroring `big_plan.ts` exactly: the first in-progress step, else the
+ * first not-yet-completed one, else the last (all done reads "step N/N", never "step 0/N").
+ */
+export function planPosition(steps: PlanStepRow[]): number {
+  if (steps.length === 0) return 0;
+  const active = steps.findIndex((s) => s.status === "in_progress");
+  if (active >= 0) return active + 1;
+  const firstOpen = steps.findIndex((s) => s.status !== "completed");
+  return firstOpen >= 0 ? firstOpen + 1 : steps.length;
+}
+
+/** The whole plan-detail projection: one pass over steps, gates, and reclassified writes. */
+export function planView(detail: PlanDetail, gateTierRows = gateTiers): PlanView {
+  const { plan, steps, gates, changes, stepCosts, runRoutedUsd } = detail;
+  const classified = classifyChanges(steps, changes, plan.project_key);
+
+  const gatesByStep = new Map<string, GateRow[]>();
+  for (const gate of gates) {
+    if (!gate.step_id) continue;
+    const list = gatesByStep.get(gate.step_id) ?? [];
+    list.push(gate);
+    gatesByStep.set(gate.step_id, list);
+  }
+  const costByStep = new Map(stepCosts.map((c) => [c.step_id, c.cost_usd]));
+  const claimedByStep = new Map<string, ChangeClass[]>();
+  for (const c of classified) {
+    if (!c.stepId) continue;
+    const list = claimedByStep.get(c.stepId) ?? [];
+    list.push(c);
+    claimedByStep.set(c.stepId, list);
+  }
+
+  const tasks: TaskRow[] = steps.map((step) => {
+    const stepGates = gatesByStep.get(step.id) ?? [];
+    const latest = stepGates[stepGates.length - 1];
+    const verdict = gateVerdictFor(latest);
+    const factors = latest ? parseFactors(latest.factors_json) : null;
+    const verify = step.verify?.trim() || null;
+    return {
+      stepId: step.id,
+      idx: step.idx,
+      content: step.content ?? "",
+      status: STATUSES.has(step.status ?? "") ? (step.status as string) : "unknown",
+      tier: verdict.tier ?? null,
+      tierReason: verdict.tier ? verdict.reason : stepGates.length > 0 ? verdict.reason : null,
+      gateCount: stepGates.length,
+      verify,
+      verifyCwd: step.verify_cwd,
+      checkOrigin: step.check_origin,
+      hasBaseline: step.baseline !== null,
+      pass: factors ? factors.pass : null,
+      redToGreen: factors ? (factors.redToGreen ?? null) : null,
+      costUsd: costByStep.get(step.id) ?? null,
+      claimed: claimedByStep.get(step.id) ?? [],
+    };
+  });
+
+  const costUsd = stepCosts.reduce((sum, c) => sum + c.cost_usd, 0);
+  return {
+    plan,
+    position: planPosition(steps),
+    total: steps.length,
+    tasks,
+    offPlan: classified.filter((c) => c.verdict === "off_plan"),
+    unattributable: classified.filter((c) => c.verdict === "unattributable"),
+    workedAhead: classified.filter((c) => c.workedAhead),
+    onPlanStrong: classified.filter((c) => c.verdict === "on_plan" && c.rule === "path").length,
+    onPlanWeak: classified.filter((c) => c.verdict === "on_plan" && c.rule === "filename").length,
+    costUsd,
+    unattributedUsd: Math.max(0, runRoutedUsd - costUsd),
+    gates: gateTierRows(gates),
+    verifyWithoutBaseline: tasks.filter((t) => t.verify !== null && !t.hasBaseline).length,
+    storedOffPlan: changes.filter((c) => c.origin === "off_plan").length,
   };
 }

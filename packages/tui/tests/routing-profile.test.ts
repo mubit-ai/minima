@@ -179,7 +179,10 @@ describe("routing profile accessors", () => {
     const { db } = freshDb();
     db.upsertRoutingProfile(
       PROJECT,
-      { candidates: ["claude-x", "claude-y"], perTaskType: { reasoning: { candidates: ["claude-y"] } } },
+      {
+        candidates: ["claude-x", "claude-y"],
+        perTaskType: { reasoning: { candidates: ["claude-y"] } },
+      },
       "user",
     );
     const row = db.getRoutingProfile(PROJECT);
@@ -231,7 +234,9 @@ describe("profile parsing helpers", () => {
     expect(parseProfileCandidates(row({ candidates: "not json" }))).toBeNull();
     expect(parseProfileCandidates(row({ candidates: "[]" }))).toBeNull();
     expect(perTaskTypeEntry(row({ per_task_type: "not json" }), "reasoning")).toBeNull();
-    expect(perTaskTypeEntry(row({ per_task_type: '{"reasoning":{"candidates":[]}}' }), "reasoning")).toBeNull();
+    expect(
+      perTaskTypeEntry(row({ per_task_type: '{"reasoning":{"candidates":[]}}' }), "reasoning"),
+    ).toBeNull();
   });
 
   test("per-task pool filters to known models, falls back to the default pool when empty", () => {

@@ -158,9 +158,7 @@ describe("whyReportFor", () => {
   test("renders an empty recorded plan", () => {
     const d = db();
     d.insertPlan({ sessionId: "run1", title: "Empty" });
-    expect(whyReportFor(d, "run1")).toBe(
-      "Plan verification - Empty\nNo plan steps recorded.",
-    );
+    expect(whyReportFor(d, "run1")).toBe("Plan verification - Empty\nNo plan steps recorded.");
   });
 
   test("R8: cost block — stamped Σ, session total, unattributed", () => {

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Agent } from "../src/agent/agent.ts";
 import type { AgentEvent } from "../src/agent/events.ts";
-import { effortForLevel } from "../src/ai/provider_quirks.ts";
 import {
   AssistantMessage,
   type Model,
@@ -13,6 +12,7 @@ import {
   text,
   thinking,
 } from "../src/ai/index.ts";
+import { effortForLevel } from "../src/ai/provider_quirks.ts";
 
 const FAUX_MODEL_REASONING: Model = {
   id: "test-reasoning",
