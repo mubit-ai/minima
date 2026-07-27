@@ -778,7 +778,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // W5.1: an edit/write/apply_patch success appends the just-edited file's LSP diagnostics
   // (opt-in; null when config.lsp is off, so the hook is never in the fold).
   if (lspManager)
-    agent.addAfterToolCall(makeLspDiagnosticsHook(lspManager, { workdir: process.cwd() }));
+    agent.addAfterToolCall(
+      makeLspDiagnosticsHook(lspManager, {
+        workdir: process.cwd(),
+        // Late-bound like bookSearchFee: the run id does not exist at tool-construction
+        // time, so read it per probe. Without this row the OFF→ON promotion bar (timeout
+        // rate, p95 latency) could only ever be argued from recollection.
+        onProbe: (probe) => {
+          const runId = agent.runId;
+          if (!db || !runId) return;
+          db.appendEvent({ runId, type: "lsp_probe", payload: probe });
+        },
+      }),
+    );
+  // W4.2 telemetry: one row per tripwire firing. Only reachable with TTSR on (it fires
+  // nothing when off), and the anti-vacuity half of the promotion bar reads it directly —
+  // "no false positives" means nothing until you can show the tripwire actually fired.
+  if (config.ttsr)
+    agent.onTtsrFire = (hit) => {
+      const runId = agent.runId;
+      if (!db || !runId) return;
+      db.appendEvent({ runId, type: "ttsr_fire", payload: { rule_id: hit.ruleId } });
+    };
   // W4.5: compaction spills the pruned window through this same store (null when artifacts
   // are off → v1 byte-identical); attach()-ed below before any compaction can fire.
   agent.artifacts = artifactStore;

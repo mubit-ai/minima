@@ -141,6 +141,10 @@ export interface AgentLoopConfig {
   /** Stream tripwire controller (W4.2). null/undefined → not installed: the loop does zero
    * regex work and the retry loop runs exactly once (flag-off byte-identity). */
   ttsr?: TtsrController | null;
+  /** Telemetry seam: called once per tripwire firing, before the retry is queued, so
+   * promotion off opt-in can be argued from the ledger instead of from recollection. Only
+   * reachable when a tripwire actually fires, and fail-open when it throws. */
+  onTtsrFire?: ((hit: TtsrHit) => void) | null;
 }
 
 /** Drop anything the LLM can't ingest (keeps user/assistant/toolResult). */
