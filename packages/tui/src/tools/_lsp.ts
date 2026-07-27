@@ -296,6 +296,11 @@ function languageIdForExt(ext: string): string {
   return LANGUAGE_IDS[ext] ?? "plaintext";
 }
 
+function rpcErrorText(err: unknown): string {
+  const message = (err as { message?: unknown })?.message;
+  return typeof message === "string" ? message : JSON.stringify(err);
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
@@ -311,11 +316,18 @@ interface DiagWaiter {
   settle: (d: Diagnostic[] | null) => void;
 }
 
+/** A JSON-RPC response carries EITHER a result or an error; collapsing the two is what let
+ * a refused `initialize` masquerade as a completed handshake. */
+interface RpcReply {
+  result?: unknown;
+  error?: unknown;
+}
+
 interface ServerConn {
   spec: LspServerSpec;
   conn: SpawnedConnection;
   nextId: number;
-  pending: Map<number, (result: unknown) => void>;
+  pending: Map<number, (reply: RpcReply) => void>;
   waiters: Map<string, DiagWaiter>;
   opened: Set<string>;
   versions: Map<string, number>;
@@ -329,6 +341,10 @@ export class LspManager implements LspClient {
   private readonly spawnFn: LspSpawn;
   private readonly timeoutMs: number;
   private readonly servers = new Map<string, ServerConn>();
+  // Server ids whose `initialize` was REFUSED (an explicit JSON-RPC error). That verdict is
+  // definitive for the session, so we stop respawning; a timeout is NOT recorded here,
+  // because a slow machine or a cold project load must stay retryable.
+  private readonly refused = new Set<string>();
 
   constructor(opts: {
     workdir: string;
@@ -434,6 +450,7 @@ export class LspManager implements LspClient {
   }
 
   private async getServer(spec: LspServerSpec): Promise<ServerConn | null> {
+    if (this.refused.has(spec.id)) return null;
     let sc = this.servers.get(spec.id);
     if (sc && (sc.dead || !sc.conn.alive)) {
       this.servers.delete(spec.id);
@@ -470,8 +487,8 @@ export class LspManager implements LspClient {
 
   private async handshake(sc: ServerConn): Promise<void> {
     const id = sc.nextId++;
-    const responded = new Promise<void>((resolve) => {
-      sc.pending.set(id, () => resolve());
+    const responded = new Promise<RpcReply>((resolve) => {
+      sc.pending.set(id, resolve);
     });
     sc.conn.send({
       jsonrpc: "2.0",
@@ -489,10 +506,18 @@ export class LspManager implements LspClient {
       },
     });
     const outcome = await Promise.race([
-      responded.then(() => "ok" as const),
-      delay(this.timeoutMs).then(() => "timeout" as const),
+      responded,
+      delay(this.timeoutMs).then((): typeof TIMEOUT => TIMEOUT),
     ]);
-    if (outcome !== "ok") throw new Error("lsp initialize timed out");
+    if (outcome === TIMEOUT) throw new Error("lsp initialize timed out");
+    if (outcome.error !== undefined) {
+      // The server answered, and its answer was "no" — e.g. typescript-language-server in a
+      // workspace with no local typescript: `Could not find a valid TypeScript installation.
+      // Exiting.` Treating this as success is what made every later edit pay the full
+      // diagnostics budget and report `timeout` instead of a refusal.
+      this.refused.add(sc.spec.id);
+      throw new Error(`lsp initialize refused: ${rpcErrorText(outcome.error)}`);
+    }
     sc.conn.send({ jsonrpc: "2.0", method: "initialized", params: {} });
   }
 
@@ -507,7 +532,7 @@ export class LspManager implements LspClient {
       const cb = sc.pending.get(msg.id);
       if (cb) {
         sc.pending.delete(msg.id);
-        cb(msg.result);
+        cb({ result: msg.result, error: msg.error });
       }
       return;
     }
