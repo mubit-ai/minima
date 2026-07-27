@@ -4,7 +4,14 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.5] - 2026-07-27
+
+A correctness release. The headline is cost accuracy: Gemini cached tokens were billed
+twice, and the inflated number was the realized cost reported to `/v1/feedback`, so it
+skewed the observed basis rather than just the local wallet. Alongside it, three ways the
+harness could lose or corrupt a turn — a wedged `/compact`, a permanently dropped feedback
+label, a `/plan` finalize that crashed on its own documented rollback — and the test-suite
+work that made the last of those findable.
 
 ### Fixed
 - **Gemini cached tokens were billed twice** (#302). `promptTokenCount` is inclusive of
