@@ -192,15 +192,30 @@ because memory seeded under A1's keys is invisible to A3a.
 
 **What happened.**
 
-| Arm | Result |
-|---|---|
-| A1 regex | completed — cost $0.0592, accuracy 0.692, 57.9 % savings vs premium, 81.8 % retention, 46.7 evidence/prompt (11.7 per model ✓), leakage 0 % |
-| A3a head | **failed** — Mubit `ServerError: request could not be processed` |
-| A5 oracle | **failed** — same |
+| Arm | cost | acc | savings | retention | evidence/prompt | **V5 crosscheck** |
+|---|---|---|---|---|---|---|
+| A1 regex | $0.0592 | 0.692 | 57.9 % | 81.8 % | 46.7 *(11.7/model ✓)* | **0.50 ✗** |
+| A3a head *(retry, own process)* | $0.0093 | 0.338 | 93.4 % | 40.0 % | 7.3 *(1.8/model ✗)* | **0.25 ✗** |
+| A5 oracle | — | — | — | — | — | failed — Mubit `ServerError` |
 
-**A1's own run is invalid anyway: the V5 crosscheck came in at 50 %**, against the harness's
-own ≥ 0.8 floor. So there is no arm here whose numbers clear the pre-registered guards, and
-therefore no downstream claim in either direction.
+**Neither arm clears the pre-registered guards.** Both fail V5 (floor 0.80); A3a additionally
+fails the ≥ 8 evidence/model floor at 1.8. **There is therefore no downstream claim here in
+either direction** — in particular, A3a's 93.4 % "savings" at 40 % retention is what an
+evidence-starved router does (collapse to the cheapest model), not a finding about the head.
+
+### Two classifier-side explanations, tested and rejected
+
+The 6.4× evidence-density gap between arms is the obvious thing to blame on the head. It does
+not survive:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The head's labels are *unstable*, so semantically similar tasks land in different cells and memory never accumulates | modal-label share within each RouterBench `eval_name` family, 1 200 rows | **Rejected** — the head is *more* stable: **91.5 %** vs the regex's 89.3 % |
+| The head *fragments* the cluster key space into more, smaller cells | distinct `task_type:difficulty` keys and concentration, 1 200 rows | **Rejected** — **17 keys each**; largest cell 46.4 % (head) vs 51.7 % (regex) |
+
+With both rejected, the remaining explanation for the gap is server-side variance between the
+two runs — the same non-determinism and throttling measured directly below. **Leg B measured
+the infrastructure, not the classifier.**
 
 **Why the crosscheck fails, and it is not the classifier.** Hosted Mubit recall is
 **non-deterministic**: identical query, identical lane, repeated back-to-back returned 16, 13,

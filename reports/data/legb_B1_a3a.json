@@ -1,0 +1,85 @@
+{
+ "config": "B1",
+ "arms": {
+  "A3a": {
+   "elapsed_s": 380.1757969856262,
+   "candidates": [
+    "mistralai/mistral-7b-chat",
+    "mistralai/mixtral-8x7b-chat",
+    "gpt-3.5-turbo-1106",
+    "gpt-4-1106-preview"
+   ],
+   "premium": "gpt-4-1106-preview",
+   "train_n": 200,
+   "val_n": 23,
+   "test_n": 65,
+   "seeded": 800,
+   "avg_recall_evidence": 7.276923076923077,
+   "crosscheck_match_rate": 0.25,
+   "leaky_fraction": 0.0,
+   "headline_cost": 0.009259000000000002,
+   "headline_accuracy": 0.3384615384615385,
+   "headline_savings_vs_premium": 0.93410902362653,
+   "headline_retention": 0.4,
+   "selected_slider": 0.0,
+   "picks": null,
+   "baselines": {
+    "always_premium": {
+     "accuracy": 0.8461538461538461,
+     "cost": 0.14052
+    },
+    "always_cheapest": {
+     "accuracy": 0.3076923076923077,
+     "cost": 0.0023372
+    },
+    "random_expectation": {
+     "accuracy": 0.6038461538461539,
+     "cost": 0.040407200000000004
+    },
+    "oracle": {
+     "accuracy": 0.9076923076923077,
+     "cost": 0.019137599999999994
+    }
+   },
+   "premium_accuracy": 0.8461538461538461,
+   "premium_cost": 0.14052,
+   "per_task_type": {
+    "classification": {
+     "n": 2,
+     "minima_acc": 0.0,
+     "premium_acc": 0.5,
+     "retention": 0.0,
+     "savings": 0.9935383011985409
+    },
+    "code": {
+     "n": 1,
+     "minima_acc": 0.0,
+     "premium_acc": 0.0,
+     "retention": 1.0,
+     "savings": 0.9933333333333333
+    },
+    "qa": {
+     "n": 31,
+     "minima_acc": 0.3548387096774194,
+     "premium_acc": 0.8709677419354839,
+     "retention": 0.40740740740740744,
+     "savings": 0.9686740843764488
+    },
+    "reasoning": {
+     "n": 30,
+     "minima_acc": 0.36666666666666664,
+     "premium_acc": 0.8666666666666667,
+     "retention": 0.423076923076923,
+     "savings": 0.8895083846925612
+    },
+    "summarization": {
+     "n": 1,
+     "minima_acc": 0.0,
+     "premium_acc": 1.0,
+     "retention": 0.0,
+     "savings": 0.9801428571428571
+    }
+   }
+  }
+ }
+}

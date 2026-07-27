@@ -1,0 +1,577 @@
+<title>Minima classifier A/B — ship, keep, or retune</title>
+<style>
+  :root{
+    --paper:#EEF1F5; --surface:#FFFFFF; --ink:#11161C; --ink-2:#3C4653; --muted:#69737F;
+    --rule:#D6DDE6; --rule-soft:#E6EBF1; --accent:#3D6EA8;
+    --regex:#3D6EA8; --head:#C46A2B;
+    --good:#2C7355; --warn:#96691A; --bad:#A2353F;
+    --good-bg:#E3F0EA; --warn-bg:#F6EDDC; --bad-bg:#F6E4E6;
+    --shadow:0 1px 2px rgba(17,22,28,.06),0 8px 24px -12px rgba(17,22,28,.18);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0D1116; --surface:#161B22; --ink:#E4E9F0; --ink-2:#B8C1CD; --muted:#8B95A3;
+      --rule:#242D38; --rule-soft:#1D242C; --accent:#5A8FCF;
+      --regex:#5A8FCF; --head:#C9803F;
+      --good:#4FA37C; --warn:#C9992F; --bad:#CE6B77;
+      --good-bg:#12241C; --warn-bg:#241E10; --bad-bg:#251418;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0D1116; --surface:#161B22; --ink:#E4E9F0; --ink-2:#B8C1CD; --muted:#8B95A3;
+    --rule:#242D38; --rule-soft:#1D242C; --accent:#5A8FCF;
+    --regex:#5A8FCF; --head:#C9803F;
+    --good:#4FA37C; --warn:#C9992F; --bad:#CE6B77;
+    --good-bg:#12241C; --warn-bg:#241E10; --bad-bg:#251418;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+  :root[data-theme="light"]{
+    --paper:#EEF1F5; --surface:#FFFFFF; --ink:#11161C; --ink-2:#3C4653; --muted:#69737F;
+    --rule:#D6DDE6; --rule-soft:#E6EBF1; --accent:#3D6EA8;
+    --regex:#3D6EA8; --head:#C46A2B;
+    --good:#2C7355; --warn:#96691A; --bad:#A2353F;
+    --good-bg:#E3F0EA; --warn-bg:#F6EDDC; --bad-bg:#F6E4E6;
+    --shadow:0 1px 2px rgba(17,22,28,.06),0 8px 24px -12px rgba(17,22,28,.18);
+  }
+
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px 96px;
+    display:flex;flex-direction:column;gap:44px;}
+  .prose{max-width:70ch;}
+  h1,h2,h3{text-wrap:balance;margin:0;line-height:1.18;letter-spacing:-.018em;}
+  h1{font-size:clamp(30px,4.6vw,46px);font-weight:660;}
+  h2{font-size:23px;font-weight:640;}
+  h3{font-size:16px;font-weight:640;}
+  p{margin:0;}
+  a{color:var(--accent);}
+  code,.num{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  code{font-size:.88em;background:var(--rule-soft);padding:.1em .36em;border-radius:3px;}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);}
+
+  /* masthead */
+  header{border-bottom:1px solid var(--rule);padding:56px 0 28px;
+    display:flex;flex-direction:column;gap:18px;}
+  .meta{display:flex;flex-wrap:wrap;gap:0 30px;font-family:var(--mono);font-size:12px;
+    color:var(--muted);}
+  .meta b{color:var(--ink-2);font-weight:520;}
+
+  section{display:flex;flex-direction:column;gap:16px;}
+  .sec-head{display:flex;flex-direction:column;gap:5px;
+    border-top:1px solid var(--rule);padding-top:22px;}
+
+  /* verdict */
+  .verdict{background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+    padding:26px 28px;display:flex;flex-direction:column;gap:20px;box-shadow:var(--shadow);}
+  .rules{display:flex;flex-direction:column;gap:0;}
+  .rule-row{display:grid;grid-template-columns:112px 1fr;gap:16px;align-items:baseline;
+    padding:11px 0;border-top:1px solid var(--rule-soft);}
+  .rule-row:first-child{border-top:0;}
+  .pill{font-family:var(--mono);font-size:11px;letter-spacing:.06em;font-weight:600;
+    padding:3px 9px;border-radius:20px;justify-self:start;white-space:nowrap;}
+  .p-good{background:var(--good-bg);color:var(--good);}
+  .p-warn{background:var(--warn-bg);color:var(--warn);}
+  .p-bad{background:var(--bad-bg);color:var(--bad);}
+
+  /* hero stat */
+  .hero{display:flex;flex-wrap:wrap;gap:12px 40px;align-items:flex-end;
+    padding:6px 0 2px;}
+  .hero .val{font-family:var(--mono);font-size:clamp(42px,6.4vw,62px);font-weight:600;
+    line-height:1;letter-spacing:-.03em;color:var(--bad);font-variant-numeric:tabular-nums;}
+  .hero .ci{font-family:var(--mono);font-size:14px;color:var(--muted);}
+
+  /* tables */
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
+    background:var(--surface);}
+  table{border-collapse:collapse;width:100%;font-size:14px;}
+  th,td{text-align:right;padding:10px 14px;border-top:1px solid var(--rule-soft);
+    white-space:nowrap;}
+  th:first-child,td:first-child{text-align:left;}
+  thead th{border-top:0;font-family:var(--mono);font-size:11px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted);font-weight:500;
+    background:var(--rule-soft);}
+  tbody td:not(:first-child){font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  tbody tr.hl td{background:color-mix(in srgb,var(--head) 8%,transparent);}
+  .win{color:var(--good);font-weight:600;}
+  .lose{color:var(--bad);}
+  .dim{color:var(--muted);}
+
+  /* figure */
+  figure{margin:0;background:var(--surface);border:1px solid var(--rule);
+    border-radius:10px;padding:22px 20px 14px;display:flex;flex-direction:column;gap:12px;}
+  figcaption{font-size:13.5px;color:var(--ink-2);max-width:78ch;}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:12.5px;
+    font-family:var(--mono);color:var(--ink-2);}
+  .legend span{display:inline-flex;align-items:center;gap:7px;}
+  .sw{width:11px;height:11px;border-radius:2px;flex:none;}
+  .chart{width:100%;overflow-x:auto;}
+  svg{display:block;max-width:100%;height:auto;}
+  .gridline{stroke:var(--rule-soft);stroke-width:1;}
+  .axis{stroke:var(--rule);stroke-width:1;}
+  .tick{font-family:var(--mono);font-size:10.5px;fill:var(--muted);}
+  .axlabel{font-family:var(--mono);font-size:10.5px;fill:var(--muted);
+    letter-spacing:.1em;text-transform:uppercase;}
+  .ann{font-family:var(--mono);font-size:11px;fill:var(--ink-2);}
+
+  ul{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:9px;}
+  li::marker{color:var(--muted);}
+  .callout{border-left:3px solid var(--head);background:var(--surface);
+    border-radius:0 8px 8px 0;padding:16px 20px;display:flex;flex-direction:column;gap:10px;}
+  .callout.good{border-left-color:var(--good);}
+  .foot{font-size:13px;color:var(--muted);max-width:74ch;}
+  @media (max-width:620px){
+    .rule-row{grid-template-columns:1fr;gap:6px;}
+    .hero{gap:8px 20px;}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Minima · classifier evaluation</div>
+  <h1>Does the embed head earn its place?</h1>
+  <p class="prose" style="font-size:18px;color:var(--ink-2);">A pre-registered A/B of the
+  shipped static-embedding task classifier against the regex it replaced, on benchmark data
+  it was never trained on.</p>
+  <div class="meta">
+    <span>artifact <b>potion-base-32M-c18e819c6c6d</b></span>
+    <span>pre-reg <b>58c020a</b></span>
+    <span>n <b>2,609</b></span>
+    <span>spend <b>$0.00</b></span>
+    <span>2026-07-27</span>
+  </div>
+</header>
+
+<section>
+  <div class="verdict">
+    <div>
+      <div class="eyebrow">Primary endpoint · macro-F1(head) − macro-F1(vocabulary+regex)</div>
+      <div class="hero">
+        <span class="val">−0.0865</span>
+        <span class="ci">95% CI [−0.1075, −0.0653]<br>paired bootstrap, 10,000 resamples · P(Δ&gt;0) = 0.000</span>
+      </div>
+    </div>
+    <p style="max-width:70ch;">On out-of-corpus benchmark data the shipped head is
+    <strong>significantly worse</strong> than the regex it replaced. The cause is its
+    abstention thresholds, not the embedding — but retuning them only reaches parity.</p>
+    <div class="rules">
+      <div class="rule-row"><span class="pill p-bad">KEEP ✕</span>
+        <span>Fails. The confidence interval lies entirely below zero.</span></div>
+      <div class="rule-row"><span class="pill p-good">RETUNE ✓</span>
+        <span>Triggered. Held-out macro-F1 rises <span class="num">0.279 → 0.363</span>
+        from threshold changes alone — necessary, and cheap.</span></div>
+      <div class="rule-row"><span class="pill p-warn">PULL ⚠</span>
+        <span>First clause met (CI upper bound <span class="num">−0.065</span> ≤ 0), but the
+        second requires downstream evidence — and the downstream leg is
+        <a href="#legb">blocked by evaluation infrastructure</a>, not merely null. Cannot be
+        discharged either way.</span></div>
+    </div>
+    <p style="max-width:70ch;font-size:14.5px;color:var(--ink-2);border-top:1px solid var(--rule-soft);padding-top:14px;">
+    <strong>Retune first, but don't read it as a rescue.</strong> The retuned head only
+    <em>ties</em> the regex, and does so by abstaining on 83% of prompts. Half of what it
+    still answers is <code>translation</code> — a class the regex already gets at F1 0.999.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Finding 01</div>
+    <h2><code>regex_hint</code> is dead code for this artifact</h2></div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:14px;">
+    <p>Inspecting <code>head.npz</code> before any evaluation: <code>regex_classes: []</code>,
+    <code>regex_scale: 0.0</code>, and <code>coef</code> is <span class="num">(11, 512)</span> —
+    exactly the embedding dims, no appended one-hot. <code>classify_embed.py</code> only
+    concatenates the regex feature <code>if self._regex_classes:</code>, which is empty.</p>
+    <p>So the <code>regex_hint</code> passed at <code>classify.py:572</code> is
+    <strong>discarded on every call</strong>. Registered as a falsifiable prediction and
+    confirmed: the with-hint and no-hint arms agree on
+    <span class="num">2,609 / 2,609</span> prompts, Δ = <span class="num">0.0000</span>.</p>
+    <p>Two consequences: the hint plumbing is wasted work on every classify, and the head's
+    features are <em>pure embeddings</em> — so head-vs-regex is a fair comparison, not a model
+    scored against its own input.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Finding 02</div>
+    <h2>The gate suite is green while the head regresses</h2></div>
+  <div class="callout">
+    <p><strong>All 7 of 7 G1 gates pass</strong> against this artifact — including
+    <code>test_g1g_beats_regex_baseline</code> and the G1e false-abstain bound — at the same
+    time as the head loses 8.7 macro-F1 points to the regex.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);">G1g compares 118 rows with no confidence
+    interval and no paired test. G1e passes at 1.8% measured false-abstain while real error is
+    ~70%: the conformal calibration was fit on the training distribution and does not transfer.
+    <strong>A green suite is currently not evidence that the head beats the regex.</strong></p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Finding 03</div>
+    <h2>Where the head actually loses</h2></div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Arm</th><th>macro-F1</th><th>accuracy</th><th>→ other</th><th>abstain</th><th>p50</th></tr></thead>
+      <tbody>
+        <tr><td>A1 · regex only</td><td class="win">0.3810</td><td>0.3204</td><td>47.3%</td><td class="dim">—</td><td>0.32 ms</td></tr>
+        <tr><td>A2 · vocabulary + regex</td><td>0.3783</td><td>0.3185</td><td>47.2%</td><td class="dim">—</td><td>0.33 ms</td></tr>
+        <tr class="hl"><td>A3a/A3b · head <em>(shipped)</em></td><td class="lose">0.2917</td><td>0.3112</td><td>10.2%</td><td>1.8%</td><td>0.46 ms</td></tr>
+        <tr><td>A5 · gold oracle <span class="dim">(ceiling)</span></td><td class="dim">1.0000</td><td class="dim">1.0000</td><td class="dim">—</td><td class="dim">—</td><td class="dim">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot">Accuracy is a statistical tie — McNemar exact <span class="num">p = 0.49</span>.
+  The head is not making <em>more</em> mistakes; it is making differently distributed ones. The
+  regex concentrates its correct answers in a few classes it fires on confidently and dumps 47%
+  into <code>other</code>; the head commits everywhere and spreads errors across all eleven classes.</p>
+
+  <figure>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--regex)"></span>regex (A1)</span>
+      <span><span class="sw" style="background:var(--head)"></span>head (A3a)</span>
+    </div>
+    <div class="chart" id="c-class"></div>
+    <figcaption>Per-class F1. The head wins one class (<code>reasoning</code>) and loses
+    heavily on the three the regex handles well. Both fail almost completely on
+    <code>extraction</code> and <code>creative</code>.</figcaption>
+  </figure>
+
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px;">
+    <h3>The error modes are semantically adjacent and operationally wrong</h3>
+    <ul>
+      <li>“rewrite a sentence in simple English”, “paraphrase the given sentence” →
+        <strong>translation</strong> <span class="dim">(94 rows)</span></li>
+      <li>“answer a simple science question” → <strong>reasoning</strong>
+        <span class="dim">(196 rows)</span></li>
+      <li>“recognize the name of the drug” → <strong>qa</strong> <span class="dim">(77 rows)</span></li>
+      <li>It invents <code>code</code> on 171 rows where no <code>code</code> gold exists at all.</li>
+    </ul>
+    <p>Churn is enormous: <strong>74.3%</strong> of rows relabelled versus the regex,
+    <strong>59.6%</strong> among regex-non-<code>other</code> rows — 4× the review threshold in
+    Minima's own <code>churn_replay.py</code>.</p>
+    <p>Ambiguity handling is worse, not better. On 198 deliberately unmappable prompts the regex
+    routes <span class="num">60.6%</span> to <code>other</code>; the head routes
+    <span class="num">14.6%</span> and abstains on <span class="num">2.0%</span>.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Finding 04</div>
+    <h2>Why this is a retune — and why the retune doesn't rescue it</h2></div>
+
+  <figure>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--head)"></span>head + regex-on-abstain, swept over τ</span>
+      <span><span class="sw" style="background:var(--regex);height:3px;border-radius:0"></span>regex only (baseline)</span>
+    </div>
+    <div class="chart" id="c-rc"></div>
+    <figcaption>Every reachable operating point of the abstention thresholds. The curve barely
+    clears the regex baseline anywhere, and only in a narrow band around 12–35% coverage — then
+    falls steadily below it as coverage rises toward the shipped point at 98.2%.</figcaption>
+  </figure>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Held-out half (split by task)</th><th>coverage</th><th>selective acc</th><th>system macro-F1</th></tr></thead>
+      <tbody>
+        <tr class="hl"><td>shipped τ<sub>dist</sub>=0.860, τ<sub>margin</sub>=0.0088</td><td>98.7%</td><td>0.302</td><td class="lose">0.279</td></tr>
+        <tr><td>regex only</td><td class="dim">—</td><td class="dim">—</td><td>0.356</td></tr>
+        <tr><td>retuned τ<sub>dist</sub>=0.638, τ<sub>margin</sub>=0.802</td><td>17.2%</td><td>0.636</td><td class="win">0.363</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot">Thresholds selected on a validation half, reported on the held-out half. Split
+  by <em>task</em>, not row — every row from one benchmark task shares a definition, so a
+  row-level split would validate the threshold on what it was fitted to.</p>
+
+  <div class="callout">
+    <h3>The caveat that changes the reading</h3>
+    <p>The selective-accuracy jump (0.302 → 0.636) looks like “the head knows when it is out of
+    its depth.” It isn't. Of the 468 rows the retuned head still answers,
+    <strong>231 (49%) are gold <code>translation</code></strong> — separable on script alone,
+    and a class the regex already gets at F1 0.999.</p>
+    <div class="tbl-wrap" style="border-radius:8px;">
+      <table>
+        <thead><tr><th>Slice</th><th>n</th><th>accuracy</th></tr></thead>
+        <tbody>
+          <tr><td>retuned-covered, all classes</td><td>468</td><td>0.656</td></tr>
+          <tr class="hl"><td>retuned-covered, <strong>excluding translation</strong></td><td>237</td><td class="lose">0.321</td></tr>
+          <tr><td>all rows at shipped τ <span class="dim">(reference)</span></td><td>2,609</td><td>0.315</td></tr>
+          <tr><td>all rows, <strong>excluding translation</strong>, shipped τ</td><td>2,209</td><td class="lose">0.214</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:14.5px;color:var(--ink-2);">Outside translation, high confidence buys
+    <strong>nothing</strong> — 0.321 selective versus 0.315 at full coverage. The head's
+    confidence ranking is informative for exactly one class, which the regex handles better.</p>
+  </div>
+</section>
+
+<section id="legb">
+  <div class="sec-head"><div class="eyebrow">Leg B</div>
+    <h2>Downstream routing: blocked, not null</h2></div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:14px;">
+    <p>The classifier-in-loop seam was built and works — an arm's classifier now assigns
+    <code>task_type</code> from prompt text, which propagates into the cluster key, into recall,
+    and into per-task-type priors. The infrastructure did not hold.</p>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Arm</th><th>cost</th><th>acc</th><th>savings</th><th>retention</th><th>evidence/prompt</th><th>V5 crosscheck</th></tr></thead>
+      <tbody>
+        <tr><td>A1 · regex</td><td>$0.0592</td><td>0.692</td><td>57.9%</td><td>81.8%</td><td>46.7 <span class="dim">(11.7/model ✓)</span></td><td class="lose">0.50 ✗</td></tr>
+        <tr><td>A3a · head</td><td>$0.0093</td><td>0.338</td><td>93.4%</td><td>40.0%</td><td class="lose">7.3 <span class="dim">(1.8/model ✗)</span></td><td class="lose">0.25 ✗</td></tr>
+        <tr><td>A5 · oracle</td><td colspan="6" style="text-align:left" class="lose">failed — Mubit <code>ServerError</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot"><strong>Neither arm clears the pre-registered guards</strong> (V5 floor 0.80;
+  A3a also misses the ≥8 evidence/model floor). A3a's 93.4% “savings” at 40% retention is what
+  an evidence-starved router does — collapse to the cheapest model — not a finding about the head.</p>
+
+  <div class="prose" style="display:flex;flex-direction:column;gap:10px;">
+    <h3>Two classifier-side explanations, tested and rejected</h3>
+    <p style="font-size:14.5px;">The 6.4× evidence-density gap is the obvious thing to blame on
+    the head. It does not survive contact with the data.</p>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Hypothesis</th><th>Test</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td style="max-width:30ch;white-space:normal">Head labels are unstable, so similar tasks land in different cells</td>
+            <td style="text-align:left">modal-label share within each RouterBench family, 1,200 rows</td>
+            <td style="text-align:left"><strong>Rejected</strong> — head is <em>more</em> stable, <span class="num">91.5%</span> vs <span class="num">89.3%</span></td></tr>
+        <tr><td style="max-width:30ch;white-space:normal">Head fragments the cluster key space into more, smaller cells</td>
+            <td style="text-align:left">distinct <code>task_type:difficulty</code> keys + concentration</td>
+            <td style="text-align:left"><strong>Rejected</strong> — <span class="num">17</span> keys each; largest cell <span class="num">46.4%</span> vs <span class="num">51.7%</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="foot">With both rejected, the remaining explanation is server-side variance between
+  runs — the non-determinism below. <strong>Leg B measured the infrastructure, not the
+  classifier.</strong></p>
+  <div class="callout">
+    <h3>The crosscheck failure is not the classifier</h3>
+    <p>Hosted Mubit recall is <strong>non-deterministic</strong>: an identical query on an
+    identical lane, repeated back-to-back, returned <span class="num">16, 13, 16</span> evidence
+    rows (and <span class="num">1, 3, 7</span> on another lane). The V5 guard compares a pick
+    made from recall cached once against a pick the engine makes from a <em>fresh</em> recall —
+    so when the recalls differ, the picks differ, for reasons unrelated to what is being tested.</p>
+    <p style="font-size:14.5px;color:var(--ink-2);">This blocks <strong>every</strong> downstream
+    routing experiment, not just this one. It should be fixed before any further spend on
+    downstream evaluation.</p>
+  </div>
+  <p class="foot"><strong>Pre-registration deviation, disclosed:</strong> the registered
+  <code>decision_basis == "memory"</code> guard is not implementable on the path it was written
+  for — the harness's headline runs through the factored scorer, which never constructs a
+  response and so never produces that field. The applicable substitutes were used instead:
+  evidence/model ≥ 8 (met, 11.7) and V5 ≥ 0.8 (failed, 0.50). My specification error, not a
+  silent skip.</p>
+  <p class="foot"><strong>Consequence for the verdict:</strong> the PULL rule requires “Leg B
+  shows no cost or quality gain”. Leg B shows nothing either way, so PULL cannot be discharged
+  and the actionable verdict stands at <strong>RETUNE</strong>.</p>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Method</div><h2>Why you can trust the number</h2></div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Guard</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>S1 · oracle arm scores 1.0 by construction</td><td class="win">PASS</td></tr>
+        <tr><td>S2 · A1 reproduces <code>infer_task_type</code> exactly</td><td class="win">PASS</td></tr>
+        <tr><td>S3 · A2 emits zero <code>embedding</code> sources</td><td class="win">PASS</td></tr>
+        <tr><td>S4 · A3a ≡ A3b <span class="dim">(0.0000 delta, 0.000 disagreement)</span></td><td class="win">PASS</td></tr>
+        <tr><td>S5 · local head == prod head <span class="dim">(ID match, 100/100 agreement)</span></td><td class="win">PASS</td></tr>
+        <tr><td>S6 · re-run determinism <span class="dim">(bit-identical)</span></td><td class="win">PASS</td></tr>
+        <tr><td>Contamination vs RouterBench + CLINC150</td><td>3 / 2,810 dropped</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px;">
+    <p><strong>The dataset is the point.</strong> Super-NaturalInstructions — 2,609 labelled
+    prompts, 437 tasks, 7 Minima types. It is in none of the head's training sources (curated
+    seeds + CLINC150 + RouterBench). RouterBench cannot answer this question, because it
+    <em>is</em> training data and its <code>eval_name → task_type</code> map is the same
+    function that labelled those training rows.</p>
+    <p><strong>Prod parity is exact.</strong> A live probe of <code>api.minima.sh</code>
+    reproduces the local head on 100/100 prompts — including its failures. “Rewrite a sentence
+    in simple English without changing its general meaning” returns
+    <code>final_task_type: translation</code>, <code>task_type_source: embedding</code>, in
+    production, right now.</p>
+    <p><strong>The verdict is not an artifact of the gold map.</strong> Dropping the six
+    categories flagged as most contestable <em>widens</em> the gap to
+    <span class="num">−0.1166 [−0.1399, −0.0935]</span>.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Limitations</div><h2>Read before acting</h2></div>
+  <div class="prose">
+    <ul>
+      <li><strong>Register shift.</strong> The benchmark is instruction-manual prose (“In this
+      task, you are given…”), not conversational user traffic — which is what the head's corpus
+      deliberately targets. This is the strongest reason to read the result as “does not
+      generalize to <em>this</em> distribution” rather than “bad everywhere”.</li>
+      <li><strong>Coverage.</strong> The benchmark yields no reliable <code>code</code>,
+      <code>rag</code>, <code>tool_use</code> or <code>other</code> gold. The verdict covers
+      <strong>7 of 11 types</strong>, and <code>code</code> — plausibly the highest-traffic
+      type — is absent.</li>
+      <li><strong>The 76→11 category map is ours</strong>, frozen and committed before any arm
+      ran. Mitigated by the sensitivity analysis and per-category reporting, not eliminated.</li>
+      <li><strong>Absolute numbers are not the point.</strong> Every arm scores badly here
+      (~0.32 accuracy). The <em>difference</em> between arms is the quantity of interest.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><div class="eyebrow">Next</div><h2>Recommended actions</h2></div>
+  <div class="prose">
+    <ul>
+      <li><strong>Fix the gate suite first.</strong> 7/7 green during an 8.7-point regression is
+      a measurement failure, and it will hide the next one too. Replace G1g with a powered,
+      CI-bearing, out-of-corpus comparison and add a non-<code>translation</code> slice.</li>
+      <li><strong>Retune the conformal thresholds</strong> against a mixed-distribution
+      calibration set. Damage control, not a fix.</li>
+      <li><strong>Delete the <code>regex_hint</code> plumbing or start using it.</strong></li>
+      <li><strong>Get a <code>code</code>-bearing clean eval set</strong> before any keep/pull
+      decision is final.</li>
+      <li><strong>Investigate <code>→ translation</code> and <code>→ reasoning</code> as
+      attractor classes</strong> — 419 <code>other→reasoning</code> moves and a
+      paraphrase→translation confusion look like a class-prior or anchor problem, and they are
+      what a retrain would need to target.</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+
+<script>
+const RC = [{"c":0.0245,"f1":0.3786},{"c":0.0284,"f1":0.3782},{"c":0.0376,"f1":0.3783},{"c":0.0475,"f1":0.3784},{"c":0.0609,"f1":0.3791},{"c":0.0709,"f1":0.378},{"c":0.0847,"f1":0.3781},{"c":0.0901,"f1":0.3786},{"c":0.1031,"f1":0.3787},{"c":0.1085,"f1":0.3798},{"c":0.123,"f1":0.3814},{"c":0.1273,"f1":0.3828},{"c":0.1391,"f1":0.3828},{"c":0.1522,"f1":0.3825},{"c":0.1633,"f1":0.3843},{"c":0.174,"f1":0.3873},{"c":0.1794,"f1":0.3883},{"c":0.1939,"f1":0.3821},{"c":0.2001,"f1":0.3841},{"c":0.2058,"f1":0.3854},{"c":0.2173,"f1":0.3861},{"c":0.2338,"f1":0.3833},{"c":0.2407,"f1":0.3844},{"c":0.2549,"f1":0.3846},{"c":0.2591,"f1":0.384},{"c":0.2733,"f1":0.383},{"c":0.281,"f1":0.3819},{"c":0.2917,"f1":0.3842},{"c":0.3032,"f1":0.3843},{"c":0.3124,"f1":0.3831},{"c":0.32,"f1":0.3844},{"c":0.3266,"f1":0.3851},{"c":0.3419,"f1":0.3832},{"c":0.3469,"f1":0.3825},{"c":0.363,"f1":0.3797},{"c":0.3706,"f1":0.3786},{"c":0.3806,"f1":0.3772},{"c":0.3856,"f1":0.3786},{"c":0.3975,"f1":0.3774},{"c":0.409,"f1":0.3761},{"c":0.4212,"f1":0.3744},{"c":0.4285,"f1":0.3733},{"c":0.435,"f1":0.3699},{"c":0.4546,"f1":0.3715},{"c":0.4584,"f1":0.3693},{"c":0.4711,"f1":0.3684},{"c":0.4814,"f1":0.3688},{"c":0.4879,"f1":0.3669},{"c":0.4987,"f1":0.3656},{"c":0.5052,"f1":0.3646},{"c":0.5182,"f1":0.3642},{"c":0.5309,"f1":0.358},{"c":0.5378,"f1":0.3624},{"c":0.5508,"f1":0.3594},{"c":0.56,"f1":0.361},{"c":0.5734,"f1":0.3535},{"c":0.5788,"f1":0.3587},{"c":0.5918,"f1":0.3564},{"c":0.5975,"f1":0.3518},{"c":0.6113,"f1":0.3459},{"c":0.6182,"f1":0.3489},{"c":0.6313,"f1":0.3471},{"c":0.6405,"f1":0.3431},{"c":0.6501,"f1":0.3437},{"c":0.6558,"f1":0.3444},{"c":0.6734,"f1":0.3411},{"c":0.6773,"f1":0.3404},{"c":0.6907,"f1":0.3412},{"c":0.7026,"f1":0.3407},{"c":0.7141,"f1":0.337},{"c":0.7302,"f1":0.3397},{"c":0.7386,"f1":0.332},{"c":0.7551,"f1":0.3352},{"c":0.7681,"f1":0.3304},{"c":0.7773,"f1":0.3248},{"c":0.7957,"f1":0.325},{"c":0.8107,"f1":0.3227},{"c":0.8367,"f1":0.3165},{"c":0.8459,"f1":0.3194},{"c":0.8773,"f1":0.3132},{"c":0.9184,"f1":0.3073},{"c":0.959,"f1":0.3016},{"c":1.0,"f1":0.2907}];
+const REGEX_F1 = 0.3783;
+const CLASSES = [
+  {k:"translation",   regex:0.999, head:0.705},
+  {k:"summarization", regex:0.603, head:0.302},
+  {k:"qa",            regex:0.450, head:0.238},
+  {k:"classification",regex:0.404, head:0.371},
+  {k:"reasoning",     regex:0.118, head:0.375},
+  {k:"extraction",    regex:0.061, head:0.005},
+  {k:"creative",      regex:0.033, head:0.047},
+];
+const NS="http://www.w3.org/2000/svg";
+const el=(n,a={})=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+function riskCoverage(){
+  const W=920,H=380,m={t:22,r:118,b:52,l:56};
+  const iw=W-m.l-m.r, ih=H-m.t-m.b;
+  const x=v=>m.l+v*iw, yMin=.28, yMax=.40;
+  const y=v=>m.t+ih-((v-yMin)/(yMax-yMin))*ih;
+  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img",
+    "aria-label":"System macro-F1 against coverage across all abstention thresholds"});
+
+  for(let v=.28;v<=.4001;v+=.02){
+    svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:y(v),y2:y(v),class:"gridline"}));
+    const t=el("text",{x:m.l-10,y:y(v)+3.5,class:"tick","text-anchor":"end"});
+    t.textContent=v.toFixed(2); svg.appendChild(t);
+  }
+  for(let v=0;v<=1.001;v+=.2){
+    const t=el("text",{x:x(v),y:m.t+ih+20,class:"tick","text-anchor":"middle"});
+    t.textContent=Math.round(v*100)+"%"; svg.appendChild(t);
+  }
+  svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:m.t+ih,y2:m.t+ih,class:"axis"}));
+  const xl=el("text",{x:m.l,y:H-10,class:"axlabel"}); xl.textContent="Coverage — share of prompts the head answers";
+  svg.appendChild(xl);
+  const yl=el("text",{x:0,y:0,class:"axlabel",transform:`translate(${14},${m.t+ih}) rotate(-90)`});
+  yl.textContent="System macro-F1"; svg.appendChild(yl);
+
+  // regex baseline
+  svg.appendChild(el("line",{x1:m.l,x2:m.l+iw,y1:y(REGEX_F1),y2:y(REGEX_F1),
+    stroke:"var(--regex)","stroke-width":2,"stroke-dasharray":"5 4"}));
+  const bl=el("text",{x:m.l+iw+10,y:y(REGEX_F1)+4,class:"ann",fill:"var(--regex)"});
+  bl.textContent="regex 0.378"; svg.appendChild(bl);
+
+  const d=RC.map((p,i)=>`${i?"L":"M"}${x(p.c).toFixed(1)},${y(p.f1).toFixed(1)}`).join(" ");
+  svg.appendChild(el("path",{d,fill:"none",stroke:"var(--head)","stroke-width":2,
+    "stroke-linejoin":"round","stroke-linecap":"round"}));
+
+  const mark=(cv,f1,label,dx,dy,anchor)=>{
+    svg.appendChild(el("circle",{cx:x(cv),cy:y(f1),r:6,fill:"var(--surface)",
+      stroke:"var(--head)","stroke-width":2.5}));
+    const t=el("text",{x:x(cv)+dx,y:y(f1)+dy,class:"ann","text-anchor":anchor});
+    t.textContent=label; svg.appendChild(t);
+  };
+  mark(0.179,0.3883,"retuned optimum",  -12,-12,"end");
+  mark(0.982,0.2917,"shipped",          -12, 16,"end");
+
+  const wrap=document.getElementById("c-rc");
+  wrap.appendChild(svg);
+
+  // hover layer
+  const hov=el("line",{y1:m.t,y2:m.t+ih,stroke:"var(--muted)","stroke-width":1,
+    "stroke-dasharray":"3 3",opacity:0}); svg.appendChild(hov);
+  const dot=el("circle",{r:5,fill:"var(--head)",stroke:"var(--surface)","stroke-width":2,opacity:0});
+  svg.appendChild(dot);
+  const tip=document.createElement("div");
+  Object.assign(tip.style,{position:"absolute",pointerEvents:"none",opacity:0,
+    background:"var(--surface)",border:"1px solid var(--rule)",borderRadius:"6px",
+    padding:"7px 10px",font:"12px var(--mono)",color:"var(--ink)",whiteSpace:"nowrap",
+    boxShadow:"var(--shadow)",transform:"translate(-50%,-118%)",zIndex:5});
+  wrap.style.position="relative"; wrap.appendChild(tip);
+  svg.addEventListener("pointermove",ev=>{
+    const r=svg.getBoundingClientRect(), sx=(ev.clientX-r.left)*(W/r.width);
+    const cv=Math.min(1,Math.max(0,(sx-m.l)/iw));
+    let best=RC[0];for(const p of RC) if(Math.abs(p.c-cv)<Math.abs(best.c-cv)) best=p;
+    hov.setAttribute("x1",x(best.c));hov.setAttribute("x2",x(best.c));hov.setAttribute("opacity",1);
+    dot.setAttribute("cx",x(best.c));dot.setAttribute("cy",y(best.f1));dot.setAttribute("opacity",1);
+    tip.style.opacity=1;
+    tip.style.left=(x(best.c)*(r.width/W))+"px";
+    tip.style.top=(y(best.f1)*(r.height/H))+"px";
+    tip.textContent=`coverage ${(best.c*100).toFixed(0)}%  ·  macro-F1 ${best.f1.toFixed(3)}`;
+  });
+  svg.addEventListener("pointerleave",()=>{hov.setAttribute("opacity",0);
+    dot.setAttribute("opacity",0);tip.style.opacity=0;});
+}
+
+function perClass(){
+  // r leaves room for the delta label beside the rightmost dot (translation sits at F1 0.999)
+  const rowH=40, W=920, m={t:16,r:78,b:38,l:118};
+  const H=m.t+CLASSES.length*rowH+m.b, iw=W-m.l-m.r;
+  const x=v=>m.l+v*iw;
+  const svg=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img",
+    "aria-label":"Per-class F1 for the regex and the head"});
+  for(let v=0;v<=1.001;v+=.25){
+    svg.appendChild(el("line",{x1:x(v),x2:x(v),y1:m.t-4,y2:m.t+CLASSES.length*rowH,class:"gridline"}));
+    const t=el("text",{x:x(v),y:H-16,class:"tick","text-anchor":"middle"});
+    t.textContent=v.toFixed(2); svg.appendChild(t);
+  }
+  CLASSES.forEach((c,i)=>{
+    const cy=m.t+i*rowH+rowH/2;
+    const lab=el("text",{x:m.l-14,y:cy+4,class:"tick","text-anchor":"end"});
+    lab.textContent=c.k; lab.style.fontSize="12px"; lab.style.fill="var(--ink-2)";
+    svg.appendChild(lab);
+    svg.appendChild(el("line",{x1:x(Math.min(c.regex,c.head)),x2:x(Math.max(c.regex,c.head)),
+      y1:cy,y2:cy,stroke:"var(--rule)","stroke-width":2}));
+    // 2px surface ring on overlapping marks
+    [["regex",c.regex,"var(--regex)"],["head",c.head,"var(--head)"]].forEach(([n,v,col])=>{
+      svg.appendChild(el("circle",{cx:x(v),cy,r:6.5,fill:col,
+        stroke:"var(--surface)","stroke-width":2}));
+    });
+    const w=c.head-c.regex;
+    const t=el("text",{x:x(Math.max(c.regex,c.head))+14,y:cy+4,class:"ann",
+      fill:w>0?"var(--good)":"var(--bad)"});
+    t.textContent=(w>0?"+":"")+w.toFixed(3); svg.appendChild(t);
+  });
+  const xl=el("text",{x:m.l,y:H-2,class:"axlabel"}); xl.textContent="F1";
+  svg.appendChild(xl);
+  document.getElementById("c-class").appendChild(svg);
+}
+
+riskCoverage(); perClass();
+</script>
