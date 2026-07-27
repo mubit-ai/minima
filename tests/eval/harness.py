@@ -29,6 +29,7 @@ import os
 import random
 import re
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -100,8 +101,31 @@ def _task_type(eval_name: str, task_type_for=rb._task_type_for) -> TaskType:
         return TaskType.other
 
 
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
 def _toks(s: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", s.lower()))
+    """Unicode-aware on purpose.
+
+    The old class was ``[a-z0-9]+``, which tokenizes Tamil/Hindi/Japanese/Arabic text to the
+    EMPTY set. `_jaccard` returns 0.0 whenever either side is empty, so every non-Latin prompt
+    scored 0.0 against every train prompt: the V1 near-duplicate filter FAILED OPEN — a
+    verbatim train/test twin in a non-Latin script was never dropped — and the leaked-neighbor
+    diagnostic reported 0.0 on a corpus that could be fully leaked. A guard that silently
+    passes is worse than one that noisily over-drops.
+
+    English-only corpora are unaffected, which is why it survived: RouterBench and
+    LLMRouterBench — every benchmark this harness has been run against to date — are English,
+    so the prior "V1 leakage 0%" results stand. Mixed-script corpora are the exposure.
+
+    `\\w` excludes Unicode combining marks, so this still fragments Tamil/Devanagari words into
+    short pieces, which inflates cross-prompt overlap (measured: 0.24 between two unrelated
+    Hindi sentences, vs 0.14 between two unrelated English ones). That is well below the 0.6
+    `_NEARDUP_JACCARD` threshold, so the filter stays sound here — but it is why
+    `minima.memory.keys` needs a mark-aware split rather than this one: its `len >= 4` filter
+    would discard every fragment.
+    """
+    return set(_WORD.findall(unicodedata.normalize("NFKC", s).lower()))
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:

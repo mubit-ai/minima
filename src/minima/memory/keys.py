@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import re
+import unicodedata
 
 
 def normalize_task_text(text: str, max_chars: int = 512) -> str:
@@ -27,7 +27,36 @@ _STOPWORDS = frozenset(
     use using want was we what when where which who why will with would you your
     """.split()
 )
-_WORD = re.compile(r"[a-z0-9]+")
+# Token boundaries are whitespace, punctuation and symbols — deliberately NOT `\w`.
+#
+# The class here used to be `[a-z0-9]+`, which matches nothing in Tamil/Hindi/Japanese/Arabic:
+# every non-Latin task tokenized to the empty list, fell through to the "general" bucket, and
+# shared ONE cluster signature — folding a whole language's memory into a single key. Inert
+# today (`versioned_cluster` passes signature=None at v1, so nothing in production calls
+# `salient_signature`), but armed the moment fine-cluster keys turn on.
+#
+# `\w+` is NOT a sufficient repair: Python's `\w` excludes Unicode combining marks (Mn/Mc), so
+# it shatters Tamil and Devanagari words into 1-2 character fragments that the `len >= 4`
+# filter below then discards — the empty-token bug all over again. Splitting on separators
+# keeps a word and its vowel signs together. English tokenization is unchanged.
+#
+# `task_fingerprint` uses str.split() and was never affected.
+_SEPARATORS = frozenset("PSCZ")
+
+
+def _word_tokens(text: str) -> list[str]:
+    out: list[str] = []
+    buf: list[str] = []
+    for ch in text:
+        if ch.isspace() or unicodedata.category(ch)[0] in _SEPARATORS:
+            if buf:
+                out.append("".join(buf))
+                buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        out.append("".join(buf))
+    return out
 
 
 def salient_signature(text: str, max_tokens: int = 4) -> str:
@@ -38,7 +67,7 @@ def salient_signature(text: str, max_tokens: int = 4) -> str:
     hashes. Paraphrases that share salient vocabulary land in the same bucket; this
     is a deterministic, embedding-free approximation of a topic cluster.
     """
-    tokens = [t for t in _WORD.findall(text.lower()) if len(t) >= 4 and t not in _STOPWORDS]
+    tokens = [t for t in _word_tokens(text.lower()) if len(t) >= 4 and t not in _STOPWORDS]
     if not tokens:
         return "general"
     # Distinct, longest-first, then alphabetical for a stable top-k selection.
