@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentTool } from "../src/agent/tools.ts";
+import { builtinTools } from "../src/tools/builtin.ts";
 import type { TodoTask } from "../src/tools/todowrite.ts";
 import { grantTaskRows, taskFooterRows } from "../src/tui/task_footer.ts";
 import { readSource } from "./_source.ts";
@@ -130,11 +132,52 @@ describe("grantTaskRows — alert wins, then header, then next (display order ke
 });
 
 describe("todoState threading — sub-agents stay isolated", () => {
-  test("builtinTools passes the observable array; spawn.ts never provides one", () => {
-    const builtin = readSource("tools/builtin.ts");
-    expect(builtin).toContain("todowriteTool(opts.todoState ?? [], {");
-    const spawn = readSource("minima/spawn.ts");
-    expect(spawn).not.toContain("todoState");
+  /** Drive the todowrite tool out of a built toolset, as the model would. */
+  async function writeTodos(tools: AgentTool[], content: string): Promise<void> {
+    const todowrite = tools.find((t) => t.name === "todowrite");
+    expect(todowrite, "builtinTools should expose a todowrite tool").toBeDefined();
+    await todowrite!.execute(
+      "1",
+      { tasks: JSON.stringify([{ content, status: "pending", priority: "high" }]) },
+      null,
+      null,
+    );
+  }
+
+  test("the lead's array is the one todowrite mutates (the TUI observes it live)", async () => {
+    const todoState: TodoTask[] = [];
+    await writeTodos(builtinTools({ todoState }), "lead task");
+    // main.ts hands this same array to the task panel, so a live mutation is the
+    // whole mechanism — a copy would render an empty panel forever.
+    expect(todoState.map((t) => t.content)).toEqual(["lead task"]);
+  });
+
+  test("a sub-agent's todowrite cannot reach the lead's array", async () => {
+    const leadState: TodoTask[] = [];
+    await writeTodos(builtinTools({ todoState: leadState }), "lead task");
+
+    // createSpawn builds child toolsets without a todoState — the child gets the
+    // default empty array, so its writes must not surface in the lead's panel.
+    await writeTodos(builtinTools({}), "child task");
+
+    expect(leadState.map((t) => t.content)).toEqual(["lead task"]);
+  });
+
+  test("spawn.ts never hands a todoState to a child toolset", () => {
+    // Kept as a source pin on purpose. The behavioral tests above prove the MECHANISM
+    // (an explicit array is mutated live; a toolset built without one cannot reach it),
+    // but only this observes the actual wiring in spawn.ts. Testing it behaviorally would
+    // mean standing up a real child agent — a far heavier test for a weaker guarantee.
+    expect(readSource("minima/spawn.ts")).not.toContain("todoState");
+  });
+
+  test("two sub-agents do not share a list with each other", async () => {
+    const a: TodoTask[] = [];
+    const b: TodoTask[] = [];
+    await writeTodos(builtinTools({ todoState: a }), "task A");
+    await writeTodos(builtinTools({ todoState: b }), "task B");
+    expect(a.map((t) => t.content)).toEqual(["task A"]);
+    expect(b.map((t) => t.content)).toEqual(["task B"]);
   });
 
   test("main.ts hands ONE array to both the toolset and the TUI", () => {
