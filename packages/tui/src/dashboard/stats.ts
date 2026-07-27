@@ -83,6 +83,8 @@ export interface OverviewPayload {
   spendByDay: DayRow[];
   models: ModelStat[];
   gates: GateTiers;
+  /** Deterministic step-check outcomes — the one gate series with full coverage. */
+  passRate: PassRate;
   scoreboard: ScoreboardCell[];
   minN: number;
 }
@@ -289,12 +291,14 @@ export function kpis(decisions: DecisionRecord[], runs: number, tiers: GateTiers
 /** Assemble the full overview payload — the shape `/api/v1/overview` returns verbatim. */
 export function overview(store: DashboardStore, scope: Scope): OverviewPayload {
   const decisions = store.decisions(scope);
-  const tiers = gateTiers(store.gateRows(scope));
+  const gateRows = store.gateRows(scope);
+  const tiers = gateTiers(gateRows);
   return {
     scope,
     ledger: { path: store.path, schemaVersion: store.schemaVersion() },
     kpis: kpis(decisions, store.runs(scope, 1000).length, tiers),
-    spendByDay: store.spendByDay(scope),
+    spendByDay: gapFillDays(store.spendByDay(scope)),
+    passRate: stepCheckPassRate(gateRows),
     models: modelStats(store.modelMix(scope)),
     gates: tiers,
     scoreboard: scoreboardCells(store.scoreboardRows(scope)),
@@ -590,4 +594,62 @@ export function planView(detail: PlanDetail, gateTierRows = gateTiers): PlanView
     verifyWithoutBaseline: tasks.filter((t) => t.verify !== null && !t.hasBaseline).length,
     storedOffPlan: changes.filter((c) => c.origin === "off_plan").length,
   };
+}
+
+/* ─────────────────────────────────── charts that have a series ─────────────────────────────── */
+
+/**
+ * Fill missing days with zero.
+ *
+ * `spendByDay` GROUPs BY day, so a day with no decisions is simply absent — and an area chart
+ * over absent days draws a straight line across them, which reads as "steady spend" when the
+ * truth is "no spend". Zero-filling is the honest shape for a time series; the caller says so
+ * in a note rather than leaving the reader to guess.
+ */
+export function gapFillDays(rows: DayRow[]): DayRow[] {
+  if (rows.length < 2) return [...rows];
+  const sorted = [...rows].sort((a, b) => a.day.localeCompare(b.day));
+  const byDay = new Map(sorted.map((r) => [r.day, r]));
+  const out: DayRow[] = [];
+  const cursor = new Date(`${sorted[0]!.day}T00:00:00Z`);
+  const last = new Date(`${sorted[sorted.length - 1]!.day}T00:00:00Z`);
+  // Bounded by construction: the range is [first recorded day, last recorded day].
+  while (cursor.getTime() <= last.getTime()) {
+    const key = cursor.toISOString().slice(0, 10);
+    out.push(byDay.get(key) ?? { day: key, n: 0, cost_usd: 0 });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+}
+
+export interface PassRate {
+  pass: number;
+  fail: number;
+  /** Gates carrying no parseable `pass` factor — excluded from the rate, never counted as fail. */
+  unknown: number;
+  rate: number | null;
+}
+
+/**
+ * Deterministic step-check outcomes from `factors_json.pass`.
+ *
+ * This is the one gate series with real coverage: `pass` is populated on 146 of 146 step checks
+ * on a real ledger (103 / 43 = 70.5%), even though `gates.confidence` is NULL on 143 of them.
+ * Charting the raw column would say nothing; charting this says something true.
+ *
+ * A tier rate over TIME is deliberately not offered anywhere: 1 green in 177 graded gates makes
+ * a trend line a flat zero that implies a precision the data does not have.
+ */
+export function stepCheckPassRate(rows: GateRow[]): PassRate {
+  const out: PassRate = { pass: 0, fail: 0, unknown: 0, rate: null };
+  for (const row of rows) {
+    if (row.kind !== "step_check") continue;
+    const factors = parseFactors(row.factors_json);
+    if (!factors) out.unknown += 1;
+    else if (factors.pass) out.pass += 1;
+    else out.fail += 1;
+  }
+  const graded = out.pass + out.fail;
+  out.rate = graded > 0 ? out.pass / graded : null;
+  return out;
 }

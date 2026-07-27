@@ -341,6 +341,17 @@ export class DashboardStore {
     }
   }
 
+  /**
+   * Newest event timestamp across the whole ledger — the poll the activity hub runs.
+   * Deliberately unscoped and index-cheap: it answers only "did anything happen at all".
+   */
+  newestEvent(): number | null {
+    const row = this.db.query("SELECT MAX(ts) AS newest FROM events").get() as {
+      newest: number | null;
+    } | null;
+    return row?.newest ?? null;
+  }
+
   /** Ledger schema version, or 0 when the DB predates schema_meta. */
   schemaVersion(): number {
     try {

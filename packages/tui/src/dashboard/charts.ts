@@ -231,6 +231,8 @@ export function dataTable<T>(
   rows: T[],
   cols: TableColumn<T>[],
   emptyMsg = "Nothing here yet.",
+  /** Pass an id to make the table sortable by header click and filterable by `tableFilter`. */
+  id?: string,
 ): string {
   if (rows.length === 0) return emptyState(emptyMsg);
   const head = cols
@@ -242,5 +244,18 @@ export function dataTable<T>(
         `<tr>${cols.map((c) => `<td${c.numeric ? ' class="num"' : ""}>${c.cell(r)}</td>`).join("")}</tr>`,
     )
     .join("");
-  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const attrs = id ? ` id="${escapeHtml(id)}" class="sortable"` : "";
+  return `<div class="table-wrap"><table${attrs}><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/**
+ * The filter control for a `dataTable` given an id. Sorting and filtering are client-side on
+ * rows already in the HTML — no query, no round-trip, and the row count stays visible so a
+ * filtered view can never be mistaken for the whole set.
+ */
+export function tableFilter(id: string, title: string, rows: number): string {
+  return `<div class="thead"><h2>${escapeHtml(title)}</h2>
+  <span class="spacer"></span>
+  <span class="rowcount" id="${escapeHtml(id)}-count">${rows} row${rows === 1 ? "" : "s"}</span>
+  <input class="tfilter" type="search" placeholder="Filter…" aria-label="Filter ${escapeHtml(title)}" data-for="${escapeHtml(id)}" /></div>`;
 }

@@ -40,6 +40,77 @@ import { overview, planView, sessionList } from "./stats.ts";
 export const DEFAULT_PORT = 4180;
 const COOKIE = "minima_dash";
 
+/**
+ * How often the shared poller asks the ledger whether anything happened. SQLite has no change
+ * notification for a separate readonly process, so this is a poll — but ONE poll for the whole
+ * process, not one per browser tab, which is the difference between flat memory and a leak.
+ *
+ * 2s is already far finer than the data's own resolution (events land at turn boundaries; p95
+ * inter-event gap is 34s), so polling faster would only burn CPU to learn nothing sooner.
+ */
+const POLL_MS = 2_000;
+/** Hard ceiling on concurrent streams; a browser opening tabs must not become unbounded state. */
+export const MAX_STREAMS = 8;
+/** Streams are dropped after this long with no activity, so a forgotten tab cannot pin memory. */
+const STREAM_IDLE_MS = 30 * 60 * 1_000;
+
+/**
+ * One poller, many subscribers.
+ *
+ * Starts on the first subscriber and STOPS on the last — an idle dashboard runs no timer at all.
+ * The broadcast payload is deliberately tiny (the newest event timestamp): the client decides
+ * whether that warrants re-fetching, and no event history is accumulated anywhere.
+ */
+export class ActivityHub {
+  private readonly subscribers = new Set<(newest: number | null) => void>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private last: number | null = null;
+
+  constructor(private readonly newestOf: () => number | null) {}
+
+  get size(): number {
+    return this.subscribers.size;
+  }
+
+  subscribe(fn: (newest: number | null) => void): (() => void) | null {
+    if (this.subscribers.size >= MAX_STREAMS) return null;
+    this.subscribers.add(fn);
+    if (!this.timer) {
+      this.last = this.newestOf();
+      this.timer = setInterval(() => this.tick(), POLL_MS);
+      // Never hold the process open just to poll.
+      this.timer.unref?.();
+    }
+    return () => {
+      this.subscribers.delete(fn);
+      if (this.subscribers.size === 0 && this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    };
+  }
+
+  private tick(): void {
+    const newest = this.newestOf();
+    if (newest === this.last) return;
+    this.last = newest;
+    for (const fn of [...this.subscribers]) {
+      try {
+        fn(newest);
+      } catch {
+        // A dead stream must not take the poller down with it.
+        this.subscribers.delete(fn);
+      }
+    }
+  }
+
+  stop(): void {
+    this.subscribers.clear();
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
 export interface DashboardOptions {
   dbPath?: string;
   port?: number;
@@ -68,6 +139,7 @@ interface Ctx {
   allowWrites: boolean;
   /** Resolved editor command, or null when none was found or `--editor none` was passed. */
   editor: string | null;
+  hub: ActivityHub;
 }
 
 const NAV: { path: string; label: string }[] = [
@@ -295,6 +367,49 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       if (!row) return json({ error: "not_found" }, 404);
       return json(await readRecorded(row.project_key, row.path));
     }
+    if (path === "/api/v1/stream") {
+      let release: (() => void) | null = null;
+      let idle: ReturnType<typeof setTimeout> | null = null;
+      const stream = new ReadableStream({
+        start(controller) {
+          const enc = new TextEncoder();
+          const send = (newest: number | null): void => {
+            controller.enqueue(
+              enc.encode(`event: activity\ndata: ${JSON.stringify({ newest })}\n\n`),
+            );
+          };
+          send(ctx.store.newestEvent());
+          release = ctx.hub.subscribe(send);
+          if (!release) {
+            controller.enqueue(enc.encode('event: full\ndata: {"error":"too_many_streams"}\n\n'));
+            controller.close();
+            return;
+          }
+          idle = setTimeout(() => {
+            release?.();
+            release = null;
+            try {
+              controller.close();
+            } catch {
+              // already closed
+            }
+          }, STREAM_IDLE_MS);
+          idle.unref?.();
+        },
+        cancel() {
+          release?.();
+          release = null;
+          if (idle) clearTimeout(idle);
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "content-type": "text/event-stream",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+        },
+      });
+    }
     if (path.startsWith("/api/")) return json({ error: "not_found" }, 404);
 
     // ---- HTML views ----
@@ -395,6 +510,7 @@ export function createDashboard(opts: DashboardOptions = {}): {
     token: opts.token ?? crypto.randomUUID(),
     allowWrites: Boolean(opts.allowWrites),
     editor: detectEditor(opts.editor),
+    hub: new ActivityHub(() => store.newestEvent()),
   };
   return { handler: createHandler(ctx), ctx };
 }
@@ -417,6 +533,7 @@ export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
     editor: ctx.editor,
     stop() {
       server.stop(true);
+      ctx.hub.stop();
       ctx.store.close();
       ctx.writeDb?.close();
     },

@@ -11,13 +11,17 @@
  * Every color lives in the single `TOKENS` block below and nowhere else — a test greps for
  * literals, so swapping in Mubit's real console tokens stays a value-only edit in one place.
  *
- * The only client JS is the theme toggle, an auto-refresh timer, the scope <select>, and the
- * cmd-K palette — every number on the page is computed server-side.
+ * Client JS is hand-written and small: theme toggle, scope <select>, cmd-K palette, local
+ * relative-age ticking, table sort/filter, a tooltip layer, and an EventSource that swaps <main>
+ * when the ledger actually changes. Every NUMBER is still computed server-side — the client
+ * formats and reorders, it never aggregates. Listeners are delegated on `document` because the
+ * live refresh replaces <main> wholesale.
  */
 
 import {
   type AreaPoint,
   type BarRow,
+  type StatusSegment,
   areaChart,
   barChart,
   dataTable,
@@ -25,6 +29,7 @@ import {
   escapeHtml,
   seqStep,
   statusBar,
+  tableFilter,
 } from "./charts.ts";
 import type { FileContent } from "./files.ts";
 import type {
@@ -37,7 +42,15 @@ import type {
   RunSummary,
   Scope,
 } from "./queries.ts";
-import type { ChangeClass, Kpi, OverviewPayload, PlanView, SessionList, TaskRow } from "./stats.ts";
+import type {
+  ChangeClass,
+  Kpi,
+  OverviewPayload,
+  PassRate,
+  PlanView,
+  SessionList,
+  TaskRow,
+} from "./stats.ts";
 
 export interface NavItem {
   href: string;
@@ -72,6 +85,15 @@ export const fmtUsd = (n: number | null): string => {
 
 export const fmtPct = (rate: number | null): string =>
   rate === null ? "—" : `${Math.round(rate * 100)}%`;
+
+/**
+ * A relative-age cell that carries its raw timestamp, so the client ticks it locally instead of
+ * re-fetching a page to learn that a minute passed.
+ */
+export function agoCell(epochSeconds: number | null, now: number): string {
+  if (epochSeconds === null || !Number.isFinite(epochSeconds)) return "—";
+  return `<span data-ts="${epochSeconds}">${escapeHtml(fmtAgo(epochSeconds, now))}</span>`;
+}
 
 export function fmtAgo(epochSeconds: number | null, now: number): string {
   if (epochSeconds === null || !Number.isFinite(epochSeconds)) return "—";
@@ -410,6 +432,32 @@ table.code tr.gap td { color: hsl(var(--muted)); text-align: center; padding: 6p
 .crumb a { color: hsl(var(--muted)); }
 .crumb a:hover { color: hsl(var(--accent)); }
 
+.tip {
+  position: fixed; z-index: 60; pointer-events: none; opacity: 0; transition: opacity 90ms;
+  background: hsl(var(--panel-elevated)); color: hsl(var(--text-strong));
+  border: 1px solid hsl(var(--border-strong)); border-radius: var(--r-lg);
+  padding: 6px 9px; font: 11px/1.45 var(--sans); max-width: 320px;
+  box-shadow: 0 4px 14px hsl(var(--bg) / 0.55);
+}
+.tip.on { opacity: 1; }
+table.sortable th { cursor: pointer; user-select: none; }
+table.sortable th:hover { color: hsl(var(--accent)); }
+table.sortable th[data-dir="asc"]::after { content: " ▲"; font-size: 8px; }
+table.sortable th[data-dir="desc"]::after { content: " ▼"; font-size: 8px; }
+input.tfilter {
+  font: 12px/1 var(--sans); color: hsl(var(--text)); background: hsl(var(--panel-soft));
+  border: 1px solid hsl(var(--border)); border-radius: var(--r-lg); padding: 6px 8px;
+  min-width: 180px;
+}
+.thead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.thead h2 { margin: 0; }
+.rowcount { font: 11px/1.5 var(--mono); color: hsl(var(--muted)); }
+#live {
+  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em;
+  color: hsl(var(--muted)); border: 1px solid hsl(var(--border));
+  border-radius: var(--r-sm); padding: 4px 5px;
+}
+
 #pal { position: fixed; inset: 0; z-index: 50; display: none; }
 #pal[open] { display: block; }
 #pal .scrim { position: absolute; inset: 0; background: hsl(var(--bg) / 0.72); }
@@ -460,24 +508,6 @@ const SCRIPT = `
     window.location.href = url.toString();
   });
 
-  var refresh = document.getElementById("refresh");
-  var timer = null;
-  function label() { refresh.textContent = timer ? "Auto-refresh: on" : "Auto-refresh: off"; }
-  if (refresh) {
-    refresh.addEventListener("click", function () {
-      if (timer) { clearInterval(timer); timer = null; }
-      else { timer = setInterval(function () { window.location.reload(); }, 10000); }
-      try { localStorage.setItem("minima-dash-refresh", timer ? "1" : "0"); } catch (e) {}
-      label();
-    });
-    try {
-      if (localStorage.getItem("minima-dash-refresh") === "1") {
-        timer = setInterval(function () { window.location.reload(); }, 10000);
-      }
-    } catch (e) {}
-    label();
-  }
-
   var pal = document.getElementById("pal");
   if (!pal) return;
   var input = pal.querySelector("input");
@@ -517,36 +547,168 @@ const SCRIPT = `
   if (opener) opener.addEventListener("click", open);
 
   function flash(btn, text) {
-    var was = btn.textContent;
+    var was = btn.getAttribute("data-was") || btn.textContent;
+    btn.setAttribute("data-was", was);
     btn.textContent = text;
     setTimeout(function () { btn.textContent = was; }, 1400);
   }
-  var copy = document.getElementById("copypath");
-  if (copy) copy.addEventListener("click", function () {
-    var value = copy.getAttribute("data-copy") || "";
-    if (navigator.clipboard) navigator.clipboard.writeText(value).then(
-      function () { flash(copy, "Copied"); },
-      function () { flash(copy, "Copy failed"); }
-    );
-    else flash(copy, value);
+
+  // DELEGATED, not bound by id: the SSE refresh swaps <main> wholesale, so listeners attached
+  // to elements inside it would be dead after the first update.
+  document.addEventListener("click", function (e) {
+    var copy = e.target.closest && e.target.closest("[data-copy]");
+    if (copy) {
+      var value = copy.getAttribute("data-copy") || "";
+      if (navigator.clipboard) navigator.clipboard.writeText(value).then(
+        function () { flash(copy, "Copied"); },
+        function () { flash(copy, "Copy failed"); }
+      );
+      else flash(copy, "Copy unavailable");
+      return;
+    }
+    var open = e.target.closest && e.target.closest("#openedit");
+    if (open) {
+      // POST, not GET: a GET that spawns a process lands in history and is fetchable by any
+      // same-origin <img src>. The body carries a ledger row reference, never a real path.
+      fetch("/api/v1/open", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          plan: open.getAttribute("data-plan"),
+          path: open.getAttribute("data-path"),
+          line: open.getAttribute("data-line") || null
+        })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        flash(open, j && j.ok ? "Opened" : "Failed: " + ((j && j.error) || "unknown"));
+      }, function () { flash(open, "Failed"); });
+      return;
+    }
+    var th = e.target.closest && e.target.closest("table.sortable th");
+    if (th) sortBy(th);
   });
-  var openEdit = document.getElementById("openedit");
-  if (openEdit) openEdit.addEventListener("click", function () {
-    // POST, not GET: a GET that spawns a process lands in history and is fetchable by any
-    // same-origin <img src>. The body carries a ledger row reference, never a filesystem path.
-    fetch("/api/v1/open", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        plan: openEdit.getAttribute("data-plan"),
-        path: openEdit.getAttribute("data-path"),
-        line: openEdit.getAttribute("data-line") || null
-      })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      flash(openEdit, j && j.ok ? "Opened" : "Failed: " + ((j && j.error) || "unknown"));
-    }, function () { flash(openEdit, "Failed"); });
+
+  // Relative ages tick locally off data-ts. No network, no server round-trip — the only thing
+  // SSE is needed for is learning that NEW activity happened.
+  function ago(secs) {
+    if (secs < 60) return "just now";
+    if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+    if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+    return Math.floor(secs / 86400) + "d ago";
+  }
+  function tickAges() {
+    var now = Date.now() / 1000;
+    var cells = document.querySelectorAll("[data-ts]");
+    for (var i = 0; i < cells.length; i++) {
+      var ts = parseFloat(cells[i].getAttribute("data-ts"));
+      if (isFinite(ts)) cells[i].textContent = ago(Math.max(0, now - ts));
+    }
+  }
+  tickAges();
+  setInterval(tickAges, 1000);
+
+  function sortBy(th) {
+    var table = th.closest("table");
+    var body = table.tBodies[0];
+    if (!body) return;
+    var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
+    var dir = th.getAttribute("data-dir") === "asc" ? -1 : 1;
+    var heads = th.parentNode.children;
+    for (var h = 0; h < heads.length; h++) heads[h].removeAttribute("data-dir");
+    th.setAttribute("data-dir", dir === 1 ? "asc" : "desc");
+    var numeric = th.classList.contains("num");
+    var rows = Array.prototype.slice.call(body.rows);
+    rows.sort(function (a, b) {
+      var x = (a.cells[idx] || {}).textContent || "";
+      var y = (b.cells[idx] || {}).textContent || "";
+      if (numeric) {
+        var nx = parseFloat(x.replace(/[^0-9.eE+-]/g, ""));
+        var ny = parseFloat(y.replace(/[^0-9.eE+-]/g, ""));
+        if (!isFinite(nx)) nx = -Infinity;
+        if (!isFinite(ny)) ny = -Infinity;
+        return (nx - ny) * dir;
+      }
+      return x.localeCompare(y) * dir;
+    });
+    for (var r = 0; r < rows.length; r++) body.appendChild(rows[r]);
+  }
+
+  document.addEventListener("input", function (e) {
+    if (!e.target.matches || !e.target.matches("input.tfilter")) return;
+    var q = e.target.value.toLowerCase();
+    var table = document.getElementById(e.target.getAttribute("data-for"));
+    if (!table || !table.tBodies[0]) return;
+    var rows = table.tBodies[0].rows;
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var hit = !q || rows[i].textContent.toLowerCase().indexOf(q) >= 0;
+      rows[i].style.display = hit ? "" : "none";
+      if (hit) shown++;
+    }
+    var count = document.getElementById(e.target.getAttribute("data-for") + "-count");
+    if (count) count.textContent = shown + " of " + rows.length + " rows";
   });
+
+  // Tooltip layer. The native <title> stays in the markup as the no-JS fallback; this replaces
+  // its ~1s delay with something usable.
+  var tip = document.createElement("div");
+  tip.className = "tip";
+  document.body.appendChild(tip);
+  document.addEventListener("mousemove", function (e) {
+    var host = e.target.closest && e.target.closest("[data-hover]");
+    if (!host) { tip.classList.remove("on"); return; }
+    tip.textContent = host.getAttribute("data-hover");
+    tip.classList.add("on");
+    var pad = 14;
+    var w = tip.offsetWidth;
+    var x = Math.min(Math.max(pad, e.clientX + pad), window.innerWidth - w - pad);
+    var y = e.clientY + pad + tip.offsetHeight > window.innerHeight
+      ? e.clientY - tip.offsetHeight - pad
+      : e.clientY + pad;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  });
+
+  // One EventSource per tab against ONE server-side poller. The payload is just the newest
+  // event timestamp; the page decides whether that is worth re-fetching, and no event history
+  // is kept client-side — the whole point is that an idle tab accumulates nothing.
+  var live = document.getElementById("live");
+  var seen = null;
+  var busy = false;
+  function refresh() {
+    if (busy) return;
+    busy = true;
+    fetch(window.location.href, { credentials: "same-origin", headers: { "x-partial": "1" } })
+      .then(function (r) { return r.text(); })
+      .then(function (text) {
+        var doc = new DOMParser().parseFromString(text, "text/html");
+        var next = doc.querySelector("main");
+        var cur = document.querySelector("main");
+        if (next && cur) {
+          var top = window.scrollY;
+          cur.innerHTML = next.innerHTML;
+          window.scrollTo(0, top);
+          tickAges();
+        }
+        busy = false;
+      }, function () { busy = false; });
+  }
+  if (window.EventSource) {
+    var es = new EventSource("/api/v1/stream");
+    es.addEventListener("activity", function (ev) {
+      var data = {};
+      try { data = JSON.parse(ev.data); } catch (err) { return; }
+      if (seen === null) { seen = data.newest; if (live) live.textContent = "Live"; return; }
+      if (data.newest !== seen) { seen = data.newest; refresh(); }
+    });
+    es.addEventListener("full", function () {
+      es.close();
+      if (live) live.textContent = "Live (too many tabs)";
+    });
+    es.onerror = function () { if (live) live.textContent = "Live: reconnecting"; };
+  } else if (live) {
+    live.textContent = "Live unsupported";
+  }
 })();
 `;
 
@@ -598,8 +760,8 @@ export function shell(opts: ShellOptions): string {
       <h1>${escapeHtml(opts.title)}</h1>
       <span class="spacer"></span>
       <div class="controls">
+        <span id="live" title="server-sent activity stream">connecting</span>
         <select id="scope" aria-label="Project scope">${options}</select>
-        <button class="ghost" id="refresh" type="button">Auto-refresh: off</button>
         <button class="ghost" id="theme" type="button" aria-label="Toggle theme">◐</button>
       </div>
     </header>
@@ -672,6 +834,8 @@ export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: 
 <section class="card">
   <h2>Realized spend per day</h2>
   ${areaChart(spend, { valueFmt: (n) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`) })}
+  <p class="note">Quiet days are zero-filled. Without that the series simply omits them, and the
+  line drawn across the gap reads as steady spend when the truth is none.</p>
 </section>
 <div class="grid-2">
   <section class="card">
@@ -685,6 +849,14 @@ export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: 
   </section>
 </div>
 <section class="card">
+  <h2>Step-check outcomes</h2>
+  ${passRateBar(payload.passRate)}
+  <p class="note">Read from <span class="mono">factors_json.pass</span>, which is populated on
+  every step check — unlike <span class="mono">gates.confidence</span>, which is NULL on nearly
+  all of them by design. There is deliberately no tier-rate trend line: with so few greens it
+  would be a flat zero implying a precision this data does not have.</p>
+</section>
+<section class="card">
   <h2>Task type × model — learned outcomes</h2>
   ${scoreboard}
   <p class="note">Cells with n &lt; ${payload.minN} are suppressed; this table is advisory and never re-ranks routing.</p>
@@ -693,6 +865,27 @@ export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: 
   <h2>Recent sessions</h2>
   ${runsTable(runs.slice(0, 10), now)}
 </section>`;
+}
+
+/**
+ * Pass/fail over deterministic step checks. A status bar rather than a trend, because that is
+ * the shape the data supports: a binary outcome with full coverage and no meaningful daily
+ * granularity at this sample size.
+ */
+function passRateBar(rate: PassRate): string {
+  if (rate.pass + rate.fail === 0) {
+    return emptyState("No step check has recorded a deterministic outcome yet.");
+  }
+  const segments: StatusSegment[] = [
+    { key: "green", label: "Check passed", icon: "✔", n: rate.pass },
+    { key: "red", label: "Check did not pass", icon: "✖", n: rate.fail },
+  ];
+  if (rate.unknown > 0) {
+    segments.push({ key: "ungraded", label: "No parseable outcome", icon: "•", n: rate.unknown });
+  }
+  const bar = statusBar(segments);
+  return `${bar}<p class="note">${fmtPct(rate.rate)} of ${rate.pass + rate.fail} graded step
+  checks passed${rate.unknown > 0 ? ` · ${rate.unknown} carried no parseable outcome and are excluded from the rate, never counted as failures` : ""}.</p>`;
 }
 
 /** Why gates landed where they did — a tier chart without this is not actionable. */
@@ -741,10 +934,11 @@ function runsTable(runs: RunSummary[], now: number): string {
         // column and the stored status are both unusable as recency.
         header: "Last activity",
         numeric: true,
-        cell: (r) => escapeHtml(fmtAgo(r.last_event ?? null, now)),
+        cell: (r) => agoCell(r.last_event ?? null, now),
       },
     ],
     "No sessions recorded yet — run `minima` in a repo to populate the ledger.",
+    "t-sessions",
   );
 }
 
@@ -763,7 +957,7 @@ export function runsView(list: SessionList, now: number): string {
     list.hidden > 0
       ? ` ${list.hidden} run row${list.hidden === 1 ? "" : "s"} with zero recorded events hidden as empty shells.`
       : "";
-  return `<section class="card"><h2>Sessions</h2>${runsTable(list.rows, now)}
+  return `<section class="card">${tableFilter("t-sessions", "Sessions", list.rows.length)}${runsTable(list.rows, now)}
   <p class="note">${freshness}${escapeHtml(hidden)}</p></section>`;
 }
 
@@ -777,7 +971,7 @@ export function runView(detail: RunDetail, now: number): string {
   }));
   return `<section class="card">
   <h2>${escapeHtml(d.run.display_name ?? d.run.run_id)}</h2>
-  <p class="note"><span class="mono">${escapeHtml(d.run.run_id)}</span> · ${escapeHtml(d.run.project_key)} · ${statusPill(d.run.status)} · updated ${escapeHtml(fmtAgo(d.run.updated, now))}</p>
+  <p class="note"><span class="mono">${escapeHtml(d.run.run_id)}</span> · ${escapeHtml(d.run.project_key)} · ${statusPill(d.run.status)} · updated ${agoCell(d.run.updated, now)}</p>
 </section>
 <div class="kpis">
   <div class="kpi"><div class="label">Decisions</div><div class="value">${d.run.decisions}</div><div class="note">routed this session</div></div>
@@ -795,7 +989,7 @@ function decisionsTable(rows: DecisionRecord[], now: number): string {
   return dataTable(
     rows.slice(0, 200),
     [
-      { header: "When", numeric: true, cell: (r) => escapeHtml(fmtAgo(r.ts, now)) },
+      { header: "When", numeric: true, cell: (r) => agoCell(r.ts, now) },
       { header: "Task", cell: (r) => escapeHtml(r.task_type ?? "—") },
       {
         header: "Model",
@@ -892,10 +1086,11 @@ function plansTable(plans: PlanSummary[], now: number): string {
       {
         header: "Last activity",
         numeric: true,
-        cell: (p) => escapeHtml(fmtAgo(p.last_event ?? null, now)),
+        cell: (p) => agoCell(p.last_event ?? null, now),
       },
     ],
     "No plans recorded yet.",
+    "t-plans",
   );
 }
 
@@ -917,7 +1112,7 @@ export function plansView(
   <span class="mono">factors_json</span>. Reading <span class="mono">gates.confidence</span>
   directly would report most step checks as ungraded.</p>
 </section>
-<section class="card"><h2>Plans</h2>${plansTable(plans, now)}</section>`;
+<section class="card">${tableFilter("t-plans", "Plans", plans.length)}${plansTable(plans, now)}</section>`;
 }
 
 const TIER_GLYPH: Record<string, string> = { green: "✔", yellow: "▲", red: "✖" };
@@ -1072,7 +1267,7 @@ ${drift}
   <h2>Session</h2>
   <p class="note">${
     p.session_id
-      ? `<a href="/runs/${encodeURIComponent(p.session_id)}" class="mono">${escapeHtml(p.session_id)}</a> · ${escapeHtml(p.project_key ?? "unknown project")} · last recorded activity ${escapeHtml(fmtAgo(p.last_event ?? null, now))}`
+      ? `<a href="/runs/${encodeURIComponent(p.session_id)}" class="mono">${escapeHtml(p.session_id)}</a> · ${escapeHtml(p.project_key ?? "unknown project")} · last recorded activity ${agoCell(p.last_event ?? null, now)}`
       : "This plan is not attached to any session."
   }</p>
 </section>`;
@@ -1157,7 +1352,7 @@ export function memoryView(rows: MemorySummary[], now: number, allowWrites: bool
       },
       { header: "Content", cell: (m) => `<span class="wrap">${escapeHtml(m.content)}</span>` },
       { header: "Origin", cell: (m) => escapeHtml(`${m.origin}/${m.evidence_source}`) },
-      { header: "Updated", numeric: true, cell: (m) => escapeHtml(fmtAgo(m.updated, now)) },
+      { header: "Updated", numeric: true, cell: (m) => agoCell(m.updated, now) },
       { header: "", cell: controls },
     ],
     "No memories curated yet.",
@@ -1186,7 +1381,7 @@ export function costView(payload: OverviewPayload, budgets: BudgetSummary[], now
       { header: "Spent", numeric: true, cell: (b) => fmtUsd(b.spent_usd) },
       { header: "Reserved", numeric: true, cell: (b) => fmtUsd(b.reserved_usd) },
       { header: "Limit", numeric: true, cell: (b) => fmtUsd(b.limit_usd) },
-      { header: "Updated", numeric: true, cell: (b) => escapeHtml(fmtAgo(b.updated, now)) },
+      { header: "Updated", numeric: true, cell: (b) => agoCell(b.updated, now) },
     ],
     "No budget scopes recorded.",
   );

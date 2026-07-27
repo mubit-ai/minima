@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { seqStep, statusBar } from "../src/dashboard/charts.ts";
+import { dataTable, seqStep, statusBar, tableFilter } from "../src/dashboard/charts.ts";
 import {
   EDITOR_NAMES,
   MAX_LINES,
@@ -20,11 +20,17 @@ import {
   resolveRecorded,
 } from "../src/dashboard/files.ts";
 import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
-import { fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
-import { createDashboard, createHandler } from "../src/dashboard/server.ts";
+import { agoCell, fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
+import {
+  ActivityHub,
+  MAX_STREAMS,
+  createDashboard,
+  createHandler,
+} from "../src/dashboard/server.ts";
 import {
   claimRule,
   classifyChanges,
+  gapFillDays,
   gateTiers,
   kpis,
   modelStats,
@@ -34,6 +40,7 @@ import {
   resolveChangePath,
   scoreboardCells,
   sessionList,
+  stepCheckPassRate,
 } from "../src/dashboard/stats.ts";
 import { type DecisionWrite, MinimaDb } from "../src/db/minima_db.ts";
 
@@ -1202,5 +1209,196 @@ describe("file routes", () => {
       }),
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe("live activity hub", () => {
+  test("polling starts on the first subscriber and STOPS on the last", () => {
+    // The RAM requirement in one test: an idle dashboard must run no timer at all, and there is
+    // ONE poller for the whole process rather than one per browser tab.
+    let polls = 0;
+    const hub = new ActivityHub(() => {
+      polls += 1;
+      return 1;
+    });
+    expect(polls).toBe(0);
+    const a = hub.subscribe(() => {})!;
+    const afterSubscribe = polls;
+    expect(afterSubscribe).toBeGreaterThan(0);
+    expect(hub.size).toBe(1);
+    const b = hub.subscribe(() => {})!;
+    // A second subscriber must NOT start a second poller.
+    expect(hub.size).toBe(2);
+    a();
+    expect(hub.size).toBe(1);
+    b();
+    expect(hub.size).toBe(0);
+    hub.stop();
+  });
+
+  test("concurrent streams are capped so tabs cannot become unbounded state", () => {
+    const hub = new ActivityHub(() => 1);
+    const releases: (() => void)[] = [];
+    for (let i = 0; i < MAX_STREAMS; i += 1) {
+      const release = hub.subscribe(() => {});
+      expect(release).not.toBeNull();
+      releases.push(release!);
+    }
+    // One past the cap is refused rather than queued or silently accepted.
+    expect(hub.subscribe(() => {})).toBeNull();
+    releases[0]!();
+    // A freed slot is reusable.
+    expect(hub.subscribe(() => {})).not.toBeNull();
+    hub.stop();
+    expect(hub.size).toBe(0);
+  });
+
+  test("GET /api/v1/stream opens an event stream and sends the current timestamp", async () => {
+    const db = new MinimaDb(dbPath);
+    db.appendEvent({ runId: seeded.runId, type: "assistant", payload: {}, ts: 1_234_567 });
+    db.close();
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const res = await handler(
+      new Request("http://127.0.0.1/api/v1/stream", { headers: { "x-minima-token": TOKEN } }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const reader = res.body!.getReader();
+    const chunk = new TextDecoder().decode((await reader.read()).value!);
+    expect(chunk).toContain("event: activity");
+    expect(chunk).toContain("1234567");
+    await reader.cancel();
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("the stream requires the token like every other route", async () => {
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const res = await handler(new Request("http://127.0.0.1/api/v1/stream"));
+    expect(res.status).toBe(401);
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+});
+
+describe("charts that have a series", () => {
+  test("quiet days are zero-filled rather than omitted", () => {
+    // Omitting them makes an area chart draw a straight line across the gap, which reads as
+    // steady spend when the truth is none.
+    const filled = gapFillDays([
+      { day: "2026-07-01", n: 2, cost_usd: 1 },
+      { day: "2026-07-04", n: 3, cost_usd: 2 },
+    ]);
+    expect(filled.map((d) => d.day)).toEqual([
+      "2026-07-01",
+      "2026-07-02",
+      "2026-07-03",
+      "2026-07-04",
+    ]);
+    expect(filled[1]).toEqual({ day: "2026-07-02", n: 0, cost_usd: 0 });
+    // Recorded values pass through untouched.
+    expect(filled[3]).toEqual({ day: "2026-07-04", n: 3, cost_usd: 2 });
+  });
+
+  test("gap-filling is a no-op below two rows and spans a month boundary", () => {
+    expect(gapFillDays([])).toEqual([]);
+    expect(gapFillDays([{ day: "2026-07-01", n: 1, cost_usd: 1 }])).toHaveLength(1);
+    const across = gapFillDays([
+      { day: "2026-07-30", n: 1, cost_usd: 1 },
+      { day: "2026-08-02", n: 1, cost_usd: 1 },
+    ]);
+    expect(across.map((d) => d.day)).toEqual([
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-01",
+      "2026-08-02",
+    ]);
+  });
+
+  test("step-check pass rate reads factors_json, not the NULL confidence column", () => {
+    const planId = (() => {
+      const db = new MinimaDb(dbPath);
+      const id = db.insertPlan({ sessionId: seeded.runId, title: "rates" });
+      const step = db.insertStep({ planId: id, idx: 0, content: "s" });
+      // parseFactors is strict: all six fields, or the whole object is rejected.
+      const base = {
+        redToGreen: true,
+        hasCheck: true,
+        coverageHit: true,
+        tamper: false,
+        checkOrigin: "pre_existing" as const,
+      };
+      // confidence is NULL on all three, exactly as the harness writes step checks.
+      db.insertGate({
+        planId: id,
+        stepId: step,
+        kind: "step_check",
+        factors: { pass: true, ...base },
+      });
+      db.insertGate({
+        planId: id,
+        stepId: step,
+        kind: "step_check",
+        factors: { pass: true, ...base },
+      });
+      db.insertGate({
+        planId: id,
+        stepId: step,
+        kind: "step_check",
+        factors: { pass: false, ...base },
+      });
+      // Unparseable factors must be excluded from the rate, never counted as a failure.
+      db.insertGate({ planId: id, stepId: step, kind: "step_check", factors: { nonsense: 1 } });
+      // A milestone gate is not a step check and must not enter the series at all.
+      db.insertGate({ planId: id, stepId: step, kind: "milestone", confidence: "red" });
+      db.close();
+      return id;
+    })();
+    const store = new DashboardStore(dbPath);
+    const rate = stepCheckPassRate(store.planDetail(planId)!.gates);
+    expect(rate.pass).toBe(2);
+    expect(rate.fail).toBe(1);
+    expect(rate.unknown).toBe(1);
+    // 2/3 over GRADED rows — the unknown is excluded from the denominator.
+    expect(rate.rate).toBeCloseTo(2 / 3, 6);
+    store.close();
+  });
+
+  test("no coverage yields a null rate, never a fabricated zero", () => {
+    expect(stepCheckPassRate([]).rate).toBeNull();
+  });
+});
+
+describe("client affordances", () => {
+  test("relative-age cells carry their raw timestamp so ticking needs no network", () => {
+    expect(agoCell(1_000_000, 1_000_030)).toContain('data-ts="1000000"');
+    expect(agoCell(null, 1)).toBe("—");
+  });
+
+  test("a table given an id is sortable and reports its row count", () => {
+    const rows = [{ a: "x" }, { a: "y" }];
+    const cols = [{ header: "A", cell: (r: { a: string }) => r.a }];
+    expect(dataTable(rows, cols, "empty", "t-x")).toContain('id="t-x" class="sortable"');
+    // Without an id it stays a plain table — sorting is opt-in per view.
+    expect(dataTable(rows, cols, "empty")).not.toContain("sortable");
+    const filter = tableFilter("t-x", "Things", 2);
+    expect(filter).toContain('data-for="t-x"');
+    expect(filter).toContain('id="t-x-count"');
+    expect(filter).toContain("2 rows");
+  });
+
+  test("listeners are delegated, so a live <main> swap does not kill them", async () => {
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const body = await (
+      await handler(new Request("http://127.0.0.1/", { headers: { "x-minima-token": TOKEN } }))
+    ).text();
+    // Bound-by-id listeners would go dead the first time the SSE refresh replaces <main>.
+    expect(body).toContain('document.addEventListener("click"');
+    expect(body).not.toContain('getElementById("copypath").addEventListener');
+    // And the superseded 10s full-page meta-reload must be gone entirely.
+    expect(body).not.toContain("Auto-refresh");
+    expect(body).toContain('new EventSource("/api/v1/stream")');
+    ctx.hub.stop();
+    ctx.store.close();
   });
 });

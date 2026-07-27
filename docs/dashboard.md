@@ -12,6 +12,7 @@ minima dashboard                     # http://127.0.0.1:4180, read-only
 minima dashboard --port 4181 --open  # pick a port, open a browser
 minima dashboard --allow-writes      # enable the one audited write control
 minima dashboard --db /path/to.db    # read a specific ledger
+minima dashboard --editor cursor     # jump-to-source target (autodetected; "none" disables)
 ```
 
 ## Running it from another repo — `minima-loc --wt`
@@ -72,6 +73,65 @@ server growing a second data path.
   its realized $. Plus the recomputed write-attribution panel.
 - **Memory** — the curated memory ledger with origin and evidence source.
 - **Cost** — spend over time plus the budget ledger (limit / spent / reserved / mode).
+- **Source** (`/files`) — any recorded path, rendered in-page with line numbers, a copy-path
+  button, and a jump-to-editor button.
+
+## Reading source (`/files`)
+
+Clicking a path opens it in-page. That is the default action, because zero friction beats a link
+that needs a scheme handler — browsers silently refuse `file://` from an `http://` page.
+
+**A request never supplies a filesystem path.** It supplies a *ledger row reference*: a plan id
+plus the exact `file_changes.path` string as recorded. The server looks that row up, resolves it
+itself against the run's `runs.project_key`, and only then touches disk. Traversal is not
+filtered — it is structurally impossible, because no caller-controlled string reaches `open()`.
+A path that was never recorded simply has no row, so `../../etc/passwd` and an absolute
+`/etc/passwd` both 404.
+
+Recorded paths are mostly **relative** (234 of 241 rows on a real ledger) and resolve through
+`runs.project_key`; the 7 absolute rows pass through. Two checks remain, because a recorded path
+is not automatically a safe one:
+
+- a relative row must still resolve **inside** its project root after `realpath`, so a repo file
+  symlinked outward is refused;
+- reads are capped at **512KB and 2,000 lines**. Past either, a head/tail excerpt ships with an
+  explicit banner and **true** line numbers (the tail is not renumbered). The cap is the RAM
+  requirement — an uncapped read is the one way this server grows.
+
+Deleted files, escaping symlinks, binaries and unresolvable rows are all explained states rather
+than errors, and **copy-path keeps working in every one of them** — a dead link with no way to
+grab the path is worse than an honest gap.
+
+`POST /api/v1/open` hands the resolved path to an editor through a `Bun.spawn` **argv array**,
+never a shell string, with the line coerced through `parseInt`. POST + same-origin + token, so it
+cannot be driven cross-site and never lands in browser history. It is deliberately **not** gated
+on `--allow-writes`: that flag means "may mutate the ledger", and conflating it with "may open my
+editor" would deny read-only users the primary affordance. The guard that matters is the
+ledger-row lookup.
+
+## Live updates
+
+There is no change notification for a separate readonly SQLite reader, so this is a poll — but
+**one poller for the whole process**, not one per browser tab, which is the difference between
+flat memory and a leak. `ActivityHub` starts on the first subscriber and **stops on the last**, so
+an idle dashboard runs no timer at all.
+
+The broadcast payload is just the newest event timestamp. The client decides whether that warrants
+re-fetching, swaps `<main>` in place (preserving scroll), and keeps **no** event history — the
+whole point is that an open tab accumulates nothing. Relative ages tick locally off `data-ts`
+attributes, so "12s ago" becoming "13s ago" costs no network at all.
+
+Bounded on purpose: **8 concurrent streams** (the 9th is refused, not queued), a 30-minute idle
+disconnect, and a 2s poll — already far finer than the data's own resolution, since events land at
+turn boundaries with a p95 gap of 34s.
+
+Measured on the live 11MB ledger: 4 concurrent streams held open for 130s left RSS oscillating
+between 33MB and 42MB and **ending 8MB below where it started**. Opening 10 streams accepted 8 and
+refused 2; RSS returned below baseline after they closed.
+
+This replaced a 10s full-page meta-refresh. Client listeners are delegated on `document` because
+the live swap replaces `<main>` wholesale — binding by id would leave them dead after the first
+update.
 
 ## Honesty rules (do not "improve" these)
 
@@ -193,12 +253,15 @@ The next decision is **how much control** the browser should get. Ranked by cost
    IPC channel (a unix socket or a `bg_jobs`-style command table the harness polls) plus a
    decision about what happens when two clients steer at once. This is where a "give the user
    control" feature actually gets designed — not a UI problem.
-3. **Streaming** (medium): replace the 10s meta-refresh with SSE over the `events` table so a
-   running session updates live.
+3. ~~**Streaming**~~ — shipped, see "Live updates" above.
 
-Other known gaps: charts hover via native SVG `<title>` (a real crosshair/tooltip layer is a
-follow-up); no date-range filter yet (scope is project-only); `spendByDay` has no gap-filling
-so quiet days are absent rather than zero; the scoreboard renders the top 20 cells.
+Other known gaps: no date-range filter yet (scope is project-only); the scoreboard renders the
+top 20 cells; the `verify` command's OUTPUT is captured nowhere in the ledger, so a failing check
+can be reported but never explained (that needs an upstream change); and the estimate-vs-realized
+cost basis below is still unfixed.
+
+Fixed since the first pass: charts carry a real tooltip layer (native `<title>` stays as the
+no-JS fallback), and `spendByDay` is zero-filled.
 
 ## Charting conventions
 
