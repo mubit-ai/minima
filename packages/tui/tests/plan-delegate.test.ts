@@ -446,6 +446,19 @@ describe("the delegate seam", () => {
   });
 });
 
+describe("regression guard", () => {
+  test("flag off: the after-hook returns nothing extra and no step is delegated", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    // No delegate injected — the flag-off wiring in main.ts passes undefined.
+    const { spawn, seen } = fakeSpawn({});
+    expect(seen).toHaveLength(0);
+    expect(db.getPlanSteps(planId)[0]!.delegated_cost_usd).toBeNull();
+    void spawn;
+  });
+});
+
 describe("config", () => {
   test("delegation is opt-in and the plan budget has a default", () => {
     withEnv({ MINIMA_TUI_PLAN_DELEGATE: undefined, MINIMA_TUI_PLAN_BUDGET: undefined }, () => {

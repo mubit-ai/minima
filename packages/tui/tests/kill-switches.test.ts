@@ -210,6 +210,15 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     );
   });
 
+  test("MINIMA_TUI_PLAN_DELEGATE still gates delegate construction in cli/main.ts", () => {
+    // Bespoke, not an AMBIENT_DEFAULT_ON row: planDelegate IS config-backed (asserted above
+    // via configFromEnv), so the risk isn't an ambient process.env read bypassing config — it
+    // is cli/main.ts silently dropping the `config.planDelegate &&` guard and constructing the
+    // delegate unconditionally. No behavioral test reaches main() to catch that, so the wiring
+    // expression itself is pinned here, the same way AMBIENT_DEFAULT_ON pins its read sites.
+    expect(readSource("cli/main.ts")).toContain(code("config.planDelegate && planDb"));
+  });
+
   test("MINIMA_TUI_PLAN_BUDGET defaults to $2 and rejects nonsense", () => {
     withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: undefined }), () =>
       expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
