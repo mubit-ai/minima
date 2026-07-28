@@ -153,6 +153,11 @@ export async function* agentLoop(
         // any tool dispatch, so the discarded rung is non-effectful and legal to replay.
         yield messageEnd(null);
         tripwire.onFired(hit);
+        try {
+          config.onTtsrFire?.(hit);
+        } catch {
+          // telemetry is fail-open — an audit write never costs the turn
+        }
         state.ttsrRetries += 1;
         const reminder = tripwire.reminder(hit);
         state.messages.push(reminder);

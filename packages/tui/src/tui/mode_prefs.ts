@@ -1,7 +1,16 @@
 /**
  * Per-project persistence for the Shift+Tab permission mode (~/.minima-harness/ui-modes.json).
- * Deliberately tiny and synchronous — read once at startup, written on mode change. `bypass`
- * is NEVER persisted: it must be re-consented every session (CLI flag or /mode bypass).
+ * Deliberately tiny and synchronous — read once at startup, written on mode change.
+ *
+ * Only `acceptEdits` and `build` persist — the two that describe a standing preference about
+ * a project ("I trust edits here"). The RESTRICTIVE modes are per-task state and must be
+ * re-entered each session:
+ *   bypass — must be re-consented every session (CLI flag or /mode bypass).
+ *   plan   — denies write/edit/bash/apply_patch outright. Restoring it days after a
+ *            Shift+Tab press gives the user a harness that refuses to do any work with no
+ *            visible cause; "why does it start in plan mode?" is the reported symptom.
+ * Because loadPersistedMode validates against PERSISTABLE, a `plan` written by an older
+ * build reads back as null — existing prefs files self-heal with no migration.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -9,7 +18,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentMode } from "../agent/modes.ts";
 
-const PERSISTABLE: readonly AgentMode[] = ["build", "acceptEdits", "plan"];
+const PERSISTABLE: readonly AgentMode[] = ["build", "acceptEdits"];
 
 function prefsDir(): string {
   return process.env.MINIMA_HARNESS_DIR?.trim() || join(homedir(), ".minima-harness");

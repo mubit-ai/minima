@@ -126,7 +126,9 @@ export interface CouncilRoundResult {
  */
 export interface SynthPlanStep {
   action: string;
-  verify: string;
+  /** null when the model named no check — the sanitizer, the renderer and auto-gates all
+   *  handle it, so the type says so rather than leaving callers to find out by crashing. */
+  verify: string | null;
   /** Name of a user-defined agent type (`.minima/agents/<name>.md`) this step is scoped to.
    *  Expanded at /plan finalize into the step's `tools` + `candidates` (agent_types.ts:
    *  agentTypePlanPreset) — the LEAD still executes the step, it just runs under that
@@ -545,7 +547,12 @@ export class PlanSessionStore {
     const steps = synth.approach
       .map((st) => ({
         action: st.action.trim(),
-        verify: st.verify.trim(),
+        // A verify-less step is a SUPPORTED state, not an impossible one: the renderer below
+        // has a branch for it, and auto-gates exists to fill these in. The declared type says
+        // `string`, the synthesizer emits null, and auto-gates normally overwrote it before
+        // this ran — so an unguarded .trim() only crashed on the documented rollback path
+        // (MINIMA_TUI_AUTO_GATES=0), taking the whole /plan finalize down with a TypeError.
+        verify: st.verify?.trim() ?? "",
         agent_type: (st.agent_type ?? "").trim(),
         tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
         candidates: (st.candidates ?? []).map((c) => c.trim()).filter(Boolean),

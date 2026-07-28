@@ -92,6 +92,9 @@ async function doSync(
       output: card.output_cost_per_mtok,
       cache_read: card.cache_read_cost_per_mtok ?? model.cost.cache_read,
       cache_write: model.cost.cache_write,
+      // The wire ModelCard has no tier field, so a refresh would otherwise silently drop a
+      // long-context tier and start undercharging every large prompt on that model.
+      long_context: model.cost.long_context,
     };
     if (card.context_window) model.context_window = card.context_window;
     if (card.max_output_tokens) model.max_tokens = card.max_output_tokens;

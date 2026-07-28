@@ -367,7 +367,7 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Flash",
-    cost: { input: 0.3, output: 2.5 },
+    cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
     reasoning: true,
@@ -377,7 +377,13 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Pro",
-    cost: { input: 1.25, output: 10.0 },
+    // Google prices 2.5 Pro in two tiers on prompt size: every rate doubles above 200k.
+    cost: {
+      input: 1.25,
+      output: 10.0,
+      cache_read: 0.125,
+      long_context: { above_prompt_tokens: 200_000, input: 2.5, output: 15.0, cache_read: 0.25 },
+    },
     context_window: 2_000_000,
     max_tokens: 8192,
     reasoning: true,
@@ -779,7 +785,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // W5.1: an edit/write/apply_patch success appends the just-edited file's LSP diagnostics
   // (opt-in; null when config.lsp is off, so the hook is never in the fold).
   if (lspManager)
-    agent.addAfterToolCall(makeLspDiagnosticsHook(lspManager, { workdir: process.cwd() }));
+    agent.addAfterToolCall(
+      makeLspDiagnosticsHook(lspManager, {
+        workdir: process.cwd(),
+        // Late-bound like bookSearchFee: the run id does not exist at tool-construction
+        // time, so read it per probe. Without this row the OFF→ON promotion bar (timeout
+        // rate, p95 latency) could only ever be argued from recollection.
+        onProbe: (probe) => {
+          const runId = agent.runId;
+          if (!db || !runId) return;
+          db.appendEvent({ runId, type: "lsp_probe", payload: probe });
+        },
+      }),
+    );
+  // W4.2 telemetry: one row per tripwire firing. Only reachable with TTSR on (it fires
+  // nothing when off), and the anti-vacuity half of the promotion bar reads it directly —
+  // "no false positives" means nothing until you can show the tripwire actually fired.
+  if (config.ttsr)
+    agent.onTtsrFire = (hit) => {
+      const runId = agent.runId;
+      if (!db || !runId) return;
+      db.appendEvent({ runId, type: "ttsr_fire", payload: { rule_id: hit.ruleId } });
+    };
   // W4.5: compaction spills the pruned window through this same store (null when artifacts
   // are off → v1 byte-identical); attach()-ed below before any compaction can fire.
   agent.artifacts = artifactStore;
@@ -1015,6 +1042,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         name: t.name,
         description: t.description,
       })),
+      onSpend: (usd) => agent.budget?.bookSpend(usd, "subagent"),
     }),
   );
 

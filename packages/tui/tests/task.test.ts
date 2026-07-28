@@ -271,3 +271,58 @@ describe("metrics primitives (P1b)", () => {
     expect(o.ocr).toBe(1); // oracle (cheapest overall 0.005) / actual 0.005, capped at 1
   });
 });
+
+describe("taskTool books child spend against the parent wallet", () => {
+  test("onSpend receives the summed realized cost of every child", async () => {
+    const booked: number[] = [];
+    const tool = taskTool({ spawn: okSpawn, onSpend: (usd) => booked.push(usd) });
+    await tool.execute(
+      "1",
+      {
+        delegations: JSON.stringify([
+          okDelegation({ step_id: "a" }),
+          okDelegation({ step_id: "b" }),
+          okDelegation({ step_id: "c" }),
+        ]),
+      },
+      null,
+      null,
+    );
+    // okSpawn bills $0.01 per child; one booking per batch, not per child.
+    expect(booked).toHaveLength(1);
+    expect(booked[0]!).toBeCloseTo(0.03, 10);
+  });
+
+  test("blocked children still book what the ones that ran actually spent", async () => {
+    const booked: number[] = [];
+    const spawn: SpawnFn = async (d, ctx) =>
+      d.step_id === "build"
+        ? { ...(await okSpawn(d, ctx)), outcome: "failure" as const, text: "boom" }
+        : okSpawn(d, ctx);
+    const tool = taskTool({ spawn, onSpend: (usd) => booked.push(usd) });
+    await tool.execute(
+      "1",
+      {
+        delegations: JSON.stringify([
+          okDelegation({ step_id: "build" }),
+          okDelegation({ step_id: "verify", depends_on: ["build"] }),
+        ]),
+      },
+      null,
+      null,
+    );
+    // The blocked dependent costs $0; the failed child still burned its $0.01.
+    expect(booked[0]!).toBeCloseTo(0.01, 10);
+  });
+
+  test("omitting onSpend is inert (no throw) — the budget is optional", async () => {
+    const tool = taskTool({ spawn: okSpawn });
+    const res = await tool.execute(
+      "1",
+      { delegations: JSON.stringify([okDelegation({ step_id: "a" })]) },
+      null,
+      null,
+    );
+    expect(textOf(res)).toContain("1 subtask(s)");
+  });
+});

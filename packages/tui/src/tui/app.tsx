@@ -3815,7 +3815,28 @@ export function HarnessApp({
         } else {
           try {
             if (agent.db) {
-              await loadRun(targetId);
+              // loadRun wants an exact 36-char run_id, but every handle the UI shows the
+              // user is something else: the picker renders a 12-char prefix and /name
+              // advertises the name. Resolve through the same resolver --resume uses, so
+              // `/resume <name>` and `/resume <prefix>` work in here exactly as they do
+              // from the shell (and get scoped to this repo, which --resume already is).
+              const projectKey = repoIdentity(process.cwd());
+              const row = agent.db.findRunByName(projectKey, targetId);
+              if (!row) {
+                const near = agent.db.searchRuns(projectKey, targetId);
+                throw new Error(
+                  `no session matching "${targetId}"${
+                    near.length
+                      ? `\n${near
+                          .map(
+                            (r) => `  ${r.run_id.slice(0, 12)}  ${r.display_name ?? "(unnamed)"}`,
+                          )
+                          .join("\n")}`
+                      : " — run /resume with no argument to browse sessions"
+                  }`,
+                );
+              }
+              await loadRun(row.run_id);
             } else {
               const manager = new SessionManager();
               const store = await manager.open(process.cwd(), {
@@ -4120,6 +4141,9 @@ export function HarnessApp({
             spawn: planSpawn,
             signal: controller.signal,
           });
+          // The refutation child runs on its own meter and was never reserved — book its
+          // realized spend or /verify is free money against the ledger.
+          if (outcome) agent.budget?.bookSpend(outcome.childCostUsd, "verify");
           const text = !outcome
             ? "Nothing to verify — no plan with steps (or the pass was aborted)."
             : outcome.verdict.refuted

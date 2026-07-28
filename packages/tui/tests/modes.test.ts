@@ -150,13 +150,50 @@ describe("mode_prefs persistence", () => {
       const { loadPersistedMode, persistMode } = await import("../src/tui/mode_prefs.ts");
       expect(loadPersistedMode("github.com/x/y")).toBeNull();
       persistMode("github.com/x/y", "acceptEdits");
-      persistMode("github.com/other/repo", "plan");
       expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
-      expect(loadPersistedMode("github.com/other/repo")).toBe("plan");
       persistMode("github.com/x/y", "bypass"); // must be ignored
       expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
       writeFileSync(join(dir, "ui-modes.json"), "{corrupt", "utf8");
       expect(loadPersistedMode("github.com/x/y")).toBeNull(); // fresh start, no throw
+    } finally {
+      if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
+      else process.env.MINIMA_HARNESS_DIR = prevEnv;
+    }
+  });
+
+  test("plan mode never survives a restart, and a stale saved 'plan' is inert", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "minima-mode-prefs-plan-"));
+    const prevEnv = process.env.MINIMA_HARNESS_DIR;
+    process.env.MINIMA_HARNESS_DIR = dir;
+    try {
+      const { loadPersistedMode, persistMode } = await import("../src/tui/mode_prefs.ts");
+
+      // Plan blocks every mutating tool. Restoring it days later gives the user a harness
+      // that silently refuses to work, with no cue tying it to a Shift+Tab press they've
+      // long forgotten — so it is per-task state, not a per-project preference.
+      persistMode("github.com/x/y", "plan");
+      expect(loadPersistedMode("github.com/x/y")).toBeNull();
+
+      // A 'plan' written by an older build must not resurrect either: loadPersistedMode
+      // validates against PERSISTABLE, so existing prefs files self-heal.
+      writeFileSync(
+        join(dir, "ui-modes.json"),
+        JSON.stringify({ "github.com/legacy/repo": "plan" }),
+        "utf8",
+      );
+      expect(loadPersistedMode("github.com/legacy/repo")).toBeNull();
+
+      // ...and it must not clobber a real preference stored alongside it.
+      writeFileSync(
+        join(dir, "ui-modes.json"),
+        JSON.stringify({ "github.com/legacy/repo": "plan", "github.com/x/y": "acceptEdits" }),
+        "utf8",
+      );
+      expect(loadPersistedMode("github.com/legacy/repo")).toBeNull();
+      expect(loadPersistedMode("github.com/x/y")).toBe("acceptEdits");
     } finally {
       if (prevEnv === undefined) delete process.env.MINIMA_HARNESS_DIR;
       else process.env.MINIMA_HARNESS_DIR = prevEnv;

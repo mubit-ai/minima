@@ -7,7 +7,7 @@ name: CI — PR checks
 # mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/boosting]
   push:
     branches: [main]
 
@@ -81,6 +81,59 @@ jobs:
 
       - name: Lint
         run: bun run lint
+
+  # `MINIMA_TUI_<X>=0` is the published rollback for every default-ON harness behavior, and
+  # until now it was verified once by hand on one machine. This job runs the whole suite with
+  # every switch engaged, so "turn it off" keeps working. NOTE: most switches resolve through
+  # configFromEnv, which main.ts calls once at startup, and most tests inject their own
+  # config — so for those the durable gate is tests/kill-switches.test.ts, which pins the
+  # contract directly, and this job is the belt-and-braces half. Three switches
+  # (PLAN_CRITIC, DIFF_REVIEW, AUTO_GATES) are read AMBIENTLY at their wiring sites, so for
+  # those this job is not redundant: it is the only place the suite runs with them off.
+  tui-flags-off:
+    name: TUI — kill-switch matrix (every switch off)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/tui
+    env:
+      MINIMA_TUI_BIG_PLAN: "0"
+      MINIMA_TUI_MEMORY: "0"
+      MINIMA_TUI_ARTIFACTS: "0"
+      MINIMA_TUI_ARTIFACT_GC_MB: "0"
+      MINIMA_TUI_BGJOBS: "0"
+      MINIMA_TUI_COMPACT2: "0"
+      MINIMA_TUI_STEER: "0"
+      MINIMA_TUI_REWIND: "0"
+      MINIMA_TUI_EDIT_GUARD: "0"
+      MINIMA_TUI_TYPED_TASK: "0"
+      MINIMA_TUI_PLAN_PREMIUM: "0"
+      MINIMA_TUI_FAILURE_MATCHER: "0"
+      MINIMA_TUI_TOOL_ALLOWLIST: "0"
+      MINIMA_TUI_GRADED_OUTCOME: "0"
+      # Ambient reads — not reachable through configFromEnv, so only this job covers them.
+      MINIMA_TUI_PLAN_CRITIC: "0"
+      MINIMA_TUI_DIFF_REVIEW: "0"
+      MINIMA_TUI_AUTO_GATES: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # Same rg install as the `tui` job: without it the rg-path tests skip, and a
+      # flags-off run that exercises fewer tests than the default run is not a matrix.
+      - name: Install ripgrep
+        run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Test with every kill switch engaged
+        run: bun test
 
   sdk-ts:
     name: TS SDK — bun test + tsc
