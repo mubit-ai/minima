@@ -977,9 +977,9 @@ describe("plan detail", () => {
     ctx.store.close();
   });
 
-  test("the project filter is withheld on a plan page but the scope survives", async () => {
-    // Picking a project on /plans/:id could only ever reload the same plan, so the control is
-    // gone there. What must NOT happen is losing the filter — it stays on every nav link and in
+  test("the project filter is withheld on detail pages but the scope survives", async () => {
+    // Picking a project on a detail page could only ever reload the same row, so the control is
+    // gone there. What must NOT happen is losing the scope — it stays on every nav link and in
     // the URL, so the way back to a scoped list still works.
     const planId = seedPlan();
     const ctx = ctxFor();
@@ -998,11 +998,18 @@ describe("plan detail", () => {
     // cmd-K still carries the projects, so scope switching is reachable without the control.
     expect(detail).toContain("project");
 
-    // An unknown plan id is still a plan page, so it withholds the control too.
-    expect(await page("/plans/nope")).not.toContain('id="scope"');
+    // A session detail page is the same story: one run, one project.
+    const session = await page(`/runs/${seeded.runId}${scoped}`);
+    expect(session).not.toContain('id="scope"');
+    expect(session).toContain(`/runs?project=${encodeURIComponent(PROJECT)}`);
 
-    // Every other view keeps it, including the session detail page.
-    for (const path of ["/", "/plans", "/runs", `/runs/${seeded.runId}`, "/memory", "/cost"]) {
+    // Unknown ids are still detail pages, so they withhold the control too.
+    for (const path of ["/plans/nope", "/runs/nope"]) {
+      expect(await page(path)).not.toContain('id="scope"');
+    }
+
+    // The lists and summaries keep it — that is where switching project changes what you see.
+    for (const path of ["/", "/routing", "/runs", "/plans", "/memory", "/cost"]) {
       expect(await page(path)).toContain('id="scope"');
     }
     ctx.hub.stop();
@@ -1176,6 +1183,8 @@ describe("file routes", () => {
     expect(body).toContain("alpha");
     expect(body).toContain('<td class="ln">2</td>');
     expect(body).toContain("Open in code");
+    // One file, one project: the project filter would only ever reload this same file.
+    expect(body).not.toContain('id="scope"');
   });
 
   test("GET /api/v1/file 404s a path the ledger never recorded", async () => {

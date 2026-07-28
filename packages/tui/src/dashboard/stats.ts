@@ -13,13 +13,13 @@
  */
 
 import { optimalCostRatio, qualityPerDollar, savings } from "../db/metrics.ts";
+import type { DecisionRowLike } from "../db/metrics.ts";
 import type { GateRow } from "../db/minima_db.ts";
 import { SCOREBOARD_MIN_N } from "../minima/scoreboard.ts";
 import { gateVerdictFor, parseFactors } from "../minima/why.ts";
 import type {
   DashboardStore,
   DayRow,
-  DecisionRecord,
   FileChangeRow,
   ModelMixRow,
   PlanDetail,
@@ -211,7 +211,7 @@ export function scoreboardCells(rows: ScoreboardRow[], minN = SCOREBOARD_MIN_N):
  * The stat-tile row. Every rate carries its n; a metric with no coverage reports "no data"
  * rather than a zero, because a fabricated zero reads as a real measurement.
  */
-export function kpis(decisions: DecisionRecord[], runs: number, tiers: GateTiers): Kpi[] {
+export function kpis(decisions: DecisionRowLike[], runs: number, tiers: GateTiers): Kpi[] {
   const qpd = qualityPerDollar(decisions);
   const sav = savings(decisions);
   const ocr = optimalCostRatio(decisions);

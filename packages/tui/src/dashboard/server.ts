@@ -291,6 +291,11 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       }),
     );
 
+  // Detail views drop the project filter: a session, a plan, and a recorded file each belong to
+  // exactly one project, so the control could only ever reload the same page. The scope itself is
+  // NOT dropped — it stays in the URL and on every nav link, so returning to a scoped list works.
+  const unscoped = { projectFilter: false };
+
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const path = url.pathname;
@@ -453,8 +458,8 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     if (runMatch) {
       const detail = ctx.store.runDetail(decodeURIComponent(runMatch[1]!));
       return detail
-        ? page("/runs", scope, "Session", runView(detail, now))
-        : page("/runs", scope, "Not found", notFoundView(path));
+        ? page("/runs", scope, "Session", runView(detail, now), unscoped)
+        : page("/runs", scope, "Not found", notFoundView(path), unscoped);
     }
     if (path === "/plans") {
       return page(
@@ -467,10 +472,6 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const planMatch = /^\/plans\/([^/]+)$/.exec(path);
     if (planMatch) {
       const detail = ctx.store.planDetail(decodeURIComponent(planMatch[1]!));
-      // No project filter here: a plan belongs to exactly one project, so the control could only
-      // ever reload the same page. The scope itself is NOT dropped — it stays in the URL and on
-      // every nav link, so returning to a scoped list still works.
-      const unscoped = { projectFilter: false };
       return detail
         ? page(
             "/plans",
@@ -485,7 +486,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       const planId = url.searchParams.get("plan");
       const wanted = url.searchParams.get("path");
       const row = planId && wanted ? ctx.store.recordedFile(planId, wanted) : null;
-      if (!planId || !row) return page("/plans", scope, "Not found", notFoundView(path));
+      if (!planId || !row) return page("/plans", scope, "Not found", notFoundView(path), unscoped);
       const detail = ctx.store.planDetail(planId);
       return page(
         "/plans",
@@ -497,6 +498,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
           detail?.plan.title ?? planId.slice(0, 8),
           ctx.editor,
         ),
+        unscoped,
       );
     }
     if (path === "/memory") {
