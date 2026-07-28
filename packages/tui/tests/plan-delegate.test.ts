@@ -13,12 +13,14 @@ import type { PlanStepRow } from "../src/db/minima_db.ts";
 import {
   PRIOR_RESULTS_CAP_CHARS,
   buildStepDelegation,
+  makePlanDelegate,
   priorResultsFor,
   synthesizeBoundaries,
   MIN_VIABLE_SLICE_USD,
   shouldDelegate,
   sliceForStep,
 } from "../src/minima/plan_delegate.ts";
+import type { ChildResult, Delegation, SpawnContext } from "../src/tools/task.ts";
 
 let dir: string;
 let db: MinimaDb;
@@ -248,5 +250,122 @@ describe("budget", () => {
   test("a healthy step delegates with its slice", () => {
     const s = row({ id: "s1", idx: 0, status: "in_progress" });
     expect(shouldDelegate(s, 2, 0, 4)).toEqual({ ok: true, sliceUsd: 0.5 });
+  });
+});
+
+function fakeSpawn(res: Partial<ChildResult>) {
+  const seen: { d: Delegation; ctx: SpawnContext }[] = [];
+  const spawn = async (d: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
+    seen.push({ d, ctx });
+    return {
+      step_id: d.step_id,
+      childId: "c1",
+      text: "done",
+      costUsd: 0.05,
+      quality: null,
+      outcome: "success",
+      workdir: null,
+      ...res,
+    };
+  };
+  return { spawn, seen };
+}
+
+describe("the delegate seam", () => {
+  test("a delegated step spawns once, stores its result, and books its spend", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [
+      { content: "one" },
+      { content: "two" },
+    ]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const booked: number[] = [];
+    const { spawn, seen } = fakeSpawn({ text: "wired it up", costUsd: 0.07 });
+    const delegate = makePlanDelegate({ db, spawn, onSpend: (u) => booked.push(u) });
+
+    const report = await delegate(planId, stepIds[0]!);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.d.objective).toBe("one");
+    expect(seen[0]!.d.budget_usd).toBeCloseTo(1, 6);
+    expect(report).toContain("wired it up");
+    expect(db.getPlanSteps(planId)[0]!.result).toBe("wired it up");
+    expect(db.planDelegatedSpend(planId)).toBeCloseTo(0.07, 6);
+    expect(booked).toEqual([0.07]);
+  });
+
+  test("the child runs in the parent workdir — isolation would cap the plan at yellow", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({});
+    await makePlanDelegate({ db, spawn })(planId, stepIds[0]!);
+    expect(seen[0]!.d.isolation).toBeUndefined();
+  });
+
+  test("a failed child stamps cost anyway and cannot be re-delegated", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({ outcome: "failure", text: "boom", costUsd: 0.03 });
+    const delegate = makePlanDelegate({ db, spawn });
+
+    const first = await delegate(planId, stepIds[0]!);
+    expect(first).toContain("boom");
+    expect(first!.toLowerCase()).toContain("finish this step yourself");
+    expect(db.getPlanSteps(planId)[0]!.delegated_cost_usd).toBeCloseTo(0.03, 6);
+
+    const second = await delegate(planId, stepIds[0]!);
+    expect(second).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  test("without an approved budget nothing spawns", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({});
+    expect(await makePlanDelegate({ db, spawn })(planId, stepIds[0]!)).toBeNull();
+    expect(seen).toHaveLength(0);
+  });
+
+  test("an exhausted plan total stops the plan and says so", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [
+      { content: "one" },
+      { content: "two" },
+    ]);
+    db.setPlanBudget(planId, 0.5);
+    db.recordStepDelegation(stepIds[0]!, "spent it", 0.5);
+    db.setStepStatus(stepIds[1]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({});
+    const report = await makePlanDelegate({ db, spawn })(planId, stepIds[1]!);
+    expect(seen).toHaveLength(0);
+    expect(report).toContain("$0.50");
+    expect(report!.toLowerCase()).toContain("budget");
+  });
+
+  test("a spawn that throws is reported, not propagated — bookkeeping never breaks a turn", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const spawn = async (): Promise<ChildResult> => {
+      throw new Error("provider exploded");
+    };
+    const report = await makePlanDelegate({ db, spawn })(planId, stepIds[0]!);
+    expect(report).toContain("provider exploded");
+    expect(db.getPlanSteps(planId)[0]!.delegated_cost_usd).toBe(0);
+  });
+
+  test("prior completed results reach the child through depends_on", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [
+      { content: "one" },
+      { content: "two" },
+    ]);
+    db.setPlanBudget(planId, 2);
+    db.recordStepDelegation(stepIds[0]!, "found the seam", 0.01);
+    db.setStepStatus(stepIds[0]!, "completed");
+    db.setStepStatus(stepIds[1]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({});
+    await makePlanDelegate({ db, spawn })(planId, stepIds[1]!);
+    expect(seen[0]!.d.depends_on).toEqual([stepIds[0]!]);
+    expect(seen[0]!.ctx.priorResults[0]!.text).toBe("found the seam");
   });
 });

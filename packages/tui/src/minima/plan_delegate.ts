@@ -13,8 +13,8 @@
  * allowed to claim verified_in_production. Wall-clock is not worth that.
  */
 
-import type { PlanStepRow } from "../db/minima_db.ts";
-import type { ChildResult, Delegation } from "../tools/task.ts";
+import type { MinimaDb, PlanStepRow } from "../db/minima_db.ts";
+import type { ChildResult, Delegation, SpawnFn } from "../tools/task.ts";
 import type { AgentTypeRegistry } from "./agent_types.ts";
 
 /**
@@ -144,4 +144,61 @@ export function shouldDelegate(
   const sliceUsd = sliceForStep(planBudgetUsd, spentUsd, stepsRemaining);
   if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "plan_exhausted" };
   return { ok: true, sliceUsd };
+}
+
+/** Run the step if it qualifies; return the report the lead should see, or null when
+ *  nothing was delegated (the lead then works the step itself, as it always has). */
+export type PlanDelegate = (planId: string, stepId: string) => Promise<string | null>;
+
+export interface PlanDelegateDeps {
+  db: MinimaDb;
+  spawn: SpawnFn;
+  signal?: AbortSignal | null;
+  /** Book realized child spend against the wallet — the same seam taskTool uses, so plan
+   *  spend is visible to enforce mode exactly like fan-out spend. */
+  onSpend?: (usd: number) => void;
+  /** Needed here (not just in createSpawn) so a type's lower budget cap can clamp the slice
+   *  BEFORE the delegation is built — applyAgentType only fills a field left unset. */
+  agentTypes?: AgentTypeRegistry;
+}
+
+export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
+  return async (planId, stepId) => {
+    const steps = deps.db.getPlanSteps(planId);
+    const step = steps.find((s) => s.id === stepId);
+    if (!step) return null;
+    const remaining = steps.filter((s) => s.status !== "completed").length;
+    const spent = deps.db.planDelegatedSpend(planId);
+    const budget = deps.db.getPlanBudget(planId);
+    const verdict = shouldDelegate(step, budget, spent, remaining);
+    if (!verdict.ok) {
+      if (verdict.reason !== "plan_exhausted") return null;
+      return `Plan budget exhausted: $${spent.toFixed(2)} of the approved $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
+    }
+
+    const delegation = buildStepDelegation(steps, step, verdict.sliceUsd, deps.agentTypes);
+    const priorResults = priorResultsFor(steps);
+    let result: ChildResult;
+    try {
+      result = await deps.spawn(delegation, {
+        depth: 1,
+        parentSignal: deps.signal ?? null,
+        priorResults,
+      });
+    } catch (exc) {
+      // The cost stamp is the one-attempt marker, so it must land even here — otherwise a
+      // provider outage lets the same step re-spawn on the lead's next todowrite.
+      deps.db.recordStepDelegation(stepId, `delegation failed: ${String(exc)}`, 0);
+      return `Step delegation failed: ${String(exc)}\n\nFinish this step yourself with your own tools, then mark it completed.`;
+    }
+
+    deps.db.recordStepDelegation(stepId, result.text, result.costUsd);
+    if (result.costUsd > 0) deps.onSpend?.(result.costUsd);
+
+    const head = `Step delegated to a sub-agent (${result.outcome}, $${result.costUsd.toFixed(4)}).`;
+    if (result.outcome === "success") {
+      return `${head}\n\n${result.text || "(no output)"}\n\nVerify it, then mark the step completed.`;
+    }
+    return `${head}\n\n${result.text || "(no output)"}\n\nThat did not complete the step. Finish this step yourself with your own tools — it will not be delegated again.`;
+  };
 }

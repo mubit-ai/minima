@@ -25,6 +25,7 @@
  */
 import type { AfterToolCall, BeforeToolCall } from "../agent/tools.ts";
 import { AssistantMessage } from "../ai/index.ts";
+import { text } from "../ai/types.ts";
 import type {
   CompletionFlip,
   FileChangeRow,
@@ -43,6 +44,7 @@ import {
   detectTamper,
 } from "./big_plan_factors.ts";
 import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
+import type { PlanDelegate } from "./plan_delegate.ts";
 import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 
@@ -630,9 +632,10 @@ export const BASELINE_BUDGET_MS = 120_000;
  */
 export function bigPlanAfterToolCall(
   ref: BigPlanAgentRef,
-  opts?: { verifyConsent?: VerifyConsent },
+  opts?: { verifyConsent?: VerifyConsent; delegate?: PlanDelegate },
 ): AfterToolCall {
   const consent = opts?.verifyConsent;
+  const delegate = opts?.delegate;
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -644,7 +647,7 @@ export function bigPlanAfterToolCall(
       if (name === "todowrite") {
         const todos = parseTodos(args.tasks);
         if (todos.length > 0) {
-          const { started } = db.upsertPlanFromTodos(session, todos);
+          const { planId, started } = db.upsertPlanFromTodos(session, todos);
           const deadline = performance.now() + BASELINE_BUDGET_MS;
           for (const s of started) {
             if (!s.verify) continue;
@@ -666,6 +669,17 @@ export function bigPlanAfterToolCall(
             } catch {
               // per-step fail-open: one failed baseline write must not skip the rest.
             }
+          }
+
+          // Delegation runs AFTER the baseline loop: the done-gate measures red→green across the
+          // child's work, so a baseline captured after it would compare the child against itself.
+          if (delegate) {
+            const reports: string[] = [];
+            for (const s of started) {
+              const report = await delegate(planId, s.id);
+              if (report) reports.push(report);
+            }
+            if (reports.length) return { content: [text(reports.join("\n\n---\n\n"))] };
           }
         }
         return null;
@@ -925,13 +939,14 @@ export function bigPlanHooks(
     /** E1: fired (post-commit, fail-open) when a plan closes with every step completed —
      * the diff-review trigger. Must not throw and must not block (fire-and-forget). */
     onPlanClosed?: (planId: string) => void;
+    delegate?: PlanDelegate;
   },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
   const enforceAllowlist = opts?.enforceAllowlist ?? false;
   const consent = opts?.verifyConsent;
-  const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent });
+  const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent, delegate: opts?.delegate });
   const pending = new Map<string, GateVerdict[]>();
 
   const before: BeforeToolCall = async (ctx) => {
