@@ -326,6 +326,10 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     }
 
     const scope = scopeOf(url);
+    // Which model the savings tile is anchored to. Validated against the ledger's own models in
+    // `overview()`, so an arbitrary string falls back to the default instead of rendering a tile
+    // for a model that was never a candidate.
+    const anchor = url.searchParams.get("anchor");
     const now = Date.now() / 1000;
 
     // The one non-GET route in the server, and it touches the editor rather than the ledger.
@@ -355,7 +359,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     if (req.method !== "GET") return json({ error: "not_found" }, 404);
 
     // ---- JSON contract (v1) ----
-    if (path === "/api/v1/overview") return json(overview(ctx.store, scope));
+    if (path === "/api/v1/overview") return json(overview(ctx.store, scope, anchor));
     if (path === "/api/v1/projects") return json({ projects: ctx.store.projects() });
     if (path === "/api/v1/runs") return json({ runs: ctx.store.runs(scope, 200) });
     if (path === "/api/v1/decisions") return json({ decisions: ctx.store.decisions(scope, 500) });
@@ -435,7 +439,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         "/",
         scope,
         "Overview",
-        overviewView(overview(ctx.store, scope), ctx.store.runs(scope, 10), now),
+        overviewView(overview(ctx.store, scope, anchor), ctx.store.runs(scope, 10), now),
       );
     }
     if (path === "/routing") {
@@ -509,7 +513,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         path,
         scope,
         "Cost",
-        costView(overview(ctx.store, scope), ctx.store.budgets(), now),
+        costView(overview(ctx.store, scope, anchor), ctx.store.budgets(), now),
       );
     }
     return page(path, scope, "Not found", notFoundView(path));

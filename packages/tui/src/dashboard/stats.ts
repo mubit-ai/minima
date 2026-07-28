@@ -3,8 +3,10 @@
  *
  * Honesty rules carried over from `/cost` and the scoreboard, because a dashboard that
  * disagrees with the TUI is worse than no dashboard:
- *  - quality-per-dollar over JUDGED rows only, always reported with its coverage;
- *  - savings never conflates the all-premium anchor with the configured-baseline comparison;
+ *  - quality-per-dollar over JUDGED rows only, always reported with its coverage — in dollars,
+ *    because a row share flatters a metric that only saw the cheap turns;
+ *  - savings is an anchor comparison in ONE unit (`db/anchors.ts`), never a per-call estimate
+ *    subtracted from a per-turn realized cost, and it names the model it is anchored to;
  *  - a cell is green only when a DETERMINISTIC gate said green (a judge's green is not);
  *  - cells under SCOREBOARD_MIN_N are suppressed, never rendered as weak signal;
  *  - every derived rate ships the n it was computed from.
@@ -12,7 +14,14 @@
  * Pure functions over row arrays — no DB handle, so all of it is testable without SQLite.
  */
 
-import { optimalCostRatio, qualityPerDollar, savings } from "../db/metrics.ts";
+import {
+  type AnchorBoard,
+  type AnchorTotals,
+  anchorBoard,
+  anchorTotals,
+  defaultAnchor,
+} from "../db/anchors.ts";
+import { anchorEvidence, qualityPerDollar, savings, tauMissNote } from "../db/metrics.ts";
 import type { DecisionRowLike } from "../db/metrics.ts";
 import type { GateRow } from "../db/minima_db.ts";
 import { SCOREBOARD_MIN_N } from "../minima/scoreboard.ts";
@@ -80,6 +89,10 @@ export interface OverviewPayload {
   scope: Scope;
   ledger: { path: string; schemaVersion: number };
   kpis: Kpi[];
+  /** Every model this ledger routed to, repriced. The per-model comparison lives here, not in a tile. */
+  anchors: AnchorBoard;
+  /** The anchor the tile and the chart marker currently name; null when nothing is priceable. */
+  anchorId: string | null;
   spendByDay: DayRow[];
   models: ModelStat[];
   gates: GateTiers;
@@ -94,15 +107,28 @@ const usd = (n: number): string => {
   return `${n < 0 ? "-" : ""}${mag >= 1 ? `$${mag.toFixed(2)}` : `$${mag.toFixed(4)}`}`;
 };
 const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
+/** For shares small enough that rounding to a whole percent would flatter them. */
+const pctFine = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
 
 /**
- * Savings can be NEGATIVE — routing overspent the anchor. Say so instead of printing a
- * minus sign under a tile labeled "Saved" and letting the reader draw the wrong conclusion.
+ * A tile is honest when its caveat fits in its LABEL. "Saved vs claude-opus-4-8" carries its own
+ * caveat by naming the anchor; the note then only has to disclose how good the evidence is.
+ *
+ * A negative saving is the exception, and it is why there is no tile per model: the minus sign
+ * reads as "routing wasted this much" unless the τ-miss count is right beside it, and a caveat
+ * that INVERTS the reading cannot live in muted 11px text next to the number it contradicts.
+ * The per-model comparison lives in the chart, where the bar, the τ-miss rate and the tier split
+ * are one object. Only a deliberately picked cheap anchor lands here, so this note leads with the
+ * counterweight instead of the coverage.
  */
-const savingsNote = (amount: number, rows: number, anchor: string): string =>
-  amount < 0
-    ? `overspent this anchor by ${usd(Math.abs(amount))} · ${rows} rows priced`
-    : `${anchor} · ${rows} rows priced`;
+const anchorNote = (t: AnchorTotals, routedUsd: number): string => {
+  if (t.savedUsd < 0) {
+    const miss = tauMissNote(t);
+    const lead = `overspent this anchor by ${usd(Math.abs(t.savedUsd))}`;
+    return miss ? `${lead} — but it ${miss}` : `${lead} · ${anchorEvidence(t, routedUsd)}`;
+  }
+  return `estimated · ${anchorEvidence(t, routedUsd)} · realized tokens are not recorded`;
+};
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -211,11 +237,18 @@ export function scoreboardCells(rows: ScoreboardRow[], minN = SCOREBOARD_MIN_N):
  * The stat-tile row. Every rate carries its n; a metric with no coverage reports "no data"
  * rather than a zero, because a fabricated zero reads as a real measurement.
  */
-export function kpis(decisions: DecisionRowLike[], runs: number, tiers: GateTiers): Kpi[] {
+export function kpis(
+  decisions: DecisionRowLike[],
+  runs: number,
+  tiers: GateTiers,
+  anchor: AnchorTotals | null = null,
+): Kpi[] {
   const qpd = qualityPerDollar(decisions);
   const sav = savings(decisions);
-  const ocr = optimalCostRatio(decisions);
-  const judgedShare = decisions.length > 0 ? qpd.judgedRows / decisions.length : 0;
+  // Coverage in DOLLARS, not rows. 47 of 492 rows sounds survivable; $1.15 of $45.17 does not,
+  // and the second one is what tells you how much of the spend this number actually speaks for.
+  const judgedShare = sav.actualUsd > 0 ? qpd.judgedCostUsd / sav.actualUsd : 0;
+  const priced = anchor !== null && anchor.directRows + anchor.solvedRows > 0;
 
   return [
     {
@@ -236,24 +269,11 @@ export function kpis(decisions: DecisionRowLike[], runs: number, tiers: GateTier
           : "all of it routed",
     },
     {
-      key: "savings_baseline",
-      label: "Saved vs baseline",
-      value: sav.baselineRows > 0 ? usd(sav.vsBaselineUsd) : "no data",
-      raw: sav.baselineRows > 0 ? sav.vsBaselineUsd : null,
-      note:
-        sav.baselineRows > 0
-          ? savingsNote(sav.vsBaselineUsd, sav.baselineRows, "honest comparison")
-          : "no configured baseline recorded",
-    },
-    {
-      key: "savings_premium",
-      label: "Saved vs all-premium",
-      value: sav.premiumRows > 0 ? usd(sav.vsAllPremiumUsd) : "no data",
-      raw: sav.premiumRows > 0 ? sav.vsAllPremiumUsd : null,
-      note:
-        sav.premiumRows > 0
-          ? savingsNote(sav.vsAllPremiumUsd, sav.premiumRows, "generous anchor")
-          : "no premium anchor recorded",
+      key: "savings_anchor",
+      label: priced ? `Saved vs ${anchor.modelId}` : "Saved vs anchor",
+      value: priced ? usd(anchor.savedUsd) : "no data",
+      raw: priced ? anchor.savedUsd : null,
+      note: priced ? anchorNote(anchor, sav.routedUsd) : "no routed rows this anchor can price",
     },
     {
       key: "qpd",
@@ -262,18 +282,8 @@ export function kpis(decisions: DecisionRowLike[], runs: number, tiers: GateTier
       raw: qpd.qpd,
       note:
         qpd.judgedRows > 0
-          ? `judged rows only · ${qpd.judgedRows}/${qpd.totalRows} (${pct(judgedShare)})`
+          ? `judged rows only · ${qpd.judgedRows}/${qpd.totalRows} rows — ${usd(qpd.judgedCostUsd)} of ${usd(sav.actualUsd)}, ${pctFine(judgedShare)} of the money`
           : "nothing judged yet",
-    },
-    {
-      key: "ocr",
-      label: "Optimal cost ratio",
-      value: ocr.ocr === null ? "no data" : pct(ocr.ocr),
-      raw: ocr.ocr,
-      note:
-        ocr.coveredRows > 0
-          ? `1.0 = already optimal · ${ocr.coveredRows}/${ocr.totalRows} covered`
-          : "no evidence-backed rows",
     },
     {
       key: "gate_green",
@@ -288,15 +298,31 @@ export function kpis(decisions: DecisionRowLike[], runs: number, tiers: GateTier
   ];
 }
 
-/** Assemble the full overview payload — the shape `/api/v1/overview` returns verbatim. */
-export function overview(store: DashboardStore, scope: Scope): OverviewPayload {
+/**
+ * Assemble the full overview payload — the shape `/api/v1/overview` returns verbatim.
+ *
+ * `wanted` is user input (`?anchor=`), so it is only honored when this ledger actually routed to
+ * that model; anything else falls back to the default rather than rendering an empty tile for a
+ * model that was never a candidate.
+ */
+export function overview(
+  store: DashboardStore,
+  scope: Scope,
+  wanted?: string | null,
+): OverviewPayload {
   const decisions = store.decisions(scope);
   const gateRows = store.gateRows(scope);
   const tiers = gateTiers(gateRows);
+  const board = anchorBoard(decisions);
+  const anchorId =
+    wanted && board.models.some((m) => m.modelId === wanted) ? wanted : defaultAnchor(board);
+  const anchor = anchorId ? anchorTotals(decisions, anchorId) : null;
   return {
     scope,
     ledger: { path: store.path, schemaVersion: store.schemaVersion() },
-    kpis: kpis(decisions, store.runs(scope, 1000).length, tiers),
+    kpis: kpis(decisions, store.runs(scope, 1000).length, tiers, anchor),
+    anchors: board,
+    anchorId,
     spendByDay: gapFillDays(store.spendByDay(scope)),
     passRate: stepCheckPassRate(gateRows),
     models: modelStats(store.modelMix(scope)),

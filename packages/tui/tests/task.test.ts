@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  type DecisionRowLike,
-  optimalCostRatio,
-  qualityPerDollar,
-  savings,
-} from "../src/db/metrics.ts";
+import { type DecisionRowLike, qualityPerDollar, savings } from "../src/db/metrics.ts";
 import {
   type ChildResult,
   type Delegation,
@@ -208,6 +203,7 @@ describe("metrics primitives (P1b)", () => {
     quality: 0.9,
     judged: 1,
     outcome: "success",
+    chosen_model: "mid",
     actual_cost_usd: 0.01,
     est_cost_usd: 0.01,
     all_premium_cost_usd: 0.05,
@@ -236,7 +232,9 @@ describe("metrics primitives (P1b)", () => {
     expect(q.qpd).toBeCloseTo(30.0, 5);
   });
 
-  test("savings: dual baselines never conflated; unrouted spend reported", () => {
+  test("savings: routed and unrouted spend split, and NOTHING is subtracted", () => {
+    // The old assertions here were the bug: `all_premium_cost_usd - actual_cost_usd` subtracts a
+    // per-call estimate from a per-turn realized cost. Anchors are `db/anchors.ts` now.
     const rows = [
       row({
         actual_cost_usd: 0.01,
@@ -246,28 +244,10 @@ describe("metrics primitives (P1b)", () => {
       row({ routed: "pinned", actual_cost_usd: 0.2, all_premium_cost_usd: null }),
     ];
     const s = savings(rows);
-    expect(s.vsAllPremiumUsd).toBeCloseTo(0.04, 8); // only the routed row
-    expect(s.premiumRows).toBe(1);
-    expect(s.vsBaselineUsd).toBeCloseTo(0.02, 8);
-    expect(s.unroutedUsd).toBeCloseTo(0.2, 8); // pinned spend surfaced, not hidden
     expect(s.actualUsd).toBeCloseTo(0.21, 8);
-  });
-
-  test("OCR: oracle = cheapest τ-clearing candidate; prior-basis rows excluded", () => {
-    const rows = [
-      // τ=0.7: cheapest clearing is 'cheap' at 0.005; actual 0.01 → per-row oracle/actual 0.5
-      row({ actual_cost_usd: 0.01 }),
-      // prior basis → excluded from coverage (no evidence, not an oracle)
-      row({ decision_basis: "prior", actual_cost_usd: 1.0 }),
-    ];
-    const o = optimalCostRatio(rows);
-    expect(o.coveredRows).toBe(1);
-    expect(o.ocr).toBeCloseTo(0.5, 5);
-  });
-
-  test("OCR: when no candidate clears τ, the full ladder is the pool (no fake oracle of 0)", () => {
-    const o = optimalCostRatio([row({ threshold_used: 0.99, actual_cost_usd: 0.005 })]);
-    expect(o.coveredRows).toBe(1);
-    expect(o.ocr).toBe(1); // oracle (cheapest overall 0.005) / actual 0.005, capped at 1
+    expect(s.routedUsd).toBeCloseTo(0.01, 8);
+    expect(s.routedRows).toBe(1);
+    expect(s.unroutedUsd).toBeCloseTo(0.2, 8); // pinned spend surfaced, not hidden
+    expect(Object.keys(s)).not.toContain("vsAllPremiumUsd");
   });
 });

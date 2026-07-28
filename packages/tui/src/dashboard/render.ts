@@ -18,6 +18,7 @@
  * live refresh replaces <main> wholesale.
  */
 
+import type { AnchorTotals } from "../db/anchors.ts";
 import {
   type AreaPoint,
   type BarRow,
@@ -319,6 +320,12 @@ section.card {
 }
 .kpi .note { font: 11px/1.4 var(--sans); color: hsl(var(--muted)); }
 .kpi.nodata .value { color: hsl(var(--muted)); font-size: 17px; }
+/* Filters ride one row above the chart they change — never inside it. */
+label.anchor-pick {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 12px;
+  font: 11px/1.3 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
+  color: hsl(var(--muted));
+}
 
 svg.chart { display: block; overflow: visible; }
 svg.chart .bar { fill: hsl(var(--seq-6)); }
@@ -327,6 +334,7 @@ svg.chart .val { fill: hsl(var(--text-strong)); font-size: 11px; font-family: va
 svg.chart .tick { fill: hsl(var(--muted)); font-size: 10px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 svg.chart .grid { stroke: hsl(var(--grid)); stroke-width: 1; }
 svg.chart .axis { stroke: hsl(var(--axis)); stroke-width: 1; }
+svg.chart .ref { stroke: hsl(var(--text)); stroke-width: 1; stroke-dasharray: 3 3; }
 svg.chart .area { fill: hsl(var(--accent) / 0.16); }
 svg.chart .line { fill: none; stroke: hsl(var(--accent)); stroke-width: 2; stroke-linejoin: round; }
 svg.chart .dot { fill: hsl(var(--accent)); stroke: hsl(var(--panel)); stroke-width: 2; }
@@ -510,6 +518,14 @@ const SCRIPT = `
     var url = new URL(window.location.href);
     if (scope.value) url.searchParams.set("project", scope.value);
     else url.searchParams.delete("project");
+    window.location.href = url.toString();
+  });
+
+  var anchor = document.getElementById("anchor");
+  if (anchor) anchor.addEventListener("change", function () {
+    var url = new URL(window.location.href);
+    if (anchor.value) url.searchParams.set("anchor", anchor.value);
+    else url.searchParams.delete("anchor");
     window.location.href = url.toString();
   });
 
@@ -809,6 +825,99 @@ function kpiTiles(kpis: Kpi[]): string {
 
 function meter(rate: number): string {
   return `<span class="meter"><span class="track"><span class="fill" style="width:${Math.round(rate * 100)}%;background:${seqStep(rate)}"></span></span><span>${fmtPct(rate)}</span></span>`;
+}
+
+/** A saved-percentage cell, signed. -353% is a real answer and must not be rounded into "-4x". */
+const fmtSaved = (pct: number | null): string =>
+  pct === null ? "—" : `${(pct * 100).toFixed(1)}%`;
+
+/** The evidence half of a bar's hover: how much of it is stored numbers vs a recovered vector. */
+function tierNote(t: AnchorTotals): string {
+  const parts = [`${t.directRows} direct / ${t.solvedRows} solved`];
+  if (t.excludedRows > 0) parts.push(`${t.excludedRows} unpriced`);
+  // Only an actual miss earns the sentence — "0 of 5" would plant a doubt the evidence denies.
+  if (t.tauMissRows > 0) {
+    const pct = Math.round((t.tauMissRows / t.tauKnownRows) * 100);
+    parts.push(`missed this row's threshold on ${t.tauMissRows} of ${t.tauKnownRows} (${pct}%)`);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * "What would this ledger have cost with one model doing everything?" — one bar per model this
+ * ledger actually routed to, realized spend as the reference rule.
+ *
+ * This is where a NEGATIVE comparison belongs. A cheap anchor's bar sits left of the realized rule
+ * and its hover says how often that model missed the row's own quality threshold, so the number and
+ * the reason it is not a verdict arrive together. A KPI tile cannot do that: it is glanceable by
+ * construction, and a caveat that inverts the reading cannot live in 11px muted text.
+ */
+export function anchorSection(payload: OverviewPayload): string {
+  const board = payload.anchors;
+  if (board.models.length === 0)
+    return `<section class="card"><h2>What one model would have cost</h2>${emptyState(
+      "No routed decisions yet — an anchor needs the router's own candidate estimates.",
+    )}</section>`;
+
+  const bars: BarRow[] = board.models.map((m) => ({
+    label: m.modelId === board.workhorse ? `${m.modelId} ✻` : m.modelId,
+    value: Math.max(m.anchorUsd, 0),
+    display: fmtUsd(m.anchorUsd),
+    hover: `${fmtUsd(m.anchorUsd)} · saved ${fmtUsd(m.savedUsd)} (${fmtSaved(m.savedPct)}) vs ${fmtUsd(board.realizedUsd)} realized · ${tierNote(m)}`,
+  }));
+
+  const table = dataTable(
+    board.models,
+    [
+      {
+        header: "Anchor",
+        cell: (m) =>
+          `<span class="mono">${escapeHtml(m.modelId)}</span>${
+            m.modelId === payload.anchorId ? ' <span class="pill">tile</span>' : ""
+          }${m.modelId === board.workhorse ? ' <span class="pill">most chosen</span>' : ""}`,
+      },
+      { header: "Would have cost", numeric: true, cell: (m) => fmtUsd(m.anchorUsd) },
+      { header: "Saved", numeric: true, cell: (m) => fmtUsd(m.savedUsd) },
+      { header: "Saved %", numeric: true, cell: (m) => fmtSaved(m.savedPct) },
+      { header: "Direct", numeric: true, cell: (m) => String(m.directRows) },
+      { header: "Solved", numeric: true, cell: (m) => String(m.solvedRows) },
+      { header: "Unpriced", numeric: true, cell: (m) => String(m.excludedRows) },
+      {
+        header: "Missed τ",
+        numeric: true,
+        cell: (m) => (m.tauKnownRows > 0 ? `${m.tauMissRows}/${m.tauKnownRows}` : "—"),
+      },
+    ],
+    "No routed decisions yet.",
+  );
+
+  const picker = `<label class="anchor-pick">Tile anchor
+    <select id="anchor" aria-label="Anchor model for the savings tile">${board.models
+      .map(
+        (m) =>
+          `<option value="${escapeHtml(m.modelId)}"${m.modelId === payload.anchorId ? " selected" : ""}>${escapeHtml(m.modelId)}</option>`,
+      )
+      .join("")}</select></label>`;
+
+  return `<section class="card">
+  <h2>What one model would have cost</h2>
+  ${picker}
+  ${barChart(bars, {
+    reference: {
+      value: board.realizedUsd,
+      label: `${fmtUsd(board.realizedUsd)} actually spent`,
+    },
+  })}
+  <p class="note">Estimated, in one unit: each routed turn's realized cost is scaled by the ratio of
+  the anchor's estimate to the chosen model's estimate, both taken from that turn's own candidate
+  set. <b>Direct</b> rows need no price table at all; <b>solved</b> rows recover an estimated token
+  vector from the row's candidates at catalog prices, and rows where that is underdetermined are
+  reported as <b>unpriced</b> rather than guessed. This assumes the realized input:output mix
+  matches the estimated mix — unverifiable from what the ledger stores. A bar left of the dashed
+  rule cost <i>less</i> than routing did; hover it for how often that model missed the row's own
+  quality threshold, because a cheaper bill is not the same work.</p>
+  ${table}
+</section>`;
 }
 
 export function overviewView(payload: OverviewPayload, runs: RunSummary[], now: number): string {
@@ -1393,6 +1502,7 @@ export function costView(payload: OverviewPayload, budgets: BudgetSummary[], now
   );
   return `${kpiTiles(payload.kpis.filter((k) => k.key !== "runs" && k.key !== "gate_green"))}
 <section class="card"><h2>Realized spend per day</h2>${areaChart(spend, { valueFmt: (n) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`) })}</section>
+${anchorSection(payload)}
 <section class="card"><h2>Budget ledger</h2>${budgetTable}</section>`;
 }
 

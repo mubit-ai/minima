@@ -61,8 +61,15 @@ export function emptyState(message: string): string {
 /**
  * Horizontal bars — the default for "magnitude by identity" with long category names.
  * One hue; identity lives in the axis label, so no legend.
+ *
+ * `reference` draws one recessive vertical rule across the plot with a direct label — for
+ * "what actually happened" behind "what each alternative would have cost". It is a rule, not a
+ * second series: same measure, same axis, so it needs no legend either.
  */
-export function barChart(rows: BarRow[], opts: { max?: number } = {}): string {
+export function barChart(
+  rows: BarRow[],
+  opts: { max?: number; reference?: { value: number; label: string } } = {},
+): string {
   if (rows.length === 0) return emptyState("No data yet.");
   const rowH = 30;
   const barH = 11;
@@ -70,8 +77,9 @@ export function barChart(rows: BarRow[], opts: { max?: number } = {}): string {
   const valueW = 96;
   const width = 760;
   const plotW = width - labelW - valueW;
-  const height = rows.length * rowH + 8;
-  const max = opts.max ?? Math.max(...rows.map((r) => r.value), 0);
+  const refH = opts.reference ? 18 : 0;
+  const height = rows.length * rowH + 8 + refH;
+  const max = opts.max ?? Math.max(...rows.map((r) => r.value), opts.reference?.value ?? 0, 0);
 
   const marks = rows
     .map((r, i) => {
@@ -89,9 +97,25 @@ export function barChart(rows: BarRow[], opts: { max?: number } = {}): string {
     })
     .join("");
 
+  const ref = opts.reference;
+  const refMark =
+    ref && max > 0
+      ? (() => {
+          const x = labelW + Math.min(1, ref.value / max) * plotW;
+          const bottom = rows.length * rowH + 8;
+          return [
+            `<g><title>${escapeHtml(ref.label)}</title>`,
+            `<line class="ref" x1="${num(x)}" y1="4" x2="${num(x)}" y2="${num(bottom)}" />`,
+            `<text class="tick" x="${num(x)}" y="${num(bottom + 13)}" text-anchor="middle">${escapeHtml(ref.label)}</text>`,
+            "</g>",
+          ].join("");
+        })()
+      : "";
+
   return `<svg class="chart" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img">
-  <line class="axis" x1="${labelW}" y1="4" x2="${labelW}" y2="${height - 4}" />
+  <line class="axis" x1="${labelW}" y1="4" x2="${labelW}" y2="${rows.length * rowH + 4}" />
   ${marks}
+  ${refMark}
 </svg>`;
 }
 

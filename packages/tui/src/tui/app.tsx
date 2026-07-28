@@ -3255,7 +3255,9 @@ export function HarnessApp({
           break;
         }
         let report = agent.meter?.report() || "(no cost metrics recorded)";
-        // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
+        // The durable view: quality/$ and the anchor comparison, from `db/anchors.ts` — the SAME
+        // functions the dashboard's cost page reads. The meter above deliberately claims no
+        // savings of its own, so this screen states one number once.
         if (agent.db && agent.runId) {
           try {
             const rows = agent.db.getRunDecisions(agent.runId) as unknown as Parameters<
