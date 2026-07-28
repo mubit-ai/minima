@@ -127,6 +127,11 @@ export interface CouncilRoundResult {
 export interface SynthPlanStep {
   action: string;
   verify: string;
+  /** Name of a user-defined agent type (`.minima/agents/<name>.md`) this step is scoped to.
+   *  Expanded at /plan finalize into the step's `tools` + `candidates` (agent_types.ts:
+   *  agentTypePlanPreset) — the LEAD still executes the step, it just runs under that
+   *  agent's tool scope and model pool. Rendered in the plan doc for the reader. */
+  agent_type?: string;
   /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
   tools: string[];
   /** Per-step candidate pool: exact model ids this step's delegated work routes among.
@@ -541,6 +546,7 @@ export class PlanSessionStore {
       .map((st) => ({
         action: st.action.trim(),
         verify: st.verify.trim(),
+        agent_type: (st.agent_type ?? "").trim(),
         tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
         candidates: (st.candidates ?? []).map((c) => c.trim()).filter(Boolean),
       }))
@@ -559,6 +565,7 @@ export class PlanSessionStore {
             ? `   - verify: \`${st.verify}\``
             : "   - verify: _none — decompose or add a check_",
         );
+        if (st.agent_type) out.push(`   - agent: ${st.agent_type}`);
         if (st.tools.length > 0) out.push(`   - tools: ${st.tools.join(", ")}`);
         if (st.candidates.length > 0) out.push(`   - models: ${st.candidates.join(", ")}`);
       });

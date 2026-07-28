@@ -36,6 +36,7 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import type { AgentTypeRegistry } from "../minima/agent_types.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import {
   type PlanStripInfo,
@@ -198,6 +199,10 @@ export interface AppProps {
   initialResume?: RehydratedRun | null;
   /** Injectable spawn for plan-mode council researchers (child MinimaAgents). From cli/main.ts. */
   planSpawn?: SpawnFn;
+  /** User-defined agent types, loaded once by cli/main.ts. Backs `/agent` (list + run) and
+   *  is the SAME registry createSpawn resolves against, so the list can never drift from
+   *  what a delegation would actually get. */
+  agentTypes?: AgentTypeRegistry;
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
   /**
@@ -341,6 +346,7 @@ const COMMANDS = [
     name: "profile",
     desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
+  { name: "agent", desc: "User-defined agent types: /agent (list) · /agent <name> <task> (run)" },
 ];
 
 export interface CommandPickerProps {
@@ -828,6 +834,7 @@ export function HarnessApp({
   childEventRef,
   initialResume = null,
   planSpawn,
+  agentTypes,
   planMetaModel,
   bigPlanGateBefore,
   verifyConsentRef,
@@ -1171,6 +1178,9 @@ export function HarnessApp({
           agent.meter?.addOverhead(usd);
           agent.budget?.bookSpend(usd, "plan-critic");
         },
+        // A step may name a user-defined agent type; finalize expands it into that step's
+        // tool allowlist + model pool.
+        agentTypes,
       });
       // MP18: approving the plan (which displays every step's verify) IS the consent event
       // for the seeded checks — without this, the first in_progress todowrite after
@@ -1202,7 +1212,7 @@ export function HarnessApp({
       }
       return outcome;
     },
-    [agent, planMetaModel],
+    [agent, planMetaModel, agentTypes],
   );
   const exitPlanFinalize = useCallback(
     async (_planMd: string | null = null, autoAcceptEdits = false) => {
@@ -1363,6 +1373,8 @@ export function HarnessApp({
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
+  /** Abort seam for a `/agent <name> <task>` run — Esc must reach the child agent. */
+  const agentCommandControllerRef = useRef<AbortController | null>(null);
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
@@ -1914,6 +1926,7 @@ export function HarnessApp({
       setPromptQueue(holdOnAbort);
       if (getMode() === "plan") councilControllerRef.current?.abort();
       refutationControllerRef.current?.abort();
+      agentCommandControllerRef.current?.abort();
       agent.abort();
       return;
     }
@@ -2667,6 +2680,129 @@ export function HarnessApp({
           "usage: /memory [list] · add <text> · pin|confirm|reject|delete <n|id>\nCurated cross-session memory for this repo — active + pinned entries are injected into the system prompt each turn.",
           true,
         );
+        break;
+      }
+      case "agent": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "agent", isError }]);
+        const defined = [...(agentTypes?.types.values() ?? [])].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const wanted = (parts[0] ?? "").toLowerCase();
+        // No name → the menu. Also the only form allowed to run mid-turn (prompt_queue.ts).
+        if (!wanted) {
+          say(
+            defined.length === 0
+              ? [
+                  "No agent types defined.",
+                  "",
+                  "Define one in .minima/agents/<name>.md (this repo) or ~/.minima-harness/agents/<name>.md (all repos):",
+                  "",
+                  "  ---",
+                  "  name: reviewer",
+                  "  description: Reviews a diff for correctness. Read-only.",
+                  "  tools: [read, grep, glob, bash]",
+                  "  candidates: [gemini-2.5-flash]",
+                  "  effort: light",
+                  "  budget_usd: 0.25",
+                  "  ---",
+                  "  You review code for correctness only. Never propose refactors.",
+                  "",
+                  "The lead agent can then delegate to it, a plan step can name it, and /agent <name> <task> runs it directly.",
+                ].join("\n")
+              : [
+                  `${defined.length} agent type${defined.length > 1 ? "s" : ""}:`,
+                  "",
+                  ...defined.map((t) => {
+                    const bits = [
+                      t.tools ? `tools: ${t.tools.join(", ")}` : null,
+                      t.candidates ? `models: ${t.candidates.join(", ")}` : null,
+                      t.effort ? `effort: ${t.effort}` : null,
+                      t.budget_usd !== undefined ? `cap: $${t.budget_usd}` : null,
+                      t.isolation ? `isolation: ${t.isolation}` : null,
+                    ].filter(Boolean);
+                    return `  ${t.name} — ${t.description || "(no description)"}${
+                      bits.length ? `\n    ${bits.join(" · ")}` : ""
+                    }`;
+                  }),
+                  "",
+                  "Run one directly with /agent <name> <task>.",
+                ].join("\n"),
+          );
+          break;
+        }
+        const type = defined.find((t) => t.name === wanted);
+        if (!type) {
+          say(
+            `Unknown agent type "${wanted}".${
+              defined.length
+                ? ` Defined: ${defined.map((t) => t.name).join(", ")}`
+                : " None are defined — run /agent for how to define one."
+            }`,
+            true,
+          );
+          break;
+        }
+        const objective = args.trim().slice(parts[0]!.length).trim();
+        if (!objective) {
+          say(`usage: /agent ${type.name} <task> — what should this agent do?`, true);
+          break;
+        }
+        if (!planSpawn) {
+          say("agent unavailable — no subagent spawner in this session", true);
+          break;
+        }
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: `Running the ${type.name} agent…`, toolName: "agent" },
+        ]);
+        setBusy(true);
+        setBusyState("running");
+        const controller = new AbortController();
+        agentCommandControllerRef.current = controller;
+        try {
+          // The contract fields the model would normally author. A type deliberately cannot
+          // supply them (it says WHO, not WHAT), so the command provides neutral ones and
+          // the user's line is the objective.
+          const res = await planSpawn(
+            {
+              step_id: type.name,
+              objective,
+              output_format: "A direct, complete answer to the objective.",
+              boundaries:
+                "Stay within the objective. Make no unrelated changes and touch no files the objective does not call for.",
+              agent_type: type.name,
+            },
+            { depth: 1, parentSignal: controller.signal, priorResults: [] },
+          );
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `${res.text || "(no output)"}\n\n---\n${type.name} · ${res.outcome} · $${res.costUsd.toFixed(4)}`,
+              toolName: "agent",
+              isError: res.outcome === "failure",
+            },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `agent failed: ${errText(exc)}`,
+              toolName: "agent",
+              isError: true,
+            },
+          ]);
+        } finally {
+          agentCommandControllerRef.current = null;
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "profile": {

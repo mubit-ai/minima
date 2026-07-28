@@ -22,6 +22,7 @@ import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/mini
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { loadAgentTypes } from "../minima/agent_types.ts";
 import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
 import { BudgetLedger } from "../minima/budget.ts";
@@ -990,11 +991,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
   // React state without the TUI needing to exist at createSpawn time.
   const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
+  // User-defined agent types (~/.minima-harness/agents/*.md + ./.minima/agents/*.md):
+  // named presets a delegation can reference by name. No files → an empty registry, which
+  // every consumer treats as "no agent types" (identical behavior to not having them).
+  const agentTypes = loadAgentTypes(process.cwd());
+  for (const warning of agentTypes.warnings) {
+    process.stderr.write(`minima: agent type — ${warning}\n`);
+  }
   const spawnFactory = createSpawn({
     parent: agent,
     workdir: process.cwd(),
     onChildEvent: (e) => childEventRef.handler?.(e),
     artifacts: artifactStore ?? undefined,
+    agentTypes,
   });
   agent.agentState.tools.push(
     taskTool({
@@ -1002,6 +1011,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       spawnDepth: 0,
       maxDepth: 2,
       typedTask: config.typedTask,
+      agentTypes: [...agentTypes.types.values()].map((t) => ({
+        name: t.name,
+        description: t.description,
+      })),
     }),
   );
 
@@ -1313,6 +1326,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       childEventRef,
       initialResume,
       planSpawn: spawnFactory,
+      agentTypes,
       planMetaModel,
       bigPlanGateBefore,
       verifyConsentRef,

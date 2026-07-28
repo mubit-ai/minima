@@ -56,6 +56,9 @@ export interface FauxRequest {
   messageCount: number;
   /** Concatenated text of the LAST user message — the prompt under test. */
   user: string;
+  /** Names of the tools this call was offered, in order — lets a test assert the tool
+   *  SCOPE an agent actually ran with (a sub-agent's allowlist, an agent type's tools). */
+  toolNames: string[];
 }
 
 /** Observable per-registration state. */
@@ -137,6 +140,7 @@ class FauxProvider implements Provider {
       model: model.id,
       systemPrompt: context.system_prompt ?? null,
       messageCount: context.messages.length,
+      toolNames: context.tools.map((t) => t.name),
       user: lastUser?.textContent ?? "",
     });
     const queued = this.state.responses.shift();
