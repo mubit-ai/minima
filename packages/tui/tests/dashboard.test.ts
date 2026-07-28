@@ -279,43 +279,61 @@ describe("stats honesty", () => {
     expect(green.value).toBe("no data");
   });
 
-  test("negative savings say 'overspent', not a minus sign under a tile labeled Saved", () => {
-    // Real ledgers do this: the realized cost can exceed the anchor.
-    const overspent = kpis(
-      [
-        {
-          quality: null,
-          judged: 0,
-          outcome: "success",
-          actual_cost_usd: 0.5,
-          est_cost_usd: 0.01,
-          all_premium_cost_usd: 0.2,
-          configured_baseline_cost_usd: null,
-          decision_basis: "observed",
-          threshold_used: 0.6,
-          routed: "server",
-          ranked: null,
-        },
-      ],
-      1,
-      gateTiers([]),
-    );
-    const premium = overspent.find((k) => k.key === "savings_premium")!;
-    expect(premium.raw).toBeCloseTo(-0.3, 6);
-    expect(premium.value).toBe("-$0.3000");
-    expect(premium.note).toContain("overspent");
-  });
-
-  test("savings never conflates the premium anchor with the configured baseline", () => {
+  test("the savings tile names its anchor and reports evidence, not a bare number", () => {
     const store = new DashboardStore(dbPath);
     const payload = overview(store, PROJECT);
-    const premium = payload.kpis.find((k) => k.key === "savings_premium")!;
-    const baseline = payload.kpis.find((k) => k.key === "savings_baseline")!;
-    expect(premium.raw).not.toBeNull();
-    expect(baseline.raw).not.toBeNull();
-    expect(premium.raw).not.toBeCloseTo(baseline.raw!, 6);
-    expect(premium.note).toContain("generous");
-    expect(baseline.note).toContain("honest");
+    const tile = payload.kpis.find((k) => k.key === "savings_anchor")!;
+    // premium-1 was a candidate on every row, so this is pure direct tier: 5 rows repriced by
+    // est_premium/est_chosen, no price table consulted at all.
+    expect(payload.anchorId).toBe("premium-1");
+    expect(tile.label).toBe("Saved vs premium-1");
+    // cheap rows: 0.02 x (0.2/0.01) = 0.4 each; the premium row reprices to itself (0.2).
+    expect(tile.raw).toBeCloseTo(4 * 0.4 + 0.2 - (4 * 0.02 + 0.2), 6);
+    expect(tile.note).toContain("5 direct / 0 solved");
+    expect(tile.note).toContain("realized tokens are not recorded");
+    store.close();
+  });
+
+  test("the strip carries exactly one savings tile, and no baseline or OCR tile", () => {
+    // Five cost tiles became three. "Saved vs baseline" was NULL on every row a real ledger has
+    // ever written (baselineModelId is hardcoded null), and the optimal-cost ratio reads 1.0 by
+    // construction once its unit bug is repaired — a metric with one possible value.
+    const store = new DashboardStore(dbPath);
+    const keys = overview(store, PROJECT).kpis.map((k) => k.key);
+    expect(keys.filter((k) => k.startsWith("savings")).length).toBe(1);
+    expect(keys).not.toContain("savings_baseline");
+    expect(keys).not.toContain("savings_premium");
+    expect(keys).not.toContain("ocr");
+    store.close();
+  });
+
+  test("a negative saving leads with the τ-miss count, not with the minus sign", () => {
+    // Picking a cheap anchor is a real path, and "-$0.30" alone reads as "routing wasted $0.30".
+    const store = new DashboardStore(dbPath);
+    const payload = overview(store, PROJECT, "cheap-1");
+    const tile = payload.kpis.find((k) => k.key === "savings_anchor")!;
+    expect(payload.anchorId).toBe("cheap-1");
+    expect(tile.raw).toBeLessThan(0);
+    expect(tile.note).toStartWith("overspent this anchor by");
+    // cheap-1's predicted success (0.7) clears τ=0.6, so there is no τ-miss to report here and
+    // the note must fall back to the evidence rather than inventing a counterweight.
+    expect(tile.note).toContain("direct / 0 solved");
+    store.close();
+  });
+
+  test("an unknown ?anchor= falls back instead of rendering a tile for a non-candidate", () => {
+    const store = new DashboardStore(dbPath);
+    const payload = overview(store, PROJECT, "gpt-4o");
+    expect(payload.anchorId).toBe("premium-1");
+    store.close();
+  });
+
+  test("quality-per-dollar discloses its coverage in dollars, not only in rows", () => {
+    // 10% of rows sounds survivable; the share of the MONEY those rows spent is the real caveat.
+    const store = new DashboardStore(dbPath);
+    const qpd = overview(store, PROJECT).kpis.find((k) => k.key === "qpd")!;
+    expect(qpd.note).toContain("of the money");
+    expect(qpd.note).toMatch(/\$[\d.]+ of \$[\d.]+/);
     store.close();
   });
 });
@@ -977,9 +995,9 @@ describe("plan detail", () => {
     ctx.store.close();
   });
 
-  test("the project filter is withheld on a plan page but the scope survives", async () => {
-    // Picking a project on /plans/:id could only ever reload the same plan, so the control is
-    // gone there. What must NOT happen is losing the filter — it stays on every nav link and in
+  test("the project filter is withheld on detail pages but the scope survives", async () => {
+    // Picking a project on a detail page could only ever reload the same row, so the control is
+    // gone there. What must NOT happen is losing the scope — it stays on every nav link and in
     // the URL, so the way back to a scoped list still works.
     const planId = seedPlan();
     const ctx = ctxFor();
@@ -998,11 +1016,18 @@ describe("plan detail", () => {
     // cmd-K still carries the projects, so scope switching is reachable without the control.
     expect(detail).toContain("project");
 
-    // An unknown plan id is still a plan page, so it withholds the control too.
-    expect(await page("/plans/nope")).not.toContain('id="scope"');
+    // A session detail page is the same story: one run, one project.
+    const session = await page(`/runs/${seeded.runId}${scoped}`);
+    expect(session).not.toContain('id="scope"');
+    expect(session).toContain(`/runs?project=${encodeURIComponent(PROJECT)}`);
 
-    // Every other view keeps it, including the session detail page.
-    for (const path of ["/", "/plans", "/runs", `/runs/${seeded.runId}`, "/memory", "/cost"]) {
+    // Unknown ids are still detail pages, so they withhold the control too.
+    for (const path of ["/plans/nope", "/runs/nope"]) {
+      expect(await page(path)).not.toContain('id="scope"');
+    }
+
+    // The lists and summaries keep it — that is where switching project changes what you see.
+    for (const path of ["/", "/routing", "/runs", "/plans", "/memory", "/cost"]) {
       expect(await page(path)).toContain('id="scope"');
     }
     ctx.hub.stop();
@@ -1176,6 +1201,8 @@ describe("file routes", () => {
     expect(body).toContain("alpha");
     expect(body).toContain('<td class="ln">2</td>');
     expect(body).toContain("Open in code");
+    // One file, one project: the project filter would only ever reload this same file.
+    expect(body).not.toContain('id="scope"');
   });
 
   test("GET /api/v1/file 404s a path the ledger never recorded", async () => {
