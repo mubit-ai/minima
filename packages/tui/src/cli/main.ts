@@ -1398,15 +1398,14 @@ Usage: minima dashboard [options]
       --port N           port to bind (default 4180)
       --host HOST        interface to bind (default 127.0.0.1 — loopback only)
       --db PATH          ledger to read (default ~/.minima-harness/minima.db)
-      --allow-writes     enable the audited memory status controls (off by default)
       --editor CMD       editor for the jump-to-source button (default: first found on PATH;
                          one of code, cursor, windsurf, zed, subl, idea, webstorm, vim, nvim;
                          pass "none" to disable the endpoint entirely)
       --open             open the printed URL in the default browser
   -h, --help
 
-Read-only by default: the ledger is opened with a readonly SQLite handle, so no route can
-write. Every route is gated on a per-process token, handed over in the printed URL.
+Read-only, always: the ledger is opened with a readonly SQLite handle and the dashboard has no
+write path at all. Every route is gated on a per-process token, handed over in the printed URL.
 `;
 
 /** `minima dashboard` — read-only localhost views over the ledger; no TUI, no model calls. */
@@ -1426,6 +1425,12 @@ async function dashboardCli(args: string[]): Promise<number> {
     return 2;
   }
 
+  if (args.includes("--allow-writes")) {
+    process.stderr.write(
+      "minima dashboard: --allow-writes was removed; the dashboard is read-only.\n",
+    );
+  }
+
   const { LedgerUnavailableError, startDashboard } = await import("../dashboard/index.ts");
   let handle: Awaited<ReturnType<typeof startDashboard>>;
   try {
@@ -1433,7 +1438,6 @@ async function dashboardCli(args: string[]): Promise<number> {
       port,
       host: flagValue("--host"),
       dbPath: flagValue("--db"),
-      allowWrites: args.includes("--allow-writes"),
       editor: flagValue("--editor"),
     });
   } catch (exc) {
@@ -1448,7 +1452,7 @@ async function dashboardCli(args: string[]): Promise<number> {
 
   process.stdout.write(`minima dashboard — ${handle.url}\n`);
   process.stdout.write(`  ledger  ${handle.ledgerPath}\n`);
-  process.stdout.write(`  mode    ${handle.readOnly ? "read-only" : "writes enabled"}\n`);
+  process.stdout.write("  mode    read-only\n");
   process.stdout.write(
     `  editor  ${handle.editor ?? "none found — pass --editor CMD to enable jump-to-source"}\n`,
   );

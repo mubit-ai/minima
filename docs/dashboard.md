@@ -10,7 +10,6 @@ the surface grows. Read this before adding features.
 ```bash
 minima dashboard                     # http://127.0.0.1:4180, read-only
 minima dashboard --port 4181 --open  # pick a port, open a browser
-minima dashboard --allow-writes      # enable the one audited write control
 minima dashboard --db /path/to.db    # read a specific ledger
 minima dashboard --editor cursor     # jump-to-source target (autodetected; "none" disables)
 ```
@@ -51,7 +50,7 @@ toolchain.
 | `stats.ts` | All aggregation → the `/api/v1/*` payloads. Pure functions over row arrays. |
 | `charts.ts` | Server-rendered SVG primitives + the table counterpart. |
 | `render.ts` | Page shell, CSS custom properties, one function per view. |
-| `server.ts` | `Bun.serve`, auth, routing, the write seam. `createHandler` is test-callable. |
+| `server.ts` | `Bun.serve`, auth, routing, the activity poller. `createHandler` is test-callable. |
 | `index.ts` | Public surface; imported lazily so normal TUI startup doesn't pay for it. |
 
 The HTML views and the JSON API are built from the **same** payloads, so `/api/v1/*` is a real
@@ -70,8 +69,12 @@ server growing a second data path.
 - **Plans & tasks** — the plan list (progress, gates, checks vs baselines, writes, last activity)
   and a per-plan detail view: every task with its stored status, its **derived** gate tier and
   reason, its `verify` command and what the ledger can prove about it, the writes it claims, and
-  its realized $. Plus the recomputed write-attribution panel.
-- **Memory** — the curated memory ledger with origin and evidence source.
+  its realized $. Plus the recomputed write-attribution panel. The project filter is withheld
+  here — a plan belongs to exactly one project, so the control could only reload the same page —
+  while the scope itself stays in the URL and on every nav link, so the way back to a scoped list
+  is unaffected.
+- **Memory** — the curated memory ledger with origin and evidence source. A view only; pin,
+  confirm and reject live in `/memory` inside the harness.
 - **Cost** — spend over time plus the budget ledger (limit / spent / reserved / mode).
 - **Source** (`/files`) — any recorded path, rendered in-page with line numbers, a copy-path
   button, and a jump-to-editor button.
@@ -104,10 +107,9 @@ grab the path is worse than an honest gap.
 
 `POST /api/v1/open` hands the resolved path to an editor through a `Bun.spawn` **argv array**,
 never a shell string, with the line coerced through `parseInt`. POST + same-origin + token, so it
-cannot be driven cross-site and never lands in browser history. It is deliberately **not** gated
-on `--allow-writes`: that flag means "may mutate the ledger", and conflating it with "may open my
-editor" would deny read-only users the primary affordance. The guard that matters is the
-ledger-row lookup.
+cannot be driven cross-site and never lands in browser history. It is the **only** route in the
+server that accepts a non-GET, and what it touches is your editor, never the ledger. The guard
+that matters is the ledger-row lookup.
 
 ## Live updates
 
@@ -121,9 +123,20 @@ re-fetching, swaps `<main>` in place (preserving scroll), and keeps **no** event
 whole point is that an open tab accumulates nothing. Relative ages tick locally off `data-ts`
 attributes, so "12s ago" becoming "13s ago" costs no network at all.
 
-Bounded on purpose: **8 concurrent streams** (the 9th is refused, not queued), a 30-minute idle
-disconnect, and a 2s poll — already far finer than the data's own resolution, since events land at
-turn boundaries with a p95 gap of 34s.
+**A quiet ledger must not look like a dead one.** `Bun.serve`'s `idleTimeout` defaults to 10
+seconds, and the poller originally said nothing at all unless the newest timestamp moved — so with
+no session running the socket went silent and Bun closed it every 10s: a warning in the terminal, a
+client reconnect, repeat. Raising the timeout alone only moves the disconnect later, so the stream
+had to stop being idle. Every 20s of quiet the poller emits a keepalive on the timer it already
+owns, as its own `event: ping` frame (re-sending `activity` when nothing happened would put a frame
+on the wire that means the opposite of its payload); `idleTimeout` is set to 60s as the backstop
+behind it. The keepalive is also how an abandoned stream is noticed — a slept laptop never fires
+`cancel()`, so its slot used to be held against the cap until the lifetime cap expired.
+
+Bounded on purpose: **8 concurrent streams** (the 9th is refused, not queued), a hard 30-minute
+lifetime cap per stream (set when it opens, never reset — the browser reconnects, so it is
+invisible in use), and a 2s poll — already far finer than the data's own resolution, since events
+land at turn boundaries with a p95 gap of 34s.
 
 Measured on the live 11MB ledger: 4 concurrent streams held open for 130s left RSS oscillating
 between 33MB and 42MB and **ending 8MB below where it started**. Opening 10 streams accepted 8 and
@@ -221,33 +234,33 @@ A dev tool that renders your entire work history deserves locking down:
   (`?t=…`), then parked in a `HttpOnly; SameSite=Strict` cookie and dropped from the address
   bar so it stops leaking into history and `Referer`;
 - the token is compared in **constant time**;
-- **read-only by default** — the SQLite handle is opened `readonly`, so no route can write even
-  if it tried, and opening the dashboard never creates a ledger file;
+- **read-only, structurally** — the SQLite handle is opened `readonly` *and* `src/dashboard/`
+  does not import `MinimaDb` at all, so there is no code path that could open a writable handle.
+  Opening the dashboard never creates a ledger file;
 - all ledger text is HTML-escaped on the way out (there is a test that tries to inject a
   `<script>` through a memory row);
-- the write endpoint additionally requires a **same-origin** request, so another tab cannot
-  drive it with a cross-site form POST.
+- the one non-GET route (`/api/v1/open`) additionally requires a **same-origin** request, so
+  another tab cannot drive it with a cross-site POST.
 
-## The write seam
+## No write seam
 
-Exactly one endpoint writes, and only under `--allow-writes`:
+There was one: `POST /api/v1/memories/:id/status` behind an `--allow-writes` flag. Both are
+**removed**. The endpoint 404s, the flag is gone (passing it prints a note and starts read-only),
+and `/memory` renders the ledger with no control that could submit anything.
 
-```
-POST /api/v1/memories/:id/status   status=pinned|active|rejected
-```
-
-It delegates to `MinimaDb.setMemoryStatus`, the same audited path `/memory` uses, so every
-change appends a `memory_events` row (`pin by dashboard`) instead of doing a bare `UPDATE`.
-Delete is **not** exposed. This exists to prove the pattern — auth + same-origin + an audited
-ledger call + a `403` when writes are off — so the controls added next have a shape to copy.
+Read-only stopped being a default and became a property of what is linked in. Memory status
+changes belong to `/memory` inside the harness, which appends the audited `memory_events` row —
+a browser tab is the wrong place to hold that authority, and `/healthz` reports
+`readOnly: true` so a caller can check without reading this file.
 
 ## Deliberately not built yet
 
 The next decision is **how much control** the browser should get. Ranked by cost:
 
-1. **Safe ledger writes** (small): budget cap + mode changes, routing-profile switching,
-   remaining `/memory` operations. All are already user-owned state; each needs the same
-   audited-call + gated-endpoint shape as the write seam.
+1. **Safe ledger writes** (small, and currently a deliberate no): budget cap + mode changes,
+   routing-profile switching, `/memory` operations. All are already user-owned state, but the
+   write path was removed rather than merely gated, so re-opening one means re-arguing that a
+   browser tab is the right place to hold the authority — not just copying an endpoint shape.
 2. **Live-run control** (large): abort/steer an in-flight run, approve a plan step from the
    browser. The dashboard is a *separate process* from the running TUI, so this needs a real
    IPC channel (a unix socket or a `bg_jobs`-style command table the harness polls) plus a
@@ -278,5 +291,8 @@ magnitude reads as "more ink" in both modes.
 
 `packages/tui/tests/dashboard.test.ts` — hermetic (temp-file ledger seeded through `MinimaDb`,
 handler invoked directly, no socket, no network). Covers the read-only guarantee, project
-scoping, the honesty rules, auth/cookie behavior, HTML escaping, and every write-seam refusal
-path.
+scoping, the honesty rules, auth/cookie behavior, HTML escaping, that `/api/v1/open` is the only
+route accepting a non-GET, and that the keepalive fires on a quiet ledger.
+
+One thing no hermetic test can prove: that Bun honors `idleTimeout`. A source guard asserts the
+option is passed and is labeled as exactly that — the real check is a tab left open past 10s.

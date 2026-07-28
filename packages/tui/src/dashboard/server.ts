@@ -6,18 +6,18 @@
  *  - every route except /healthz requires a per-process bearer token, handed over once in
  *    the printed URL (`?t=…`) and then parked in a Strict/HttpOnly cookie;
  *  - the token is compared in constant time, so a wrong guess leaks no timing signal;
- *  - READ-ONLY by default: the SQLite handle is opened `readonly`, so no route can write
- *    even if it tried. `--allow-writes` opens a second, read-write MinimaDb handle used by
- *    exactly one endpoint;
- *  - that write endpoint additionally requires a same-origin request, so a page in another
- *    tab cannot drive it with a cross-site form POST.
+ *  - READ-ONLY, structurally: the SQLite handle is opened `readonly` and this module does not
+ *    import MinimaDb at all, so there is no code path that could open a writable handle. The
+ *    only non-GET route is `/api/v1/open`, which touches the editor, never the ledger;
+ *  - that route additionally requires a same-origin request, so a page in another tab cannot
+ *    drive it with a cross-site POST.
  *
  * The HTML views and the JSON API are built from the SAME payloads (`stats.ts`), so the
  * `/api/v1/*` contract is a real contract — a future SPA can consume it without the server
  * growing a second data path.
  */
 
-import { MinimaDb, defaultDbPath } from "../db/minima_db.ts";
+import { defaultDbPath } from "../db/minima_db.ts";
 import { detectEditor, openInEditor, readRecorded, resolveRecorded } from "./files.ts";
 import { DashboardStore, LedgerUnavailableError, type Scope } from "./queries.ts";
 import {
@@ -51,8 +51,28 @@ const COOKIE = "minima_dash";
 const POLL_MS = 2_000;
 /** Hard ceiling on concurrent streams; a browser opening tabs must not become unbounded state. */
 export const MAX_STREAMS = 8;
-/** Streams are dropped after this long with no activity, so a forgotten tab cannot pin memory. */
-const STREAM_IDLE_MS = 30 * 60 * 1_000;
+/**
+ * A stream that has said nothing for this long gets a keepalive frame.
+ *
+ * Without it a quiet ledger means a silent socket, and Bun closes an idle connection at its
+ * `idleTimeout` (10s by default) — which is exactly how this shipped: warning in the terminal,
+ * client reconnect, repeat, forever. Raising the timeout alone only moves the disconnect later,
+ * so the stream has to stop being idle. It rides the poller that already exists, so this costs
+ * no extra timer, and it is how an abandoned stream (a slept laptop never fires `cancel()`) is
+ * finally noticed and evicted from the MAX_STREAMS cap.
+ */
+const KEEPALIVE_MS = 20_000;
+/** Passed to `Bun.serve`; must stay comfortably above KEEPALIVE_MS. */
+export const IDLE_TIMEOUT_S = 60;
+/**
+ * A hard lifetime cap per stream — set once when the stream opens and never reset, so a
+ * forgotten tab cannot pin memory indefinitely. The browser reconnects, so it is invisible
+ * in use.
+ */
+const STREAM_MAX_MS = 30 * 60 * 1_000;
+
+/** `activity` = the newest event timestamp moved. `ping` = nothing happened, still alive. */
+export type ActivityKind = "activity" | "ping";
 
 /**
  * One poller, many subscribers.
@@ -62,22 +82,32 @@ const STREAM_IDLE_MS = 30 * 60 * 1_000;
  * whether that warrants re-fetching, and no event history is accumulated anywhere.
  */
 export class ActivityHub {
-  private readonly subscribers = new Set<(newest: number | null) => void>();
+  private readonly subscribers = new Set<(newest: number | null, kind: ActivityKind) => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private last: number | null = null;
+  private quietMs = 0;
+  private readonly pollMs: number;
+  private readonly keepaliveMs: number;
 
-  constructor(private readonly newestOf: () => number | null) {}
+  constructor(
+    private readonly newestOf: () => number | null,
+    opts: { pollMs?: number; keepaliveMs?: number } = {},
+  ) {
+    this.pollMs = opts.pollMs ?? POLL_MS;
+    this.keepaliveMs = opts.keepaliveMs ?? KEEPALIVE_MS;
+  }
 
   get size(): number {
     return this.subscribers.size;
   }
 
-  subscribe(fn: (newest: number | null) => void): (() => void) | null {
+  subscribe(fn: (newest: number | null, kind: ActivityKind) => void): (() => void) | null {
     if (this.subscribers.size >= MAX_STREAMS) return null;
     this.subscribers.add(fn);
     if (!this.timer) {
       this.last = this.newestOf();
-      this.timer = setInterval(() => this.tick(), POLL_MS);
+      this.quietMs = 0;
+      this.timer = setInterval(() => this.tick(), this.pollMs);
       // Never hold the process open just to poll.
       this.timer.unref?.();
     }
@@ -92,11 +122,15 @@ export class ActivityHub {
 
   private tick(): void {
     const newest = this.newestOf();
-    if (newest === this.last) return;
+    const changed = newest !== this.last;
+    this.quietMs += this.pollMs;
+    if (!changed && this.quietMs < this.keepaliveMs) return;
     this.last = newest;
+    this.quietMs = 0;
+    const kind: ActivityKind = changed ? "activity" : "ping";
     for (const fn of [...this.subscribers]) {
       try {
-        fn(newest);
+        fn(newest, kind);
       } catch {
         // A dead stream must not take the poller down with it.
         this.subscribers.delete(fn);
@@ -116,7 +150,6 @@ export interface DashboardOptions {
   port?: number;
   host?: string;
   token?: string;
-  allowWrites?: boolean;
   /** Editor command for the jump-to-source button; null/"none" disables the endpoint. */
   editor?: string | null;
 }
@@ -125,7 +158,8 @@ export interface DashboardHandle {
   url: string;
   port: number;
   token: string;
-  readOnly: boolean;
+  /** Always true. Kept in the contract so a caller learns the posture without reading this file. */
+  readOnly: true;
   ledgerPath: string;
   /** The editor the jump-to-source button will launch, or null when none is available. */
   editor: string | null;
@@ -134,9 +168,7 @@ export interface DashboardHandle {
 
 interface Ctx {
   store: DashboardStore;
-  writeDb: MinimaDb | null;
   token: string;
-  allowWrites: boolean;
   /** Resolved editor command, or null when none was found or `--editor none` was passed. */
   editor: string | null;
   hub: ActivityHub;
@@ -239,7 +271,13 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       })),
   ];
 
-  const page = (path: string, scope: Scope, title: string, body: string): Response =>
+  const page = (
+    path: string,
+    scope: Scope,
+    title: string,
+    body: string,
+    opts: { projectFilter?: boolean } = {},
+  ): Response =>
     html(
       shell({
         title,
@@ -247,9 +285,9 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         projects: ctx.store.projects(),
         scope,
         ledgerPath: ctx.store.path,
-        readOnly: !ctx.allowWrites,
         body,
         commands: paletteFor(scope),
+        projectFilter: opts.projectFilter,
       }),
     );
 
@@ -258,7 +296,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const path = url.pathname;
 
     if (path === "/healthz") {
-      return json({ ok: true, readOnly: !ctx.allowWrites, ledger: ctx.store.path });
+      return json({ ok: true, readOnly: true, ledger: ctx.store.path });
     }
 
     if (!authorized(req, url, ctx.token)) {
@@ -285,38 +323,11 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const scope = scopeOf(url);
     const now = Date.now() / 1000;
 
-    // Guarded on the match, NOT on the method: an unqualified `req.method === "POST"` here made
-    // every other POST route unreachable dead code, which is how /api/v1/open first shipped
-    // returning 404 for a cross-origin request instead of 403.
-    const memoryPost =
-      req.method === "POST" ? /^\/api\/v1\/memories\/([^/]+)\/status$/.exec(path) : null;
-    if (memoryPost) {
-      const match = memoryPost;
-      if (!ctx.allowWrites || !ctx.writeDb) {
-        return json({ error: "read_only", hint: "restart with --allow-writes" }, 403);
-      }
-      if (!sameOrigin(req, url)) return json({ error: "cross_origin_denied" }, 403);
-
-      const id = decodeURIComponent(match[1]!);
-      const form = await req.formData().catch(() => null);
-      const status = String(form?.get("status") ?? "");
-      if (status !== "pinned" && status !== "active" && status !== "rejected") {
-        return json({ error: "bad_status", allowed: ["pinned", "active", "rejected"] }, 400);
-      }
-      // Reuses the audited /memory path: appends a memory_events row, never a bare UPDATE.
-      const changed = ctx.writeDb.setMemoryStatus(id, status, "dashboard");
-      if (req.headers.get("accept")?.includes("text/html")) {
-        return new Response(null, { status: 303, headers: { location: `/memory${url.search}` } });
-      }
-      return json({ ok: changed, id, status });
-    }
-
-    // Hand a recorded file to the editor. Same posture as the write seam: POST + token +
-    // same-origin, so no cross-site page can drive it and it never lands in browser history.
-    // NOT gated on --allow-writes: that flag means "may mutate the ledger", and conflating it
-    // with "may open my editor" would deny read-only users the primary affordance. The guard
-    // that matters is that `path` is a LEDGER ROW REFERENCE — the spawn only ever receives a
-    // path the server resolved itself, via an argv array that is never a shell string.
+    // The one non-GET route in the server, and it touches the editor rather than the ledger.
+    // POST + token + same-origin, so no cross-site page can drive it and it never lands in
+    // browser history. The guard that matters is that `path` is a LEDGER ROW REFERENCE — the
+    // spawn only ever receives a path the server resolved itself, via an argv array that is
+    // never a shell string.
     if (req.method === "POST" && path === "/api/v1/open") {
       if (!sameOrigin(req, url)) return json({ error: "cross_origin" }, 403);
       if (!ctx.editor) return json({ ok: false, error: "no_editor" }, 403);
@@ -373,10 +384,11 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       const stream = new ReadableStream({
         start(controller) {
           const enc = new TextEncoder();
-          const send = (newest: number | null): void => {
-            controller.enqueue(
-              enc.encode(`event: activity\ndata: ${JSON.stringify({ newest })}\n\n`),
-            );
+          // A keepalive is its OWN event type. Re-sending `activity` when nothing happened
+          // would put a frame on the wire that says the opposite of what the payload means.
+          const send = (newest: number | null, kind: ActivityKind = "activity"): void => {
+            const data = kind === "activity" ? JSON.stringify({ newest }) : "{}";
+            controller.enqueue(enc.encode(`event: ${kind}\ndata: ${data}\n\n`));
           };
           send(ctx.store.newestEvent());
           release = ctx.hub.subscribe(send);
@@ -393,7 +405,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
             } catch {
               // already closed
             }
-          }, STREAM_IDLE_MS);
+          }, STREAM_MAX_MS);
           idle.unref?.();
         },
         cancel() {
@@ -455,9 +467,19 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const planMatch = /^\/plans\/([^/]+)$/.exec(path);
     if (planMatch) {
       const detail = ctx.store.planDetail(decodeURIComponent(planMatch[1]!));
+      // No project filter here: a plan belongs to exactly one project, so the control could only
+      // ever reload the same page. The scope itself is NOT dropped — it stays in the URL and on
+      // every nav link, so returning to a scoped list still works.
+      const unscoped = { projectFilter: false };
       return detail
-        ? page("/plans", scope, detail.plan.title ?? "Plan", planDetailView(planView(detail), now))
-        : page("/plans", scope, "Not found", notFoundView(path));
+        ? page(
+            "/plans",
+            scope,
+            detail.plan.title ?? "Plan",
+            planDetailView(planView(detail), now),
+            unscoped,
+          )
+        : page("/plans", scope, "Not found", notFoundView(path), unscoped);
     }
     if (path === "/files") {
       const planId = url.searchParams.get("plan");
@@ -478,12 +500,7 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       );
     }
     if (path === "/memory") {
-      return page(
-        path,
-        scope,
-        "Memory",
-        memoryView(ctx.store.memories(scope, 200), now, ctx.allowWrites),
-      );
+      return page(path, scope, "Memory", memoryView(ctx.store.memories(scope, 200), now));
     }
     if (path === "/cost") {
       return page(
@@ -506,9 +523,7 @@ export function createDashboard(opts: DashboardOptions = {}): {
   const store = new DashboardStore(dbPath);
   const ctx: Ctx = {
     store,
-    writeDb: opts.allowWrites ? new MinimaDb(dbPath) : null,
     token: opts.token ?? crypto.randomUUID(),
-    allowWrites: Boolean(opts.allowWrites),
     editor: detectEditor(opts.editor),
     hub: new ActivityHub(() => store.newestEvent()),
   };
@@ -520,6 +535,9 @@ export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
   const server = Bun.serve({
     hostname: opts.host ?? "127.0.0.1",
     port: opts.port ?? DEFAULT_PORT,
+    // Bun's default is 10s, which silently killed every SSE stream on a quiet ledger. The
+    // keepalive above is what actually keeps a stream alive; this is the backstop.
+    idleTimeout: IDLE_TIMEOUT_S,
     fetch: handler,
   });
   const port = server.port ?? opts.port ?? DEFAULT_PORT;
@@ -528,14 +546,13 @@ export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
     url: `${base}/?t=${ctx.token}`,
     port,
     token: ctx.token,
-    readOnly: !ctx.allowWrites,
+    readOnly: true,
     ledgerPath: ctx.store.path,
     editor: ctx.editor,
     stop() {
       server.stop(true);
       ctx.hub.stop();
       ctx.store.close();
-      ctx.writeDb?.close();
     },
   };
 }

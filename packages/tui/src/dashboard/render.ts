@@ -71,10 +71,15 @@ export interface ShellOptions {
   projects: ProjectSummary[];
   scope: Scope;
   ledgerPath: string;
-  readOnly: boolean;
   body: string;
   /** Extra cmd-K targets beyond nav + projects; views supply plans/sessions. */
   commands?: PaletteItem[];
+  /**
+   * Pass `false` on a view whose content a project filter cannot change — a single-entity
+   * detail page. The scope is still carried by the nav links and the URL; only the control
+   * is withheld, so nothing is lost by hiding it.
+   */
+  projectFilter?: boolean;
 }
 
 export const fmtUsd = (n: number | null): string => {
@@ -693,21 +698,26 @@ const SCRIPT = `
         busy = false;
       }, function () { busy = false; });
   }
+  function setLive(text) { if (live) live.textContent = text; }
   if (window.EventSource) {
     var es = new EventSource("/api/v1/stream");
+    // ANY frame proves the stream is up, so the label heals itself after a blip. Keying the
+    // reset off "seen === null" meant one reconnect left it reading "reconnecting" forever.
     es.addEventListener("activity", function (ev) {
+      setLive("Live");
       var data = {};
       try { data = JSON.parse(ev.data); } catch (err) { return; }
-      if (seen === null) { seen = data.newest; if (live) live.textContent = "Live"; return; }
+      if (seen === null) { seen = data.newest; return; }
       if (data.newest !== seen) { seen = data.newest; refresh(); }
     });
+    es.addEventListener("ping", function () { setLive("Live"); });
     es.addEventListener("full", function () {
       es.close();
-      if (live) live.textContent = "Live (too many tabs)";
+      setLive("Live (too many tabs)");
     });
-    es.onerror = function () { if (live) live.textContent = "Live: reconnecting"; };
-  } else if (live) {
-    live.textContent = "Live unsupported";
+    es.onerror = function () { setLive("Live: reconnecting"); };
+  } else {
+    setLive("Live unsupported");
   }
 })();
 `;
@@ -726,6 +736,10 @@ export function shell(opts: ShellOptions): string {
         `<option value="${escapeHtml(p.project_key)}"${p.project_key === opts.scope ? " selected" : ""}>${escapeHtml(p.project_key)} (${p.runs})</option>`,
     ),
   ].join("");
+  const filter =
+    opts.projectFilter === false
+      ? ""
+      : `<select id="scope" aria-label="Project scope">${options}</select>`;
   const palette: PaletteItem[] = [
     ...opts.nav.map((n) => ({ kind: "view", label: n.label, href: n.href })),
     ...opts.projects.map((p) => ({
@@ -748,7 +762,7 @@ export function shell(opts: ShellOptions): string {
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand"><b>Minima</b><span class="ro">${opts.readOnly ? "read-only" : "writes on"}</span></div>
+    <div class="brand"><b>Minima</b><span class="ro">read-only</span></div>
     <nav>${links}</nav>
     <div class="side-foot">
       <div>${escapeHtml(opts.ledgerPath)}</div>
@@ -761,7 +775,7 @@ export function shell(opts: ShellOptions): string {
       <span class="spacer"></span>
       <div class="controls">
         <span id="live" title="server-sent activity stream">connecting</span>
-        <select id="scope" aria-label="Project scope">${options}</select>
+        ${filter}
         <button class="ghost" id="theme" type="button" aria-label="Toggle theme">◐</button>
       </div>
     </header>
@@ -1332,15 +1346,7 @@ function driftPanel(view: PlanView): string {
 </section>`;
 }
 
-export function memoryView(rows: MemorySummary[], now: number, allowWrites: boolean): string {
-  const controls = (m: MemorySummary): string => {
-    if (!allowWrites) return '<span class="pill">read-only</span>';
-    const btn = (status: string, label: string) =>
-      `<button class="ghost" type="submit" name="status" value="${status}">${label}</button>`;
-    return `<form method="post" action="/api/v1/memories/${encodeURIComponent(m.id)}/status" style="display:flex;gap:4px">
-      ${btn("pinned", "Pin")}${btn("active", "Confirm")}${btn("rejected", "Reject")}
-    </form>`;
-  };
+export function memoryView(rows: MemorySummary[], now: number): string {
   const table = dataTable(
     rows,
     [
@@ -1353,13 +1359,13 @@ export function memoryView(rows: MemorySummary[], now: number, allowWrites: bool
       { header: "Content", cell: (m) => `<span class="wrap">${escapeHtml(m.content)}</span>` },
       { header: "Origin", cell: (m) => escapeHtml(`${m.origin}/${m.evidence_source}`) },
       { header: "Updated", numeric: true, cell: (m) => agoCell(m.updated, now) },
-      { header: "", cell: controls },
     ],
     "No memories curated yet.",
   );
-  const banner = allowWrites
-    ? `<div class="banner">Writes are enabled. Status changes go through the same audited path as <span class="mono">/memory</span> — every change appends a <span class="mono">memory_events</span> row. Deletes are not exposed here.</div>`
-    : `<div class="banner">Read-only. Start with <span class="mono">--allow-writes</span> to enable memory status changes from the browser.</div>`;
+  const banner = `<div class="banner">A view, not a control surface. Pin, confirm and reject live in
+  <span class="mono">/memory</span> inside the harness, which appends an audited
+  <span class="mono">memory_events</span> row for every change; this process holds a readonly
+  handle and cannot write one.</div>`;
   return `${banner}<section class="card"><h2>Memory ledger</h2>${table}</section>`;
 }
 

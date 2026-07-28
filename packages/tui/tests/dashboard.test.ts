@@ -23,6 +23,7 @@ import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries
 import { agoCell, fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
 import {
   ActivityHub,
+  IDLE_TIMEOUT_S,
   MAX_STREAMS,
   createDashboard,
   createHandler,
@@ -115,6 +116,21 @@ function seed(): void {
     status: "pending",
   });
   db.close();
+}
+
+/**
+ * A complete handler context. `tsconfig.json` typechecks `src/**` only, so a ctx literal spelled
+ * out inline here goes stale silently — three of them had drifted past `hub` and `editor` before
+ * this existed. Everything is closed by the caller.
+ */
+function ctxFor(opts: { editor?: string | null; hub?: ActivityHub } = {}) {
+  const store = new DashboardStore(dbPath);
+  return {
+    store,
+    token: TOKEN,
+    editor: opts.editor ?? null,
+    hub: opts.hub ?? new ActivityHub(() => store.newestEvent()),
+  };
 }
 
 beforeEach(() => {
@@ -382,78 +398,71 @@ describe("http surface", () => {
   });
 });
 
-describe("write seam", () => {
-  const post = (
-    handler: (r: Request) => Promise<Response>,
-    path: string,
-    status: string,
-    extra: Record<string, string> = {},
-  ) => {
-    const form = new FormData();
-    form.set("status", status);
-    return handler(
+describe("no write path", () => {
+  const post = (handler: (r: Request) => Promise<Response>, path: string) =>
+    handler(
       new Request(`http://127.0.0.1:4180${path}`, {
         method: "POST",
-        headers: { cookie: `minima_dash=${TOKEN}`, ...extra },
-        body: form,
+        headers: { cookie: `minima_dash=${TOKEN}` },
+        body: new FormData(),
       }),
     );
-  };
 
-  test("read-only mode refuses the write and leaves the row untouched", async () => {
-    const { handler } = createDashboard({ dbPath, token: TOKEN });
-    const res = await post(handler, `/api/v1/memories/${seeded.memoryId}/status`, "pinned");
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: "read_only" });
-    const store = new DashboardStore(dbPath);
-    expect(store.memories(PROJECT)[0]!.status).toBe("pending");
-    store.close();
-  });
-
-  test("--allow-writes routes the change through the audited /memory path", async () => {
-    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN, allowWrites: true });
-    const res = await post(handler, `/api/v1/memories/${seeded.memoryId}/status`, "pinned");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, status: "pinned" });
-    // The audit row is the point: a bare UPDATE would leave no memory_events trail.
-    const events = ctx.writeDb!.listMemoryEvents(seeded.memoryId).map((e) => e.op);
-    expect(events).toContain("pin");
-    const store = new DashboardStore(dbPath);
-    expect(store.memories(PROJECT)[0]!.status).toBe("pinned");
-    store.close();
-    ctx.writeDb!.close();
-    ctx.store.close();
-  });
-
-  test("an unknown status is rejected before it reaches the ledger", async () => {
-    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN, allowWrites: true });
-    const res = await post(handler, `/api/v1/memories/${seeded.memoryId}/status`, "invalidated");
-    expect(res.status).toBe(400);
-    const store = new DashboardStore(dbPath);
-    expect(store.memories(PROJECT)[0]!.status).toBe("pending");
-    store.close();
-    ctx.writeDb!.close();
-    ctx.store.close();
-  });
-
-  test("a cross-site form POST is denied even with a valid cookie", async () => {
-    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN, allowWrites: true });
-    const res = await post(handler, `/api/v1/memories/${seeded.memoryId}/status`, "pinned", {
-      origin: "http://evil.example",
-    });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: "cross_origin_denied" });
-    ctx.writeDb!.close();
-    ctx.store.close();
-  });
-
-  test("POST to a route that does not accept one is a 404", async () => {
-    // The memory-status branch is matched on its PATH, not merely on the method — guarding it
-    // with a bare `req.method === "POST"` made every other POST route unreachable dead code.
-    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN, allowWrites: true });
-    const res = await post(handler, "/api/v1/runs", "pinned");
+  test("the memory-status endpoint is gone, and the row it used to change is untouched", async () => {
+    // It used to answer 403 without --allow-writes. There is no endpoint now, so a 404 is the
+    // honest answer — nothing to authorize.
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const res = await post(handler, `/api/v1/memories/${seeded.memoryId}/status`);
     expect(res.status).toBe(404);
-    ctx.writeDb!.close();
+    const store = new DashboardStore(dbPath);
+    expect(store.memories(PROJECT)[0]!.status).toBe("pending");
+    store.close();
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("the ONLY route that accepts a non-GET is /api/v1/open", async () => {
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    for (const path of [
+      "/",
+      "/memory",
+      "/plans",
+      "/api/v1/runs",
+      "/api/v1/plans",
+      `/api/v1/memories/${seeded.memoryId}/status`,
+    ]) {
+      const res = await post(handler, path);
+      expect(res.status).toBe(404);
+    }
+    // /api/v1/open still answers — 400 for a malformed body, which means it was reached.
+    const open = await post(handler, "/api/v1/open");
+    expect(open.status).not.toBe(404);
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("/memory renders no control that could submit anything", async () => {
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const body = await (
+      await handler(
+        new Request("http://127.0.0.1:4180/memory", {
+          headers: { cookie: `minima_dash=${TOKEN}` },
+        }),
+      )
+    ).text();
+    expect(body).not.toContain("<form");
+    expect(body).not.toContain("/api/v1/memories/");
+    // The status column stays — it is information, not a control.
+    expect(body).toContain("pending");
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("/healthz still states the posture without needing the token", async () => {
+    const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
+    const res = await handler(new Request("http://127.0.0.1:4180/healthz"));
+    expect(await res.json()).toMatchObject({ ok: true, readOnly: true });
+    ctx.hub.stop();
     ctx.store.close();
   });
 });
@@ -482,14 +491,15 @@ describe("rendering safety", () => {
     expect(body).toContain("&lt;script&gt;alert");
   });
 
-  test("createHandler works without a write handle at all", async () => {
-    const store = new DashboardStore(dbPath);
-    const handler = createHandler({ store, writeDb: null, token: TOKEN, allowWrites: false });
+  test("createHandler renders from a bare readonly context", async () => {
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
     const res = await handler(
       new Request("http://127.0.0.1:4180/", { headers: { cookie: `minima_dash=${TOKEN}` } }),
     );
     expect(res.status).toBe(200);
-    store.close();
+    ctx.hub.stop();
+    ctx.store.close();
   });
 });
 
@@ -948,12 +958,8 @@ describe("plan detail", () => {
 
   test("GET /plans/:id renders, and an unknown id is a clean not-found", async () => {
     const planId = seedPlan();
-    const handler = createHandler({
-      store: new DashboardStore(dbPath),
-      writeDb: null,
-      token: TOKEN,
-      allowWrites: false,
-    });
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
     const ok = await handler(
       new Request(`http://127.0.0.1/plans/${planId}`, { headers: { "x-minima-token": TOKEN } }),
     );
@@ -967,6 +973,40 @@ describe("plan detail", () => {
     );
     expect(missing.status).toBe(200);
     expect(await missing.text()).toContain("Not found");
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("the project filter is withheld on a plan page but the scope survives", async () => {
+    // Picking a project on /plans/:id could only ever reload the same plan, so the control is
+    // gone there. What must NOT happen is losing the filter — it stays on every nav link and in
+    // the URL, so the way back to a scoped list still works.
+    const planId = seedPlan();
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
+    const page = async (path: string) =>
+      (
+        await handler(
+          new Request(`http://127.0.0.1${path}`, { headers: { "x-minima-token": TOKEN } }),
+        )
+      ).text();
+
+    const scoped = `?project=${encodeURIComponent(PROJECT)}`;
+    const detail = await page(`/plans/${planId}${scoped}`);
+    expect(detail).not.toContain('id="scope"');
+    expect(detail).toContain(`/plans?project=${encodeURIComponent(PROJECT)}`);
+    // cmd-K still carries the projects, so scope switching is reachable without the control.
+    expect(detail).toContain("project");
+
+    // An unknown plan id is still a plan page, so it withholds the control too.
+    expect(await page("/plans/nope")).not.toContain('id="scope"');
+
+    // Every other view keeps it, including the session detail page.
+    for (const path of ["/", "/plans", "/runs", `/runs/${seeded.runId}`, "/memory", "/cost"]) {
+      expect(await page(path)).toContain('id="scope"');
+    }
+    ctx.hub.stop();
+    ctx.store.close();
   });
 });
 
@@ -1109,13 +1149,7 @@ describe("file viewer", () => {
 
 describe("file routes", () => {
   function handlerWith(editor: string | null): (req: Request) => Promise<Response> {
-    return createHandler({
-      store: new DashboardStore(dbPath),
-      writeDb: null,
-      token: TOKEN,
-      allowWrites: false,
-      editor,
-    });
+    return createHandler(ctxFor({ editor }));
   }
   function seedOne(): string {
     const project = join(dir, "proj2");
@@ -1279,6 +1313,54 @@ describe("live activity hub", () => {
     ctx.hub.stop();
     ctx.store.close();
   });
+
+  test("a quiet ledger still produces keepalive frames, and they are NOT activity", async () => {
+    // The whole bug: tick() used to return early whenever nothing changed, so a quiet ledger
+    // meant a silent socket and Bun closed it at its 10s idleTimeout, forever. Milliseconds
+    // here instead of the real 20s keepalive.
+    let newest: number | null = 5;
+    const seen: { newest: number | null; kind: string }[] = [];
+    const hub = new ActivityHub(() => newest, { pollMs: 1, keepaliveMs: 4 });
+    const release = hub.subscribe((n, kind) => seen.push({ newest: n, kind }))!;
+    await Bun.sleep(30);
+    expect(seen.length).toBeGreaterThan(0);
+    // Nothing changed, so every frame so far is a ping carrying the unchanged value.
+    expect(seen.every((f) => f.kind === "ping")).toBe(true);
+    expect(seen.every((f) => f.newest === 5)).toBe(true);
+    // A real change is still reported as activity.
+    seen.length = 0;
+    newest = 6;
+    await Bun.sleep(10);
+    expect(seen[0]).toEqual({ newest: 6, kind: "activity" });
+    release();
+    hub.stop();
+  });
+
+  test("the stream writes a ping frame for a keepalive", async () => {
+    const ctx = ctxFor({ hub: new ActivityHub(() => 1, { pollMs: 1, keepaliveMs: 2 }) });
+    const handler = createHandler(ctx);
+    const res = await handler(
+      new Request("http://127.0.0.1/api/v1/stream", { headers: { "x-minima-token": TOKEN } }),
+    );
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    // First frame is the state on connect; the next one is the keepalive.
+    expect(dec.decode((await reader.read()).value!)).toContain("event: activity");
+    const ping = dec.decode((await reader.read()).value!);
+    expect(ping).toContain("event: ping");
+    expect(ping).not.toContain("event: activity");
+    await reader.cancel();
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("Bun.serve is given an explicit idleTimeout above the keepalive interval", async () => {
+    // A source guard, and labeled as one: it proves the option is passed, not that Bun honors
+    // it. The real proof is a tab left open past 10s, which no hermetic test can stage.
+    const src = await Bun.file(new URL("../src/dashboard/server.ts", import.meta.url)).text();
+    expect(src).toContain("idleTimeout: IDLE_TIMEOUT_S");
+    expect(IDLE_TIMEOUT_S).toBeGreaterThan(20);
+  });
 });
 
 describe("charts that have a series", () => {
@@ -1398,6 +1480,9 @@ describe("client affordances", () => {
     // And the superseded 10s full-page meta-reload must be gone entirely.
     expect(body).not.toContain("Auto-refresh");
     expect(body).toContain('new EventSource("/api/v1/stream")');
+    // The label must heal on ANY frame; keying it off the first one left a reconnected stream
+    // reading "reconnecting" forever.
+    expect(body).toContain('es.addEventListener("ping"');
     ctx.hub.stop();
     ctx.store.close();
   });
