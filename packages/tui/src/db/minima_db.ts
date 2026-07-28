@@ -519,6 +519,19 @@ const MIGRATIONS: string[][] = [
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_run ON bg_jobs(run_id, started)",
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_state ON bg_jobs(state)",
   ],
+  // realized token counts per rung. These were computed at feedback time (the same
+  // `usageSince` totals already sent to /v1/feedback) and then thrown away locally — so the
+  // harness could never check its own cost estimate against what a run actually spent, and
+  // `expected_output_tokens` had no observed basis to come from. Retaining them makes the
+  // output-token estimator (output_estimate.ts) possible and its error auditable.
+  // Run-TOTAL, matching the feedback contract: one row spans every turn of the rung.
+  [
+    "ALTER TABLE routing_decisions ADD COLUMN input_tokens INTEGER",
+    "ALTER TABLE routing_decisions ADD COLUMN output_tokens INTEGER",
+    // The estimator reads recent rows project-wide (not run-scoped), which ix_decisions_run
+    // cannot serve — without this the read degrades to a scan+sort of the whole ledger.
+    "CREATE INDEX IF NOT EXISTS ix_decisions_ts ON routing_decisions(ts)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -605,6 +618,10 @@ export interface DecisionWrite {
   lessonPromoted?: boolean | null;
   /** In-progress plan step at routing time (v9) — reporting provenance, not feedback. */
   stepId?: string | null;
+  /** Realized run-TOTAL usage for this rung — the same numbers sent to /v1/feedback.
+   * Retained so the output-token estimator has an observed basis and its error is auditable. */
+  inputTokens?: number | null;
+  outputTokens?: number | null;
   /** Classifier agreement telemetry (v19) — never feeds routing or feedback. */
   clientTaskType?: string | null;
   clientDifficulty?: string | null;
@@ -1349,12 +1366,13 @@ export class MinimaDb {
          harness_version, tool_schema_hash,
          client_task_type, client_difficulty, client_confidence,
          heuristic_task_type, heuristic_difficulty, classify_disagreement,
-         cluster_key_version, ts, schema_v, synced
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
+         cluster_key_version, input_tokens, output_tokens, ts, schema_v, synced
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 0)
        ON CONFLICT(rec_id) DO UPDATE SET
          actual_cost_usd = excluded.actual_cost_usd,
          quality = excluded.quality, judged = excluded.judged, outcome = excluded.outcome,
          turns = excluded.turns, latency_ms = excluded.latency_ms,
+         input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
          step_id = COALESCE(routing_decisions.step_id, excluded.step_id),
          reinforced_entry_ids = excluded.reinforced_entry_ids,
          lesson_promoted = excluded.lesson_promoted`,
@@ -1401,9 +1419,38 @@ export class MinimaDb {
         d.heuristicDifficulty ?? null,
         d.classifyDisagreement ?? null,
         d.clusterKeyVersion ?? null,
+        d.inputTokens ?? null,
+        d.outputTokens ?? null,
         Date.now() / 1000,
       ],
     );
+  }
+
+  /**
+   * Realized run-TOTAL output-token counts for recent rungs in this project, newest first.
+   *
+   * Feeds the output-token estimator (output_estimate.ts). Scoped to the project so one
+   * repo's turn shape never estimates another's, and restricted to rows that actually
+   * recorded usage — pre-migration rows and unrouted/aborted rungs are NULL, and a zero is
+   * an infra failure that spent nothing, not evidence of a cheap turn.
+   */
+  recentOutputTokens(projectKey: string, limit: number, taskType?: string | null): number[] {
+    const clause = taskType ? " AND d.task_type = ?" : "";
+    const params: (string | number)[] = taskType
+      ? [projectKey, taskType, limit]
+      : [projectKey, limit];
+    return this.db
+      .query(
+        `SELECT d.output_tokens AS n
+           FROM routing_decisions d JOIN runs r ON r.run_id = d.run_id
+          WHERE r.project_key = ? AND d.output_tokens IS NOT NULL AND d.output_tokens > 0
+          ${clause}
+          -- rowid breaks the tie: every rung of one prompt writes inside the same
+          -- millisecond, so ordering on ts alone leaves their order undefined.
+          ORDER BY d.ts DESC, d.rowid DESC LIMIT ?`,
+      )
+      .all(...params)
+      .map((row) => Number((row as { n: number }).n));
   }
 
   getRunDecisions(runId: string): Record<string, unknown>[] {

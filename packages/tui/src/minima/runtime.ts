@@ -63,6 +63,7 @@ import { type HarnessMemory, NoopHarnessMemory, formatRecallBlock } from "./memo
 import { knownProcedureFor } from "./memory_dream.ts";
 import { memoryProjectionFor } from "./memory_ledger.ts";
 import type { CostMeter } from "./meter.ts";
+import { estimateOutputTokensFor } from "./output_estimate.ts";
 import { classifyRungOutput } from "./replay_guard.ts";
 import { MinimaRouter, type RoutingResult } from "./router.ts";
 import { minDefinedCap, perTaskTypeEntry, resolveProfilePool } from "./routing_profile.ts";
@@ -305,6 +306,31 @@ export class MinimaAgent extends Agent {
   /** Drop the cached routing profile — call after ANY routing_profiles write. */
   invalidateRoutingProfile(): void {
     this.profileCache = null;
+  }
+
+  /** This run's project key, or null without a persistence spine. Fail-open. */
+  private currentProjectKey(): string | null {
+    if (!this.db || !this.runId) return null;
+    try {
+      return this.db.getRun(this.runId)?.project_key ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Expected run-TOTAL output tokens for this prompt, from realized history (output_estimate.ts).
+   *
+   * Without this the server substitutes a difficulty-scaled constant that is identical for
+   * nearly all agent traffic, which makes the cost ordering — and therefore the pick — the same
+   * on every turn. Undefined only when there is no ledger to learn from, in which case the
+   * server's own fallback applies exactly as before.
+   */
+  private expectedOutputTokens(taskType?: string | null): number | undefined {
+    if (!this.db) return undefined;
+    const projectKey = this.currentProjectKey();
+    if (!projectKey) return undefined;
+    return estimateOutputTokensFor(this.db, projectKey, taskType ?? null);
   }
 
   /** The current project's routing profile (cached per project; fail-open on DB errors).
@@ -734,6 +760,10 @@ export class MinimaAgent extends Agent {
         this.persistDecision(content, routing, {
           recId: rungRecId,
           actualCostUsd: runUsage.cost.total,
+          // Realized run-TOTAL usage — the same figures sent to /v1/feedback. Retained so the
+          // next turn's output estimate has an observed basis instead of a constant.
+          inputTokens: runUsage.input,
+          outputTokens: runUsage.output,
           quality,
           judged: quality !== null,
           outcome: failed ? "failure" : outcome,
@@ -868,6 +898,9 @@ export class MinimaAgent extends Agent {
       /** The rung's identity, minted at rung start (routing rec_id, else a local-* id). */
       recId: string;
       actualCostUsd: number;
+      /** Realized run-TOTAL usage for this rung (feeds the next turn's output estimate). */
+      inputTokens?: number | null;
+      outputTokens?: number | null;
       quality: number | null;
       judged: boolean;
       outcome: "success" | "partial" | "failure";
@@ -960,6 +993,8 @@ export class MinimaAgent extends Agent {
           : null,
         configuredBaselineCostUsd: routing?.baselineCostUsd ?? null,
         actualCostUsd: o.actualCostUsd,
+        inputTokens: o.inputTokens ?? null,
+        outputTokens: o.outputTokens ?? null,
         quality: o.quality,
         judged: o.judged,
         outcome: o.outcome,
@@ -1121,6 +1156,10 @@ export class MinimaAgent extends Agent {
         // The live context IS the input the chosen model will read — the server's cost
         // estimate is only truthful when it knows the real prompt size.
         expectedInputTokens: this.estimateContextTokens(taskText),
+        // ...and the output half is the term the server's cheapest-clearing-tau pick actually
+        // minimizes. Left unsent it defaults to a constant, so every candidate's cost moved
+        // together and the ordering never changed.
+        expectedOutputTokens: this.expectedOutputTokens(opts.taskType),
         candidates: effective,
         // Two ceilings may coexist (profile cap + remaining-budget cap) — honoring both
         // means the tighter one; an explicit per-call cap outranks both.
