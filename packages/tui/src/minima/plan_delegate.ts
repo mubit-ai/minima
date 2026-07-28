@@ -25,16 +25,13 @@ import type { AgentTypeRegistry } from "./agent_types.ts";
 export const PRIOR_RESULTS_CAP_CHARS = 4000;
 
 /** Completed steps' stored results, most recent first, truncated at the cap boundary. */
-export function priorResultsFor(
-  steps: PlanStepRow[],
-  capChars: number = PRIOR_RESULTS_CAP_CHARS,
-): ChildResult[] {
+export function priorResultsFor(steps: PlanStepRow[]): ChildResult[] {
   const out: ChildResult[] = [];
   let used = 0;
   for (let i = steps.length - 1; i >= 0; i--) {
     const s = steps[i]!;
     if (s.status !== "completed" || !s.result) continue;
-    const room = capChars - used;
+    const room = PRIOR_RESULTS_CAP_CHARS - used;
     if (room <= 0) break;
     const text = s.result.length <= room ? s.result : `${s.result.slice(0, room)}…`;
     used += text.length;
@@ -84,8 +81,8 @@ export function buildStepDelegation(
   step: PlanStepRow,
   budgetUsd: number,
   agentTypes?: AgentTypeRegistry,
+  priors: ChildResult[] = priorResultsFor(steps),
 ): Delegation {
-  const priors = priorResultsFor(steps);
   const verify = (step.verify ?? "").trim();
   const d: Delegation = {
     step_id: step.id,
@@ -120,7 +117,6 @@ export function buildStepDelegation(
 export const MIN_VIABLE_SLICE_USD = 0.02;
 
 export type DelegateSkip =
-  | "flag_off"
   | "already_delegated"
   | "no_budget"
   | "plan_exhausted"
@@ -149,14 +145,17 @@ export function shouldDelegate(
   planBudgetUsd: number | null,
   spentUsd: number,
   stepsRemaining: number,
-): { ok: true; sliceUsd: number } | { ok: false; reason: DelegateSkip } {
+):
+  | { ok: true; sliceUsd: number }
+  | { ok: false; reason: "slice_too_thin"; sliceUsd: number }
+  | { ok: false; reason: Exclude<DelegateSkip, "slice_too_thin"> } {
   if (step.delegated_cost_usd !== null) return { ok: false, reason: "already_delegated" };
   if (!(step.content ?? "").trim()) return { ok: false, reason: "no_content" };
   if (planBudgetUsd === null || planBudgetUsd <= 0) return { ok: false, reason: "no_budget" };
   const remainingUsd = planBudgetUsd - spentUsd;
   if (remainingUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "plan_exhausted" };
   const sliceUsd = sliceForStep(planBudgetUsd, spentUsd, stepsRemaining);
-  if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "slice_too_thin" };
+  if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "slice_too_thin", sliceUsd };
   return { ok: true, sliceUsd };
 }
 
@@ -171,8 +170,8 @@ export interface PlanDelegateDeps {
    *  flight when the delegate was BUILT — since the delegate is constructed once per
    *  session but runSignal changes every turn, that would leave every child unabortable
    *  after the first turn. Pass a thunk (`() => agent.runSignal ?? null`) so it is read
-   *  fresh at spawn time; a plain value/null is still accepted for tests. */
-  signal?: AbortSignal | null | (() => AbortSignal | null);
+   *  fresh at spawn time. */
+  signal?: () => AbortSignal | null;
   /** Book realized child spend against the wallet — the same seam taskTool uses, so plan
    *  spend is visible to enforce mode exactly like fan-out spend. */
   onSpend?: (usd: number) => void;
@@ -195,15 +194,21 @@ export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
         return `Plan budget exhausted: $${spent.toFixed(2)} of the approved $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
       }
       if (verdict.reason === "slice_too_thin") {
-        const perStepUsd = sliceForStep(budget ?? 0, spent, remaining);
+        const perStepUsd = verdict.sliceUsd;
         return `Plan budget too thin: $${((budget ?? 0) - spent).toFixed(2)} left, split across ${remaining} remaining step${remaining === 1 ? "" : "s"}, is only $${perStepUsd.toFixed(2)} each — too small for a sub-agent to do anything useful with. This step was not delegated. Stop and ask the user to raise the plan budget before continuing.`;
       }
       return null;
     }
 
-    const delegation = buildStepDelegation(steps, step, verdict.sliceUsd, deps.agentTypes);
     const priorResults = priorResultsFor(steps);
-    const signal = typeof deps.signal === "function" ? deps.signal() : (deps.signal ?? null);
+    const delegation = buildStepDelegation(
+      steps,
+      step,
+      verdict.sliceUsd,
+      deps.agentTypes,
+      priorResults,
+    );
+    const signal = deps.signal ? deps.signal() : null;
     let result: ChildResult;
     try {
       result = await deps.spawn(delegation, {
@@ -213,13 +218,34 @@ export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
       });
     } catch (exc) {
       // The cost stamp is the one-attempt marker, so it must land even here — otherwise a
-      // provider outage lets the same step re-spawn on the lead's next todowrite.
-      deps.db.recordStepDelegation(stepId, `delegation failed: ${String(exc)}`, 0);
+      // provider outage lets the same step re-spawn on the lead's next todowrite. Store an
+      // empty result, not the error text: priorResultsFor's `!s.result` filter is what keeps
+      // a later step from being told this one succeeded (delegated_cost_usd alone is the
+      // one-attempt marker).
+      try {
+        deps.db.recordStepDelegation(stepId, "", 0);
+      } catch {
+        // A stamp failure must not also lose the failure report to the lead.
+      }
       return `Step delegation failed: ${String(exc)}\n\nFinish this step yourself with your own tools, then mark it completed.`;
     }
 
-    deps.db.recordStepDelegation(stepId, result.text, result.costUsd);
+    // Book the spend before the stamp: a throwing recordStepDelegation must not also cost
+    // the BudgetLedger its record of the spend — that's the "one flaky step drains the
+    // budget in a loop" failure this one-attempt guard exists to prevent.
     if (result.costUsd > 0) deps.onSpend?.(result.costUsd);
+    // Only a SUCCESS result is stored — priorResultsFor hardcodes outcome: "success" for
+    // every stored result, so storing a failure/abort string here would tell a later step
+    // a prior one succeeded when it did not.
+    try {
+      deps.db.recordStepDelegation(
+        stepId,
+        result.outcome === "success" ? result.text : "",
+        result.costUsd,
+      );
+    } catch {
+      // The spend is already booked; a stamp failure must not also lose the report to the lead.
+    }
 
     const head = `Step delegated to a sub-agent (${result.outcome}, $${result.costUsd.toFixed(4)}).`;
     if (result.outcome === "success") {

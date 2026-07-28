@@ -229,6 +229,14 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "free" }), () =>
       expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
     );
+    // "0" is how a user caps spend at zero — it must mean zero, not silently fall back to
+    // the $2 default (that fallback is reserved for non-numeric/negative input).
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "0" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBe(0),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "-5" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
   });
 
   test("MINIMA_TUI_FETCH_LOCAL is a consent gate: absent means DENY", () => {

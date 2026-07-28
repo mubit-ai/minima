@@ -676,6 +676,11 @@ export function bigPlanAfterToolCall(
           if (delegate) {
             const reports: string[] = [];
             for (const s of started) {
+              // An already-aborted signal never fires its "abort" listener (spawn.ts's
+              // addEventListener registration is a no-op on a signal that's already
+              // tripped), so a child launched past this point could never be stopped —
+              // it would run to its full effort cap after the user pressed Esc.
+              if (ref.runSignal?.aborted) break;
               const report = await delegate(planId, s.id);
               if (report) reports.push(report);
             }

@@ -228,6 +228,30 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     expect(budgetCalled).toBe(false);
   });
 
+  test("a $0 plan budget also skips the stamp — 0 means capped at zero, not unset", async () => {
+    const store = new PlanSessionStore("g");
+    let budgetCalled = false;
+    const fakeDb = {
+      seedPlanFromSteps: (_s: string, _t: string | null, steps: SeededStep[]) => ({
+        planId: "p",
+        stepIds: steps.map((_, i) => `s${i}`),
+      }),
+      setPlanBudget: () => {
+        budgetCalled = true;
+      },
+    };
+    const { base } = deps({
+      metaModel: META,
+      db: fakeDb,
+      runId: "run-1",
+      synthesize: async () => synth(),
+      planBudgetUsd: 0,
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(budgetCalled).toBe(false);
+  });
+
   test("synthesis failure is SURFACED (synthFailed), never silent — no seeding happened", async () => {
     const store = new PlanSessionStore("g");
     const { base, written } = deps({

@@ -1071,6 +1071,33 @@ describe("bigPlanAfterToolCall — delegate wiring", () => {
     expect(spawnCalls).toHaveLength(0);
   });
 
+  test("an already-aborted run signal spawns nothing and stamps no cost", async () => {
+    // Regression: spawn.ts's abort wiring is addEventListener("abort", ...) on the child's
+    // parentSignal — a no-op on a signal that's ALREADY tripped, so a child launched past
+    // this point could never be stopped. The loop must not even start delegating.
+    const d = db();
+    const controller = new AbortController();
+    controller.abort();
+    let delegateCalls = 0;
+    const delegate: PlanDelegate = async () => {
+      delegateCalls++;
+      return "should never run";
+    };
+    const sink = bigPlanAfterToolCall(
+      { db: d, runId: "run1", runSignal: controller.signal },
+      { delegate },
+    );
+    await sink(
+      resultCtx("todowrite", {
+        tasks: JSON.stringify([{ content: "A", status: "in_progress" }]),
+      }),
+    );
+    expect(delegateCalls).toBe(0);
+    const plan = d.getActivePlan("run1");
+    expect(plan).not.toBeNull();
+    expect(d.getPlanSteps(plan!.id)[0]!.delegated_cost_usd).toBeNull();
+  });
+
   test("a delegate's report augments the todowrite result — it never replaces it", async () => {
     const d = db();
     const delegate: PlanDelegate = async () => "Step delegated to a sub-agent (success, $0.0500).";

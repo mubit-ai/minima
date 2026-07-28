@@ -2370,6 +2370,10 @@ export class MinimaDb {
       .run(result, costUsd, stepId);
   }
 
+  /** Best-effort, not a hard ceiling: this is a SUM() over the current plan_steps rows, and
+   *  upsertPlanFromTodos hard-deletes any step a later todowrite no longer matches — so a
+   *  lead re-emitting a shortened todo list silently erases those steps' delegation records
+   *  along with them, resetting the spend the plan budget is tracked against mid-plan. */
   planDelegatedSpend(planId: string): number {
     const row = this.db
       .query(

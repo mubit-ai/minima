@@ -850,6 +850,41 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   config.memorySession = memorySession;
   agent.memory = await createMubitMemory(memorySession);
 
+  // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
+  // Children get their own routed model, meter, confined tools, and budget slice; their
+  // rows land in the same run under agentId=childId.
+  //
+  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
+  // React state without the TUI needing to exist at createSpawn time.
+  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
+  // User-defined agent types (~/.minima-harness/agents/*.md + ./.minima/agents/*.md):
+  // named presets a delegation can reference by name. No files → an empty registry, which
+  // every consumer treats as "no agent types" (identical behavior to not having them).
+  const agentTypes = loadAgentTypes(process.cwd());
+  for (const warning of agentTypes.warnings) {
+    process.stderr.write(`minima: agent type — ${warning}\n`);
+  }
+  const spawnFactory = createSpawn({
+    parent: agent,
+    workdir: process.cwd(),
+    onChildEvent: (e) => childEventRef.handler?.(e),
+    artifacts: artifactStore ?? undefined,
+    agentTypes,
+  });
+  agent.agentState.tools.push(
+    taskTool({
+      spawn: spawnFactory,
+      spawnDepth: 0,
+      maxDepth: 2,
+      typedTask: config.typedTask,
+      agentTypes: [...agentTypes.types.values()].map((t) => ({
+        name: t.name,
+        description: t.description,
+      })),
+      onSpend: (usd) => agent.budget?.bookSpend(usd, "subagent"),
+    }),
+  );
+
   // Persistence spine: open the local DB, register {project_key, run_id}, and attach the
   // event sink + DecisionRecord writer. Fail-open — a broken DB never blocks a run — EXCEPT
   // --resume, where continuing without the store would silently start a fresh session.
@@ -934,22 +969,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // consent per exact command via the existing overlay and -p runs never execute an
       // unapproved check.
       const planDb = db;
-      // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): built lazily because
-      // spawnFactory/agentTypes are constructed further down (they need `agent` fully set
-      // up first) — this closure isn't invoked until the agent's first todowrite, long
-      // after that construction has run. `signal` is a thunk, not a captured value: the
+      // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): spawnFactory/agentTypes
+      // are hoisted above (before the persistence spine) so this is built once per session,
+      // not rebuilt on every todowrite. `signal` is a thunk, not a captured value: the
       // delegate is built once here but agent.runSignal changes every turn, so reading it
       // eagerly would leave every child unabortable after the first turn.
       const delegate =
         config.planDelegate && planDb
-          ? (planId: string, stepId: string) =>
-              makePlanDelegate({
-                db: planDb,
-                spawn: spawnFactory,
-                signal: () => agent.runSignal ?? null,
-                onSpend: (usd) => agent.budget?.bookSpend(usd, "plan-step"),
-                agentTypes,
-              })(planId, stepId)
+          ? makePlanDelegate({
+              db: planDb,
+              spawn: spawnFactory,
+              signal: () => agent.runSignal ?? null,
+              onSpend: (usd) => agent.budget?.bookSpend(usd, "plan-step"),
+              agentTypes,
+            })
           : undefined;
       const { before, after } = bigPlanHooks(agent, {
         enforceAllowlist: config.toolAllowlist,
@@ -1030,41 +1063,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // curation is optional — never delay shutdown on an error
     }
   };
-
-  // Orchestration: the lead (depth 0) can delegate subtasks to cost-routed child agents.
-  // Children get their own routed model, meter, confined tools, and budget slice; their
-  // rows land in the same run under agentId=childId.
-  //
-  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
-  // React state without the TUI needing to exist at createSpawn time.
-  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
-  // User-defined agent types (~/.minima-harness/agents/*.md + ./.minima/agents/*.md):
-  // named presets a delegation can reference by name. No files → an empty registry, which
-  // every consumer treats as "no agent types" (identical behavior to not having them).
-  const agentTypes = loadAgentTypes(process.cwd());
-  for (const warning of agentTypes.warnings) {
-    process.stderr.write(`minima: agent type — ${warning}\n`);
-  }
-  const spawnFactory = createSpawn({
-    parent: agent,
-    workdir: process.cwd(),
-    onChildEvent: (e) => childEventRef.handler?.(e),
-    artifacts: artifactStore ?? undefined,
-    agentTypes,
-  });
-  agent.agentState.tools.push(
-    taskTool({
-      spawn: spawnFactory,
-      spawnDepth: 0,
-      maxDepth: 2,
-      typedTask: config.typedTask,
-      agentTypes: [...agentTypes.types.values()].map((t) => ({
-        name: t.name,
-        description: t.description,
-      })),
-      onSpend: (usd) => agent.budget?.bookSpend(usd, "subagent"),
-    }),
-  );
 
   // Fixed cheap model the plan-mode council uses for keeper/critic/synth completions.
   const planMetaModel = findModelById(agent.config.judgeModel) ?? agent.mapping.defaultModel();

@@ -59,7 +59,7 @@ export interface PlanOverview {
   unattributedUsd: number;
   /** Latest gate rows per step, newest last — the detail card's evidence list. */
   gatesByStep: Map<string, GateRow[]>;
-  /** Plan-delegated steps (Task 6): the approved plan budget, null until one is set — the
+  /** Plan-delegated steps (Task 6): the plan's budget total, null until one is set — the
    *  readout line's gate. A plan that never delegated must render identically to before. */
   planBudgetUsd: number | null;
   /** Σ plan_steps.delegated_cost_usd — 0 when nothing has been delegated yet. */
@@ -148,12 +148,13 @@ function sessionCostLine(overview: PlanOverview): string | null {
   return `session total ${fmtUsd(overview.sessionTotalUsd)} · unattributed ${fmtUsd(overview.unattributedUsd)}`;
 }
 
-/** Task 6: spend-vs-approved line; null when the plan has no approved budget — omitted
+/** Task 6: spend-vs-budget line; null when the plan has no stamped budget — omitted
  *  entirely rather than rendered as "$0.00 of $0.00" so a plan that never delegated is
- *  unchanged. */
+ *  unchanged. Says "budget", never "approved" — there is no accept/override/decline
+ *  prompt; this is just MINIMA_TUI_PLAN_BUDGET's value. */
 function delegatedSpendLine(overview: PlanOverview): string | null {
   if (overview.planBudgetUsd === null) return null;
-  return `delegated: $${overview.delegatedSpendUsd.toFixed(2)} of $${overview.planBudgetUsd.toFixed(2)} approved · ${overview.delegatedStepCount} of ${overview.stepTotal} steps`;
+  return `delegated: $${overview.delegatedSpendUsd.toFixed(2)} of $${overview.planBudgetUsd.toFixed(2)} budget · ${overview.delegatedStepCount} of ${overview.stepTotal} steps`;
 }
 
 const fmtUsd = (v: number | null) => (v === null ? "—" : `$${v.toFixed(4)}`);

@@ -131,8 +131,10 @@ export interface SynthPlanStep {
   verify: string | null;
   /** Name of a user-defined agent type (`.minima/agents/<name>.md`) this step is scoped to.
    *  Expanded at /plan finalize into the step's `tools` + `candidates` (agent_types.ts:
-   *  agentTypePlanPreset) — the LEAD still executes the step, it just runs under that
-   *  agent's tool scope and model pool. Rendered in the plan doc for the reader. */
+   *  agentTypePlanPreset) — scope only while plan-delegated steps are OFF, so the LEAD
+   *  executes the step itself under that agent's tool scope and model pool. With
+   *  MINIMA_TUI_PLAN_DELEGATE=1 the step instead runs AS that agent, identity included.
+   *  Rendered in the plan doc for the reader. */
   agent_type?: string;
   /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
   tools: string[];

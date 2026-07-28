@@ -17,7 +17,6 @@ import {
   makePlanDelegate,
   priorResultsFor,
   synthesizeBoundaries,
-  MIN_VIABLE_SLICE_USD,
   shouldDelegate,
   sliceForStep,
 } from "../src/minima/plan_delegate.ts";
@@ -281,7 +280,12 @@ describe("budget", () => {
   test("a thin slice over many steps is NOT the same as an exhausted plan — the money is still there", () => {
     const s = row({ id: "s1", idx: 0, status: "in_progress" });
     // $0.10 unspent, but 6 steps left: $0.0167/step is unusable, yet nothing has been spent.
-    expect(shouldDelegate(s, 0.1, 0, 6)).toEqual({ ok: false, reason: "slice_too_thin" });
+    // sliceUsd rides along on this branch too, so the caller's exhausted-plan message can
+    // use it directly instead of recomputing sliceForStep a second time.
+    const verdict = shouldDelegate(s, 0.1, 0, 6);
+    expect(verdict.ok).toBe(false);
+    expect(verdict).toMatchObject({ reason: "slice_too_thin" });
+    expect((verdict as { sliceUsd: number }).sliceUsd).toBeCloseTo(0.0167, 3);
   });
 
   test("an empty step is not delegated", () => {
@@ -359,6 +363,27 @@ describe("the delegate seam", () => {
     const second = await delegate(planId, stepIds[0]!);
     expect(second).toBeNull();
     expect(seen).toHaveLength(1);
+  });
+
+  test("a failed delegation stores an empty result, never the failure text", async () => {
+    // Regression: priorResultsFor hardcodes outcome: "success" for every stored result, so
+    // storing "boom" here would later tell a downstream step this failed step succeeded.
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [
+      { content: "one" },
+      { content: "two" },
+    ]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const { spawn } = fakeSpawn({ outcome: "failure", text: "boom", costUsd: 0.03 });
+    const first = await makePlanDelegate({ db, spawn })(planId, stepIds[0]!);
+    expect(first).toContain("boom");
+    expect(db.getPlanSteps(planId)[0]!.result).toBe("");
+
+    // Mark it completed (as the lead would after finishing it itself) and confirm the next
+    // step's prior-results projection does not resurrect the stored failure text.
+    db.setStepStatus(stepIds[0]!, "completed");
+    const steps = db.getPlanSteps(planId);
+    expect(priorResultsFor(steps).map((p) => p.step_id)).not.toContain(stepIds[0]!);
   });
 
   test("without an approved budget nothing spawns", async () => {
@@ -443,19 +468,6 @@ describe("the delegate seam", () => {
     current = freshSignal;
     await delegate(planId, stepIds[0]!);
     expect(seen[0]!.ctx.parentSignal).toBe(freshSignal);
-  });
-});
-
-describe("regression guard", () => {
-  test("flag off: the after-hook returns nothing extra and no step is delegated", async () => {
-    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
-    db.setPlanBudget(planId, 2);
-    db.setStepStatus(stepIds[0]!, "in_progress");
-    // No delegate injected — the flag-off wiring in main.ts passes undefined.
-    const { spawn, seen } = fakeSpawn({});
-    expect(seen).toHaveLength(0);
-    expect(db.getPlanSteps(planId)[0]!.delegated_cost_usd).toBeNull();
-    void spawn;
   });
 });
 

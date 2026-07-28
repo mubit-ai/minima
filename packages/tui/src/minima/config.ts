@@ -428,7 +428,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.planDelegate = process.env.MINIMA_TUI_PLAN_DELEGATE === "1";
   const planBudget = Number(process.env.MINIMA_TUI_PLAN_BUDGET);
-  cfg.planBudgetUsd = Number.isFinite(planBudget) && planBudget > 0 ? planBudget : 2;
+  cfg.planBudgetUsd = Number.isFinite(planBudget) && planBudget >= 0 ? planBudget : 2;
   return { ...cfg, ...overrides };
 }
 
