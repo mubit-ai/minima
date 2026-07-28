@@ -174,7 +174,7 @@ describe("projection", () => {
     expect(d.output_format).toContain("bun test tests/cli.test.ts");
     expect(d.boundaries).toContain("step 0");
     // A worktree child's writes go opaque and cap the plan at yellow — never isolate.
-    expect(d.isolation).toBeUndefined();
+    expect(d.isolation).toBe("inherit");
   });
 
   test("a step with no tools/candidates/type delegates unrestricted", () => {
@@ -211,6 +211,22 @@ describe("projection", () => {
     const plain = row({ id: "s3", idx: 0, status: "in_progress", agent_type: "nope" });
     expect(buildStepDelegation([plain], plain, 2, registry).budget_usd).toBeCloseTo(2, 6);
   });
+
+  test("an agent type's isolation can never force a worktree child", () => {
+    const registry = {
+      types: new Map([
+        [
+          "worktree-fan",
+          { name: "worktree-fan", description: "d", prompt: "", isolation: "workdir" as const },
+        ],
+      ]),
+      warnings: [],
+    };
+    const s = row({ id: "s1", idx: 0, status: "in_progress", agent_type: "worktree-fan" });
+    // buildStepDelegation always sets isolation itself, so applyAgentType's "fill only what's
+    // unset" rule has nothing to fill — a type's isolation can never reach a plan step.
+    expect(buildStepDelegation([s], s, 1, registry).isolation).toBe("inherit");
+  });
 });
 
 describe("budget", () => {
@@ -240,6 +256,12 @@ describe("budget", () => {
   test("an exhausted plan total stops the next step rather than shrinking it to nothing", () => {
     const s = row({ id: "s1", idx: 0, status: "in_progress" });
     expect(shouldDelegate(s, 2, 1.995, 1)).toEqual({ ok: false, reason: "plan_exhausted" });
+  });
+
+  test("a thin slice over many steps is NOT the same as an exhausted plan — the money is still there", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress" });
+    // $0.10 unspent, but 6 steps left: $0.0167/step is unusable, yet nothing has been spent.
+    expect(shouldDelegate(s, 0.1, 0, 6)).toEqual({ ok: false, reason: "slice_too_thin" });
   });
 
   test("an empty step is not delegated", () => {
@@ -299,7 +321,7 @@ describe("the delegate seam", () => {
     db.setStepStatus(stepIds[0]!, "in_progress");
     const { spawn, seen } = fakeSpawn({});
     await makePlanDelegate({ db, spawn })(planId, stepIds[0]!);
-    expect(seen[0]!.d.isolation).toBeUndefined();
+    expect(seen[0]!.d.isolation).toBe("inherit");
   });
 
   test("a failed child stamps cost anyway and cannot be re-delegated", async () => {
@@ -340,6 +362,23 @@ describe("the delegate seam", () => {
     expect(seen).toHaveLength(0);
     expect(report).toContain("$0.50");
     expect(report!.toLowerCase()).toContain("budget");
+  });
+
+  test("a thin slice reports honestly — the budget is not spent, just spread too thin", async () => {
+    const { planId, stepIds } = db.seedPlanFromSteps(
+      "s",
+      "T",
+      Array.from({ length: 6 }, (_, i) => ({ content: `step ${i}` })),
+    );
+    db.setPlanBudget(planId, 0.1);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    const { spawn, seen } = fakeSpawn({});
+    const report = await makePlanDelegate({ db, spawn })(planId, stepIds[0]!);
+    expect(seen).toHaveLength(0);
+    expect(report).toContain("$0.10");
+    expect(report!.toLowerCase()).toContain("budget");
+    expect(report!.toLowerCase()).not.toContain("exhausted");
+    expect(report!.toLowerCase()).not.toContain("is spent");
   });
 
   test("a spawn that throws is reported, not propagated — bookkeeping never breaks a turn", async () => {

@@ -95,6 +95,11 @@ export function buildStepDelegation(
       : "A short report of what you changed and how you confirmed it works.",
     boundaries: synthesizeBoundaries(steps, step.id),
     depends_on: priors.map((p) => p.step_id),
+    // Same defensive shape as the budget_usd clamp below: applyAgentType fills isolation
+    // ONLY when the delegation left it unset, so a type declaring isolation:"workdir" would
+    // otherwise force a worktree child — the opaque marker this module's header says must
+    // never happen. Setting it here, always, closes that off regardless of agent_type.
+    isolation: "inherit",
   };
   const tools = jsonList(step.tools);
   if (tools) d.tool_allowlist = tools;
@@ -119,6 +124,7 @@ export type DelegateSkip =
   | "already_delegated"
   | "no_budget"
   | "plan_exhausted"
+  | "slice_too_thin"
   | "no_content";
 
 /** What is LEFT, divided among the steps that REMAIN — recomputed before every spawn, so a
@@ -132,6 +138,12 @@ export function sliceForStep(
   return Math.max(0, (planTotalUsd - spentUsd) / stepsRemaining);
 }
 
+/**
+ * A thin slice is NOT an exhausted plan: "plan_exhausted" means the money itself is gone
+ * (the remaining total can't fund even one more step), while "slice_too_thin" means the
+ * money is still there but there are too many steps left to divide it usefully — the two
+ * need different messages, since only one of them is honestly described as "spent".
+ */
 export function shouldDelegate(
   step: PlanStepRow,
   planBudgetUsd: number | null,
@@ -141,8 +153,10 @@ export function shouldDelegate(
   if (step.delegated_cost_usd !== null) return { ok: false, reason: "already_delegated" };
   if (!(step.content ?? "").trim()) return { ok: false, reason: "no_content" };
   if (planBudgetUsd === null || planBudgetUsd <= 0) return { ok: false, reason: "no_budget" };
+  const remainingUsd = planBudgetUsd - spentUsd;
+  if (remainingUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "plan_exhausted" };
   const sliceUsd = sliceForStep(planBudgetUsd, spentUsd, stepsRemaining);
-  if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "plan_exhausted" };
+  if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "slice_too_thin" };
   return { ok: true, sliceUsd };
 }
 
@@ -172,8 +186,14 @@ export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
     const budget = deps.db.getPlanBudget(planId);
     const verdict = shouldDelegate(step, budget, spent, remaining);
     if (!verdict.ok) {
-      if (verdict.reason !== "plan_exhausted") return null;
-      return `Plan budget exhausted: $${spent.toFixed(2)} of the approved $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
+      if (verdict.reason === "plan_exhausted") {
+        return `Plan budget exhausted: $${spent.toFixed(2)} of the approved $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
+      }
+      if (verdict.reason === "slice_too_thin") {
+        const perStepUsd = sliceForStep(budget ?? 0, spent, remaining);
+        return `Plan budget too thin: $${((budget ?? 0) - spent).toFixed(2)} left, split across ${remaining} remaining step${remaining === 1 ? "" : "s"}, is only $${perStepUsd.toFixed(2)} each — too small for a sub-agent to do anything useful with. This step was not delegated. Stop and ask the user to raise the plan budget before continuing.`;
+      }
+      return null;
     }
 
     const delegation = buildStepDelegation(steps, step, verdict.sliceUsd, deps.agentTypes);

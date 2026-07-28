@@ -679,7 +679,16 @@ export function bigPlanAfterToolCall(
               const report = await delegate(planId, s.id);
               if (report) reports.push(report);
             }
-            if (reports.length) return { content: [text(reports.join("\n\n---\n\n"))] };
+            // AUGMENT, never replace: ctx.result is the rendered todo list + "N/M done" summary
+            // from todowrite itself — the lead's only confirmation the list was accepted, and
+            // after compaction its only view of its own plan position. loop.ts splices this
+            // hook's `content` in place of the tool result wholesale, so dropping ctx.result.content
+            // here would silently destroy that echo on every delegating turn.
+            if (reports.length) {
+              return {
+                content: [...ctx.result.content, text(`\n\n---\n\n${reports.join("\n\n---\n\n")}`)],
+              };
+            }
           }
         }
         return null;
