@@ -242,6 +242,14 @@ export interface HarnessConfig {
    * switch — NOT umbrella-covered). 0 = unset (the built-in 1500ms ceiling). Only consulted
    * when `lsp` is on. */
   lspTimeoutMs: number;
+  /** Plan-delegated steps: every step of an active plan runs as a sub-agent. OPT-IN with
+   *  MINIMA_TUI_PLAN_DELEGATE=1 for one release — the repo's default-on convention fits
+   *  additive features, and this redirects who executes every plan step. Only consulted when
+   *  `bigPlan` is on. */
+  planDelegate: boolean;
+  /** Default plan total, USD, offered at /plan finalize (MINIMA_TUI_PLAN_BUDGET). Only
+   *  consulted when `planDelegate` is on. */
+  planBudgetUsd: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -294,6 +302,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     ttsrCap: 0,
     lsp: false,
     lspTimeoutMs: 0,
+    planDelegate: false,
+    planBudgetUsd: 2,
     ...overrides,
   };
 }
@@ -413,6 +423,9 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(backoffEnv);
     if (Number.isInteger(n) && n >= 0) cfg.backoffMs = n;
   }
+  cfg.planDelegate = process.env.MINIMA_TUI_PLAN_DELEGATE === "1";
+  const planBudget = Number(process.env.MINIMA_TUI_PLAN_BUDGET);
+  cfg.planBudgetUsd = Number.isFinite(planBudget) && planBudget > 0 ? planBudget : 2;
   return { ...cfg, ...overrides };
 }
 

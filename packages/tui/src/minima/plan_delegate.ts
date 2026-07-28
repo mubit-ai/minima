@@ -167,7 +167,12 @@ export type PlanDelegate = (planId: string, stepId: string) => Promise<string | 
 export interface PlanDelegateDeps {
   db: MinimaDb;
   spawn: SpawnFn;
-  signal?: AbortSignal | null;
+  /** The run's live AbortSignal. A plain value would be a snapshot of whatever was in
+   *  flight when the delegate was BUILT — since the delegate is constructed once per
+   *  session but runSignal changes every turn, that would leave every child unabortable
+   *  after the first turn. Pass a thunk (`() => agent.runSignal ?? null`) so it is read
+   *  fresh at spawn time; a plain value/null is still accepted for tests. */
+  signal?: AbortSignal | null | (() => AbortSignal | null);
   /** Book realized child spend against the wallet — the same seam taskTool uses, so plan
    *  spend is visible to enforce mode exactly like fan-out spend. */
   onSpend?: (usd: number) => void;
@@ -198,11 +203,12 @@ export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
 
     const delegation = buildStepDelegation(steps, step, verdict.sliceUsd, deps.agentTypes);
     const priorResults = priorResultsFor(steps);
+    const signal = typeof deps.signal === "function" ? deps.signal() : (deps.signal ?? null);
     let result: ChildResult;
     try {
       result = await deps.spawn(delegation, {
         depth: 1,
-        parentSignal: deps.signal ?? null,
+        parentSignal: signal,
         priorResults,
       });
     } catch (exc) {

@@ -136,6 +136,11 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_DEBUG_ANCHOR",
   "MINIMA_TUI_BADGE",
   "MINIMA_TUI_PERF",
+  // Deliberately NOT umbrella-covered (own dedicated test below, not the OPT_IN loop's
+  // EXPERIMENTAL=1 assertion): plan-delegated steps redirect who executes every plan step,
+  // so it ships opt-in for one release on its own switch, not tucked under the umbrella.
+  "MINIMA_TUI_PLAN_DELEGATE",
+  "MINIMA_TUI_PLAN_BUDGET",
 ]);
 
 /** Every .ts/.tsx file under src/, so an ambient read cannot hide outside config.ts. */
@@ -187,6 +192,32 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     );
     withEnv(clean({ MINIMA_TUI_ARTIFACT_GC_MB: "16" }), () =>
       expect(configFromEnv().artifactGcMb).toBe(16),
+    );
+  });
+
+  test("MINIMA_TUI_PLAN_DELEGATE is opt-in on its own switch — EXPERIMENTAL=1 must not open it", () => {
+    withEnv(clean({ MINIMA_TUI_PLAN_DELEGATE: undefined }), () =>
+      expect(configFromEnv().planDelegate).toBe(false),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_DELEGATE: "1" }), () =>
+      expect(configFromEnv().planDelegate).toBe(true),
+    );
+    // Redirects who executes every plan step — deliberately NOT under the umbrella that
+    // flips every other default-off feature on at once.
+    withEnv(clean({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_PLAN_DELEGATE: undefined }), () =>
+      expect(configFromEnv().planDelegate).toBe(false),
+    );
+  });
+
+  test("MINIMA_TUI_PLAN_BUDGET defaults to $2 and rejects nonsense", () => {
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: undefined }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "5.50" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(5.5, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "free" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
     );
   });
 

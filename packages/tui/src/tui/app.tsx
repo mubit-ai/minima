@@ -1227,6 +1227,10 @@ export function HarnessApp({
         // A step may name a user-defined agent type; finalize expands it into that step's
         // tool allowlist + model pool.
         agentTypes,
+        // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): stamp the approved
+        // total so the delegate seam's budget gate has something to spend against. No
+        // interactive approval prompt yet — that is deferred to a later change.
+        planBudgetUsd: agent.config.planDelegate ? agent.config.planBudgetUsd : null,
       });
       // MP18: approving the plan (which displays every step's verify) IS the consent event
       // for the seeded checks — without this, the first in_progress todowrite after

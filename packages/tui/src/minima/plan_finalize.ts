@@ -30,8 +30,12 @@ export interface PlanFinalizeDb {
       verify?: string | null;
       tools?: string[] | null;
       candidates?: string[] | null;
+      agentType?: string | null;
     }[],
   ): { planId: string; stepIds: string[] };
+  /** Stamp the plan's approved total (Task 1). Optional — only real delegation callers
+   *  (main.ts/app.tsx) carry it; fakeDb test doubles that predate delegation need not. */
+  setPlanBudget?(planId: string, usd: number): void;
 }
 
 export interface PlanFinalizeDeps {
@@ -65,6 +69,10 @@ export interface PlanFinalizeDeps {
   /** User-defined agent types: advertised to the recorder model, then expanded into each
    *  step's tools/candidates before the lint, the doc and the seed all see them. */
   agentTypes?: PlanFinalizeAgentTypes;
+  /** Plan-delegated steps' approved total, resolved by the caller from `config.planBudgetUsd`
+   *  (only when `config.planDelegate` is on — this module stays flag-agnostic). null/absent
+   *  → no plan budget is stamped, so the delegate seam's `no_budget` skip applies. */
+  planBudgetUsd?: number | null;
 }
 
 export type PlanFinalizeOutcome =
@@ -275,11 +283,15 @@ export async function finalizePlan(
           verify: st.verify,
           tools: st.tools,
           candidates: st.candidates ?? null,
+          agentType: st.agent_type?.trim() ? st.agent_type.trim() : null,
         }))
         .filter((st) => st.content.length > 0);
       if (seedSteps.length > 0) {
-        seededCount = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps).stepIds
-          .length;
+        const seeded = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps);
+        seededCount = seeded.stepIds.length;
+        if (deps.planBudgetUsd && deps.planBudgetUsd > 0) {
+          deps.db.setPlanBudget?.(seeded.planId, deps.planBudgetUsd);
+        }
         // MP18: the verifies the user just approved WITH the plan — the caller feeds them
         // into the consent store, so the first in_progress todowrite (which carries no
         // verify text of its own) does not dead-end at the execution-time consent check.

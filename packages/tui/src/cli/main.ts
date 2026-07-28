@@ -39,6 +39,7 @@ import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
+import { makePlanDelegate } from "../minima/plan_delegate.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
@@ -932,10 +933,29 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       // the TUI swaps in its permission-state-backed checker on mount, so interactive runs
       // consent per exact command via the existing overlay and -p runs never execute an
       // unapproved check.
+      const planDb = db;
+      // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): built lazily because
+      // spawnFactory/agentTypes are constructed further down (they need `agent` fully set
+      // up first) — this closure isn't invoked until the agent's first todowrite, long
+      // after that construction has run. `signal` is a thunk, not a captured value: the
+      // delegate is built once here but agent.runSignal changes every turn, so reading it
+      // eagerly would leave every child unabortable after the first turn.
+      const delegate =
+        config.planDelegate && planDb
+          ? (planId: string, stepId: string) =>
+              makePlanDelegate({
+                db: planDb,
+                spawn: spawnFactory,
+                signal: () => agent.runSignal ?? null,
+                onSpend: (usd) => agent.budget?.bookSpend(usd, "plan-step"),
+                agentTypes,
+              })(planId, stepId)
+          : undefined;
       const { before, after } = bigPlanHooks(agent, {
         enforceAllowlist: config.toolAllowlist,
         verifyConsent: (cmd) => verifyConsentRef.current(cmd),
         onPlanClosed: (planId) => planClosedRef.current?.(planId),
+        delegate,
       });
       agent.addAfterToolCall(after);
       bigPlanGateBefore = before;

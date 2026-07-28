@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import type { PlanStepRow } from "../src/db/minima_db.ts";
+import { configFromEnv } from "../src/minima/index.ts";
 import {
   PRIOR_RESULTS_CAP_CHARS,
   buildStepDelegation,
@@ -21,6 +22,25 @@ import {
   sliceForStep,
 } from "../src/minima/plan_delegate.ts";
 import type { ChildResult, Delegation, SpawnContext } from "../src/tools/task.ts";
+
+// configFromEnv reads process.env directly (no env-object argument), so config assertions
+// save/restore the exact keys they touch — same pattern as tests/kill-switches.test.ts.
+function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) {
+    saved[k] = process.env[k];
+    if (vars[k] === undefined) delete process.env[k];
+    else process.env[k] = vars[k];
+  }
+  try {
+    fn();
+  } finally {
+    for (const k of Object.keys(saved)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
 
 let dir: string;
 let db: MinimaDb;
@@ -406,5 +426,44 @@ describe("the delegate seam", () => {
     await makePlanDelegate({ db, spawn })(planId, stepIds[1]!);
     expect(seen[0]!.d.depends_on).toEqual([stepIds[0]!]);
     expect(seen[0]!.ctx.priorResults[0]!.text).toBe("found the seam");
+  });
+
+  test("a function signal is read fresh at spawn time, not snapshotted at construction", async () => {
+    // Regression: a plan delegate is built ONCE (per session) but the run's AbortSignal
+    // changes every turn. Passing a plain value would freeze it at whatever was live when
+    // the delegate was constructed, silently making every later child unabortable.
+    const { planId, stepIds } = db.seedPlanFromSteps("s", "T", [{ content: "one" }]);
+    db.setPlanBudget(planId, 2);
+    db.setStepStatus(stepIds[0]!, "in_progress");
+    let current: AbortSignal | null = new AbortController().signal;
+    const { spawn, seen } = fakeSpawn({});
+    const delegate = makePlanDelegate({ db, spawn, signal: () => current });
+
+    const freshSignal = new AbortController().signal;
+    current = freshSignal;
+    await delegate(planId, stepIds[0]!);
+    expect(seen[0]!.ctx.parentSignal).toBe(freshSignal);
+  });
+});
+
+describe("config", () => {
+  test("delegation is opt-in and the plan budget has a default", () => {
+    withEnv({ MINIMA_TUI_PLAN_DELEGATE: undefined, MINIMA_TUI_PLAN_BUDGET: undefined }, () => {
+      expect(configFromEnv().planDelegate).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_PLAN_DELEGATE: "1", MINIMA_TUI_PLAN_BUDGET: undefined }, () => {
+      const on = configFromEnv();
+      expect(on.planDelegate).toBe(true);
+      expect(on.planBudgetUsd).toBeCloseTo(2, 6);
+    });
+    withEnv({ MINIMA_TUI_PLAN_DELEGATE: "1", MINIMA_TUI_PLAN_BUDGET: "5.50" }, () => {
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(5.5, 6);
+    });
+  });
+
+  test("a nonsense budget falls back to the default rather than disabling delegation", () => {
+    withEnv({ MINIMA_TUI_PLAN_DELEGATE: "1", MINIMA_TUI_PLAN_BUDGET: "free" }, () => {
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6);
+    });
   });
 });
