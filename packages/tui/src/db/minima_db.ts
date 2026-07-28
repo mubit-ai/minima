@@ -881,6 +881,8 @@ export interface CompletionFlip {
   verify_cwd: string | null;
   /** Stored check provenance, when known up-front (else null → compute at gate time). */
   check_origin: CheckOrigin | null;
+  /** The matched step's CURRENT status (null for a brand-new todo with no matched step). */
+  status: string | null;
 }
 
 /**
@@ -2496,6 +2498,7 @@ export class MinimaDb {
         baseline: verifyChanged ? null : (prev?.baseline ?? null),
         verify_cwd: t.verify_cwd ?? prev?.verify_cwd ?? null,
         check_origin: prev?.check_origin ?? null,
+        status: prev?.status ?? null,
       });
     }
     return flips;

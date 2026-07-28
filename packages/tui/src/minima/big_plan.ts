@@ -795,6 +795,20 @@ function soloCompletionReason(names: string[]): string {
   return `${SOLO_COMPLETION_PREFIX}${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
 }
 
+const NOT_ANNOUNCED_PREFIX = "Step not announced — ";
+
+/**
+ * Plan-delegated steps (requireInProgress, MINIMA_TUI_PLAN_DELEGATE=1 only): a step that jumps
+ * pending -> completed in one todowrite skipped the in_progress transition entirely, so the
+ * harness never ran its pre-work baseline and never delegated it — both fire ONLY when a step
+ * enters in_progress. Refusing forces the model to announce the step first, in its own message,
+ * before doing the work.
+ */
+function notAnnouncedReason(names: string[]): string {
+  const list = names.map((n) => `"${n}"`).join(", ");
+  return `${NOT_ANNOUNCED_PREFIX}${list} went straight from pending to completed without ever being marked in_progress. Mark it in_progress with todowrite FIRST, in its own message, BEFORE doing the work — the harness runs the step's pre-work baseline check and delegates it at that moment, and skipping the transition means neither ever happens. This call was refused before executing (none of its statuses were applied) — send an in_progress todowrite for ${names.length > 1 ? "these steps" : "this step"} now, then do the work, then mark it completed in a later message.`;
+}
+
 /**
  * True when a beforeToolCall block reason came from the todowrite done-gate family (step
  * verification, same-batch refusal, solo-completion refusal) rather than a permission
@@ -954,11 +968,17 @@ export function bigPlanHooks(
      * the diff-review trigger. Must not throw and must not block (fire-and-forget). */
     onPlanClosed?: (planId: string) => void;
     delegate?: PlanDelegate;
+    /** Plan-delegated steps only (MINIMA_TUI_PLAN_DELEGATE=1): refuse a pending -> completed
+     *  flip that skipped in_progress. OFF by default — the plan spine is on for everyone, and
+     *  universally refusing un-announced completions would change behavior for every plan user,
+     *  not just delegated ones. */
+    requireInProgress?: boolean;
   },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
   const enforceAllowlist = opts?.enforceAllowlist ?? false;
+  const requireInProgress = opts?.requireInProgress ?? false;
   const consent = opts?.verifyConsent;
   const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent, delegate: opts?.delegate });
   const pending = new Map<string, GateVerdict[]>();
@@ -993,6 +1013,16 @@ export function bigPlanHooks(
       if (todos.length === 0) return null;
       const flips = db.completionsForTodos(session, todos);
       if (flips.length === 0) return null;
+      // Plan-delegated steps only: a lead that does the work and THEN marks a step completed
+      // never passes through in_progress, so both the pre-work baseline capture and the step's
+      // delegation — which fire only on that transition — silently never happen. Block before
+      // running any checks; there is no point verifying a completion this call is refusing.
+      if (requireInProgress) {
+        const notAnnounced = flips.filter((f) => f.stepId !== null && f.status === "pending");
+        if (notAnnounced.length > 0) {
+          return { block: true, reason: notAnnouncedReason(notAnnounced.map((f) => f.content)) };
+        }
+      }
       // Solo-completion: a completion-flipping todowrite must be the only state-changing call
       // in its message — a mutating sibling executes AFTER this verdict is computed and could
       // regress the very state the check just verified.

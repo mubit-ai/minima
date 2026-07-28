@@ -989,6 +989,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         verifyConsent: (cmd) => verifyConsentRef.current(cmd),
         onPlanClosed: (planId) => planClosedRef.current?.(planId),
         delegate,
+        requireInProgress: config.planDelegate,
       });
       agent.addAfterToolCall(after);
       bigPlanGateBefore = before;

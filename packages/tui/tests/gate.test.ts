@@ -91,6 +91,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: null,
         verify_cwd: null,
         check_origin: null,
+        status: null,
       },
       {
         content: "C",
@@ -99,6 +100,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: null,
         verify_cwd: null,
         check_origin: null,
+        status: null,
       },
     ]);
   });
@@ -122,6 +124,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: "red",
         verify_cwd: null,
         check_origin: null,
+        status: "in_progress",
       },
       {
         content: "B",
@@ -130,6 +133,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: null,
         verify_cwd: null,
         check_origin: null,
+        status: "pending",
       },
     ]);
   });
@@ -153,6 +157,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: "red",
         verify_cwd: null,
         check_origin: null,
+        status: "in_progress",
       },
     ]);
   });
@@ -176,6 +181,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: null,
         verify_cwd: null,
         check_origin: null,
+        status: "in_progress",
       },
     ]);
   });
@@ -225,6 +231,7 @@ describe("MinimaDb.completionsForTodos", () => {
         baseline: null,
         verify_cwd: null,
         check_origin: null,
+        status: "pending",
       },
     ]);
   });
@@ -494,6 +501,48 @@ describe("done-gate before-hook (M4.1)", () => {
     } finally {
       process.chdir(prev);
     }
+  });
+});
+
+// --------------------------------------------------------------------------- requireInProgress (announce)
+
+describe("done-gate requireInProgress (announce-before-complete)", () => {
+  test("option ON: pending → completed is refused, naming the step and telling the model to announce it first", async () => {
+    const d = db();
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { requireInProgress: true });
+    d.upsertPlanFromTodos("run1", [{ content: "Fix the parser", status: "pending" }]);
+    const decision = await before(bctx([{ content: "Fix the parser", status: "completed" }]));
+    expect(decision?.block).toBe(true);
+    expect(decision?.reason).toContain("Fix the parser");
+    expect(decision?.reason).toContain("in_progress");
+    expect(decision?.reason).toContain("todowrite");
+    expect(d.getPlanSteps(d.getLatestPlan("run1")!.id)[0]!.status).toBe("pending");
+    expect(gates(d)).toHaveLength(0);
+  });
+
+  test("option ON: in_progress → completed is allowed and still reaches the verify machinery", async () => {
+    const d = db();
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { requireInProgress: true });
+    d.upsertPlanFromTodos("run1", [
+      { content: "Fix the parser", status: "in_progress", verify: "true" },
+    ]);
+    const decision = await before(bctx([{ content: "Fix the parser", status: "completed" }]));
+    expect(decision).toBeNull();
+  });
+
+  test("option OFF (default): pending → completed is NOT blocked by requireInProgress", async () => {
+    const d = db();
+    const { before } = bigPlanHooks({ db: d, runId: "run1" });
+    d.upsertPlanFromTodos("run1", [{ content: "Fix the parser", status: "pending", verify: "true" }]);
+    const decision = await before(bctx([{ content: "Fix the parser", status: "completed" }]));
+    expect(decision).toBeNull();
+  });
+
+  test("option ON: a brand-new completed todo with no matched step is NOT blocked", async () => {
+    const d = db();
+    const { before } = bigPlanHooks({ db: d, runId: "run1" }, { requireInProgress: true });
+    const decision = await before(bctx([{ content: "Brand new todo", status: "completed" }]));
+    expect(decision).toBeNull();
   });
 });
 
