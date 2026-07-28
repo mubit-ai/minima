@@ -9,16 +9,26 @@ All notable changes to Minima are documented here. The format follows
 ### Changed
 - **The candidate pool is now the union of each provider's Pareto frontier.** The old
   9-model pool left three models that no slider value could ever select (they cost more
-  than a same-provider model with an equal-or-higher capability prior), and its floor for
-  a user without a DeepSeek key was `gemini-2.5-flash` at $0.0032/turn. Rebuilt per
+  than a same-provider model with an equal-or-higher capability prior). Rebuilt per
   provider — not globally — so any combination of provider keys still yields a ladder with
-  rungs: with a Gemini key alone, `claude-haiku-4-5` is dominated, but for an
-  Anthropic-only user it is the floor. For the common Anthropic+Google+OpenAI key set this
-  takes the reachable ladder from 4 rungs to 6 and the floor from $0.003200 to $0.000720
-  (4.4x cheaper); at the shipped slider of 5.0 the pick is unchanged. Adds
-  `gemini-2.5-flash-lite` to the seed registry, and lists DeepSeek/OpenRouter models that
-  cost nothing when their key is absent (they are filtered pre-request) and add rungs the
-  moment one is set.
+  rungs: with a Gemini key alone `claude-haiku-4-5` is dominated, but for an
+  Anthropic-only user it is the floor. Adds `gemini-2.5-flash-lite` to the seed registry,
+  and lists DeepSeek/OpenRouter models that cost nothing when their key is absent (they are
+  filtered pre-request) and add rungs the moment one is set.
+
+  **This changes the default model on most key sets.** Two measured examples, `task=code`
+  at 4000 in / 800 out:
+
+  | keys | floor | pick at the default slider 5.0 |
+  |---|---|---|
+  | Anthropic+OpenAI+OpenRouter | $0.008000 -> $0.001080 | claude-sonnet-5 $0.016000 -> minimax/minimax-m3 $0.001360 |
+  | + Google | $0.003200 -> $0.000720 | gemini-2.5-flash $0.003200 -> minimax/minimax-m3 $0.001360 |
+
+  `minimax/minimax-m3` carries the same catalog prior for coding (0.74) as the
+  `gemini-2.5-flash` it displaces, at 2.4x less. Note it is served via OpenRouter, so on a
+  key set including OpenRouter the default routes prompts through OpenRouter rather than a
+  first-party provider. There is no environment override for the pool: pin a model with
+  `/model`, or set a per-repo routing profile, to opt out.
 
 ### Added
 - **The harness now sends `expected_output_tokens`.** The server prices candidates as
