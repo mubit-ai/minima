@@ -82,7 +82,14 @@ field for. Rather than add two authoring burdens, the harness synthesizes both:
   them.
 - `tool_allowlist`, `candidates`, `agent_type` — the row's own fields, unchanged.
 - `budget_usd` — the slice (below).
-- `depends_on` results — prior completed steps' stored results.
+- prior results — the stored `result` of every **completed** step, most recent first, under a hard
+  character cap, truncated at the boundary. All-of-them-uncapped would grow the child prompt
+  linearly with plan length and give back the context-hygiene win this feature exists for;
+  previous-step-only would starve a step that builds on something three steps back. The cap is the
+  same shape the memory ledger already uses for its injected projection.
+
+Steps stay linearly ordered, so the `Delegation.depends_on` field is left unset — prior results are
+passed directly rather than through a graph the plan format does not have.
 
 An agent type named by the step resolves through the existing `applyAgentType` inside `createSpawn`,
 so precedence stays explicit field > type > default and a typed child takes the identical code path.
@@ -106,7 +113,9 @@ already-delegated marker (see Failure).
 ## Cost
 
 **No estimator.** `/plan finalize` shows a plan total and the user accepts or overrides it — one
-number, defaulting from `MINIMA_TUI_PLAN_BUDGET` (default `$2.00`). A per-step estimator would mean
+number per plan, defaulting from `MINIMA_TUI_PLAN_BUDGET` (default `$2.00`). **Declining the budget
+turns delegation off for that plan**, which is exactly today's behavior: the lead executes every
+step inline. There is no half-state where some steps delegate for want of money. A per-step estimator would mean
 a throwaway `/v1/recommend` per step, minting `routing_decisions` rows that never receive feedback
 — polluting the propensity record to produce a guess the user can simply be asked for.
 
@@ -178,7 +187,7 @@ stays `in_progress` and the lead reports.
 - `MINIMA_TUI_PLAN_DELEGATE=1` — **opt-in for one release**, then default-on once benched. The
   repo's convention is default-on with a `=0` escape, but that fits *additive* features; this
   redirects who executes every plan step.
-- `MINIMA_TUI_PLAN_BUDGET` — default plan total offered at finalize (default `2.00`).
+- `MINIMA_TUI_PLAN_BUDGET` — default plan total, in USD, offered at finalize (default `2.00`).
 - Gated on `config.bigPlan`: no plan spine, no delegation.
 - With no agent types defined it still works — steps run as plain focused children.
 
