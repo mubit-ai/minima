@@ -14,6 +14,96 @@ minima dashboard --db /path/to.db    # read a specific ledger
 minima dashboard --editor cursor     # jump-to-source target (autodetected; "none" disables)
 ```
 
+You mostly should not need that command: an interactive TUI starts one for you. See
+[Lifecycle](#lifecycle-one-server-per-ledger-owned-by-no-tui).
+
+## Lifecycle: one server per ledger, owned by no TUI
+
+Launching a TUI brings the dashboard up; `/dashboard` prints its URL; closing the last TUI takes it
+down ~10s later. Running `minima dashboard` yourself is untouched by all of this — a foreground
+server is never adopted, never killed, and publishes nothing.
+
+```
+TUI starts ─→ read <dir-of-ledger>/dashboard/<sha256(ledger)>.json
+              ├─ /healthz answers with MY ledger ──────────→ attach
+              └─ otherwise → spawn detached `dashboard --managed` → attach
+```
+
+The rendezvous lives **beside the ledger**, not in a fixed home directory, so the detached child
+re-derives the identical path from the `--db` it was handed — nothing to plumb through, and no
+module-level default the two sides could disagree about. For the default ledger that is
+`~/.minima-harness/dashboard/`; a harness pointed at its own DB gets its own rendezvous for free.
+
+**Not in the TUI process.** The server is a detached child (`node:child_process`, `detached: true`,
+`stdio: "ignore"`, `unref()`), so closing the TUI that started it changes nothing for the other
+TUIs, Ctrl+C in that shell does not reach it, and the read-only guarantee stays structural — the
+serving process still never imports `MinimaDb`.
+
+**The bind is the mutex — per port, which is not the same as per ledger.** Ports 4180→4189 in order;
+`Bun.serve` throwing `EADDRINUSE` is the atomic race-winner. 4180 is not a safe assumption — it is
+also oauth2-proxy's default — so a moved port is recorded and `/dashboard` says why. Three checks
+guard against a second server for one ledger, because the first two are not sufficient alone:
+
+1. discovery (rendezvous + `/healthz`) before starting at all;
+2. a scan of the whole range for a live server on this ledger, before binding and again before each
+   fallback port — a child binds and only *then* publishes, so "nothing recorded" does not mean
+   "nothing serving";
+3. after publishing, a re-read: **whoever the file names survives, everyone else stops.** A dead heat
+   can still clear checks 1 and 2 and take two different ports; this converges it in ~300ms with a
+   deterministic winner instead of leaving a spare to time out.
+
+**A failed bind must leave nothing behind.** `createDashboard` opens the ledger handle and arms the
+idle fuse; `Bun.serve` throws after both. Every skipped port therefore left a live 10-second timer
+whose `onIdle` shut the process down — so on any machine where 4180 was taken, the dashboard exited
+every ~10s with TUIs still attached and respawned into the same loop. `startDashboard` now tears the
+context down before rethrowing.
+
+**Keyed on the resolved ledger path** (`realpathSync(resolve(p))`, dir-realpath fallback for a
+ledger that does not exist yet), computed by the TUI and passed to the child as `--db <abs>` with a
+fixed cwd. This is load-bearing: `defaultDbPath()` uses `MINIMA_DB_PATH` **verbatim** and
+`DashboardStore.path` echoes it, so without resolution `MINIMA_DB_PATH=./x.db` from two different
+directories hashes identically *and* reports the same ledger over `/healthz` — the match check
+would pass while the files differ. Symlinks and macOS's `/tmp` → `/private/tmp` cost only a
+duplicate server; the relative case is the silent one.
+
+**The refcount is `GET /attach?pid=…`**, one held stream per TUI. The kernel closing it covers
+clean exit, `kill -9`, SIGHUP and an OOM kill. It subscribes to the **same `ActivityHub` keepalive**
+as the browser stream, which is not optional: Bun closes an idle connection at `idleTimeout` (60s),
+so a silent attach stream would drop every client a minute after boot and take the server down with
+three sessions still open.
+
+**The pid outranks the socket.** `prune()` runs on the poll tick that already exists and drops a
+client whose pid is gone *even when its socket is still open* — the case a socket cannot see is a
+background job that inherited the fd and outlived its parent. Browser streams never count toward
+the refcount, or a forgotten tab would outlive every TUI.
+
+**Exit is ordered**: delete the rendezvous (only if it still names this pid) → stop accepting →
+exit. The file must not advertise a server that has already decided to die. The TUI re-attaches on
+any stream end, which is what makes an eager exit safe — a wrong exit costs one respawn, a missed
+exit costs a server nobody can see.
+
+Opt out with `MINIMA_TUI_DASHBOARD=0`. Auto-start requires a TTY and live persistence, so `-p`,
+`--mode json`, CI and git hooks never open a socket.
+
+### Three residuals, named on purpose
+
+1. **A wedged server keeps its port.** A process that is alive but not answering (`SIGSTOP`, a hung
+   query, paged out) is displaced from the rendezvous but not reaped: nothing deletes its entry
+   (the replacement overwrites it), and nothing releases its port. Killing it on a sub-second
+   inference would mean `SIGTERM`-ing a stranger's process — possibly a reused pid — to avoid
+   leaking a port, which is the worse trade. So it is surfaced instead: `/dashboard` names the
+   holder, and you kill it yourself. The "delete only if the file names my pid" guard is what stops
+   the zombie from evicting its replacement when it eventually wakes.
+2. **A dead heat can briefly run two servers.** Two TUIs launched in the same instant can both clear
+   every pre-bind check and take different ports. The rendezvous arbitrates within ~300ms and the
+   loser stops itself, so the steady state is one server — but "exactly one" is a property of the
+   steady state, not of every instant.
+3. **"No immortal server" is a probability, not a guarantee.** The socket and the pid probe are
+   independent in mechanism but not in failure: the socket path fails when nothing closes the fd,
+   and the pid path fails when the pid has been reused. A dead TUI's pid reused by a live process
+   inside the grace window, while a leaked fd holds the socket, still reads as an attached client.
+   Bounded, not eliminated.
+
 ## Running it from another repo — `minima-loc --wt`
 
 The harness resolves `.env.harness`/`.env` **relative to the current directory**, so a worktree
@@ -314,9 +404,23 @@ A dev tool that renders your entire work history deserves locking down:
   (`?t=…`), then parked in a `HttpOnly; SameSite=Strict` cookie and dropped from the address
   bar so it stops leaking into history and `Referer`;
 - the token is compared in **constant time**;
+- `?k=…` accepts a **60-second HMAC ticket** in place of the token and exchanges it for the cookie.
+  `/dashboard` prints one of those, not the token: that line lands in a TUI transcript, and
+  `~/.minima-harness/sessions` is 0755/0644. Stateless (`src/dashboard/auth.ts`) — an HMAC of an
+  expiry under the token, so there is no ticket map to grow and the durable secret never leaves the
+  0600 rendezvous file. The foreground `minima dashboard` still prints a durable token, because
+  "copy this URL once" has to keep working;
+- **the token is not a read-only credential.** It reads the whole ledger *and* it can spawn your
+  configured editor via `/api/v1/open`. `sameOrigin` constrains browsers, not a local client that
+  simply omits the `Origin` header — which is what that check is for, and all it can be;
 - **read-only, structurally** — the SQLite handle is opened `readonly` *and* `src/dashboard/`
   does not import `MinimaDb` at all, so there is no code path that could open a writable handle.
+  `DashboardHandle.readOnly` is the literal type `true`, so a write-capable server is a type error.
   Opening the dashboard never creates a ledger file;
+- worth knowing about what is already on disk: `~/.minima-harness/minima.db` is **0644**, so on a
+  shared box everything the dashboard serves is readable without any token at all. The token
+  protects a network surface, not data at rest. Tightening the ledger's mode (and the 0755 session
+  dirs) is a separate change — neither is caused by the dashboard;
 - all ledger text is HTML-escaped on the way out (there is a test that tries to inject a
   `<script>` through a memory row);
 - the one non-GET route (`/api/v1/open`) additionally requires a **same-origin** request, so
@@ -389,8 +493,23 @@ the unit bug cannot return (a row whose realized cost is 10× its estimate must 
 realized cost), that a negative saving stays negative, id normalization both ways, dollar-vs-row
 coverage, the workhorse population rule, and that `meter.report()` contains no savings claim.
 
-One thing no hermetic test can prove: that Bun honors `idleTimeout`. A source guard asserts the
-option is passed and is labeled as exactly that — the real check is a tab left open past 10s.
+`packages/tui/tests/dashboard_supervisor.test.ts` — the lifecycle parts that ARE hermetic: temp
+state dir, injected probe/spawn/clock, no socket and no children. Ledger identity (a symlink and
+its target key to one server; the same relative path in two cwds keys to two), the 0600 rendezvous
+and its pid-guarded deletion, pid-dead vs pid-alive-but-wedged, the retry that stops a slow server
+being displaced, bind-as-mutex including yield and exhaustion, the compiled-vs-dev argv, and tickets.
+
+`packages/tui/tests/dashboard_lifecycle.test.ts` — **real sockets, on purpose.** Lifecycle claims
+are not hermetically provable, and a test suite that can only pass is how the attach stream shipped
+idle in the first draft: every state-transition test finishes in milliseconds, so none of them
+notices a stream Bun will close at 60s. Timings are injected (grace and keepalive in the tens of ms,
+ephemeral port) and the assertions are about duration — a keepalive frame actually arriving, an idle
+server firing exactly once, a client arriving inside the grace cancelling the exit, and a dead pid
+being dropped *while its socket is still held open*. The keepalive test is mutation-checked: removing
+the hub subscription fails that test and only that test.
+
+One thing no test here can prove: that Bun honors `idleTimeout`. A source guard asserts the option is
+passed and is labeled as exactly that — the real check is a tab, or a TUI, left open past 60s.
 
 `tsconfig.tests.json` typechecks `tests/**` (the base config covers `src/**` only, which is how
 three stale ctx literals in `dashboard.test.ts` kept passing). It is a **ratchet**: 124 of 166 test

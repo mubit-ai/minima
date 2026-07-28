@@ -18,6 +18,8 @@ import { providerKeyPresent } from "../ai/provider_catalog.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import { SEED_MODELS } from "../ai/seed_models.ts";
+// Type-only: the dashboard module stays lazily imported so the TUI startup path never pays for it.
+import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
@@ -746,8 +748,25 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;
   }
+  // The localhost dashboard, ambient: one detached server per ledger, shared by every TUI, gone
+  // shortly after the last one closes. Fire-and-forget on purpose — never awaited, so a busy probe
+  // or a slow spawn cannot delay the first frame. Gated on a TTY (a `-p` run, CI or a git hook must
+  // not open a socket) and on live persistence (nothing to serve without a ledger).
+  // MINIMA_TUI_DASHBOARD=0 opts out entirely.
+  let dashboard: DashboardSupervisor | null = null;
+  if (db && process.stdout.isTTY === true && process.env.MINIMA_TUI_DASHBOARD !== "0") {
+    try {
+      const { DashboardSupervisor, resolveLedger } = await import("../dashboard/supervisor.ts");
+      dashboard = new DashboardSupervisor({ ledger: resolveLedger(dbPath).path });
+      dashboard.start();
+    } catch {
+      // A dashboard that will not start is never a reason a session does not.
+    }
+  }
   const closeDb = (status: "done" | "aborted" = "done"): void => {
     try {
+      // Drop the attach so the server's refcount falls now rather than when the kernel gets to it.
+      dashboard?.detach();
       // Orphan policy (W4.1): kill every live background job's group and durably mark it
       // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
       bgJobRegistry?.shutdown();
@@ -1116,6 +1135,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
+      dashboard,
     }),
     { exitOnCtrlC: false },
   );
@@ -1199,9 +1219,150 @@ Usage: minima dashboard [options]
       --open             open the printed URL in the default browser
   -h, --help
 
+An interactive TUI starts one of these for you (detached, shared by every TUI on the same ledger,
+gone ~10s after the last one closes) — MINIMA_TUI_DASHBOARD=0 opts out, and /dashboard in the TUI
+prints its URL. Running this command yourself is always independent: it is never adopted or killed.
+
 Read-only, always: the ledger is opened with a readonly SQLite handle and the dashboard has no
 write path at all. Every route is gated on a per-process token, handed over in the printed URL.
+That token is not a read-only credential — it reads the whole ledger and can spawn your editor.
 `;
+
+/**
+ * `minima dashboard --managed` — the auto-started server. Internal: a TUI spawns it detached.
+ *
+ * Differs from the foreground command in four ways, and every one of them is about not being owned
+ * by the terminal that happened to start it:
+ *   - it probes the port range instead of failing on a busy 4180, and records WHY it moved;
+ *   - it publishes a rendezvous file so every other TUI on this ledger finds it instead of starting
+ *     a second one;
+ *   - it ignores SIGINT/SIGHUP, so Ctrl+C in that shell and closing that window leave it running;
+ *   - it exits ~10s after the last TUI detaches, deleting its rendezvous FIRST so the file never
+ *     advertises a server that has already decided to die.
+ */
+async function managedDashboard(args: string[]): Promise<number> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const dash = await import("../dashboard/index.ts");
+  const ledger = dash.resolveLedger(flag("--db") ?? defaultDbPath()).path;
+  const rvPath = dash.rendezvousPath(ledger);
+  const host = flag("--host") ?? "127.0.0.1";
+  const probe = dash.httpProbe(host);
+
+  const pre = await dash.discover({ ledger, path: rvPath, probe });
+  if (pre.kind === "live") return 0; // another TUI's child won while we were being spawned
+
+  /**
+   * The rendezvous file is not sufficient on its own to decide "nobody is serving this ledger": a
+   * sibling child binds and only THEN publishes, so a file-only check can miss a winner that is
+   * already listening. Scanning the range closes that window — without it, two TUIs launched in the
+   * same instant each got a server (three, in the run that caught this).
+   *
+   * A server that is listening but still unpublished gets a moment to finish; either way this child
+   * declines to add a second one. Yielding is safe even if the sibling never publishes: an
+   * unpublished server has no clients, so it reaps itself on the idle rule and the TUI retries.
+   */
+  const already = await dash.findServing(dash.PORT_RANGE, ledger, probe);
+  if (already) {
+    for (let i = 0; i < 15; i += 1) {
+      const rv = await dash.readRendezvous(rvPath);
+      if (rv && rv.ledger === ledger && rv.port === already.port) return 0;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return 0;
+  }
+
+  let handle: ReturnType<typeof dash.startDashboard> | null = null;
+  let shuttingDown = false;
+  const shutdown = async (): Promise<never> => {
+    if (!shuttingDown) {
+      shuttingDown = true;
+      // Ordered: stop advertising, THEN stop serving. A TUI that read the file a moment ago can
+      // still land; a TUI that reads it after this point goes straight to spawning a fresh one.
+      await dash.clearRendezvous(rvPath, process.pid);
+      handle?.stop();
+    }
+    process.exit(0);
+  };
+
+  // Installed BEFORE binding, not after publishing: until they exist, the default disposition
+  // applies, so a signal arriving during startup would kill this process with its rendezvous already
+  // on disk and no handler to clear it. A detached server must also never die with the terminal that
+  // spawned its parent, and that has to be true from the first instant, not from the first request.
+  process.on("SIGINT", () => {});
+  process.on("SIGHUP", () => {});
+  process.once("SIGTERM", () => void shutdown());
+
+  try {
+    const bound = await dash.bindWithProbe({
+      ports: dash.PORT_RANGE,
+      // Re-checked before every fallback port, by both means: a published server, or an unpublished
+      // one that is nonetheless listening.
+      onFallback: async () =>
+        (await dash.discover({ ledger, path: rvPath, probe })).kind === "live" ||
+        (await dash.findServing(dash.PORT_RANGE, ledger, probe)) !== null,
+      start: (port, skipped) =>
+        dash.startDashboard({
+          port,
+          host,
+          dbPath: ledger,
+          editor: flag("--editor"),
+          portNote: portNote(skipped, pre),
+          onIdle: () => void shutdown(),
+        }),
+    });
+    if (bound.kind !== "bound") return bound.kind === "yielded" ? 0 : 1;
+    handle = bound.handle;
+    await dash.writeRendezvous(rvPath, {
+      ledger,
+      port: bound.port,
+      token: bound.handle.token,
+      pid: process.pid,
+      startedAt: Date.now(),
+      portNote: portNote(bound.skipped, pre),
+    });
+
+    /**
+     * Last resort for a dead heat. Every check above happens before binding, so two children
+     * launched in the same instant can both clear them and then take different ports — a ranged
+     * bind is a mutex per port, never per ledger. So the FILE arbitrates: whoever's write landed
+     * last owns it, everyone else stops. Deterministic, exactly one survivor, and it converges in
+     * milliseconds instead of leaving a spare server to time out on the idle rule.
+     */
+    await new Promise((r) => setTimeout(r, 300));
+    const owner = await dash.readRendezvous(rvPath);
+    if (owner?.pid !== process.pid) {
+      // Every post-publish exit goes through the same cleanup, so no path can forget it. The clear
+      // is a no-op unless the file still names us, which is exactly the guard we want here.
+      await dash.clearRendezvous(rvPath, process.pid);
+      handle.stop();
+      return 0;
+    }
+  } catch (exc) {
+    handle?.stop();
+    if (!(exc instanceof dash.LedgerUnavailableError)) {
+      process.stderr.write(`minima dashboard: ${errText(exc)}\n`);
+    }
+    return 1;
+  }
+
+  await new Promise<void>(() => {});
+  return 0;
+}
+
+/** Why this server is not on 4180, in words `/dashboard` can print verbatim. */
+function portNote(
+  skipped: number[],
+  pre: { kind: string; rv?: { pid: number } | null },
+): string | null {
+  if (skipped.length === 0) return null;
+  const taken = `${skipped.join(", ")} already in use`;
+  return pre.kind === "wedged" && pre.rv
+    ? `${taken} — recorded dashboard (pid ${pre.rv.pid}) is alive but not answering`
+    : taken;
+}
 
 /** `minima dashboard` — read-only localhost views over the ledger; no TUI, no model calls. */
 async function dashboardCli(args: string[]): Promise<number> {
@@ -1209,6 +1370,7 @@ async function dashboardCli(args: string[]): Promise<number> {
     process.stdout.write(DASHBOARD_HELP);
     return 0;
   }
+  if (args.includes("--managed")) return managedDashboard(args);
   const flagValue = (name: string): string | undefined => {
     const i = args.indexOf(name);
     return i >= 0 ? args[i + 1] : undefined;

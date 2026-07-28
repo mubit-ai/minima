@@ -23,7 +23,9 @@ import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries
 import { agoCell, fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
 import {
   ActivityHub,
+  ClientRegistry,
   IDLE_TIMEOUT_S,
+  MAX_CLIENTS,
   MAX_STREAMS,
   createDashboard,
   createHandler,
@@ -123,13 +125,32 @@ function seed(): void {
  * out inline here goes stale silently — three of them had drifted past `hub` and `editor` before
  * this existed. Everything is closed by the caller.
  */
-function ctxFor(opts: { editor?: string | null; hub?: ActivityHub } = {}) {
+function ctxFor(
+  opts: {
+    editor?: string | null;
+    hub?: ActivityHub;
+    graceMs?: number;
+    maxClients?: number;
+    onIdle?: () => void;
+    alive?: (pid: number) => boolean;
+    portNote?: string | null;
+  } = {},
+) {
   const store = new DashboardStore(dbPath);
+  const hub = opts.hub ?? new ActivityHub(() => store.newestEvent());
   return {
     store,
     token: TOKEN,
     editor: opts.editor ?? null,
-    hub: opts.hub ?? new ActivityHub(() => store.newestEvent()),
+    hub,
+    clients: new ClientRegistry(hub, {
+      graceMs: opts.graceMs ?? 20,
+      maxClients: opts.maxClients ?? MAX_CLIENTS,
+      onIdle: opts.onIdle ?? (() => {}),
+      ...(opts.alive ? { alive: opts.alive } : {}),
+    }),
+    startedAt: 1_700_000_000_000,
+    portNote: opts.portNote ?? null,
   };
 }
 

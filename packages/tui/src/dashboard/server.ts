@@ -4,8 +4,13 @@
  * Security posture (a dev tool that reads your whole work history is worth locking down):
  *  - binds 127.0.0.1 by default, never 0.0.0.0;
  *  - every route except /healthz requires a per-process bearer token, handed over once in
- *    the printed URL (`?t=…`) and then parked in a Strict/HttpOnly cookie;
+ *    the printed URL (`?t=…`) and then parked in a Strict/HttpOnly cookie. `?k=…` accepts a
+ *    short-lived HMAC ticket instead, for the auto-started server whose URL is printed into a
+ *    TUI transcript rather than a terminal the user owns (see ./auth.ts);
  *  - the token is compared in constant time, so a wrong guess leaks no timing signal;
+ *  - that token is NOT a read-only credential: it reads the entire ledger and it can spawn the
+ *    configured editor via /api/v1/open. `sameOrigin` below constrains browsers, not clients that
+ *    simply omit the header;
  *  - READ-ONLY, structurally: the SQLite handle is opened `readonly` and this module does not
  *    import MinimaDb at all, so there is no code path that could open a writable handle. The
  *    only non-GET route is `/api/v1/open`, which touches the editor, never the ledger;
@@ -18,6 +23,7 @@
  */
 
 import { defaultDbPath } from "../db/minima_db.ts";
+import { constantTimeEqual, ticketValid } from "./auth.ts";
 import { detectEditor, openInEditor, readRecorded, resolveRecorded } from "./files.ts";
 import { DashboardStore, LedgerUnavailableError, type Scope } from "./queries.ts";
 import {
@@ -49,8 +55,20 @@ const COOKIE = "minima_dash";
  * inter-event gap is 34s), so polling faster would only burn CPU to learn nothing sooner.
  */
 const POLL_MS = 2_000;
-/** Hard ceiling on concurrent streams; a browser opening tabs must not become unbounded state. */
+/** Hard ceiling on concurrent BROWSER streams; a browser opening tabs must not become unbounded
+ * state. Attached TUIs are counted separately (MAX_CLIENTS) so eight tabs cannot starve a TUI of
+ * the connection its own liveness depends on, and vice versa. */
 export const MAX_STREAMS = 8;
+/** Hard ceiling on attached TUIs. Higher than anyone runs; it exists to bound the registry. */
+export const MAX_CLIENTS = 16;
+/**
+ * How long the managed server tolerates having no attached TUI before it exits.
+ *
+ * Long enough to ride out a Ctrl+C-then-relaunch or a `/new`, short enough that a closed laptop
+ * lid does not leave a server running all afternoon. Erring short is safe: the TUI re-attaches,
+ * and re-attaching respawns.
+ */
+export const GRACE_MS = 10_000;
 /**
  * A stream that has said nothing for this long gets a keepalive frame.
  *
@@ -83,6 +101,7 @@ export type ActivityKind = "activity" | "ping";
  */
 export class ActivityHub {
   private readonly subscribers = new Set<(newest: number | null, kind: ActivityKind) => void>();
+  private readonly counted = new Set<(newest: number | null, kind: ActivityKind) => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private last: number | null = null;
   private quietMs = 0;
@@ -101,8 +120,22 @@ export class ActivityHub {
     return this.subscribers.size;
   }
 
-  subscribe(fn: (newest: number | null, kind: ActivityKind) => void): (() => void) | null {
-    if (this.subscribers.size >= MAX_STREAMS) return null;
+  /** Only browser streams count against MAX_STREAMS. */
+  get streamCount(): number {
+    return this.counted.size;
+  }
+
+  /**
+   * `counted: false` opts out of the MAX_STREAMS cap — used by the attach registry, which needs the
+   * same keepalive pump but must not compete with browser tabs for it.
+   */
+  subscribe(
+    fn: (newest: number | null, kind: ActivityKind) => void,
+    opts: { counted?: boolean } = {},
+  ): (() => void) | null {
+    const counted = opts.counted !== false;
+    if (counted && this.counted.size >= MAX_STREAMS) return null;
+    if (counted) this.counted.add(fn);
     this.subscribers.add(fn);
     if (!this.timer) {
       this.last = this.newestOf();
@@ -113,6 +146,7 @@ export class ActivityHub {
     }
     return () => {
       this.subscribers.delete(fn);
+      this.counted.delete(fn);
       if (this.subscribers.size === 0 && this.timer) {
         clearInterval(this.timer);
         this.timer = null;
@@ -140,8 +174,127 @@ export class ActivityHub {
 
   stop(): void {
     this.subscribers.clear();
+    this.counted.clear();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+}
+
+/**
+ * Who is still using this server, and therefore whether it should still exist.
+ *
+ * The pid is the identity and the socket is only a fast path. Socket close covers every ordinary
+ * death — clean exit, `kill -9`, SIGHUP, an OOM kill — but NOT a background job that inherited the
+ * fd and outlived its parent, where the connection stays open with nobody behind it. So `prune()`
+ * runs on the poll tick that already exists and drops a client whose pid is gone even when its
+ * socket is not, and the pid wins over the socket whenever they disagree.
+ *
+ * That pair makes an immortal server unlikely, not impossible: a pid reused inside the grace window
+ * still reads as alive. Which is why `onIdle` is allowed to fire eagerly — the TUI re-establishes,
+ * so a wrong exit costs one respawn while a missed exit costs a server nobody can see.
+ */
+export class ClientRegistry {
+  private readonly clients = new Map<number, { seq: number; close: () => void }>();
+  private seq = 0;
+  private idle: ReturnType<typeof setTimeout> | null = null;
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(
+    private readonly hub: ActivityHub,
+    private readonly opts: {
+      graceMs: number;
+      maxClients: number;
+      onIdle: () => void;
+      alive?: (pid: number) => boolean;
+    },
+  ) {
+    // Armed from birth: a managed server nobody ever attaches to must still go away.
+    this.armIfEmpty();
+  }
+
+  get size(): number {
+    return this.clients.size;
+  }
+
+  pids(): number[] {
+    return [...this.clients.keys()];
+  }
+
+  /**
+   * A second attach from the same pid replaces the first: a TUI whose stream broke and retried is
+   * still one client, and keying on pid makes that structural rather than a cleanup race.
+   */
+  add(pid: number, close: () => void): number | null {
+    if (!this.clients.has(pid) && this.clients.size >= this.opts.maxClients) return null;
+    this.clients.get(pid)?.close();
+    this.seq += 1;
+    this.clients.set(pid, { seq: this.seq, close });
+    if (this.idle) {
+      clearTimeout(this.idle);
+      this.idle = null;
+    }
+    if (!this.unsubscribe) {
+      this.unsubscribe = this.hub.subscribe(() => this.prune(), { counted: false });
+    }
+    return this.seq;
+  }
+
+  /** Seq-guarded so a late close from a replaced attach cannot evict the live one. */
+  remove(pid: number, seq: number): void {
+    if (this.clients.get(pid)?.seq !== seq) return;
+    this.clients.delete(pid);
+    this.armIfEmpty();
+  }
+
+  prune(): void {
+    const alive = this.opts.alive ?? defaultPidAlive;
+    for (const [pid, entry] of [...this.clients]) {
+      if (alive(pid)) continue;
+      this.clients.delete(pid);
+      // The socket may still be open — held by something that inherited it. Close our end.
+      try {
+        entry.close();
+      } catch {
+        // a dead stream must not take the poller down
+      }
+    }
+    this.armIfEmpty();
+  }
+
+  private armIfEmpty(): void {
+    if (this.clients.size > 0 || this.idle) return;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.idle = setTimeout(() => {
+      this.idle = null;
+      if (this.clients.size === 0) this.opts.onIdle();
+    }, this.opts.graceMs);
+    this.idle.unref?.();
+  }
+
+  stop(): void {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    for (const entry of this.clients.values()) {
+      try {
+        entry.close();
+      } catch {
+        // shutting down
+      }
+    }
+    this.clients.clear();
+  }
+}
+
+function defaultPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (exc) {
+    return (exc as { code?: string }).code === "EPERM";
   }
 }
 
@@ -152,6 +305,22 @@ export interface DashboardOptions {
   token?: string;
   /** Editor command for the jump-to-source button; null/"none" disables the endpoint. */
   editor?: string | null;
+  /** Zero-attached-client grace before `onIdle`. Overridden by tests to make 10s a few ms. */
+  graceMs?: number;
+  maxClients?: number;
+  pollMs?: number;
+  keepaliveMs?: number;
+  /**
+   * Fired when the last attached TUI has been gone for `graceMs`. The MANAGED server uses this to
+   * clear its rendezvous and exit; a foreground `minima dashboard` leaves it unset and lives until
+   * Ctrl+C.
+   */
+  onIdle?: () => void;
+  /** Liveness probe override (tests). Real one is `process.kill(pid, 0)`. */
+  alive?: (pid: number) => boolean;
+  /** Reported by /healthz so `/dashboard` can explain a non-default port. */
+  portNote?: string | null;
+  startedAt?: number;
 }
 
 export interface DashboardHandle {
@@ -163,6 +332,8 @@ export interface DashboardHandle {
   ledgerPath: string;
   /** The editor the jump-to-source button will launch, or null when none is available. */
   editor: string | null;
+  /** Currently attached TUIs. */
+  clients(): number;
   stop(): void;
 }
 
@@ -172,6 +343,9 @@ interface Ctx {
   /** Resolved editor command, or null when none was found or `--editor none` was passed. */
   editor: string | null;
   hub: ActivityHub;
+  clients: ClientRegistry;
+  startedAt: number;
+  portNote: string | null;
 }
 
 const NAV: { path: string; label: string }[] = [
@@ -182,13 +356,6 @@ const NAV: { path: string; label: string }[] = [
   { path: "/memory", label: "Memory" },
   { path: "/cost", label: "Cost" },
 ];
-
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
 
 function cookieToken(req: Request): string | null {
   const header = req.headers.get("cookie");
@@ -201,6 +368,8 @@ function cookieToken(req: Request): string | null {
 }
 
 function authorized(req: Request, url: URL, token: string): boolean {
+  const ticket = url.searchParams.get("k");
+  if (ticket !== null && ticketValid(token, ticket)) return true;
   const supplied =
     url.searchParams.get("t") ?? req.headers.get("x-minima-token") ?? cookieToken(req);
   return supplied !== null && constantTimeEqual(supplied, token);
@@ -300,8 +469,20 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
 
+    // The discovery primitive: unauthenticated on purpose, because a TUI has to be able to ask
+    // "is the thing on this port MY dashboard" before it holds a token worth using. It reports the
+    // ledger it serves (the only field that makes the rendezvous file trustworthy), plus the client
+    // count and pid that `/dashboard` prints — none of it beyond what `ps` already shows.
     if (path === "/healthz") {
-      return json({ ok: true, readOnly: true, ledger: ctx.store.path });
+      return json({
+        ok: true,
+        readOnly: true,
+        ledger: ctx.store.path,
+        clients: ctx.clients.size,
+        pid: process.pid,
+        startedAt: ctx.startedAt,
+        portNote: ctx.portNote,
+      });
     }
 
     if (!authorized(req, url, ctx.token)) {
@@ -311,11 +492,14 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       );
     }
 
-    // First hit carries the token in the query string — park it in a cookie and drop it from
-    // the address bar so it stops leaking into history and Referer.
-    if (url.searchParams.has("t")) {
+    // First hit carries the token (`t`) or a ticket (`k`) in the query string — park the durable
+    // token in a cookie and drop the credential from the address bar so it stops leaking into
+    // history and Referer. Redeeming a ticket for the cookie is what lets the printed link expire
+    // without the browser session expiring with it.
+    if (url.searchParams.has("t") || url.searchParams.has("k")) {
       const clean = new URL(url.toString());
       clean.searchParams.delete("t");
+      clean.searchParams.delete("k");
       return new Response(null, {
         status: 302,
         headers: {
@@ -387,6 +571,64 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       if (!row) return json({ error: "not_found" }, 404);
       return json(await readRecorded(row.project_key, row.path));
     }
+    // The refcount. A TUI holds this open for its whole life; the kernel closing it is what tells
+    // this server the TUI is gone. It rides the SAME keepalive as the browser stream — a stream that
+    // says nothing is closed by Bun at `idleTimeout`, which would have dropped every client at 60s
+    // and taken the server down under three live TUIs.
+    if (path === "/attach") {
+      const pid = Number.parseInt(url.searchParams.get("pid") ?? "", 10);
+      if (!Number.isInteger(pid) || pid <= 1) return json({ error: "bad_pid" }, 400);
+      let seq: number | null = null;
+      let release: (() => void) | null = null;
+      let closed = false;
+      const stream = new ReadableStream({
+        start(controller) {
+          const enc = new TextEncoder();
+          const shut = (): void => {
+            if (closed) return;
+            closed = true;
+            release?.();
+            release = null;
+            try {
+              controller.close();
+            } catch {
+              // already closed
+            }
+          };
+          seq = ctx.clients.add(pid, shut);
+          if (seq === null) {
+            controller.enqueue(enc.encode('{"error":"too_many_clients"}\n'));
+            controller.close();
+            return;
+          }
+          controller.enqueue(enc.encode(`{"attached":${pid}}\n`));
+          release = ctx.hub.subscribe(
+            () => {
+              try {
+                controller.enqueue(enc.encode("\n"));
+              } catch {
+                shut();
+              }
+            },
+            { counted: false },
+          );
+        },
+        cancel() {
+          closed = true;
+          release?.();
+          release = null;
+          if (seq !== null) ctx.clients.remove(pid, seq);
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "content-type": "application/x-ndjson",
+          "cache-control": "no-store",
+          connection: "keep-alive",
+        },
+      });
+    }
+
     if (path === "/api/v1/stream") {
       let release: (() => void) | null = null;
       let idle: ReturnType<typeof setTimeout> | null = null;
@@ -527,25 +769,51 @@ export function createDashboard(opts: DashboardOptions = {}): {
 } {
   const dbPath = opts.dbPath ?? defaultDbPath();
   const store = new DashboardStore(dbPath);
+  const hub = new ActivityHub(() => store.newestEvent(), {
+    pollMs: opts.pollMs,
+    keepaliveMs: opts.keepaliveMs,
+  });
   const ctx: Ctx = {
     store,
     token: opts.token ?? crypto.randomUUID(),
     editor: detectEditor(opts.editor),
-    hub: new ActivityHub(() => store.newestEvent()),
+    hub,
+    clients: new ClientRegistry(hub, {
+      graceMs: opts.graceMs ?? GRACE_MS,
+      maxClients: opts.maxClients ?? MAX_CLIENTS,
+      onIdle: opts.onIdle ?? (() => {}),
+      ...(opts.alive ? { alive: opts.alive } : {}),
+    }),
+    startedAt: opts.startedAt ?? Date.now(),
+    portNote: opts.portNote ?? null,
   };
   return { handler: createHandler(ctx), ctx };
 }
 
 export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
   const { handler, ctx } = createDashboard(opts);
-  const server = Bun.serve({
-    hostname: opts.host ?? "127.0.0.1",
-    port: opts.port ?? DEFAULT_PORT,
-    // Bun's default is 10s, which silently killed every SSE stream on a quiet ledger. The
-    // keepalive above is what actually keeps a stream alive; this is the backstop.
-    idleTimeout: IDLE_TIMEOUT_S,
-    fetch: handler,
-  });
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      hostname: opts.host ?? "127.0.0.1",
+      port: opts.port ?? DEFAULT_PORT,
+      // Bun's default is 10s, which silently killed every SSE stream on a quiet ledger. The
+      // keepalive above is what actually keeps a stream alive; this is the backstop.
+      idleTimeout: IDLE_TIMEOUT_S,
+      fetch: handler,
+    });
+  } catch (exc) {
+    // A failed bind must leave NOTHING behind. `createDashboard` has already opened a readonly
+    // SQLite handle and armed the client registry's idle timer — and that timer's `onIdle` shuts the
+    // whole process down. A caller that walks a port range (every auto-start on a machine where
+    // 4180 is taken) would therefore inherit, from each port it skipped, a live 10-second fuse that
+    // saw zero clients of its own and killed a perfectly healthy server. Observed as the dashboard
+    // exiting every ~10s forever with three TUIs still attached.
+    ctx.clients.stop();
+    ctx.hub.stop();
+    ctx.store.close();
+    throw exc;
+  }
   const port = server.port ?? opts.port ?? DEFAULT_PORT;
   const base = `http://${opts.host ?? "127.0.0.1"}:${port}`;
   return {
@@ -555,8 +823,10 @@ export function startDashboard(opts: DashboardOptions = {}): DashboardHandle {
     readOnly: true,
     ledgerPath: ctx.store.path,
     editor: ctx.editor,
+    clients: () => ctx.clients.size,
     stop() {
       server.stop(true);
+      ctx.clients.stop();
       ctx.hub.stop();
       ctx.store.close();
     },

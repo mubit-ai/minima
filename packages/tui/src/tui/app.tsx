@@ -33,6 +33,7 @@ import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provide
 import { allModels } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
@@ -220,6 +221,12 @@ export interface AppProps {
    * unfiltered pattern the plan strip refresh uses).
    */
   todos?: TodoTask[];
+  /**
+   * The ambient localhost dashboard, when one was started (TTY + persistence + not opted out).
+   * Only `/dashboard` reads it, and it re-reads the rendezvous file on every call: another TUI may
+   * have started the server, or it may have moved ports since this session began.
+   */
+  dashboard?: DashboardSupervisor | null;
 }
 
 /** Persona the lead adopts in plan mode; the council's plan snapshot is appended each turn. */
@@ -303,6 +310,7 @@ const COMMANDS = [
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
+  { name: "dashboard", desc: "Show the local dashboard URL (auto-starts with the TUI)" },
   { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
@@ -832,6 +840,7 @@ export function HarnessApp({
   bigPlanGateBefore,
   verifyConsentRef,
   todos,
+  dashboard = null,
 }: AppProps) {
   const { exit } = useApp();
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
@@ -2406,6 +2415,22 @@ export function HarnessApp({
       }
       case "copy": {
         copyLastReply(`/${name}`);
+        break;
+      }
+      case "dashboard": {
+        // Snapshotted fresh, never cached: another TUI may have started the server, or it may have
+        // moved ports since this session began. Formatting lives in dashboard/supervisor.ts so the
+        // no-dashboard branches are testable without a terminal.
+        const { dashboardReport } = await import("../dashboard/supervisor.ts");
+        const lines = dashboardReport(dashboard ? await dashboard.snapshot() : null, {
+          disabled: process.env.MINIMA_TUI_DASHBOARD === "0",
+          age: (startedAt) => formatAge(startedAt / 1000),
+        });
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: "/dashboard" },
+          { role: "tool", text: lines.join("\n"), toolName: "dashboard" },
+        ]);
         break;
       }
       case "undo": {
