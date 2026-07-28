@@ -46,7 +46,7 @@
  * byte-identically to before this module existed.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { builtinTools } from "../tools/builtin.ts";
@@ -78,6 +78,8 @@ export interface AgentTypeRegistry {
 const EFFORTS = new Set(["light", "standard", "deep"]);
 const ISOLATIONS = new Set(["workdir", "inherit"]);
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
+/** The same rule the loader enforces, exported so authoring paths reject a name up front. */
+export const AGENT_NAME_RE = NAME_RE;
 const KNOWN_KEYS = new Set([
   "name",
   "description",
@@ -330,6 +332,64 @@ export function loadAgentTypes(cwd: string, opts: { globalDir?: string } = {}): 
     }
   }
   return { types, warnings };
+}
+
+/**
+ * Write a definition and return its path. `/agent make` exists because the two directories and
+ * the frontmatter keys are the whole discoverability problem — nobody should have to remember
+ * either. Fields the user did not fill in are emitted COMMENTED, so the file doubles as its own
+ * documentation for the next edit. Refuses to overwrite: an existing type is someone's work.
+ */
+export function scaffoldAgentType(
+  cwd: string,
+  name: string,
+  opts: {
+    global?: boolean;
+    globalDir?: string;
+    description?: string;
+    role?: string;
+    tools?: string[];
+    budget_usd?: number;
+  } = {},
+): string {
+  const lower = name.trim().toLowerCase();
+  if (!NAME_RE.test(lower)) {
+    throw new Error(`"${name}" is not a usable name — use lowercase letters, digits, "_" or "-"`);
+  }
+  const dir = opts.global
+    ? (opts.globalDir ?? globalAgentsDir())
+    : resolve(cwd, ".minima", "agents");
+  const path = join(dir, `${lower}.md`);
+  if (existsSync(path)) throw new Error(`${path} already exists`);
+  mkdirSync(dir, { recursive: true });
+  // Every value goes through JSON.stringify: a description with a colon in it is valid prose
+  // and invalid bare YAML, and an unquoted one would take the whole definition down with it.
+  const yaml = (v: string) => JSON.stringify(v);
+  writeFileSync(
+    path,
+    [
+      "---",
+      `name: ${lower}`,
+      `description: ${yaml(opts.description || "One line — what this agent is for.")}`,
+      opts.tools?.length
+        ? `tools: [${opts.tools.join(", ")}]`
+        : "# tools: [read, grep, glob, bash]   # omit = every tool except task",
+      "# candidates: [gemini-2.5-flash]    # omit = normal routing",
+      "# effort: light | standard | deep",
+      opts.budget_usd ? `budget_usd: ${opts.budget_usd}` : "# budget_usd: 0.25",
+      "---",
+      "## Role",
+      "",
+      // A skipped role must not leave the placeholder behind: the body IS the child's persona,
+      // so filler would be injected as if it were an instruction. The description is real.
+      opts.role?.trim() ||
+        opts.description?.trim() ||
+        "Describe the persona and how this agent should work.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return path;
 }
 
 function hasItems(x: unknown): boolean {

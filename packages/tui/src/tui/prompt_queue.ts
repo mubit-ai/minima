@@ -43,7 +43,8 @@ function isLocalWhileBusy(name: string, args: string): boolean {
     case "memory":
       return args === "" || args === "list";
     // Bare `/agent` lists the defined types (a disk-free read of the loaded registry);
-    // `/agent <name> <task>` spawns a child agent and spends money, so it queues.
+    // `/agent <name> <task>` spawns a child agent and spends money, so it queues. `/agent make`
+    // queues too — its wizard takes over the prompt line, which the running turn still owns.
     case "agent":
       return args === "";
     default:

@@ -36,7 +36,12 @@ import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
-import type { AgentTypeRegistry } from "../minima/agent_types.ts";
+import {
+  type AgentType,
+  type AgentTypeRegistry,
+  loadAgentTypes,
+  scaffoldAgentType,
+} from "../minima/agent_types.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import {
   type PlanStripInfo,
@@ -96,6 +101,15 @@ import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
+import {
+  type AgentDraft,
+  WIZARD_FIELDS,
+  newAgentDraft,
+  wizardAdvance,
+  wizardHint,
+  wizardQuestion,
+  wizardSummary,
+} from "./agent_wizard.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
@@ -346,8 +360,38 @@ const COMMANDS = [
     name: "profile",
     desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
-  { name: "agent", desc: "User-defined agent types: /agent (list) · /agent <name> <task> (run)" },
+  {
+    name: "agent",
+    desc: "Agent types: /agent (list) · /agent make (define) · /agent <name> <task> (run)",
+  },
 ];
+
+/**
+ * Agent types whose name matches the `/agent <partial>` being typed, sorted; null when the
+ * draft isn't an in-progress agent name (a name already followed by a task is a run, not a
+ * completion). Shared by the inline suggestion list and Tab.
+ */
+export function agentTypeMatches(
+  typed: string,
+  registry: AgentTypeRegistry | undefined,
+): AgentType[] | null {
+  const m = /^\/agent[ \t]+(\S*)$/.exec(typed);
+  if (!m) return null;
+  const prefix = m[1]!.toLowerCase();
+  const types = [...(registry?.types.values() ?? [])]
+    .filter((t) => t.name.startsWith(prefix))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  // The `make` subcommand rides the same list — it is how a first agent type gets defined at
+  // all, and an empty registry would otherwise complete to nothing. A real type named `make` wins.
+  if ("make".startsWith(prefix) && !types.some((t) => t.name === "make")) {
+    types.push({
+      name: "make",
+      description: "define a new agent type, field by field",
+      prompt: "",
+    });
+  }
+  return types;
+}
 
 export interface CommandPickerProps {
   commands: { name: string; desc: string }[];
@@ -1013,6 +1057,8 @@ export function HarnessApp({
   // where the input is re-enabled to capture one line of guidance. Arms only when bigPlanBehavior.block
   // exists, which itself requires bigPlan on — structurally inert on the default path.
   const [gateFocus, setGateFocus] = useState<{ gateId: string; noteEntry: boolean } | null>(null);
+  // `/agent make`: while set, the prompt line answers the wizard instead of the agent.
+  const [agentDraft, setAgentDraft] = useState<AgentDraft | null>(null);
   /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
   const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
@@ -1545,10 +1591,16 @@ export function HarnessApp({
 
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
-  const allMatchingCommands =
-    typedText.startsWith("/") && !hasSpace
-      ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
-      : [];
+  // `/agent <partial>` completes agent-type names instead of commands. Neither list applies
+  // mid-wizard — there the line is a field value, and "/" is legal prose.
+  const typedAgentTypes = agentDraft ? null : agentTypeMatches(typedText, agentTypes);
+  const allMatchingCommands = agentDraft
+    ? []
+    : typedAgentTypes
+      ? typedAgentTypes.map((t) => ({ name: t.name, desc: t.description }))
+      : typedText.startsWith("/") && !hasSpace
+        ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+        : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
   const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
@@ -2038,6 +2090,22 @@ export function HarnessApp({
         }
       }
     }
+    // `/agent make`: Esc abandons the draft, and a bare Enter takes the current field's
+    // default — TextInput never submits an empty line, so the skip has to be caught here.
+    if (agentDraft) {
+      if (key.escape) {
+        setAgentDraft(null);
+        setMessages((m) => [
+          ...m,
+          { role: "tool", toolName: "agent", text: "Cancelled — nothing written." },
+        ]);
+        return;
+      }
+      if (key.return && !typedText.trim()) {
+        answerAgentDraft(agentDraft, "");
+        return;
+      }
+    }
     // MUB-183: Esc while idle with queued prompts clears the queue (the abort branch
     // above already returned while busy, so this can never eat the abort key).
     if (key.escape && promptQueue.items.length > 0) {
@@ -2106,6 +2174,8 @@ export function HarnessApp({
   }
 
   function handleTabComplete(val: string): string | undefined {
+    const types = agentTypeMatches(val, agentTypes);
+    if (types) return types[0] ? `/agent ${types[0].name} ` : undefined;
     if (!val.startsWith("/")) return undefined;
     const hasSpace = val.includes(" ");
     if (hasSpace) return undefined;
@@ -2686,11 +2756,32 @@ export function HarnessApp({
         const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
         const say = (text: string, isError = false) =>
           setMessages((m) => [...m, echo, { role: "tool", text, toolName: "agent", isError }]);
-        const defined = [...(agentTypes?.types.values() ?? [])].sort((a, b) =>
-          a.name.localeCompare(b.name),
-        );
+        // Re-read from disk first: a definition created or hand-edited during the session must
+        // land without a restart (the startup load is the only other read).
+        const reload = () => {
+          if (!agentTypes) return [];
+          const fresh = loadAgentTypes(process.cwd());
+          agentTypes.types.clear();
+          for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+          return [...fresh.types.values()].sort((a, b) => a.name.localeCompare(b.name));
+        };
+        const defined = reload();
         const parts = args.trim().split(/\s+/).filter(Boolean);
         const wanted = (parts[0] ?? "").toLowerCase();
+        // `make` is a subcommand only while no type actually claims that name.
+        if (wanted === "make" && !defined.some((t) => t.name === "make")) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              toolName: "agent",
+              text: "New agent type — answer each line, Esc to cancel.",
+            },
+          ]);
+          setAgentDraft(newAgentDraft(parts[1] ?? ""));
+          break;
+        }
         // No name → the menu. Also the only form allowed to run mid-turn (prompt_queue.ts).
         if (!wanted) {
           say(
@@ -2698,19 +2789,12 @@ export function HarnessApp({
               ? [
                   "No agent types defined.",
                   "",
-                  "Define one in .minima/agents/<name>.md (this repo) or ~/.minima-harness/agents/<name>.md (all repos):",
+                  "  /agent make          define one — it asks for each field in turn",
+                  "  /agent make <name>   same, with the name already answered",
                   "",
-                  "  ---",
-                  "  name: reviewer",
-                  "  description: Reviews a diff for correctness. Read-only.",
-                  "  tools: [read, grep, glob, bash]",
-                  "  candidates: [gemini-2.5-flash]",
-                  "  effort: light",
-                  "  budget_usd: 0.25",
-                  "  ---",
-                  "  You review code for correctness only. Never propose refactors.",
-                  "",
-                  "The lead agent can then delegate to it, a plan step can name it, and /agent <name> <task> runs it directly.",
+                  "A type is a persona plus a tool allowlist, a model pool, an effort level and a",
+                  "spend cap. The lead agent can then delegate to it, a plan step can name it,",
+                  "and /agent <name> <task> runs it directly.",
                 ].join("\n")
               : [
                   `${defined.length} agent type${defined.length > 1 ? "s" : ""}:`,
@@ -2728,7 +2812,7 @@ export function HarnessApp({
                     }`;
                   }),
                   "",
-                  "Run one directly with /agent <name> <task>.",
+                  "Run one with /agent <name> <task> · define another with /agent make.",
                 ].join("\n"),
           );
           break;
@@ -2739,7 +2823,7 @@ export function HarnessApp({
             `Unknown agent type "${wanted}".${
               defined.length
                 ? ` Defined: ${defined.map((t) => t.name).join(", ")}`
-                : " None are defined — run /agent for how to define one."
+                : ` None are defined — /agent make ${wanted} defines it.`
             }`,
             true,
           );
@@ -4425,10 +4509,58 @@ export function HarnessApp({
     drainGen,
   ]);
 
+  /** One answer in the `/agent make` wizard. Persists on the last field. */
+  function answerAgentDraft(draft: AgentDraft, text: string) {
+    const res = wizardAdvance(draft, text);
+    const note = (t: string, isError = false) =>
+      setMessages((m) => [...m, { role: "tool", toolName: "agent", text: t, isError }]);
+    if (res.kind === "error") {
+      note(res.message, true);
+      return;
+    }
+    if (res.kind === "next") {
+      setAgentDraft(res.draft);
+      return;
+    }
+    setAgentDraft(null);
+    const d = res.draft;
+    try {
+      const path = scaffoldAgentType(process.cwd(), d.name, {
+        global: d.global,
+        description: d.description,
+        role: d.role,
+        tools: d.tools,
+        budget_usd: d.budget_usd,
+      });
+      // The registry is loaded once at startup, so the new type has to be folded into the live
+      // one or it would not be runnable (or completable) until restart.
+      if (agentTypes) {
+        const fresh = loadAgentTypes(process.cwd());
+        agentTypes.types.clear();
+        for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+      }
+      note(
+        [
+          `created ${path}`,
+          "",
+          `Run it with /agent ${d.name} <task>. The lead agent can delegate to it and a plan`,
+          "step can name it. Edit the file to add a model pool or an effort level.",
+        ].join("\n"),
+      );
+    } catch (exc) {
+      note(errText(exc), true);
+    }
+  }
+
   async function onSubmit(text: string) {
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
       answerGate(gateFocus.gateId, "steer", text.trim() || null);
+      return;
+    }
+    if (agentDraft) {
+      setTypedText("");
+      answerAgentDraft(agentDraft, text);
       return;
     }
     setTypedText("");
@@ -4568,8 +4700,13 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const suggestionsHeight =
-    matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
+  // The two live boxes above the composer are mutually exclusive (the wizard suppresses the
+  // suggestion list), so one term books whichever is mounted: border rows + question + hint.
+  const suggestionsHeight = agentDraft
+    ? wizardSummary(agentDraft).length + 3 + (wizardHint(agentDraft) ? 1 : 0)
+    : matchingCommands.length > 0
+      ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0)
+      : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only hides for the pickers/overlays that replace it in the
   // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
@@ -5106,11 +5243,14 @@ export function HarnessApp({
               flexShrink={0}
             >
               <Box position="absolute" marginTop={-1} marginLeft={2}>
-                <Text color="gray"> commands </Text>
+                <Text color="gray"> {typedAgentTypes ? "agent types" : "commands"} </Text>
               </Box>
               {matchingCommands.map((cmd) => (
                 <Box key={cmd.name}>
-                  <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
+                  <Text color="yellow">
+                    {typedAgentTypes ? " " : "/"}
+                    {cmd.name.padEnd(12)}
+                  </Text>
                   <Text color="gray">{cmd.desc}</Text>
                 </Box>
               ))}
@@ -5122,9 +5262,36 @@ export function HarnessApp({
             </Box>
           )}
           {queueListVisible && <QueueList queue={promptQueue} />}
+          {agentDraft && (
+            <Box
+              borderStyle="round"
+              borderColor="cyan"
+              paddingX={1}
+              flexDirection="column"
+              width="100%"
+              flexShrink={0}
+            >
+              <Box position="absolute" marginTop={-1} marginLeft={2}>
+                <Text color="cyan"> new agent type </Text>
+              </Box>
+              {wizardSummary(agentDraft).map((row) => (
+                <Text key={row} color="gray" wrap="truncate">
+                  {row}
+                </Text>
+              ))}
+              <Text color="cyan" wrap="truncate">
+                {wizardQuestion(agentDraft)}
+              </Text>
+              {wizardHint(agentDraft) && (
+                <Text color="gray" wrap="truncate">
+                  {wizardHint(agentDraft)}
+                </Text>
+              )}
+            </Box>
+          )}
           <Box
             borderStyle="round"
-            borderColor={planMode ? "magenta" : "yellow"}
+            borderColor={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}
             paddingX={1}
             flexDirection="column"
             width="100%"
@@ -5135,8 +5302,12 @@ export function HarnessApp({
             flexShrink={0}
           >
             <Box position="absolute" marginTop={-1} marginLeft={2}>
-              <Text color={planMode ? "magenta" : "yellow"}>
-                {planMode ? " plan mode " : " prompt "}
+              <Text color={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}>
+                {agentDraft
+                  ? ` ${WIZARD_FIELDS[agentDraft.step]} `
+                  : planMode
+                    ? " plan mode "
+                    : " prompt "}
               </Text>
             </Box>
             <TextInput
@@ -5155,11 +5326,13 @@ export function HarnessApp({
                   : undefined
               }
               placeholder={
-                gateFocus?.noteEntry
-                  ? "steer guidance — Enter to record, Esc to skip note"
-                  : busy
-                    ? "turn running — Enter queues (esc aborts)"
-                    : ""
+                agentDraft
+                  ? "Enter to accept · Esc to cancel"
+                  : gateFocus?.noteEntry
+                    ? "steer guidance — Enter to record, Esc to skip note"
+                    : busy
+                      ? "turn running — Enter queues (esc aborts)"
+                      : ""
               }
               showPrefix={false}
             />

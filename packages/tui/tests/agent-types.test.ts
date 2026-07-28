@@ -31,6 +31,7 @@ import {
   loadAgentTypes,
   parseAgentType,
   parseFrontmatter,
+  scaffoldAgentType,
   spawnableToolNames,
 } from "../src/minima/agent_types.ts";
 import {
@@ -53,6 +54,8 @@ import {
   taskTool,
   validateDelegations,
 } from "../src/tools/task.ts";
+import { newAgentDraft, wizardAdvance } from "../src/tui/agent_wizard.ts";
+import { agentTypeMatches } from "../src/tui/app.tsx";
 import { decideBusySubmit } from "../src/tui/prompt_queue.ts";
 
 const SPAWNABLE = spawnableToolNames();
@@ -1190,6 +1193,125 @@ describe("guards", () => {
 
   test("every spawnable tool is a KNOWN_TOOL — a type's allowlist survives the plan lint", () => {
     for (const name of spawnableToolNames()) expect(KNOWN_TOOLS.has(name)).toBe(true);
+  });
+
+  test("/agent <partial> completes names; a name plus a task no longer completes", () => {
+    const reg = {
+      types: new Map(
+        ["reviewer", "refactor", "fixer"].map((name) => [
+          name,
+          { name, description: `${name} d`, prompt: "" },
+        ]),
+      ),
+      warnings: [],
+    };
+    const names = (typed: string) => agentTypeMatches(typed, reg)?.map((t) => t.name) ?? null;
+    expect(names("/agent ")).toEqual(["fixer", "refactor", "reviewer", "make"]);
+    expect(names("/agent re")).toEqual(["refactor", "reviewer"]);
+    expect(names("/agent rev")).toEqual(["reviewer"]);
+    expect(names("/agent zz")).toEqual([]);
+    expect(names("/agent reviewer check the diff")).toBeNull();
+    expect(names("/agents")).toBeNull();
+    expect(names("/ag")).toBeNull();
+    // `make` is offered even with nothing defined — otherwise there is no way in.
+    expect(names("/agent m")).toEqual(["make"]);
+    expect(agentTypeMatches("/agent ", undefined)?.map((t) => t.name)).toEqual(["make"]);
+  });
+
+  test("scaffoldAgentType writes a definition the loader accepts, and never clobbers", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "minima-scaffold-"));
+    const path = scaffoldAgentType(cwd, "Reviewer");
+    expect(path).toBe(join(cwd, ".minima", "agents", "reviewer.md"));
+
+    const reg = loadAgentTypes(cwd, { globalDir: join(cwd, "nope") });
+    expect(reg.warnings).toEqual([]);
+    expect(reg.types.get("reviewer")?.prompt).toContain("## Role");
+
+    expect(() => scaffoldAgentType(cwd, "reviewer")).toThrow("already exists");
+    expect(() => scaffoldAgentType(cwd, "Bad Name")).toThrow("not a usable name");
+
+    const globalDir = join(cwd, "home", "agents");
+    scaffoldAgentType(cwd, "fixer", { global: true, globalDir });
+    expect(loadAgentTypes(cwd, { globalDir }).types.has("fixer")).toBe(true);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("the /agent make wizard fills every field, validates, and round-trips through the loader", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "minima-wizard-"));
+    let d = newAgentDraft();
+    expect(d.step).toBe(0);
+
+    // Each answer must be usable — a bad one re-asks the SAME field rather than being kept.
+    const bad = (input: string) => {
+      const r = wizardAdvance(d, input);
+      expect(r.kind).toBe("error");
+      return r.kind === "error" ? r.message : "";
+    };
+    const ok = (input: string) => {
+      const r = wizardAdvance(d, input);
+      if (r.kind === "error") throw new Error(`unexpected error: ${r.message}`);
+      d = r.draft;
+      return r.kind;
+    };
+
+    expect(bad("Not A Name")).toContain("lowercase");
+    expect(ok("Reviewer")).toBe("next");
+    expect(d.name).toBe("reviewer");
+    expect(bad("")).toContain("description is required");
+    ok("Reviews a diff: correctness only");
+    ok("You review code for correctness. Never propose refactors.");
+    expect(bad("read grepp")).toContain("unknown tool: grepp");
+    ok("read grep bash");
+    expect(d.tools).toEqual(["read", "grep", "bash"]);
+    expect(bad("free")).toContain("positive dollar amount");
+    ok("$0.25");
+    expect(wizardAdvance(d, "p").kind).toBe("done");
+
+    const done = wizardAdvance(d, "p");
+    if (done.kind !== "done") throw new Error("expected done");
+    scaffoldAgentType(cwd, done.draft.name, {
+      global: done.draft.global,
+      description: done.draft.description,
+      role: done.draft.role,
+      tools: done.draft.tools,
+      budget_usd: done.draft.budget_usd,
+    });
+
+    const reg = loadAgentTypes(cwd, { globalDir: join(cwd, "nope") });
+    expect(reg.warnings).toEqual([]);
+    const type = reg.types.get("reviewer");
+    // The colon in the description is the interesting part: unquoted, it is invalid YAML and
+    // would take the whole definition (including the allowlist) down with it.
+    expect(type?.description).toBe("Reviews a diff: correctness only");
+    expect(type?.tools).toEqual(["read", "grep", "bash"]);
+    expect(type?.budget_usd).toBe(0.25);
+    expect(type?.prompt).toContain("Never propose refactors");
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("the wizard skips optional fields on a bare Enter, and a given name pre-answers step 0", () => {
+    let d = newAgentDraft("triage");
+    expect(d.step).toBe(1); // name already answered
+    const step = (input: string) => {
+      const r = wizardAdvance(d, input);
+      if (r.kind === "error") throw new Error(r.message);
+      d = r.draft;
+      return r;
+    };
+    step("Sorts incoming failures");
+    step(""); // role
+    step(""); // tools
+    step(""); // budget
+    const done = wizardAdvance(d, ""); // scope defaults to this repo
+    if (done.kind !== "done") throw new Error("expected done");
+    expect(done.draft).toMatchObject({
+      name: "triage",
+      tools: undefined,
+      budget_usd: undefined,
+      global: false,
+    });
+    // A garbage name on the command line is NOT silently kept — step 0 still asks.
+    expect(newAgentDraft("Not A Name").step).toBe(0);
   });
 
   test("bare /agent runs mid-turn; /agent <name> <task> queues (it spends money)", () => {
