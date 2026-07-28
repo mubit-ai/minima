@@ -33,9 +33,8 @@ export interface PlanFinalizeDb {
       agentType?: string | null;
     }[],
   ): { planId: string; stepIds: string[] };
-  /** Stamp the plan's approved total (Task 1). Optional — only real delegation callers
-   *  (main.ts/app.tsx) carry it; fakeDb test doubles that predate delegation need not. */
-  setPlanBudget?(planId: string, usd: number): void;
+  /** Stamp the plan's approved total (Task 1). */
+  setPlanBudget(planId: string, usd: number): void;
 }
 
 export interface PlanFinalizeDeps {
@@ -289,15 +288,22 @@ export async function finalizePlan(
       if (seedSteps.length > 0) {
         const seeded = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps);
         seededCount = seeded.stepIds.length;
-        if (deps.planBudgetUsd && deps.planBudgetUsd > 0) {
-          deps.db.setPlanBudget?.(seeded.planId, deps.planBudgetUsd);
-        }
         // MP18: the verifies the user just approved WITH the plan — the caller feeds them
         // into the consent store, so the first in_progress todowrite (which carries no
         // verify text of its own) does not dead-end at the execution-time consent check.
+        // This MUST run regardless of what happens below — a budget-write failure must
+        // never leave the consent store unpopulated.
         for (const st of seedSteps) {
           const v = (st.verify ?? "").trim();
           if (v) seededVerifies.push(v);
+        }
+        if (deps.planBudgetUsd && deps.planBudgetUsd > 0) {
+          try {
+            deps.db.setPlanBudget(seeded.planId, deps.planBudgetUsd);
+          } catch {
+            // fail-open: stamping the budget is bookkeeping: a locked DB/disk error here
+            // must not undo the seeding or the consent list already recorded above.
+          }
         }
       }
     } catch {

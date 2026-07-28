@@ -121,6 +121,8 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_ARTIFACT_GC_MB",
   "MINIMA_TUI_TTSR_CAP",
   "MINIMA_TUI_LSP_TIMEOUT_MS",
+  // Plan-delegated steps' default budget, USD — a number, not a switch.
+  "MINIMA_TUI_PLAN_BUDGET",
   "MINIMA_TUI_STOP_STRIKES",
   "MINIMA_TUI_SPIRAL_REPEATS",
   "MINIMA_TUI_STEP_CAP",
@@ -140,7 +142,6 @@ const NOT_A_SWITCH = new Set([
   // EXPERIMENTAL=1 assertion): plan-delegated steps redirect who executes every plan step,
   // so it ships opt-in for one release on its own switch, not tucked under the umbrella.
   "MINIMA_TUI_PLAN_DELEGATE",
-  "MINIMA_TUI_PLAN_BUDGET",
 ]);
 
 /** Every .ts/.tsx file under src/, so an ambient read cannot hide outside config.ts. */

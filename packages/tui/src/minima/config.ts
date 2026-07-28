@@ -312,7 +312,10 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
  * explicit "1" → on; explicit "0" → off (even under experimental); unset → on iff
  * experimental. Convention: every future default-off feature flag MUST resolve through
  * this helper so MINIMA_TUI_EXPERIMENTAL reaches it; consent gates (e.g.
- * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. */
+ * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. `planDelegate` is also a
+ * deliberate exception: it redirects who executes every plan step, so it ships opt-in on
+ * its own switch outside the umbrella — MINIMA_TUI_EXPERIMENTAL must not silently turn it
+ * on. */
 export function optInFlag(value: string | undefined, experimental: boolean): boolean {
   return value === "1" || (experimental && value !== "0");
 }

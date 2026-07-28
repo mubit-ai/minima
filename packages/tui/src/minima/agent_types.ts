@@ -432,12 +432,17 @@ export function applyAgentType(
 }
 
 /**
- * A plan step's view of a type: the two fields a step can actually enforce. `tools` is
- * checked by the dispatcher's per-step allowlist while the step is in progress;
- * `candidates` becomes the step's routing pool. The persona/effort/budget of a type are
- * meaningless for a step (the LEAD executes it in-band, under its own system prompt) and
+ * A plan step's view of a type: the two fields a step can actually enforce when the LEAD
+ * executes the step in-band, under its own system prompt — `tools` is checked by the
+ * dispatcher's per-step allowlist while the step is in progress; `candidates` becomes the
+ * step's routing pool. In that mode the persona/effort/budget of a type are meaningless and
  * are deliberately NOT applied — a step named after an agent gets that agent's scope, not
  * its identity.
+ *
+ * That holds only while plan-delegated steps are OFF. With MINIMA_TUI_PLAN_DELEGATE=1 the
+ * step instead runs AS a sub-agent (`buildStepDelegation` in plan_delegate.ts forwards
+ * `agent_type` and clamps the slice by the type's cap, and `applyAgentType` supplies the
+ * child's persona and effort) — identity included, not just scope.
  *
  * Like {@link applyAgentType}, an authored value always wins and an unknown name is inert.
  */

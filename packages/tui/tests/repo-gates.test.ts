@@ -122,6 +122,7 @@ describe("finalize integration", () => {
         seeded.push(steps);
         return { planId: "p", stepIds: steps.map((_, i) => `s${i}`) };
       },
+      setPlanBudget: () => {},
     };
     const saved = process.env.MINIMA_TUI_AUTO_GATES;
     process.env.MINIMA_TUI_AUTO_GATES = autoGates;
