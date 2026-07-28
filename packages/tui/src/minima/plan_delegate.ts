@@ -109,3 +109,39 @@ export function buildStepDelegation(
   d.budget_usd = typeCap !== undefined ? Math.min(budgetUsd, typeCap) : budgetUsd;
   return d;
 }
+
+/** Below this a child cannot finish anything useful, so the plan stops instead of
+ *  spawning an agent that will immediately hit its cap and report partial. */
+export const MIN_VIABLE_SLICE_USD = 0.02;
+
+export type DelegateSkip =
+  | "flag_off"
+  | "already_delegated"
+  | "no_budget"
+  | "plan_exhausted"
+  | "no_content";
+
+/** What is LEFT, divided among the steps that REMAIN — recomputed before every spawn, so a
+ *  cheap early step leaves more for later ones and a static split cannot strand the last. */
+export function sliceForStep(
+  planTotalUsd: number,
+  spentUsd: number,
+  stepsRemaining: number,
+): number {
+  if (stepsRemaining <= 0) return 0;
+  return Math.max(0, (planTotalUsd - spentUsd) / stepsRemaining);
+}
+
+export function shouldDelegate(
+  step: PlanStepRow,
+  planBudgetUsd: number | null,
+  spentUsd: number,
+  stepsRemaining: number,
+): { ok: true; sliceUsd: number } | { ok: false; reason: DelegateSkip } {
+  if (step.delegated_cost_usd !== null) return { ok: false, reason: "already_delegated" };
+  if (!(step.content ?? "").trim()) return { ok: false, reason: "no_content" };
+  if (planBudgetUsd === null || planBudgetUsd <= 0) return { ok: false, reason: "no_budget" };
+  const sliceUsd = sliceForStep(planBudgetUsd, spentUsd, stepsRemaining);
+  if (sliceUsd < MIN_VIABLE_SLICE_USD) return { ok: false, reason: "plan_exhausted" };
+  return { ok: true, sliceUsd };
+}

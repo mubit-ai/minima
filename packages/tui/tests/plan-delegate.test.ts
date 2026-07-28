@@ -15,6 +15,9 @@ import {
   buildStepDelegation,
   priorResultsFor,
   synthesizeBoundaries,
+  MIN_VIABLE_SLICE_USD,
+  shouldDelegate,
+  sliceForStep,
 } from "../src/minima/plan_delegate.ts";
 
 let dir: string;
@@ -205,5 +208,45 @@ describe("projection", () => {
     // A type with no cap, and an unknown name, both fall through to the slice.
     const plain = row({ id: "s3", idx: 0, status: "in_progress", agent_type: "nope" });
     expect(buildStepDelegation([plain], plain, 2, registry).budget_usd).toBeCloseTo(2, 6);
+  });
+});
+
+describe("budget", () => {
+  test("the slice divides what is LEFT among the steps that remain", () => {
+    expect(sliceForStep(2, 0, 4)).toBeCloseTo(0.5, 6);
+    expect(sliceForStep(2, 1, 2)).toBeCloseTo(0.5, 6);
+    // A cheap early step leaves more for the rest — a static split cannot do this.
+    expect(sliceForStep(2, 0.1, 3)).toBeCloseTo(0.6333, 3);
+  });
+
+  test("the last step gets everything left, and an overspent plan gets zero", () => {
+    expect(sliceForStep(2, 1.5, 1)).toBeCloseTo(0.5, 6);
+    expect(sliceForStep(2, 2.5, 1)).toBe(0);
+    expect(sliceForStep(2, 0, 0)).toBe(0);
+  });
+
+  test("a step already delegated never spawns again — the one-attempt guard", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress", delegated_cost_usd: 0 });
+    expect(shouldDelegate(s, 2, 0, 1)).toEqual({ ok: false, reason: "already_delegated" });
+  });
+
+  test("no approved plan budget means no delegation at all — never a half-state", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress" });
+    expect(shouldDelegate(s, null, 0, 1)).toEqual({ ok: false, reason: "no_budget" });
+  });
+
+  test("an exhausted plan total stops the next step rather than shrinking it to nothing", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress" });
+    expect(shouldDelegate(s, 2, 1.995, 1)).toEqual({ ok: false, reason: "plan_exhausted" });
+  });
+
+  test("an empty step is not delegated", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress", content: "  " });
+    expect(shouldDelegate(s, 2, 0, 1)).toEqual({ ok: false, reason: "no_content" });
+  });
+
+  test("a healthy step delegates with its slice", () => {
+    const s = row({ id: "s1", idx: 0, status: "in_progress" });
+    expect(shouldDelegate(s, 2, 0, 4)).toEqual({ ok: true, sliceUsd: 0.5 });
   });
 });
