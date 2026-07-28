@@ -191,7 +191,7 @@ export function makePlanDelegate(deps: PlanDelegateDeps): PlanDelegate {
     const verdict = shouldDelegate(step, budget, spent, remaining);
     if (!verdict.ok) {
       if (verdict.reason === "plan_exhausted") {
-        return `Plan budget exhausted: $${spent.toFixed(2)} of the approved $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
+        return `Plan budget exhausted: $${spent.toFixed(2)} of the $${(budget ?? 0).toFixed(2)} is spent, so this step was not delegated. Stop and tell the user — do not continue the plan until they raise the budget or ask you to finish it yourself.`;
       }
       if (verdict.reason === "slice_too_thin") {
         const perStepUsd = verdict.sliceUsd;

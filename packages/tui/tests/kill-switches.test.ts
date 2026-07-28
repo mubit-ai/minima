@@ -237,6 +237,13 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "-5" }), () =>
       expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
     );
+    // Empty or whitespace-only values must fall back to $2, not disable delegation.
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "  " }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
   });
 
   test("MINIMA_TUI_FETCH_LOCAL is a consent gate: absent means DENY", () => {
