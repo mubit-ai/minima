@@ -406,6 +406,11 @@ export function dashboardReport(
     lines.push(`Dashboard  ${state.url}`);
     // A 60s ticket, not the durable token: this text lands in the transcript.
     lines.push("  link     valid 60s · /dashboard issues a fresh one");
+  } else if (state.status === "off") {
+    // Deliberate, so it must not read like a fault — and it has to say the way back.
+    lines.push("Dashboard  off for this session");
+    if (state.reason) lines.push(`  reason   ${state.reason}`);
+    lines.push("  back on  /dashboard on · MINIMA_TUI_DASHBOARD=0 opts out for good");
   } else {
     lines.push("Dashboard  not reachable");
     if (state.reason) lines.push(`  reason   ${state.reason}`);
@@ -462,7 +467,12 @@ export class DashboardSupervisor {
   private stopped = false;
   private abort: AbortController | null = null;
   private wakeup: (() => void) | null = null;
+  /** The supervising loop, or null when detached — the synchronous answer to "am I on?". */
   private loopDone: Promise<void> | null = null;
+  /** A detached loop's completion, so a restart cannot run two loops at once. */
+  private unwinding: Promise<void> = Promise.resolve();
+  /** Bumped by every start and every detach; a chained restart that is stale does nothing. */
+  private runId = 0;
 
   constructor(options: SupervisorOptions) {
     this.opts = {
@@ -496,13 +506,48 @@ export class DashboardSupervisor {
     };
   }
 
-  /** Fire-and-forget. Never awaited by the caller — a wedged probe must not delay the TUI. */
+  /**
+   * Fire-and-forget. Never awaited by the caller — a wedged probe must not delay the TUI.
+   *
+   * Callable again after `detach`, which is what `/dashboard on` does. The new loop is chained onto
+   * the detached one's completion rather than started beside it: `stopped` is the only thing telling
+   * the old loop to unwind, so clearing it early would leave two loops attaching from one TUI —
+   * double-counting the refcount and racing each other to spawn.
+   */
   start(): void {
     if (this.loopDone) return;
-    this.state = { ...this.state, status: "starting" };
-    this.loopDone = this.loop().catch(() => {
-      // the loop swallows its own errors; this is the belt for an unexpected throw
-    });
+    const id = (this.runId += 1);
+    this.state = { ...this.state, status: "starting", reason: null };
+    this.loopDone = this.unwinding
+      .then(() => {
+        // A detach that landed while the previous loop was still unwinding wins — it bumped runId.
+        if (this.runId !== id) return;
+        this.stopped = false;
+        return this.loop();
+      })
+      .catch(() => {
+        // the loop swallows its own errors; this is the belt for an unexpected throw
+      });
+  }
+
+  /**
+   * `/dashboard on`. Restarts the loop and waits, briefly, for a link — so the reply is the URL
+   * rather than "not reachable" while a spawn is still in flight. Bounded on purpose: a server that
+   * never comes up must not hold the composer, and the loop keeps retrying either way.
+   */
+  async resume(timeoutMs = 4_000): Promise<DashboardState> {
+    this.start();
+    const deadline = this.opts.now() + timeoutMs;
+    for (;;) {
+      const snap = await this.snapshot();
+      // Waits for the HOLD, not merely for a link. The URL goes live the moment the rendezvous names
+      // an answering server, which is before this session's own attach lands — returning there would
+      // report a refcount it is only about to take. On the deadline it returns whatever it has, which
+      // still carries the URL if there is one.
+      const settled = snap.status === "attached" || snap.status === "failed";
+      if (settled || this.opts.now() >= deadline) return snap;
+      await this.opts.sleep(150);
+    }
   }
 
   /**
@@ -516,9 +561,11 @@ export class DashboardSupervisor {
    * because the loop is already replacing that server and the next call has a working one.
    */
   async snapshot(): Promise<DashboardState> {
-    const rv = await readRendezvous(this.rvPath);
-    if (!rv || rv.ledger !== this.opts.ledger) return this.state;
-    const health = await this.opts.probe(rv.port);
+    const found = await readRendezvous(this.rvPath);
+    const rv = found && found.ledger === this.opts.ledger ? found : null;
+    const health = rv ? await this.opts.probe(rv.port) : null;
+    if (this.stopped) return this.released(rv, health);
+    if (!rv) return this.state;
     const base: DashboardState = {
       ...this.state,
       port: rv.port,
@@ -543,18 +590,52 @@ export class DashboardSupervisor {
   }
 
   /**
-   * Stop for good. Everything that matters happens synchronously — the attach is aborted and a
-   * pending backoff is cancelled rather than left to hold the TUI's event loop open on the way out.
-   * The returned promise is the loop's completion, and is safe to ignore: `closeDb` does, because an
-   * exiting TUI must not block on a socket.
+   * What `/dashboard` prints once this session has let go. Keyed on `stopped`, which means
+   * *released* — not merely "no loop running", which is also true of a supervisor nobody has started
+   * yet and whose `/dashboard` must still report the world. Reports what is out there, because "does
+   * it die now, or is someone else using it" is the whole question, but hands back no link: a URL
+   * this session opted out of contradicts the state line printed under it.
+   */
+  private released(rv: Rendezvous | null, health: Health | null): DashboardState {
+    const others = health?.clients ?? 0;
+    return {
+      ...this.state,
+      status: "off",
+      url: null,
+      clients: health?.clients ?? null,
+      port: health && rv ? rv.port : null,
+      serverPid: health && rv ? rv.pid : null,
+      startedAt: health && rv ? rv.startedAt : null,
+      portNote: health && rv ? (rv.portNote ?? null) : null,
+      reason: !health
+        ? "nothing is serving this ledger"
+        : others > 0
+          ? `${others} other client(s) still attached, so the server stays up`
+          : "no clients left — the server exits on its own within ~10s",
+    };
+  }
+
+  /**
+   * Release this TUI's hold — on the way out, and on `/dashboard off`. Everything that matters
+   * happens synchronously: the attach is aborted and a pending backoff is cancelled rather than left
+   * to hold the TUI's event loop open. The returned promise is the loop's completion, and is safe to
+   * ignore: `closeDb` does, because an exiting TUI must not block on a socket.
+   *
+   * It never signals the server. Another TUI may be attached, and taking down someone else's
+   * dashboard is the one thing this feature must not do — the server's own grace window ends it once
+   * its last client leaves. Reversible via `start`/`resume`.
    */
   detach(): Promise<void> {
+    this.runId += 1;
     this.stopped = true;
     this.abort?.abort();
     this.abort = null;
     this.wakeup?.();
-    this.state = { ...this.state, status: "off", url: null };
-    return this.loopDone ?? Promise.resolve();
+    const done = this.loopDone ?? Promise.resolve();
+    this.loopDone = null;
+    this.unwinding = done;
+    this.state = { ...this.state, status: "off", url: null, reason: null, clients: null };
+    return done;
   }
 
   /**

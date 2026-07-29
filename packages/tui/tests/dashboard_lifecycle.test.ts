@@ -485,6 +485,73 @@ describe("the client re-establishes, over real sockets", () => {
   }, 20_000);
 });
 
+describe("/dashboard off and on, over real sockets", () => {
+  /**
+   * The refcount is a socket the kernel owns, so what `off` actually does — and whether the count the
+   * reply quotes is the count the server has — can only be shown against a listening server. The
+   * hermetic suite proves the loop stops and restarts; this proves the server sees it, and that `off`
+   * sends no signal: the same process is still serving when `on` takes it back.
+   */
+  test("off drops this TUI's hold without touching the server, and on takes it back", async () => {
+    const { DashboardSupervisor, rendezvousPath, resolveLedger, writeRendezvous } = await import(
+      "../src/dashboard/supervisor.ts"
+    );
+    const ledger = resolveLedger(dbPath).path;
+    const rvDir = join(dir, "onoff");
+    const rvFile = rendezvousPath(ledger, rvDir);
+    // A long grace so the server outlives the release: this test is about the client letting go,
+    // not about the idle shutdown, which "idle shutdown" above already covers.
+    const server = serve({ dbPath: ledger, graceMs: 30_000 });
+    await writeRendezvous(rvFile, {
+      ledger,
+      port: server.port,
+      token: server.token,
+      pid: PID_A,
+      startedAt: Date.now(),
+    });
+
+    let spawns = 0;
+    const sup = new DashboardSupervisor({
+      ledger,
+      dir: rvDir,
+      backoffMs: [20],
+      probeTries: 1,
+      probeGapMs: 10,
+      // Nothing may be spawned in either direction: one server is already serving this ledger.
+      spawnServer: () => {
+        spawns += 1;
+      },
+    });
+
+    try {
+      sup.start();
+      for (let i = 0; i < 200 && server.clients() === 0; i += 1) await sleep(10);
+      expect(server.clients()).toBe(1);
+
+      await sup.detach();
+      for (let i = 0; i < 200 && server.clients() > 0; i += 1) await sleep(10);
+      expect(server.clients()).toBe(0);
+
+      // The count in the reply is the server's own, and the server is still the same process.
+      const off = await sup.snapshot();
+      expect(off.status).toBe("off");
+      expect(off.url).toBeNull();
+      expect(off.clients).toBe(0);
+      expect(off.reason).toContain("no clients left");
+      expect(await fetch(`http://127.0.0.1:${server.port}/healthz`).then((r) => r.ok)).toBe(true);
+
+      const on = await sup.resume(8_000);
+      expect(on.status).toBe("attached");
+      expect(on.url).toContain(`:${server.port}/`);
+      expect(server.clients()).toBe(1);
+      expect(spawns).toBe(0);
+    } finally {
+      await sup.detach();
+      server.stop();
+    }
+  }, 20_000);
+});
+
 describe("tickets over the wire", () => {
   test("a ticket opens the dashboard and is exchanged for the durable cookie", async () => {
     const { mintTicket } = await import("../src/dashboard/auth.ts");

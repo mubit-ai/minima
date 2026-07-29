@@ -392,6 +392,17 @@ describe("what /dashboard prints", () => {
     expect(out).not.toContain("null");
     expect(out).not.toContain("0 attached");
   });
+
+  test("off is a choice, not a fault — it never reads as an error and it says the way back", () => {
+    const out = text(
+      state({ url: null, status: "off", reason: "no clients left — the server exits on its own" }),
+    );
+    expect(out).toContain("off for this session");
+    expect(out).toContain("/dashboard on");
+    expect(out).toContain("MINIMA_TUI_DASHBOARD=0");
+    expect(out).not.toContain("not reachable");
+    expect(out).not.toContain("http://");
+  });
 });
 
 describe("tickets", () => {
@@ -553,5 +564,204 @@ describe("the client re-establishes", () => {
     const started = Date.now();
     await s.detach();
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("/dashboard off and on", () => {
+  let rvDir: string;
+  let rvFile: string;
+
+  beforeEach(() => {
+    rvDir = join(dir, "onoff");
+    rvFile = rendezvousPath(ledger, rvDir);
+  });
+
+  /**
+   * An attach that stays open until the supervisor aborts it — the shape of a live hold, and the
+   * only shape that can show whether two loops are attaching at once. A stub that ignored the
+   * signal would hang `detach`, because the loop unwinds through the aborted read.
+   */
+  const heldAttach =
+    (onOpen: () => void, onClose: () => void) =>
+    async (_url: string, init?: RequestInit): Promise<Response> => {
+      onOpen();
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"attached":1}\n'));
+            init?.signal?.addEventListener("abort", () => {
+              onClose();
+              c.error(new Error("aborted"));
+            });
+          },
+        }),
+        { status: 200 },
+      );
+    };
+
+  const sup = (over: Partial<SupervisorOptions> = {}): DashboardSupervisor =>
+    new DashboardSupervisor({
+      ledger,
+      dir: rvDir,
+      backoffMs: [1],
+      spawnWaitMs: 30,
+      probeTries: 1,
+      probeGapMs: 1,
+      sleep: noSleep,
+      probe: async () => healthy(),
+      spawnServer: () => {},
+      ...over,
+    });
+
+  test("off says the server is about to go when this was its last client", async () => {
+    await writeRendezvous(rvFile, rv({ port: 4187, pid: 4242 }));
+    let attaches = 0;
+    const s = sup({
+      probe: async () => healthy({ clients: attaches > 0 ? 0 : 1 }),
+      fetchImpl: heldAttach(
+        () => {
+          attaches += 1;
+        },
+        () => {},
+      ),
+    });
+    s.start();
+    await until(() => attaches > 0);
+    await s.detach();
+
+    const snap = await s.snapshot();
+    expect(snap.status).toBe("off");
+    expect(snap.url).toBeNull();
+    expect(snap.reason).toContain("no clients left");
+    const out = dashboardReport(snap).join("\n");
+    expect(out).toContain("off for this session");
+    expect(out).not.toContain("http://");
+  });
+
+  test("off leaves a server the others are using alone, and says so", async () => {
+    // The one thing this must never do is take down someone else's dashboard: no signal is sent,
+    // the rendezvous is left exactly as found, and the report names the holders.
+    await writeRendezvous(rvFile, rv({ port: 4187, pid: 4242 }));
+    let attaches = 0;
+    const s = sup({
+      probe: async () => healthy({ clients: 2 }),
+      fetchImpl: heldAttach(
+        () => {
+          attaches += 1;
+        },
+        () => {},
+      ),
+    });
+    s.start();
+    await until(() => attaches > 0);
+    await s.detach();
+
+    const snap = await s.snapshot();
+    expect(snap.reason).toContain("2 other client(s)");
+    expect(snap.reason).toContain("stays up");
+    expect(snap.serverPid).toBe(4242);
+    expect(snap.url).toBeNull();
+    // Still discoverable by everyone else — off is a client-side decision.
+    expect(await readRendezvous(rvFile)).not.toBeNull();
+  });
+
+  test("on starts a server again after off", async () => {
+    let spawns = 0;
+    const s = sup({
+      probe: async () => null,
+      spawnWaitMs: 0,
+      spawnServer: () => {
+        spawns += 1;
+      },
+      fetchImpl: async () => {
+        throw new Error("nothing is serving");
+      },
+    });
+    s.start();
+    await until(() => spawns > 0);
+    await s.detach();
+
+    const afterOff = spawns;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(spawns).toBe(afterOff); // off really stopped the retry loop
+
+    s.start();
+    await until(() => spawns > afterOff);
+    await s.detach();
+  });
+
+  test("off then on in the same breath runs ONE loop, not two", async () => {
+    /**
+     * `stopped` is the only thing telling the old loop to unwind, so a restart that cleared it
+     * early would leave two loops attaching from one TUI — the refcount double-counted and two
+     * spawns racing. The restart is chained onto the detached loop's completion instead.
+     */
+    await writeRendezvous(rvFile, rv({ port: 4187 }));
+    let attaches = 0;
+    let open = 0;
+    let peak = 0;
+    const s = sup({
+      fetchImpl: heldAttach(
+        () => {
+          attaches += 1;
+          open += 1;
+          peak = Math.max(peak, open);
+        },
+        () => {
+          open -= 1;
+        },
+      ),
+    });
+    s.start();
+    await until(() => attaches === 1);
+
+    const off = s.detach(); // deliberately NOT awaited: `on` lands mid-handover
+    s.start();
+    await until(() => attaches === 2);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(peak).toBe(1);
+    expect(open).toBe(1);
+    await off;
+    await s.detach();
+  });
+
+  test("a second off during the handover wins — no loop survives it", async () => {
+    await writeRendezvous(rvFile, rv({ port: 4187 }));
+    let attaches = 0;
+    const s = sup({
+      fetchImpl: heldAttach(
+        () => {
+          attaches += 1;
+        },
+        () => {},
+      ),
+    });
+    s.start();
+    await until(() => attaches === 1);
+
+    const off1 = s.detach();
+    s.start(); // chained — has not run yet
+    const off2 = s.detach(); // bumps the run id, so that chained start must do nothing
+    await off1;
+    await off2;
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(attaches).toBe(1);
+    expect((await s.snapshot()).status).toBe("off");
+  });
+
+  test("on hands back the link rather than 'not reachable' while a spawn is in flight", async () => {
+    await writeRendezvous(rvFile, rv({ port: 4187, token: "s3cret-token-value" }));
+    const s = sup({
+      fetchImpl: heldAttach(
+        () => {},
+        () => {},
+      ),
+    });
+    const snap = await s.resume(2_000);
+    expect(snap.url).toContain(":4187/?k=");
+    expect(snap.url).not.toContain("s3cret-token-value");
+    await s.detach();
   });
 });

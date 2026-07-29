@@ -310,7 +310,10 @@ const COMMANDS = [
   { name: "quit", desc: "Exit the application" },
   { name: "exit", desc: "Exit the application" },
   { name: "cost", desc: "Show cost meter totals" },
-  { name: "dashboard", desc: "Show the local dashboard URL (auto-starts with the TUI)" },
+  {
+    name: "dashboard",
+    desc: "Local dashboard URL · `off` stops it for this session, `on` starts it again",
+  },
   { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
   { name: "reconnect", desc: "Reconnect routing client" },
   { name: "new", desc: "Start a fresh session" },
@@ -2422,13 +2425,37 @@ export function HarnessApp({
         // moved ports since this session began. Formatting lives in dashboard/supervisor.ts so the
         // no-dashboard branches are testable without a terminal.
         const { dashboardReport } = await import("../dashboard/supervisor.ts");
-        const lines = dashboardReport(dashboard ? await dashboard.snapshot() : null, {
+        const verb = args.trim().toLowerCase();
+        const echo: ChatMessage = { role: "user", text: `/dashboard${verb ? ` ${verb}` : ""}` };
+        if (verb !== "" && verb !== "on" && verb !== "off") {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: `Unknown argument "${verb}". Usage: /dashboard [on|off]`,
+              toolName: "dashboard",
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        // `off` releases this TUI's hold and stops it retrying; it never signals the server, which
+        // ends itself once its last client leaves. `on` waits briefly so the reply is the link
+        // rather than "not reachable" while the spawn is in flight.
+        if (verb === "off") await dashboard?.detach();
+        const snap = dashboard
+          ? verb === "on"
+            ? await dashboard.resume()
+            : await dashboard.snapshot()
+          : null;
+        const lines = dashboardReport(snap, {
           disabled: process.env.MINIMA_TUI_DASHBOARD === "0",
           age: (startedAt) => formatAge(startedAt / 1000),
         });
         setMessages((m) => [
           ...m,
-          { role: "user", text: "/dashboard" },
+          echo,
           { role: "tool", text: lines.join("\n"), toolName: "dashboard" },
         ]);
         break;

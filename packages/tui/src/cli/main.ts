@@ -1222,8 +1222,16 @@ Usage: minima dashboard [options]
   -h, --help
 
 An interactive TUI starts one of these for you (detached, shared by every TUI on the same ledger,
-gone ~10s after the last one closes) — MINIMA_TUI_DASHBOARD=0 opts out, and /dashboard in the TUI
-prints its URL. Running this command yourself is always independent: it is never adopted or killed.
+gone ~10s after the last one closes) — MINIMA_TUI_DASHBOARD=0 opts out for good, and in the TUI:
+
+  /dashboard         print the URL (a fresh 60-second link each time)
+  /dashboard off     stop using it in this session — the server exits ~10s after its LAST TUI
+                     leaves, so if others are attached it keeps serving them
+  /dashboard on      start it again (re-uses a running one, spawns if there is none)
+
+Because it is detached it ignores SIGINT and SIGHUP: Ctrl+C in the shell that started it, and
+closing that window, both leave it running. Running this command yourself is always independent:
+that server is never adopted or killed by any TUI.
 
 Read-only, always: the ledger is opened with a readonly SQLite handle and the dashboard has no
 write path at all. Every route is gated on a per-process token, handed over in the printed URL.

@@ -92,8 +92,29 @@ two-second reconnect for a permanently leaked port. `/dashboard` prints no URL i
 confirmed: if the recorded server does not answer, it prints the reason and the pid instead, because
 the rendezvous outlives its server by the kernel's reap delay and by the whole grace window.
 
-Opt out with `MINIMA_TUI_DASHBOARD=0`. Auto-start requires a TTY and live persistence, so `-p`,
-`--mode json`, CI and git hooks never open a socket.
+**Turning it off is a client-side act: `/dashboard off`.** It releases *this* TUI's attach and stops
+the retry loop; it never signals the server, because another TUI may be holding it and taking down
+someone else's dashboard is the one thing this feature must not do. If it was the last client the
+server ends itself through the ordinary grace window (~10s) — so in the common single-TUI case, `off`
+*is* how you stop the dashboard. The reply says which of the two happened, and never hands back a link
+this session has opted out of. `/dashboard on` reverses it: it re-uses a running server if there is
+one (same pid, no respawn) and spawns if there is not, and it waits for the **attach** rather than for
+a mere URL — the URL goes live the moment the rendezvous names an answering server, which is before
+this session's hold exists, so returning there would report a refcount it was only about to take.
+
+The restart is chained onto the released loop's completion rather than started beside it: `stopped` is
+the only thing telling the old loop to unwind, so clearing it early would leave two loops attaching
+from one TUI — the refcount double-counted and two spawns racing. A second `off` during that handover
+wins.
+
+Because the server is detached it **ignores SIGINT and SIGHUP** by design, so `Ctrl+C` in the shell
+that started it and closing that window both leave it running — that is the property that keeps one
+TUI from killing another's dashboard, and it is why `off` (or a plain `kill`, once nothing is attached)
+is the way to stop it rather than `Ctrl+C`. A `kill` while a TUI *is* attached is futile: the stream
+ends, the loop re-discovers, and a replacement is up in a couple of seconds.
+
+Opt out for the whole session with `MINIMA_TUI_DASHBOARD=0`. Auto-start requires a TTY and live
+persistence, so `-p`, `--mode json`, CI and git hooks never open a socket.
 
 ### Three residuals, named on purpose
 
@@ -521,6 +542,14 @@ holding the TUI open, and `snapshot` publishes a URL only when the probe just an
 are mutation-checked — republishing an unconfirmed URL, returning from the loop after one cycle, and
 dropping the wakeup from `detach` each fail exactly the test that claims it.
 
+And the `off`/`on` toggle: `off` reports whether the server is about to go or is still serving others,
+leaves the rendezvous exactly as found, and never yields a link; `on` starts one again after `off`;
+`off`-then-`on` in the same breath runs **one** loop, not two (an attach stub that stays open until
+aborted makes concurrent holds observable, and the assertion is on the peak); and a second `off`
+during that handover wins. Five more mutations, one per claim: dropping `stopped = false` from the
+restart, starting the new loop beside the old one instead of chaining it, dropping the stale-restart
+guard, letting `snapshot` hand back a link after `off`, and making `detach` irreversible again.
+
 `packages/tui/tests/dashboard_lifecycle.test.ts` — **real sockets, on purpose.** Lifecycle claims
 are not hermetically provable, and a test suite that can only pass is how the attach stream shipped
 idle in the first draft: every state-transition test finishes in milliseconds, so none of them
@@ -528,9 +557,12 @@ notices a stream Bun will close at 60s. Timings are injected (grace and keepaliv
 ephemeral port) and the assertions are about duration — a keepalive frame actually arriving, an idle
 server firing exactly once, a client arriving inside the grace cancelling the exit, and a dead pid
 being dropped *while its socket is still held open*. The keepalive test is mutation-checked: removing
-the hub subscription fails that test and only that test. It also covers the cross-process shape the
-hermetic suite cannot claim: a real server stopped under a live attach, and a real client that ends up
-attached to its real replacement.
+the hub subscription fails that test and only that test. It also covers the cross-process shapes the
+hermetic suite cannot claim: a real server stopped under a live attach with a real client that ends up
+attached to its real replacement, and the `off`/`on` round trip — the server's own client count going
+1 → 0 → 1, `/healthz` still answering in between (so `off` demonstrably signals nothing), and no spawn
+in either direction. That last one is where `on` was caught returning "starting" with a working URL,
+because it was waiting for a link rather than for the hold.
 
 One thing no test here can prove: that Bun honors `idleTimeout`. A source guard asserts the option is
 passed and is labeled as exactly that — the real check is a tab, or a TUI, left open past 60s.
