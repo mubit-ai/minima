@@ -28,6 +28,13 @@ function freshDir(): string {
   return dir;
 }
 
+/**
+ * Read through a dynamic key. `delete process.env.X` narrows that property to `undefined` for the
+ * rest of the block, and tsc cannot see that `hydrateEnv()` puts it back — so a direct
+ * `expect(process.env.X).toBe("...")` afterwards is a type error rather than a real one.
+ */
+const envValue = (key: string): string | undefined => process.env[key];
+
 describe("config_store (file backend)", () => {
   test("setValue → get round-trips and reports the file backend", async () => {
     freshDir();
@@ -79,7 +86,7 @@ describe("config_store (file backend)", () => {
     expect(process.env.MUBIT_API_KEY).toBe("from-shell"); // real env wins
     delete process.env.MUBIT_API_KEY;
     await hydrateEnv();
-    expect(process.env.MUBIT_API_KEY).toBe("from-store"); // store fills the gap
+    expect(envValue("MUBIT_API_KEY")).toBe("from-store"); // store fills the gap
     delete process.env.MUBIT_API_KEY;
   });
 
@@ -100,7 +107,7 @@ describe("config_store (file backend)", () => {
 
     delete process.env.EXA_API_KEY;
     await hydrateEnv();
-    expect(process.env.EXA_API_KEY).toBe("exa-secret");
+    expect(envValue("EXA_API_KEY")).toBe("exa-secret");
     delete process.env.EXA_API_KEY;
   });
 });

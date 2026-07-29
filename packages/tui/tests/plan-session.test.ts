@@ -543,9 +543,13 @@ describe("PlanSessionStore.toBigPlan", () => {
           { topic: "Language", decision: "Python 3", rationale: "user asked for Python" },
         ],
         approach: [
-          { action: "Create binary_search.py", verify: "test -f binary_search.py" },
-          { action: "Implement bisect-style search", verify: "python -c 'import binary_search'" },
-          { action: "Add pytest cases", verify: "pytest -q" },
+          { action: "Create binary_search.py", verify: "test -f binary_search.py", tools: [] },
+          {
+            action: "Implement bisect-style search",
+            verify: "python -c 'import binary_search'",
+            tools: [],
+          },
+          { action: "Add pytest cases", verify: "pytest -q", tools: [] },
         ],
         risks: ["Off-by-one on the midpoint", "Unsorted input is undefined behavior"],
         successCriteria: ["All pytest cases pass"],
@@ -588,7 +592,11 @@ describe("PlanSessionStore.toBigPlan", () => {
     );
     // Synthesis provides prose but no constraints/decisions → fall back to session state.
     const md = store.toBigPlan(
-      synth({ title: "T", goal: "do the thing", approach: [{ action: "step", verify: "" }] }),
+      synth({
+        title: "T",
+        goal: "do the thing",
+        approach: [{ action: "step", verify: "", tools: [] }],
+      }),
     );
     expect(md).toContain("- must stay offline");
     expect(md).toContain("### Store");

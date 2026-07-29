@@ -60,6 +60,8 @@ function step(over: Partial<PlanStepRow> & { idx: number }): PlanStepRow {
     created_at: null,
     verify_cwd: null,
     check_origin: null,
+    tools: null,
+    candidates: null,
     ...over,
   };
 }
@@ -70,6 +72,7 @@ const PLAN: PlanRow = {
   title: "My Plan",
   status: "active",
   created_at: null,
+  closed_at: null,
 };
 
 // --------------------------------------------------------------------------- parseTodos

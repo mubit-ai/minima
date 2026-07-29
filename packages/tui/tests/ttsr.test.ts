@@ -310,4 +310,56 @@ describe("TTSR abort → inject → retry", () => {
     expect(rec.calls).toBe(2);
     expect(agent.agentState.messages.filter(isAssistant)[0]!.textContent).toBe("clean");
   });
+
+  // Promotion off opt-in needs a firing COUNT, not a recollection: "no false positives" is
+  // unfalsifiable until you can also show the tripwire fired at all (the anti-vacuity half
+  // of the bar). onTtsrFire is the row behind that number.
+  test("each firing reports its rule id exactly once", async () => {
+    const attempts: Attempt[] = [
+      { deltas: ["about to run rm -rf / now"], result: asst("discarded") },
+      { deltas: ["clean answer"], result: asst("clean answer") },
+    ];
+    const rec: StreamRec = { calls: 0, returned: [], signals: [] };
+    const fired: string[] = [];
+    const agent = new Agent({
+      model: MODEL,
+      streamFn: scriptedStreamFn(attempts, rec),
+      ttsr: compileTtsr([{ id: "root", pattern: /rm -rf \//, reminder: "no root deletes" }]),
+    });
+    agent.onTtsrFire = (hit) => fired.push(hit.ruleId);
+    await agent.prompt("go");
+    expect(fired).toEqual(["root"]);
+  });
+
+  test("a quiet turn reports nothing, and a throwing sink never costs the turn", async () => {
+    const quiet: Attempt[] = [{ deltas: ["entirely harmless"], result: asst("entirely harmless") }];
+    const rec1: StreamRec = { calls: 0, returned: [], signals: [] };
+    const fired: string[] = [];
+    const quietAgent = new Agent({
+      model: MODEL,
+      streamFn: scriptedStreamFn(quiet, rec1),
+      ttsr: compileTtsr([{ id: "root", pattern: /rm -rf \//, reminder: "no" }]),
+    });
+    quietAgent.onTtsrFire = (hit) => fired.push(hit.ruleId);
+    await quietAgent.prompt("go");
+    expect(fired).toEqual([]);
+
+    const attempts: Attempt[] = [
+      { deltas: ["rm -rf /"], result: asst("discarded") },
+      { deltas: ["clean"], result: asst("clean") },
+    ];
+    const rec2: StreamRec = { calls: 0, returned: [], signals: [] };
+    const throwing = new Agent({
+      model: MODEL,
+      streamFn: scriptedStreamFn(attempts, rec2),
+      ttsr: compileTtsr([{ id: "root", pattern: /rm -rf \//, reminder: "no" }]),
+    });
+    throwing.onTtsrFire = () => {
+      throw new Error("ledger is down");
+    };
+    await throwing.prompt("go");
+    // The retry still happens and still lands its clean answer.
+    expect(rec2.calls).toBe(2);
+    expect(throwing.agentState.messages.filter(isAssistant)[0]!.textContent).toBe("clean");
+  });
 });

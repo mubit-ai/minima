@@ -191,7 +191,7 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Flash",
-    cost: { input: 0.3, output: 2.5 },
+    cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
     reasoning: true,
@@ -201,7 +201,13 @@ export const SEED_MODELS: Model[] = [
     provider: "google",
     api: "google-generative-ai",
     name: "Gemini 2.5 Pro",
-    cost: { input: 1.25, output: 10.0 },
+    // Google prices 2.5 Pro in two tiers on prompt size: every rate doubles above 200k.
+    cost: {
+      input: 1.25,
+      output: 10.0,
+      cache_read: 0.125,
+      long_context: { above_prompt_tokens: 200_000, input: 2.5, output: 15.0, cache_read: 0.25 },
+    },
     context_window: 2_000_000,
     max_tokens: 8192,
     reasoning: true,

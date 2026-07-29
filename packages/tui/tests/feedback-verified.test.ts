@@ -11,6 +11,7 @@ import {
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import type { ConfidenceTier, GateOutcome } from "../src/minima/big_plan_contract.ts";
+import { feedbackResponse, recommendResponse } from "./_service.ts";
 import {
   CostMeter,
   MinimaAgent,
@@ -60,36 +61,19 @@ function mockService() {
       recSeq += 1;
       return {
         status: 200,
-        json: async () => ({
-          recommendation_id: `rec-${recSeq}`,
-          recommended_model: {
-            model_id: "test-faux",
-            provider: "faux",
-            predicted_success: 0.9,
-            est_cost_usd: 0.001,
-            score: 0.001,
-          },
-          ranked: [
-            {
-              model_id: "test-faux",
-              provider: "faux",
-              predicted_success: 0.9,
-              est_cost_usd: 0.001,
-              score: 0.001,
-            },
-          ],
-          confidence: 0.8,
-          decision_basis: "memory",
-          threshold_used: 0.5,
-          classified_task_type: "code",
-          classified_difficulty: "easy",
-          catalog_version: "v1",
-        }),
+        json: async () =>
+          recommendResponse({
+            recommendation_id: `rec-${recSeq}`,
+            recommended_model: { score: 0.001 },
+            decision_basis: "memory",
+            threshold_used: 0.5,
+            catalog_version: "v1",
+          }),
       };
     }
     if (method === "POST" && u.pathname === "/v1/feedback") {
       feedbackCalls.push(init?.body ? JSON.parse(init.body) : {});
-      return { status: 200, json: async () => ({ accepted: true, record_id: "o1" }) };
+      return { status: 200, json: async () => feedbackResponse({ record_id: "o1" }) };
     }
     return { status: 404, json: async () => ({ detail: "not found" }) };
   };

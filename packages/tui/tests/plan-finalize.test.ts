@@ -64,6 +64,36 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     expect(out.auditNote).toBe("");
   });
 
+  test("a verify-less step finalizes instead of crashing when auto-gates are off", async () => {
+    // Regression: toBigPlan deref'd st.verify.trim() unguarded. Auto-gates normally fills
+    // the field first, so the crash only appeared on the DOCUMENTED rollback path —
+    // MINIMA_TUI_AUTO_GATES=0 turned every /plan finalize with an unverified step into a
+    // TypeError. Pinned with the env set explicitly so the ambient value cannot hide it.
+    const saved = process.env.MINIMA_TUI_AUTO_GATES;
+    process.env.MINIMA_TUI_AUTO_GATES = "0";
+    try {
+      const store = new PlanSessionStore("ship the endpoint");
+      const { base, written } = deps({
+        metaModel: META,
+        force: true,
+        synthesize: (async () =>
+          synth({
+            approach: [
+              { action: "wire endpoint", verify: null, tools: [] },
+              { action: "wrap up", verify: null, tools: [] },
+            ],
+          })) as never,
+      });
+      const out = await finalizePlan(store, base);
+      if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+      // The renderer's verify-less branch is the correct output, not an exception.
+      expect(written[0]!.content).toContain("_none — decompose or add a check_");
+    } finally {
+      if (saved === undefined) delete process.env.MINIMA_TUI_AUTO_GATES;
+      else process.env.MINIMA_TUI_AUTO_GATES = saved;
+    }
+  });
+
   test("the /plan start goal lands in BigPlan.md on both synthesis paths (MUB-180)", async () => {
     // Deterministic path: no synthesis, the doc's Goal section is the session goal verbatim.
     const store = new PlanSessionStore("GOAL-MARKER-180 ship the endpoint");
@@ -224,7 +254,9 @@ describe("plan-premium finalize (two-tier models)", () => {
         return synth();
       },
       critic: async (o) => {
-        seen.critic = o.metaModel.id;
+        // `?? "(none)"` rather than `!`: a null metaModel then fails the toEqual below by value,
+        // which is the assertion this test is making, instead of throwing on a property access.
+        seen.critic = o.metaModel?.id ?? "(none)";
         return [];
       },
     });
@@ -248,7 +280,8 @@ describe("plan-premium finalize (two-tier models)", () => {
         return synth();
       },
       critic: async (o) => {
-        seen.push(o.metaModel.id);
+        // Only the critic's metaModel is nullable; see the note above on `?? "(none)"`.
+        seen.push(o.metaModel?.id ?? "(none)");
         return [];
       },
     });

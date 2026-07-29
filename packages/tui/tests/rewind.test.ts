@@ -7,6 +7,7 @@ import { AssistantMessage, Message } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { rehydrateRun } from "../src/db/rehydrate.ts";
 import { snapshot } from "../src/session/checkpoint.ts";
+import { readSource } from "./_source.ts";
 import {
   parseRewindMarker,
   promptText,
@@ -169,9 +170,7 @@ describe("/undo stacking seam (B4.2) — checkpoint walk-back", () => {
 
 describe("composer prefill seam (B4.3)", () => {
   test("TextInput seeds its draft from initialValue", async () => {
-    const input = await Bun.file(
-      new URL("../src/tui/text-input.tsx", import.meta.url).pathname,
-    ).text();
+    const input = readSource("tui/text-input.tsx");
     expect(input).toContain("initialValue?: string");
     // The input's source of truth is draftRef (stale-closure fix); prefill seeds it at mount.
     expect(input).toContain('value: initialValue ?? ""');

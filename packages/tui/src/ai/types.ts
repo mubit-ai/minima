@@ -40,11 +40,22 @@ export type Modality = "text" | "image";
 /** API ids match PI's registry so provider dispatch is recognizable. */
 export type ApiId = "anthropic-messages" | "google-generative-ai" | "openai-completions" | "faux";
 
-export interface ModelCost {
+/** Per-Mtok USD prices for one billing tier. */
+export interface ModelRates {
   input: number;
   output: number;
   cache_read?: number;
   cache_write?: number;
+}
+
+export interface ModelCost extends ModelRates {
+  /**
+   * Long-context tier: once the PROMPT exceeds `above_prompt_tokens`, these rates replace
+   * the base ones for the whole call — input, output and cache alike. Gemini 2.5 Pro
+   * doubles every rate above 200k, and a flat price on a 2M-context model undercharges by
+   * half on exactly the calls that cost the most.
+   */
+  long_context?: ModelRates & { above_prompt_tokens: number };
 }
 
 export interface Model {

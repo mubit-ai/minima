@@ -23,6 +23,7 @@ import {
   harnessConfig,
 } from "../src/minima/index.ts";
 import { type AskUserRef, questionTool } from "../src/tools/question.ts";
+import { readSource } from "./_source.ts";
 
 // A2 stop-gate through the REAL runtime/loop wiring: with plan verification on and an active plan whose
 // step is still in_progress, promptRouted must force-continue the model instead of letting it end,
@@ -208,7 +209,7 @@ describe("A2 stop-gate — runtime integration", () => {
   });
 
   test("runtime threads ONE per-rung flag from the anti-spiral into the stop-gate (R5c)", () => {
-    const src = readFileSync(join(import.meta.dir, "../src/minima/runtime.ts"), "utf8");
+    const src = readSource("minima/runtime.ts");
     expect(src).toContain("const rungFlags = { capWrapFired: false }");
     expect(src).toContain("capWrapFired: () => rungFlags.capWrapFired");
     expect(src).toContain("flags: rungFlags");

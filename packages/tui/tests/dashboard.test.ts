@@ -46,6 +46,7 @@ import {
   stepCheckPassRate,
 } from "../src/dashboard/stats.ts";
 import { type DecisionWrite, MinimaDb } from "../src/db/minima_db.ts";
+import { code, readSource } from "./_source.ts";
 
 const PROJECT = "acme/widget";
 const TOKEN = "test-token-0123456789";
@@ -1402,11 +1403,10 @@ describe("live activity hub", () => {
     ctx.store.close();
   });
 
-  test("Bun.serve is given an explicit idleTimeout above the keepalive interval", async () => {
+  test("Bun.serve is given an explicit idleTimeout above the keepalive interval", () => {
     // A source guard, and labeled as one: it proves the option is passed, not that Bun honors
     // it. The real proof is a tab left open past 10s, which no hermetic test can stage.
-    const src = await Bun.file(new URL("../src/dashboard/server.ts", import.meta.url)).text();
-    expect(src).toContain("idleTimeout: IDLE_TIMEOUT_S");
+    expect(readSource("dashboard/server.ts")).toContain(code("idleTimeout: IDLE_TIMEOUT_S"));
     expect(IDLE_TIMEOUT_S).toBeGreaterThan(20);
   });
 });

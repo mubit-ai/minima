@@ -47,8 +47,20 @@ function spillCompaction(artifacts: ToolArtifacts, messages: Message[]): string 
 export function compactMessages(agent: MinimaAgent, messages: Message[]): Message[] {
   if (messages.length <= KEEP_RECENT + 2) return messages;
 
-  const oldMessages = messages.slice(0, messages.length - KEEP_RECENT);
-  const recentMessages = messages.slice(-KEEP_RECENT);
+  // Never cut between an assistant's toolCall and its toolResult: a kept tail that OPENS
+  // with a toolResult carries a tool_use_id whose owning message was just summarized away,
+  // and the provider rejects the next request ("tool_use ids were not found"). Every later
+  // prompt replays the same broken history, so the session is wedged until /clear — which
+  // discards exactly what the user compacted to keep. Walk the split BACK onto the owning
+  // assistant (keeping the whole round) rather than forward past the orphans, which would
+  // empty the kept window whenever KEEP_RECENT trailing messages are all tool results. A
+  // `while`, not an `if`: parallel tool calls put N consecutive toolResults under one
+  // assistant.
+  let cut = messages.length - KEEP_RECENT;
+  while (cut > 0 && messages[cut]!.role === "toolResult") cut--;
+
+  const oldMessages = messages.slice(0, cut);
+  const recentMessages = messages.slice(cut);
 
   // TTSR (W4.2): harness-injected tripwire reminders in the old window are preserved verbatim
   // as active context rather than truncated into the summary — they are enforcement steers the

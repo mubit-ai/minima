@@ -226,7 +226,7 @@ describe("todowrite permission prompt surfaces verify commands", () => {
 // narrow width can never render taller than the rows reserved for it (inline: Ink's
 // scrollback-wiping clearTerminal).
 describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("reservation and render share the layout helpers (estimate == render)", () => {
     expect(src).toContain("permOverlayHeight(permPrompt, cols)");
@@ -298,6 +298,7 @@ import { type GuardEvent, onGuardEvent } from "../src/agent/policy.ts";
 import type { AgentState } from "../src/agent/state.ts";
 import type { BeforeToolCallContext } from "../src/agent/tools.ts";
 import { makeModeGatedBeforeToolCall } from "../src/tui/permissions.ts";
+import { readSource } from "./_source.ts";
 
 function editCtx(): BeforeToolCallContext {
   return {
@@ -782,7 +783,7 @@ describe("MP18 — mode interaction with verify consent", () => {
   test("the TUI consent checker grants bypass mode blanket consent (source pin)", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    const src = readSource("tui/app.tsx");
     expect(src).toContain(
       'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
     );
@@ -794,7 +795,7 @@ describe("MP18 — mode interaction with verify consent", () => {
 // mode, and no UI copy may still claim Shift+Tab returns from plan to build (the ring now
 // continues to bypass). Source pins on app.tsx wiring — the handler has no seam.
 describe("MUB-177 R2 — ring transit through bypass is consent-safe (source pins)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the Shift+Tab handler never auto-resolves a pending prompt when the cycle lands on bypass", () => {
     expect(src).toContain('next !== "bypass" &&');

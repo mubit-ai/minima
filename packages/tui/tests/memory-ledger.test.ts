@@ -231,7 +231,7 @@ function setupAgent(over: Partial<ReturnType<typeof harnessConfig>> = {}) {
   return { agent, reg, db, runId };
 }
 
-const reply = () => new AssistantMessage({ content: [text("ok")], stop_reason: "endTurn" });
+const reply = () => new AssistantMessage({ content: [text("ok")], stop_reason: "stop" });
 
 describe("memory ledger — runtime injection", () => {
   test("active memory reaches the model's system prompt; inject audited once per set", async () => {

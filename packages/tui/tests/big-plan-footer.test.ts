@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readSource } from "./_source.ts";
 
 // Guards the D3a task-panel wiring in tui/app.tsx — the ONE plan surface (MP6, MUB-149).
 // The old plan footer banner (planStrip row + 🟡 note + 🔴 block rows) folded INTO the task
@@ -10,7 +11,7 @@ import { join } from "node:path";
 //  - the budget still subtracts the wipe-guard constants,
 //  - the ledger refresh cadence and fail-open behavior survived the fold.
 describe("tui/app.tsx wires the D3a plan surface (the old plan banner is gone)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the old banner render sites are gone — one plan surface", () => {
     expect(src).not.toContain("planStripLabel(planStrip)");

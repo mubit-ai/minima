@@ -129,8 +129,8 @@ describe("openai-compat SSE streaming", () => {
 
     expect(result.stop_reason).toBe("toolUse");
     expect(result.toolCalls).toHaveLength(1);
-    expect(result.toolCalls[0].name).toBe("bash");
-    expect(result.toolCalls[0].arguments).toEqual({ command: "ls" });
+    expect(result.toolCalls[0]?.name).toBe("bash");
+    expect(result.toolCalls[0]?.arguments).toEqual({ command: "ls" });
   });
 
   test("emits thinking deltas from reasoning_content (deepseek-style)", async () => {
@@ -170,5 +170,72 @@ describe("openai-compat SSE streaming", () => {
 
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/HTTP 401/);
+  });
+});
+
+describe("openai-compat surfaces the provider's own error message", () => {
+  /** A failing fetch whose body carries whatever the provider actually said. */
+  function failingFetch(status: number, body: string) {
+    return async () => ({ status, ok: false, body: null, text: async () => body });
+  }
+
+  async function errorOf(fetchImpl: unknown): Promise<string> {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    const result = await complete(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: fetchImpl, api_key: "k" } },
+    );
+    return result.error_message ?? "";
+  }
+
+  test("the standard {error:{message}} envelope is unwrapped", async () => {
+    const msg = await errorOf(
+      failingFetch(429, JSON.stringify({ error: { message: "Rate limit reached, retry in 20s" } })),
+    );
+    expect(msg).toContain("HTTP 429");
+    expect(msg).toContain("Rate limit reached, retry in 20s");
+  });
+
+  test("a bad request explains itself instead of reading as a bare 400", async () => {
+    const msg = await errorOf(
+      failingFetch(400, JSON.stringify({ error: { message: "max_tokens is too large" } })),
+    );
+    expect(msg).toContain("max_tokens is too large");
+  });
+
+  test("a non-JSON body (proxy HTML) is quoted raw rather than dropped", async () => {
+    const msg = await errorOf(failingFetch(502, "<html>502 Bad Gateway</html>"));
+    expect(msg).toContain("HTTP 502");
+    expect(msg).toContain("502 Bad Gateway");
+  });
+
+  test("a huge body is capped so it cannot flood the TUI", async () => {
+    const msg = await errorOf(failingFetch(500, "x".repeat(5000)));
+    expect(msg.length).toBeLessThan(600);
+    expect(msg).toContain("…");
+  });
+
+  test("an empty body still yields the bare status, and never throws", async () => {
+    expect(await errorOf(failingFetch(503, ""))).toContain("HTTP 503");
+  });
+
+  test("a transport with no text() at all is unchanged (back-compat)", async () => {
+    const msg = await errorOf(async () => ({ status: 401, ok: false, body: null }));
+    expect(msg).toContain("HTTP 401");
+  });
+
+  test("a text() that throws degrades to the bare status", async () => {
+    const msg = await errorOf(async () => ({
+      status: 500,
+      ok: false,
+      body: null,
+      text: async () => {
+        throw new Error("body already consumed");
+      },
+    }));
+    expect(msg).toContain("HTTP 500");
+    expect(msg).not.toContain("already consumed");
   });
 });

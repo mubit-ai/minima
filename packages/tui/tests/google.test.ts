@@ -20,7 +20,7 @@ const MODEL: Model = {
   provider: "google",
   api: "google-generative-ai",
   name: "Gemini Flash",
-  cost: { input: 0.3, output: 2.5 },
+  cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
   context_window: 1_000_000,
   max_tokens: 8192,
   reasoning: true,
@@ -80,10 +80,12 @@ describe("GoogleProvider", () => {
     expect(types).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
     expect(result.textContent).toBe("Hello, world");
     expect(result.stop_reason).toBe("stop");
-    expect(result.usage.input).toBe(8);
+    // promptTokenCount (8) is inclusive of the 2 cached tokens: input is the uncached
+    // remainder, so the 2 are priced once, at the cache-read rate.
+    expect(result.usage.input).toBe(6);
     expect(result.usage.output).toBe(3);
     expect(result.usage.cache_read).toBe(2);
-    expect(result.usage.cost.total).toBeCloseTo((8 * 0.3 + 3 * 2.5) / 1_000_000, 10);
+    expect(result.usage.cost.total).toBeCloseTo((6 * 0.3 + 3 * 2.5 + 2 * 0.03) / 1_000_000, 10);
   });
 
   test("emits a full toolcall_end for a function_call part and sets toolUse", async () => {

@@ -194,7 +194,12 @@ export class GoogleProvider {
 
     assistant.content = blocks;
     assistant.stop_reason = stopReason as AssistantMessage["stop_reason"];
-    assistant.usage.input = inTokens;
+    // Gemini's promptTokenCount is INCLUSIVE of cachedContentTokenCount (unlike Anthropic,
+    // whose input_tokens excludes the cache). Reporting both raw made attachCost bill every
+    // cached token at the full input rate AND again at the cache-read rate; the inflated
+    // total is the realized actual_cost_usd fed to the meter and to /v1/feedback, so it
+    // permanently skewed the observed cost basis for every Gemini model.
+    assistant.usage.input = Math.max(0, inTokens - cacheRead);
     assistant.usage.output = outTokens + thoughtTokens;
     assistant.usage.cache_read = cacheRead;
     attachCost(model, assistant.usage);

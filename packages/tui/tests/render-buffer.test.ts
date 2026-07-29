@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readSource } from "./_source.ts";
 
 // Guards the inline renderer wiring in main.ts (the only renderer since MP3, MUB-146):
 // main buffer + <Static> native scrollback. Native scroll + select + copy — the alternate
 // screen buffer must never come back (it has no scrollback: "can't scroll the session").
 describe("cli/main.ts wires the inline renderer", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
+  const src = readSource("cli/main.ts");
 
   test("no renderer selection and no alt-screen writes remain", () => {
     expect(src).not.toContain("fullscreen");
@@ -44,7 +45,7 @@ describe("cli/main.ts wires the inline renderer", () => {
 // ledger's cap-seeded remount frame re-seats the composer at the bottom. /new shares the
 // reseat (same gap).
 describe("app.tsx /clear and /new reseat the terminal", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("the reseat emits the boot sequence: margin reset + 2J/3J clear + home, and NO newline reserve", () => {
     expect(src).toContain("[r\\u001b[?69l\\u001b[2J\\u001b[3J\\u001b[H");
@@ -62,7 +63,7 @@ describe("app.tsx /clear and /new reseat the terminal", () => {
 // too-small branch unmounted PermissionOverlay entirely — taking its useInput with it, so
 // y/a/n stopped working and the run wedged until a blind resize.
 describe("app.tsx keeps the permission overlay answerable (LB-20)", () => {
-  const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+  const src = readSource("tui/app.tsx");
 
   test("composer stays MOUNTED-but-suspended under permPrompt/questionPrompt (never null)", () => {
     expect(src).not.toContain("permPrompt || questionPrompt ? null");
