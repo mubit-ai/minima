@@ -2,9 +2,10 @@
  * Dashboard credentials: the long-lived bearer token's comparison, and the short-lived tickets
  * that stand in for it wherever the URL is going somewhere we do not control.
  *
- * Why tickets exist: `/dashboard` prints a clickable URL into the TUI transcript. The durable
- * token lives in a 0600 rendezvous file, but a URL in a chat message is only as protected as
- * whatever ends up persisting that chat — and `~/.minima-harness/sessions` is 0755/0644 today.
+ * Why tickets exist: `/dashboard` prints a clickable URL into the transcript. The durable token
+ * lives in a 0600 rendezvous file, but a URL on screen is only as protected as whatever ends up
+ * persisting the screen — scrollback, a tmux capture, a `script(1)` log. The harness writes that
+ * line to no file of its own (in-memory messages only), and controls none of the rest.
  * A ticket is an HMAC of an expiry under the token, so it is worthless a minute after it is
  * printed and the durable secret never leaves the 0600 file. Stateless by construction: no map
  * to grow, no route to mint from, nothing to clean up.

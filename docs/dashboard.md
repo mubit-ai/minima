@@ -415,11 +415,12 @@ A dev tool that renders your entire work history deserves locking down:
   bar so it stops leaking into history and `Referer`;
 - the token is compared in **constant time**;
 - `?k=…` accepts a **60-second HMAC ticket** in place of the token and exchanges it for the cookie.
-  `/dashboard` prints one of those, not the token: that line lands in a TUI transcript, and
-  `~/.minima-harness/sessions` is 0755/0644. Stateless (`src/dashboard/auth.ts`) — an HMAC of an
-  expiry under the token, so there is no ticket map to grow and the durable secret never leaves the
-  0600 rendezvous file. The foreground `minima dashboard` still prints a durable token, because
-  "copy this URL once" has to keep working;
+  `/dashboard` prints one of those, not the token: that line goes to the terminal, and what persists
+  a terminal is scrollback, a tmux capture, a `script(1)` log — none of which this harness controls.
+  (It reaches no file the harness writes: the reply is in-memory only — no ledger event, no session
+  append.) Stateless (`src/dashboard/auth.ts`) — an HMAC of an expiry under the token, so there is
+  no ticket map to grow and the durable secret never leaves the 0600 rendezvous file. The foreground
+  `minima dashboard` still prints a durable token, because "copy this URL once" has to keep working;
 - **the token is not a read-only credential.** It reads the whole ledger *and* it can spawn your
   configured editor via `/api/v1/open`. `sameOrigin` constrains browsers, not a local client that
   simply omits the `Origin` header — which is what that check is for, and all it can be;
@@ -427,10 +428,16 @@ A dev tool that renders your entire work history deserves locking down:
   does not import `MinimaDb` at all, so there is no code path that could open a writable handle.
   `DashboardHandle.readOnly` is the literal type `true`, so a write-capable server is a type error.
   Opening the dashboard never creates a ledger file;
-- worth knowing about what is already on disk: `~/.minima-harness/minima.db` is **0644**, so on a
-  shared box everything the dashboard serves is readable without any token at all. The token
-  protects a network surface, not data at rest. Tightening the ledger's mode (and the 0755 session
-  dirs) is a separate change — neither is caused by the dashboard;
+- **at rest, the ledger is the weak link — not the token.** `~/.minima-harness/` is **0755** and
+  everything durable under it is **0644**: `minima.db` (every prompt, path, cost and tool call) and
+  `blobs/` (spilled tool results, which are raw file contents). On a shared box that is readable
+  with no token at all, so the 0600 rendezvous file guards a strictly smaller secret than the file
+  sitting next to it. This predates the dashboard and is not caused by it — the server opens the
+  ledger read-only and never creates it — but it is the larger of the two exposures, and it is
+  being fixed separately: `~/.minima-harness` → **0700**, which is one directory bit and therefore
+  covers every 0644 file already on disk without rewriting any of them, plus the ledger itself →
+  **0600** for the case where `MINIMA_DB_PATH` puts it somewhere that bit does not protect. Two of
+  its neighbours are already 0600 (`config.env`, `projects.json`);
 - all ledger text is HTML-escaped on the way out (there is a test that tries to inject a
   `<script>` through a memory row);
 - the one non-GET route (`/api/v1/open`) additionally requires a **same-origin** request, so
