@@ -181,11 +181,13 @@ export interface Health {
 
 export type ProbeFn = (port: number) => Promise<Health | null>;
 
-export function httpProbe(
-  host = DEFAULT_HOST,
-  timeoutMs = 300,
-  impl: typeof fetch = fetch,
-): ProbeFn {
+/**
+ * Everything this module asks of `fetch`, and no more. `typeof fetch` would also demand
+ * `preconnect`, which is Bun's and which no injected stub has any business implementing.
+ */
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+export function httpProbe(host = DEFAULT_HOST, timeoutMs = 300, impl: FetchLike = fetch): ProbeFn {
   return async (port: number): Promise<Health | null> => {
     try {
       const res = await impl(`http://${host}:${port}/healthz`, {
@@ -431,7 +433,7 @@ export interface SupervisorOptions {
   dir?: string;
   probe?: ProbeFn;
   spawnServer?: (dbPath: string) => void;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   probeTries?: number;
@@ -451,7 +453,7 @@ export class DashboardSupervisor {
   > & {
     probe: ProbeFn;
     spawnServer: (dbPath: string) => void;
-    fetchImpl: typeof fetch;
+    fetchImpl: FetchLike;
     sleep: (ms: number) => Promise<void>;
     now: () => number;
   };
@@ -507,30 +509,52 @@ export class DashboardSupervisor {
    * What `/dashboard` prints. Re-reads the rendezvous and re-probes, so it stays correct when
    * another TUI started the server or the server moved ports — a cached URL would be a lie the
    * moment anything changed. The link is a short-lived ticket, not the durable token.
+   *
+   * No URL is printed that this call has not just confirmed. The rendezvous outlives its server by
+   * however long the kernel takes to reap a `kill -9`, and by the whole grace window when the server
+   * has decided to exit but not yet unlinked the file — a link that refuses is worse than no link,
+   * because the loop is already replacing that server and the next call has a working one.
    */
   async snapshot(): Promise<DashboardState> {
     const rv = await readRendezvous(this.rvPath);
     if (!rv || rv.ledger !== this.opts.ledger) return this.state;
     const health = await this.opts.probe(rv.port);
-    return {
+    const base: DashboardState = {
       ...this.state,
-      url: `http://${this.opts.host}:${rv.port}/?k=${mintTicket(rv.token, this.opts.now())}`,
       port: rv.port,
       serverPid: rv.pid,
       startedAt: rv.startedAt,
       portNote: rv.portNote ?? null,
-      clients: health?.clients ?? null,
-      status: health ? this.state.status : "reconnecting",
+    };
+    if (!health) {
+      return {
+        ...base,
+        status: "reconnecting",
+        reason: `recorded dashboard (pid ${rv.pid}) is not answering`,
+        url: null,
+        clients: null,
+      };
+    }
+    return {
+      ...base,
+      url: `http://${this.opts.host}:${rv.port}/?k=${mintTicket(rv.token, this.opts.now())}`,
+      clients: health.clients ?? null,
     };
   }
 
-  detach(): void {
+  /**
+   * Stop for good. Everything that matters happens synchronously — the attach is aborted and a
+   * pending backoff is cancelled rather than left to hold the TUI's event loop open on the way out.
+   * The returned promise is the loop's completion, and is safe to ignore: `closeDb` does, because an
+   * exiting TUI must not block on a socket.
+   */
+  detach(): Promise<void> {
     this.stopped = true;
     this.abort?.abort();
     this.abort = null;
-    // Cancel a pending backoff rather than let it hold the TUI's event loop open on the way out.
     this.wakeup?.();
     this.state = { ...this.state, status: "off", url: null };
+    return this.loopDone ?? Promise.resolve();
   }
 
   /**

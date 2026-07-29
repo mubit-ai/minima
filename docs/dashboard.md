@@ -82,6 +82,16 @@ exit. The file must not advertise a server that has already decided to die. The 
 any stream end, which is what makes an eager exit safe — a wrong exit costs one respawn, a missed
 exit costs a server nobody can see.
 
+**`/healthz` stays truthful while the grace counts down, and the client absorbs the race.** A probe
+that passes at T+9.9s of zero clients can be followed by an attach that lands after the server has
+gone, because the two calls cross a process boundary. The fix is on the client: an attach that ends
+or is refused *for any reason* re-runs discovery and spawns if needed. `/healthz` deliberately does
+**not** start answering "not ok" once the timer is armed — a server that fails a discovery probe gets
+*displaced*, and a displaced server still holds its port (residual 1), so lying there would trade a
+two-second reconnect for a permanently leaked port. `/dashboard` prints no URL it has not just
+confirmed: if the recorded server does not answer, it prints the reason and the pid instead, because
+the rendezvous outlives its server by the kernel's reap delay and by the whole grace window.
+
 Opt out with `MINIMA_TUI_DASHBOARD=0`. Auto-start requires a TTY and live persistence, so `-p`,
 `--mode json`, CI and git hooks never open a socket.
 
@@ -498,6 +508,11 @@ state dir, injected probe/spawn/clock, no socket and no children. Ledger identit
 its target key to one server; the same relative path in two cwds keys to two), the 0600 rendezvous
 and its pid-guarded deletion, pid-dead vs pid-alive-but-wedged, the retry that stops a slow server
 being displaced, bind-as-mutex including yield and exhaustion, the compiled-vs-dev argv, and tickets.
+Also the supervisor's own loop, with every collaborator injected: an attach that ends and an attach
+that is refused both re-discover and spawn again, `detach` cancels a pending backoff instead of
+holding the TUI open, and `snapshot` publishes a URL only when the probe just answered. Those four
+are mutation-checked — republishing an unconfirmed URL, returning from the loop after one cycle, and
+dropping the wakeup from `detach` each fail exactly the test that claims it.
 
 `packages/tui/tests/dashboard_lifecycle.test.ts` — **real sockets, on purpose.** Lifecycle claims
 are not hermetically provable, and a test suite that can only pass is how the attach stream shipped
@@ -506,7 +521,9 @@ notices a stream Bun will close at 60s. Timings are injected (grace and keepaliv
 ephemeral port) and the assertions are about duration — a keepalive frame actually arriving, an idle
 server firing exactly once, a client arriving inside the grace cancelling the exit, and a dead pid
 being dropped *while its socket is still held open*. The keepalive test is mutation-checked: removing
-the hub subscription fails that test and only that test.
+the hub subscription fails that test and only that test. It also covers the cross-process shape the
+hermetic suite cannot claim: a real server stopped under a live attach, and a real client that ends up
+attached to its real replacement.
 
 One thing no test here can prove: that Bun honors `idleTimeout`. A source guard asserts the option is
 passed and is labeled as exactly that — the real check is a tab, or a TUI, left open past 60s.

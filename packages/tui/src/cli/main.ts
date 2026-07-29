@@ -766,7 +766,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const closeDb = (status: "done" | "aborted" = "done"): void => {
     try {
       // Drop the attach so the server's refcount falls now rather than when the kernel gets to it.
-      dashboard?.detach();
+      // Deliberately not awaited: the abort and the cancelled backoff are synchronous, and an
+      // exiting TUI has no business waiting on a socket.
+      void dashboard?.detach();
       // Orphan policy (W4.1): kill every live background job's group and durably mark it
       // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
       bgJobRegistry?.shutdown();

@@ -413,6 +413,78 @@ describe("two managed children in a dead heat", () => {
   }, 40_000);
 });
 
+describe("the client re-establishes, over real sockets", () => {
+  /**
+   * The cross-process half of the healthz→attach race: a server that answered its probe and then
+   * went away under a live client. The hermetic suite proves the loop calls spawn again; only real
+   * sockets prove the TUI ends up attached to a server that is genuinely listening — here the stream
+   * ending, the failed probe, the new bind and the second attach all happen for real.
+   *
+   * `spawnServer` starts an in-process replacement rather than a subprocess: a real
+   * `dashboard --managed` child costs ~1s of startup and is covered by the tests above.
+   */
+  test("a server that dies under a live attach is replaced, and the TUI lands on the new one", async () => {
+    const { DashboardSupervisor, rendezvousPath, resolveLedger, writeRendezvous } = await import(
+      "../src/dashboard/supervisor.ts"
+    );
+    const ledger = resolveLedger(dbPath).path;
+    const rvDir = join(dir, "rv");
+    const rvFile = rendezvousPath(ledger, rvDir);
+    // /healthz echoes the path it was handed, so both servers get the RESOLVED one — the same string
+    // main.ts passes the child, and what makes the ledger comparison mean anything.
+    const first = serve({ dbPath: ledger, graceMs: 5_000 });
+    await writeRendezvous(rvFile, {
+      ledger,
+      port: first.port,
+      token: first.token,
+      pid: PID_A,
+      startedAt: Date.now(),
+    });
+
+    const replacements: DashboardHandle[] = [];
+    const sup = new DashboardSupervisor({
+      ledger,
+      dir: rvDir,
+      backoffMs: [20],
+      probeTries: 1,
+      probeGapMs: 10,
+      spawnWaitMs: 3_000,
+      spawnServer: () => {
+        if (replacements.length > 0) return;
+        const next = serve({ dbPath: ledger, graceMs: 5_000 });
+        replacements.push(next);
+        void writeRendezvous(rvFile, {
+          ledger,
+          port: next.port,
+          token: next.token,
+          pid: PID_B,
+          startedAt: Date.now(),
+        });
+      },
+    });
+
+    try {
+      sup.start();
+      for (let i = 0; i < 200 && first.clients() === 0; i += 1) await sleep(10);
+      expect(first.clients()).toBe(1);
+
+      first.stop();
+
+      for (let i = 0; i < 400 && (replacements[0]?.clients() ?? 0) === 0; i += 1) await sleep(10);
+      const second = replacements[0];
+      if (!second) throw new Error("the supervisor never started a replacement server");
+      expect(second.clients()).toBe(1);
+
+      const snap = await sup.snapshot();
+      expect(snap.port).toBe(second.port);
+      expect(snap.status).toBe("attached");
+      expect(snap.url).toContain(`:${second.port}/`);
+    } finally {
+      await sup.detach();
+    }
+  }, 20_000);
+});
+
 describe("tickets over the wire", () => {
   test("a ticket opens the dashboard and is exchanged for the durable cookie", async () => {
     const { mintTicket } = await import("../src/dashboard/auth.ts");

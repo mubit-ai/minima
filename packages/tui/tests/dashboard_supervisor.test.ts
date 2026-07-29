@@ -18,6 +18,8 @@ import {
   type DashboardState,
   type Health,
   type Rendezvous,
+  type SupervisorOptions,
+  DashboardSupervisor,
   bindWithProbe,
   clearRendezvous,
   dashboardReport,
@@ -57,6 +59,17 @@ const rv = (over: Partial<Rendezvous> = {}): Rendezvous => ({
 
 const healthy = (over: Partial<Health> = {}): Health => ({ ok: true, ledger, ...over });
 const noSleep = async (): Promise<void> => {};
+
+/** A pid above macOS's pid ceiling: provably not alive, and never a real process we could disturb. */
+const DEAD_PID = 900_001;
+
+const until = async (ready: () => boolean, ms = 3_000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!ready()) {
+    if (Date.now() >= deadline) throw new Error("waited for something that never happened");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
 
 describe("ledger identity", () => {
   test("a symlinked ledger and its target key to ONE server", () => {
@@ -405,5 +418,140 @@ describe("tickets", () => {
     for (const bad of ["", ".", "abc", "12345", "12345.", ".mac", "NaN.mac"]) {
       expect(ticketValid("t", bad, 1_000)).toBe(false);
     }
+  });
+});
+
+/**
+ * The supervisor's own loop — the mechanism that turns "a server was started once" into "a server
+ * exists while a TUI does", and the only thing standing between a TUI and a dashboard that went away
+ * under it. Every collaborator is injected, so nothing here opens a socket.
+ */
+describe("the client re-establishes", () => {
+  let rvDir: string;
+  let rvFile: string;
+
+  beforeEach(() => {
+    rvDir = join(dir, "rv");
+    rvFile = rendezvousPath(ledger, rvDir);
+  });
+
+  /** An attach that lands and then ends — the shape of a server exiting under a live client. */
+  const attachThatEnds = async (): Promise<Response> =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('{"attached":1}\n'));
+          c.close();
+        },
+      }),
+      { status: 200 },
+    );
+
+  const sup = (over: Partial<SupervisorOptions> = {}): DashboardSupervisor =>
+    new DashboardSupervisor({
+      ledger,
+      dir: rvDir,
+      backoffMs: [1],
+      spawnWaitMs: 30,
+      probeTries: 1,
+      probeGapMs: 1,
+      sleep: noSleep,
+      probe: async () => null,
+      spawnServer: () => {},
+      fetchImpl: async () => {
+        throw new Error("this test does not attach");
+      },
+      ...over,
+    });
+
+  test("snapshot never hands out a URL the probe just failed to answer", async () => {
+    // The rendezvous outlives its server: by the kernel's reap delay after a kill -9, and by the
+    // whole grace window when the server has decided to exit. A link that refuses is worse than
+    // none, because the loop is already replacing it.
+    await writeRendezvous(rvFile, rv({ port: 4183, pid: 4242 }));
+    const snap = await sup({ probe: async () => null }).snapshot();
+    expect(snap.url).toBeNull();
+    expect(snap.status).toBe("reconnecting");
+    expect(snap.reason).toContain("4242");
+    expect(snap.port).toBe(4183);
+    expect(dashboardReport(snap).join("\n")).not.toContain("http://");
+  });
+
+  test("a server that answers gets a ticket URL, and the durable token stays out of it", async () => {
+    await writeRendezvous(rvFile, rv({ port: 4183, token: "s3cret-token-value" }));
+    const snap = await sup({ probe: async () => healthy({ clients: 2 }) }).snapshot();
+    expect(snap.clients).toBe(2);
+    expect(snap.url).toContain(":4183/?k=");
+    expect(snap.url).not.toContain("s3cret-token-value");
+    const k = new URL(snap.url ?? "").searchParams.get("k") ?? "";
+    expect(ticketValid("s3cret-token-value", k, Date.now())).toBe(true);
+  });
+
+  test("an attach that ends re-runs discovery and starts a server again", async () => {
+    await writeRendezvous(rvFile, rv({ pid: DEAD_PID }));
+    let attaches = 0;
+    let spawns = 0;
+    const s = sup({
+      // Answering for the first cycle, gone for the second.
+      probe: async () => (attaches === 0 ? healthy() : null),
+      fetchImpl: async () => {
+        attaches += 1;
+        return attachThatEnds();
+      },
+      spawnServer: () => {
+        spawns += 1;
+      },
+    });
+    s.start();
+    await until(() => spawns > 0);
+    await s.detach();
+    expect(attaches).toBe(1);
+  });
+
+  test("a refused attach is a reason to respawn, not to give up", async () => {
+    /**
+     * The healthz→attach window, which is only a window because the two calls cross a process
+     * boundary: the server passed its probe with the grace already counting down and stopped
+     * accepting before the stream landed. The answer is the retry, not a `/healthz` that lies —
+     * a server that reports "not ok" gets displaced, and a displaced server still holds its port.
+     */
+    await writeRendezvous(rvFile, rv({ pid: DEAD_PID }));
+    let refusals = 0;
+    let spawns = 0;
+    const s = sup({
+      probe: async () => (refusals === 0 ? healthy() : null),
+      fetchImpl: async () => {
+        refusals += 1;
+        throw new Error("ECONNREFUSED");
+      },
+      spawnServer: () => {
+        spawns += 1;
+      },
+    });
+    s.start();
+    await until(() => spawns > 0);
+    await s.detach();
+    expect(refusals).toBe(1);
+    expect((await s.snapshot()).url).toBeNull();
+  });
+
+  test("detach cuts a pending backoff short instead of holding the TUI open", async () => {
+    let spawns = 0;
+    const s = sup({
+      // The first retry is instant and the second is the long one, so two cycles park the loop in a
+      // 60s wait — which is the state detach has to be able to cancel. `spawnWaitMs: 0` keeps every
+      // other step non-blocking, so after the second spawn the only pending timer is that backoff.
+      backoffMs: [1, 60_000],
+      spawnWaitMs: 0,
+      spawnServer: () => {
+        spawns += 1;
+      },
+    });
+    s.start();
+    await until(() => spawns > 1);
+    await new Promise((r) => setTimeout(r, 30));
+    const started = Date.now();
+    await s.detach();
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
