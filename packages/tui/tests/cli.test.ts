@@ -81,3 +81,32 @@ describe("tui/app.tsx /version command (source pins)", () => {
     expect(src).toContain("minima ${VERSION}");
   });
 });
+
+describe("tui/app.tsx /dashboard on|off (source pins)", () => {
+  /**
+   * A source pin, not a behavioural test: `app.tsx` is an Ink component with no dispatch seam, and
+   * this is how `/version` is pinned above. What the two verbs DO is covered hermetically in
+   * dashboard_supervisor.test.ts and over real sockets in dashboard_lifecycle.test.ts — this only
+   * holds the wiring and the discoverability, which is where a rename would quietly land.
+   */
+  test("the verbs are wired, validated, and advertised in the command list", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "../src/tui/app.tsx"), "utf8");
+    // Discoverable: /help and the composer's autocomplete both render `desc`.
+    expect(src).toContain("`off` stops it for this session, `on` starts it again");
+    expect(src).toContain('if (verb === "off") await dashboard?.detach();');
+    expect(src).toContain("await dashboard.resume()");
+    expect(src).toContain("Usage: /dashboard [on|off]");
+  });
+
+  test("the dashboard subcommand help explains both verbs and why Ctrl+C misses it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(import.meta.dir, "../src/cli/main.ts"), "utf8");
+    expect(src).toContain("/dashboard off");
+    expect(src).toContain("/dashboard on");
+    expect(src).toContain("its LAST TUI");
+    expect(src).toContain("ignores SIGINT and SIGHUP");
+  });
+});

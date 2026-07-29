@@ -18,8 +18,30 @@ export type {
   ScoreboardRow,
   ToolRow,
 } from "./queries.ts";
-export { DEFAULT_PORT, createDashboard, createHandler, startDashboard } from "./server.ts";
+export {
+  DEFAULT_PORT,
+  GRACE_MS,
+  MAX_CLIENTS,
+  createDashboard,
+  createHandler,
+  startDashboard,
+} from "./server.ts";
 export type { DashboardHandle, DashboardOptions } from "./server.ts";
+export {
+  PORT_RANGE,
+  bindWithProbe,
+  clearRendezvous,
+  discover,
+  findServing,
+  httpProbe,
+  managedArgv,
+  readRendezvous,
+  pidAlive,
+  rendezvousPath,
+  resolveLedger,
+  writeRendezvous,
+} from "./supervisor.ts";
+export type { BindResult, Discovery, Rendezvous } from "./supervisor.ts";
 export { gateTiers, kpis, modelStats, overview, scoreboardCells } from "./stats.ts";
 export type {
   GateReason,
