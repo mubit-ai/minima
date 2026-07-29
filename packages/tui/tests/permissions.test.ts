@@ -782,13 +782,13 @@ describe("MP18 — mode interaction with verify consent", () => {
     expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "todowrite", subject: "" })).not.toBe("auto");
   });
 
-  test("the TUI consent checker grants bypass mode blanket consent (source pin)", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readSource("tui/app.tsx");
+  test("the TUI consent checker grants bypass mode blanket consent (source pin)", () => {
+    // The consent seam lives in the useVerifyConsent hook that app.tsx mounts.
+    const src = readSource("tui/use_seams.ts");
     expect(src).toContain(
       'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
     );
+    expect(readSource("tui/app.tsx")).toContain("useVerifyConsent(verifyConsentRef, permStateRef)");
   });
 });
 

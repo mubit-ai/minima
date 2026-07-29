@@ -515,7 +515,7 @@ describe("tui/app.tsx panel key routing", () => {
 // the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
 // pendingEcho dedupe (which only covers the optimistic first echo).
 describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
-  const src = readSource("tui/app.tsx");
+  const src = readSource("tui/use_agent_events.ts");
 
   test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
     const idx = src.indexOf('case "message_start":');
@@ -612,11 +612,12 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   });
 
   test("guard denials and harness steers are tagged at ingestion and render dim, never red (R3b)", () => {
-    // app.tsx tags at the event seam (full text still reaches the model — only the
-    // transcript projection compacts); MessageRow's calm branches return BEFORE the red
-    // isError path, so a guard deny structurally cannot render red.
-    expect(src).toContain("isGuardDenyReason");
-    expect(src).toContain("isHarnessSteerText");
+    // The useAgentEvents hook tags at the event seam (full text still reaches the model —
+    // only the transcript projection compacts); MessageRow's calm branches return BEFORE the
+    // red isError path, so a guard deny structurally cannot render red.
+    const events = readSource("tui/use_agent_events.ts");
+    expect(events).toContain("isGuardDenyReason");
+    expect(events).toContain("isHarnessSteerText");
     const messages = readSource("tui/messages.tsx");
     const deny = messages.indexOf('msg.guardKind === "deny"');
     expect(deny).toBeGreaterThan(-1);
@@ -746,6 +747,9 @@ describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
 // @file-expanded/replan-prefixed run content — is deduped via pendingEchoRef.
 describe("tui/app.tsx echoes the prompt optimistically", () => {
   const src = readSource("tui/app.tsx");
+  // The message_start handler moved to the useAgentEvents hook; onSubmit stayed in app.tsx,
+  // so the pendingEchoRef invariant now spans both files.
+  const events = readSource("tui/use_agent_events.ts");
 
   test("verbatim echo lands in onSubmit between the slash dispatch and setBusy", () => {
     const echo = 'setMessages((m) => [...m, { role: "user", text: trimmed }]);';
@@ -760,21 +764,24 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   });
 
   test("the loop's message_start(user) is deduped, not double-posted", () => {
-    const idx = src.indexOf('case "message_start":');
+    const idx = events.indexOf('case "message_start":');
     expect(idx).toBeGreaterThan(-1);
-    const handler = src.slice(idx, idx + 800);
+    const handler = events.slice(idx, idx + 800);
     expect(handler).toContain("if (pendingEchoRef.current) {");
     expect(handler).toContain("pendingEchoRef.current = false;");
     // The event echo survives for non-optimistic user messages (finalize handoff, replays);
     // R3b only TAGS harness steers on the same echo object — it never swallows one.
     expect(handler).toContain('{ role: "user", text: utext }');
-    expect(handler).toContain("setMessages((m) => [...m, echo]);");
+    expect(handler).toContain("pushMessage(echo);");
   });
 
   test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {
     expect(src).toContain("const pendingEchoRef = useRef(false);");
+    // Set once, in onSubmit; cleared once in the handler's dedupe and once in onSubmit's finally.
     expect(src.split("pendingEchoRef.current = true;").length - 1).toBe(1);
-    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(2);
+    expect(events.split("pendingEchoRef.current = true;").length - 1).toBe(0);
+    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(1);
+    expect(events.split("pendingEchoRef.current = false;").length - 1).toBe(1);
   });
 
   test("the finally clear keeps a failed turn from muting a later echo", () => {
