@@ -27,10 +27,16 @@ import {
   decideInvocation,
   renderDryRunReport,
 } from "../src/minima/classifier_eval.ts";
+import {
+  buildCorrelationReport,
+  renderCorrelationReport,
+} from "../src/minima/classifier_eval_correlate.ts";
 
 const HELP = [
-  "Classifier eval — dry run (MUB-215).",
+  "Classifier eval — dry run (MUB-215) and prompt↔decision correlation (MUB-225).",
   "",
+  "  --correlate       report which prompt caused each recorded decision, and how much to",
+  "                    trust that claim (a heuristic, not a join). Reads only.",
   "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
   "  --limit=<n>       cap rows read, most recent first (default 20000)",
   "  --db=<path>       read a specific ledger (default: the harness's own)",
@@ -71,10 +77,28 @@ if (dbPath !== null && !existsSync(dbPath)) {
 }
 
 const db = dbPath ? new MinimaDb(dbPath) : new MinimaDb();
+const scope = project ? `project ${project} · ${db.path}` : `whole ledger · ${db.path}`;
+
+// MUB-225. Both reads take the SAME cap, so --limit cannot pair a wide decision read against a
+// narrow prompt read; when it still bites, the report separates that artifact from a real gap.
+if (invocation.kind === "correlate") {
+  try {
+    const report = buildCorrelationReport(
+      db.listRoutingDecisions(project, rowCap),
+      db.listUserPrompts(project, rowCap),
+      { scope, rowCap },
+    );
+    console.log(renderCorrelationReport(report));
+  } finally {
+    db.close();
+  }
+  process.exit(0);
+}
+
 try {
   const rows = db.listUserPrompts(project, rowCap);
   const report = buildDryRunReport(rows, {
-    scope: project ? `project ${project} · ${db.path}` : `whole ledger · ${db.path}`,
+    scope,
     lengthBoundaries: DEFAULT_LENGTH_BOUNDARIES,
     specs: DEFAULT_CALL_SPECS,
     rowCap,

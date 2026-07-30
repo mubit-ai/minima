@@ -348,7 +348,9 @@ export const DEFAULT_ROW_CAP = 20000;
 export type Invocation =
   | { kind: "help" }
   | { kind: "refuse-spend" }
-  | { kind: "dry-run"; project: string | null; dbPath: string | null; rowCap: number };
+  | { kind: "dry-run"; project: string | null; dbPath: string | null; rowCap: number }
+  /** MUB-225: report the prompt↔decision correlation and its corroboration rate. Reads only. */
+  | { kind: "correlate"; project: string | null; dbPath: string | null; rowCap: number };
 
 /**
  * Decide what an argv means, without doing any of it.
@@ -367,6 +369,14 @@ export function decideInvocation(argv: readonly string[]): Invocation {
   if (has("spend")) return { kind: "refuse-spend" };
   if (has("help")) return { kind: "help" };
   const raw = Number(option("limit") ?? DEFAULT_ROW_CAP);
+  if (has("correlate")) {
+    return {
+      kind: "correlate",
+      project: option("project"),
+      dbPath: option("db"),
+      rowCap: Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ROW_CAP,
+    };
+  }
   return {
     kind: "dry-run",
     project: option("project"),

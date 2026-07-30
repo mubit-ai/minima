@@ -826,6 +826,22 @@ export interface UserPromptRow {
   text: string | null;
 }
 
+/**
+ * One recorded routing decision, reduced to the columns the prompt↔decision correlation reads
+ * (MUB-225). `task_label` is the 40-char ellipsised DISPLAY truncation of the task — it is a
+ * corroboration signal only and is never a substitute for prompt text (see `UserPromptRow.text`).
+ * Offline and pinned rows come through: deciding which population counts is the caller's pure core.
+ */
+export interface RoutingDecisionRow {
+  rec_id: string;
+  run_id: string;
+  ts: number;
+  /** NULL = the lead agent — the only agent the client-side classifier ever labels. */
+  agent_id: string | null;
+  task_label: string | null;
+  routed: string;
+}
+
 /** One plan step with its latest gate verdict — workflow-induction mining input (F5b). */
 export interface PlanStepVerdictRow {
   plan_id: string;
@@ -1249,6 +1265,34 @@ export class MinimaDb {
          ORDER BY e.ts DESC, e.rowid DESC LIMIT ?`,
       )
       .all(...params) as UserPromptRow[];
+    return newestFirst.reverse();
+  }
+
+  /**
+   * Every recorded routing decision, oldest first — the other half of the classifier-evaluation
+   * read (MUB-225, read-only). `projectKey` scopes to one project's runs; null spans the ledger.
+   *
+   * Raw rows: offline and pinned decisions, sub-agent decisions and null labels all come through.
+   * Which population the correlation runs over is decided by the caller's pure core, so the counts
+   * it reports are testable without a ledger.
+   *
+   * `limit` selects the MOST RECENT rows and returns them oldest-first, for the same reason
+   * `listUserPrompts` does — a cap that truncated from the old end would answer with
+   * pre-regime-change traffic. The `rowid` tie-break keeps the order total when timestamps collide,
+   * which they do: `writeDecision` stamps `ts` from the clock at insert.
+   */
+  listRoutingDecisions(projectKey: string | null = null, limit = 20000): RoutingDecisionRow[] {
+    const scope = projectKey
+      ? "WHERE d.run_id IN (SELECT run_id FROM runs WHERE project_key = ?)"
+      : "";
+    const params: (string | number)[] = projectKey ? [projectKey, limit] : [limit];
+    const newestFirst = this.db
+      .query(
+        `SELECT d.rec_id, d.run_id, d.ts, d.agent_id, d.task_label, d.routed
+         FROM routing_decisions d ${scope}
+         ORDER BY d.ts DESC, d.rowid DESC LIMIT ?`,
+      )
+      .all(...params) as RoutingDecisionRow[];
     return newestFirst.reverse();
   }
 
