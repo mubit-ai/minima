@@ -373,6 +373,8 @@ export type Invocation =
   | { kind: "help" }
   | ({ kind: "refuse-spend"; reason: SpendRefusal } & CorpusScope)
   | ({ kind: "dry-run" } & CorpusScope)
+  /** MUB-225: report the prompt↔decision correlation and its corroboration rate. Reads only. */
+  | ({ kind: "correlate" } & CorpusScope)
   | ({ kind: "spend"; maxUsd: number } & CorpusScope);
 
 /**
@@ -388,6 +390,11 @@ export type Invocation =
  * (Before a paid path existed, refusal was checked first instead — with `spend` reachable, that
  * order would let `--spend --max-usd=1 --help` bill.) Flag order carries no permission either way;
  * the ceiling is the only thing that grants it.
+ *
+ * `--correlate` (MUB-225) selects a read-only mode, so it is decided INSIDE the no-spend branch:
+ * `--spend` is answered ahead of it either way. That keeps the guard's invariant a property of the
+ * spend flags alone — a read-only mode can neither be read as permission nor route around the
+ * refusal a `--spend` in the same argv has earned.
  *
  * A refusal still carries its scope, so the shell can price the corpus the caller asked about and
  * quote a real figure back — choosing a ceiling is only possible against a number.
@@ -409,7 +416,10 @@ export function decideInvocation(argv: readonly string[]): Invocation {
     dbPath: option("db"),
     rowCap: Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ROW_CAP,
   };
-  if (!has("spend")) return { kind: "dry-run", ...scope };
+  if (!has("spend")) {
+    if (has("correlate")) return { kind: "correlate", ...scope };
+    return { kind: "dry-run", ...scope };
+  }
   const ceiling = option("max-usd");
   if (ceiling === null) return { kind: "refuse-spend", reason: "missing-ceiling", ...scope };
   const maxUsd = Number(ceiling);

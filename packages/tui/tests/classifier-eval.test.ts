@@ -405,39 +405,49 @@ describe("decideInvocation", () => {
       spend: [[], ["--spend"]],
       ceiling: [[], ["--max-usd=0.05"], ["--max-usd=abc"], ["--max-usd=0"], ["--max-usd=-1"]],
       help: [[], ["--help"]],
+      // MUB-225's read-only mode is on this axis rather than spot-checked beside it: a mode that
+      // spends nothing is exactly the kind of flag that opens a path by interacting with one.
+      correlate: [[], ["--correlate"]],
       project: [[], ["--project=p"]],
     };
     let spendable = 0;
     for (const spend of axes.spend) {
       for (const ceiling of axes.ceiling) {
         for (const help of axes.help) {
-          for (const project of axes.project) {
-            const argv = [...spend, ...ceiling, ...help, ...project];
-            const wants = spend.length > 0;
-            const stated = ceiling.length > 0;
-            const valid = ceiling[0] === "--max-usd=0.05";
-            const expected = help.length
-              ? "help"
-              : !wants
-                ? "dry-run"
-                : !stated || !valid
-                  ? "refuse-spend"
-                  : "spend";
-            const decided = decideInvocation(argv);
-            expect(decided.kind, `argv: ${argv.join(" ") || "(none)"}`).toBe(expected);
-            if (decided.kind === "spend") {
-              spendable++;
-              expect(argv).toContain("--spend");
-              expect(argv).toContain("--max-usd=0.05");
-              expect(argv).not.toContain("--help");
+          for (const correlate of axes.correlate) {
+            for (const project of axes.project) {
+              const argv = [...spend, ...ceiling, ...help, ...correlate, ...project];
+              const wants = spend.length > 0;
+              const stated = ceiling.length > 0;
+              const valid = ceiling[0] === "--max-usd=0.05";
+              const reads = correlate.length > 0;
+              const expected = help.length
+                ? "help"
+                : !wants
+                  ? reads
+                    ? "correlate"
+                    : "dry-run"
+                  : !stated || !valid
+                    ? "refuse-spend"
+                    : "spend";
+              const decided = decideInvocation(argv);
+              expect(decided.kind, `argv: ${argv.join(" ") || "(none)"}`).toBe(expected);
+              if (decided.kind === "spend") {
+                spendable++;
+                expect(argv).toContain("--spend");
+                expect(argv).toContain("--max-usd=0.05");
+                expect(argv).not.toContain("--help");
+              }
+              // Flag order carries no permission: the same flags in reverse decide the same way.
+              expect(decideInvocation([...argv].reverse()).kind).toBe(expected);
             }
-            // Flag order carries no permission: the same flags in reverse decide the same way.
-            expect(decideInvocation([...argv].reverse()).kind).toBe(expected);
           }
         }
       }
     }
-    expect(spendable).toBe(2); // only the two --spend + valid-ceiling + no-help argvs, × project
+    // Only the --spend + valid-ceiling + no-help argvs, × project × correlate — the read-only mode
+    // neither adds a spendable argv nor removes one.
+    expect(spendable).toBe(4);
   });
 
   test("reads the project, ledger path and row cap", () => {
