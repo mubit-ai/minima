@@ -61,19 +61,33 @@ export const CORPUS_REV = "r2-observer-steer";
  * the service AND carrying a label — it is 110/252 (43.7%) then 129/173 (74.6%). The step is real
  * either way; the quoted pair is not the comparison it sounds like.
  *
- * Three more things a reader of any figure segmented on it should carry:
+ * Three more things a reader of any figure segmented on it should carry. ADR 0003 settles why the
+ * constant stays here rather than moving to the author change below, and what the data cannot say:
  *
- *   · It is NOT identified by the ledger. There are no decisions between 2026-07-22T14:28:08Z and
- *     2026-07-23T09:33:57Z, so every instant in that 19-hour gap — including a naive midnight cut —
- *     produces the same 321/173. The release record pins it; the data cannot.
+ *   · THIS instant is not identified by the ledger. There are no decisions between
+ *     2026-07-22T14:28:08Z and 2026-07-23T09:33:57Z, so every instant in that 19-hour gap —
+ *     including a naive midnight cut — produces the same 321/173. The release record pins it; the
+ *     data cannot. That is true of this boundary only: the author change below IS data-identifiable,
+ *     because the server stamps its own provenance on the rows it serves.
  *   · A SECOND service classifier change sits inside the later regime: the classifier program
  *     (agreement telemetry, cluster-key-space versioning, and the embed classifier served behind
  *     the dispatcher) first shipped in v0.14.2, published 2026-07-23T16:20:11Z — ts 1784823611,
  *     which splits the same decisions 452/42. That one is a change of label AUTHOR where this one
  *     is a revision by the same author, so "two regimes" is an approximation with a third inside it.
- *   · The catch-all rate had already risen BEFORE this instant — 30.8% on 2026-07-20, 73.0% on
- *     2026-07-21 over labelled rows — so part of the step across the boundary is a change in the
- *     traffic mix rather than in the classifier.
+ *     It is the weaker cut, not the stronger one: like for like the catch-all rate barely moves
+ *     across it (217/383, 56.7% then 22/42, 52.4%), and it leaves MUB-226's adjudication 154 corpus
+ *     entries before and 22 after — every task type in those 22 at single-digit support. Segmenting
+ *     the AUTHOR question is better served by the 39 rows the server stamped with
+ *     `cluster_key_version` and `classification_profile.heuristic_task_type`, where the two authors
+ *     are directly observable disagreeing on 24 of 39 (61.5%).
+ *   · The catch-all rate had already risen BEFORE this instant, and not because of a classifier.
+ *     `classify.py` is byte-identical from 2026-07-02 until `c071670`, yet across that ONE fixed
+ *     labeller the rate steps 42/158 (26.6%) on 2026-07-03..07-20 to 68/94 (72.3%) on
+ *     07-21..this instant — routed to the service AND carrying a label, both sides. That 45.7-point
+ *     step under an unchanged labeller is larger than the 30.9-point step across this boundary, so
+ *     the traffic moves this rate at least as hard as the classifier does. Each regime is also a
+ *     disjoint block of working days (12 days / 1 day / 3 days), so no segment difference here can
+ *     be attributed to the label author at all.
  */
 export const REGIME_BOUNDARY_TS = 1784738496;
 
