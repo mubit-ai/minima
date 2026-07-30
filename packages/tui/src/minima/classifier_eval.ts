@@ -413,13 +413,43 @@ export const LABEL_INSTRUCTION_TOKENS = 99;
 export const DEFAULT_ROW_CAP = 20000;
 
 /**
- * Which ledger rows a run reads. Shared by every run kind, so a flag cannot select one corpus for
- * a dry run and a different one for the paid run whose cost that dry run just projected.
+ * Draws per prompt for MUB-217's self-consistency sampling, when `--samples` states none.
+ *
+ * Ten, and the number is load-bearing rather than round. `MIN_REPORTABLE_SUPPORT` is 10, so at this
+ * default the per-prompt denominator is EXACTLY the bar a percentage has to clear to be printed at
+ * all: every per-prompt modal frequency is reportable, and every value below it prints as `n/d†`.
+ * The resolution band the direction of bias is bucketed against is 1/(2n) = +/-0.05 here, which is
+ * the finest distinction ten draws can support. Both facts get worse together as n falls, which is
+ * the strongest structural argument for this default and the reason no readout softens it by
+ * passing a lower `minSupport`.
+ */
+export const DEFAULT_SAMPLES = 10;
+
+/**
+ * The floor `--samples` is clamped to.
+ *
+ * At n = 1 the modal frequency of a single draw is 1.0 by construction, for every prompt, with no
+ * sampling having happened — a vacuous number that reads exactly like perfect calibration, and one
+ * that not even a degeneracy pilot could catch, because there is no second draw for a first to
+ * differ from. Two is the smallest n at which the figure is a measurement rather than an identity.
+ */
+export const MIN_SAMPLES = 2;
+
+/**
+ * Which ledger rows a run reads, and how deeply the sampling lane draws. Shared by every run kind,
+ * so a flag cannot select one corpus for a dry run and a different one for the paid run whose cost
+ * that dry run just projected.
+ *
+ * `samples` is here rather than on the arms that consume it for exactly that reason: the dry run
+ * PROJECTS the sampling lane (AC 5) and `--spend` PAYS for it, and a sample count that reached only
+ * one of them would let a caller accept a ceiling quoted at one depth and be billed at another.
  */
 export interface CorpusScope {
   readonly project: string | null;
   readonly dbPath: string | null;
   readonly rowCap: number;
+  /** Draws per prompt, already floored at {@link MIN_SAMPLES}. Every readout prints it. */
+  readonly samples: number;
 }
 
 /**
@@ -459,7 +489,19 @@ export type Invocation =
   | ({ kind: "refuse-score"; reason: ScoreRefusal } & CorpusScope)
   /** MUB-226: adjudicate what overriding the service's label would have done. Reads only. */
   | ({ kind: "adjudicate" } & CorpusScope)
-  | ({ kind: "spend"; maxUsd: number } & CorpusScope);
+  /**
+   * MUB-217: is the classifier's self-reported number honest about its own uncertainty? Reads only
+   * — it reports on draws already in the ledger and buys none. Appended AFTER `--adjudicate` so no
+   * existing precedence moves.
+   */
+  | ({ kind: "self-consistency" } & CorpusScope)
+  /**
+   * `pilot` is a MODIFIER on this arm, never a verb of its own. It narrows what a spend run buys;
+   * it opens no route to a billable call, so the invariant below — `spend` is reachable only from
+   * an argv carrying both `--spend` and a valid `--max-usd` — is untouched by its presence. A
+   * `--pilot` with no `--spend` decides a read-only mode, exactly as it would have without it.
+   */
+  | ({ kind: "spend"; maxUsd: number; pilot: boolean } & CorpusScope);
 
 /**
  * Decide what an argv means, without doing any of it.
@@ -475,8 +517,9 @@ export type Invocation =
  * order would let `--spend --max-usd=1 --help` bill.) Flag order carries no permission either way;
  * the ceiling is the only thing that grants it.
  *
- * The read-only modes — `--correlate` (MUB-225), `--score` (MUB-218), `--adjudicate` (MUB-226) —
- * are all decided INSIDE the no-spend branch, so `--spend` is answered ahead of every one of them.
+ * The read-only modes — `--correlate` (MUB-225), `--score` (MUB-218), `--adjudicate` (MUB-226),
+ * `--self-consistency` (MUB-217) — are all decided INSIDE the no-spend branch, so `--spend` is
+ * answered ahead of every one of them.
  * That keeps the guard's invariant a property of the spend flags alone: a read-only mode can
  * neither be read as permission nor route around the refusal a `--spend` in the same argv has
  * earned. Among themselves the order above is a stated PRECEDENCE and first match wins — an argv
@@ -506,6 +549,7 @@ export function decideInvocation(argv: readonly string[]): Invocation {
     project: option("project"),
     dbPath: option("db"),
     rowCap: Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ROW_CAP,
+    samples: resolveSamples(option("samples")),
   };
   if (!has("spend")) {
     if (has("correlate")) return { kind: "correlate", ...scope };
@@ -519,6 +563,9 @@ export function decideInvocation(argv: readonly string[]): Invocation {
       return { kind: "score", targetCorrectness, ...scope };
     }
     if (has("adjudicate")) return { kind: "adjudicate", ...scope };
+    // MUB-217, LAST in the precedence because it was added last: appending rather than inserting is
+    // what keeps every existing combined argv deciding exactly what it decided before.
+    if (has("self-consistency")) return { kind: "self-consistency", ...scope };
     return { kind: "dry-run", ...scope };
   }
   const ceiling = option("max-usd");
@@ -527,7 +574,27 @@ export function decideInvocation(argv: readonly string[]): Invocation {
   if (!Number.isFinite(maxUsd) || maxUsd <= 0) {
     return { kind: "refuse-spend", reason: "bad-ceiling", ...scope };
   }
-  return { kind: "spend", maxUsd, ...scope };
+  // `pilot` is read only on the arm that already earned permission. It narrows a spend that both
+  // affirmatives above have already authorized, and every refusal path returns before it.
+  return { kind: "spend", maxUsd, pilot: has("pilot"), ...scope };
+}
+
+/**
+ * Admit a stated `--samples`, or fall back — and FLOOR IT AT {@link MIN_SAMPLES}.
+ *
+ * Forgiving like the row cap rather than refusing like the ceiling: this flag cannot spend on its
+ * own — `--max-usd` still binds every call it could deepen — so a nonsense value falling back costs
+ * nothing, while refusing would turn a typo into a failed read-only readout. `--max-usd` keeps the
+ * opposite rule for the opposite reason: a defaulted spending limit is the one default that could
+ * cost money.
+ *
+ * The floor is not cosmetic; see {@link MIN_SAMPLES}. A fallback and a clamp are both invisible on
+ * the command line, so every readout prints the effective n beside its figures.
+ */
+export function resolveSamples(stated: string | null): number {
+  const n = Number(stated ?? DEFAULT_SAMPLES);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_SAMPLES;
+  return Math.max(MIN_SAMPLES, Math.floor(n));
 }
 
 /** The ceiling check's verdict. Carries both figures on refusal, so the shell states neither. */

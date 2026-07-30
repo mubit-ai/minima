@@ -6,18 +6,25 @@
  * The dry run reports the corpus a full evaluation would use and what that run would cost, and is
  * READ-ONLY. `--correlate` reports which prompt caused each recorded routing decision — an inferred
  * link, with its corroboration rate measured rather than assumed. `--score` and `--adjudicate` read
- * the panel's cached labels and report against them. All four read only.
+ * the panel's cached labels and report against them. `--self-consistency` (MUB-217) reads the
+ * sampling lane's cached draws and asks whether the classifier's self-reported number is honest
+ * about its OWN uncertainty, using no reference labels at all. All five read only.
  *
- * `--spend --max-usd=<ceiling>` is the ONE path that bills. It runs the reference panel over the
- * prompts it does not already have labels for, at the current corpus revision, writing each vote to
- * the ledger as it lands. A rerun with everything cached spends nothing and prints the same report,
- * which is what makes MUB-218 and MUB-226 re-runnable without re-invoking the panel.
+ * `--spend --max-usd=<ceiling>` is the ONE path that bills. It runs the reference panel, the
+ * classifier replay and the self-consistency sampling over the work they do not already have at the
+ * current corpus revision, writing each row to the ledger as it lands. A rerun with everything
+ * cached spends nothing and prints the same report, which is what makes MUB-218, MUB-226 and
+ * MUB-217's readouts re-runnable without re-invoking anything. `--pilot` is a MODIFIER on that
+ * path, narrowing the sampling lane to its deterministic 10-entry pilot; it is not a verb and adds
+ * no route to a billable call.
  *
  *   bun packages/tui/scripts/classifier_eval.ts
  *   bun packages/tui/scripts/classifier_eval.ts --project=minima --limit=5000
  *   bun packages/tui/scripts/classifier_eval.ts --correlate
  *   bun packages/tui/scripts/classifier_eval.ts --score --target-correctness=0.85
  *   bun packages/tui/scripts/classifier_eval.ts --adjudicate
+ *   bun packages/tui/scripts/classifier_eval.ts --self-consistency --samples=10
+ *   bun packages/tui/scripts/classifier_eval.ts --spend --max-usd=0.10 --pilot
  *   bun packages/tui/scripts/classifier_eval.ts --spend --max-usd=4.00
  *
  * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, the panel,
@@ -71,6 +78,22 @@ import {
   summarizeReplayOutstanding,
 } from "../src/minima/classifier_replay.ts";
 import {
+  SAMPLED_MODEL,
+  isReadableSample,
+  pilotEntries,
+  planSampling,
+  renderSamplingOutstanding,
+  renderSamplingRunResult,
+  runSampling,
+  sampleKey,
+  selfConsistencyCallSpecs,
+  summarizeSamplingOutstanding,
+} from "../src/minima/classifier_self_consistency.ts";
+import {
+  buildSelfConsistencyReport,
+  renderSelfConsistencyReport,
+} from "../src/minima/classifier_self_consistency_report.ts";
+import {
   REFERENCE_PANEL,
   buildPanelReport,
   checkPanelDiversity,
@@ -90,7 +113,8 @@ import { hydrateEnv } from "../src/tui/config_store.ts";
 
 const HELP = [
   "Classifier eval — dry run (MUB-215), prompt↔decision correlation (MUB-225), reference",
-  "panel (MUB-216), replay score and routing floor (MUB-218), override adjudication (MUB-226).",
+  "panel (MUB-216), replay score and routing floor (MUB-218), override adjudication (MUB-226),",
+  "self-consistency sampling (MUB-217).",
   "",
   "  --correlate       report which prompt caused each recorded decision, and how much to",
   "                    trust that claim (a heuristic, not a join). Reads only.",
@@ -102,6 +126,15 @@ const HELP = [
   "                    corpus, and defaulting it would make a chosen number look derived",
   "  --adjudicate      would overriding the service's task label have helped? Four-way outcome",
   "                    and a net-benefit floor sweep. Reads only.",
+  "  --self-consistency",
+  "                    is the classifier's self-reported number honest about its OWN uncertainty?",
+  "                    Compares the self-report against the empirical frequency of its modal label",
+  "                    over repeated draws. Uses NO reference labels. Reads only.",
+  "  --samples=<n>     draws per prompt for the sampling lane (default 10, floored at 2 — at n=1",
+  "                    the modal frequency is 1.0 by construction). Parsed forgivingly: it cannot",
+  "                    spend on its own and --max-usd still binds. The effective n is printed",
+  "  --pilot           MODIFIER on --spend: buy only the sampling lane's 10-entry pilot, which is",
+  "                    what authorizes the full lane. Not a verb — on its own it spends nothing",
   "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
   "  --limit=<n>       cap rows read, most recent first (default 20000)",
   "  --db=<path>       read a specific ledger (default: the harness's own)",
@@ -124,7 +157,7 @@ if (invocation.kind === "help") {
   process.exit(0);
 }
 
-const { project, dbPath, rowCap } = invocation;
+const { project, dbPath, rowCap, samples } = invocation;
 
 // Opening a ledger creates it when absent, so a typo'd --db would silently report a zero corpus
 // as though it were a finding. Refuse instead. (Opening an EXISTING ledger runs the harness's
@@ -210,11 +243,10 @@ try {
       // whatever the replay did), and requiring equality would silence the note on a real run.
       if (report.scored === 0 && noReplay > 0) {
         // WHY there is no replayed label is now two different states of the world, and naming the
-        // wrong one is a false statement about the ledger. Before MUB-218 there was no replay to
-        // consume; there is one now, and `buildOverrideReport` still takes an empty map because
-        // wiring it into the adjudication is MUB-226's, not this readout's. DERIVED from the
-        // ledger rather than asserted, so this note cannot go stale the way the last one did the
-        // moment a replay landed.
+        // wrong one is a false statement about the ledger. DERIVED from the ledger rather than
+        // asserted, so this note cannot go stale the way the last one did the moment a replay
+        // landed — and the second branch no longer names a ticket as the reason, because whose
+        // wiring that is has moved once already and a note that tracks it would be wrong again.
         const cached = reads.replayLabels.length;
         console.error(
           [
@@ -222,8 +254,8 @@ try {
             ...(cached === 0
               ? ["note: no classifier replay is recorded, so"]
               : [
-                  `note: ${cached} replay labels ARE cached, but this adjudication does not read`,
-                  "  them — that wiring is MUB-226's, not this readout's. So",
+                  `note: ${cached} replay labels ARE cached, but the shipped replay model has no`,
+                  "  usable label for these entries. So",
                 ]),
             `  ${noReplay} of ${report.candidates} candidates were set aside as "replay gave no`,
             '  usable label"; the rest were set aside for the reasons listed above. The candidate',
@@ -233,6 +265,28 @@ try {
         );
       }
     }
+  } else if (invocation.kind === "self-consistency") {
+    // MUB-217. Reads TWO things and nothing else: the prompt rows, and the draws. No votes, no
+    // replay labels, no routing decisions — AC 4 is "runs with no reference labels", and the read
+    // is where that is either true or not.
+    console.log(
+      renderSelfConsistencyReport(
+        buildSelfConsistencyReport(
+          {
+            corpus: db.listUserPrompts(project, rowCap),
+            samples: db.listSelfConsistencySamples(CORPUS_REV),
+          },
+          {
+            scope,
+            samples,
+            corpusRev: CORPUS_REV,
+            // The tree's ONE key producer, injected. A second hash would miss every cached draw
+            // and report it as "the classifier has never been sampled on this corpus".
+            hashOf: promptHash,
+          },
+        ),
+      ),
+    );
   } else {
     const rows = db.listUserPrompts(project, rowCap);
     const report = buildDryRunReport(rows, {
@@ -240,7 +294,11 @@ try {
       lengthBoundaries: DEFAULT_LENGTH_BOUNDARIES,
       // Each lane's legs come from the lane itself, so the projection and the calls that get
       // billed cannot disagree about which models they mean.
-      specs: [...panelCallSpecs(REFERENCE_PANEL), ...replayCallSpecs(REPLAY_MODELS)],
+      specs: [
+        ...panelCallSpecs(REFERENCE_PANEL),
+        ...replayCallSpecs(REPLAY_MODELS),
+        ...selfConsistencyCallSpecs(samples),
+      ],
       rowCap,
     });
     // The projection is free, so every invocation gets it — including a refused one. A ceiling can
@@ -252,6 +310,10 @@ try {
         "    own output allowance (a panelist that reasons server-side bills those hidden tokens",
         "    as output). The replay legs are MUB-218's two classifier models, and `--spend` runs",
         "    both lanes under the one ceiling.",
+        `  · The self-consistency leg is MUB-217's: the shipped default classifier drawn ${samples}`,
+        "    times per prompt at the provider default temperature (unset). It is the deepest leg",
+        "    by an order of magnitude — n calls per prompt where the others take one — so its",
+        "    output allowance is where an under-count costs the most.",
       ].join("\n"),
     );
 
@@ -288,13 +350,60 @@ try {
     console.log("");
     console.log(renderReplayOutstanding(replayWork));
 
+    // MUB-217's sampling lane, planned against its own cache the same way. The key producer is the
+    // same `promptHash`, and the key SHAPE is `voteKey` applied twice so the draw index rides in it
+    // — the one thing this lane cannot inherit from the other two, whose keys silently upsert a
+    // resample over its predecessor.
+    const cachedSamples = db.listSelfConsistencySamples(CORPUS_REV).filter(isReadableSample);
+    const cachedSampleKeys = new Set(
+      cachedSamples.map((s) => sampleKey(voteKey, s.prompt_hash, s.model_id, s.sample_index)),
+    );
+    const keyOf = (hash: string, modelId: string, i: number): string =>
+      sampleKey(voteKey, hash, modelId, i);
+    const samplingPlan = planSampling(
+      corpus,
+      SAMPLED_MODEL,
+      samples,
+      cachedSampleKeys,
+      promptHash,
+      keyOf,
+    );
+    // The pilot is planned SEPARATELY and always, whatever the flags say, so its projection is
+    // printed on every invocation and cannot go stale between the run that quotes it and the run
+    // that pays it.
+    const pilotPlan = planSampling(
+      pilotEntries(corpus),
+      SAMPLED_MODEL,
+      samples,
+      cachedSampleKeys,
+      promptHash,
+      keyOf,
+    );
+    const samplingWork = summarizeSamplingOutstanding(samplingPlan, pilotPlan, corpus, CORPUS_REV);
+    console.log("");
+    console.log(renderSamplingOutstanding(samplingWork));
+
     // The ceiling answers what THIS run would spend, not what the whole arc would (ADR 0006): a
     // rerun over cached labels costs nothing, and a ceiling chosen against the full-corpus figure
-    // would be answering a question the run is not asking. It binds BOTH lanes, because one
-    // `--spend` buys both — a per-lane ceiling would let the pair exceed the number the caller read.
-    const projected = work.cost.totalUsd + replayWork.cost.totalUsd;
-    const outstandingCalls = work.cost.totalCalls + replayWork.cost.totalCalls;
+    // would be answering a question the run is not asking. It binds ALL THREE lanes, because one
+    // `--spend` buys all three — a per-lane ceiling would let them together exceed the number the
+    // caller read.
+    //
+    // `--pilot` narrows the SAMPLING lane to its 10-entry pilot and nothing else. It is a modifier
+    // on an already-authorized spend: the panel and replay lanes are untouched by it (they owe what
+    // they owe), and it opens no route to a call that `--spend --max-usd` had not already opened.
+    const spendPilot = invocation.kind === "spend" && invocation.pilot;
+    const samplingSpendPlan = spendPilot ? pilotPlan : samplingPlan;
+    const samplingSpendCost = spendPilot ? samplingWork.pilotOutstanding : samplingWork.outstanding;
+    const projected = work.cost.totalUsd + replayWork.cost.totalUsd + samplingSpendCost.totalUsd;
+    const outstandingCalls =
+      work.cost.totalCalls + replayWork.cost.totalCalls + samplingSpendCost.totalCalls;
     const suggested = suggestCeilingUsd(projected).toFixed(2);
+    // What the SAME argv plus `--pilot` would cost, quoted beside the full figure so a caller who
+    // only wants to authorize the pilot is not left to choose a ceiling against the wrong number.
+    const pilotProjected =
+      work.cost.totalUsd + replayWork.cost.totalUsd + samplingWork.pilotOutstanding.totalUsd;
+    const pilotSuggested = suggestCeilingUsd(pilotProjected).toFixed(2);
 
     /** Print whatever labels exist, so the panel's findings are readable without spending. */
     const printPanelReport = (): void => {
@@ -313,14 +422,17 @@ try {
           ? [
               "",
               "--spend: refusing — no ceiling stated. A bare --spend is an intention, not permission.",
-              `  The outstanding work — panel and replay together — projects $${projected.toFixed(4)},`,
-              "  an estimate on the heuristic above; actuals can exceed it.",
+              "  The outstanding work — panel, replay and self-consistency sampling together —",
+              `  projects $${projected.toFixed(4)}, an estimate on the heuristic above; actuals can exceed it.`,
               `  Re-run with a ceiling you accept paying:  --spend --max-usd=${suggested}`,
+              `  Or authorize only the sampling PILOT first ($${pilotProjected.toFixed(4)}), which is what says`,
+              `  whether the draws vary at all:  --spend --max-usd=${pilotSuggested} --pilot`,
             ].join("\n")
           : [
               "",
               "--max-usd: refusing — a ceiling must be a positive number of US dollars.",
               `  For this run's $${projected.toFixed(4)} projection, --max-usd=${suggested} would do.`,
+              `  For the sampling pilot alone ($${pilotProjected.toFixed(4)}), --max-usd=${pilotSuggested} --pilot would.`,
               "  There is no default: a defaulted spending limit is the one default that could cost",
               "  money.",
             ].join("\n"),
@@ -385,12 +497,29 @@ try {
             ].join("\n"),
           );
           exitCode = 2;
+        } else if (
+          samplingSpendPlan.todo.length > 0 &&
+          !providerKeyPresent(SAMPLED_MODEL.model.provider)
+        ) {
+          // Gated on this lane HAVING outstanding draws, like the two above: a fully-cached
+          // sampling lane owes no call, so its provider key is irrelevant to this run.
+          console.error(
+            [
+              "",
+              "--spend: refusing — the sampled classifier has no provider key. Every draw would",
+              "  fail, and a lane with no draws reports 'not sampled', which is indistinguishable",
+              "  in the output from a degenerate sampler.",
+              missingKey(SAMPLED_MODEL.model.id, SAMPLED_MODEL.model.provider),
+            ].join("\n"),
+          );
+          exitCode = 2;
         } else if (outstandingCalls === 0) {
           console.error(
             [
               "",
               `--spend --max-usd=${invocation.maxUsd}: nothing to pay for. Every panelist already has`,
-              `  a vote, and every replay model a label, on every corpus prompt at ${CORPUS_REV}.`,
+              `  a vote, every replay model a label, and the sampling lane all ${samples} of its draws,`,
+              `  on every corpus prompt at ${CORPUS_REV}.`,
               "  Nothing was spent.",
             ].join("\n"),
           );
@@ -414,7 +543,8 @@ try {
                 `--spend --max-usd=${invocation.maxUsd}: accepted. ${outstandingCalls} outstanding calls,`,
                 `  projected $${projected.toFixed(4)} — ${work.cost.totalCalls} panel` +
                   ` ($${work.cost.totalUsd.toFixed(4)}) · ${replayWork.cost.totalCalls} replay` +
-                  ` ($${replayWork.cost.totalUsd.toFixed(4)}).`,
+                  ` ($${replayWork.cost.totalUsd.toFixed(4)}) · ${samplingSpendCost.totalCalls} draws` +
+                  ` ($${samplingSpendCost.totalUsd.toFixed(4)}${spendPilot ? ", PILOT only" : ""}).`,
                 "  Rows are written as they land, so an interrupted run keeps what it paid for.",
               ].join("\n"),
             );
@@ -517,6 +647,52 @@ try {
               });
               console.error(`\n${renderReplayRunResult(result, replayWork.cost.totalUsd)}`);
               reportStops("replay", "label", result);
+              ledgerBroken = ledgerBroken || result.ledgerFailed;
+            }
+
+            // MUB-217's sampling runs THIRD, under the SAME guard, for the same reason the replay
+            // runs second: if the money runs out, the halves worth keeping are the reference and
+            // the subject under test, and a repeatability measurement over a corpus nothing has
+            // labelled is the least useful thing to have bought.
+            //
+            // `makeReplayCaller()` UNCHANGED — a fresh `TaskClassifier` per call. Reusing one
+            // instance would serve nine of every ten draws from its per-session memo, at no cost
+            // and with no call, and the lane would report a flawless 1.0 self-consistency having
+            // asked the model once. That is the single defect most able to look like a finding here.
+            if (ledgerBroken) {
+              console.error(
+                [
+                  "",
+                  `--spend: the sampling lane was NOT started — ${samplingSpendCost.totalCalls} draws never`,
+                  "  dispatched. The ledger just rejected a write, so those draws could not have been",
+                  "  stored either. Fix the ledger and re-run; nothing was spent on this lane.",
+                ].join("\n"),
+              );
+            } else if (samplingSpendCost.totalCalls > 0) {
+              const result = await runSampling({
+                plan: samplingSpendPlan,
+                corpusRev: CORPUS_REV,
+                call: makeReplayCaller(),
+                // A hash, a draw index and a label. The prompt text reaches neither the ledger nor
+                // this output.
+                record: (s) => db.upsertSelfConsistencySample(s),
+                guard,
+                onProgress: progress(spendPilot ? "sampling (pilot)" : "sampling"),
+              });
+              console.error(`\n${renderSamplingRunResult(result, samplingSpendCost.totalUsd)}`);
+              reportStops("sampling", "draw", result);
+              if (spendPilot) {
+                console.error(
+                  [
+                    "",
+                    "  The pilot is in the ledger. Read its verdict — whether the draws actually",
+                    "  varied — before authorizing the full lane:",
+                    `    bun packages/tui/scripts/classifier_eval.ts --self-consistency --samples=${samples}`,
+                    "  A verdict that is not OK prints an abort banner instead of a headline figure,",
+                    "  and the full lane is not authorized.",
+                  ].join("\n"),
+                );
+              }
             }
             printPanelReport();
           }

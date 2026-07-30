@@ -585,6 +585,43 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_classifier_replay_rev ON classifier_replay_labels(corpus_rev, prompt_hash)",
   ],
+  // classifier self-consistency samples (MUB-217) — the SAME classifier asked the SAME prompt
+  // repeatedly, per docs/adr/0009-self-consistency-samples.md. Batch position may shift at rebase
+  // (append-only discipline: renumber unmerged, never edit shipped), so this comment states no
+  // version number.
+  //
+  // `sample_index` IS IN THE PRIMARY KEY, and that is the whole reason this is a third table rather
+  // than more rows in `classifier_replay_labels`. Both shipped caches key on (prompt_hash,
+  // model_id) and upsert on conflict, so a same-model resample overwrites its predecessor with no
+  // error: ten draws would leave one row, the modal frequency would be 1.0 by construction, and the
+  // readout would report perfect self-consistency having measured nothing. The key carries the draw.
+  //
+  // `temperature` is stored as TEXT, not REAL, because the value being recorded is the literal
+  // string 'provider default, unset'. No call in this lane sets a temperature: Anthropic and OpenAI
+  // both default to 1.0 when it is absent and production does not set it either, so sampling at the
+  // unset default measures the ACTUAL production distribution rather than a synthetic one. A REAL
+  // column would force this lane to invent a number production never sends.
+  //
+  // `confidence` is the RAW self-report of that individual draw, pre-floor. It is the left-hand side
+  // of the comparison this ticket exists to make — the number the classifier reports about itself,
+  // against the empirical frequency of its own modal label — so a floored value would compare the
+  // wrong thing. A NULL task_type is a real draw that carried no usable label, cached like the
+  // replay's; a failed call writes no row and is redrawn.
+  [
+    `CREATE TABLE IF NOT EXISTS classifier_self_consistency_samples (
+       prompt_hash  TEXT    NOT NULL,  -- sha256 of the exact prompt text (the text is never stored)
+       model_id     TEXT    NOT NULL,  -- the classifier model that produced this draw
+       sample_index INTEGER NOT NULL,  -- IN THE KEY: without it every draw upserts the last
+       corpus_rev   TEXT    NOT NULL,  -- eval-core CORPUS_REV the sampling was run under
+       temperature  TEXT    NOT NULL,  -- 'provider default, unset' — recorded, never set
+       task_type    TEXT,              -- NULL = answered, but with no usable label
+       difficulty   TEXT,
+       confidence   REAL,              -- RAW self-report of THIS draw, pre-floor
+       created_at   REAL    NOT NULL,
+       PRIMARY KEY (prompt_hash, model_id, sample_index)
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_self_consistency_rev ON classifier_self_consistency_samples(corpus_rev, prompt_hash)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -924,6 +961,32 @@ export interface ReplayLabelRow {
   prompt_hash: string;
   model_id: string;
   corpus_rev: string;
+  task_type: string | null;
+  difficulty: string | null;
+  confidence: number | null;
+  created_at: number;
+}
+
+/**
+ * ONE DRAW of the shipped classifier over one corpus prompt (MUB-217, ADR 0009).
+ *
+ * A superset of {@link ReplayLabelRow} by two columns, and structurally assignable to the reader
+ * `classifier_replay.ts` already ships — which is deliberate, so a draw is re-admitted through the
+ * same shipped parser path a replay label is rather than through a second copy of those rules.
+ *
+ * `sample_index` distinguishes the draws and is part of the primary key. The replay's key is
+ * `(prompt_hash, model_id)` and upserts, so without this column ten draws of the same prompt would
+ * collapse to the last one and the measured self-consistency would be 1.0 by construction.
+ *
+ * `temperature` is the string `'provider default, unset'`: this lane sets no temperature, so what
+ * is recorded is the absence of the setting rather than a number nothing sent.
+ */
+export interface SelfConsistencySampleRow {
+  prompt_hash: string;
+  model_id: string;
+  sample_index: number;
+  corpus_rev: string;
+  temperature: string;
   task_type: string | null;
   difficulty: string | null;
   confidence: number | null;
@@ -3204,6 +3267,79 @@ export class MinimaDb {
          ORDER BY prompt_hash, model_id`,
       )
       .all(corpusRev) as ReplayLabelRow[];
+  }
+
+  // --------------------------------------- classifier self-consistency samples (MUB-217, ADR 0009)
+  /**
+   * Record ONE draw of the classifier over one prompt.
+   *
+   * Upsert on `(prompt_hash, model_id, sample_index)` — the draw index is in the key. Re-running
+   * draw 3 replaces draw 3 and leaves draws 0..2 and 4..n alone, which is what makes ten draws ten
+   * rows. Both shipped caches key on `(prompt_hash, model_id)` and silently overwrite on a resample;
+   * a lane that inherited that key would measure a perfect 1.0 self-consistency having stored one
+   * row, with no error anywhere to notice.
+   *
+   * `temperature` is required and is the literal `'provider default, unset'` on every row this
+   * lane writes. It has no default here: what a measurement was taken under is not something a
+   * caller should be able to omit and have guessed for them.
+   *
+   * `confidence` is the RAW self-report of this draw. Callers pass the sha256 of the prompt, never
+   * the prompt: nothing on this path can store text.
+   */
+  upsertSelfConsistencySample(v: {
+    promptHash: string;
+    modelId: string;
+    sampleIndex: number;
+    corpusRev: string;
+    temperature: string;
+    taskType?: string | null;
+    difficulty?: string | null;
+    confidence?: number | null;
+    ts?: number;
+  }): void {
+    this.db.run(
+      `INSERT INTO classifier_self_consistency_samples
+         (prompt_hash, model_id, sample_index, corpus_rev, temperature,
+          task_type, difficulty, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(prompt_hash, model_id, sample_index) DO UPDATE SET
+         corpus_rev  = excluded.corpus_rev,
+         temperature = excluded.temperature,
+         task_type   = excluded.task_type,
+         difficulty  = excluded.difficulty,
+         confidence  = excluded.confidence,
+         created_at  = excluded.created_at`,
+      [
+        v.promptHash,
+        v.modelId,
+        v.sampleIndex,
+        v.corpusRev,
+        v.temperature,
+        v.taskType ?? null,
+        v.difficulty ?? null,
+        v.confidence ?? null,
+        v.ts ?? Date.now() / 1000,
+      ],
+    );
+  }
+
+  /**
+   * Every draw taken under one corpus revision, in a stable order.
+   *
+   * Scoped to the revision by construction, for the same reason `listConsensusVotes` and
+   * `listReplayLabels` are: a draw taken against a different corpus revision describes a corpus that
+   * no longer exists and must read as a cache MISS. There is no unscoped read.
+   *
+   * Ordered by `sample_index` within a prompt so a reader iterating rows sees the draws in the order
+   * they were planned — the order the pilot's determinism is defined in.
+   */
+  listSelfConsistencySamples(corpusRev: string): SelfConsistencySampleRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM classifier_self_consistency_samples WHERE corpus_rev = ?
+         ORDER BY prompt_hash, model_id, sample_index`,
+      )
+      .all(corpusRev) as SelfConsistencySampleRow[];
   }
 
   // ---------------------------------------------------------------- plan outcome (M7.1)
