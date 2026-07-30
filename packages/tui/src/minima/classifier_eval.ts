@@ -15,6 +15,31 @@ import type { UserPromptRow } from "../db/minima_db.ts";
 import { isHarnessSteerText } from "./stop_gate.ts";
 
 // ---------------------------------------------------------------------------
+// Corpus revision. What "the corpus" means, versioned — so cached work cannot outlive it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which corpus the counting below describes (ADR 0001).
+ *
+ * `partitionSteerText` delegates to the SHIPPED steer predicate, so what counts as a prompt at
+ * all is decided elsewhere and can change without a line of this file changing. When it does, the
+ * corpus becomes a different set of prompts — and anything expensive that was derived from the old
+ * set (the reference panel's paid labels, MUB-216) is then attributed to a corpus that no longer
+ * exists. Stamping that work with this revision turns a silent misattribution into a cache miss.
+ *
+ * BUMP THIS whenever `isHarnessSteerText` changes, or whenever the rule for what enters the corpus
+ * changes in any other way. It is a hand-maintained constant on purpose: no probe of the predicate
+ * can detect a NEW steer kind, because new steer text is by definition text the old probes never
+ * contained. The cost of forgetting is paying for labels twice, or worse, not paying and reading
+ * stale ones — so it is stated where the predicate's consumers can see it.
+ *
+ *   r1 — the 243-prompt corpus, before the observer's steer prefix entered the predicate.
+ *   r2 — 238 prompts. ADR 0002 widened `isHarnessSteerText` to `[observer] `; five distinct
+ *        observer steers left the corpus and raw steer exclusions went 41 → 46.
+ */
+export const CORPUS_REV = "r2-observer-steer";
+
+// ---------------------------------------------------------------------------
 // Rates. Every reported rate carries its denominator — structurally, not by convention.
 // ---------------------------------------------------------------------------
 
@@ -119,6 +144,17 @@ export function distinctPrompts(rows: readonly UserPromptRow[]): DistinctPrompt[
     counts.set(row.text as string, (counts.get(row.text as string) ?? 0) + 1);
   }
   return [...counts].map(([text, occurrences]) => ({ text, occurrences }));
+}
+
+/**
+ * THE corpus: the distinct prompts a full run would label, from raw ledger rows.
+ *
+ * One definition, used by the dry run's counting AND by anything that spends money on those
+ * prompts. Composing the three filters at each call site instead would let a report describe a
+ * different set than the panel actually labelled — and neither number would look wrong.
+ */
+export function corpusPrompts(rows: readonly UserPromptRow[]): DistinctPrompt[] {
+  return distinctPrompts(partitionSteerText(partitionLeadPrompts(rows).lead).corpus);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,49 +320,30 @@ export const DEFAULT_LENGTH_BOUNDARIES: readonly number[] = [60, 200, 1000];
 
 /**
  * A label reply is one line of minified JSON (three short fields), so ~40 output tokens covers it
- * with room to spare, and a labelling instruction runs about the size of the classifier's own
- * system prompt — 395 chars, ~99 tokens. Both are allowances, and both are printed.
+ * with room to spare. The instruction is `CLASSIFY_SYSTEM` itself — 395 chars, ~99 tokens — which
+ * every leg here pays per call. Both are allowances, and both are printed.
+ *
+ * A leg whose model reasons SERVER-SIDE bills those hidden tokens as output, so 40 understates it
+ * by an order of magnitude. Legs like that state their own larger allowance (see the reference
+ * panel in `consensus_panel.ts`); the constant below is the non-reasoning case.
  */
-const LABEL_OUTPUT_TOKENS = 40;
-const LABEL_INSTRUCTION_TOKENS = 99;
+export const LABEL_OUTPUT_TOKENS = 40;
+export const LABEL_INSTRUCTION_TOKENS = 99;
 
 /**
- * PROVISIONAL legs for the full run's spend estimate: a provider-diverse reference panel plus one
- * replay of the harness classifier per prompt.
+ * PROVISIONAL leg for the full arc's spend estimate: one replay of the harness classifier per
+ * prompt (MUB-218). It exists so the dry run prints the arc's order of magnitude, and NOTHING
+ * executes it — `--spend` runs the reference panel only.
  *
- * The actual panel is MUB-216's decision. These exist only so the dry run can print a real
- * order-of-magnitude number before that choice is made.
+ * The reference panel's legs are no longer here: MUB-216 chose the panel, and its models, prices
+ * and per-leg output allowances now live with the panel itself (`consensus_panel.ts`), so the
+ * projection and the calls that get billed cannot disagree about which models they mean.
  *
- * The prices were COPIED from the harness's own model registry (the CLI's built-in model table) and
- * nothing keeps them in sync — the first price edit there makes these stale. That is tolerable only
- * because the readout prints each leg's prices, so drift shows up in the output rather than hiding
- * inside the total. Do not read them as authoritative current prices.
+ * The price below was COPIED from the harness's own model registry and nothing keeps it in sync —
+ * the first price edit there makes it stale. Tolerable only because the readout prints each leg's
+ * prices, so drift shows up in the output rather than hiding inside the total.
  */
-export const DEFAULT_CALL_SPECS: readonly CallSpec[] = [
-  {
-    label: "panel: claude-haiku-4-5",
-    callsPerPrompt: 1,
-    inputUsdPerMTok: 1.0,
-    outputUsdPerMTok: 5.0,
-    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
-  },
-  {
-    label: "panel: gpt-4o-mini",
-    callsPerPrompt: 1,
-    inputUsdPerMTok: 0.15,
-    outputUsdPerMTok: 0.6,
-    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
-  },
-  {
-    label: "panel: gemini-2.5-flash",
-    callsPerPrompt: 1,
-    inputUsdPerMTok: 0.3,
-    outputUsdPerMTok: 2.5,
-    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
-  },
+export const REPLAY_CALL_SPECS: readonly CallSpec[] = [
   {
     label: "replay: harness classifier",
     callsPerPrompt: 1,
@@ -511,10 +528,10 @@ export interface DryRunReport {
 /** Assemble the whole dry-run readout from raw ledger rows. Pure: reads nothing, spends nothing. */
 export function buildDryRunReport(rows: readonly UserPromptRow[], cfg: DryRunConfig): DryRunReport {
   const { lead, subagent } = partitionLeadPrompts(rows);
-  const { corpus, excluded } = partitionSteerText(lead);
-  const corpusPrompts = distinctPrompts(corpus);
+  const { excluded } = partitionSteerText(lead);
+  const corpus = corpusPrompts(rows);
   const steerPrompts = distinctPrompts(excluded);
-  const leadDistinct = corpusPrompts.length + steerPrompts.length;
+  const leadDistinct = corpus.length + steerPrompts.length;
   const unusable = rows.filter((r) => !hasPromptText(r)).length;
   return {
     scope: cfg.scope,
@@ -524,10 +541,10 @@ export function buildDryRunReport(rows: readonly UserPromptRow[], cfg: DryRunCon
     subagentRows: rate(subagent.length, rows.length),
     steerRows: rate(excluded.length, rows.length),
     steerDistinct: rate(steerPrompts.length, leadDistinct),
-    corpusDistinct: corpusPrompts.length,
-    corpusOccurrences: corpusPrompts.reduce((n, p) => n + p.occurrences, 0),
-    strata: stratifyByLength(corpusPrompts, cfg.lengthBoundaries),
-    cost: estimateRunCost(corpusPrompts, cfg.specs),
+    corpusDistinct: corpus.length,
+    corpusOccurrences: corpus.reduce((n, p) => n + p.occurrences, 0),
+    strata: stratifyByLength(corpus, cfg.lengthBoundaries),
+    cost: estimateRunCost(corpus, cfg.specs),
   };
 }
 

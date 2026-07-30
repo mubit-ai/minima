@@ -1,35 +1,41 @@
 /**
- * Classifier evaluation — corpus extraction and cost-guarded dry run (MUB-215), plus the
- * prompt↔decision correlation (MUB-225). Both modes read only, and nothing here spends yet: the
- * spend affirmative is wired to the cost guard, but no billable leg exists (MUB-216 onward).
+ * Classifier evaluation — corpus extraction and cost-guarded dry run (MUB-215), the prompt↔decision
+ * correlation (MUB-225), and the provider-diverse reference panel (MUB-216).
  *
- * The dry run reports the corpus a full evaluation would use and what that run would cost. It is
- * the tracer bullet for the measurement arc: it proves the ledger → corpus → report path end to
- * end before any money is committed. `--correlate` reports which prompt caused each recorded
- * routing decision — an inferred link, with its corroboration rate measured rather than assumed.
+ * The dry run reports the corpus a full evaluation would use and what that run would cost, and is
+ * READ-ONLY. `--correlate` reports which prompt caused each recorded routing decision — an inferred
+ * link, with its corroboration rate measured rather than assumed, also read-only.
+ *
+ * `--spend --max-usd=<ceiling>` is the ONE path that bills. It runs the reference panel over the
+ * prompts it does not already have labels for, at the current corpus revision, writing each vote to
+ * the ledger as it lands. A rerun with everything cached spends nothing and prints the same report,
+ * which is what makes MUB-218 and MUB-226 re-runnable without re-invoking the panel.
  *
  *   bun packages/tui/scripts/classifier_eval.ts
  *   bun packages/tui/scripts/classifier_eval.ts --project=minima --limit=5000
  *   bun packages/tui/scripts/classifier_eval.ts --correlate
+ *   bun packages/tui/scripts/classifier_eval.ts --spend --max-usd=4.00
  *
- * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, all
- * counting and all rendering live in the pure cores (`src/minima/classifier_eval.ts` and
- * `src/minima/classifier_eval_correlate.ts`), which are unit-tested with no ledger and no network.
- * What is left here is opening a ledger, the reads, and printing — nothing a reported number
- * depends on.
+ * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, the panel,
+ * all counting and all rendering live in the pure cores (`src/minima/classifier_eval.ts`,
+ * `src/minima/classifier_eval_correlate.ts`, `src/minima/consensus_panel.ts`), which are unit-tested
+ * with no ledger and no network. What is left here is opening a ledger, the reads, the writes, and
+ * printing — nothing a reported number depends on.
  *
  * It lives under `scripts/` deliberately: `bun test` matches only `*.test.ts`, so nothing here is
- * reachable from the hermetic suite. The full evaluation will make real network calls by design,
- * which is why the only path to spending is `--spend` with an explicit `--max-usd` ceiling.
+ * reachable from the hermetic suite, and the paid path cannot be entered by running the suite.
  */
 
 import { existsSync } from "node:fs";
+import { envVarsForProvider, providerKeyPresent } from "../src/ai/provider_catalog.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
-  DEFAULT_CALL_SPECS,
+  CORPUS_REV,
   DEFAULT_LENGTH_BOUNDARIES,
+  REPLAY_CALL_SPECS,
   buildDryRunReport,
   checkSpendCeiling,
+  corpusPrompts,
   decideInvocation,
   renderDryRunReport,
   suggestCeilingUsd,
@@ -38,21 +44,40 @@ import {
   buildCorrelationReport,
   renderCorrelationReport,
 } from "../src/minima/classifier_eval_correlate.ts";
+import {
+  REFERENCE_PANEL,
+  buildPanelReport,
+  checkPanelDiversity,
+  makePanelCaller,
+  makeSpendGuard,
+  panelCallSpecs,
+  planPanelRun,
+  projectPanelCost,
+  renderPanelReport,
+  runPanel,
+  voteKey,
+} from "../src/minima/consensus_panel.ts";
+import { hydrateEnv } from "../src/tui/config_store.ts";
 
 const HELP = [
-  "Classifier eval — dry run (MUB-215) and prompt↔decision correlation (MUB-225).",
+  "Classifier eval — dry run (MUB-215), prompt↔decision correlation (MUB-225), reference",
+  "panel (MUB-216).",
   "",
   "  --correlate       report which prompt caused each recorded decision, and how much to",
   "                    trust that claim (a heuristic, not a join). Reads only.",
   "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
   "  --limit=<n>       cap rows read, most recent first (default 20000)",
   "  --db=<path>       read a specific ledger (default: the harness's own)",
-  "  --spend           opt in to a billable run — REQUIRES --max-usd; refused on its own",
+  "  --spend           opt in to a billable run of the reference panel — REQUIRES --max-usd;",
+  "                    refused on its own. Only prompts with no cached vote at the current",
+  "                    corpus revision are paid for",
   "  --max-usd=<usd>   the ceiling you accept paying. The run refuses if the projection",
-  "                    exceeds it. No default: a defaulted spending limit could cost money",
+  "                    exceeds it, and stops dispatching if realized spend reaches it. No",
+  "                    default: a defaulted spending limit could cost money",
   "  --help            this message",
   "",
-  "Exit codes: 0 ok · 2 refused (the cost guard) · 3 asked for a path that is not built yet.",
+  "Exit codes: 0 ok · 2 refused, or stopped by the cost guard mid-run (votes already paid",
+  "for are kept — rerun to finish).",
 ].join("\n");
 
 const invocation = decideInvocation(process.argv.slice(2));
@@ -95,70 +120,204 @@ try {
     const report = buildDryRunReport(rows, {
       scope,
       lengthBoundaries: DEFAULT_LENGTH_BOUNDARIES,
-      specs: DEFAULT_CALL_SPECS,
+      // The panel's legs come from the panel itself, so the projection and the calls that get
+      // billed cannot disagree about which models they mean. The replay leg is MUB-218's and
+      // nothing here executes it.
+      specs: [...panelCallSpecs(REFERENCE_PANEL), ...REPLAY_CALL_SPECS],
       rowCap,
     });
     // The projection is free, so every invocation gets it — including a refused one. A ceiling can
     // only be chosen against a number, and this is the number.
     console.log(renderDryRunReport(report));
-    // Specific to the legs THIS shell chose, so it belongs here rather than in the report.
     console.log(
       [
-        "  · The call legs above are PROVISIONAL — MUB-216 chooses the reference panel. Their",
-        "    prices were copied from the harness's model registry and nothing keeps them in sync,",
-        "    which is why each leg prints the prices it was costed at.",
+        "  · The panel legs above are MUB-216's chosen reference panel, priced at each model's",
+        "    own output allowance (a panelist that reasons server-side bills those hidden tokens",
+        "    as output). The replay leg is PROVISIONAL — MUB-218's, and nothing here executes it.",
       ].join("\n"),
     );
 
-    const projected = report.cost.totalUsd;
+    // The panel works over the SAME corpus the report just counted — one definition, called once.
+    const corpus = corpusPrompts(rows);
+    const cachedVotes = db.listConsensusVotes(CORPUS_REV);
+    const plans = planPanelRun(
+      corpus,
+      REFERENCE_PANEL,
+      new Set(cachedVotes.map((v) => voteKey(v.prompt_hash, v.model_id))),
+    );
+    const outstanding = projectPanelCost(plans);
+    const cachedTotal = plans.reduce((n, p) => n + p.cached, 0);
+    const panelTotal = corpus.length * REFERENCE_PANEL.length;
+
+    console.log(
+      [
+        "",
+        "Reference panel (MUB-216) — what --spend would actually pay for",
+        `  corpus revision              ${CORPUS_REV}`,
+        `  votes cached at this rev     ${cachedTotal}/${panelTotal}`,
+        `  outstanding                  ${outstanding.totalCalls} calls · $${outstanding.totalUsd.toFixed(4)}`,
+      ].join("\n"),
+    );
+    for (const l of outstanding.lines) {
+      console.log(
+        `  ${l.label.padEnd(28)} ${l.calls} calls · ${l.inputTokens} in · ${l.outputTokens} out` +
+          ` · $${l.inputUsdPerMTok}/$${l.outputUsdPerMTok} per Mtok · $${l.usd.toFixed(4)}`,
+      );
+    }
+
+    // The ceiling answers what THIS run would spend, not what the whole arc would: a rerun over
+    // cached labels costs nothing, and a ceiling chosen against the full-corpus figure would be
+    // answering a question the run is not asking.
+    const projected = outstanding.totalUsd;
     const suggested = suggestCeilingUsd(projected).toFixed(2);
+
+    /** Print whatever labels exist, so the panel's findings are readable without spending. */
+    const printPanelReport = (): void => {
+      const votes = db.listConsensusVotes(CORPUS_REV);
+      if (votes.length === 0) return;
+      console.log("");
+      console.log(renderPanelReport(buildPanelReport(corpus, REFERENCE_PANEL, votes, CORPUS_REV)));
+    };
 
     if (invocation.kind === "refuse-spend") {
       // The cost guard. `decideInvocation` reached this without a usable ceiling, so no billable
       // path was ever entered — the wording only explains which half of the affirmative was missing.
+      printPanelReport();
       console.error(
         invocation.reason === "missing-ceiling"
           ? [
               "",
               "--spend: refusing — no ceiling stated. A bare --spend is an intention, not permission.",
-              `  A full run over this corpus projects $${projected.toFixed(4)} — an estimate, on the`,
+              `  The outstanding panel work projects $${projected.toFixed(4)} — an estimate, on the`,
               "  heuristic above; actuals can exceed it.",
               `  Re-run with a ceiling you accept paying:  --spend --max-usd=${suggested}`,
             ].join("\n")
           : [
               "",
               "--max-usd: refusing — a ceiling must be a positive number of US dollars.",
-              `  For this corpus's $${projected.toFixed(4)} projection, --max-usd=${suggested} would do.`,
+              `  For this run's $${projected.toFixed(4)} projection, --max-usd=${suggested} would do.`,
               "  There is no default: a defaulted spending limit is the one default that could cost",
               "  money.",
             ].join("\n"),
       );
       exitCode = 2;
     } else if (invocation.kind === "spend") {
-      const verdict = checkSpendCeiling(projected, invocation.maxUsd);
-      if (!verdict.ok) {
+      // The acceptance criterion, enforced before a cent is spent: two panelists sharing a training
+      // lineage would inflate agreement, and the unanimity rate is what every downstream number
+      // rests on. A panel that quietly lost its diversity still produces numbers.
+      const diversity = checkPanelDiversity(REFERENCE_PANEL);
+      if (!diversity.ok) {
         console.error(
           [
             "",
-            "--spend: refusing — the projection is over the ceiling you stated.",
-            `  projected $${verdict.estimateUsd.toFixed(4)} · your ceiling $${verdict.maxUsd.toFixed(4)}`,
-            "  Raise the ceiling deliberately, or narrow the corpus with --project / --limit.",
-          ].join("\n"),
+            "--spend: refusing — the reference panel is not provider-diverse.",
+            diversity.repeated.length
+              ? `  Repeated training lineage: ${diversity.repeated.join(", ")}. Two models from one`
+              : "  Fewer than two panelists — a panel that cannot disagree measures nothing.",
+            diversity.repeated.length
+              ? "  lineage agreeing is not independent evidence, so unanimity would be inflated."
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         );
         exitCode = 2;
       } else {
-        // Accepted, and there is still nothing to bill: this shell owns the guard, not the legs.
-        // MUB-216 onward add the paid execution here — the decision above does not change for them.
-        console.error(
-          [
-            "",
-            `--spend --max-usd=${invocation.maxUsd}: accepted — and there is nothing to spend it on yet.`,
-            "  The projection is within your ceiling, but the reference panel (MUB-216) and the replay",
-            "  (MUB-218) are not built, so no billable leg exists. Nothing was spent.",
-          ].join("\n"),
-        );
-        exitCode = 3;
+        // Provider keys are hydrated from the harness's own store (keychain / config.env), the
+        // same place the CLI reads them.
+        await hydrateEnv();
+        const unrunnable = REFERENCE_PANEL.filter((p) => !providerKeyPresent(p.model.provider));
+        if (unrunnable.length) {
+          // Preflight rather than discover it per call: without this, a missing key means paying
+          // for two thirds of a panel that can never be unanimous.
+          console.error(
+            [
+              "",
+              "--spend: refusing — a panelist has no provider key, so the panel could never be",
+              "  complete and every prompt would be excluded as incomplete.",
+              ...unrunnable.map(
+                (p) =>
+                  `  ${p.model.id} (${p.model.provider}) — set ${envVarsForProvider(p.model.provider)[0] ?? "its API key"}`,
+              ),
+            ].join("\n"),
+          );
+          exitCode = 2;
+        } else if (outstanding.totalCalls === 0) {
+          console.error(
+            [
+              "",
+              `--spend --max-usd=${invocation.maxUsd}: nothing to pay for. Every panelist already has`,
+              `  a vote on every corpus prompt at ${CORPUS_REV}. Nothing was spent.`,
+            ].join("\n"),
+          );
+          printPanelReport();
+        } else {
+          const verdict = checkSpendCeiling(projected, invocation.maxUsd);
+          if (!verdict.ok) {
+            console.error(
+              [
+                "",
+                "--spend: refusing — the projection is over the ceiling you stated.",
+                `  projected $${verdict.estimateUsd.toFixed(4)} · your ceiling $${verdict.maxUsd.toFixed(4)}`,
+                "  Raise the ceiling deliberately, or narrow the corpus with --project / --limit.",
+              ].join("\n"),
+            );
+            exitCode = 2;
+          } else {
+            console.error(
+              [
+                "",
+                `--spend --max-usd=${invocation.maxUsd}: accepted. Running the reference panel over`,
+                `  ${outstanding.totalCalls} outstanding calls, projected $${projected.toFixed(4)}.`,
+                "  Votes are written as they land, so an interrupted run keeps what it paid for.",
+              ].join("\n"),
+            );
+            const guard = makeSpendGuard(invocation.maxUsd);
+            let lastReported = 0;
+            const result = await runPanel({
+              plans,
+              corpusRev: CORPUS_REV,
+              call: makePanelCaller(),
+              // Counts and a hash — the prompt text never reaches the ledger or this output.
+              record: (v) => db.upsertConsensusVote(v),
+              guard,
+              onProgress: (done, total, spentUsd) => {
+                if (done - lastReported < 25 && done !== total) return;
+                lastReported = done;
+                console.error(`  … ${done}/${total} calls · $${spentUsd.toFixed(4)} realized`);
+              },
+            });
+            console.error(
+              [
+                "",
+                `panel run: ${result.attempted} calls · ${result.labelled} labelled ·` +
+                  ` ${result.unusable} unusable · ${result.failed} failed`,
+                `  realized $${result.spentUsd.toFixed(4)} against a $${projected.toFixed(4)} projection` +
+                  ` (${projected > 0 ? `${((result.spentUsd / projected) * 100).toFixed(0)}%` : "n/a"} of it)`,
+                result.failed > 0
+                  ? "  Failed calls wrote no row, so re-running pays only for those."
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            );
+            if (result.ceilingHit) {
+              console.error(
+                [
+                  "",
+                  "--spend: STOPPED by the live cap — realized spend reached your ceiling.",
+                  `  ${result.skippedForCeiling} calls were never dispatched. The ${result.labelled + result.unusable} votes`,
+                  "  already paid for are in the ledger; re-run with a higher ceiling to finish.",
+                ].join("\n"),
+              );
+              exitCode = 2;
+            }
+            printPanelReport();
+          }
+        }
       }
+    } else {
+      printPanelReport();
     }
   }
 } finally {

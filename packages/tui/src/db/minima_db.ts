@@ -519,6 +519,42 @@ const MIGRATIONS: string[][] = [
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_run ON bg_jobs(run_id, started)",
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_state ON bg_jobs(state)",
   ],
+  // consensus label cache (MUB-216) — the reference panel's votes over the classifier
+  // evaluation corpus, per docs/adr/0001-consensus-label-cache.md. Batch position may shift at
+  // rebase if other migration PRs land first (append-only discipline: renumber unmerged, never
+  // edit shipped), so this comment states no version number.
+  //
+  // ONE ROW PER (prompt_hash, model_id) — the individual vote. Consensus is DERIVED AT READ
+  // TIME by deriveConsensus() and never stored: a stored verdict would discard whether a panel
+  // was unanimous or 2-1, and recovering that afterwards costs another paid run.
+  //
+  // The key is the sha256 of the EXACT prompt text and the text is NEVER stored. The corpus is
+  // the owner's own development traffic; the ledger already holds it legitimately, and a cached
+  // label must not become a second place it lives. The hash is one-way by construction, so
+  // prompt-level analysis re-derives hashes from the live corpus rather than reading them back.
+  //
+  // `corpus_rev` is the eval core's CORPUS_REV at the time of the vote. The steer predicate
+  // decides what counts as a prompt at all, so a change to it makes the corpus a different set —
+  // reads filter on the revision, turning that into a cache miss rather than labels quietly
+  // attributed to a corpus that no longer exists.
+  //
+  // A NULL task_type is a real answer that carried no usable label (cached, so a rerun does not
+  // pay for it twice). A panelist whose call FAILED writes no row at all, so a rerun retries it.
+  // Deliberately no events table: the votes are themselves the durable record, and an audit
+  // trail of paid calls would be a second schema commitment nothing reads.
+  [
+    `CREATE TABLE IF NOT EXISTS consensus_labels (
+       prompt_hash TEXT NOT NULL,     -- sha256 of the exact prompt text (the text is never stored)
+       model_id    TEXT NOT NULL,     -- the panelist that cast this vote
+       corpus_rev  TEXT NOT NULL,     -- eval-core CORPUS_REV the vote was cast under
+       task_type   TEXT,              -- NULL = answered, but with no usable label
+       difficulty  TEXT,
+       confidence  REAL,
+       created_at  REAL NOT NULL,
+       PRIMARY KEY (prompt_hash, model_id)
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_consensus_labels_rev ON consensus_labels(corpus_rev, prompt_hash)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -824,6 +860,25 @@ export interface UserPromptRow {
   /** NULL = the lead agent — the only agent the client-side classifier ever labels. */
   agent_id: string | null;
   text: string | null;
+}
+
+/**
+ * One panelist's vote on one corpus prompt (MUB-216, ADR 0001). The row is the INDIVIDUAL vote,
+ * never a verdict: whether the panel was unanimous or 2-1 is derived at read time by
+ * `deriveConsensus`, because a stored verdict discards the split and recovering it costs another
+ * paid run.
+ *
+ * `prompt_hash` is the sha256 of the exact prompt text; the text itself is never stored here.
+ * `task_type` is NULL when the panelist answered with nothing usable as a label.
+ */
+export interface ConsensusVoteRow {
+  prompt_hash: string;
+  model_id: string;
+  corpus_rev: string;
+  task_type: string | null;
+  difficulty: string | null;
+  confidence: number | null;
+  created_at: number;
 }
 
 /**
@@ -2950,6 +3005,61 @@ export class MinimaDb {
       )
       .get(recId);
     return row !== null;
+  }
+
+  // ------------------------------------------------- consensus label cache (MUB-216, ADR 0001)
+  /**
+   * Record one panelist's vote. Upsert on `(prompt_hash, model_id)`: re-labelling the same prompt
+   * with the same panelist REPLACES the vote (and its `corpus_rev`) rather than accumulating rows
+   * — the cache holds the current vote, and history of a vote nothing reads is not worth a table.
+   *
+   * Callers pass the sha256 of the prompt, never the prompt. Nothing on this path can store text.
+   */
+  upsertConsensusVote(v: {
+    promptHash: string;
+    modelId: string;
+    corpusRev: string;
+    taskType?: string | null;
+    difficulty?: string | null;
+    confidence?: number | null;
+    ts?: number;
+  }): void {
+    this.db.run(
+      `INSERT INTO consensus_labels
+         (prompt_hash, model_id, corpus_rev, task_type, difficulty, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(prompt_hash, model_id) DO UPDATE SET
+         corpus_rev = excluded.corpus_rev,
+         task_type  = excluded.task_type,
+         difficulty = excluded.difficulty,
+         confidence = excluded.confidence,
+         created_at = excluded.created_at`,
+      [
+        v.promptHash,
+        v.modelId,
+        v.corpusRev,
+        v.taskType ?? null,
+        v.difficulty ?? null,
+        v.confidence ?? null,
+        v.ts ?? Date.now() / 1000,
+      ],
+    );
+  }
+
+  /**
+   * Every vote cast under one corpus revision, in a stable order.
+   *
+   * Scoped to the revision by construction — there is no unscoped read. A vote cast against a
+   * different corpus revision describes a corpus that no longer exists, so it must read as a cache
+   * MISS rather than as a label; making the revision a required argument is what enforces that.
+   */
+  listConsensusVotes(corpusRev: string): ConsensusVoteRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM consensus_labels WHERE corpus_rev = ?
+         ORDER BY prompt_hash, model_id`,
+      )
+      .all(corpusRev) as ConsensusVoteRow[];
   }
 
   // ---------------------------------------------------------------- plan outcome (M7.1)
