@@ -168,33 +168,42 @@ try {
       votes: db.listConsensusVotes(CORPUS_REV),
     };
     if (invocation.kind === "score") {
-      console.log(
-        renderReplayScoreReport(
-          buildScoreReport(reads, {
-            scope,
-            targetCorrectness: invocation.targetCorrectness,
-          }),
-        ),
-      );
+      const report = buildScoreReport(reads, {
+        scope,
+        targetCorrectness: invocation.targetCorrectness,
+      });
+      console.log(renderReplayScoreReport(report));
+      // DERIVED, not asserted: the report itself says whether a replay reached it. A fixed line of
+      // prose here would keep claiming "no replay" on the first run that has one.
+      if (report.models.every((m) => m.modelId === UNREPLAYED_MODEL_ID)) {
+        console.error(
+          [
+            "",
+            "note: no classifier replay is recorded, so every corpus entry reads `unreplayed` and",
+            "  no floor can be derived. The reference-label block above is real — it is what the",
+            "  panel's cached votes resolve to.",
+          ].join("\n"),
+        );
+      }
     } else {
-      console.log(renderAdjudicationReport(buildOverrideReport(reads, { scope })));
+      const report = buildOverrideReport(reads, { scope });
+      console.log(renderAdjudicationReport(report));
+      const noReplay = report.excluded.find((e) => e.reason === "no-replayed-label")?.count ?? 0;
+      // Nothing scored AND the replay accounted for some of it. Not `noReplay === candidates`:
+      // other exclusions are legitimately non-zero (an entry spanning the boundary is set aside
+      // whatever the replay did), and requiring equality would silence the note on a real run.
+      if (report.scored === 0 && noReplay > 0) {
+        console.error(
+          [
+            "",
+            `note: no classifier replay is recorded, so ${noReplay} of ${report.candidates}`,
+            "  candidates were set aside as `replay gave no usable label`; the rest were set aside",
+            "  for the reasons listed above. The candidate and exclusion counts are real —",
+            "  they are what the correlation and the cache resolve to.",
+          ].join("\n"),
+        );
+      }
     }
-    // The classifier replay is a paid pass over the corpus and nothing in the ledger caches one, so
-    // every invocation today is the no-replay case. Said once, plainly, rather than left for a
-    // reader to infer from a table of dashes: the reference figures above are real, and every
-    // accuracy figure is a statement about this run's coverage, not about the classifier.
-    console.error(
-      [
-        "",
-        `note: no classifier replay is recorded, so this run scored against ${UNREPLAYED_MODEL_ID}.`,
-        invocation.kind === "score"
-          ? "  Every corpus entry reads `unreplayed` and no floor can be derived. The reference-label"
-          : "  Every candidate is set aside as `no usable replay label`. The candidate and exclusion",
-        invocation.kind === "score"
-          ? "  block above is real: it is what the panel's cached votes resolve to."
-          : "  counts above are real: they are what the correlation and the cache resolve to.",
-      ].join("\n"),
-    );
   } else {
     const rows = db.listUserPrompts(project, rowCap);
     const report = buildDryRunReport(rows, {

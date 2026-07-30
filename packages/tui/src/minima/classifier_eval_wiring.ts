@@ -16,15 +16,26 @@
  * Impure only in that it takes ledger ROWS. It opens nothing, spends nothing and calls nothing:
  * the reads are the shell's, every count below is a pure core's, and no path here can reach a
  * provider.
+ *
+ * One consequence worth stating where it is caused: `ReferenceResolution.votesAtOtherRev` is
+ * structurally 0 on this path. `listConsensusVotes` takes the revision as a required argument and
+ * filters in SQL — ADR 0001 leaves no unscoped read — so an off-revision vote never reaches
+ * `resolveReferenceVerdicts` to be counted. The diagnostic is live for a caller that assembles
+ * votes some other way; through the ledger it is a zero by construction, not a measurement.
  */
 import type { RoutingDecisionRow, UserPromptRow } from "../db/minima_db.ts";
 import { CORPUS_REV, REGIME_BOUNDARY_TS } from "./classifier_eval.ts";
 import {
   type AdjudicationReport,
-  type HarnessReplay,
+  type EntryDecision,
+  type OverrideCandidate,
   buildAdjudicationReport,
-  buildOverrideCandidates,
 } from "./classifier_eval_adjudicate.ts";
+import {
+  correlateDecisions,
+  groupByCorpusEntry,
+  partitionServiceRouted,
+} from "./classifier_eval_correlate.ts";
 import {
   DEFAULT_CONFIDENCE_BOUNDARIES,
   type ModelReplay,
@@ -43,6 +54,7 @@ import {
   promptHash,
   toCachedVotes,
 } from "./consensus_panel.ts";
+import type { TaskType } from "./schemas.ts";
 
 /**
  * THE read-time consensus rule, panel bound (ADR 0001).
@@ -62,6 +74,73 @@ export const REFERENCE_CONSENSUS = consensusRuleFor(REFERENCE_PANEL);
  * nothing in the ledger caches one, so this is the state every invocation is in today.
  */
 export const UNREPLAYED_MODEL_ID = "(no classifier replay recorded)";
+
+/** What the replay made of one corpus entry. Null on either field = the classifier declined. */
+export interface HarnessReplay {
+  readonly taskType: TaskType | null;
+  readonly confidence: number | null;
+}
+
+/** What {@link buildOverrideCandidates} needs to turn ledger rows into candidates. */
+export interface CandidateSources {
+  readonly decisions: readonly RoutingDecisionRow[];
+  readonly prompts: readonly UserPromptRow[];
+  /** The replay's answer per corpus entry, keyed on the EXACT recorded text. */
+  readonly replay: ReadonlyMap<string, HarnessReplay>;
+  /** MUB-216's key producer, injected so there is exactly one hash in play. */
+  readonly hashOf: (text: string) => string;
+  /**
+   * The floor a caller-supplied task type has to clear to override the service's own. Mirrored as
+   * the COMPARISON `runtime.ts` makes (`confidence >= floor`), never as a second copy of the number.
+   */
+  readonly overrideFloor: number;
+}
+
+/**
+ * Turn ledger rows into adjudication candidates, via MUB-225's correlation.
+ *
+ * Every step is delegated rather than restated, so a row cannot be corpus to the correlation and
+ * non-corpus here: `partitionServiceRouted` drops the decisions that never asked the service,
+ * `correlateDecisions` applies the run-and-timestamp rule, and `groupByCorpusEntry` collapses a
+ * prompt's whole recovery ladder onto ONE candidate. Re-deriving any of them would be a second
+ * chance to disagree with the correlation report printed beside this one.
+ *
+ * A corpus entry with no replay answer still becomes a candidate, carrying nulls. The exclusion is
+ * `scoreCandidates`'s to name — dropping the entry here would shrink the candidate denominator
+ * without saying so, and `candidates` is what every exclusion count is read against.
+ */
+export function buildOverrideCandidates(sources: CandidateSources): OverrideCandidate[] {
+  const { serviceRouted } = partitionServiceRouted(sources.decisions);
+  const { pairings } = correlateDecisions(serviceRouted, sources.prompts);
+  const byRecId = new Map(serviceRouted.map((d) => [d.rec_id, d]));
+  const corroborationByRecId = new Map(pairings.map((p) => [p.recId, p.corroboration]));
+
+  return groupByCorpusEntry(pairings).map((entry) => {
+    const decisions: EntryDecision[] = [];
+    for (const recId of entry.recIds) {
+      const row = byRecId.get(recId);
+      if (row === undefined) continue;
+      decisions.push({
+        ts: row.ts,
+        serviceLabel: (row.task_type as TaskType | null) ?? null,
+        corroboration: corroborationByRecId.get(recId) ?? "unassessable",
+        // The client's label overrode only when it cleared the floor. A recorded client label below
+        // it never won, so the service's own label is what the row carries.
+        serviceLabelOverridden:
+          row.client_task_type !== null &&
+          row.client_confidence !== null &&
+          row.client_confidence >= sources.overrideFloor,
+      });
+    }
+    const replayed = sources.replay.get(entry.text);
+    return {
+      promptHash: sources.hashOf(entry.text),
+      decisions,
+      harnessLabel: replayed?.taskType ?? null,
+      harnessSelfReport: replayed?.confidence ?? null,
+    };
+  });
+}
 
 /** The ledger rows an evaluation reads. Read by the shell, interpreted only by pure cores. */
 export interface EvalReads {
@@ -85,7 +164,7 @@ export function buildScoreReport(
   const corpus = segmentCorpus(reads.prompts, REGIME_BOUNDARY_TS);
   const reference = resolveReferenceVerdicts(
     corpus.map((e) => e.text),
-    toCachedVotes(reads.votes),
+    toCachedVotes(reads.votes, REFERENCE_PANEL),
     { corpusRev: CORPUS_REV, hashOf: promptHash, consensus: REFERENCE_CONSENSUS },
   );
   const passes = replays.length ? replays : [{ modelId: UNREPLAYED_MODEL_ID, labels: [] }];
@@ -124,10 +203,15 @@ export function buildOverrideReport(
     hashOf: promptHash,
     overrideFloor: CLASSIFY_CONFIDENCE_FLOOR,
   });
-  return buildAdjudicationReport(candidates, toCachedVotes(reads.votes), REFERENCE_CONSENSUS, {
-    scope: opts.scope,
-    regimeBoundaryTs: REGIME_BOUNDARY_TS,
-    corpusRev: CORPUS_REV,
-    currentFloor: CLASSIFY_CONFIDENCE_FLOOR,
-  });
+  return buildAdjudicationReport(
+    candidates,
+    toCachedVotes(reads.votes, REFERENCE_PANEL),
+    REFERENCE_CONSENSUS,
+    {
+      scope: opts.scope,
+      regimeBoundaryTs: REGIME_BOUNDARY_TS,
+      corpusRev: CORPUS_REV,
+      currentFloor: CLASSIFY_CONFIDENCE_FLOOR,
+    },
+  );
 }

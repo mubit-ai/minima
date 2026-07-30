@@ -253,8 +253,10 @@ export function deriveConsensus(votes: readonly PanelVote[], panelSize: number):
  * consumers cannot quorum against different panels over the same cached votes.
  *
  * The returned function is assignable, as-is, to both consumers' seams: neither has to adapt this
- * return value, and an adapter is the only place an arm of the verdict could be dropped. The seam
- * test pins that with a type annotation rather than a comment.
+ * return value, and an adapter is the only place an arm of the verdict could be dropped. What
+ * ENFORCES that is `classifier_eval_wiring.ts`, which passes this value to both and lives under
+ * `src/` where `tsc` reaches it — the test files that also pass it are outside `tsconfig.json`'s
+ * `include`, so an annotation there would state the claim without checking it.
  */
 export function consensusRuleFor(
   panel: readonly Panelist[],
@@ -280,20 +282,38 @@ export interface CachedPanelVote {
 }
 
 /**
- * Lift ledger rows into cached votes. The one conversion in the seam.
+ * Lift ledger rows into cached votes, keeping only the panel's own. The one conversion in the seam.
+ *
+ * `panel` is REQUIRED, and it is the same membership filter {@link buildPanelReport} applies in its
+ * own reader. Changing a panelist is a new `model_id` and deliberately NOT a revision bump, so a
+ * retired panelist's paid rows stay in the ledger at the CURRENT revision — and the quorum rule
+ * counts votes, not membership. Two current panelists plus one retired one is three agreeing votes,
+ * which every consumer would score as a unanimous reference label from a panel that no longer has
+ * that member. Filtering here rather than in each consumer is what keeps the readout's panel and
+ * the scored panel the same panel.
  *
  * A null `task_type` survives as a null `taskType` rather than being filtered out. That filter is
- * the whole hazard: drop the row and a three-panelist panel arrives as two agreeing votes, which
+ * the opposite hazard: drop the row and a three-panelist panel arrives as two agreeing votes, which
  * every downstream rule would score as unanimous — pseudo-gold manufactured out of a panelist that
  * never voted. The row is a paid, deterministic non-answer and the rule is entitled to see it.
+ *
+ * The revision is NOT filtered here: each consumer states the revision it means and counts the
+ * mismatches itself, so a caller that passes the wrong one gets a visible cache miss rather than a
+ * silently smaller input.
  */
-export function toCachedVotes(rows: readonly StoredVote[]): CachedPanelVote[] {
-  return rows.map((r) => ({
-    promptHash: r.prompt_hash,
-    modelId: r.model_id,
-    corpusRev: r.corpus_rev,
-    taskType: (r.task_type as TaskType | null) ?? null,
-  }));
+export function toCachedVotes(
+  rows: readonly StoredVote[],
+  panel: readonly Panelist[],
+): CachedPanelVote[] {
+  const inPanel = new Set(panel.map((p) => p.model.id));
+  return rows
+    .filter((r) => inPanel.has(r.model_id))
+    .map((r) => ({
+      promptHash: r.prompt_hash,
+      modelId: r.model_id,
+      corpusRev: r.corpus_rev,
+      taskType: (r.task_type as TaskType | null) ?? null,
+    }));
 }
 
 // ---------------------------------------------------------------------------

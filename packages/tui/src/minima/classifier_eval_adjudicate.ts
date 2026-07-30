@@ -34,14 +34,8 @@
  * `classifier_eval.ts` and `classifier_eval_correlate.ts`, and tested the same way. It never calls
  * a panel: reference labels arrive as cached vote rows, already paid for.
  */
-import type { RoutingDecisionRow, UserPromptRow } from "../db/minima_db.ts";
 import { type Rate, formatRate, rate } from "./classifier_eval.ts";
-import {
-  type Corroboration,
-  correlateDecisions,
-  groupByCorpusEntry,
-  partitionServiceRouted,
-} from "./classifier_eval_correlate.ts";
+import type { Corroboration } from "./classifier_eval_correlate.ts";
 import { TASK_TYPES, type TaskType } from "./schemas.ts";
 
 // ---------------------------------------------------------------------------
@@ -115,14 +109,21 @@ export interface EntryDecision {
   readonly serviceLabel: TaskType | null;
   readonly corroboration: Corroboration;
   /**
-   * Whether a CALLER-supplied task type won on this decision, so `serviceLabel` above is the
-   * harness classifier's label echoed back rather than the service's own.
+   * Whether a CALLER-supplied task type is known to have won on this decision, so `serviceLabel`
+   * above is that label echoed back rather than the service's own.
    *
    * The ledger records the service's FINAL type, and a caller override beats the service's
-   * absolutely — so the recorded label stops being the service's the moment the harness classifier
-   * is turned on. It is false on every row this ledger holds today, which is a fact worth asserting
-   * rather than assuming: the day it is not, an adjudication that ignored it would be scoring the
-   * classifier against its own output and reporting the result as a no-op rate.
+   * absolutely — so the recorded label stops being the service's the moment anything overrides it.
+   * The day that happens, an adjudication ignoring it would be scoring the classifier against its
+   * own output and reporting the result as a no-op rate.
+   *
+   * A TRIPWIRE, NOT A PROOF. It is derivable only from what the ledger stores, which is the harness
+   * classifier's own label and self-report — so it catches the harness classifier overriding, and
+   * it is false on every row this ledger holds today. It CANNOT see a task type supplied directly
+   * by the caller: `runtime.ts` skips the client classifier entirely when one is present, that type
+   * still becomes the service's final label, and no column records it. A row with a caller-supplied
+   * type reads here as the service's own, and closing that would take a new column, not a better
+   * predicate.
    */
   readonly serviceLabelOverridden: boolean;
 }
@@ -143,73 +144,6 @@ export interface OverrideCandidate {
   readonly harnessLabel: TaskType | null;
   /** The classifier's self-report in [0,1], or null when it declined. */
   readonly harnessSelfReport: number | null;
-}
-
-/** What the replay made of one corpus entry. Null on either field = the classifier declined. */
-export interface HarnessReplay {
-  readonly taskType: TaskType | null;
-  readonly confidence: number | null;
-}
-
-/** What {@link buildOverrideCandidates} needs to turn ledger rows into candidates. */
-export interface CandidateSources {
-  readonly decisions: readonly RoutingDecisionRow[];
-  readonly prompts: readonly UserPromptRow[];
-  /** The replay's answer per corpus entry, keyed on the EXACT recorded text. */
-  readonly replay: ReadonlyMap<string, HarnessReplay>;
-  /** MUB-216's key producer, injected so there is exactly one hash in play. */
-  readonly hashOf: (text: string) => string;
-  /**
-   * The floor a caller-supplied task type has to clear to override the service's own. Mirrored as
-   * the COMPARISON `runtime.ts` makes (`confidence >= floor`), never as a second copy of the number.
-   */
-  readonly overrideFloor: number;
-}
-
-/**
- * Turn ledger rows into adjudication candidates, via MUB-225's correlation.
- *
- * Every step is delegated rather than restated, so a row cannot be corpus to the correlation and
- * non-corpus here: `partitionServiceRouted` drops the decisions that never asked the service,
- * `correlateDecisions` applies the run-and-timestamp rule, and `groupByCorpusEntry` collapses a
- * prompt's whole recovery ladder onto ONE candidate. Re-deriving any of them would be a second
- * chance to disagree with the correlation report printed beside this one.
- *
- * A corpus entry with no replay answer still becomes a candidate, carrying nulls. The exclusion is
- * `scoreCandidates`'s to name — dropping the entry here would shrink the candidate denominator
- * without saying so, and `candidates` is what every exclusion count is read against.
- */
-export function buildOverrideCandidates(sources: CandidateSources): OverrideCandidate[] {
-  const { serviceRouted } = partitionServiceRouted(sources.decisions);
-  const { pairings } = correlateDecisions(serviceRouted, sources.prompts);
-  const byRecId = new Map(serviceRouted.map((d) => [d.rec_id, d]));
-  const corroborationByRecId = new Map(pairings.map((p) => [p.recId, p.corroboration]));
-
-  return groupByCorpusEntry(pairings).map((entry) => {
-    const decisions: EntryDecision[] = [];
-    for (const recId of entry.recIds) {
-      const row = byRecId.get(recId);
-      if (row === undefined) continue;
-      decisions.push({
-        ts: row.ts,
-        serviceLabel: (row.task_type as TaskType | null) ?? null,
-        corroboration: corroborationByRecId.get(recId) ?? "unassessable",
-        // The client's label overrode only when it cleared the floor. A recorded client label below
-        // it never won, so the service's own label is what the row carries.
-        serviceLabelOverridden:
-          row.client_task_type !== null &&
-          row.client_confidence !== null &&
-          row.client_confidence >= sources.overrideFloor,
-      });
-    }
-    const replayed = sources.replay.get(entry.text);
-    return {
-      promptHash: sources.hashOf(entry.text),
-      decisions,
-      harnessLabel: replayed?.taskType ?? null,
-      harnessSelfReport: replayed?.confidence ?? null,
-    };
-  });
 }
 
 // ---------------------------------------------------------------------------

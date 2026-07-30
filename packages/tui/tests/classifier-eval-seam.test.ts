@@ -16,6 +16,7 @@ import {
   deriveFloor as deriveFloorFromCurve,
   resolveReferenceVerdicts,
 } from "../src/minima/classifier_eval_score.ts";
+import { buildOverrideCandidates } from "../src/minima/classifier_eval_wiring.ts";
 import {
   type CachedPanelVote,
   REFERENCE_PANEL,
@@ -51,17 +52,130 @@ function panelRows(hash: string, labels: readonly (string | null)[]) {
   return labels.map((label, i) => stored(hash, PANEL_IDS[i] as string, label));
 }
 
+describe("buildOverrideCandidates — the join MUB-225's output makes possible", () => {
+  const prompt = (id: string, ts: number, text: string | null, agentId: string | null = null) => ({
+    id,
+    run_id: "r1",
+    ts,
+    agent_id: agentId,
+    text,
+  });
+  const decision = (recId: string, ts: number, over: Record<string, unknown> = {}) => ({
+    rec_id: recId,
+    run_id: "r1",
+    ts,
+    agent_id: null,
+    task_label: "fix the parser",
+    routed: "server",
+    task_type: "other",
+    client_task_type: null,
+    client_confidence: null,
+    heuristic_task_type: null,
+    classify_disagreement: null,
+    ...over,
+  });
+  const hashOf = (text: string) => `h:${text}`;
+
+  test("groups a prompt's whole recovery ladder under one candidate, in rung order", () => {
+    // Three rungs of one prompt are ONE observation of the classifier (MUB-225), and the first is
+    // the initial route — the label an override would actually have replaced.
+    const candidates = buildOverrideCandidates({
+      decisions: [
+        decision("d1", 20, { task_type: "other" }),
+        decision("d2", 21, { task_type: "code" }),
+        decision("d3", 22, { task_type: "code" }),
+      ],
+      prompts: [prompt("e1", 10, "fix the parser")],
+      replay: new Map([["fix the parser", { taskType: "code" as TaskType, confidence: 0.9 }]]),
+      hashOf,
+      overrideFloor: 0.75,
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.promptHash).toBe("h:fix the parser");
+    expect(candidates[0]?.decisions.map((d) => [d.ts, d.serviceLabel])).toEqual([
+      [20, "other"],
+      [21, "code"],
+      [22, "code"],
+    ]);
+    expect(candidates[0]).toMatchObject({ harnessLabel: "code", harnessSelfReport: 0.9 });
+  });
+
+  test("a decision whose caller override won is marked, using the floor it was gated on", () => {
+    // The floor is the COMPARISON, mirrored from `runtime.ts`, not a number copied from it: a
+    // client label below the floor never overrode, so the recorded label is still the service's.
+    const [entry] = buildOverrideCandidates({
+      decisions: [
+        decision("d1", 20, { client_task_type: "code", client_confidence: 0.8 }),
+        decision("d2", 21, { client_task_type: "code", client_confidence: 0.5 }),
+      ],
+      prompts: [prompt("e1", 10, "fix the parser")],
+      replay: new Map(),
+      hashOf,
+      overrideFloor: 0.75,
+    });
+    expect(entry?.decisions.map((d) => d.serviceLabelOverridden)).toEqual([true, false]);
+  });
+
+  test("only corpus prompts become candidates — steer text and sub-agent briefs do not", () => {
+    // A decision the rule paired to harness steer text is not an observation of the corpus, and
+    // folding it in would attribute it to a prompt it did not come from.
+    const candidates = buildOverrideCandidates({
+      decisions: [decision("d1", 20), decision("d2", 40), decision("d3", 60)],
+      prompts: [
+        prompt("e1", 10, "⚠ You have used 40 of 50 steps"),
+        prompt("e2", 30, "a sub-agent brief", "child-1"),
+        prompt("e3", 50, "fix the parser"),
+      ],
+      replay: new Map(),
+      hashOf,
+      overrideFloor: 0.75,
+    });
+    expect(candidates.map((c) => c.promptHash)).toEqual(["h:fix the parser"]);
+  });
+
+  test("offline and pinned decisions never became candidates — they never asked the service", () => {
+    const candidates = buildOverrideCandidates({
+      decisions: [
+        decision("d1", 20, { routed: "pinned" }),
+        decision("d2", 21, { routed: "offline" }),
+      ],
+      prompts: [prompt("e1", 10, "fix the parser")],
+      replay: new Map(),
+      hashOf,
+      overrideFloor: 0.75,
+    });
+    expect(candidates).toEqual([]);
+  });
+
+  test("a corpus prompt with no replay entry still becomes a candidate, with a null label", () => {
+    // The exclusion belongs to `scoreCandidates`, which names it `no-replayed-label`. Dropping the
+    // entry here instead would shrink the candidate denominator without saying so.
+    const [entry] = buildOverrideCandidates({
+      decisions: [decision("d1", 20)],
+      prompts: [prompt("e1", 10, "fix the parser")],
+      replay: new Map(),
+      hashOf,
+      overrideFloor: 0.75,
+    });
+    expect(entry).toMatchObject({ harnessLabel: null, harnessSelfReport: null });
+  });
+});
+
 describe("the consensus rule is assignable to both consumers' seams", () => {
   // Three prompts, one per verdict arm. `gamma` is the case the seam existed to keep separate:
   // two panelists agreed and the third produced no usable label.
   const alphaVotes = panelRows("h:alpha", ["code", "code", "code"]);
   const betaVotes = panelRows("h:beta", ["code", "qa", "reasoning"]);
   const gammaVotes = panelRows("h:gamma", ["code", "code", null]);
-  const ALL: CachedPanelVote[] = toCachedVotes([...alphaVotes, ...betaVotes, ...gammaVotes]);
+  const ALL: CachedPanelVote[] = toCachedVotes(
+    [...alphaVotes, ...betaVotes, ...gammaVotes],
+    REFERENCE_PANEL,
+  );
 
   test("MUB-218 takes it as its ReferenceLookup, with no adapter in between", () => {
-    // The annotation is the assertion: if `deriveConsensus`'s three-way return did not satisfy
-    // 218's seam, this would not compile — which is exactly the check no lane could run.
+    // The annotation states the claim; `src/minima/classifier_eval_wiring.ts` is what ENFORCES it,
+    // because `tsconfig.json` includes only `src/**` and this file is never type-checked. Kept as
+    // the readable statement of the seam, with the runtime assertions below as its real teeth.
     const lookup: ReferenceLookup<CachedPanelVote> = {
       corpusRev: CORPUS_REV,
       hashOf: (text) => `h:${text}`,
@@ -86,7 +200,14 @@ describe("the consensus rule is assignable to both consumers' seams", () => {
     };
     const candidate = (hash: string): OverrideCandidate => ({
       promptHash: hash,
-      decisions: [{ ts: 10, serviceLabel: "other", corroboration: "corroborated" }],
+      decisions: [
+        {
+          ts: 10,
+          serviceLabel: "other",
+          corroboration: "corroborated",
+          serviceLabelOverridden: false,
+        },
+      ],
       harnessLabel: "code",
       harnessSelfReport: 0.9,
     });
@@ -117,6 +238,66 @@ describe("the consensus rule is assignable to both consumers' seams", () => {
     const dropped = ALL.filter((v) => v.promptHash === "h:gamma" && v.taskType !== null);
     expect(dropped).toHaveLength(2);
     expect(RULE(dropped)).toEqual({ kind: "incomplete", votes: 2, panelSize: 3 });
+  });
+});
+
+describe("a retired panelist's votes never complete a panel that no longer has it", () => {
+  test("toCachedVotes drops a vote from a model that is not on the panel", () => {
+    // Changing a panelist is a NEW model_id and deliberately NOT a revision bump, so the retired
+    // panelist's paid rows stay in the ledger at the CURRENT rev. Two current panelists plus one
+    // retired one is three votes agreeing on a label — and the quorum rule counts votes, not
+    // membership, so it would call that unanimous. `buildPanelReport` filters membership in
+    // `indexVotes`; every consumer path has to filter it in the same place or score a wider panel
+    // than the one it names.
+    const rows = [
+      stored("h:alpha", PANEL_IDS[0] as string, "code"),
+      stored("h:alpha", PANEL_IDS[1] as string, "code"),
+      stored("h:alpha", "retired-model-4o", "code"),
+    ];
+    const votes = toCachedVotes(rows, REFERENCE_PANEL);
+    expect(votes.map((v) => v.modelId)).toEqual([PANEL_IDS[0], PANEL_IDS[1]]);
+    expect(RULE(votes)).toEqual({ kind: "incomplete", votes: 2, panelSize: 3 });
+  });
+
+  test("both consumers see the retired vote as incomplete, not as a reference label", () => {
+    const votes = toCachedVotes(
+      [
+        stored("h:alpha", PANEL_IDS[0] as string, "code"),
+        stored("h:alpha", PANEL_IDS[1] as string, "code"),
+        stored("h:alpha", "retired-model-4o", "code"),
+      ],
+      REFERENCE_PANEL,
+    );
+    const res = resolveReferenceVerdicts(["alpha"], votes, {
+      corpusRev: CORPUS_REV,
+      hashOf: (text) => `h:${text}`,
+      consensus: RULE,
+    });
+    expect(res.entriesResolved).toBe(0);
+    expect(res.entriesPanelIncomplete).toBe(1);
+
+    const { rows, excluded } = scoreCandidates(
+      [
+        {
+          promptHash: "h:alpha",
+          decisions: [
+            {
+              ts: 10,
+              serviceLabel: "other",
+              corroboration: "corroborated",
+              serviceLabelOverridden: false,
+            },
+          ],
+          harnessLabel: "code",
+          harnessSelfReport: 0.9,
+        },
+      ],
+      votes,
+      RULE,
+      { scope: "seam", regimeBoundaryTs: 100, corpusRev: CORPUS_REV, currentFloor: 0.75 },
+    );
+    expect(rows).toEqual([]);
+    expect(excluded).toEqual([{ promptHash: "h:alpha", reason: "panel-incomplete" }]);
   });
 });
 
@@ -160,7 +341,7 @@ describe("the ledger's own rows travel the seam", () => {
           confidence: null,
         });
       }
-      const votes = toCachedVotes(db.listConsensusVotes(CORPUS_REV));
+      const votes = toCachedVotes(db.listConsensusVotes(CORPUS_REV), REFERENCE_PANEL);
       expect(votes).toHaveLength(3);
       expect(votes.filter((v) => v.taskType === null)).toHaveLength(1);
 
@@ -194,7 +375,7 @@ describe("the ledger's own rows travel the seam", () => {
       }
       expect(db.listConsensusVotes(CORPUS_REV)).toHaveLength(0);
 
-      const votes = toCachedVotes(db.listConsensusVotes("r1-superseded"));
+      const votes = toCachedVotes(db.listConsensusVotes("r1-superseded"), REFERENCE_PANEL);
       const res = resolveReferenceVerdicts(["ship it"], votes, {
         corpusRev: CORPUS_REV,
         hashOf: promptHash,
@@ -207,7 +388,14 @@ describe("the ledger's own rows travel the seam", () => {
         [
           {
             promptHash: hash,
-            decisions: [{ ts: 10, serviceLabel: "other", corroboration: "corroborated" }],
+            decisions: [
+              {
+                ts: 10,
+                serviceLabel: "other",
+                corroboration: "corroborated",
+                serviceLabelOverridden: false,
+              },
+            ],
             harnessLabel: "code",
             harnessSelfReport: 0.9,
           },

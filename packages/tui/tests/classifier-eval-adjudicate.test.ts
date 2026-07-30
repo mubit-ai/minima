@@ -10,7 +10,6 @@ import {
   type ThresholdPoint,
   breakdownByServiceLabel,
   buildAdjudicationReport,
-  buildOverrideCandidates,
   deriveFloor,
   outcomeOf,
   renderAdjudicationReport,
@@ -128,115 +127,6 @@ function row(over: Partial<ScoredRow> = {}): ScoredRow {
     ...over,
   };
 }
-
-describe("buildOverrideCandidates — the join MUB-225's output makes possible", () => {
-  const prompt = (id: string, ts: number, text: string | null, agentId: string | null = null) => ({
-    id,
-    run_id: "r1",
-    ts,
-    agent_id: agentId,
-    text,
-  });
-  const decision = (recId: string, ts: number, over: Record<string, unknown> = {}) => ({
-    rec_id: recId,
-    run_id: "r1",
-    ts,
-    agent_id: null,
-    task_label: "fix the parser",
-    routed: "server",
-    task_type: "other",
-    client_task_type: null,
-    client_confidence: null,
-    heuristic_task_type: null,
-    classify_disagreement: null,
-    ...over,
-  });
-  const hashOf = (text: string) => `h:${text}`;
-
-  test("groups a prompt's whole recovery ladder under one candidate, in rung order", () => {
-    // Three rungs of one prompt are ONE observation of the classifier (MUB-225), and the first is
-    // the initial route — the label an override would actually have replaced.
-    const candidates = buildOverrideCandidates({
-      decisions: [
-        decision("d1", 20, { task_type: "other" }),
-        decision("d2", 21, { task_type: "code" }),
-        decision("d3", 22, { task_type: "code" }),
-      ],
-      prompts: [prompt("e1", 10, "fix the parser")],
-      replay: new Map([["fix the parser", { taskType: "code" as TaskType, confidence: 0.9 }]]),
-      hashOf,
-      overrideFloor: 0.75,
-    });
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.promptHash).toBe("h:fix the parser");
-    expect(candidates[0]?.decisions.map((d) => [d.ts, d.serviceLabel])).toEqual([
-      [20, "other"],
-      [21, "code"],
-      [22, "code"],
-    ]);
-    expect(candidates[0]).toMatchObject({ harnessLabel: "code", harnessSelfReport: 0.9 });
-  });
-
-  test("a decision whose caller override won is marked, using the floor it was gated on", () => {
-    // The floor is the COMPARISON, mirrored from `runtime.ts`, not a number copied from it: a
-    // client label below the floor never overrode, so the recorded label is still the service's.
-    const [entry] = buildOverrideCandidates({
-      decisions: [
-        decision("d1", 20, { client_task_type: "code", client_confidence: 0.8 }),
-        decision("d2", 21, { client_task_type: "code", client_confidence: 0.5 }),
-      ],
-      prompts: [prompt("e1", 10, "fix the parser")],
-      replay: new Map(),
-      hashOf,
-      overrideFloor: 0.75,
-    });
-    expect(entry?.decisions.map((d) => d.serviceLabelOverridden)).toEqual([true, false]);
-  });
-
-  test("only corpus prompts become candidates — steer text and sub-agent briefs do not", () => {
-    // A decision the rule paired to harness steer text is not an observation of the corpus, and
-    // folding it in would attribute it to a prompt it did not come from.
-    const candidates = buildOverrideCandidates({
-      decisions: [decision("d1", 20), decision("d2", 40), decision("d3", 60)],
-      prompts: [
-        prompt("e1", 10, "⚠ You have used 40 of 50 steps"),
-        prompt("e2", 30, "a sub-agent brief", "child-1"),
-        prompt("e3", 50, "fix the parser"),
-      ],
-      replay: new Map(),
-      hashOf,
-      overrideFloor: 0.75,
-    });
-    expect(candidates.map((c) => c.promptHash)).toEqual(["h:fix the parser"]);
-  });
-
-  test("offline and pinned decisions never became candidates — they never asked the service", () => {
-    const candidates = buildOverrideCandidates({
-      decisions: [
-        decision("d1", 20, { routed: "pinned" }),
-        decision("d2", 21, { routed: "offline" }),
-      ],
-      prompts: [prompt("e1", 10, "fix the parser")],
-      replay: new Map(),
-      hashOf,
-      overrideFloor: 0.75,
-    });
-    expect(candidates).toEqual([]);
-  });
-
-  test("a corpus prompt with no replay entry still becomes a candidate, with a null label", () => {
-    // The exclusion belongs to `scoreCandidates`, which names it `no-replayed-label`. Dropping the
-    // entry here instead would shrink the candidate denominator without saying so.
-    const [entry] = buildOverrideCandidates({
-      decisions: [decision("d1", 20)],
-      prompts: [prompt("e1", 10, "fix the parser")],
-      replay: new Map(),
-      hashOf,
-      overrideFloor: 0.75,
-    });
-    expect(entry).toMatchObject({ harnessLabel: null, harnessSelfReport: null });
-  });
-});
 
 describe("outcomeOf — the four-way cell", () => {
   test("both right is a no-op: agreeing with a correct label changes nothing", () => {

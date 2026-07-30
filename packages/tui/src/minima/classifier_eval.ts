@@ -50,11 +50,18 @@ export const CORPUS_REV = "r2-observer-steer";
  * boundary from the rates it is meant to explain is the same mistake as averaging across it.
  *
  * It is what MUB-224 quoted in prose and nothing in the tree backed: over this ledger's 494 routing
- * decisions it splits 321 before / 173 after, and the service's catch-all rate across it is
- * 110/321 (34.3%) then 129/173 (74.6%) — the ticket's figures, exactly. Over the 238-prompt corpus
- * the split is 159 before / 77 after / 2 spanning.
+ * decisions it splits 321 before / 173 after. Over the 238-prompt corpus the split is 159 before /
+ * 77 after / 2 spanning.
  *
- * Three things a reader of any figure segmented on it should carry:
+ * MUB-226's motivating catch-all figures reproduce at exactly this instant — 110/321 (34.3%) then
+ * 129/173 (74.6%) — but READ THE DENOMINATORS. The "before" 321 includes 68 pinned/offline rows
+ * that never asked the service and 69 rows carrying no task type at all; the "after" 173 has none
+ * of either. So 34.3% is a catch-all rate over a population that is partly rows the service never
+ * labelled, and the gap it opens against 74.6% is partly that asymmetry. Like for like — routed to
+ * the service AND carrying a label — it is 110/252 (43.7%) then 129/173 (74.6%). The step is real
+ * either way; the quoted pair is not the comparison it sounds like.
+ *
+ * Three more things a reader of any figure segmented on it should carry:
  *
  *   · It is NOT identified by the ledger. There are no decisions between 2026-07-22T14:28:08Z and
  *     2026-07-23T09:33:57Z, so every instant in that 19-hour gap — including a naive midnight cut —
