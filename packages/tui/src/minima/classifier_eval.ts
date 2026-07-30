@@ -344,19 +344,57 @@ export const DEFAULT_CALL_SPECS: readonly CallSpec[] = [
 /** Default row cap: far above this ledger's size, so a normal run is never truncated. */
 export const DEFAULT_ROW_CAP = 20000;
 
-/** What an argv asks the evaluation to do. */
+/**
+ * Which ledger rows a run reads. Shared by every run kind, so a flag cannot select one corpus for
+ * a dry run and a different one for the paid run whose cost that dry run just projected.
+ */
+export interface CorpusScope {
+  readonly project: string | null;
+  readonly dbPath: string | null;
+  readonly rowCap: number;
+}
+
+/**
+ * Why a spend request was refused. An enum rather than a message, so the shell's wording is derived
+ * from the decision instead of re-deciding alongside it.
+ *
+ * `missing-ceiling` — `--spend` with no `--max-usd`. Bare `--spend` is not permission.
+ * `bad-ceiling` — a `--max-usd` that is not a positive finite number of dollars.
+ */
+export type SpendRefusal = "missing-ceiling" | "bad-ceiling";
+
+/**
+ * What an argv asks the evaluation to do. Total over argv: every argument list maps to exactly one
+ * of these, and the only one that permits a billable call is `spend`, which is unreachable without
+ * a stated ceiling. Kept total deliberately — the paid legs (MUB-216 onward) add their execution to
+ * the shell, and should not need to touch this union.
+ */
 export type Invocation =
   | { kind: "help" }
-  | { kind: "refuse-spend" }
-  | { kind: "dry-run"; project: string | null; dbPath: string | null; rowCap: number };
+  | ({ kind: "refuse-spend"; reason: SpendRefusal } & CorpusScope)
+  | ({ kind: "dry-run" } & CorpusScope)
+  | ({ kind: "spend"; maxUsd: number } & CorpusScope);
 
 /**
  * Decide what an argv means, without doing any of it.
  *
- * The cost guard lives here rather than in the shell so it is unit-testable: there is no argv that
- * both requests spending and yields a run. Refusal is checked FIRST, so combining `--spend` with
- * anything else cannot be read as permission. A nonsense row cap falls back to the default instead
- * of reading nothing and reporting an empty corpus as a finding.
+ * The cost guard lives here rather than in the shell so it is unit-testable, and the invariant it
+ * exists to hold is a property of this function alone: `spend` is reachable only from an argv
+ * carrying BOTH `--spend` and a valid `--max-usd`, so no accidental argv can spend. `--spend` is
+ * the verb and the ceiling is the affirmative — a bare `--spend` states an intention, not a
+ * permission, and is refused.
+ *
+ * `--help` is decided first: asking for documentation must never spend, whatever else is present.
+ * (Before a paid path existed, refusal was checked first instead — with `spend` reachable, that
+ * order would let `--spend --max-usd=1 --help` bill.) Flag order carries no permission either way;
+ * the ceiling is the only thing that grants it.
+ *
+ * A refusal still carries its scope, so the shell can price the corpus the caller asked about and
+ * quote a real figure back — choosing a ceiling is only possible against a number.
+ *
+ * A nonsense row cap falls back to the default instead of reading nothing and reporting an empty
+ * corpus as a finding. A nonsense ceiling does NOT fall back: a defaulted spending limit is the one
+ * default that could cost money.
  */
 export function decideInvocation(argv: readonly string[]): Invocation {
   const has = (name: string): boolean => argv.includes(`--${name}`);
@@ -364,15 +402,62 @@ export function decideInvocation(argv: readonly string[]): Invocation {
     const hit = argv.find((a) => a.startsWith(`--${name}=`));
     return hit ? hit.slice(name.length + 3) : null;
   };
-  if (has("spend")) return { kind: "refuse-spend" };
   if (has("help")) return { kind: "help" };
   const raw = Number(option("limit") ?? DEFAULT_ROW_CAP);
-  return {
-    kind: "dry-run",
+  const scope: CorpusScope = {
     project: option("project"),
     dbPath: option("db"),
     rowCap: Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ROW_CAP,
   };
+  if (!has("spend")) return { kind: "dry-run", ...scope };
+  const ceiling = option("max-usd");
+  if (ceiling === null) return { kind: "refuse-spend", reason: "missing-ceiling", ...scope };
+  const maxUsd = Number(ceiling);
+  if (!Number.isFinite(maxUsd) || maxUsd <= 0) {
+    return { kind: "refuse-spend", reason: "bad-ceiling", ...scope };
+  }
+  return { kind: "spend", maxUsd, ...scope };
+}
+
+/** The ceiling check's verdict. Carries both figures on refusal, so the shell states neither. */
+export type CeilingVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly estimateUsd: number; readonly maxUsd: number };
+
+/**
+ * Is a projected run within the ceiling its caller stated?
+ *
+ * This bounds the PROJECTION, not the money. The estimate is a chars/4 heuristic over declared
+ * prices, so a real run's actual spend can exceed it, and this check cannot stop that — what it
+ * catches is a ceiling chosen against one corpus and re-used against a bigger one, which is how a
+ * remembered command quietly turns into a larger bill than the one it was approved for. A live cap
+ * that watches realized cost as it accrues belongs with the code that does the billing (MUB-216).
+ *
+ * Boundary: an estimate exactly equal to the ceiling passes. The ceiling is a limit the caller
+ * accepted paying, not one they accepted staying under.
+ */
+export function checkSpendCeiling(estimateUsd: number, maxUsd: number): CeilingVerdict {
+  if (estimateUsd <= maxUsd) return { ok: true };
+  return { ok: false, estimateUsd, maxUsd };
+}
+
+/**
+ * A ceiling that would admit this projection: the estimate rounded up to the next cent, and never
+ * below a cent. Printed as a concrete suggestion because a ceiling can only be chosen against a
+ * number, and a caller with no figure to anchor on picks one that is wrong in whichever direction
+ * is more annoying.
+ *
+ * Carries no headroom for actuals, on purpose: it is the smallest ceiling that clears the estimate,
+ * so the caller adds headroom deliberately rather than inheriting a number that silently permits
+ * more than they read.
+ *
+ * Rounds through the micro-dollar the estimate is already quantized to, rather than `x * 100`
+ * directly: nine values under $2 (`$0.07`, `$0.28`, `$0.55`…) have a binary expansion just above
+ * their exact cent, so the direct form suggests a cent more than an exact-cent estimate needs. A
+ * cost guard whose printed figures cannot be re-derived by hand is not worth much.
+ */
+export function suggestCeilingUsd(estimateUsd: number): number {
+  return Math.max(0.01, Math.ceil(Math.round(estimateUsd * 1e6) / 1e4) / 100);
 }
 
 /** What the dry run is told to measure. `scope` is descriptive only — it labels the readout. */
@@ -471,7 +556,7 @@ export function renderDryRunReport(r: DryRunReport): string {
   lines.push(
     `  ${"TOTAL".padEnd(28)} ${r.cost.totalCalls} calls · $${r.cost.totalUsd.toFixed(4)}`,
     "",
-    "Spending requires --spend. Nothing above cost anything.",
+    "Spending requires --spend --max-usd=<ceiling>. Nothing above cost anything.",
   );
   // The corpus's limits travel with the report, not alongside it — a figure quoted out of this
   // readout should carry the reason it is not a general claim.
