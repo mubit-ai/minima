@@ -21,6 +21,9 @@ _REPO_ID = "withmartian/routerbench"
 _SPLIT_FILES = {"0shot": "routerbench_0shot.pkl", "5shot": "routerbench_5shot.pkl"}
 _COST_SUFFIX = "|total_cost"
 
+# TOTAL eval->type map for memory seeding: every outcome row needs a cluster key, so this
+# maps broadly and falls back to `other`. scripts/classifier/common.py RB_EVAL_MAP is the
+# CONSERVATIVE training map (unmapped rows dropped) — different job, kept separate on purpose.
 _EVAL_TO_TASK_TYPE = {
     "mbpp": "code",
     "humaneval": "code",

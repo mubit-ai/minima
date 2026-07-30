@@ -163,3 +163,17 @@
 {"text": "as discussed earlier", "label": "other", "slice": "oos"}
 {"text": "per my last message", "label": "other", "slice": "oos"}
 {"text": "see above", "label": "other", "slice": "oos"}
+{"text": "open a draft pr from my branch and add the backend folks as reviewers", "label": "tool_use", "slice": "typed"}
+{"text": "file an issue for the memory leak with the heap snapshot attached", "label": "tool_use", "slice": "typed"}
+{"text": "rerun just the failed jobs on that workflow and ping me when green", "label": "tool_use", "slice": "typed"}
+{"text": "roll the api deployment back to yesterday's image", "label": "tool_use", "slice": "typed"}
+{"text": "post this incident summary to the status page", "label": "tool_use", "slice": "typed"}
+{"text": "pull yesterday's error spike from sentry and drop the links in the ticket", "label": "tool_use", "slice": "typed"}
+{"text": "apply this patch to the parser and rerun the unit suite", "label": "code", "slice": "typed"}
+{"text": "grep for every use of the old logger and swap in the structured one", "label": "code", "slice": "typed"}
+{"text": "rebase onto the release branch and sort out the conflicts in the schema file", "label": "code", "slice": "typed"}
+{"text": "what's the difference between a soft and a hard git reset", "label": "qa", "slice": "typed"}
+{"text": "why would a container run fine locally but crash on the cluster, generally speaking", "label": "qa", "slice": "typed"}
+{"text": "open a pull request for this branch and request review", "label": "tool_use", "slice": "pin"}
+{"text": "create a github issue for the flaky auth test and attach the log", "label": "tool_use", "slice": "pin"}
+{"text": "run the linter and fix everything it flags", "label": "code", "slice": "pin"}

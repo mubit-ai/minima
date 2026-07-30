@@ -97,6 +97,19 @@ async def test_engine_refines_low_confidence_type_from_neighbors():
     assert "neighbor_classified" in resp.warnings
 
 
+async def test_engine_rescues_code_tainted_easy_type_from_neighbors():
+    resp = await _engine(FakeMemory(_CODE_VOTES)).recommend(
+        RecommendRequest(
+            task=TaskInput(
+                task="Summarize the diff and condense the release notes after you debug the crash."
+            ),
+            allow_llm_escalation=False,
+        )
+    )
+    assert resp.classified_task_type == TaskType.code
+    assert "neighbor_classified" in resp.warnings
+
+
 async def test_engine_keeps_confident_heuristic_despite_neighbors():
     resp = await _engine(FakeMemory(_CODE_VOTES)).recommend(
         RecommendRequest(

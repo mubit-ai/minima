@@ -7,6 +7,13 @@ one. Label judgment calls baked into the frozen set (documented here, adjudicate
 generation ("make me a packing list") is other/creative; explanation-imperatives are
 qa; rewrite/draft/tone work is creative; comparison/advice analysis is reasoning.
 
+Agentic amendment (2026-07-30): in the coding-agent register, actions on the working
+tree or local toolchain (run tests, edit/grep files, apply patches, run linters) are
+code; actions on external dev systems (open/merge PRs, file issues/tickets, trigger
+CI/deploys, post to chat, drive a browser) are tool_use; dev-concept questions with no
+repo referent ("why would a test be flaky in CI but pass locally") are qa;
+repo-specific diagnosis ("why is THIS test flaky, logs attached") stays code.
+
 Gates:
   G1a  macro-F1 >= 0.80 on the typed slice
   G1b  conversational sink-leakage <= 0.15 among non-other-gold rows (regex ~0.77)

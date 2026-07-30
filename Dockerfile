@@ -41,7 +41,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    MINIMA_CLASSIFIER_ARTIFACT="/app/models/classifier/potion-base-32M-c18e819c6c6d"
+    MINIMA_CLASSIFIER_ARTIFACT="/app/models/classifier/potion-base-32M-309b09a4eefc"
 
 # Cloud Run injects PORT (default 8080). One uvicorn worker per container;
 # Cloud Run handles horizontal scaling at the instance level.

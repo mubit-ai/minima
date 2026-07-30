@@ -49,6 +49,10 @@ PINS = (
     ("update index.html with the new nav", "code"),
     ("create a landing page for the product launch", "code"),
     ("add some html and css for the hero section", "code"),
+    # agentic tool_use/code boundary pins (2026-07-30) — mirrored in the frozen set.
+    ("open a pull request for this branch and request review", "tool_use"),
+    ("create a github issue for the flaky auth test and attach the log", "tool_use"),
+    ("run the linter and fix everything it flags", "code"),
 )
 
 
@@ -69,12 +73,32 @@ class ArtifactClassifier:
         self.tau_margin = float(head["tau_margin"])
         self.tok = Tokenizer.from_file(str(artifact / "tokenizer.json"))
         self.manifest = json.loads((artifact / "manifest.json").read_text())
+        # Regex-as-feature mirror (classify_embed.py): one-hot of the regex vote rides
+        # next to the embedding. Standalone runs (no repo venv) classify with no hint —
+        # same as serving with regex_hint=None.
+        self.regex_classes = (
+            [str(c) for c in head["regex_classes"]] if "regex_classes" in head else []
+        )
+        self.regex_scale = float(head["regex_scale"]) if "regex_scale" in head else 1.0
+        try:
+            from minima.recommender.classify import infer_task_type
+
+            self._hint = lambda text: infer_task_type(text).value
+        except ImportError:
+            self._hint = lambda text: None
 
     def classify(self, text: str) -> tuple[str, bool]:
         ids = self.tok.encode(text, add_special_tokens=False).ids
         v = self.E[ids].mean(axis=0) if ids else np.zeros(self.E.shape[1], dtype=np.float32)
         v = v / max(float(np.linalg.norm(v)), 1e-9)
-        logits = self.coef @ v + self.intercept
+        feats = v
+        if self.regex_classes:
+            onehot = np.zeros(len(self.regex_classes), dtype=np.float32)
+            hint = self._hint(text)
+            if hint in self.regex_classes:
+                onehot[self.regex_classes.index(hint)] = self.regex_scale
+            feats = np.concatenate([v, onehot])
+        logits = self.coef @ feats + self.intercept
         p = np.exp(logits - logits.max())
         p /= p.sum()
         order = np.argsort(p)

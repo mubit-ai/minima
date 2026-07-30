@@ -330,7 +330,10 @@ def _classify_text(
     selected_rule: str | None = None
     best_hits = 0
     for rule in _FEATURE_RULES:
-        hits = len(rule.pattern.findall(text))
+        # Distinct alternates, not raw frequency: rules differ wildly in alternate count,
+        # and one cheap token repeated ("extract... extract...") must not outvote several
+        # distinct domain cues. finditer, not findall — the patterns have capture groups.
+        hits = len({m.group(0).lower() for m in rule.pattern.finditer(text)})
         # Question FORM is one weak signal, not two: a leading interrogative plus a
         # trailing "?" must not outvote a single real domain cue.
         if rule.task_type is TaskType.qa:
@@ -441,6 +444,7 @@ def _classification_confidence(
     heuristic_task_type: TaskType,
     uncertainty: float,
     selected_rule: str | None = None,
+    code_signal: bool = False,
 ) -> float:
     confidence = 1.0 - _clamp01(uncertainty)
     if task.task_type is not None:
@@ -464,6 +468,12 @@ def _classification_confidence(
         confidence = max(confidence, 0.85)
     elif selected_rule is not None and task_type in _EASY_TYPES:
         confidence = max(confidence, 0.75)
+    # An easy-type win over a prompt that also matched the code rule is suspect — the
+    # dominant code feature makes the margin (and thus confidence) HIGH exactly when the
+    # classification is most doubtful. Cap under the 0.6 neighbor gate so recall
+    # evidence can correct it; a wrong easy type poisons the memory cluster key.
+    if code_signal and task.task_type is None and task_type in _EASY_TYPES:
+        confidence = min(confidence, 0.55)
     return _clamp01(confidence)
 
 
@@ -513,7 +523,13 @@ def infer_task_type(text: str) -> TaskType:
     return task_type
 
 
-def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
+def infer_difficulty(
+    text: str,
+    task_type: TaskType,
+    *,
+    expected_input_tokens: int | None = None,
+    expected_output_tokens: int | None = None,
+) -> Difficulty:
     words = len(text.split())
     if words < 40:
         base = 1  # easy
@@ -526,6 +542,16 @@ def infer_difficulty(text: str, task_type: TaskType) -> Difficulty:
 
     if _BUILD_SCOPE_MARKERS.search(text):
         base = max(base, 2)  # build-scope floor: a short ask for a big artifact is not easy
+
+    # Context-scope floor: word count measures the ask, not the work. A short ask
+    # against a large real context (the harness sends its full-context estimate as
+    # expected_input_tokens) is not easy work.
+    # ponytail: fixed 16k/64k thresholds, tune against decision logs
+    expected_tokens = (expected_input_tokens or 0) + (expected_output_tokens or 0)
+    if expected_tokens >= 64_000:
+        base = max(base, 3)
+    elif expected_tokens >= 16_000:
+        base = max(base, 2)
 
     if len(_COMPLEXITY_MARKERS.findall(text)) >= 2:
         base += 1  # multiple multi-step / constraint markers
@@ -593,10 +619,21 @@ def classify_details(
                 task_type_source = "neighbor_vote"
         profiler.mark("neighbor_vote")
     profiler.mark("difficulty")
-    difficulty = task.difficulty or infer_difficulty(task.task, task_type)
+    difficulty = task.difficulty or infer_difficulty(
+        task.task,
+        task_type,
+        expected_input_tokens=task.expected_input_tokens,
+        expected_output_tokens=task.expected_output_tokens,
+    )
     uncertainty = _estimate_uncertainty(features, task_type, neighbor_support=neighbor_support)
+    code_signal = any(rc.matched and rc.task_type is TaskType.code for rc in rule_checks)
     confidence = _classification_confidence(
-        task, task_type, heuristic_task_type, uncertainty, selected_rule=selected_rule
+        task,
+        task_type,
+        heuristic_task_type,
+        uncertainty,
+        selected_rule=selected_rule,
+        code_signal=code_signal,
     )
     if embed_confidence is not None:
         confidence = embed_confidence
@@ -607,7 +644,12 @@ def classify_details(
         caller_task_type=task.task_type,
         caller_difficulty=task.difficulty,
         heuristic_task_type=heuristic_task_type,
-        heuristic_difficulty=infer_difficulty(task.task, heuristic_task_type),
+        heuristic_difficulty=infer_difficulty(
+            task.task,
+            heuristic_task_type,
+            expected_input_tokens=task.expected_input_tokens,
+            expected_output_tokens=task.expected_output_tokens,
+        ),
         final_task_type=task_type,
         final_difficulty=difficulty,
         selected_rule=selected_rule,

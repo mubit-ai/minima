@@ -397,6 +397,7 @@ export function makeRoutedExtractor(deps: {
       routing = await deps.router.recommend({
         task: prompt,
         taskType: "extraction",
+        difficulty: "easy",
         tags: ["memory:extract"],
         slider: 2,
         maxCostPerCall: SCRIBE_PASS_CAP_USD,

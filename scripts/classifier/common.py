@@ -60,7 +60,11 @@ CLINC_MAP = {
     "what_can_i_ask_you": "other", "whisper_mode": "other",
 }
 
-# RouterBench eval-name substring -> Minima task type.
+# RouterBench eval-name substring -> Minima task type. Deliberately CONSERVATIVE (unmapped
+# rows are dropped; no rag/mt-bench entries — training `other`/`rag` on benchmark prose is
+# the measured failure mode). src/minima/seeding/routerbench.py carries a TOTAL map for
+# memory seeding, where every outcome row needs some cluster key — different job, kept
+# separate on purpose.
 RB_EVAL_MAP = (
     ("mbpp", "code"), ("humaneval", "code"),
     ("gsm8k", "reasoning"), ("grade-school-math", "reasoning"),
@@ -77,7 +81,11 @@ RB_CAP_PER_TYPE = 350
 # genuine magnet is CLINC's imperative command register (tool_use), capped below.
 RB_TYPE_CAPS: dict[str, int] = {}
 CLINC_CAP_PER_TYPE = 300
-CLINC_TYPE_CAPS = {"tool_use": 200}
+# 2026-07-30: 200 -> 100. The agentic tool_use seed block (PRs, CI, tickets, browser)
+# entered; at 200 the consumer command register drowned it ~6:1. Measured: 150 fails
+# G1a (0.798) and regresses an agentic pin; 100 passes all gates with one consumer
+# typed-row miss ("order two more ergonomic keyboards" -> other) — acceptable, not a pin.
+CLINC_TYPE_CAPS = {"tool_use": 100}
 
 # Minima-scoped true-OOS eval set: nothing here fits any of the 11 types. Benchmark OOS
 # splits (CLINC oos) are NOT valid here — under an open taxonomy most of their rows are

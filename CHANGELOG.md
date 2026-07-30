@@ -4,6 +4,39 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+The classifier retuned for its actual job: agentic coding turns from the harness, not
+consumer-assistant intents and benchmark snippets.
+
+### Changed
+- **Classifier artifact `potion-base-32M-309b09a4eefc`** (was `c18e819c6c6d`): the embed
+  head is retrained with an agentic seed register — external-dev-system actions (PRs,
+  issues, CI/deploys, chat/tickets, browser) as `tool_use`, working-tree/toolchain work as
+  `code`, dev-concept questions as `qa` — and CLINC's consumer `tool_use` mass down-capped
+  200→100 so it no longer drowns the agentic register ~6:1. All G1 gates pass (macro-F1
+  0.872, 18/18 pins incl. 3 new agentic ones, true-OOS 26/32); the frozen set gains 14
+  agentic rows under an adjudication amendment documented in the gate suite.
+- **Difficulty now floors on real context size.** `infer_difficulty` uses the caller's
+  `expected_input_tokens`/`expected_output_tokens` (the harness sends its full-context
+  estimate): ≥16k tokens floors medium, ≥64k floors hard. Word count measures the ask,
+  not the work.
+- **Type selection counts distinct regex alternates, not raw hits** — one cheap token
+  repeated ("extract… extract…") no longer outvotes several distinct code cues.
+
+### Fixed
+- **A confidently-wrong easy-type call on a coding prompt had no correction path.** When
+  an easy type (summarization/extraction/classification/translation) wins over a prompt
+  that also matched the code rule, confidence is now capped under the neighbor-vote gate
+  so recall evidence can re-classify it — previously the 0.75 floor suppressed the rescue
+  and the misroute poisoned the memory cluster key on both read and write.
+- **`evaluate.py`'s local inference mirror predated the regex-as-feature head** — it fed
+  512-dim vectors to a 523-dim head and crashed on any regex-featured artifact; it now
+  composes the one-hot hint block exactly like `classify_embed.py`.
+- **The memory scribe's extraction pass no longer prices as hard/expert** — long ledger
+  dumps rode the word-count ladder; the TUI now sends `difficulty: "easy"` for the
+  fixed-cost extraction call.
+
 ## [0.14.5] - 2026-07-27
 
 A correctness release. The headline is cost accuracy: Gemini cached tokens were billed

@@ -11,7 +11,7 @@ from minima.recommender.classify_embed import load_embed_classifier
 from minima.schemas.common import TaskType
 
 ARTIFACT = (
-    Path(__file__).resolve().parents[2] / "models" / "classifier" / "potion-base-32M-c18e819c6c6d"
+    Path(__file__).resolve().parents[2] / "models" / "classifier" / "potion-base-32M-309b09a4eefc"
 )
 
 

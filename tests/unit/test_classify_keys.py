@@ -170,3 +170,46 @@ def test_build_scope_floor_leaves_scopeless_prompts_alone():
     # No build verb + artifact noun -> the word-count base still rules.
     assert infer_difficulty("what time is it in Tokyo", TaskType.qa) == Difficulty.easy
     assert infer_difficulty("fix the typo in the readme", TaskType.code) == Difficulty.medium
+
+
+# --- agentic-register fixes (2026-07-30): distinct votes, context floors, code-taint cap --
+
+
+def test_repeated_easy_tokens_do_not_outvote_distinct_code_cues():
+    # Raw findall counts let one token repeated 4x beat 3 distinct code cues.
+    text = (
+        "Extract the config, extract the schema, extract the constants, extract the defaults, "
+        "then refactor parser.py so pytest passes."
+    )
+    assert infer_task_type(text) == TaskType.code
+
+
+def test_expected_context_tokens_floor_difficulty():
+    # Word count measures the ask; a short ask against a big context is not easy work.
+    text = "fix the flaky test"
+    assert infer_difficulty(text, TaskType.code) == Difficulty.medium
+    assert infer_difficulty(text, TaskType.code, expected_input_tokens=20_000) == Difficulty.hard
+    assert infer_difficulty(text, TaskType.code, expected_input_tokens=80_000) == Difficulty.expert
+
+
+def test_classify_details_threads_expected_tokens_into_difficulty():
+    details = classify_details(TaskInput(task="fix the flaky test", expected_input_tokens=80_000))
+    assert details.task_type == TaskType.code
+    assert details.difficulty == Difficulty.expert
+
+
+def test_code_tainted_easy_type_stays_below_neighbor_gate():
+    # An easy-type win over a prompt that also matched the code rule is suspect: keep
+    # confidence under the 0.6 neighbor gate so recall evidence can correct it.
+    details = classify_details(
+        TaskInput(
+            task="Summarize the diff and condense the release notes after you debug the crash."
+        )
+    )
+    assert details.task_type == TaskType.summarization
+    assert details.confidence < 0.6
+
+
+def test_plain_summarization_keeps_confidence_floor():
+    details = classify_details(TaskInput(task="Summarize this article in three sentences."))
+    assert details.confidence >= 0.75
