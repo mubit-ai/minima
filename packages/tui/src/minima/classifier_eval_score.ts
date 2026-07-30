@@ -11,8 +11,9 @@
  *
  *   · **The read-time consensus rule.** ADR 0001 makes it one function every consumer goes
  *     through, so a quorum rule cannot drift between the tickets that read the same votes. It
- *     arrives as `(votes) => verdict | null` and MUB-216 owns it. There is deliberately no
- *     fallback here: a missing consensus rule must be a compile error, not a second rule.
+ *     arrives as `(votes) => PanelVerdict` and MUB-216 owns it. There is deliberately no fallback
+ *     here: a missing consensus rule must be a compile error, not a second rule. The verdict type
+ *     is a supertype of the producer's, so the rule needs no adapter — see {@link PanelVerdict}.
  *   · **The prompt hash.** The cache is keyed on the sha256 of the exact prompt text and the text
  *     is never stored, so the hash is the only way back from a corpus entry to its votes. Two
  *     implementations that ever disagreed would produce a total cache miss and report it as "the
@@ -37,6 +38,7 @@ import type { UserPromptRow } from "../db/minima_db.ts";
 import {
   type DistinctPrompt,
   type Rate,
+  cutPoints,
   distinctPrompts,
   formatRate,
   partitionLeadPrompts,
@@ -596,13 +598,6 @@ export interface ReliabilityBin {
   readonly correct: Supported;
 }
 
-/** Sorted, de-duplicated, in-range cut points. Total over any array a caller passes. */
-function confidenceCuts(boundaries: readonly number[]): number[] {
-  return [...new Set(boundaries.filter((b) => Number.isFinite(b) && b > 0 && b <= 1))].sort(
-    (a, b) => a - b,
-  );
-}
-
 /**
  * Bin the scored entries by the confidence the classifier reported for them.
  *
@@ -615,7 +610,7 @@ export function reliabilityCurve(
   boundaries: readonly number[] = DEFAULT_CONFIDENCE_BOUNDARIES,
 ): ReliabilityBin[] {
   const scored = scoredOnly(entries);
-  const edges = [0, ...confidenceCuts(boundaries)];
+  const edges = [0, ...cutPoints(boundaries, 1)];
   return edges.map((minConfidence, i) => {
     const next = edges[i + 1] ?? null;
     const inBin = scored.filter(
@@ -696,7 +691,7 @@ export function floorCandidates(
   minSupport: number = MIN_REPORTABLE_SUPPORT,
 ): FloorCandidate[] {
   const scored = scoredOnly(entries);
-  return confidenceCuts(thresholds).map((t) => candidateAt(scored, t, minSupport));
+  return cutPoints(thresholds, 1).map((t) => candidateAt(scored, t, minSupport));
 }
 
 /**
@@ -1051,6 +1046,17 @@ export function formatSupportedCompact(s: Supported): string {
 const SEG_LABEL_WIDTH = 26;
 
 /**
+ * Width of one segment column, heading included.
+ *
+ * Wide enough for the longest cell this corpus can produce — `before 159/159 (100.0%)` is 23
+ * characters, and a 238-entry corpus reaches it the first time every entry lands in one outcome.
+ * A column that a figure overflows closes up into the next heading and prints
+ * `(100.0%)after 77/77`, which is a misread number rather than an ugly line. Sized so the FIGURE
+ * never gives way; the row LABEL is what gets cut (see `SEG_LABEL_WIDTH`).
+ */
+const SEG_CELL_WIDTH = 25;
+
+/**
  * One line of four segment columns, so a whole-corpus figure is never printed on its own.
  *
  * The label is truncated to its column rather than pushed through it: a model id long enough to
@@ -1060,10 +1066,13 @@ const SEG_LABEL_WIDTH = 26;
 function segRow(label: string, s: Segmented<string>): string {
   const head =
     label.length > SEG_LABEL_WIDTH - 1 ? `${label.slice(0, SEG_LABEL_WIDTH - 2)}…` : label;
+  // Every cell is padded to its own width AND separated by a space, so a cell that outgrows the
+  // column pushes the next one right instead of fusing with it.
+  const cell = (text: string): string => `${text.padEnd(SEG_CELL_WIDTH - 1)} `;
   return (
     `  ${head.padEnd(SEG_LABEL_WIDTH)}` +
-    `${`before ${s.before}`.padEnd(22)}${`after ${s.after}`.padEnd(22)}` +
-    `${`spanning ${s.spanning}`.padEnd(22)}whole ${s.whole}`
+    `${cell(`before ${s.before}`)}${cell(`after ${s.after}`)}` +
+    `${cell(`spanning ${s.spanning}`)}whole ${s.whole}`
   );
 }
 

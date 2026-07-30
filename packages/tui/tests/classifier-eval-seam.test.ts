@@ -2,14 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { CORPUS_REV } from "../src/minima/classifier_eval.ts";
 import {
+  MIN_REPORTABLE_SUPPORT as ADJUDICATE_MIN_SUPPORT,
   type AdjudicationConfig,
   type ConsensusFn,
   type OverrideCandidate,
   buildAdjudicationReport,
+  deriveFloor as deriveFloorFromSweep,
   scoreCandidates,
 } from "../src/minima/classifier_eval_adjudicate.ts";
 import {
   type ReferenceLookup,
+  MIN_REPORTABLE_SUPPORT as SCORE_MIN_SUPPORT,
+  deriveFloor as deriveFloorFromCurve,
   resolveReferenceVerdicts,
 } from "../src/minima/classifier_eval_score.ts";
 import {
@@ -113,6 +117,28 @@ describe("the consensus rule is assignable to both consumers' seams", () => {
     const dropped = ALL.filter((v) => v.promptHash === "h:gamma" && v.taskType !== null);
     expect(dropped).toHaveLength(2);
     expect(RULE(dropped)).toEqual({ kind: "incomplete", votes: 2, panelSize: 3 });
+  });
+});
+
+describe("the names both consumers export, which mean different things", () => {
+  test("the two deriveFloors are different functions and must not be merged", () => {
+    // MUB-218 derives a floor from the reliability curve's TAIL over scored entries, against a
+    // stated target correctness. MUB-226 reads one off a self-report SWEEP, where the bar is
+    // corrections exceeding harms. Same name, different input, different question, different
+    // answer — a single import of `deriveFloor` would silently pick one of them.
+    expect(deriveFloorFromCurve).not.toBe(deriveFloorFromSweep);
+    expect(deriveFloorFromSweep([])).toEqual({ floor: null, lowestNetPositive: null });
+    expect(
+      deriveFloorFromCurve([], { targetCorrectness: 0.85, thresholds: [0.75], baseline: 0.75 }),
+    ).toMatchObject({ kind: "underdetermined", reason: "no-observations" });
+  });
+
+  test("the two support bars are separate constants that happen to agree", () => {
+    // Equal today and read off the same reasoning — ten is the first two-digit denominator — but
+    // each governs its own readout. Asserting they agree is not the same as sharing one, and
+    // sharing one would make a change to either an unannounced change to the other.
+    expect(SCORE_MIN_SUPPORT).toBe(10);
+    expect(ADJUDICATE_MIN_SUPPORT).toBe(10);
   });
 });
 

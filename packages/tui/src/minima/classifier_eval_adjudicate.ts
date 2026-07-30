@@ -34,8 +34,14 @@
  * `classifier_eval.ts` and `classifier_eval_correlate.ts`, and tested the same way. It never calls
  * a panel: reference labels arrive as cached vote rows, already paid for.
  */
+import type { RoutingDecisionRow, UserPromptRow } from "../db/minima_db.ts";
 import { type Rate, formatRate, rate } from "./classifier_eval.ts";
-import type { Corroboration } from "./classifier_eval_correlate.ts";
+import {
+  type Corroboration,
+  correlateDecisions,
+  groupByCorpusEntry,
+  partitionServiceRouted,
+} from "./classifier_eval_correlate.ts";
 import { TASK_TYPES, type TaskType } from "./schemas.ts";
 
 // ---------------------------------------------------------------------------
@@ -108,6 +114,17 @@ export interface EntryDecision {
   /** The SERVICE's task type on this decision; null when the row carried none. */
   readonly serviceLabel: TaskType | null;
   readonly corroboration: Corroboration;
+  /**
+   * Whether a CALLER-supplied task type won on this decision, so `serviceLabel` above is the
+   * harness classifier's label echoed back rather than the service's own.
+   *
+   * The ledger records the service's FINAL type, and a caller override beats the service's
+   * absolutely — so the recorded label stops being the service's the moment the harness classifier
+   * is turned on. It is false on every row this ledger holds today, which is a fact worth asserting
+   * rather than assuming: the day it is not, an adjudication that ignored it would be scoring the
+   * classifier against its own output and reporting the result as a no-op rate.
+   */
+  readonly serviceLabelOverridden: boolean;
 }
 
 /**
@@ -126,6 +143,73 @@ export interface OverrideCandidate {
   readonly harnessLabel: TaskType | null;
   /** The classifier's self-report in [0,1], or null when it declined. */
   readonly harnessSelfReport: number | null;
+}
+
+/** What the replay made of one corpus entry. Null on either field = the classifier declined. */
+export interface HarnessReplay {
+  readonly taskType: TaskType | null;
+  readonly confidence: number | null;
+}
+
+/** What {@link buildOverrideCandidates} needs to turn ledger rows into candidates. */
+export interface CandidateSources {
+  readonly decisions: readonly RoutingDecisionRow[];
+  readonly prompts: readonly UserPromptRow[];
+  /** The replay's answer per corpus entry, keyed on the EXACT recorded text. */
+  readonly replay: ReadonlyMap<string, HarnessReplay>;
+  /** MUB-216's key producer, injected so there is exactly one hash in play. */
+  readonly hashOf: (text: string) => string;
+  /**
+   * The floor a caller-supplied task type has to clear to override the service's own. Mirrored as
+   * the COMPARISON `runtime.ts` makes (`confidence >= floor`), never as a second copy of the number.
+   */
+  readonly overrideFloor: number;
+}
+
+/**
+ * Turn ledger rows into adjudication candidates, via MUB-225's correlation.
+ *
+ * Every step is delegated rather than restated, so a row cannot be corpus to the correlation and
+ * non-corpus here: `partitionServiceRouted` drops the decisions that never asked the service,
+ * `correlateDecisions` applies the run-and-timestamp rule, and `groupByCorpusEntry` collapses a
+ * prompt's whole recovery ladder onto ONE candidate. Re-deriving any of them would be a second
+ * chance to disagree with the correlation report printed beside this one.
+ *
+ * A corpus entry with no replay answer still becomes a candidate, carrying nulls. The exclusion is
+ * `scoreCandidates`'s to name — dropping the entry here would shrink the candidate denominator
+ * without saying so, and `candidates` is what every exclusion count is read against.
+ */
+export function buildOverrideCandidates(sources: CandidateSources): OverrideCandidate[] {
+  const { serviceRouted } = partitionServiceRouted(sources.decisions);
+  const { pairings } = correlateDecisions(serviceRouted, sources.prompts);
+  const byRecId = new Map(serviceRouted.map((d) => [d.rec_id, d]));
+  const corroborationByRecId = new Map(pairings.map((p) => [p.recId, p.corroboration]));
+
+  return groupByCorpusEntry(pairings).map((entry) => {
+    const decisions: EntryDecision[] = [];
+    for (const recId of entry.recIds) {
+      const row = byRecId.get(recId);
+      if (row === undefined) continue;
+      decisions.push({
+        ts: row.ts,
+        serviceLabel: (row.task_type as TaskType | null) ?? null,
+        corroboration: corroborationByRecId.get(recId) ?? "unassessable",
+        // The client's label overrode only when it cleared the floor. A recorded client label below
+        // it never won, so the service's own label is what the row carries.
+        serviceLabelOverridden:
+          row.client_task_type !== null &&
+          row.client_confidence !== null &&
+          row.client_confidence >= sources.overrideFloor,
+      });
+    }
+    const replayed = sources.replay.get(entry.text);
+    return {
+      promptHash: sources.hashOf(entry.text),
+      decisions,
+      harnessLabel: replayed?.taskType ?? null,
+      harnessSelfReport: replayed?.confidence ?? null,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +248,9 @@ export interface ScoredRow {
  * Why a candidate could not be adjudicated. Each is a different claim and they are never added up
  * into one "dropped" number:
  *
+ *   · `service-label-overridden` — a caller-supplied type won on some rung, so the recorded label
+ *     is the harness classifier's rather than the service's. There is no override to adjudicate
+ *     because it already happened, and scoring the row would compare the classifier to itself.
  *   · `no-service-label` — the initial route carried no task type (or there was no decision at
  *     all), so there is nothing for an override to have replaced.
  *   · `spans-regime-boundary` — the entry's decisions fall on both sides of the boundary, so its
@@ -189,6 +276,7 @@ export interface ScoredRow {
  *     and two agreeing panelists out of three have not agreed.
  */
 export type ExclusionReason =
+  | "service-label-overridden"
   | "no-service-label"
   | "spans-regime-boundary"
   | "no-replayed-label"
@@ -197,13 +285,14 @@ export type ExclusionReason =
   | "panel-incomplete";
 
 /**
- * The order reasons are checked in, which is the order a candidate is walked through: does it name
- * one service label, does that label have one author, did the replay offer an override, is there a
- * reference to score against, did the panel agree. A candidate qualifying for several is counted
+ * The order reasons are checked in, which is the order a candidate is walked through: is the
+ * recorded label the SERVICE's at all, does it name one, does that label have one author, did the
+ * replay offer an override, is there a reference to score against, did the panel agree. A candidate qualifying for several is counted
  * under the FIRST — so these counts partition the exclusions exactly, and `scored + excluded`
  * always equals the candidates offered.
  */
 export const EXCLUSION_REASONS: readonly ExclusionReason[] = [
+  "service-label-overridden",
   "no-service-label",
   "spans-regime-boundary",
   "no-replayed-label",
@@ -300,6 +389,13 @@ export function scoreCandidates(
   };
 
   for (const c of candidates) {
+    // ANY rung whose label the caller supplied disqualifies the entry, not just the initial route:
+    // the rungs are one observation, and one of them being the classifier's own output makes the
+    // whole entry's provenance mixed. Pessimistic in the same direction MUB-225's corroboration is.
+    if (c.decisions.some((d) => d.serviceLabelOverridden)) {
+      setAside(c.promptHash, "service-label-overridden");
+      continue;
+    }
     const serviceLabel = c.decisions[0]?.serviceLabel ?? null;
     if (serviceLabel === null) {
       setAside(c.promptHash, "no-service-label");
@@ -702,6 +798,7 @@ function signed(n: number): string {
 
 /** Human wording for an exclusion reason. Keyed by the enum, so a new reason cannot go unworded. */
 const EXCLUSION_WORDING: Record<ExclusionReason, string> = {
+  "service-label-overridden": "label was the client's, not the service's",
   "no-service-label": "no service label on the initial route",
   "spans-regime-boundary": "decisions span the regime boundary",
   "no-replayed-label": "replay gave no usable label",

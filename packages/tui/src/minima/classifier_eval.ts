@@ -192,6 +192,25 @@ export function corpusPrompts(rows: readonly UserPromptRow[]): DistinctPrompt[] 
 // Length stratification.
 // ---------------------------------------------------------------------------
 
+/**
+ * Sorted, de-duplicated, in-range cut points. Total over any array a caller passes.
+ *
+ * Every stratification here — length buckets, confidence bins, floor candidates — needs the same
+ * thing done to a caller's boundaries before they can be edges: drop what cannot be a cut, remove
+ * repeats, put them in order. Stated once, because two copies of this shape drift on the parts
+ * that are identical while looking like they differ only where they should.
+ *
+ * `max` is the one place they genuinely differ: a length has no upper bound, a confidence stops at
+ * 1. Absent means unbounded above.
+ */
+export function cutPoints(values: readonly number[], max?: number): number[] {
+  return [
+    ...new Set(
+      values.filter((v) => Number.isFinite(v) && v > 0 && (max === undefined || v <= max)),
+    ),
+  ].sort((a, b) => a - b);
+}
+
 /** One length bucket of the corpus. `maxChars: null` marks the open-ended top bucket. */
 export interface Stratum {
   readonly label: string;
@@ -215,10 +234,7 @@ export function stratifyByLength(
   prompts: readonly DistinctPrompt[],
   boundaries: readonly number[],
 ): Stratum[] {
-  const cuts = [...new Set(boundaries.filter((b) => Number.isFinite(b) && b > 0))].sort(
-    (a, b) => a - b,
-  );
-  const edges = [0, ...cuts];
+  const edges = [0, ...cutPoints(boundaries)];
   return edges.map((minChars, i) => {
     const next = edges[i + 1];
     const maxChars = next === undefined ? null : next - 1;
@@ -412,6 +428,17 @@ export interface CorpusScope {
 export type SpendRefusal = "missing-ceiling" | "bad-ceiling";
 
 /**
+ * Why a scoring request was refused. Same shape as {@link SpendRefusal}, and for the same reason:
+ * the shell's wording is derived from the decision rather than re-deciding alongside it.
+ *
+ * `missing-target` — `--score` with no `--target-correctness`. The bar an admitted override has to
+ * clear is the caller's to state; the non-arbitrary one is what the SERVICE's own label scores on
+ * this corpus, which is a different readout's answer.
+ * `bad-target` — a `--target-correctness` that is not a correctness: outside (0, 1].
+ */
+export type ScoreRefusal = "missing-target" | "bad-target";
+
+/**
  * What an argv asks the evaluation to do. Total over argv: every argument list maps to exactly one
  * of these, and the only one that permits a billable call is `spend`, which is unreachable without
  * a stated ceiling. Kept total deliberately — the paid legs (MUB-216 onward) add their execution to
@@ -423,6 +450,11 @@ export type Invocation =
   | ({ kind: "dry-run" } & CorpusScope)
   /** MUB-225: report the prompt↔decision correlation and its corroboration rate. Reads only. */
   | ({ kind: "correlate" } & CorpusScope)
+  /** MUB-218: score the classifier replay against the panel and derive a floor. Reads only. */
+  | ({ kind: "score"; targetCorrectness: number } & CorpusScope)
+  | ({ kind: "refuse-score"; reason: ScoreRefusal } & CorpusScope)
+  /** MUB-226: adjudicate what overriding the service's label would have done. Reads only. */
+  | ({ kind: "adjudicate" } & CorpusScope)
   | ({ kind: "spend"; maxUsd: number } & CorpusScope);
 
 /**
@@ -439,10 +471,17 @@ export type Invocation =
  * order would let `--spend --max-usd=1 --help` bill.) Flag order carries no permission either way;
  * the ceiling is the only thing that grants it.
  *
- * `--correlate` (MUB-225) selects a read-only mode, so it is decided INSIDE the no-spend branch:
- * `--spend` is answered ahead of it either way. That keeps the guard's invariant a property of the
- * spend flags alone — a read-only mode can neither be read as permission nor route around the
- * refusal a `--spend` in the same argv has earned.
+ * The read-only modes — `--correlate` (MUB-225), `--score` (MUB-218), `--adjudicate` (MUB-226) —
+ * are all decided INSIDE the no-spend branch, so `--spend` is answered ahead of every one of them.
+ * That keeps the guard's invariant a property of the spend flags alone: a read-only mode can
+ * neither be read as permission nor route around the refusal a `--spend` in the same argv has
+ * earned. Among themselves the order above is a stated PRECEDENCE and first match wins — an argv
+ * naming several picks one, rather than printing figures under a heading computed for another.
+ *
+ * `--score` refuses without a target the same way `--spend` refuses without a ceiling. Nothing is
+ * at stake but a number's honesty rather than money, and the reasoning is the same: a defaulted
+ * target would put a figure nobody chose into the bar the floor derivation is measured against,
+ * where it would read as derived.
  *
  * A refusal still carries its scope, so the shell can price the corpus the caller asked about and
  * quote a real figure back — choosing a ceiling is only possible against a number.
@@ -466,6 +505,16 @@ export function decideInvocation(argv: readonly string[]): Invocation {
   };
   if (!has("spend")) {
     if (has("correlate")) return { kind: "correlate", ...scope };
+    if (has("score")) {
+      const stated = option("target-correctness");
+      if (stated === null) return { kind: "refuse-score", reason: "missing-target", ...scope };
+      const targetCorrectness = Number(stated);
+      if (!Number.isFinite(targetCorrectness) || targetCorrectness <= 0 || targetCorrectness > 1) {
+        return { kind: "refuse-score", reason: "bad-target", ...scope };
+      }
+      return { kind: "score", targetCorrectness, ...scope };
+    }
+    if (has("adjudicate")) return { kind: "adjudicate", ...scope };
     return { kind: "dry-run", ...scope };
   }
   const ceiling = option("max-usd");

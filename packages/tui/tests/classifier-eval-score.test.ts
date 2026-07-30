@@ -808,6 +808,31 @@ describe("renderReplayScoreReport — the readout's own honesty", () => {
     }
   });
 
+  test("a three-digit denominator does not run one segment's cell into the next", () => {
+    // The same defect one column over, and the one this corpus actually hits: 238 entries make
+    // `before 159/159 (100.0%)` wider than its cell, and the columns close up into
+    // `(100.0%)after 77/77` — a figure and a heading fused into one token. Every cell keeps a
+    // space in front of it, whatever the numbers are.
+    const wide: ScoredEntry[] = Array.from({ length: 250 }, (_, i) => ({
+      text: `w${i}`,
+      segment: i < 159 ? "before" : i < 236 ? "after" : "spanning",
+      outcome: "unreplayed",
+      emitted: null,
+      confidence: null,
+      reference: null,
+      referenceUnanimous: null,
+    }));
+    const out = renderReplayScoreReport(
+      buildReplayScoreReport([{ modelId: "wide", entries: wide }], REPORT_REFERENCE, REPORT_CFG),
+    );
+    expect(out).toContain("159/159 (100.0%)");
+    for (const line of out.split("\n")) {
+      for (const column of ["after ", "spanning ", "whole "]) {
+        if (line.includes(column)) expect(line, line).toMatch(new RegExp(`\\s${column}`));
+      }
+    }
+  });
+
   test("renders an empty denominator as a dash, never as a zero out of zero", () => {
     // `0/0` reads as "the classifier got none of them right" when it means "there were none".
     expect(formatSupportedCompact(supported(rate(0, 0)))).toBe("—");

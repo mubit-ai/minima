@@ -7,6 +7,7 @@ import {
   REGIME_BOUNDARY_TS,
   buildDryRunReport,
   checkSpendCeiling,
+  cutPoints,
   decideInvocation,
   distinctPrompts,
   estimateRunCost,
@@ -22,6 +23,24 @@ import {
 
 // MUB-215 — the classifier evaluation's pure core. Every function here is total and takes plain
 // arrays, so these tests construct rows directly: no ledger, no network, no spend.
+
+describe("cutPoints — the one sort/dedupe every stratification uses", () => {
+  test("sorts, de-duplicates and drops what cannot be a cut", () => {
+    expect(cutPoints([200, 60, 200, 0, -5, Number.NaN, 1000])).toEqual([60, 200, 1000]);
+  });
+
+  test("an upper bound is applied when one is stated, and not when it is not", () => {
+    // Length cuts are unbounded above; confidence cuts stop at 1. One function, one argument —
+    // rather than two implementations of the same shape drifting on the parts that are the same.
+    expect(cutPoints([0.9, 0.6, 1, 1.5, 0.6], 1)).toEqual([0.6, 0.9, 1]);
+    expect(cutPoints([0.9, 0.6, 1, 1.5, 0.6])).toEqual([0.6, 0.9, 1, 1.5]);
+  });
+
+  test("total over any array: out of order, empty, all rejected", () => {
+    expect(cutPoints([])).toEqual([]);
+    expect(cutPoints([0, -1, Number.POSITIVE_INFINITY])).toEqual([]);
+  });
+});
 
 describe("REGIME_BOUNDARY_TS", () => {
   test("is the v0.14.0 release instant, in the SECONDS the ledger records", () => {
@@ -408,6 +427,55 @@ describe("decideInvocation", () => {
     expect(decideInvocation(["--max-usd=999"]).kind).toBe("dry-run");
   });
 
+  test("--score needs a stated target correctness, and never defaults one", () => {
+    // The non-arbitrary bar is what the SERVICE's own label scores on this corpus, which is a
+    // different readout's answer. A default here would put a number nobody chose into the one
+    // figure the floor derivation is measured against, and it would look derived.
+    expect(decideInvocation(["--score"])).toMatchObject({
+      kind: "refuse-score",
+      reason: "missing-target",
+    });
+    for (const bad of ["abc", "0", "-1", "", "NaN", "Infinity", "1.5"]) {
+      expect(
+        decideInvocation(["--score", `--target-correctness=${bad}`]),
+        `target: ${bad}`,
+      ).toMatchObject({ kind: "refuse-score", reason: "bad-target" });
+    }
+  });
+
+  test("--score with a target in (0,1] selects the scoring readout, carrying its scope", () => {
+    expect(decideInvocation(["--score", "--target-correctness=0.85", "--project=minima"])).toEqual({
+      kind: "score",
+      targetCorrectness: 0.85,
+      project: "minima",
+      dbPath: null,
+      rowCap: 20000,
+    });
+    expect(decideInvocation(["--score", "--target-correctness=1"])).toMatchObject({
+      kind: "score",
+    });
+  });
+
+  test("--adjudicate needs nothing stated: every input it takes is the shipped one", () => {
+    // Its baseline is CLASSIFY_CONFIDENCE_FLOOR, imported from the classifier that ships it, and
+    // its sweep is over the self-reports actually observed. Nothing is left for a caller to choose.
+    expect(decideInvocation(["--adjudicate", "--limit=50"])).toEqual({
+      kind: "adjudicate",
+      project: null,
+      dbPath: null,
+      rowCap: 50,
+    });
+  });
+
+  test("the read-only modes have a stated precedence, so a combined argv does one thing", () => {
+    // First match wins, in the order they were added. A run that tried to be several readouts at
+    // once would print figures under one heading that were computed for another.
+    expect(decideInvocation(["--correlate", "--score", "--adjudicate"]).kind).toBe("correlate");
+    expect(decideInvocation(["--score", "--target-correctness=0.85", "--adjudicate"]).kind).toBe(
+      "score",
+    );
+  });
+
   test("--help asks for help, and outranks a fully-formed spend request", () => {
     // Asking for documentation must never bill. This is why --help is decided before the spend
     // branch: with `spend` reachable, the old refusal-first order would let this argv spend.
@@ -428,6 +496,10 @@ describe("decideInvocation", () => {
       // MUB-225's read-only mode is on this axis rather than spot-checked beside it: a mode that
       // spends nothing is exactly the kind of flag that opens a path by interacting with one.
       correlate: [[], ["--correlate"]],
+      // MUB-218's and MUB-226's read-only modes are on the axis too, for the same reason: a mode
+      // that spends nothing is exactly the kind of flag that opens a path by interacting with one.
+      score: [[], ["--score"], ["--score", "--target-correctness=0.85"]],
+      adjudicate: [[], ["--adjudicate"]],
       project: [[], ["--project=p"]],
     };
     let spendable = 0;
@@ -435,39 +507,61 @@ describe("decideInvocation", () => {
       for (const ceiling of axes.ceiling) {
         for (const help of axes.help) {
           for (const correlate of axes.correlate) {
-            for (const project of axes.project) {
-              const argv = [...spend, ...ceiling, ...help, ...correlate, ...project];
-              const wants = spend.length > 0;
-              const stated = ceiling.length > 0;
-              const valid = ceiling[0] === "--max-usd=0.05";
-              const reads = correlate.length > 0;
-              const expected = help.length
-                ? "help"
-                : !wants
-                  ? reads
+            for (const score of axes.score) {
+              for (const adjudicate of axes.adjudicate) {
+                for (const project of axes.project) {
+                  const argv = [
+                    ...spend,
+                    ...ceiling,
+                    ...help,
+                    ...correlate,
+                    ...score,
+                    ...adjudicate,
+                    ...project,
+                  ];
+                  const wants = spend.length > 0;
+                  const stated = ceiling.length > 0;
+                  const valid = ceiling[0] === "--max-usd=0.05";
+                  const reads = correlate.length > 0;
+                  const scores = score.length > 0;
+                  const scoreTargeted = score.length === 2;
+                  const adjudicates = adjudicate.length > 0;
+                  const readOnly = reads
                     ? "correlate"
-                    : "dry-run"
-                  : !stated || !valid
-                    ? "refuse-spend"
-                    : "spend";
-              const decided = decideInvocation(argv);
-              expect(decided.kind, `argv: ${argv.join(" ") || "(none)"}`).toBe(expected);
-              if (decided.kind === "spend") {
-                spendable++;
-                expect(argv).toContain("--spend");
-                expect(argv).toContain("--max-usd=0.05");
-                expect(argv).not.toContain("--help");
+                    : scores
+                      ? scoreTargeted
+                        ? "score"
+                        : "refuse-score"
+                      : adjudicates
+                        ? "adjudicate"
+                        : "dry-run";
+                  const expected = help.length
+                    ? "help"
+                    : !wants
+                      ? readOnly
+                      : !stated || !valid
+                        ? "refuse-spend"
+                        : "spend";
+                  const decided = decideInvocation(argv);
+                  expect(decided.kind, `argv: ${argv.join(" ") || "(none)"}`).toBe(expected);
+                  if (decided.kind === "spend") {
+                    spendable++;
+                    expect(argv).toContain("--spend");
+                    expect(argv).toContain("--max-usd=0.05");
+                    expect(argv).not.toContain("--help");
+                  }
+                  // Flag order carries no permission: the same flags in reverse decide the same way.
+                  expect(decideInvocation([...argv].reverse()).kind).toBe(expected);
+                }
               }
-              // Flag order carries no permission: the same flags in reverse decide the same way.
-              expect(decideInvocation([...argv].reverse()).kind).toBe(expected);
             }
           }
         }
       }
     }
-    // Only the --spend + valid-ceiling + no-help argvs, × project × correlate — the read-only mode
-    // neither adds a spendable argv nor removes one.
-    expect(spendable).toBe(4);
+    // Only the --spend + valid-ceiling + no-help argvs, × project × correlate × score ×
+    // adjudicate — 1×1×1×2×3×2×2. No read-only mode adds a spendable argv or removes one.
+    expect(spendable).toBe(24);
   });
 
   test("reads the project, ledger path and row cap", () => {

@@ -1,10 +1,12 @@
 /**
  * Classifier evaluation — corpus extraction and cost-guarded dry run (MUB-215), the prompt↔decision
- * correlation (MUB-225), and the provider-diverse reference panel (MUB-216).
+ * correlation (MUB-225), the provider-diverse reference panel (MUB-216), the replay's score and the
+ * routing floor it implies (MUB-218), and the override adjudication (MUB-226).
  *
  * The dry run reports the corpus a full evaluation would use and what that run would cost, and is
  * READ-ONLY. `--correlate` reports which prompt caused each recorded routing decision — an inferred
- * link, with its corroboration rate measured rather than assumed, also read-only.
+ * link, with its corroboration rate measured rather than assumed. `--score` and `--adjudicate` read
+ * the panel's cached labels and report against them. All four read only.
  *
  * `--spend --max-usd=<ceiling>` is the ONE path that bills. It runs the reference panel over the
  * prompts it does not already have labels for, at the current corpus revision, writing each vote to
@@ -14,13 +16,19 @@
  *   bun packages/tui/scripts/classifier_eval.ts
  *   bun packages/tui/scripts/classifier_eval.ts --project=minima --limit=5000
  *   bun packages/tui/scripts/classifier_eval.ts --correlate
+ *   bun packages/tui/scripts/classifier_eval.ts --score --target-correctness=0.85
+ *   bun packages/tui/scripts/classifier_eval.ts --adjudicate
  *   bun packages/tui/scripts/classifier_eval.ts --spend --max-usd=4.00
  *
  * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, the panel,
- * all counting and all rendering live in the pure cores (`src/minima/classifier_eval.ts`,
- * `src/minima/classifier_eval_correlate.ts`, `src/minima/consensus_panel.ts`), which are unit-tested
- * with no ledger and no network. What is left here is opening a ledger, the reads, the writes, and
- * printing — nothing a reported number depends on.
+ * all counting and all rendering live in the pure cores, which are unit-tested with no ledger and
+ * no network. What is left here is opening a ledger, the reads, the writes, and printing — nothing
+ * a reported number depends on.
+ *
+ * The three-way JOIN between MUB-216, MUB-218 and MUB-226 is deliberately NOT here either:
+ * `scripts/` is outside `tsconfig.json`'s `include`, so a join written in this file would not be
+ * type-checked, and three modules that were never type-checked against each other is exactly how
+ * their seams drifted. It lives in `src/minima/classifier_eval_wiring.ts` instead.
  *
  * It lives under `scripts/` deliberately: `bun test` matches only `*.test.ts`, so nothing here is
  * reachable from the hermetic suite, and the paid path cannot be entered by running the suite.
@@ -40,10 +48,17 @@ import {
   renderDryRunReport,
   suggestCeilingUsd,
 } from "../src/minima/classifier_eval.ts";
+import { renderAdjudicationReport } from "../src/minima/classifier_eval_adjudicate.ts";
 import {
   buildCorrelationReport,
   renderCorrelationReport,
 } from "../src/minima/classifier_eval_correlate.ts";
+import { renderReplayScoreReport } from "../src/minima/classifier_eval_score.ts";
+import {
+  UNREPLAYED_MODEL_ID,
+  buildOverrideReport,
+  buildScoreReport,
+} from "../src/minima/classifier_eval_wiring.ts";
 import {
   REFERENCE_PANEL,
   buildPanelReport,
@@ -63,10 +78,18 @@ import { hydrateEnv } from "../src/tui/config_store.ts";
 
 const HELP = [
   "Classifier eval — dry run (MUB-215), prompt↔decision correlation (MUB-225), reference",
-  "panel (MUB-216).",
+  "panel (MUB-216), replay score and routing floor (MUB-218), override adjudication (MUB-226).",
   "",
   "  --correlate       report which prompt caused each recorded decision, and how much to",
   "                    trust that claim (a heuristic, not a join). Reads only.",
+  "  --score           score the classifier replay against the reference panel and derive the",
+  "                    routing floor it implies. REQUIRES --target-correctness. Reads only.",
+  "  --target-correctness=<f>",
+  "                    the correctness an admitted override must reach, in (0,1]. No default:",
+  "                    the non-arbitrary bar is what the SERVICE's own label scores on this",
+  "                    corpus, and defaulting it would make a chosen number look derived",
+  "  --adjudicate      would overriding the service's task label have helped? Four-way outcome",
+  "                    and a net-benefit floor sweep. Reads only.",
   "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
   "  --limit=<n>       cap rows read, most recent first (default 20000)",
   "  --db=<path>       read a specific ledger (default: the harness's own)",
@@ -117,6 +140,61 @@ try {
     );
     // Reads only, so there is no cost guard to answer and nothing to exit non-zero about.
     console.log(renderCorrelationReport(report));
+  } else if (invocation.kind === "refuse-score") {
+    // Not a cost guard — nothing here could have spent. It refuses because the bar an admitted
+    // override must clear is the caller's to state, and a default would look derived.
+    console.error(
+      invocation.reason === "missing-target"
+        ? [
+            "--score: refusing — no target correctness stated.",
+            "  The bar an admitted override has to clear is yours to choose. There is no default:",
+            "  the non-arbitrary target is what the SERVICE's own label scores on this same corpus,",
+            "  which is what --adjudicate measures, and a number defaulted here would read as",
+            "  derived from the data rather than chosen.",
+            "  Re-run with one:  --score --target-correctness=0.85",
+          ].join("\n")
+        : [
+            "--target-correctness: refusing — a correctness is a fraction in (0, 1].",
+            "  0.85 means 'an admitted override must be right 85% of the time'.",
+          ].join("\n"),
+    );
+    exitCode = 2;
+  } else if (invocation.kind === "score" || invocation.kind === "adjudicate") {
+    // Both readouts run over the SAME three reads at the same cap, so a --limit cannot pair a wide
+    // decision read against a narrow prompt read, and both see the same cached votes.
+    const reads = {
+      prompts: db.listUserPrompts(project, rowCap),
+      decisions: db.listRoutingDecisions(project, rowCap),
+      votes: db.listConsensusVotes(CORPUS_REV),
+    };
+    if (invocation.kind === "score") {
+      console.log(
+        renderReplayScoreReport(
+          buildScoreReport(reads, {
+            scope,
+            targetCorrectness: invocation.targetCorrectness,
+          }),
+        ),
+      );
+    } else {
+      console.log(renderAdjudicationReport(buildOverrideReport(reads, { scope })));
+    }
+    // The classifier replay is a paid pass over the corpus and nothing in the ledger caches one, so
+    // every invocation today is the no-replay case. Said once, plainly, rather than left for a
+    // reader to infer from a table of dashes: the reference figures above are real, and every
+    // accuracy figure is a statement about this run's coverage, not about the classifier.
+    console.error(
+      [
+        "",
+        `note: no classifier replay is recorded, so this run scored against ${UNREPLAYED_MODEL_ID}.`,
+        invocation.kind === "score"
+          ? "  Every corpus entry reads `unreplayed` and no floor can be derived. The reference-label"
+          : "  Every candidate is set aside as `no usable replay label`. The candidate and exclusion",
+        invocation.kind === "score"
+          ? "  block above is real: it is what the panel's cached votes resolve to."
+          : "  counts above are real: they are what the correlation and the cache resolve to.",
+      ].join("\n"),
+    );
   } else {
     const rows = db.listUserPrompts(project, rowCap);
     const report = buildDryRunReport(rows, {
