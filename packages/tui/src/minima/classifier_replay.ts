@@ -352,6 +352,24 @@ export type ReplayCaller = (model: ReplayModel, promptText: string) => Promise<R
 const TRUNCATING_STOP_REASONS: ReadonlySet<StopReason> = new Set<StopReason>(["length", "aborted"]);
 
 /**
+ * Output cap per replay call. The one place the replay's REQUEST diverges from production's.
+ *
+ * `classify()` sets no `max_tokens`, so every provider falls back to `model.max_tokens` — 8192 for
+ * `claude-haiku-4-5`, 16384 for `gpt-4o-mini`. On one interactive turn that ceiling is a rounding
+ * error. Over a few hundred billable calls it is the difference between a projection and a bill:
+ * the guard bounds DISPATCH, not completion, so at `DEFAULT_CONCURRENCY` six in-flight replies each
+ * free to run to 8192 tokens can overshoot an accepted ceiling by ~$0.25 — on a run whose whole
+ * projection is cents. The panel caps for exactly this reason (`PANEL_MAX_TOKENS`), and ADR 0005
+ * records that divergence as operational rather than instructional. This is the same one.
+ *
+ * Chosen so it CANNOT change a measurement: 1024 is nearly 8x the ~132 output tokens these models
+ * actually emit, and across 476 realized calls not one stopped on `length`. If it ever did bite,
+ * the reply is discarded as `truncated` and no row is written — so a capped call can cost a retry,
+ * never a wrong label.
+ */
+const REPLAY_MAX_TOKENS = 1024;
+
+/**
  * The real caller: the SHIPPED `TaskClassifier`, asked the shipped way.
  *
  * A FRESH classifier per call, deliberately. `TaskClassifier` memoizes on `Bun.hash(task)`, and a
@@ -372,7 +390,7 @@ export function makeReplayCaller(
     opts: ConstructorParameters<typeof TaskClassifier>[1],
   ) => {
     classify: (task: string) => Promise<TaskClassification | null>;
-  } = (m, opts) => new TaskClassifier(m.model, opts),
+  } = (m, opts) => new TaskClassifier(m.model, { ...opts, maxTokens: REPLAY_MAX_TOKENS }),
 ): ReplayCaller {
   return async (model, promptText) => {
     let usd = 0;
@@ -425,8 +443,11 @@ export interface ReplaySpendGuard {
 
 export interface ReplayRunResult {
   readonly attempted: number;
+  /** Rows the ledger ACCEPTED. Counted after the write returns, never before it. */
   readonly labelled: number;
   readonly unusable: number;
+  /** Calls paid for whose row the ledger rejected: real answers, bought and not kept. */
+  readonly unstored: number;
   readonly failed: number;
   /** Failures by cause. Three counts, never one — see {@link ReplayFailureCause}. */
   readonly failedByCause: Readonly<Record<ReplayFailureCause, number>>;
@@ -478,6 +499,7 @@ export async function runReplay(opts: RunReplayOptions): Promise<ReplayRunResult
   let attempted = 0;
   let labelled = 0;
   let unusable = 0;
+  let unstored = 0;
   let skipped = 0;
   let skippedForLedger = 0;
   let ledgerFailed = false;
@@ -514,8 +536,6 @@ export async function runReplay(opts: RunReplayOptions): Promise<ReplayRunResult
       if (outcome.kind === "failed") {
         failedByCause[outcome.cause] += 1;
       } else {
-        if (outcome.kind === "labelled") labelled++;
-        else unusable++;
         try {
           const cls = outcome.kind === "labelled" ? outcome.classification : null;
           opts.record({
@@ -528,7 +548,19 @@ export async function runReplay(opts: RunReplayOptions): Promise<ReplayRunResult
             // no evidence in the region the floor is being argued about.
             confidence: cls?.confidence ?? null,
           });
+          // Counted AFTER the write returns, never before it. `labelled` and `unusable` are read
+          // as "rows that are in the ledger" — `renderReplayRunResult` prints them that way and
+          // the ceiling note says the labels "already paid for are in the ledger". Incrementing
+          // first makes both statements false on exactly the run where they matter: a rejected
+          // write would report six stored rows and zero failures with nothing on disk, and the
+          // rerun would silently pay for those prompts twice.
+          if (outcome.kind === "labelled") labelled++;
+          else unusable++;
         } catch {
+          // Paid for, and not stored. Its own count: it is not a `failed` call (the money bought a
+          // real answer) and it is not a stored row, and folding it into either would misstate
+          // what a rerun still owes.
+          unstored++;
           ledgerFailed = true;
         }
       }
@@ -548,6 +580,7 @@ export async function runReplay(opts: RunReplayOptions): Promise<ReplayRunResult
     attempted,
     labelled,
     unusable,
+    unstored,
     failed,
     failedByCause,
     skippedForCeiling: skipped,
@@ -576,6 +609,12 @@ export function renderReplayRunResult(r: ReplayRunResult, projectedUsd: number):
       ` ${r.failedByCause["transport-error"]} transport/timeout ·` +
       ` ${r.failedByCause.truncated} truncated reply`,
   ];
+  if (r.unstored > 0) {
+    lines.push(
+      `  ${r.unstored} calls were PAID FOR AND NOT STORED — the ledger rejected the row. Those`,
+      "  prompts are still outstanding and a rerun buys them again.",
+    );
+  }
   if (r.failed > 0) {
     lines.push("  Failed calls wrote no row, so re-running pays only for those.");
   }
@@ -597,6 +636,24 @@ export type StoredReplayLabel = Pick<
   ReplayLabelRow,
   "prompt_hash" | "model_id" | "corpus_rev" | "task_type" | "difficulty" | "confidence"
 >;
+
+/**
+ * Is this stored row still usable as a cache hit?
+ *
+ * THE predicate that decides it, consulted by the PLANNER as well as the reader. Without that,
+ * the two disagree and the cache deadlocks: `toModelReplays` drops a row whose taxonomy has moved
+ * on as `unreadable`, while a planner counting rows would still see the key as cached — so
+ * `--score` reports the entry `unreplayed` and tells the caller to run `--spend`, and `--spend`
+ * answers "nothing to pay for". Neither command is wrong on its own and together they are a trap
+ * with no way out but hand-deleting rows or bumping `CORPUS_REV`, which re-opens the paid panel.
+ *
+ * A NULL `task_type` is usable: it is a deterministic non-answer that was paid for, and re-buying
+ * it would spend money to learn the same thing again.
+ */
+export function isReadableReplayLabel(row: StoredReplayLabel): boolean {
+  if (row.task_type === null) return true;
+  return classificationFromParts(row.task_type, row.difficulty, row.confidence) !== null;
+}
 
 /** One model's cache coverage, so a partial replay cannot read as a complete one. */
 export interface ReplayModelCoverage {

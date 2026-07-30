@@ -60,6 +60,7 @@ import {
 } from "../src/minima/classifier_eval_wiring.ts";
 import {
   REPLAY_MODELS,
+  isReadableReplayLabel,
   makeReplayCaller,
   planReplayRun,
   renderReplayCoverage,
@@ -271,10 +272,15 @@ try {
     // and a second copy of either would produce a total cache miss and report it as "the
     // classifier has not labelled this corpus" — a defect wearing a finding's clothes.
     const cachedReplay = db.listReplayLabels(CORPUS_REV);
+    // Only rows the READER can still use count as cached. A row whose taxonomy has moved on is
+    // dropped by `toModelReplays` as unreadable, and counting it here would leave the entry
+    // permanently unscoreable and permanently un-rebuyable — `--score` telling the caller to spend
+    // and `--spend` answering "nothing to pay for". One predicate, so the two cannot disagree.
+    const usableReplay = cachedReplay.filter(isReadableReplayLabel);
     const replayPlans = planReplayRun(
       corpus,
       REPLAY_MODELS,
-      new Set(cachedReplay.map((r) => voteKey(r.prompt_hash, r.model_id))),
+      new Set(usableReplay.map((r) => voteKey(r.prompt_hash, r.model_id))),
       promptHash,
       voteKey,
     );
@@ -352,9 +358,11 @@ try {
         const unrunnablePanel = work.cost.totalCalls
           ? REFERENCE_PANEL.filter((p) => !providerKeyPresent(p.model.provider))
           : [];
-        const unrunnableReplay = replayWork.cost.totalCalls
-          ? REPLAY_MODELS.filter((m) => !providerKeyPresent(m.model.provider))
-          : [];
+        // Per MODEL, not per lane: a model whose labels are all cached owes no call, so its
+        // provider key is irrelevant and refusing over it would block a run that never needed it.
+        const unrunnableReplay = replayPlans
+          .filter((p) => p.todo.length > 0 && !providerKeyPresent(p.model.model.provider))
+          .map((p) => p.model);
         const missingKey = (id: string, provider: string): string =>
           `  ${id} (${provider}) — set ${envVarsForProvider(provider)[0] ?? "its API key"}`;
         if (unrunnablePanel.length) {
@@ -462,6 +470,12 @@ try {
               }
             };
 
+            // "Persistence is the product" has to bind ACROSS the lanes, not within each. A panel
+            // whose writes are failing is a ledger that will reject the replay's rows too, and a
+            // second lane starting anyway dispatches a full concurrency width of billable calls
+            // before it rediscovers that for itself — buying labels nothing can store, which is
+            // the exact outcome the stop rule exists to prevent.
+            let ledgerBroken = false;
             if (work.cost.totalCalls > 0) {
               const result = await runPanel({
                 plans,
@@ -474,6 +488,7 @@ try {
               });
               console.error(`\n${renderPanelRunResult(result, work.cost.totalUsd)}`);
               reportStops("panel", "vote", result);
+              ledgerBroken = result.ledgerFailed;
             }
 
             // MUB-218's replay runs SECOND and under the same guard, so a panel that consumed the
@@ -481,7 +496,16 @@ try {
             // here: the reference labels are what the replay is scored against, and buying the
             // subject under test before the thing that judges it would be the wrong half to keep
             // if the money ran out.
-            if (replayWork.cost.totalCalls > 0) {
+            if (ledgerBroken) {
+              console.error(
+                [
+                  "",
+                  `--spend: the replay lane was NOT started — ${replayWork.cost.totalCalls} calls never`,
+                  "  dispatched. The ledger just rejected a write, so those labels could not have been",
+                  "  stored either. Fix the ledger and re-run; nothing was spent on this lane.",
+                ].join("\n"),
+              );
+            } else if (replayWork.cost.totalCalls > 0) {
               const result = await runReplay({
                 plans: replayPlans,
                 corpusRev: CORPUS_REV,

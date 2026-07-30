@@ -3,9 +3,11 @@ import {
   AssistantMessage,
   type Model,
   registerFauxProvider,
+  registerProvider,
   resetProviderRegistration,
   resetRegistry,
   text as textBlock,
+  unregisterProvider,
 } from "../src/ai/index.ts";
 import { CHEAP_FALLBACK_MODELS } from "../src/ai/model_fallback.ts";
 import { SEED_MODELS } from "../src/cli/main.ts";
@@ -23,6 +25,7 @@ import {
   REPLAY_OUTPUT_TOKENS,
   type ReplayModel,
   countTruncated,
+  isReadableReplayLabel,
   makeReplayCaller,
   planReplayRun,
   projectReplayCost,
@@ -420,6 +423,25 @@ describe("runReplay — the paid loop, driven by a fake that spends fake money",
     expect(res).toMatchObject({ attempted: 1, skippedForCeiling: 2, ceilingHit: true });
   });
 
+  test("a rejected write is NOT counted as a stored label", async () => {
+    // `labelled` is read as "rows that are in the ledger" — renderReplayRunResult prints it that
+    // way and the ceiling note says those labels "are in the ledger". Counting before the write
+    // makes both false on exactly the run where it matters, and the rerun pays twice in silence.
+    const res = await runReplay({
+      plans: plansFor([A]),
+      corpusRev: CORPUS_REV,
+      call: async () => ({ kind: "labelled", classification: LABELLED.classification, usd: 0.001 }),
+      record: () => {
+        throw new Error("disk full");
+      },
+      guard: guard(10),
+      concurrency: 1,
+    });
+    expect(res.labelled).toBe(0);
+    expect(res.unstored).toBe(1);
+    expect(renderReplayRunResult(res, 1)).toContain("PAID FOR AND NOT STORED");
+  });
+
   test("a ledger that rejects a write STOPS the run — persistence is the product", async () => {
     let calls = 0;
     const res = await runReplay({
@@ -530,6 +552,32 @@ describe("toModelReplays — the cache read back, and the distinction the scorer
     ]);
     expect(r.perModel[0]?.unreadable).toBe(2);
     expect(r.replays[0]?.labels.map((l) => l.text)).toEqual(["p3"]);
+  });
+
+  test("an unreadable row is NOT a cache hit, so the planner re-buys it", () => {
+    // The deadlock this closes: `toModelReplays` drops a row whose taxonomy has moved on, while a
+    // planner counting rows would still call the key cached. `--score` then reports the entry
+    // unreplayed and says to run `--spend`, and `--spend` answers "nothing to pay for" — a trap
+    // with no way out but hand-deleting rows or bumping CORPUS_REV, which re-opens the paid panel.
+    const stale = row(h("p1"), "model-a", "no-such-task-type");
+    const good = row(h("p2"), "model-a", "code");
+    const nullVote = row(h("p3"), "model-a", null);
+    expect(isReadableReplayLabel(stale)).toBe(false);
+    expect(isReadableReplayLabel(good)).toBe(true);
+    // A deterministic non-answer was paid for and stays cached — re-buying it learns nothing new.
+    expect(isReadableReplayLabel(nullVote)).toBe(true);
+
+    // And the two agree: what the reader drops is exactly what the planner re-owes.
+    const readable = [stale, good, nullVote].filter(isReadableReplayLabel);
+    const plans = planReplayRun(
+      [prompt("p1"), prompt("p2"), prompt("p3")],
+      [A],
+      new Set(readable.map((r) => voteKey(r.prompt_hash, r.model_id))),
+      promptHash,
+      voteKey,
+    );
+    expect(plans[0]?.todo.map((w) => w.prompt.text)).toEqual(["p1"]);
+    expect(resolve([stale, good, nullVote]).perModel[0]?.unreadable).toBe(1);
   });
 
   test("a model with no stored label at all is OMITTED, not returned as an empty pass", () => {
@@ -801,6 +849,36 @@ describe("TaskClassifier.onOutcome — the hook that makes the causes distinguis
     }).classify("x");
     expect(result).toBeNull();
     expect(seen).toEqual({ kind: "transport-error" });
+  });
+
+  test("maxTokens is passed through, and undefined leaves the routing request unchanged", async () => {
+    // The replay caps output because the guard bounds DISPATCH, not completion: six in-flight
+    // replies each free to run to model.max_tokens can overshoot an accepted ceiling by dollars on
+    // a run projected in cents. Routing must be untouched, so the default has to stay undefined —
+    // every provider reads `options.max_tokens ?? model.max_tokens`.
+    resetRegistry();
+    resetProviderRegistration();
+    const reg = registerFauxProvider([CLS]);
+    const seen: (number | undefined)[] = [];
+    // A stub that records the options and yields nothing. `complete()` then throws, `classify()`
+    // fails open to null, and what was sent on the wire is the assertion.
+    const spy = {
+      apiId: "faux",
+      stream(_m: Model, _c: unknown, o?: { options?: Record<string, unknown> }) {
+        seen.push(o?.options?.max_tokens as number | undefined);
+        return (async function* () {})();
+      },
+    };
+    reg.unregister();
+    registerProvider("faux", spy as never);
+    try {
+      expect(await new TaskClassifier(CLS, {}).classify("a")).toBeNull();
+      expect(await new TaskClassifier(CLS, { maxTokens: 1024 }).classify("b")).toBeNull();
+    } finally {
+      unregisterProvider("faux");
+    }
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toBe(1024);
   });
 
   test("a hook that throws cannot break classification", async () => {

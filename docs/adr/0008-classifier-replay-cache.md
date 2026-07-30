@@ -105,3 +105,29 @@ Append the batch; never insert it, and do not hard-code a version number in its 
 is the batch's array index. `MIGRATIONS.length` was 23 on this branch and `schema_meta.version`
 read 23 on the live ledger, so the appended batch is v24. Counted by `/^  \[/` rather than by
 bracket balance: the SQL strings contain unbalanced brackets, so naive counting lies.
+
+## Amendment — bounds the review found
+
+Four defects on the billable path, all fixed, all recorded here because each is a rule the next
+paid lane has to inherit:
+
+- **The replay caps output; production does not.** `classify()` sets no `max_tokens`, so a provider
+  falls back to `model.max_tokens` — 8192 for `claude-haiku-4-5`. The guard bounds DISPATCH, not
+  completion, so a full concurrency width of replies free to run to that ceiling can overshoot an
+  accepted `--max-usd` by dollars on a run projected in cents. `REPLAY_MAX_TOKENS = 1024` is the
+  same divergence the panel already takes, and it cannot change a measurement: it is ~8x the ~132
+  tokens these models emit, no call in 476 stopped on `length`, and a capped reply is discarded as
+  `truncated` rather than stored. `TaskClassifier` takes `maxTokens` as an option defaulting to
+  undefined, which every provider reads as `options.max_tokens ?? model.max_tokens` — so the
+  routing path's request is unchanged.
+- **"Persistence is the product" binds across lanes, not within each.** A panel whose writes are
+  failing is a ledger that will reject the replay's rows too; the replay lane no longer starts.
+- **`labelled` and `unusable` count rows the ledger ACCEPTED**, incremented after the write returns.
+  A call whose write was rejected is `unstored` — its own count, because it is neither a failed call
+  (the money bought a real answer) nor a stored row, and folding it into either misstates what a
+  rerun still owes.
+- **An unreadable row is not a cache hit.** `isReadableReplayLabel` is consulted by the PLANNER as
+  well as the reader, so what one drops the other re-buys. Without it the two disagree and the cache
+  deadlocks: `--score` reports the entry unreplayed and says to run `--spend`, `--spend` answers
+  "nothing to pay for", and the only exits are hand-deleting rows or bumping `CORPUS_REV` — which
+  re-opens the paid panel lane for a taxonomy change that never touched the corpus.

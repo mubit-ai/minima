@@ -133,6 +133,12 @@ export class TaskClassifier {
        * never consulted, and a throw from it cannot break classification. Fires once per call
        * that was actually made — a memo hit reports nothing, because nothing happened. */
       onOutcome?: (outcome: ClassifyOutcome) => void;
+      /** Output cap for the completion. Undefined — the default, and what routing uses — is
+       * passed straight through, so providers fall back to `model.max_tokens` exactly as before.
+       * A BATCH caller sets it: this classifier is bounded by nothing but the model's own
+       * ceiling (8192+ tokens against a ~40-token label), which is a rounding error on one
+       * interactive turn and real money over a few hundred. See MUB-218's replay. */
+      maxTokens?: number;
     } = {},
   ) {}
 
@@ -168,7 +174,15 @@ export class TaskClassifier {
           messages: [new Message({ role: "user", content: task.slice(0, 8000) + sizeHint })],
           tools: [],
         },
-        { options: { timeout: this.opts.timeout ?? CLASSIFY_TIMEOUT_S, prompt_cache: false } },
+        {
+          options: {
+            timeout: this.opts.timeout ?? CLASSIFY_TIMEOUT_S,
+            prompt_cache: false,
+            // Undefined by default, and every provider reads it as `options.max_tokens ??
+            // model.max_tokens` — so the routing path's request is byte-identical to before.
+            max_tokens: this.opts.maxTokens,
+          },
+        },
       );
       this.bookCost(resp.usage.cost.total);
       if (resp.stop_reason === "error") {
