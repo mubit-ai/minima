@@ -40,7 +40,6 @@ import { MinimaDb } from "../src/db/minima_db.ts";
 import {
   CORPUS_REV,
   DEFAULT_LENGTH_BOUNDARIES,
-  REPLAY_CALL_SPECS,
   buildDryRunReport,
   checkSpendCeiling,
   corpusPrompts,
@@ -60,6 +59,18 @@ import {
   buildScoreReport,
 } from "../src/minima/classifier_eval_wiring.ts";
 import {
+  REPLAY_MODELS,
+  isReadableReplayLabel,
+  makeReplayCaller,
+  planReplayRun,
+  renderReplayCoverage,
+  renderReplayOutstanding,
+  renderReplayRunResult,
+  replayCallSpecs,
+  runReplay,
+  summarizeReplayOutstanding,
+} from "../src/minima/classifier_replay.ts";
+import {
   REFERENCE_PANEL,
   buildPanelReport,
   checkPanelDiversity,
@@ -67,6 +78,7 @@ import {
   makeSpendGuard,
   panelCallSpecs,
   planPanelRun,
+  promptHash,
   renderOutstandingWork,
   renderPanelReport,
   renderPanelRunResult,
@@ -166,13 +178,16 @@ try {
       prompts: db.listUserPrompts(project, rowCap),
       decisions: db.listRoutingDecisions(project, rowCap),
       votes: db.listConsensusVotes(CORPUS_REV),
+      replayLabels: db.listReplayLabels(CORPUS_REV),
     };
     if (invocation.kind === "score") {
-      const report = buildScoreReport(reads, {
+      const { report, coverage } = buildScoreReport(reads, {
         scope,
         targetCorrectness: invocation.targetCorrectness,
       });
       console.log(renderReplayScoreReport(report));
+      console.log("");
+      console.log(renderReplayCoverage(coverage));
       // DERIVED, not asserted: the report itself says whether a replay reached it. A fixed line of
       // prose here would keep claiming "no replay" on the first run that has one.
       if (report.models.every((m) => m.modelId === UNREPLAYED_MODEL_ID)) {
@@ -182,6 +197,7 @@ try {
             "note: no classifier replay is recorded, so every corpus entry reads `unreplayed` and",
             "  no floor can be derived. The reference-label block above is real — it is what the",
             "  panel's cached votes resolve to.",
+            "  Run one with:  --spend --max-usd=<ceiling>",
           ].join("\n"),
         );
       }
@@ -193,13 +209,26 @@ try {
       // other exclusions are legitimately non-zero (an entry spanning the boundary is set aside
       // whatever the replay did), and requiring equality would silence the note on a real run.
       if (report.scored === 0 && noReplay > 0) {
+        // WHY there is no replayed label is now two different states of the world, and naming the
+        // wrong one is a false statement about the ledger. Before MUB-218 there was no replay to
+        // consume; there is one now, and `buildOverrideReport` still takes an empty map because
+        // wiring it into the adjudication is MUB-226's, not this readout's. DERIVED from the
+        // ledger rather than asserted, so this note cannot go stale the way the last one did the
+        // moment a replay landed.
+        const cached = reads.replayLabels.length;
         console.error(
           [
             "",
-            `note: no classifier replay is recorded, so ${noReplay} of ${report.candidates}`,
-            "  candidates were set aside as `replay gave no usable label`; the rest were set aside",
-            "  for the reasons listed above. The candidate and exclusion counts are real —",
-            "  they are what the correlation and the cache resolve to.",
+            ...(cached === 0
+              ? ["note: no classifier replay is recorded, so"]
+              : [
+                  `note: ${cached} replay labels ARE cached, but this adjudication does not read`,
+                  "  them — that wiring is MUB-226's, not this readout's. So",
+                ]),
+            `  ${noReplay} of ${report.candidates} candidates were set aside as "replay gave no`,
+            '  usable label"; the rest were set aside for the reasons listed above. The candidate',
+            "  and exclusion counts are real — they are what the correlation and the cache",
+            "  resolve to.",
           ].join("\n"),
         );
       }
@@ -209,10 +238,9 @@ try {
     const report = buildDryRunReport(rows, {
       scope,
       lengthBoundaries: DEFAULT_LENGTH_BOUNDARIES,
-      // The panel's legs come from the panel itself, so the projection and the calls that get
-      // billed cannot disagree about which models they mean. The replay leg is MUB-218's and
-      // nothing here executes it.
-      specs: [...panelCallSpecs(REFERENCE_PANEL), ...REPLAY_CALL_SPECS],
+      // Each lane's legs come from the lane itself, so the projection and the calls that get
+      // billed cannot disagree about which models they mean.
+      specs: [...panelCallSpecs(REFERENCE_PANEL), ...replayCallSpecs(REPLAY_MODELS)],
       rowCap,
     });
     // The projection is free, so every invocation gets it — including a refused one. A ceiling can
@@ -222,11 +250,12 @@ try {
       [
         "  · The panel legs above are MUB-216's chosen reference panel, priced at each model's",
         "    own output allowance (a panelist that reasons server-side bills those hidden tokens",
-        "    as output). The replay leg is PROVISIONAL — MUB-218's, and nothing here executes it.",
+        "    as output). The replay legs are MUB-218's two classifier models, and `--spend` runs",
+        "    both lanes under the one ceiling.",
       ].join("\n"),
     );
 
-    // The panel works over the SAME corpus the report just counted — one definition, called once.
+    // Both lanes work over the SAME corpus the report just counted — one definition, called once.
     const corpus = corpusPrompts(rows);
     const cachedVotes = db.listConsensusVotes(CORPUS_REV);
     const plans = planPanelRun(
@@ -238,10 +267,33 @@ try {
     console.log("");
     console.log(renderOutstandingWork(work));
 
-    // The ceiling answers what THIS run would spend, not what the whole arc would: a rerun over
-    // cached labels costs nothing, and a ceiling chosen against the full-corpus figure would be
-    // answering a question the run is not asking.
-    const projected = work.cost.totalUsd;
+    // MUB-218's replay, planned the same way against its own cache. `promptHash` and `voteKey` are
+    // INJECTED rather than re-implemented: they are the tree's one key producer and one key shape,
+    // and a second copy of either would produce a total cache miss and report it as "the
+    // classifier has not labelled this corpus" — a defect wearing a finding's clothes.
+    const cachedReplay = db.listReplayLabels(CORPUS_REV);
+    // Only rows the READER can still use count as cached. A row whose taxonomy has moved on is
+    // dropped by `toModelReplays` as unreadable, and counting it here would leave the entry
+    // permanently unscoreable and permanently un-rebuyable — `--score` telling the caller to spend
+    // and `--spend` answering "nothing to pay for". One predicate, so the two cannot disagree.
+    const usableReplay = cachedReplay.filter(isReadableReplayLabel);
+    const replayPlans = planReplayRun(
+      corpus,
+      REPLAY_MODELS,
+      new Set(usableReplay.map((r) => voteKey(r.prompt_hash, r.model_id))),
+      promptHash,
+      voteKey,
+    );
+    const replayWork = summarizeReplayOutstanding(replayPlans, corpus, CORPUS_REV);
+    console.log("");
+    console.log(renderReplayOutstanding(replayWork));
+
+    // The ceiling answers what THIS run would spend, not what the whole arc would (ADR 0006): a
+    // rerun over cached labels costs nothing, and a ceiling chosen against the full-corpus figure
+    // would be answering a question the run is not asking. It binds BOTH lanes, because one
+    // `--spend` buys both — a per-lane ceiling would let the pair exceed the number the caller read.
+    const projected = work.cost.totalUsd + replayWork.cost.totalUsd;
+    const outstandingCalls = work.cost.totalCalls + replayWork.cost.totalCalls;
     const suggested = suggestCeilingUsd(projected).toFixed(2);
 
     /** Print whatever labels exist, so the panel's findings are readable without spending. */
@@ -261,8 +313,8 @@ try {
           ? [
               "",
               "--spend: refusing — no ceiling stated. A bare --spend is an intention, not permission.",
-              `  The outstanding panel work projects $${projected.toFixed(4)} — an estimate, on the`,
-              "  heuristic above; actuals can exceed it.",
+              `  The outstanding work — panel and replay together — projects $${projected.toFixed(4)},`,
+              "  an estimate on the heuristic above; actuals can exceed it.",
               `  Re-run with a ceiling you accept paying:  --spend --max-usd=${suggested}`,
             ].join("\n")
           : [
@@ -299,28 +351,47 @@ try {
         // Provider keys are hydrated from the harness's own store (keychain / config.env), the
         // same place the CLI reads them.
         await hydrateEnv();
-        const unrunnable = REFERENCE_PANEL.filter((p) => !providerKeyPresent(p.model.provider));
-        if (unrunnable.length) {
-          // Preflight rather than discover it per call: without this, a missing key means paying
-          // for two thirds of a panel that can never be unanimous.
+        // Preflight rather than discover it per call: without this, a missing key means paying for
+        // two thirds of a panel that can never be unanimous. Each lane's check is gated on that
+        // lane HAVING outstanding work — refusing a replay-only run over a key belonging to a panel
+        // that is fully cached would refuse a run that could not have called that provider at all.
+        const unrunnablePanel = work.cost.totalCalls
+          ? REFERENCE_PANEL.filter((p) => !providerKeyPresent(p.model.provider))
+          : [];
+        // Per MODEL, not per lane: a model whose labels are all cached owes no call, so its
+        // provider key is irrelevant and refusing over it would block a run that never needed it.
+        const unrunnableReplay = replayPlans
+          .filter((p) => p.todo.length > 0 && !providerKeyPresent(p.model.model.provider))
+          .map((p) => p.model);
+        const missingKey = (id: string, provider: string): string =>
+          `  ${id} (${provider}) — set ${envVarsForProvider(provider)[0] ?? "its API key"}`;
+        if (unrunnablePanel.length) {
           console.error(
             [
               "",
               "--spend: refusing — a panelist has no provider key, so the panel could never be",
               "  complete and every prompt would be excluded as incomplete.",
-              ...unrunnable.map(
-                (p) =>
-                  `  ${p.model.id} (${p.model.provider}) — set ${envVarsForProvider(p.model.provider)[0] ?? "its API key"}`,
-              ),
+              ...unrunnablePanel.map((p) => missingKey(p.model.id, p.model.provider)),
             ].join("\n"),
           );
           exitCode = 2;
-        } else if (work.cost.totalCalls === 0) {
+        } else if (unrunnableReplay.length) {
+          console.error(
+            [
+              "",
+              "--spend: refusing — a replay model has no provider key. Its whole pass would fail,",
+              "  and the readout would report a model that was never asked as one that abstained.",
+              ...unrunnableReplay.map((m) => missingKey(m.model.id, m.model.provider)),
+            ].join("\n"),
+          );
+          exitCode = 2;
+        } else if (outstandingCalls === 0) {
           console.error(
             [
               "",
               `--spend --max-usd=${invocation.maxUsd}: nothing to pay for. Every panelist already has`,
-              `  a vote on every corpus prompt at ${CORPUS_REV}. Nothing was spent.`,
+              `  a vote, and every replay model a label, on every corpus prompt at ${CORPUS_REV}.`,
+              "  Nothing was spent.",
             ].join("\n"),
           );
           printPanelReport();
@@ -340,50 +411,112 @@ try {
             console.error(
               [
                 "",
-                `--spend --max-usd=${invocation.maxUsd}: accepted. Running the reference panel over`,
-                `  ${work.cost.totalCalls} outstanding calls, projected $${projected.toFixed(4)}.`,
-                "  Votes are written as they land, so an interrupted run keeps what it paid for.",
+                `--spend --max-usd=${invocation.maxUsd}: accepted. ${outstandingCalls} outstanding calls,`,
+                `  projected $${projected.toFixed(4)} — ${work.cost.totalCalls} panel` +
+                  ` ($${work.cost.totalUsd.toFixed(4)}) · ${replayWork.cost.totalCalls} replay` +
+                  ` ($${replayWork.cost.totalUsd.toFixed(4)}).`,
+                "  Rows are written as they land, so an interrupted run keeps what it paid for.",
               ].join("\n"),
             );
+            // ONE guard across both lanes. The ceiling the caller accepted was quoted against the
+            // combined projection, so two guards at that number would together permit twice it.
             const guard = makeSpendGuard(invocation.maxUsd);
-            let lastReported = 0;
-            const result = await runPanel({
-              plans,
-              corpusRev: CORPUS_REV,
-              call: makePanelCaller(),
-              // Counts and a hash — the prompt text never reaches the ledger or this output.
-              record: (v) => db.upsertConsensusVote(v),
-              guard,
-              onProgress: (done, total, spentUsd) => {
+            const progress = (label: string) => {
+              let lastReported = 0;
+              return (done: number, total: number, spentUsd: number): void => {
                 if (done - lastReported < 25 && done !== total) return;
                 lastReported = done;
-                console.error(`  … ${done}/${total} calls · $${spentUsd.toFixed(4)} realized`);
+                console.error(
+                  `  … ${label} ${done}/${total} calls · $${spentUsd.toFixed(4)} realized`,
+                );
+              };
+            };
+            /** Both lanes stop for the same two reasons, and both exit 2 for them. */
+            const reportStops = (
+              lane: string,
+              noun: string,
+              r: {
+                ledgerFailed: boolean;
+                skippedForLedger: number;
+                ceilingHit: boolean;
+                skippedForCeiling: number;
+                labelled: number;
+                unusable: number;
               },
-            });
-            console.error(`\n${renderPanelRunResult(result, projected)}`);
-            if (result.ledgerFailed) {
-              // Persistence is the product: the run stopped rather than keep buying labels the
-              // ledger would not store.
-              console.error(
-                [
-                  "",
-                  "--spend: STOPPED — the ledger rejected a vote write.",
-                  `  ${result.skippedForLedger} calls were never dispatched. Votes written before the`,
-                  "  failure are kept; fix the ledger and re-run to finish.",
-                ].join("\n"),
-              );
-              exitCode = 2;
+            ): void => {
+              if (r.ledgerFailed) {
+                // Persistence is the product: the run stopped rather than keep buying labels the
+                // ledger would not store.
+                console.error(
+                  [
+                    "",
+                    `--spend: STOPPED — the ledger rejected a ${noun} write (${lane}).`,
+                    `  ${r.skippedForLedger} calls were never dispatched. Rows written before the`,
+                    "  failure are kept; fix the ledger and re-run to finish.",
+                  ].join("\n"),
+                );
+                exitCode = 2;
+              }
+              if (r.ceilingHit) {
+                console.error(
+                  [
+                    "",
+                    `--spend: STOPPED by the live cap (${lane}) — realized spend reached your ceiling.`,
+                    `  ${r.skippedForCeiling} calls were never dispatched. The ${r.labelled + r.unusable} ${noun}s`,
+                    "  already paid for are in the ledger; re-run with a higher ceiling to finish.",
+                  ].join("\n"),
+                );
+                exitCode = 2;
+              }
+            };
+
+            // "Persistence is the product" has to bind ACROSS the lanes, not within each. A panel
+            // whose writes are failing is a ledger that will reject the replay's rows too, and a
+            // second lane starting anyway dispatches a full concurrency width of billable calls
+            // before it rediscovers that for itself — buying labels nothing can store, which is
+            // the exact outcome the stop rule exists to prevent.
+            let ledgerBroken = false;
+            if (work.cost.totalCalls > 0) {
+              const result = await runPanel({
+                plans,
+                corpusRev: CORPUS_REV,
+                call: makePanelCaller(),
+                // Counts and a hash — the prompt text never reaches the ledger or this output.
+                record: (v) => db.upsertConsensusVote(v),
+                guard,
+                onProgress: progress("panel"),
+              });
+              console.error(`\n${renderPanelRunResult(result, work.cost.totalUsd)}`);
+              reportStops("panel", "vote", result);
+              ledgerBroken = result.ledgerFailed;
             }
-            if (result.ceilingHit) {
+
+            // MUB-218's replay runs SECOND and under the same guard, so a panel that consumed the
+            // ceiling leaves it nothing rather than overspending past it. Ordering matters only
+            // here: the reference labels are what the replay is scored against, and buying the
+            // subject under test before the thing that judges it would be the wrong half to keep
+            // if the money ran out.
+            if (ledgerBroken) {
               console.error(
                 [
                   "",
-                  "--spend: STOPPED by the live cap — realized spend reached your ceiling.",
-                  `  ${result.skippedForCeiling} calls were never dispatched. The ${result.labelled + result.unusable} votes`,
-                  "  already paid for are in the ledger; re-run with a higher ceiling to finish.",
+                  `--spend: the replay lane was NOT started — ${replayWork.cost.totalCalls} calls never`,
+                  "  dispatched. The ledger just rejected a write, so those labels could not have been",
+                  "  stored either. Fix the ledger and re-run; nothing was spent on this lane.",
                 ].join("\n"),
               );
-              exitCode = 2;
+            } else if (replayWork.cost.totalCalls > 0) {
+              const result = await runReplay({
+                plans: replayPlans,
+                corpusRev: CORPUS_REV,
+                call: makeReplayCaller(),
+                // A hash and a label. The prompt text never reaches the ledger or this output.
+                record: (l) => db.upsertReplayLabel(l),
+                guard,
+                onProgress: progress("replay"),
+              });
+              console.error(`\n${renderReplayRunResult(result, replayWork.cost.totalUsd)}`);
+              reportStops("replay", "label", result);
             }
             printPanelReport();
           }

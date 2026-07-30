@@ -398,29 +398,12 @@ export const DEFAULT_LENGTH_BOUNDARIES: readonly number[] = [60, 200, 1000];
 export const LABEL_OUTPUT_TOKENS = 40;
 export const LABEL_INSTRUCTION_TOKENS = 99;
 
-/**
- * PROVISIONAL leg for the full arc's spend estimate: one replay of the harness classifier per
- * prompt (MUB-218). It exists so the dry run prints the arc's order of magnitude, and NOTHING
- * executes it — `--spend` runs the reference panel only.
- *
- * The reference panel's legs are no longer here: MUB-216 chose the panel, and its models, prices
- * and per-leg output allowances now live with the panel itself (`consensus_panel.ts`), so the
- * projection and the calls that get billed cannot disagree about which models they mean.
- *
- * The price below was COPIED from the harness's own model registry and nothing keeps it in sync —
- * the first price edit there makes it stale. Tolerable only because the readout prints each leg's
- * prices, so drift shows up in the output rather than hiding inside the total.
- */
-export const REPLAY_CALL_SPECS: readonly CallSpec[] = [
-  {
-    label: "replay: harness classifier",
-    callsPerPrompt: 1,
-    inputUsdPerMTok: 1.0,
-    outputUsdPerMTok: 5.0,
-    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
-  },
-];
+// Neither the reference panel's legs nor the replay's are here any more, and for one reason. Each
+// lane owns its own models, prices and per-leg output allowances — the panel's in
+// `consensus_panel.ts` (MUB-216), the replay's in `classifier_replay.ts` (MUB-218) — so the
+// projection and the calls that actually get billed cannot disagree about which models they mean.
+// A `CallSpec` copied into this file would be a second declaration of a price, stale the first time
+// the registry moved, and the dry run would print the stale one under the same heading.
 
 // ---------------------------------------------------------------------------
 // Invocation. The cost guard is a pure decision, so it can be pinned by a test.
