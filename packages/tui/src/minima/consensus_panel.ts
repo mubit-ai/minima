@@ -244,6 +244,58 @@ export function deriveConsensus(votes: readonly PanelVote[], panelSize: number):
   return { kind: "split", labels: distinct, votes: labels.length };
 }
 
+/**
+ * The consensus rule with the PANEL bound — the value MUB-218 and MUB-226 actually inject.
+ *
+ * The size of the panel is what makes `incomplete` decidable at all: a rule handed only the votes
+ * in front of it cannot tell two agreeing panelists from two panelists who are the whole panel, so
+ * it would call the first unanimous. Binding it here rather than at each call site means the two
+ * consumers cannot quorum against different panels over the same cached votes.
+ *
+ * The returned function is assignable, as-is, to both consumers' seams: neither has to adapt this
+ * return value, and an adapter is the only place an arm of the verdict could be dropped. The seam
+ * test pins that with a type annotation rather than a comment.
+ */
+export function consensusRuleFor(
+  panel: readonly Panelist[],
+): (votes: readonly PanelVote[]) => ConsensusVerdict {
+  const panelSize = panel.length;
+  return (votes) => deriveConsensus(votes, panelSize);
+}
+
+/**
+ * One cached vote, in the shape every reader downstream of the ledger takes.
+ *
+ * The ledger's row is snake_case with a `string | null` label ({@link StoredVote}); the rule reads
+ * `{modelId, taskType}` and the two consumers key on `promptHash` and `corpusRev`. This type is all
+ * four at once, so {@link toCachedVotes} is the ONLY place the seam converts anything and everything
+ * past it is structural.
+ */
+export interface CachedPanelVote {
+  readonly promptHash: string;
+  readonly modelId: string;
+  readonly corpusRev: string;
+  /** NULL = this panelist answered with nothing usable as a label. Carried, never dropped. */
+  readonly taskType: TaskType | null;
+}
+
+/**
+ * Lift ledger rows into cached votes. The one conversion in the seam.
+ *
+ * A null `task_type` survives as a null `taskType` rather than being filtered out. That filter is
+ * the whole hazard: drop the row and a three-panelist panel arrives as two agreeing votes, which
+ * every downstream rule would score as unanimous — pseudo-gold manufactured out of a panelist that
+ * never voted. The row is a paid, deterministic non-answer and the rule is entitled to see it.
+ */
+export function toCachedVotes(rows: readonly StoredVote[]): CachedPanelVote[] {
+  return rows.map((r) => ({
+    promptHash: r.prompt_hash,
+    modelId: r.model_id,
+    corpusRev: r.corpus_rev,
+    taskType: (r.task_type as TaskType | null) ?? null,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Planning a run: what is still outstanding, and what that would cost.
 // ---------------------------------------------------------------------------

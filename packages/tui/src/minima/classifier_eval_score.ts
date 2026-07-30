@@ -55,19 +55,49 @@ import { TASK_TYPES, type TaskType } from "./schemas.ts";
  * that voted, the label it gave — and passes through untouched to the consensus rule, which is the
  * only thing entitled to interpret it. Structural typing means its row satisfies this without
  * either side importing the other.
+ *
+ * `corpusRev` is a STRING: the eval core's `CORPUS_REV` is one (`r2-observer-steer`) and so is the
+ * ledger column. It was typed `number` here while no wiring existed to disagree with, which is the
+ * shape of every defect a lane cannot see from inside itself.
  */
 export interface CachedVote {
   readonly promptHash: string;
-  readonly corpusRev: number;
+  readonly corpusRev: string;
 }
 
 /**
- * The panel's answer for one prompt, as the read-time consensus rule returns it.
+ * What the injected rule says about one prompt's votes — MUB-216's `ConsensusVerdict`, narrowed to
+ * the fields this module reads.
+ *
+ * Declared as a SUPERTYPE of the producer's union rather than adapted to it, so `deriveConsensus`
+ * is directly assignable and the seam carries no mapping code. That is the point: a mapping is the
+ * only place an arm can be dropped, and dropping `incomplete` into `split` is how a coverage gap
+ * gets reported as a disagreement rate. The arm names are 216's vocabulary because assignability
+ * requires the same discriminants — the quorum rule is its, not this module's (ADR 0001).
+ *
+ * Three arms, three claims, and they are never added together:
+ *
+ *   · `unanimous` — a reference label. The only arm that produces one.
+ *   · `split` — the panel labelled the prompt and disagreed. A fact about the PROMPT.
+ *   · `incomplete` — fewer usable labels than panelists. A fact about the PANEL's coverage. Two
+ *     agreeing panelists out of three have not agreed unanimously, and calling that a split would
+ *     charge the prompt for a panelist that never voted.
+ */
+export type PanelVerdict =
+  | { readonly kind: "unanimous"; readonly label: TaskType; readonly votes: number }
+  | { readonly kind: "split"; readonly votes: number }
+  | { readonly kind: "incomplete"; readonly votes: number; readonly panelSize: number };
+
+/**
+ * The panel's answer for one prompt, once a verdict has produced a label.
  *
  * `votesFor`/`votesTotal` are here because ADR 0001's reason for storing individual votes was that
- * a unanimous panel and a 2-1 split must stay distinguishable. The reliability curve uses exactly
- * that: a classifier that disagrees with a split panel is weaker evidence of a mistake than one
- * that disagrees with a unanimous one, and averaging the two hides which it was.
+ * a unanimous panel and a 2-1 split must stay distinguishable. Under the quorum rule MUB-216
+ * ships they are always EQUAL — unanimity is the admission criterion, so nothing weaker reaches
+ * here — and `correctUnanimousOnly` below is therefore identical to `correct`. Both are kept
+ * rather than removed: a future quorum rule that admitted a majority would make them diverge, and
+ * the arithmetic is what would notice. Neither is rendered, because a printed row naming a
+ * population identical to the row above it teaches a reader that the distinction is live.
  */
 export interface ReferenceVerdict {
   readonly taskType: TaskType;
@@ -85,16 +115,16 @@ export interface ReferenceLookup<V extends CachedVote> {
   /**
    * Votes at any other revision are absent, not stale-but-usable (ADR 0001).
    *
-   * Supplied by the caller because ADR 0001 sources it from a constant the eval core exports and
-   * that constant does not exist yet — MUB-216 adds it with the cache. A caller that passes the
-   * wrong one gets a total cache miss, but not a silent one: it lands in `votesAtOtherRev` with
-   * `entriesUnvoted` equal to the corpus, and the readout prints both side by side.
+   * Supplied by the caller because ADR 0001 sources it from the eval core's `CORPUS_REV`. A caller
+   * that passes the wrong one gets a total cache miss, but not a silent one: it lands in
+   * `votesAtOtherRev` with `entriesUnvoted` equal to the corpus, and the readout prints both side
+   * by side.
    */
-  readonly corpusRev: number;
+  readonly corpusRev: string;
   /** MUB-216's key producer. Injected so there is exactly one hash in play, never two. */
   readonly hashOf: (text: string) => string;
   /** MUB-216's read-time consensus rule. Never re-implemented here, not even as a fallback. */
-  readonly consensus: (votes: readonly V[]) => ReferenceVerdict | null;
+  readonly consensus: (votes: readonly V[]) => PanelVerdict;
 }
 
 /**
@@ -108,8 +138,14 @@ export interface ReferenceResolution {
   readonly entriesResolved: number;
   /** Entries with no vote at this revision — a gap in the cache, not a panel that disagreed. */
   readonly entriesUnvoted: number;
-  /** Entries whose votes the rule declined to resolve — a panel that could not agree. */
-  readonly entriesUnresolved: number;
+  /** Entries the panel labelled and disagreed on. A fact about the prompt: it is genuinely hard. */
+  readonly entriesPanelSplit: number;
+  /**
+   * Entries where fewer panelists produced a usable label than the panel has members. A fact about
+   * the panel's COVERAGE, never about the prompt — reported apart from `entriesPanelSplit` because
+   * one number over both would let a missing panelist read as models disagreeing.
+   */
+  readonly entriesPanelIncomplete: number;
   /** Votes discarded because they describe a different corpus revision. */
   readonly votesAtOtherRev: number;
   /**
@@ -146,7 +182,8 @@ export function resolveReferenceVerdicts<V extends CachedVote>(
   const verdicts = new Map<string, ReferenceVerdict>();
   const liveHashes = new Set<string>();
   let entriesUnvoted = 0;
-  let entriesUnresolved = 0;
+  let entriesPanelSplit = 0;
+  let entriesPanelIncomplete = 0;
   for (const text of entries) {
     const hash = lookup.hashOf(text);
     liveHashes.add(hash);
@@ -155,9 +192,12 @@ export function resolveReferenceVerdicts<V extends CachedVote>(
       entriesUnvoted += 1;
       continue;
     }
+    // The rule's three arms land in three counters. No default branch and no `else`: a fourth arm
+    // would be a compile error here rather than silently joining whichever bucket it fell past.
     const v = lookup.consensus(panel);
-    if (v === null) entriesUnresolved += 1;
-    else verdicts.set(text, v);
+    if (v.kind === "split") entriesPanelSplit += 1;
+    else if (v.kind === "incomplete") entriesPanelIncomplete += 1;
+    else verdicts.set(text, { taskType: v.label, votesFor: v.votes, votesTotal: v.votes });
   }
   let votesWithoutCorpusEntry = 0;
   for (const [hash, panel] of byHash) {
@@ -167,7 +207,8 @@ export function resolveReferenceVerdicts<V extends CachedVote>(
     verdicts,
     entriesResolved: verdicts.size,
     entriesUnvoted,
-    entriesUnresolved,
+    entriesPanelSplit,
+    entriesPanelIncomplete,
     votesAtOtherRev,
     votesWithoutCorpusEntry,
   };
@@ -1101,7 +1142,8 @@ export function renderReplayScoreReport(r: ReplayScoreReport): string {
     "Reference labels (consensus over cached votes — no stored label can enter here)",
     `  corpus entries resolved      ${r.reference.entriesResolved}`,
     `  no vote at this corpus rev   ${r.reference.entriesUnvoted}`,
-    `  panel could not agree        ${r.reference.entriesUnresolved}`,
+    `  panel labelled and DISAGREED ${r.reference.entriesPanelSplit}  (a hard prompt)`,
+    `  panel INCOMPLETE             ${r.reference.entriesPanelIncomplete}  (a panelist produced no label — coverage, not disagreement)`,
     `  votes at another corpus rev  ${r.reference.votesAtOtherRev}  (a different corpus, so absent)`,
     `  votes whose prompt is gone   ${r.reference.votesWithoutCorpusEntry}  (hash is one-way — unreadable)`,
     "",
@@ -1120,10 +1162,11 @@ export function renderReplayScoreReport(r: ReplayScoreReport): string {
         "correct",
         mapSegmented(m.accuracy, (a) => formatSupportedCompact(a.correct)),
       ),
-      segRow(
-        "unanimous panels only",
-        mapSegmented(m.accuracy, (a) => formatSupportedCompact(a.correctUnanimousOnly)),
-      ),
+      // `correctUnanimousOnly` is deliberately NOT printed. Unanimity is the shipped rule's
+      // admission criterion, so under it that figure equals `correct` exactly — and a row naming a
+      // population identical to the row above it teaches a reader the distinction is live. The
+      // field stays computed: a quorum rule that admitted a majority would make the two diverge,
+      // and the arithmetic is what would notice.
       segRow(
         "abstained",
         mapSegmented(m.accuracy, (a) => formatSupportedCompact(a.abstained)),
@@ -1290,6 +1333,11 @@ export function renderReplayScoreReport(r: ReplayScoreReport): string {
     "  · Reference labels are a paid panel's consensus over individual votes, resolved at read time.",
     "    No historical stored task type is scored: the recorded labels are the SERVICE's, and their",
     "    author is ambiguous, which is why this is a replay and not a mining exercise.",
+    "  · An entry with no vote, a panel that DISAGREED and a panel that never finished are three",
+    "    separate counts above and are never added up. One is a gap in the cache, one is a fact",
+    "    about the prompt, one is a fact about the panel's coverage — and two agreeing panelists",
+    "    out of three have not agreed. Under the rule that ships, unanimity is the admission",
+    "    criterion, so every reference label here rests on a panel of one mind.",
     "  · Accuracy's denominator is entries the classifier answered AND the panel labelled. An",
     "    abstention is the classifier failing open by design, and an unlabelled entry is nothing to",
     "    compare against — neither is a wrong answer, so neither is counted as one.",

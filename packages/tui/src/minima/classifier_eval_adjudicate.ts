@@ -51,21 +51,37 @@ export interface ReferenceVote {
   /** sha256 of the exact prompt text. The text itself never enters this module. */
   readonly promptHash: string;
   readonly modelId: string;
-  readonly label: TaskType;
+  /**
+   * The label this panelist gave, or NULL when it answered with nothing usable as one.
+   *
+   * Nullable because the cache stores that case as a row (a deterministic non-answer, cached so a
+   * rerun does not pay for it again). A non-nullable field here would force the caller to drop
+   * those rows to satisfy the type, and a three-panelist panel with one dropped row arrives as two
+   * agreeing votes — vacuously unanimous, and pseudo-gold manufactured out of a panelist that
+   * never voted. Named `taskType`, like the producer's vote and the ledger's column: three names
+   * for one field across a seam is how the seam drifted.
+   */
+  readonly taskType: TaskType | null;
   /** The corpus revision this vote was cast under. A different rev is a MISS, not a stale hit. */
-  readonly corpusRev: number;
+  readonly corpusRev: string;
 }
 
 /**
- * What the read-time consensus function tells this module. The minimum, on purpose: a richer
- * verdict from the function that owns the rule is structurally assignable to it, and anything this
- * module wants beyond a label it derives from the vote rows it already holds rather than demanding
- * a wider contract from a type it does not own.
+ * What the read-time consensus function tells this module — MUB-216's `ConsensusVerdict`, narrowed
+ * to the fields adjudication reads.
+ *
+ * Declared as a SUPERTYPE of the producer's union rather than adapted to it, so the shipped rule is
+ * directly assignable and the seam carries no mapping code. A mapping is the only place an arm can
+ * be dropped, and this type previously had nowhere to put one: `{label: TaskType | null}` collapsed
+ * "the panel disagreed" and "the panel never finished" onto the same null.
+ *
+ * The arm names are 216's vocabulary, because structural assignability requires the same
+ * discriminants. That is the rule's own naming, not this module's opinion about quorum (ADR 0001).
  */
-export interface ReferenceVerdict {
-  /** The agreed reference label, or null when the panel did not reach agreement. */
-  readonly label: TaskType | null;
-}
+export type ReferenceVerdict =
+  | { readonly kind: "unanimous"; readonly label: TaskType }
+  | { readonly kind: "split" }
+  | { readonly kind: "incomplete" };
 
 /**
  * The ONE read-time consensus rule, injected.
@@ -165,14 +181,20 @@ export interface ScoredRow {
  *   · `no-cached-label` — no vote rows for this prompt at this corpus rev. A cache MISS, including
  *     the case where votes exist at another rev; ADR 0001 makes a corpus redefinition a miss rather
  *     than a silent mis-attribution.
- *   · `panel-did-not-agree` — votes were there and the injected rule returned no label.
+ *   · `panel-split` — every panelist labelled it and they disagreed. A fact about the PROMPT: it is
+ *     genuinely hard, and no rule that requires agreement can give it a reference label.
+ *   · `panel-incomplete` — fewer usable labels than the panel has members. A fact about the panel's
+ *     COVERAGE, not about the prompt. Held apart from `panel-split` because one reason for both
+ *     would put a missing panelist into the count a reader uses to judge how hard the corpus is —
+ *     and two agreeing panelists out of three have not agreed.
  */
 export type ExclusionReason =
   | "no-service-label"
   | "spans-regime-boundary"
   | "no-replayed-label"
   | "no-cached-label"
-  | "panel-did-not-agree";
+  | "panel-split"
+  | "panel-incomplete";
 
 /**
  * The order reasons are checked in, which is the order a candidate is walked through: does it name
@@ -186,7 +208,8 @@ export const EXCLUSION_REASONS: readonly ExclusionReason[] = [
   "spans-regime-boundary",
   "no-replayed-label",
   "no-cached-label",
-  "panel-did-not-agree",
+  "panel-split",
+  "panel-incomplete",
 ];
 
 /** One candidate set aside, with the reason. Carried per row so nothing is silently dropped. */
@@ -205,7 +228,7 @@ export interface AdjudicationConfig {
    */
   readonly regimeBoundaryTs: number;
   /** The corpus revision whose votes count. Votes at any other rev are ABSENT, not stale-but-usable. */
-  readonly corpusRev: number;
+  readonly corpusRev: string;
   /**
    * The routing floor the harness ships, so a derived floor is argued against the real baseline.
    *
@@ -298,11 +321,21 @@ export function scoreCandidates(
       setAside(c.promptHash, "no-cached-label");
       continue;
     }
-    const referenceLabel = consensus(cached).label;
-    if (referenceLabel === null) {
-      setAside(c.promptHash, "panel-did-not-agree");
+    // The rule's three arms land in three outcomes. No default branch: a fourth arm would be a
+    // compile error here rather than silently joining whichever exclusion it fell past.
+    const verdict = consensus(cached);
+    if (verdict.kind === "split") {
+      setAside(c.promptHash, "panel-split");
       continue;
     }
+    if (verdict.kind === "incomplete") {
+      setAside(c.promptHash, "panel-incomplete");
+      continue;
+    }
+    const referenceLabel = verdict.label;
+    // Votes that carried a label. A null vote is a paid, deterministic non-answer, so it is not
+    // evidence standing behind the reference label and does not count toward it.
+    const cachedLabels = cached.map((v) => v.taskType).filter((t): t is TaskType => t !== null);
     // Distinct labels among the rungs, ignoring rungs that carried none: a missing label is not a
     // different label, and counting it as one would report variation the service never produced.
     const rungLabels = new Set(
@@ -317,8 +350,8 @@ export function scoreCandidates(
       regime: [...regimes][0] as Regime,
       corroboration: entryCorroboration(c.decisions),
       serviceLabelVaried: rungLabels.size > 1,
-      panelVotes: cached.length,
-      panelDistinctLabels: new Set(cached.map((v) => v.label)).size,
+      panelVotes: cachedLabels.length,
+      panelDistinctLabels: new Set(cachedLabels).size,
     });
   }
   return { rows, excluded };
@@ -575,7 +608,7 @@ function segmentedTally(rows: readonly ScoredRow[]): SegmentedTally {
  */
 export interface AdjudicationReport {
   readonly scope: string;
-  readonly corpusRev: number;
+  readonly corpusRev: string;
   readonly currentFloor: number;
   /** Corpus entries offered for adjudication, before anything was set aside. */
   readonly candidates: number;
@@ -673,7 +706,8 @@ const EXCLUSION_WORDING: Record<ExclusionReason, string> = {
   "spans-regime-boundary": "decisions span the regime boundary",
   "no-replayed-label": "replay gave no usable label",
   "no-cached-label": "no cached label at this corpus rev",
-  "panel-did-not-agree": "panel did not reach agreement",
+  "panel-split": "panel labelled it and disagreed",
+  "panel-incomplete": "panel incomplete — a panelist produced no label",
 };
 
 /**
@@ -773,13 +807,16 @@ export function renderAdjudicationReport(r: AdjudicationReport): string {
   // Sensitivity: drop the rows whose provenance is weaker and see whether the answer moves. These
   // are outcome counts, so they come segmented too — a corroborated-only net over both eras would
   // be the same blended figure the four-way table is forbidden to print alone.
+  // `unanimousPanelOnly` is deliberately NOT a row here. Under the rule MUB-216 ships, unanimity is
+  // the admission criterion, so that subset is every scored row and the line would restate the one
+  // above it. It stays computed: a looser injected rule makes the two diverge, and the arithmetic —
+  // not a remembered caveat — is what would notice.
   const subsets: readonly [string, SegmentedTally][] = [
     [
       "all scored rows",
       { aggregate: r.aggregate.outcomes, before: r.before.outcomes, after: r.after.outcomes },
     ],
     ["corroborated rows only", r.corroboratedOnly],
-    ["unanimous panels only", r.unanimousPanelOnly],
   ];
   lines.push("", "What the result rests on (rows · net)", head);
   for (const [label, t] of subsets) {
@@ -794,8 +831,7 @@ export function renderAdjudicationReport(r: AdjudicationReport): string {
   lines.push(
     `  corroborated pairings        ${formatRate(r.corroborated)}` +
       ` · uncorroborated ${r.uncorroborated} · nothing to compare ${r.corroborationUnassessable}`,
-    `  unanimous panels             ${formatRate(r.panelUnanimous)}` +
-      ` · of which resting on ONE cached vote (vacuously unanimous): ${r.singleVoteRows}`,
+    `  rows resting on ONE cached vote (vacuously unanimous): ${r.singleVoteRows}`,
     `  scored on the initial route because the ladder's rungs disagreed: ${r.serviceLabelVariedRows}`,
   );
 
@@ -811,7 +847,12 @@ export function renderAdjudicationReport(r: AdjudicationReport): string {
     "    invoked and nothing in this readout spent anything. Votes at another corpus revision were",
     "    treated as absent, so a redefined corpus is a miss rather than a mis-attribution.",
     "  · The consensus rule is injected, not owned here. A different quorum rule over the same",
-    "    cached votes scores a different set of rows — which is why the cache stores votes.",
+    "    cached votes scores a different set of rows — which is why the cache stores votes. Under",
+    "    the rule that ships, unanimity is the admission criterion: every scored row's panel agreed,",
+    "    so a 'unanimous only' sensitivity would be every row and is not printed.",
+    "  · A panel that DISAGREED and a panel that never finished are set aside under different",
+    "    reasons above. One is a fact about the prompt, the other about the panel's coverage, and a",
+    "    single count for both would put a missing panelist into how hard this corpus looks.",
     "  · The service label is an INPUT being scored. This readout makes no recommendation about",
     "    which service-side classifier should produce it.",
     "  · The aggregate spans two label authors. It is printed only beside both segments, and a",

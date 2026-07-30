@@ -32,20 +32,40 @@ import type { TaskType } from "../src/minima/schemas.ts";
 // caller's, by adjudicating the SAME vote rows differently (see the paired test at the bottom).
 // ---------------------------------------------------------------------------
 
-/** A verdict only when every cached vote agrees. */
+/**
+ * The panel size both stubs quorum against. Stated here because the real rule takes it as an
+ * argument (MUB-216 binds it to the shipped panel) and a stub that inferred it from the votes in
+ * hand could never report `incomplete` — it would call a two-of-three panel unanimous, which is the
+ * exact pseudo-gold this seam exists to prevent.
+ */
+const PANEL_SIZE = 3;
+
+/** Usable labels only. A null vote is a panelist that answered with nothing, not a label. */
+function labelled(votes: readonly ReferenceVote[]): TaskType[] {
+  return votes.map((v) => v.taskType).filter((t): t is TaskType => t !== null);
+}
+
+/** A verdict only when every panelist voted and they all agree. */
 const unanimousOnly: ConsensusFn = (votes) => {
-  const labels = new Set(votes.map((v) => v.label));
-  return {
-    label: votes.length > 0 && labels.size === 1 ? (votes[0] as ReferenceVote).label : null,
-  };
+  const labels = labelled(votes);
+  if (labels.length < PANEL_SIZE) return { kind: "incomplete" };
+  return new Set(labels).size === 1
+    ? { kind: "unanimous", label: labels[0] as TaskType }
+    : { kind: "split" };
 };
 
-/** A verdict when one label holds strictly more than half the cached votes. */
+/**
+ * A verdict when one label holds strictly more than half the cached votes.
+ *
+ * It reports its answer on the `unanimous` arm because the discriminants belong to MUB-216's type,
+ * not to whoever injects a rule — which is the whole point: this stub scores rows the shipped rule
+ * refuses, over the same votes, without either module owning a second quorum rule.
+ */
 const simpleMajority: ConsensusFn = (votes) => {
   const counts = new Map<TaskType, number>();
-  for (const v of votes) counts.set(v.label, (counts.get(v.label) ?? 0) + 1);
-  for (const [label, n] of counts) if (n * 2 > votes.length) return { label };
-  return { label: null };
+  for (const t of labelled(votes)) counts.set(t, (counts.get(t) ?? 0) + 1);
+  for (const [label, n] of counts) if (n * 2 > votes.length) return { kind: "unanimous", label };
+  return labelled(votes).length < PANEL_SIZE ? { kind: "incomplete" } : { kind: "split" };
 };
 
 // ---------------------------------------------------------------------------
@@ -55,7 +75,7 @@ const simpleMajority: ConsensusFn = (votes) => {
 const CFG: AdjudicationConfig = {
   scope: "test",
   regimeBoundaryTs: 100,
-  corpusRev: 1,
+  corpusRev: "r-test",
   currentFloor: 0.75,
 };
 
@@ -78,9 +98,16 @@ function cand(promptHash: string, over: Partial<OverrideCandidate> = {}): Overri
   };
 }
 
-/** `n` cached votes for one prompt, all at corpus rev 1 unless told otherwise. */
-function votes(promptHash: string, labels: readonly TaskType[], corpusRev = 1): ReferenceVote[] {
-  return labels.map((label, i) => ({ promptHash, modelId: `m${i}`, label, corpusRev }));
+/**
+ * `n` cached votes for one prompt, all at the fixture's corpus rev unless told otherwise. A `null`
+ * label is a real cached row: the panelist answered, with nothing usable as a label.
+ */
+function votes(
+  promptHash: string,
+  labels: readonly (TaskType | null)[],
+  corpusRev = CFG.corpusRev,
+): ReferenceVote[] {
+  return labels.map((taskType, i) => ({ promptHash, modelId: `m${i}`, taskType, corpusRev }));
 }
 
 /** A scored row, so the tabulation can be tested without going through the assembly at all. */
@@ -294,7 +321,7 @@ describe("scoreCandidates — assembly, and what it refuses to score", () => {
     // ADR 0001: a corpus redefinition is a cache MISS. A rev-2 vote must not label a rev-1 run.
     const { rows, excluded } = scoreCandidates(
       [cand("h1")],
-      votes("h1", ["code", "code", "code"], 2),
+      votes("h1", ["code", "code", "code"], "r-old"),
       unanimousOnly,
       CFG,
     );
@@ -302,7 +329,7 @@ describe("scoreCandidates — assembly, and what it refuses to score", () => {
     expect(excluded).toEqual([{ promptHash: "h1", reason: "no-cached-label" }]);
   });
 
-  test("a panel that did not agree is counted as its own exclusion, never dropped", () => {
+  test("a panel that labelled and disagreed is counted as its own exclusion, never dropped", () => {
     const { rows, excluded } = scoreCandidates(
       [cand("h1")],
       votes("h1", ["code", "qa", "other"]),
@@ -310,7 +337,21 @@ describe("scoreCandidates — assembly, and what it refuses to score", () => {
       CFG,
     );
     expect(rows).toEqual([]);
-    expect(excluded).toEqual([{ promptHash: "h1", reason: "panel-did-not-agree" }]);
+    expect(excluded).toEqual([{ promptHash: "h1", reason: "panel-split" }]);
+  });
+
+  test("a panel that never finished is a DIFFERENT exclusion from one that disagreed", () => {
+    // Two panelists agreeing and a third that produced no usable label is a coverage gap, not a
+    // disagreement. One reason for both would put a missing panelist into the rate that describes
+    // how hard the corpus is — and 226's own exclusion list is what a reader checks that against.
+    const { rows, excluded } = scoreCandidates(
+      [cand("h1")],
+      votes("h1", ["code", "code", null]),
+      unanimousOnly,
+      CFG,
+    );
+    expect(rows).toEqual([]);
+    expect(excluded).toEqual([{ promptHash: "h1", reason: "panel-incomplete" }]);
   });
 
   test("a replay that declined cannot be adjudicated — no override would have happened", () => {
@@ -455,7 +496,7 @@ const VOTES: ReferenceVote[] = [
   ...votes("h5", ["code", "code", "code"]),
   ...votes("h6", ["code", "code", "code"]),
   ...votes("h7", ["code", "code", "qa"]), // 2-1: a majority, not a unanimous panel
-  ...votes("h8", ["code", "code", "code"], 2), // a different corpus rev
+  ...votes("h8", ["code", "code", "code"], "r-old"), // a different corpus rev
   ...votes("h9", ["code", "qa", "other"]), // no majority under either rule
   ...votes("h10", ["code", "code", "code"]),
   ...votes("h11", ["code", "code", "code"]),
@@ -490,7 +531,8 @@ describe("buildAdjudicationReport", () => {
       { reason: "spans-regime-boundary", count: 1 },
       { reason: "no-replayed-label", count: 1 },
       { reason: "no-cached-label", count: 1 },
-      { reason: "panel-did-not-agree", count: 1 },
+      { reason: "panel-split", count: 1 },
+      { reason: "panel-incomplete", count: 0 },
     ]);
     expect(r.excludedTotal).toBe(5);
     expect(r.scored + r.excludedTotal).toBe(r.candidates);
@@ -554,16 +596,22 @@ describe("buildAdjudicationReport", () => {
     expect(r.singleVoteRows).toBe(0);
   });
 
-  test("unanimity over ONE cached vote is counted, not passed off as agreement", () => {
-    const thin = buildAdjudicationReport(
-      [cand("s1"), cand("s2")],
-      [...votes("s1", ["code"]), ...votes("s2", ["code", "code", "code"])],
-      unanimousOnly,
-      CFG,
-    );
-    expect(thin.scored).toBe(2);
-    expect(thin.panelUnanimous).toEqual({ n: 2, d: 2, pct: 100 });
-    expect(thin.singleVoteRows).toBe(1);
+  test("one cached vote is an INCOMPLETE panel, never a vacuously unanimous one", () => {
+    // A single model's opinion is not a panel that agreed. Under a rule that quorums against the
+    // panel's size it cannot reach a verdict at all, so `singleVoteRows` reads 0 — the guard is
+    // structural rather than a number someone remembers to check.
+    const thin = [...votes("s1", ["code"]), ...votes("s2", ["code", "code", "code"])];
+    const strict = buildAdjudicationReport([cand("s1"), cand("s2")], thin, unanimousOnly, CFG);
+    expect(strict.scored).toBe(1);
+    expect(strict.excluded.find((e) => e.reason === "panel-incomplete")?.count).toBe(1);
+    expect(strict.singleVoteRows).toBe(0);
+
+    // And the guard still counts when a LOOSER injected rule admits that one vote: the row is
+    // scored, vacuously unanimous, and said so rather than folded into the agreement figure.
+    const loose = buildAdjudicationReport([cand("s1"), cand("s2")], thin, simpleMajority, CFG);
+    expect(loose.scored).toBe(2);
+    expect(loose.panelUnanimous).toEqual({ n: 2, d: 2, pct: 100 });
+    expect(loose.singleVoteRows).toBe(1);
   });
 
   test("the same cached votes adjudicate differently under a different consensus rule", () => {
@@ -571,7 +619,7 @@ describe("buildAdjudicationReport", () => {
     // takes the rule as a parameter instead of owning one.
     const strict = buildAdjudicationReport(CANDIDATES, VOTES, unanimousOnly, CFG);
     expect(strict.scored).toBe(6); // h7's 2-1 panel no longer reaches a verdict
-    expect(strict.excluded.find((e) => e.reason === "panel-did-not-agree")?.count).toBe(2);
+    expect(strict.excluded.find((e) => e.reason === "panel-split")?.count).toBe(2);
     expect(strict.aggregate.outcomes.harmShare).toEqual({ n: 1, d: 6, pct: 16.7 });
     expect(strict.aggregate.outcomes.net).toBe(2);
   });

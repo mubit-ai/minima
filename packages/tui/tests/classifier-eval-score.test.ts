@@ -5,6 +5,7 @@ import { rate } from "../src/minima/classifier_eval.ts";
 import {
   type CachedVote,
   type ModelReplay,
+  type PanelVerdict,
   type ReferenceVerdict,
   type ScoredEntry,
   accuracyOf,
@@ -35,15 +36,25 @@ function ev(ts: number, text: string | null, over: Partial<UserPromptRow> = {}):
   return { id: `e${ts}`, run_id: "r1", ts, agent_id: null, text, ...over };
 }
 
-/** A richer vote than the module reads, to pin that the generic accepts MUB-216's real row. */
+/**
+ * A richer vote than the module reads, to pin that the generic accepts MUB-216's real row. It is
+ * also, deliberately, exactly the shape `deriveConsensus` takes — the wiring pass made the two
+ * match so the injected rule needs no adapter, and an adapter is the only place an arm can be lost.
+ */
 interface TestVote extends CachedVote {
   readonly modelId: string;
-  readonly taskType: TaskType;
+  readonly taskType: TaskType | null;
 }
 
-const CORPUS_REV = 3;
+/** A string, like `CORPUS_REV` and the ledger column both are. */
+const CORPUS_REV = "r-test";
 
-function vote(promptHash: string, modelId: string, taskType: TaskType, rev = CORPUS_REV): TestVote {
+function vote(
+  promptHash: string,
+  modelId: string,
+  taskType: TaskType | null,
+  rev = CORPUS_REV,
+): TestVote {
   return { promptHash, corpusRev: rev, modelId, taskType };
 }
 
@@ -57,15 +68,27 @@ function verdict(taskType: TaskType, votesFor: number, votesTotal: number): Refe
   return { taskType, votesFor, votesTotal };
 }
 
+/** The three arms of the injected rule's verdict, in MUB-216's own vocabulary. */
+const agreed = (label: TaskType, votes = 3): PanelVerdict => ({ kind: "unanimous", label, votes });
+const disagreed = (votes = 3): PanelVerdict => ({ kind: "split", votes });
+const unfinished = (votes = 2, panelSize = 3): PanelVerdict => ({
+  kind: "incomplete",
+  votes,
+  panelSize,
+});
+
 /**
  * A stub consensus: a LOOKUP keyed on the hash, deliberately NOT a quorum rule. MUB-216 owns the
  * one read-time consensus function (ADR 0001), and a plausible-looking stand-in here — even in a
  * test — is precisely the second quorum rule that ADR exists to prevent.
+ *
+ * A hash absent from the table resolves to `incomplete`, because the stub is a lookup and has no
+ * opinion — never to a label.
  */
 function lookupConsensus(
-  table: Readonly<Record<string, ReferenceVerdict | null>>,
-): (votes: readonly TestVote[]) => ReferenceVerdict | null {
-  return (votes) => (votes.length === 0 ? null : (table[votes[0]?.promptHash ?? ""] ?? null));
+  table: Readonly<Record<string, PanelVerdict>>,
+): (votes: readonly TestVote[]) => PanelVerdict {
+  return (votes) => table[votes[0]?.promptHash ?? ""] ?? unfinished(votes.length);
 }
 
 describe("resolveReferenceVerdicts — the cache join", () => {
@@ -85,22 +108,22 @@ describe("resolveReferenceVerdicts — the cache join", () => {
       hashOf,
       consensus: (v) => {
         seen = v;
-        return verdict("code", 2, 3);
+        return agreed("code", 3);
       },
     });
     expect(seen.map((v) => v.modelId)).toEqual(["m1", "m2", "m3"]);
-    expect(res.verdicts.get("alpha")).toEqual(verdict("code", 2, 3));
+    expect(res.verdicts.get("alpha")).toEqual(verdict("code", 3, 3));
     expect(res.entriesResolved).toBe(1);
   });
 
   test("treats votes at another corpus_rev as ABSENT, not as stale-but-usable", () => {
     // ADR 0001: a corpus redefinition is a cache miss. A vote from rev 2 describes a corpus this
     // one is not, so admitting it would attribute a label to a prompt set that no longer exists.
-    const votes = [vote("h:alpha", "m1", "code", 2), vote("h:beta", "m1", "qa", CORPUS_REV)];
+    const votes = [vote("h:alpha", "m1", "code", "r-old"), vote("h:beta", "m1", "qa", CORPUS_REV)];
     const res = resolveReferenceVerdicts(entries, votes, {
       corpusRev: CORPUS_REV,
       hashOf,
-      consensus: lookupConsensus({ "h:beta": verdict("qa", 3, 3) }),
+      consensus: lookupConsensus({ "h:beta": agreed("qa") }),
     });
     expect(res.verdicts.has("alpha")).toBe(false);
     expect(res.votesAtOtherRev).toBe(1);
@@ -113,36 +136,59 @@ describe("resolveReferenceVerdicts — the cache join", () => {
     const res = resolveReferenceVerdicts(["alpha"], [vote("h:departed", "m1", "code")], {
       corpusRev: CORPUS_REV,
       hashOf,
-      consensus: lookupConsensus({ "h:departed": verdict("code", 3, 3) }),
+      consensus: lookupConsensus({ "h:departed": agreed("code") }),
     });
     expect(res.votesWithoutCorpusEntry).toBe(1);
     expect(res.verdicts.size).toBe(0);
     expect(res.entriesUnvoted).toBe(1);
   });
 
-  test("separates a panel that could not agree from a prompt the panel never saw", () => {
-    // "No verdict" and "no votes" are different claims: one is a panel that deadlocked, the other
-    // is a gap in the cache. Adding them up would report an unlabelled corpus as a split panel.
-    const votes = [vote("h:alpha", "m1", "code"), vote("h:alpha", "m2", "qa")];
-    const res = resolveReferenceVerdicts(entries, votes, {
+  test("keeps a split panel, an incomplete panel and an unvoted prompt as three populations", () => {
+    // Three different states of the world, and each is a different claim: the panel disagreed,
+    // the panel never finished, nobody ever voted. Two agreeing panelists out of three have not
+    // agreed — folding that into "could not agree" reports a COVERAGE gap as a disagreement rate,
+    // and folding either into "unvoted" reports a paid cache as an empty one.
+    const votes = [
+      vote("h:alpha", "m1", "code"),
+      vote("h:alpha", "m2", "qa"),
+      vote("h:alpha", "m3", "reasoning"),
+      vote("h:beta", "m1", "code"),
+      vote("h:beta", "m2", "code"),
+    ];
+    const res = resolveReferenceVerdicts(["alpha", "beta", "gamma"], votes, {
       corpusRev: CORPUS_REV,
       hashOf,
-      consensus: lookupConsensus({ "h:alpha": null }),
+      consensus: lookupConsensus({ "h:alpha": disagreed(3), "h:beta": unfinished(2, 3) }),
     });
-    expect(res.entriesUnresolved).toBe(1);
+    expect(res.entriesPanelSplit).toBe(1);
+    expect(res.entriesPanelIncomplete).toBe(1);
     expect(res.entriesUnvoted).toBe(1);
     expect(res.entriesResolved).toBe(0);
   });
 
-  test("every entry lands in exactly one of resolved, unvoted and unresolved", () => {
-    const votes = [vote("h:alpha", "m1", "code"), vote("h:beta", "m1", "qa")];
-    const res = resolveReferenceVerdicts(["alpha", "beta", "gamma"], votes, {
+  test("every entry lands in exactly one of resolved, unvoted, split and incomplete", () => {
+    const votes = [
+      vote("h:alpha", "m1", "code"),
+      vote("h:beta", "m1", "qa"),
+      vote("h:delta", "m1", "code"),
+    ];
+    const res = resolveReferenceVerdicts(["alpha", "beta", "gamma", "delta"], votes, {
       corpusRev: CORPUS_REV,
       hashOf,
-      consensus: lookupConsensus({ "h:alpha": verdict("code", 3, 3), "h:beta": null }),
+      consensus: lookupConsensus({
+        "h:alpha": agreed("code"),
+        "h:beta": disagreed(),
+        "h:delta": unfinished(),
+      }),
     });
-    expect(res.entriesResolved + res.entriesUnvoted + res.entriesUnresolved).toBe(3);
-    expect([res.entriesResolved, res.entriesUnvoted, res.entriesUnresolved]).toEqual([1, 1, 1]);
+    const parts = [
+      res.entriesResolved,
+      res.entriesUnvoted,
+      res.entriesPanelSplit,
+      res.entriesPanelIncomplete,
+    ];
+    expect(parts.reduce((a, b) => a + b, 0)).toBe(4);
+    expect(parts).toEqual([1, 1, 1, 1]);
   });
 });
 
