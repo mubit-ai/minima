@@ -39,6 +39,37 @@ import { isHarnessSteerText } from "./stop_gate.ts";
  */
 export const CORPUS_REV = "r2-observer-steer";
 
+/**
+ * The instant the SERVICE's classifier changed — 2026-07-22T16:41:36Z, in UNIX seconds, the unit
+ * every `ts` in this ledger is recorded in.
+ *
+ * A fact about the DEPLOYMENT, not about the data: it is when GitHub published release v0.14.0, and
+ * publishing a release is what triggers the prod deploy. v0.14.0 is the first release containing
+ * `c071670 fix(classifier): web/build vocabulary, scope-aware difficulty, confidence-gated neighbor
+ * refinement, cold-start margin (#223)`. Held here rather than derived, because inferring a regime
+ * boundary from the rates it is meant to explain is the same mistake as averaging across it.
+ *
+ * It is what MUB-224 quoted in prose and nothing in the tree backed: over this ledger's 494 routing
+ * decisions it splits 321 before / 173 after, and the service's catch-all rate across it is
+ * 110/321 (34.3%) then 129/173 (74.6%) — the ticket's figures, exactly. Over the 238-prompt corpus
+ * the split is 159 before / 77 after / 2 spanning.
+ *
+ * Three things a reader of any figure segmented on it should carry:
+ *
+ *   · It is NOT identified by the ledger. There are no decisions between 2026-07-22T14:28:08Z and
+ *     2026-07-23T09:33:57Z, so every instant in that 19-hour gap — including a naive midnight cut —
+ *     produces the same 321/173. The release record pins it; the data cannot.
+ *   · A SECOND service classifier change sits inside the later regime: the classifier program
+ *     (agreement telemetry, cluster-key-space versioning, and the embed classifier served behind
+ *     the dispatcher) first shipped in v0.14.2, published 2026-07-23T16:20:11Z — ts 1784823611,
+ *     which splits the same decisions 452/42. That one is a change of label AUTHOR where this one
+ *     is a revision by the same author, so "two regimes" is an approximation with a third inside it.
+ *   · The catch-all rate had already risen BEFORE this instant — 30.8% on 2026-07-20, 73.0% on
+ *     2026-07-21 over labelled rows — so part of the step across the boundary is a change in the
+ *     traffic mix rather than in the classifier.
+ */
+export const REGIME_BOUNDARY_TS = 1784738496;
+
 // ---------------------------------------------------------------------------
 // Rates. Every reported rate carries its denominator — structurally, not by convention.
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   type CallSpec,
   type DistinctPrompt,
   type DryRunConfig,
+  REGIME_BOUNDARY_TS,
   buildDryRunReport,
   checkSpendCeiling,
   decideInvocation,
@@ -21,6 +22,25 @@ import {
 
 // MUB-215 — the classifier evaluation's pure core. Every function here is total and takes plain
 // arrays, so these tests construct rows directly: no ledger, no network, no spend.
+
+describe("REGIME_BOUNDARY_TS", () => {
+  test("is the v0.14.0 release instant, in the SECONDS the ledger records", () => {
+    // The expected value is read off the release record (GitHub published v0.14.0 at
+    // 2026-07-22T16:41:36Z), not recomputed from the constant — so this disagrees with the code if
+    // the constant is ever edited to fit a figure, and catches the milliseconds-for-seconds mixup
+    // that would put the whole corpus on one side of the boundary without failing anything else.
+    expect(new Date(REGIME_BOUNDARY_TS * 1000).toISOString()).toBe("2026-07-22T16:41:36.000Z");
+  });
+
+  test("is comparable against a ledger timestamp without conversion", () => {
+    // `UserPromptRow.ts` and `routing_decisions.ts` are seconds since the epoch, and every consumer
+    // compares this constant to one directly. A boundary in the wrong unit is off by a factor of
+    // 1000 in a direction that still sorts, so it segments silently rather than throwing.
+    const row = ev("after the boundary", { ts: REGIME_BOUNDARY_TS + 1 });
+    expect(row.ts > REGIME_BOUNDARY_TS).toBe(true);
+    expect(String(REGIME_BOUNDARY_TS)).toHaveLength(10);
+  });
+});
 
 /** A minimal user-prompt row (only the fields the eval core reads). Lead agent unless overridden. */
 function ev(text: string | null, over: Partial<UserPromptRow> = {}): UserPromptRow {
