@@ -321,6 +321,7 @@ describe("decideInvocation — the correlate mode", () => {
       project: "minima",
       dbPath: null,
       rowCap: 50,
+      samples: 10,
     });
   });
 

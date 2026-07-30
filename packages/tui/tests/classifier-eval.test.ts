@@ -375,6 +375,7 @@ describe("decideInvocation", () => {
       project: null,
       dbPath: null,
       rowCap: 20000,
+      samples: 10,
     });
   });
 
@@ -400,6 +401,7 @@ describe("decideInvocation", () => {
       project: "minima",
       dbPath: null,
       rowCap: 50,
+      samples: 10,
     });
   });
 
@@ -417,9 +419,13 @@ describe("decideInvocation", () => {
     expect(decideInvocation(["--spend", "--max-usd=0.05", "--project=minima"])).toEqual({
       kind: "spend",
       maxUsd: 0.05,
+      // MUB-217's modifier, present and false: it is read only on this arm, and only after both
+      // affirmatives above have already been earned.
+      pilot: false,
       project: "minima",
       dbPath: null,
       rowCap: 20000,
+      samples: 10,
     });
   });
 
@@ -450,6 +456,7 @@ describe("decideInvocation", () => {
       project: "minima",
       dbPath: null,
       rowCap: 20000,
+      samples: 10,
     });
     expect(decideInvocation(["--score", "--target-correctness=1"])).toMatchObject({
       kind: "score",
@@ -464,6 +471,7 @@ describe("decideInvocation", () => {
       project: null,
       dbPath: null,
       rowCap: 50,
+      samples: 10,
     });
   });
 
@@ -570,6 +578,7 @@ describe("decideInvocation", () => {
       project: "minima",
       dbPath: "/tmp/x.db",
       rowCap: 50,
+      samples: 10,
     });
   });
 
