@@ -1,17 +1,21 @@
 /**
- * Classifier evaluation — corpus extraction and cost-guarded dry run (MUB-215).
+ * Classifier evaluation — corpus extraction and cost-guarded dry run (MUB-215), plus the
+ * prompt↔decision correlation (MUB-225). Both modes read only and spend nothing.
  *
- * Reports the corpus a full evaluation would use and what that run would cost, and spends
- * nothing doing it. This is the tracer bullet for the measurement arc: it proves the
- * ledger → corpus → report path end to end before any money is committed.
+ * The dry run reports the corpus a full evaluation would use and what that run would cost. It is
+ * the tracer bullet for the measurement arc: it proves the ledger → corpus → report path end to
+ * end before any money is committed. `--correlate` reports which prompt caused each recorded
+ * routing decision — an inferred link, with its corroboration rate measured rather than assumed.
  *
  *   bun packages/tui/scripts/classifier_eval.ts
  *   bun packages/tui/scripts/classifier_eval.ts --project=minima --limit=5000
+ *   bun packages/tui/scripts/classifier_eval.ts --correlate
  *
  * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, all
- * counting and all rendering live in the pure core (`src/minima/classifier_eval.ts`), which is
- * unit-tested with no ledger and no network. What is left here is opening a ledger, one read, and
- * printing — nothing a reported number depends on.
+ * counting and all rendering live in the pure cores (`src/minima/classifier_eval.ts` and
+ * `src/minima/classifier_eval_correlate.ts`), which are unit-tested with no ledger and no network.
+ * What is left here is opening a ledger, the reads, and printing — nothing a reported number
+ * depends on.
  *
  * It lives under `scripts/` deliberately: `bun test` matches only `*.test.ts`, so nothing here is
  * reachable from the hermetic suite. The full evaluation will make real network calls by design,

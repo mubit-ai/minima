@@ -24,8 +24,13 @@
  * corpus is one developer's own traffic, so the readout is counts and denominators only.
  */
 import type { RoutingDecisionRow, UserPromptRow } from "../db/minima_db.ts";
-import { type Rate, formatRate, hasPromptText, rate } from "./classifier_eval.ts";
-import { isHarnessSteerText } from "./stop_gate.ts";
+import {
+  type Rate,
+  formatRate,
+  partitionLeadPrompts,
+  partitionSteerText,
+  rate,
+} from "./classifier_eval.ts";
 
 /**
  * Which population a decision belongs to.
@@ -52,11 +57,12 @@ export function partitionServiceRouted(rows: readonly RoutingDecisionRow[]): {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the display label backs up the pairing. Three states, not two: a decision with no stored
- * label can neither corroborate nor fail to, so it belongs in neither the numerator nor the
- * denominator of the reported rate.
+ * Whether the display label backs up the pairing. Three states, not two: with nothing to compare —
+ * no label stored, or a prompt row carrying no text — the check can neither corroborate nor fail,
+ * so the pairing belongs in neither the numerator nor the denominator of the reported rate.
+ * Folding those into `uncorroborated` would inflate the failure count with non-observations.
  */
-export type Corroboration = "corroborated" | "uncorroborated" | "no-label";
+export type Corroboration = "corroborated" | "uncorroborated" | "unassessable";
 
 /**
  * The transform the shipped label maker applies before truncating (`runtime.ts:shortLabel` does
@@ -97,8 +103,7 @@ function stripTruncationMark(label: string): string {
  */
 export function corroborate(label: string | null, promptText: string | null): Corroboration {
   const stem = label === null ? "" : collapseWhitespace(stripTruncationMark(label));
-  if (stem === "") return "no-label";
-  if (promptText === null) return "uncorroborated";
+  if (stem === "" || promptText === null) return "unassessable";
   return collapseWhitespace(promptText).startsWith(stem) ? "corroborated" : "uncorroborated";
 }
 
@@ -118,25 +123,36 @@ export type PromptBucket = "corpus" | "steer" | "subagent" | "unusable";
 export const PROMPT_BUCKETS: readonly PromptBucket[] = ["corpus", "steer", "subagent", "unusable"];
 
 /**
- * Classify one correlated prompt row. Same order of tests as the dry run's corpus build
- * (`partitionLeadPrompts` then `partitionSteerText`), so a row cannot be corpus here and excluded
- * there.
+ * Classify one correlated prompt row by running it through the dry run's OWN corpus partitions.
+ *
+ * Deliberately delegated rather than re-implemented: a row must not be corpus here and excluded
+ * there. Re-stating the cascade would leave that invariant resting on a comment, which is exactly
+ * the inconsistency `hasPromptText` was made a single predicate to prevent. The one-row arrays are
+ * the price of holding it in code instead — a few hundred decisions, so the cost is nothing.
  */
 function bucketOf(row: UserPromptRow): PromptBucket {
-  if (row.agent_id !== null) return "subagent";
-  if (!hasPromptText(row)) return "unusable";
-  return isHarnessSteerText(row.text as string) ? "steer" : "corpus";
+  const { lead } = partitionLeadPrompts([row]);
+  if (lead.length === 0) return "subagent";
+  const { corpus, excluded } = partitionSteerText(lead);
+  if (corpus.length === 1) return "corpus";
+  return excluded.length === 1 ? "steer" : "unusable";
 }
 
 /** One decision paired to the prompt the rule says caused it. A heuristic pairing, not a join. */
 export interface Pairing {
   readonly recId: string;
-  readonly runId: string;
   /** The correlated prompt's event id — the closest thing to a join key that exists. */
   readonly promptEventId: string;
   /** The FULL recorded prompt, or null for an `unusable` row. Never rendered. */
   readonly promptText: string | null;
   readonly promptBucket: PromptBucket;
+  /**
+   * Whether the DECISION was a sub-agent's. The rule keys on run and timestamp alone, so it can
+   * pair a sub-agent's decision to a lead prompt — which would be false evidence about a classifier
+   * that only ever labels lead turns. Carried so the report can count that case instead of
+   * inheriting it.
+   */
+  readonly decisionIsSubagent: boolean;
   readonly corroboration: Corroboration;
 }
 
@@ -156,7 +172,6 @@ export type UnpairedReason = "before-read-window" | "no-earlier-prompt-in-run";
 /** A decision the rule could not pair, with which of the two reasons applies. */
 export interface Unpaired {
   readonly recId: string;
-  readonly runId: string;
   readonly reason: UnpairedReason;
 }
 
@@ -170,9 +185,14 @@ export interface Correlation {
  * Apply the run-and-timestamp rule to every decision.
  *
  * Total, and deterministic in a way the equivalent SQL is not: among the candidates at or before
- * the decision, the greatest timestamp wins, and a TIE is broken on the later-arriving row. A
- * nondeterministic tie-break would move the reported corroboration rate without the ledger moving.
- * The result does not depend on the order rows arrive in.
+ * the decision, the greatest timestamp wins. A nondeterministic tie-break would move the reported
+ * corroboration rate without the ledger moving.
+ *
+ * On distinct timestamps the result is independent of the order rows arrive in. A TIE is broken on
+ * the LAST such row in input order, which is the one precondition this function places on its
+ * caller: `listUserPrompts` reads `ORDER BY ts, rowid`, so last-in-input means last-recorded, and
+ * that is the row a tie should resolve to. Feed it unordered rows and ties resolve arbitrarily —
+ * still deterministically, but no longer meaningfully.
  *
  * Prompts are indexed by run first, so this is one pass per run rather than a scan per decision.
  */
@@ -203,7 +223,6 @@ export function correlateDecisions(
     if (best === null) {
       unpaired.push({
         recId: d.rec_id,
-        runId: d.run_id,
         reason:
           windowStart === null || d.ts < windowStart
             ? "before-read-window"
@@ -213,10 +232,10 @@ export function correlateDecisions(
     }
     pairings.push({
       recId: d.rec_id,
-      runId: d.run_id,
       promptEventId: best.id,
       promptText: best.text,
       promptBucket: bucketOf(best),
+      decisionIsSubagent: d.agent_id !== null,
       corroboration: corroborate(d.task_label, best.text),
     });
   }
@@ -311,19 +330,33 @@ export interface CorrelationReport {
   readonly corroborated: Rate;
   /** Pairings the label contradicts. Reported, not discarded: a rewrite fails this check. */
   readonly uncorroborated: number;
-  /** Pairings whose decision stored no label — in neither side of the corroboration rate. */
-  readonly labelUnavailable: number;
+  /** Pairings with nothing to compare — no label stored, or no prompt text. Neither side of it. */
+  readonly corroborationUnassessable: number;
   readonly buckets: readonly BucketCount[];
+  /**
+   * Pairings where a SUB-AGENT's decision was attributed to a corpus prompt. The classifier labels
+   * lead turns only, so every one of these is false evidence about it. A tripwire, not a rate: it
+   * should be zero, and a non-zero reading means the rule needs an agent term.
+   */
+  readonly subagentDecisionsOnCorpusPrompt: number;
   /** Distinct prompt events something correlated to — the grouping denominator. */
   readonly promptEventsCorrelated: number;
   /** Prompt events that drove more than one decision, over the events correlated to. */
   readonly promptEventsWithMultipleDecisions: Rate;
+  /** The recovery ladder's depth: the most rungs one asking of one prompt was re-decided over. */
   readonly maxDecisionsPerPromptEvent: number;
   /** Distinct corpus prompts the decisions group under — NOT the number of decisions. */
   readonly corpusEntries: number;
   /** Decisions attributed to a corpus entry — always >= corpusEntries. */
   readonly corpusEntryDecisions: number;
+  /**
+   * The most decisions under one entry. NOT ladder depth: an entry aggregates every asking of the
+   * same text across every run, so this is dominated by re-asking. `maxDecisionsPerPromptEvent` is
+   * the ladder figure; `maxAskingsPerCorpusEntry` below says how much of this is repetition.
+   */
   readonly maxDecisionsPerCorpusEntry: number;
+  /** The most distinct prompt events under one entry — how often its text was asked again. */
+  readonly maxAskingsPerCorpusEntry: number;
 }
 
 /** Assemble the whole correlation readout from raw ledger rows. Pure: reads nothing, spends nothing. */
@@ -342,7 +375,8 @@ export function buildCorrelationReport(
   const entries = groupByCorpusEntry(pairings);
   const entryCounts = entries.map((e) => e.recIds.length);
 
-  const labelled = pairings.filter((p) => p.corroboration !== "no-label").length;
+  const assessable = pairings.filter((p) => p.corroboration !== "unassessable").length;
+  const max = (ns: readonly number[]): number => ns.reduce((a, b) => Math.max(a, b), 0);
 
   return {
     scope: cfg.scope,
@@ -355,19 +389,26 @@ export function buildCorrelationReport(
     uncorrelatedBeforeReadWindow: unpaired.filter((u) => u.reason === "before-read-window").length,
     uncorrelatedNoEarlierPrompt: unpaired.filter((u) => u.reason === "no-earlier-prompt-in-run")
       .length,
-    corroborated: rate(pairings.filter((p) => p.corroboration === "corroborated").length, labelled),
+    corroborated: rate(
+      pairings.filter((p) => p.corroboration === "corroborated").length,
+      assessable,
+    ),
     uncorroborated: pairings.filter((p) => p.corroboration === "uncorroborated").length,
-    labelUnavailable: pairings.length - labelled,
+    corroborationUnassessable: pairings.length - assessable,
     buckets: PROMPT_BUCKETS.map((bucket) => {
       const count = pairings.filter((p) => p.promptBucket === bucket).length;
       return { bucket, count, share: rate(count, pairings.length) };
     }),
+    subagentDecisionsOnCorpusPrompt: pairings.filter(
+      (p) => p.decisionIsSubagent && p.promptBucket === "corpus",
+    ).length,
     promptEventsCorrelated: perEvent.size,
     promptEventsWithMultipleDecisions: rate(eventCounts.filter((n) => n > 1).length, perEvent.size),
-    maxDecisionsPerPromptEvent: eventCounts.reduce((a, b) => Math.max(a, b), 0),
+    maxDecisionsPerPromptEvent: max(eventCounts),
     corpusEntries: entries.length,
     corpusEntryDecisions: entryCounts.reduce((a, b) => a + b, 0),
-    maxDecisionsPerCorpusEntry: entryCounts.reduce((a, b) => Math.max(a, b), 0),
+    maxDecisionsPerCorpusEntry: max(entryCounts),
+    maxAskingsPerCorpusEntry: max(entries.map((e) => e.promptEventIds.length)),
   };
 }
 
@@ -396,27 +437,29 @@ export function renderCorrelationReport(r: CorrelationReport): string {
     `    no earlier prompt in run   ${r.uncorrelatedNoEarlierPrompt}`,
   ];
   if (r.uncorrelatedRecIds.length > 0) {
-    const shown = r.uncorrelatedRecIds.slice(0, 5).join(" ");
-    const more = r.uncorrelatedRecIds.length - shown.split(" ").length;
-    lines.push(`    rec_ids: ${shown}${more > 0 ? ` … +${more} more` : ""}`);
+    const shown = r.uncorrelatedRecIds.slice(0, 5);
+    const more = r.uncorrelatedRecIds.length - shown.length;
+    lines.push(`    rec_ids: ${shown.join(" ")}${more > 0 ? ` … +${more} more` : ""}`);
   }
   lines.push("", "Where the correlated prompt actually came from (of all pairings)");
   for (const b of r.buckets) {
     lines.push(`  ${b.bucket.padEnd(28)} ${formatRate(b.share)}`);
   }
   lines.push(
+    `  ${"⚠ sub-agent dec → corpus".padEnd(28)} ${r.subagentDecisionsOnCorpusPrompt} (must be 0 — see below)`,
     "",
     "Corroboration (display label as a leading substring — a signal, never prompt text)",
     `  corroborated                 ${formatRate(r.corroborated)}`,
     `  uncorroborated               ${r.uncorroborated}`,
-    `  no label stored              ${r.labelUnavailable}`,
+    `  nothing to compare           ${r.corroborationUnassessable}  (no label stored, or no prompt text)`,
     "",
     "Grouping (one prompt, however many decisions it drove)",
     `  prompt events correlated to  ${r.promptEventsCorrelated}`,
     `  driving >1 decision          ${formatRate(r.promptEventsWithMultipleDecisions)}` +
-      ` · max ${r.maxDecisionsPerPromptEvent}`,
+      ` · max ${r.maxDecisionsPerPromptEvent} (the ladder's depth)`,
     `  corpus entries               ${r.corpusEntries} (from ${r.corpusEntryDecisions} decisions,` +
-      ` max ${r.maxDecisionsPerCorpusEntry} per entry)`,
+      ` max ${r.maxDecisionsPerCorpusEntry} per entry over up to` +
+      ` ${r.maxAskingsPerCorpusEntry} askings — repetition, NOT ladder depth)`,
   );
   // The correlation's limits travel with the report, not alongside it — a figure quoted out of this
   // readout should carry the reason it is not a join.
@@ -432,6 +475,10 @@ export function renderCorrelationReport(r: CorrelationReport): string {
     "  · A pairing outside the `corpus` bucket landed on harness steer text, a sub-agent's brief",
     "    or a row with no text. Those are not observations of the classifier under test, which",
     "    labels lead-agent turns only.",
+    "  · The rule keys on run and timestamp ALONE — it has no agent term. It therefore could pair a",
+    "    sub-agent's decision to a lead prompt, which would be false evidence about a classifier",
+    "    that never labelled it. That count is above and must read 0; a non-zero reading is a",
+    "    defect in the rule, not a fact about the ledger.",
     "  · Decisions group under one corpus entry per distinct prompt. The recovery ladder re-decides",
     "    per rung, so several decisions from one prompt are ONE observation, not several.",
   );

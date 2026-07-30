@@ -155,12 +155,14 @@ describe("corroborate — the display label as an independent signal", () => {
   });
 
   test("reports a missing or empty label as unassessable, never as a failure", () => {
-    expect(corroborate(null, "fix the parser")).toBe("no-label");
-    expect(corroborate("   ", "fix the parser")).toBe("no-label");
+    expect(corroborate(null, "fix the parser")).toBe("unassessable");
+    expect(corroborate("   ", "fix the parser")).toBe("unassessable");
   });
 
-  test("cannot corroborate a prompt with no text", () => {
-    expect(corroborate("fix the parser", null)).toBe("uncorroborated");
+  test("reports a prompt row with no text as unassessable, not as a failure", () => {
+    // Nothing to compare is not a failed comparison. Counting it as one would inflate the
+    // uncorroborated tally with non-observations.
+    expect(corroborate("fix the parser", null)).toBe("unassessable");
   });
 });
 
@@ -218,7 +220,7 @@ describe("buildCorrelationReport", () => {
     const r = buildCorrelationReport(decisions, prompts, cfg);
     expect(r.corroborated).toEqual({ n: 1, d: 2, pct: 50 });
     expect(r.uncorroborated).toBe(1);
-    expect(r.labelUnavailable).toBe(1);
+    expect(r.corroborationUnassessable).toBe(1);
   });
 
   test("counts prompts driving more than one decision, and the entries they group into", () => {
@@ -229,6 +231,34 @@ describe("buildCorrelationReport", () => {
     expect(r.maxDecisionsPerPromptEvent).toBe(2);
     expect(r.corpusEntries).toBe(2);
     expect(r.corpusEntryDecisions).toBe(3);
+  });
+
+  test("separates an entry's ladder depth from the same text being asked again", () => {
+    // One text asked in two runs, two decisions each. Four decisions under one entry is NOT a
+    // four-rung ladder, and a reader must be able to tell those apart from the readout alone.
+    const prompts = [ev(10, "run the suite"), ev(10, "run the suite", { run_id: "r2", id: "e-b" })];
+    const decisions = [
+      dec(11),
+      dec(12),
+      dec(11, { rec_id: "d-b1", run_id: "r2" }),
+      dec(12, { rec_id: "d-b2", run_id: "r2" }),
+    ];
+    const r = buildCorrelationReport(decisions, prompts, cfg);
+    expect(r.corpusEntries).toBe(1);
+    expect(r.maxDecisionsPerCorpusEntry).toBe(4);
+    expect(r.maxAskingsPerCorpusEntry).toBe(2);
+    expect(r.maxDecisionsPerPromptEvent).toBe(2);
+  });
+
+  test("counts a sub-agent's decision attributed to a corpus prompt as the defect it is", () => {
+    // The rule has no agent term, so it CAN pair a sub-agent's decision to a lead prompt. The
+    // classifier only ever labels lead turns, so that pairing is false evidence about it.
+    const r = buildCorrelationReport(
+      [dec(11, { agent_id: "child-1" }), dec(12)],
+      [ev(10, "fix the parser")],
+      cfg,
+    );
+    expect(r.subagentDecisionsOnCorpusPrompt).toBe(1);
   });
 
   test("reports the bucket every pairing landed in, each with the pairing denominator", () => {
