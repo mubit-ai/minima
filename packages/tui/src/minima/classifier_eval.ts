@@ -44,6 +44,36 @@ export function formatRate(r: Rate): string {
 }
 
 /**
+ * Does this row carry a prompt at all? One predicate, used by every counting function here, so a
+ * whitespace-only row cannot be a prompt to one of them and not to another — an inconsistency
+ * that would let the same row be both counted and excluded.
+ */
+export function hasPromptText(row: UserPromptRow): boolean {
+  return row.text !== null && row.text.trim() !== "";
+}
+
+/**
+ * Split rows by which agent was asked.
+ *
+ * The client-side classifier runs only for the lead agent — the runtime gates the call on
+ * `agentId === null`. A sub-agent's brief is therefore traffic the classifier under test never
+ * labels, and scoring it against reference labels would measure something production never does.
+ * Set aside rather than dropped, so the size of the exclusion stays visible in the readout.
+ */
+export function partitionLeadPrompts(rows: readonly UserPromptRow[]): {
+  lead: UserPromptRow[];
+  subagent: UserPromptRow[];
+} {
+  const lead: UserPromptRow[] = [];
+  const subagent: UserPromptRow[] = [];
+  for (const row of rows) {
+    if (row.agent_id === null) lead.push(row);
+    else subagent.push(row);
+  }
+  return { lead, subagent };
+}
+
+/**
  * Split recorded user-role rows into the corpus and the harness-authored steer messages.
  *
  * Turn-budget warnings, doom-loop nudges, stop-gate continuations and stream-tripwire reminders
@@ -61,8 +91,8 @@ export function partitionSteerText(rows: readonly UserPromptRow[]): {
   const corpus: UserPromptRow[] = [];
   const excluded: UserPromptRow[] = [];
   for (const row of rows) {
-    if (row.text === null) continue;
-    if (isHarnessSteerText(row.text)) excluded.push(row);
+    if (!hasPromptText(row)) continue;
+    if (isHarnessSteerText(row.text as string)) excluded.push(row);
     else corpus.push(row);
   }
   return { corpus, excluded };
@@ -85,8 +115,8 @@ export interface DistinctPrompt {
 export function distinctPrompts(rows: readonly UserPromptRow[]): DistinctPrompt[] {
   const counts = new Map<string, number>();
   for (const row of rows) {
-    if (row.text === null || row.text.trim() === "") continue;
-    counts.set(row.text, (counts.get(row.text) ?? 0) + 1);
+    if (!hasPromptText(row)) continue;
+    counts.set(row.text as string, (counts.get(row.text as string) ?? 0) + 1);
   }
   return [...counts].map(([text, occurrences]) => ({ text, occurrences }));
 }
@@ -149,6 +179,12 @@ export interface CallSpec {
   readonly callsPerPrompt: number;
   readonly inputUsdPerMTok: number;
   readonly outputUsdPerMTok: number;
+  /**
+   * Input tokens every call pays regardless of prompt — the system prompt and instructions. NOT
+   * optional: the classifier's own system prompt is ~99 tokens against a ~17-token average prompt
+   * here, so a silently-defaulted zero would understate input by nearly 7x. State it, even as 0.
+   */
+  readonly fixedInputTokensPerCall: number;
   /** Output budget assumed per call — a label response is short and bounded. */
   readonly outputTokensPerCall: number;
 }
@@ -195,9 +231,15 @@ function usd(n: number): number {
 /**
  * Project what a full run would spend, without spending it.
  *
- * Input tokens come from the prompts themselves; output tokens from each leg's declared per-call
- * budget. Each DISTINCT prompt is priced once however often it was asked — the corpus is the unit
- * of work, so a prompt repeated forty times is not forty calls.
+ * Input tokens come from the prompts themselves plus each leg's fixed per-call overhead; output
+ * tokens from each leg's declared per-call budget. Each DISTINCT prompt is priced once however
+ * often it was asked — the corpus is the unit of work, so a prompt repeated forty times is not
+ * forty calls.
+ *
+ * The chars/4 + fixed-output-allowance heuristic is the same one `estimatedPassCostUsd` uses for
+ * the observer's cap. Deliberately not shared: that one is shaped around a single pass over a
+ * `Model`, and reusing it would pull the AI layer's types into this pure core for two lines of
+ * arithmetic.
  */
 export function estimateRunCost(
   prompts: readonly DistinctPrompt[],
@@ -206,7 +248,8 @@ export function estimateRunCost(
   const corpusInputTokens = prompts.reduce((sum, p) => sum + estimateTokens(p.text), 0);
   const lines = specs.map((s) => {
     const calls = prompts.length * s.callsPerPrompt;
-    const inputTokens = corpusInputTokens * s.callsPerPrompt;
+    const inputTokens =
+      (corpusInputTokens + prompts.length * s.fixedInputTokensPerCall) * s.callsPerPrompt;
     const outputTokens = calls * s.outputTokensPerCall;
     return {
       label: s.label,
@@ -240,13 +283,24 @@ export function estimateRunCost(
 export const DEFAULT_LENGTH_BOUNDARIES: readonly number[] = [60, 200, 1000];
 
 /**
+ * A label reply is one line of minified JSON (three short fields), so ~40 output tokens covers it
+ * with room to spare, and a labelling instruction runs about the size of the classifier's own
+ * system prompt — 395 chars, ~99 tokens. Both are allowances, and both are printed.
+ */
+const LABEL_OUTPUT_TOKENS = 40;
+const LABEL_INSTRUCTION_TOKENS = 99;
+
+/**
  * PROVISIONAL legs for the full run's spend estimate: a provider-diverse reference panel plus one
- * replay of the harness classifier per prompt. Prices are the harness's OWN registered per-Mtok
- * figures for those models, not figures invented here.
+ * replay of the harness classifier per prompt.
  *
  * The actual panel is MUB-216's decision. These exist only so the dry run can print a real
- * order-of-magnitude number before that choice is made. The rendered readout prints each leg's
- * prices, so a stale entry here shows up in the output rather than hiding inside the total.
+ * order-of-magnitude number before that choice is made.
+ *
+ * The prices were COPIED from the harness's own model registry (the CLI's built-in model table) and
+ * nothing keeps them in sync — the first price edit there makes these stale. That is tolerable only
+ * because the readout prints each leg's prices, so drift shows up in the output rather than hiding
+ * inside the total. Do not read them as authoritative current prices.
  */
 export const DEFAULT_CALL_SPECS: readonly CallSpec[] = [
   {
@@ -254,36 +308,80 @@ export const DEFAULT_CALL_SPECS: readonly CallSpec[] = [
     callsPerPrompt: 1,
     inputUsdPerMTok: 1.0,
     outputUsdPerMTok: 5.0,
-    outputTokensPerCall: 120,
+    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
+    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
   },
   {
     label: "panel: gpt-4o-mini",
     callsPerPrompt: 1,
     inputUsdPerMTok: 0.15,
     outputUsdPerMTok: 0.6,
-    outputTokensPerCall: 120,
+    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
+    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
   },
   {
     label: "panel: gemini-2.5-flash",
     callsPerPrompt: 1,
     inputUsdPerMTok: 0.3,
     outputUsdPerMTok: 2.5,
-    outputTokensPerCall: 120,
+    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
+    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
   },
   {
     label: "replay: harness classifier",
     callsPerPrompt: 1,
     inputUsdPerMTok: 1.0,
     outputUsdPerMTok: 5.0,
-    outputTokensPerCall: 120,
+    fixedInputTokensPerCall: LABEL_INSTRUCTION_TOKENS,
+    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Invocation. The cost guard is a pure decision, so it can be pinned by a test.
+// ---------------------------------------------------------------------------
+
+/** Default row cap: far above this ledger's size, so a normal run is never truncated. */
+export const DEFAULT_ROW_CAP = 20000;
+
+/** What an argv asks the evaluation to do. */
+export type Invocation =
+  | { kind: "help" }
+  | { kind: "refuse-spend" }
+  | { kind: "dry-run"; project: string | null; dbPath: string | null; rowCap: number };
+
+/**
+ * Decide what an argv means, without doing any of it.
+ *
+ * The cost guard lives here rather than in the shell so it is unit-testable: there is no argv that
+ * both requests spending and yields a run. Refusal is checked FIRST, so combining `--spend` with
+ * anything else cannot be read as permission. A nonsense row cap falls back to the default instead
+ * of reading nothing and reporting an empty corpus as a finding.
+ */
+export function decideInvocation(argv: readonly string[]): Invocation {
+  const has = (name: string): boolean => argv.includes(`--${name}`);
+  const option = (name: string): string | null => {
+    const hit = argv.find((a) => a.startsWith(`--${name}=`));
+    return hit ? hit.slice(name.length + 3) : null;
+  };
+  if (has("spend")) return { kind: "refuse-spend" };
+  if (has("help")) return { kind: "help" };
+  const raw = Number(option("limit") ?? DEFAULT_ROW_CAP);
+  return {
+    kind: "dry-run",
+    project: option("project"),
+    dbPath: option("db"),
+    rowCap: Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ROW_CAP,
+  };
+}
 
 /** What the dry run is told to measure. `scope` is descriptive only — it labels the readout. */
 export interface DryRunConfig {
   readonly scope: string;
   readonly lengthBoundaries: readonly number[];
   readonly specs: readonly CallSpec[];
+  /** The row cap the read was made under, so a truncated read can be reported as truncated. */
+  readonly rowCap?: number;
 }
 
 /**
@@ -298,11 +396,15 @@ export interface DryRunReport {
   readonly scope: string;
   /** Recorded user-role messages read, before any filtering. */
   readonly rawUserRows: number;
+  /** True when the read hit its cap, so these figures describe a slice, not the ledger. */
+  readonly capHit: boolean;
   /** Rows whose payload carried no prompt text at all, over all rows read. */
   readonly unusableRows: Rate;
+  /** Messages set aside as a sub-agent's, over all rows read — traffic the classifier never sees. */
+  readonly subagentRows: Rate;
   /** Raw messages excluded as harness steer text, over all rows read. */
   readonly steerRows: Rate;
-  /** Distinct steer texts, over all distinct texts — so `corpusDistinct + n = d`. */
+  /** Distinct steer texts, over all distinct LEAD texts — so `corpusDistinct + n = d`. */
   readonly steerDistinct: Rate;
   readonly corpusDistinct: number;
   /** Recorded messages carrying a corpus prompt — always >= corpusDistinct. */
@@ -313,17 +415,20 @@ export interface DryRunReport {
 
 /** Assemble the whole dry-run readout from raw ledger rows. Pure: reads nothing, spends nothing. */
 export function buildDryRunReport(rows: readonly UserPromptRow[], cfg: DryRunConfig): DryRunReport {
-  const { corpus, excluded } = partitionSteerText(rows);
+  const { lead, subagent } = partitionLeadPrompts(rows);
+  const { corpus, excluded } = partitionSteerText(lead);
   const corpusPrompts = distinctPrompts(corpus);
   const steerPrompts = distinctPrompts(excluded);
-  const allDistinct = corpusPrompts.length + steerPrompts.length;
-  const unusable = rows.filter((r) => r.text === null || r.text.trim() === "").length;
+  const leadDistinct = corpusPrompts.length + steerPrompts.length;
+  const unusable = rows.filter((r) => !hasPromptText(r)).length;
   return {
     scope: cfg.scope,
     rawUserRows: rows.length,
+    capHit: cfg.rowCap !== undefined && rows.length >= cfg.rowCap,
     unusableRows: rate(unusable, rows.length),
+    subagentRows: rate(subagent.length, rows.length),
     steerRows: rate(excluded.length, rows.length),
-    steerDistinct: rate(steerPrompts.length, allDistinct),
+    steerDistinct: rate(steerPrompts.length, leadDistinct),
     corpusDistinct: corpusPrompts.length,
     corpusOccurrences: corpusPrompts.reduce((n, p) => n + p.occurrences, 0),
     strata: stratifyByLength(corpusPrompts, cfg.lengthBoundaries),
@@ -342,7 +447,8 @@ export function renderDryRunReport(r: DryRunReport): string {
     `scope: ${r.scope}`,
     "",
     "Corpus",
-    `  user-role messages read      ${r.rawUserRows}`,
+    `  user-role messages read      ${r.rawUserRows}${r.capHit ? "  ⚠ TRUNCATED at the row cap" : ""}`,
+    `  set aside as sub-agent       ${formatRate(r.subagentRows)}`,
     `  excluded as harness steer    ${formatRate(r.steerRows)} raw · ${formatRate(r.steerDistinct)} distinct`,
     `  unusable (no prompt text)    ${formatRate(r.unusableRows)}`,
     `  distinct prompts in corpus   ${r.corpusDistinct} (from ${r.corpusOccurrences} messages)`,
@@ -367,5 +473,21 @@ export function renderDryRunReport(r: DryRunReport): string {
     "",
     "Spending requires --spend. Nothing above cost anything.",
   );
+  // The corpus's limits travel with the report, not alongside it — a figure quoted out of this
+  // readout should carry the reason it is not a general claim.
+  lines.push(
+    "",
+    "Limits of this corpus, which travel with every figure above:",
+    "  · One developer's traffic, a few hundred prompts. Aggregate figures mean something;",
+    "    per-task-type figures mostly will not.",
+    "  · Sub-agent messages are excluded: the client-side classifier only labels lead-agent",
+    "    turns, so they are traffic it never sees.",
+  );
+  if (r.capHit) {
+    lines.push(
+      "  · ⚠ The read was TRUNCATED at its row cap, so this describes the most recent slice of",
+      "    the ledger, not the whole of it. Raise the cap.",
+    );
+  }
   return lines.join("\n");
 }

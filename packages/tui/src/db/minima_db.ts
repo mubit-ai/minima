@@ -821,6 +821,8 @@ export interface UserPromptRow {
   id: string;
   run_id: string;
   ts: number;
+  /** NULL = the lead agent — the only agent the client-side classifier ever labels. */
+  agent_id: string | null;
   text: string | null;
 }
 
@@ -1224,23 +1226,30 @@ export class MinimaDb {
   /**
    * Every recorded user-role message, oldest first, with its prompt text extracted from the
    * payload — the classifier-evaluation corpus read (MUB-215, read-only). `projectKey` scopes
-   * to one project's runs; null spans the whole ledger. Raw rows: duplicates, harness steer
-   * text and null payloads all come through, because deciding what counts is the caller's
-   * pure core, not this query.
+   * to one project's runs; null spans the whole ledger.
+   *
+   * Raw rows: duplicates, harness steer text, sub-agent messages and null payloads all come
+   * through. Deciding what counts is the caller's pure core, not this query — so the counts it
+   * reports are testable without a ledger.
+   *
+   * `limit` selects the MOST RECENT rows and returns them oldest-first. Truncating from the old
+   * end would silently answer with pre-regime-change traffic, which is the reading most likely
+   * to mislead; a caller that wants the whole ledger raises the cap and checks `capHit`.
    */
   listUserPrompts(projectKey: string | null = null, limit = 20000): UserPromptRow[] {
     const scope = projectKey
       ? "AND e.run_id IN (SELECT run_id FROM runs WHERE project_key = ?)"
       : "";
     const params: (string | number)[] = projectKey ? [projectKey, limit] : [limit];
-    return this.db
+    const newestFirst = this.db
       .query(
-        `SELECT e.id, e.run_id, e.ts, json_extract(e.payload, '$.text') AS text
+        `SELECT e.id, e.run_id, e.ts, e.agent_id, json_extract(e.payload, '$.text') AS text
          FROM events e
          WHERE e.type = 'user' ${scope}
-         ORDER BY e.ts, e.rowid LIMIT ?`,
+         ORDER BY e.ts DESC, e.rowid DESC LIMIT ?`,
       )
       .all(...params) as UserPromptRow[];
+    return newestFirst.reverse();
   }
 
   writeToolCall(opts: {

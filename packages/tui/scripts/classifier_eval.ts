@@ -8,9 +8,10 @@
  *   bun packages/tui/scripts/classifier_eval.ts
  *   bun packages/tui/scripts/classifier_eval.ts --project=minima --limit=5000
  *
- * This is the SHELL. It reads the ledger, prints, and holds no logic that any reported number
- * depends on — all filtering, grouping, stratification and counting lives in the pure core
- * (`src/minima/classifier_eval.ts`), which is unit-tested with no ledger and no network.
+ * This is the SHELL, and it is a dispatcher only: argv interpretation, the cost guard, all
+ * counting and all rendering live in the pure core (`src/minima/classifier_eval.ts`), which is
+ * unit-tested with no ledger and no network. What is left here is opening a ledger, one read, and
+ * printing — nothing a reported number depends on.
  *
  * It lives under `scripts/` deliberately: `bun test` matches only `*.test.ts`, so nothing here is
  * reachable from the hermetic suite. The full evaluation will make real network calls by design,
@@ -23,34 +24,30 @@ import {
   DEFAULT_CALL_SPECS,
   DEFAULT_LENGTH_BOUNDARIES,
   buildDryRunReport,
+  decideInvocation,
   renderDryRunReport,
 } from "../src/minima/classifier_eval.ts";
 
-const argv = process.argv.slice(2);
-const flag = (name: string): boolean => argv.includes(`--${name}`);
-const option = (name: string): string | null => {
-  const hit = argv.find((a) => a.startsWith(`--${name}=`));
-  return hit ? hit.slice(name.length + 3) : null;
-};
+const HELP = [
+  "Classifier eval — dry run (MUB-215).",
+  "",
+  "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
+  "  --limit=<n>       cap rows read, most recent first (default 20000)",
+  "  --db=<path>       read a specific ledger (default: the harness's own)",
+  "  --spend           opt in to a billable run (not implemented yet — see MUB-216 onward)",
+  "  --help            this message",
+].join("\n");
 
-if (flag("help")) {
-  console.log(
-    [
-      "Classifier eval — dry run (MUB-215).",
-      "",
-      "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
-      "  --limit=<n>       cap rows read (default 20000)",
-      "  --db=<path>       read a specific ledger (default: the harness's own)",
-      "  --spend           opt in to a billable run (not implemented yet — see MUB-216 onward)",
-      "  --help            this message",
-    ].join("\n"),
-  );
+const invocation = decideInvocation(process.argv.slice(2));
+
+if (invocation.kind === "help") {
+  console.log(HELP);
   process.exit(0);
 }
 
-// The cost guard. There is no path to a billable call that does not pass through this flag, and
-// today there is no billable path at all: the panel and replay legs land in MUB-216 onward.
-if (flag("spend")) {
+// The cost guard. `decideInvocation` refuses --spend ahead of every other flag, and today there is
+// no billable path at all: the panel and replay legs land in MUB-216 onward.
+if (invocation.kind === "refuse-spend") {
   console.error(
     [
       "--spend: refusing — the spending path is not implemented yet.",
@@ -61,7 +58,8 @@ if (flag("spend")) {
   process.exit(2);
 }
 
-const dbPath = option("db");
+const { project, dbPath, rowCap } = invocation;
+
 // Opening a ledger creates it when absent, so a typo'd --db would silently report a zero corpus
 // as though it were a finding. Refuse instead. (Opening an EXISTING ledger runs the harness's
 // normal append-only migrations, exactly as a harness launch would.)
@@ -72,28 +70,22 @@ if (dbPath !== null && !existsSync(dbPath)) {
   process.exit(2);
 }
 
-const project = option("project");
-const rawLimit = Number(option("limit") ?? 20000);
-const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 20000;
-
 const db = dbPath ? new MinimaDb(dbPath) : new MinimaDb();
 try {
-  const rows = db.listUserPrompts(project, limit);
+  const rows = db.listUserPrompts(project, rowCap);
   const report = buildDryRunReport(rows, {
     scope: project ? `project ${project} · ${db.path}` : `whole ledger · ${db.path}`,
     lengthBoundaries: DEFAULT_LENGTH_BOUNDARIES,
     specs: DEFAULT_CALL_SPECS,
+    rowCap,
   });
   console.log(renderDryRunReport(report));
+  // Specific to the legs THIS shell chose, so it belongs here rather than in the report.
   console.log(
     [
-      "",
-      "Caveats, which travel with every figure above:",
-      "  · The call legs are PROVISIONAL — MUB-216 chooses the reference panel. Prices shown are",
-      "    the harness's own registered per-Mtok figures for those models.",
-      "  · This corpus is one developer's traffic, a few hundred prompts. Aggregate figures mean",
-      "    something; per-task-type figures mostly will not.",
-      `  · Rows read were capped at ${limit}. Raise --limit if the count above equals that cap.`,
+      "  · The call legs above are PROVISIONAL — MUB-216 chooses the reference panel. Their",
+      "    prices were copied from the harness's model registry and nothing keeps them in sync,",
+      "    which is why each leg prints the prices it was costed at.",
     ].join("\n"),
   );
 } finally {
