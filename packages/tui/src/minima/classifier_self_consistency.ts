@@ -290,6 +290,9 @@ export interface SamplingOutstanding {
   readonly temperature: string;
   readonly corpusEntries: number;
   readonly pilotEntries: number;
+  /** The prices every figure below was costed at, carried so the total can be re-derived by hand. */
+  readonly inputUsdPerMTok: number;
+  readonly outputUsdPerMTok: number;
   /** Draws stored at this revision, over corpus x samples. A Rate, so the share carries its base. */
   readonly drawsCached: Rate;
   /** What `--spend` would pay for the whole lane right now. */
@@ -316,6 +319,8 @@ export function summarizeSamplingOutstanding(
     temperature: SAMPLING_TEMPERATURE,
     corpusEntries: prompts.length,
     pilotEntries: pilot.length,
+    inputUsdPerMTok: plan.model.model.cost.input,
+    outputUsdPerMTok: plan.model.model.cost.output,
     drawsCached: rate(plan.cached, prompts.length * plan.samples),
     outstanding: projectSamplingCost(plan),
     pilotOutstanding: projectSamplingCost(pilotPlan),
@@ -338,9 +343,12 @@ export function renderSamplingOutstanding(w: SamplingOutstanding): string {
     "",
     "  Both gross projections, printed always so neither can go stale:",
   ];
+  // Every price a leg was costed at travels WITH the leg, as the panel's and the replay's do: a
+  // printed estimate a reviewer cannot re-derive by hand is as misleading as a bare percentage.
+  const prices = `$${w.inputUsdPerMTok}/$${w.outputUsdPerMTok} per Mtok`;
   const gross = (label: string, e: CostEstimate, entries: number): string =>
     `  ${label.padEnd(28)} ${entries} entries x ${w.samples} draws = ${e.totalCalls} calls` +
-    ` · ${e.totalInputTokens} in · ${e.totalOutputTokens} out · $${e.totalUsd.toFixed(4)}`;
+    ` · ${e.totalInputTokens} in · ${e.totalOutputTokens} out · ${prices} · $${e.totalUsd.toFixed(4)}`;
   lines.push(
     gross("FULL LANE from scratch", w.fullLane, w.corpusEntries),
     gross("PILOT from scratch", w.pilotLane, w.pilotEntries),

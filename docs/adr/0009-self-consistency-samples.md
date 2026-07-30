@@ -86,7 +86,12 @@ here untouched precisely because no second quorum rule was added — this lane n
 
 Bucketed against a resolution band of ±1/(2n) — ±0.05 at n = 10, because an empirical frequency
 over n draws lands only on multiples of 1/n and half of that is the finest distinction the
-instrument supports. Above the band, `overconfident`; below, `underconfident`; inside,
+instrument supports. **n here is the draws that prompt actually has, not the `--samples` a reader
+passed**: the two can differ (a run stopped at its ceiling, a lane sampled at 4 and read at 10, a
+prompt whose last three draws failed), and taking the band from the flag is the direction that
+MANUFACTURES a direction of bias — a 0.1 gap over four draws would read `overconfident` on evidence
+that cannot resolve it. The readout prints the observed depth beside the nominal n and flags a
+mismatch. Above the band, `overconfident`; below, `underconfident`; inside,
 **`indistinguishable`, deliberately NOT `calibrated`**. A gap inside the band has not been shown to
 be zero, only to be smaller than n draws can resolve, and naming the arm `calibrated` would let a
 run at n = 2 (band ±0.25) describe almost everything as calibrated and be quoted as having measured

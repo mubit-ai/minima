@@ -15,12 +15,14 @@ import {
   LABEL_INSTRUCTION_TOKENS,
   MIN_SAMPLES,
   REGIME_BOUNDARY_TS,
+  corpusPrompts,
   decideInvocation,
   resolveSamples,
 } from "../src/minima/classifier_eval.ts";
 import {
   DEFAULT_CONFIDENCE_BOUNDARIES,
   MIN_REPORTABLE_SUPPORT,
+  segmentCorpus,
 } from "../src/minima/classifier_eval_score.ts";
 import {
   REPLAY_MODELS,
@@ -515,6 +517,43 @@ describe("direction of bias (AC 3) — the sign is the finding", () => {
     expect(directionOf(0.050001, 0.05)).toBe("overconfident");
   });
 
+  test("the band comes from the DRAWS IN HAND, not from the --samples a reader passed", () => {
+    // A lane read at n=10 whose rows were bought at 4 must be bucketed at +/-0.125, not +/-0.05.
+    // Taking the band from the flag is the direction that MANUFACTURES a direction of bias: a
+    // gap of 0.1 over four draws would read `overconfident` on evidence that cannot resolve it.
+    const corpus = [userRow("u0", "p0")];
+    const samples = [
+      ...Array.from({ length: 3 }, (_, i) => draw("p0", i, "code", "easy", 0.85)),
+      draw("p0", 3, "code", "hard", 0.85),
+    ];
+    const r = buildSelfConsistencyReport({ corpus, samples }, CFG); // CFG says samples: 10
+    const p = r.perPrompt[0] as PromptSelfConsistency;
+    expect(p.draws).toBe(4);
+    expect(p.band).toBe(resolutionBand(4)); // 0.125, not the header's 0.05
+    expect(p.gap).toBeCloseTo(0.1, 6); // 0.85 - 3/4
+    expect(p.direction).toBe("indistinguishable");
+    // …and at the flag's band it would have been called overconfident, which is the whole point.
+    expect(directionOf(p.gap as number, resolutionBand(10))).toBe("overconfident");
+  });
+
+  test("a depth that disagrees with the stated n is flagged in the readout, never silent", () => {
+    const corpus = [userRow("u0", "p0")];
+    const samples = Array.from({ length: 4 }, (_, i) =>
+      draw("p0", i, "code", i < 3 ? "easy" : "hard", 0.85),
+    );
+    const r = buildSelfConsistencyReport({ corpus, samples }, CFG);
+    expect(r.coverage.drawsPerPrompt).toEqual({ min: 4, max: 4 });
+    const out = renderSelfConsistencyReport(r);
+    expect(out).toContain("draws per sampled entry      4");
+    expect(out).toContain("the ledger's depth does not match the stated n=10");
+  });
+
+  test("…and is not flagged when it agrees", () => {
+    const f = fixture({ prompts: 12, samples: 10, agree: 6, confidence: 0.95 });
+    const out = renderSelfConsistencyReport(buildSelfConsistencyReport(f, CFG));
+    expect(out).not.toContain("does not match the stated n");
+  });
+
   test("the middle arm is never called 'calibrated', and the readout says why", () => {
     const dirs = new Set([directionOf(0, 0.05), directionOf(1, 0.05), directionOf(-1, 0.05)]);
     expect([...dirs].sort()).toEqual(["indistinguishable", "overconfident", "underconfident"]);
@@ -687,6 +726,34 @@ describe("planning, cost and the pilot", () => {
     );
     expect(pilotEntries(corpus)).toEqual(pilotEntries(corpus));
     expect(pilotEntries(corpus.slice(0, 4))).toHaveLength(4);
+  });
+
+  test("the pilot the PLANNER buys is the pilot the REPORT checks", () => {
+    // Two pipelines reach the corpus — `corpusPrompts` for the planner, `segmentCorpus` for the
+    // report — and both end in `distinctPrompts`, so both are in first-appearance order. If they
+    // ever diverged, the run would buy one set of ten and the abort criterion would be evaluated
+    // over another, which is a verdict about prompts nobody sampled.
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      userRow(`u${i}`, `prompt-${i}`, BEFORE_TS + i),
+    );
+    const plannerPilot = pilotEntries(corpusPrompts(rows)).map((p) => p.text);
+    const reportPilot = pilotEntries(segmentCorpus(rows, REGIME_BOUNDARY_TS)).map((p) => p.text);
+    expect(plannerPilot).toEqual(reportPilot);
+    expect(plannerPilot).toHaveLength(PILOT_ENTRIES);
+    expect(plannerPilot[0]).toBe("prompt-0");
+  });
+
+  test("the leg's prices travel with every figure, so the total is re-derivable by hand", () => {
+    const corpus = [prompt("abcd")];
+    const w = summarizeSamplingOutstanding(
+      planSampling(corpus, SAMPLED_MODEL, 10, new Set(), promptHash, KEY_OF),
+      planSampling(corpus, SAMPLED_MODEL, 10, new Set(), promptHash, KEY_OF),
+      corpus,
+      CORPUS_REV,
+    );
+    expect(w.inputUsdPerMTok).toBe(SAMPLED_MODEL.model.cost.input);
+    expect(w.outputUsdPerMTok).toBe(SAMPLED_MODEL.model.cost.output);
+    expect(renderSamplingOutstanding(w)).toContain("$1/$5 per Mtok");
   });
 
   test("pilot draws PREPAY the same draws of the full lane — a re-run is a cache hit", () => {

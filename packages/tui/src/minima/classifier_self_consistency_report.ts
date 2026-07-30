@@ -194,6 +194,12 @@ export interface PromptSelfConsistency {
   readonly gap: number | null;
   /** The same gap against the secondary comparand, so the understatement can be seen. */
   readonly taskTypeGap: number | null;
+  /**
+   * The band {@link direction} was bucketed against: 1/(2·{@link draws}), from THIS prompt's own
+   * evidence rather than from the `--samples` a reader passed. A prompt with four draws cannot
+   * resolve a 0.05 gap however deeply the flag says the lane was meant to sample.
+   */
+  readonly band: number;
   readonly direction: BiasDirection | null;
 }
 
@@ -218,12 +224,19 @@ function modal(values: readonly string[]): { value: string | null; count: number
 
 const PAIR_SEP = "/";
 
-/** Reduce one entry's draws. Total: no draws yields nulls rather than a divide by zero. */
+/**
+ * Reduce one entry's draws. Total: no draws yields nulls rather than a divide by zero.
+ *
+ * The direction band is derived from THIS PROMPT'S OWN draw count, not from the `--samples` the
+ * invocation states. The two can differ — a run that stopped at its ceiling, a lane sampled at n=4
+ * and read at n=10, a prompt whose last three draws failed — and the band is a claim about what the
+ * evidence in hand can resolve. Taking it from the flag would let a shallow prompt be bucketed at a
+ * resolution it does not have, which is the direction that manufactures a direction of bias.
+ */
 function reduceDraws(
   entry: SegmentedPrompt,
   draws: readonly StoredSelfConsistencySample[],
   hash: string,
-  band: number,
 ): PromptSelfConsistency {
   const labelled = draws.filter((d) => d.task_type !== null);
   const pairs = labelled.map((d) => `${d.task_type}${PAIR_SEP}${d.difficulty ?? "-"}`);
@@ -254,7 +267,8 @@ function reduceDraws(
     selfReport,
     gap,
     taskTypeGap: selfReport !== null && typeFreq !== null ? round6(selfReport - typeFreq) : null,
-    direction: gap === null ? null : directionOf(gap, band),
+    band: resolutionBand(d),
+    direction: gap === null ? null : directionOf(gap, resolutionBand(d)),
   };
 }
 
@@ -410,6 +424,14 @@ export interface SampleCoverage {
   readonly rowsUnreadable: number;
   /** Entries with draws but no labelled draw at all: it answered every time, and declined. */
   readonly entriesAllAbstained: number;
+  /**
+   * The shallowest and deepest sampled entry, over entries that have any draws at all.
+   *
+   * Printed because the direction band is 1/(2·draws) PER PROMPT, so a lane read at `--samples=10`
+   * whose rows were bought at 4 is being bucketed at ±0.125 while the header says ±0.05. The two
+   * figures beside each other are what makes that visible instead of silent.
+   */
+  readonly drawsPerPrompt: { readonly min: number; readonly max: number } | null;
   /** Distinct `temperature` values actually recorded. AC 1's "recorded", read back, not asserted. */
   readonly temperaturesRecorded: readonly string[];
 }
@@ -487,7 +509,7 @@ export function buildSelfConsistencyReport(
     if (draws.length === 0) continue;
     entriesSampled += 1;
     drawsPresent += draws.length;
-    const reduced = reduceDraws(entry, draws, hash, band);
+    const reduced = reduceDraws(entry, draws, hash);
     if (reduced.modalPair === null) entriesAllAbstained += 1;
     perPrompt.push(reduced);
   }
@@ -513,6 +535,13 @@ export function buildSelfConsistencyReport(
       rowsWithoutCorpusEntry,
       rowsUnreadable,
       entriesAllAbstained,
+      drawsPerPrompt:
+        perPrompt.length === 0
+          ? null
+          : {
+              min: Math.min(...perPrompt.map((p) => p.draws)),
+              max: Math.max(...perPrompt.map((p) => p.draws)),
+            },
       temperaturesRecorded: [...temperatures].sort(),
     },
     perPrompt,
@@ -549,6 +578,12 @@ export const SELF_CONSISTENCY_LIMITS: readonly string[] = [
   "    sends. No temperature was set anywhere, so this is the actual production distribution and",
   "    not a synthetic one. The pilot is what verifies the calls vary at all.",
 ];
+
+/** How deep the ledger actually is, as a point or a range. */
+function depthLabel(d: { min: number; max: number } | null): string {
+  if (d === null) return "—";
+  return d.min === d.max ? `${d.min}` : `${d.min}-${d.max}`;
+}
 
 /** A signed figure, with the sign always shown — the sign is the finding. */
 function signed(n: number | null): string {
@@ -596,6 +631,7 @@ function mapSeg<T>(s: Segmented<T>, f: (t: T) => string): Segmented<string> {
  */
 export function renderSelfConsistencyReport(r: SelfConsistencyReport): string {
   const w = r.bias.whole;
+  const depth = r.coverage.drawsPerPrompt;
   const lines: string[] = [
     "Classifier self-consistency (MUB-217) — is the self-reported number honest?",
     `scope: ${r.scope}`,
@@ -606,11 +642,18 @@ export function renderSelfConsistencyReport(r: SelfConsistencyReport): string {
     `  samples per prompt (n)       ${r.samples}   (effective, after --samples' fallback and floor)`,
     `  temperature                  ${r.temperature}`,
     `  temperature recorded on rows ${r.coverage.temperaturesRecorded.join(" · ") || "—"}`,
-    `  resolution band              +/-${r.band.toFixed(4)}  = 1/(2n)`,
+    `  resolution band at that n    +/-${r.band.toFixed(4)}  = 1/(2n)`,
     `  corpus entries sampled       ${formatRate(r.coverage.entriesSampled)}`,
     `  draws present                ${formatRate(r.coverage.drawsPresent)}`,
-    "",
+    `  draws per sampled entry      ${depthLabel(depth)}   (the band is 1/(2·draws) PER PROMPT)`,
   ];
+  if (depth !== null && (depth.min !== r.samples || depth.max !== r.samples)) {
+    lines.push(
+      `  ⚠ the ledger's depth does not match the stated n=${r.samples}. Every direction below was`,
+      "    bucketed at the band ITS OWN prompt can resolve, not at the one in the header.",
+    );
+  }
+  lines.push("");
 
   if (r.sampler.kind === "ok") {
     lines.push(
