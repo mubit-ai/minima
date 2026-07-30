@@ -20,6 +20,7 @@ import { buildScoreReport } from "../src/minima/classifier_eval_wiring.ts";
 import {
   CLASSIFY_PROMPT_CHARS,
   REPLAY_MODELS,
+  REPLAY_OUTPUT_TOKENS,
   type ReplayModel,
   countTruncated,
   makeReplayCaller,
@@ -135,8 +136,14 @@ describe("REPLAY_MODELS — the models under test, pinned to the registry that p
     expect(providers.size).toBe(REPLAY_MODELS.length);
   });
 
-  test("neither model reasons server-side, so the bare label allowance is honest", () => {
-    for (const m of REPLAY_MODELS) expect(m.outputTokensPerCall).toBe(LABEL_OUTPUT_TOKENS);
+  test("the output allowance is the MEASURED one, well above a bare label", () => {
+    // The first paid run tripped its live cap at 28% of the corpus because it was projected at
+    // LABEL_OUTPUT_TOKENS (40) and the shipped classifier really emits ~132. Understating this is
+    // the expensive error: it is the number a caller's ceiling gets chosen against.
+    for (const m of REPLAY_MODELS) {
+      expect(m.outputTokensPerCall).toBe(REPLAY_OUTPUT_TOKENS);
+      expect(m.outputTokensPerCall).toBeGreaterThan(LABEL_OUTPUT_TOKENS);
+    }
   });
 });
 

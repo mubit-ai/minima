@@ -76,9 +76,33 @@ export interface ReplayModel {
   readonly model: Model;
   /** Why this model is in the replay at all — printed, so the choice is auditable. */
   readonly role: string;
-  /** Projected output tokens per call. A label reply is one line of minified JSON. */
+  /** Projected output tokens per call. See {@link REPLAY_OUTPUT_TOKENS} — a measurement. */
   readonly outputTokensPerCall: number;
 }
+
+/**
+ * Output allowance per replay call — MEASURED, not assumed.
+ *
+ * `LABEL_OUTPUT_TOKENS` is 40, reasoned from the shape of the reply the instruction asks for: one
+ * line of minified JSON with three short fields. The first paid run falsified it. 135 realized
+ * `claude-haiku-4-5` calls cost $0.1046, which at its $1/$5 prices and a ~115-token input works out
+ * at ~132 output tokens per call — over three times the allowance, and the reason that run tripped
+ * its live cap at 28% of the corpus having been quoted a projection for all of it.
+ *
+ * A one-line JSON label really is ~40 tokens, so the gap is what the models emit AROUND it: a
+ * preamble, a fenced block, an explanation. Fourteen of those 135 replies would not parse at all,
+ * which is the same behaviour showing up in the other column.
+ *
+ * Set generously above the measurement, on purpose: this figure feeds the ceiling a caller is asked
+ * to accept, and understating it is the expensive error — as this run demonstrated.
+ *
+ * NOT a fix to `LABEL_OUTPUT_TOKENS` itself. That constant is the eval core's stated allowance for
+ * a bare label and the panel's non-reasoning leg is projected from it; re-deriving it from one
+ * model's realized output would change a figure MUB-216's cached run was costed against.
+ * `outputTokensPerCall` is per-model precisely so a leg can state what it actually costs — the same
+ * mechanism the panel uses for its server-side reasoners.
+ */
+export const REPLAY_OUTPUT_TOKENS = 150;
 
 /**
  * The two classifier models replayed over the corpus.
@@ -92,8 +116,9 @@ export interface ReplayModel {
  * is the capability the later confidence tickets would need — so the accuracy difference measured
  * here is the price of that option, on this corpus, rather than a guess about it.
  *
- * Neither model reasons server-side, so both are projected at the bare label allowance. Prices are
- * copied from the harness's model registry and pinned to it by test.
+ * Neither model reasons server-side, but neither is projected at the bare label allowance either —
+ * see {@link REPLAY_OUTPUT_TOKENS}, which the first paid run measured. Prices are copied from the
+ * harness's model registry and pinned to it by test.
  */
 export const REPLAY_MODELS: readonly ReplayModel[] = [
   {
@@ -108,7 +133,7 @@ export const REPLAY_MODELS: readonly ReplayModel[] = [
       reasoning: false,
     },
     role: "the shipped default classifier",
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
+    outputTokensPerCall: REPLAY_OUTPUT_TOKENS,
   },
   {
     model: {
@@ -121,7 +146,7 @@ export const REPLAY_MODELS: readonly ReplayModel[] = [
       max_tokens: 16_384,
     },
     role: "cheap, and its API can return token probabilities",
-    outputTokensPerCall: LABEL_OUTPUT_TOKENS,
+    outputTokensPerCall: REPLAY_OUTPUT_TOKENS,
   },
 ];
 
