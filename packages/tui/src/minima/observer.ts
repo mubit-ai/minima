@@ -33,6 +33,7 @@ import {
   type TripwireVerdict,
   runTripwires,
 } from "./observer_tripwires.ts";
+import { OBSERVER_STEER_PREFIX } from "./stop_gate.ts";
 
 // ---------------------------------------------------------------- constants
 
@@ -556,7 +557,7 @@ export class ObserverController {
     if (this.steersUsed < this.steerCap) {
       this.steersUsed += 1;
       try {
-        this.deps.steer(`[observer] ${v.claim} (evidence: ${v.evidenceRef})`);
+        this.deps.steer(`${OBSERVER_STEER_PREFIX}${v.claim} (evidence: ${v.evidenceRef})`);
         this.auditEvent(verdictId, "steer");
       } catch {
         // a failed steer stays a stored verdict

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AgentState } from "../src/agent/state.ts";
 import { AssistantMessage, Message, text } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
+import { ObserverController } from "../src/minima/observer.ts";
 import { assessStop, isHarnessSteerText, makeStopGate } from "../src/minima/stop_gate.ts";
 import type { AskUserRef } from "../src/tools/question.ts";
 
@@ -340,6 +341,22 @@ describe("isHarnessSteerText (R3b)", () => {
     await gate(terminalTurn(), [], state); // strike 1 → ⛔ follow-up
     const text = (state.followUp[0]!.content[0] as { text: string }).text;
     expect(isHarnessSteerText(text)).toBe(true);
+  });
+
+  test("matches the observer's real advisory steer", async () => {
+    const d = db();
+    seed(d, [{ status: "in_progress" }]);
+    const steers: string[] = [];
+    const c = new ObserverController({ db: d, runId: SESSION, steer: (n) => steers.push(n) });
+    await c.consume({
+      type: "tool_start",
+      name: "edit",
+      path: "tests/parser.test.ts",
+      content: "x",
+    });
+    await c.consume({ type: "turn_end", assistantText: "", recId: null });
+    expect(steers).toHaveLength(1);
+    expect(isHarnessSteerText(steers[0]!)).toBe(true);
   });
 
   test("does NOT match ordinary user text or the user-steer relay (user words stay a ▸ you bubble)", () => {

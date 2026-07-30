@@ -121,18 +121,22 @@ function reasonsBlock(a: StopAssessment): string {
 /** R3b: stable prefix of the continuation message below — isHarnessSteerText keys on it. */
 export const STOP_GATE_CONTINUATION_PREFIX = "⛔ You are ending the turn";
 
+/** R3b: stable prefix of the observer's advisory steer (observer.ts builds its note from this). */
+export const OBSERVER_STEER_PREFIX = "[observer] ";
+
 /**
  * R3b: harness-authored user-role steering (the continuation below, the anti-spiral's
- * doom-loop/step-cap nudges, the W4.2 stream-tripwire reminder). The FULL text always stays
- * model-visible; the transcript projection compacts a match to one dim system line instead of a
- * "▸ you" bubble. The user-steer relay ("The user reviewed…") carries the user's own words and
- * does not match.
+ * doom-loop/step-cap nudges, the W4.2 stream-tripwire reminder, the observer's advisory notes).
+ * The FULL text always stays model-visible; the transcript projection compacts a match to one dim
+ * system line instead of a "▸ you" bubble. The user-steer relay ("The user reviewed…") carries the
+ * user's own words and does not match.
  */
 export function isHarnessSteerText(text: string): boolean {
   return (
     text.startsWith(STOP_GATE_CONTINUATION_PREFIX) ||
     text.startsWith(STEP_CAP_WRAP_PREFIX) ||
     text.startsWith(DOOM_LOOP_PREFIX) ||
+    text.startsWith(OBSERVER_STEER_PREFIX) ||
     isTtsrReminder(text)
   );
 }
