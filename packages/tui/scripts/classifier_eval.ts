@@ -15,7 +15,7 @@
  *
  * It lives under `scripts/` deliberately: `bun test` matches only `*.test.ts`, so nothing here is
  * reachable from the hermetic suite. The full evaluation will make real network calls by design,
- * which is why the only path to spending is an explicit `--spend`.
+ * which is why the only path to spending is `--spend` with an explicit `--max-usd` ceiling.
  */
 
 import { existsSync } from "node:fs";
@@ -24,8 +24,10 @@ import {
   DEFAULT_CALL_SPECS,
   DEFAULT_LENGTH_BOUNDARIES,
   buildDryRunReport,
+  checkSpendCeiling,
   decideInvocation,
   renderDryRunReport,
+  suggestCeilingUsd,
 } from "../src/minima/classifier_eval.ts";
 
 const HELP = [
@@ -34,8 +36,12 @@ const HELP = [
   "  --project=<key>   scope the corpus to one project's runs (default: whole ledger)",
   "  --limit=<n>       cap rows read, most recent first (default 20000)",
   "  --db=<path>       read a specific ledger (default: the harness's own)",
-  "  --spend           opt in to a billable run (not implemented yet — see MUB-216 onward)",
+  "  --spend           opt in to a billable run — REQUIRES --max-usd; refused on its own",
+  "  --max-usd=<usd>   the ceiling you accept paying. The run refuses if the projection",
+  "                    exceeds it. No default: a defaulted spending limit could cost money",
   "  --help            this message",
+  "",
+  "Exit codes: 0 ok · 2 refused (the cost guard) · 3 asked for a path that is not built yet.",
 ].join("\n");
 
 const invocation = decideInvocation(process.argv.slice(2));
@@ -43,19 +49,6 @@ const invocation = decideInvocation(process.argv.slice(2));
 if (invocation.kind === "help") {
   console.log(HELP);
   process.exit(0);
-}
-
-// The cost guard. `decideInvocation` refuses --spend ahead of every other flag, and today there is
-// no billable path at all: the panel and replay legs land in MUB-216 onward.
-if (invocation.kind === "refuse-spend") {
-  console.error(
-    [
-      "--spend: refusing — the spending path is not implemented yet.",
-      "The reference panel (MUB-216) and the replay (MUB-218) are not built, so there is nothing",
-      "to spend on. Run without --spend for the corpus and the projected cost.",
-    ].join("\n"),
-  );
-  process.exit(2);
 }
 
 const { project, dbPath, rowCap } = invocation;
@@ -71,6 +64,8 @@ if (dbPath !== null && !existsSync(dbPath)) {
 }
 
 const db = dbPath ? new MinimaDb(dbPath) : new MinimaDb();
+// Set inside, exited after the ledger closes: process.exit() skips `finally`.
+let exitCode = 0;
 try {
   const rows = db.listUserPrompts(project, rowCap);
   const report = buildDryRunReport(rows, {
@@ -79,6 +74,8 @@ try {
     specs: DEFAULT_CALL_SPECS,
     rowCap,
   });
+  // The projection is free, so every invocation gets it — including a refused one. A ceiling can
+  // only be chosen against a number, and this is the number.
   console.log(renderDryRunReport(report));
   // Specific to the legs THIS shell chose, so it belongs here rather than in the report.
   console.log(
@@ -88,6 +85,58 @@ try {
       "    which is why each leg prints the prices it was costed at.",
     ].join("\n"),
   );
+
+  const projected = report.cost.totalUsd;
+  const suggested = suggestCeilingUsd(projected).toFixed(2);
+
+  if (invocation.kind === "refuse-spend") {
+    // The cost guard. `decideInvocation` reached this without a usable ceiling, so no billable
+    // path was ever entered — the wording only explains which half of the affirmative was missing.
+    console.error(
+      invocation.reason === "missing-ceiling"
+        ? [
+            "",
+            "--spend: refusing — no ceiling stated. A bare --spend is an intention, not permission.",
+            `  A full run over this corpus projects $${projected.toFixed(4)} — an estimate, on the`,
+            "  heuristic above; actuals can exceed it.",
+            `  Re-run with a ceiling you accept paying:  --spend --max-usd=${suggested}`,
+          ].join("\n")
+        : [
+            "",
+            "--max-usd: refusing — a ceiling must be a positive number of US dollars.",
+            `  For this corpus's $${projected.toFixed(4)} projection, --max-usd=${suggested} would do.`,
+            "  There is no default: a defaulted spending limit is the one default that could cost",
+            "  money.",
+          ].join("\n"),
+    );
+    exitCode = 2;
+  } else if (invocation.kind === "spend") {
+    const verdict = checkSpendCeiling(projected, invocation.maxUsd);
+    if (!verdict.ok) {
+      console.error(
+        [
+          "",
+          "--spend: refusing — the projection is over the ceiling you stated.",
+          `  projected $${verdict.estimateUsd.toFixed(4)} · your ceiling $${verdict.maxUsd.toFixed(4)}`,
+          "  Raise the ceiling deliberately, or narrow the corpus with --project / --limit.",
+        ].join("\n"),
+      );
+      exitCode = 2;
+    } else {
+      // Accepted, and there is still nothing to bill: this shell owns the guard, not the legs.
+      // MUB-216 onward add the paid execution here — the decision above does not change for them.
+      console.error(
+        [
+          "",
+          `--spend --max-usd=${invocation.maxUsd}: accepted — and there is nothing to spend it on yet.`,
+          "  The projection is within your ceiling, but the reference panel (MUB-216) and the replay",
+          "  (MUB-218) are not built, so no billable leg exists. Nothing was spent.",
+        ].join("\n"),
+      );
+      exitCode = 3;
+    }
+  }
 } finally {
   db.close();
 }
+process.exit(exitCode);

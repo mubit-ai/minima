@@ -5,6 +5,7 @@ import {
   type DistinctPrompt,
   type DryRunConfig,
   buildDryRunReport,
+  checkSpendCeiling,
   decideInvocation,
   distinctPrompts,
   estimateRunCost,
@@ -15,6 +16,7 @@ import {
   rate,
   renderDryRunReport,
   stratifyByLength,
+  suggestCeilingUsd,
 } from "../src/minima/classifier_eval.ts";
 
 // MUB-215 — the classifier evaluation's pure core. Every function here is total and takes plain
@@ -206,6 +208,11 @@ describe("buildDryRunReport", () => {
         callsPerPrompt: 1,
         inputUsdPerMTok: 3,
         outputUsdPerMTok: 15,
+        // Required, and it was omitted here until MUB-216's spend guard landed: tsconfig's
+        // `include` is src-only, so tsc never saw the gap, and every cost figure below was NaN.
+        // `toBe` is Object.is, so NaN === NaN — the "never costs the steer text" test passed
+        // whatever the core did. State it, even as 0.
+        fixedInputTokensPerCall: 0,
         outputTokensPerCall: 50,
       },
     ],
@@ -332,15 +339,105 @@ describe("decideInvocation", () => {
     });
   });
 
-  test("--spend is refused, and refusal wins over every other flag", () => {
-    // The cost guard, pinned: there is no argv that both requests spending and gets a run.
-    expect(decideInvocation(["--spend"]).kind).toBe("refuse-spend");
-    expect(decideInvocation(["--spend", "--help"]).kind).toBe("refuse-spend");
-    expect(decideInvocation(["--project=x", "--spend"]).kind).toBe("refuse-spend");
+  test("a bare --spend is an intention, not permission", () => {
+    // The affirmative is the ceiling, so --spend alone cannot be read as permission however it is
+    // combined. Before a paid path existed this was pinned as "refusal wins over every other flag";
+    // the guarantee now rests on the ceiling rather than on flag order (see the matrix below).
+    expect(decideInvocation(["--spend"])).toMatchObject({
+      kind: "refuse-spend",
+      reason: "missing-ceiling",
+    });
+    expect(decideInvocation(["--project=x", "--spend"])).toMatchObject({
+      kind: "refuse-spend",
+      reason: "missing-ceiling",
+    });
   });
 
-  test("--help asks for help", () => {
+  test("a refusal carries the scope, so the shell can price the corpus it was asked about", () => {
+    // Choosing a ceiling requires a number, and the number depends on which rows were in scope.
+    expect(decideInvocation(["--spend", "--project=minima", "--limit=50"])).toEqual({
+      kind: "refuse-spend",
+      reason: "missing-ceiling",
+      project: "minima",
+      dbPath: null,
+      rowCap: 50,
+    });
+  });
+
+  test("a ceiling that is not a positive number of dollars is refused, never defaulted", () => {
+    // The one place a fallback would cost money, so --limit's forgiving parse is NOT mirrored here.
+    for (const bad of ["abc", "0", "-1", "", "NaN", "Infinity", "1e999"]) {
+      expect(decideInvocation(["--spend", `--max-usd=${bad}`])).toMatchObject({
+        kind: "refuse-spend",
+        reason: "bad-ceiling",
+      });
+    }
+  });
+
+  test("--spend with a ceiling is the one argv that permits spending", () => {
+    expect(decideInvocation(["--spend", "--max-usd=0.05", "--project=minima"])).toEqual({
+      kind: "spend",
+      maxUsd: 0.05,
+      project: "minima",
+      dbPath: null,
+      rowCap: 20000,
+    });
+  });
+
+  test("a ceiling without --spend is a dry run, not a spend", () => {
+    expect(decideInvocation(["--max-usd=999"]).kind).toBe("dry-run");
+  });
+
+  test("--help asks for help, and outranks a fully-formed spend request", () => {
+    // Asking for documentation must never bill. This is why --help is decided before the spend
+    // branch: with `spend` reachable, the old refusal-first order would let this argv spend.
     expect(decideInvocation(["--help"]).kind).toBe("help");
+    expect(decideInvocation(["--spend", "--max-usd=1", "--help"]).kind).toBe("help");
+    expect(decideInvocation(["--spend", "--help"]).kind).toBe("help");
+  });
+
+  test("the guard's invariant, over every combination of the flags that bear on it", () => {
+    // The property the cost guard exists to hold, re-derived independently of the implementation
+    // rather than restated from it: `spend` is reachable ONLY from an argv carrying --spend and a
+    // valid --max-usd, with no --help. Every combination is enumerated, so a future flag cannot
+    // open a path by interacting with one that was only spot-checked.
+    const axes = {
+      spend: [[], ["--spend"]],
+      ceiling: [[], ["--max-usd=0.05"], ["--max-usd=abc"], ["--max-usd=0"], ["--max-usd=-1"]],
+      help: [[], ["--help"]],
+      project: [[], ["--project=p"]],
+    };
+    let spendable = 0;
+    for (const spend of axes.spend) {
+      for (const ceiling of axes.ceiling) {
+        for (const help of axes.help) {
+          for (const project of axes.project) {
+            const argv = [...spend, ...ceiling, ...help, ...project];
+            const wants = spend.length > 0;
+            const stated = ceiling.length > 0;
+            const valid = ceiling[0] === "--max-usd=0.05";
+            const expected = help.length
+              ? "help"
+              : !wants
+                ? "dry-run"
+                : !stated || !valid
+                  ? "refuse-spend"
+                  : "spend";
+            const decided = decideInvocation(argv);
+            expect(decided.kind, `argv: ${argv.join(" ") || "(none)"}`).toBe(expected);
+            if (decided.kind === "spend") {
+              spendable++;
+              expect(argv).toContain("--spend");
+              expect(argv).toContain("--max-usd=0.05");
+              expect(argv).not.toContain("--help");
+            }
+            // Flag order carries no permission: the same flags in reverse decide the same way.
+            expect(decideInvocation([...argv].reverse()).kind).toBe(expected);
+          }
+        }
+      }
+    }
+    expect(spendable).toBe(2); // only the two --spend + valid-ceiling + no-help argvs, × project
   });
 
   test("reads the project, ledger path and row cap", () => {
@@ -357,6 +454,64 @@ describe("decideInvocation", () => {
     expect(decideInvocation(["--limit=-5"])).toMatchObject({ rowCap: 20000 });
     expect(decideInvocation(["--limit=0"])).toMatchObject({ rowCap: 20000 });
     expect(decideInvocation(["--limit=7.9"])).toMatchObject({ rowCap: 7 });
+  });
+});
+
+describe("checkSpendCeiling", () => {
+  test("a projection within the stated ceiling passes", () => {
+    expect(checkSpendCeiling(0.0312, 0.05)).toEqual({ ok: true });
+  });
+
+  test("a projection over the ceiling is refused, and reports both figures", () => {
+    // Both numbers come from the verdict so the shell states neither on its own authority.
+    expect(checkSpendCeiling(0.0312, 0.01)).toEqual({
+      ok: false,
+      estimateUsd: 0.0312,
+      maxUsd: 0.01,
+    });
+  });
+
+  test("boundary: an estimate exactly at the ceiling passes", () => {
+    // The ceiling is a limit the caller accepted paying, not one they accepted staying under.
+    expect(checkSpendCeiling(0.05, 0.05)).toEqual({ ok: true });
+  });
+
+  test("a zero-cost projection passes any ceiling", () => {
+    // An empty corpus costs nothing, and refusing it would be a confusing way to say so.
+    expect(checkSpendCeiling(0, 0.01)).toEqual({ ok: true });
+  });
+});
+
+describe("suggestCeilingUsd", () => {
+  test("rounds up to the next cent, with no headroom for actuals", () => {
+    expect(suggestCeilingUsd(0.0312)).toBe(0.04);
+    expect(suggestCeilingUsd(0.2401)).toBe(0.25);
+  });
+
+  test("an exact-cent estimate suggests itself, not a cent more", () => {
+    // The direct `x * 100` form fails here: nine values under $2 have a binary expansion just
+    // above their exact cent, so it would print $0.08 for a $0.07 projection.
+    for (const exact of [0.03, 0.05, 0.07, 0.14, 0.28, 0.55, 0.56, 1.15]) {
+      expect(suggestCeilingUsd(exact), `$${exact}`).toBe(exact);
+    }
+  });
+
+  test("never suggests a ceiling of zero", () => {
+    // A ceiling of $0 refuses everything, including the run the caller is trying to authorize.
+    expect(suggestCeilingUsd(0)).toBe(0.01);
+    expect(suggestCeilingUsd(0.000004)).toBe(0.01);
+  });
+
+  test("a suggested ceiling always clears the projection it was derived from", () => {
+    // The two functions have to agree: a printed suggestion that the guard then refuses would
+    // make the guard look broken to the one caller who followed its advice exactly.
+    for (let i = 0; i <= 5000; i++) {
+      const projection = Math.round(i * 4.37 * 1e2) / 1e6;
+      expect(
+        checkSpendCeiling(projection, suggestCeilingUsd(projection)).ok,
+        `$${projection}`,
+      ).toBe(true);
+    }
   });
 });
 
