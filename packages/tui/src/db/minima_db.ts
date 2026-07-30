@@ -810,6 +810,20 @@ export interface GateLabeledDecisionRow {
   step_content: string | null;
 }
 
+/**
+ * One recorded user-role message with its prompt text lifted out of the JSON payload — the
+ * classifier-evaluation corpus substrate (MUB-215). `text` is the FULL recorded prompt; the
+ * truncated `routing_decisions.task_label` is a display string and is never a substitute.
+ * Harness-authored steer messages also land in the user role, so a consumer must partition
+ * them out (see `partitionSteerText`) before treating these as a corpus.
+ */
+export interface UserPromptRow {
+  id: string;
+  run_id: string;
+  ts: number;
+  text: string | null;
+}
+
 /** One plan step with its latest gate verdict — workflow-induction mining input (F5b). */
 export interface PlanStepVerdictRow {
   plan_id: string;
@@ -1205,6 +1219,28 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM events WHERE run_id = ? ORDER BY ts, rowid")
       .all(runId) as EventRow[];
+  }
+
+  /**
+   * Every recorded user-role message, oldest first, with its prompt text extracted from the
+   * payload — the classifier-evaluation corpus read (MUB-215, read-only). `projectKey` scopes
+   * to one project's runs; null spans the whole ledger. Raw rows: duplicates, harness steer
+   * text and null payloads all come through, because deciding what counts is the caller's
+   * pure core, not this query.
+   */
+  listUserPrompts(projectKey: string | null = null, limit = 20000): UserPromptRow[] {
+    const scope = projectKey
+      ? "AND e.run_id IN (SELECT run_id FROM runs WHERE project_key = ?)"
+      : "";
+    const params: (string | number)[] = projectKey ? [projectKey, limit] : [limit];
+    return this.db
+      .query(
+        `SELECT e.id, e.run_id, e.ts, json_extract(e.payload, '$.text') AS text
+         FROM events e
+         WHERE e.type = 'user' ${scope}
+         ORDER BY e.ts, e.rowid LIMIT ?`,
+      )
+      .all(...params) as UserPromptRow[];
   }
 
   writeToolCall(opts: {

@@ -1,0 +1,371 @@
+/**
+ * Classifier-evaluation pure core (MUB-215).
+ *
+ * Every claim the evaluation's report makes is a counting claim — a distinct count, a
+ * denominator, a stratum boundary, an exclusion tally — and every one of them can be silently
+ * wrong. So all filtering, grouping, stratification and counting lives HERE, in total functions
+ * over plain arrays with no I/O, and the shell (`scripts/classifier_eval.ts`) holds no logic that
+ * a reported number depends on.
+ *
+ * This module is PURE: no filesystem, no ledger, no network, no clock. Same shape as the
+ * plan-verification factor engine (`big_plan_factors.ts`), and tested the same way — fixtures
+ * declared inline, one field overridden per case.
+ */
+import type { UserPromptRow } from "../db/minima_db.ts";
+import { isHarnessSteerText } from "./stop_gate.ts";
+
+// ---------------------------------------------------------------------------
+// Rates. Every reported rate carries its denominator — structurally, not by convention.
+// ---------------------------------------------------------------------------
+
+/**
+ * A rate that cannot be quoted without its denominator: the percentage is only ever reachable
+ * alongside `n` and `d`, and is `null` when there is nothing to divide by. This corpus is a few
+ * hundred prompts of one developer's traffic, so a bare percentage over single-digit support is
+ * the most likely way for this evaluation to mislead. Making the denominator inseparable is what
+ * prevents that, rather than remembering to print it.
+ */
+export interface Rate {
+  readonly n: number;
+  readonly d: number;
+  /** Percentage to one decimal, or null when the denominator is zero. */
+  readonly pct: number | null;
+}
+
+/** Build a {@link Rate}. Total: a zero denominator yields `pct: null`, never NaN or Infinity. */
+export function rate(n: number, d: number): Rate {
+  if (d <= 0) return { n, d, pct: null };
+  return { n, d, pct: Math.round((n / d) * 1000) / 10 };
+}
+
+/** Render a rate as `n/d (pct%)`, or `n/d (n/a)` when there is no denominator to divide by. */
+export function formatRate(r: Rate): string {
+  return `${r.n}/${r.d} (${r.pct === null ? "n/a" : `${r.pct.toFixed(1)}%`})`;
+}
+
+/**
+ * Split recorded user-role rows into the corpus and the harness-authored steer messages.
+ *
+ * Turn-budget warnings, doom-loop nudges, stop-gate continuations and stream-tripwire reminders
+ * are all written into the user role, so they would otherwise pollute a corpus of things a
+ * developer actually asked for. The shipped predicate decides — never a prefix check
+ * re-implemented here, which would drift the moment a new steer kind is added.
+ *
+ * A null payload text is neither: it cannot be steer text and it cannot be a prompt, so it is
+ * reported separately by the caller rather than silently landing in either bucket.
+ */
+export function partitionSteerText(rows: readonly UserPromptRow[]): {
+  corpus: UserPromptRow[];
+  excluded: UserPromptRow[];
+} {
+  const corpus: UserPromptRow[] = [];
+  const excluded: UserPromptRow[] = [];
+  for (const row of rows) {
+    if (row.text === null) continue;
+    if (isHarnessSteerText(row.text)) excluded.push(row);
+    else corpus.push(row);
+  }
+  return { corpus, excluded };
+}
+
+/** One distinct prompt in the corpus, with how many recorded messages carried that exact text. */
+export interface DistinctPrompt {
+  readonly text: string;
+  readonly occurrences: number;
+}
+
+/**
+ * Collapse rows to the distinct prompts they carry, in first-appearance order.
+ *
+ * Distinctness is on the EXACT recorded text. No normalizing, no case folding, no trimming for
+ * the comparison — a normalized key would make the reported distinct count depend on a rule
+ * nobody stated. Rows whose text is absent or whitespace-only carry no prompt and are dropped;
+ * they are counted by the caller as unusable rather than folded into the corpus.
+ */
+export function distinctPrompts(rows: readonly UserPromptRow[]): DistinctPrompt[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.text === null || row.text.trim() === "") continue;
+    counts.set(row.text, (counts.get(row.text) ?? 0) + 1);
+  }
+  return [...counts].map(([text, occurrences]) => ({ text, occurrences }));
+}
+
+// ---------------------------------------------------------------------------
+// Length stratification.
+// ---------------------------------------------------------------------------
+
+/** One length bucket of the corpus. `maxChars: null` marks the open-ended top bucket. */
+export interface Stratum {
+  readonly label: string;
+  readonly minChars: number;
+  readonly maxChars: number | null;
+  readonly count: number;
+  readonly share: Rate;
+}
+
+/**
+ * Bucket the corpus by prompt length in characters. Boundaries are lower-inclusive, so
+ * `[60, 200]` yields `<60`, `60-199` and `>=200`.
+ *
+ * Counts are of DISTINCT prompts, never of occurrences: one prompt asked forty times is one
+ * corpus entry, because a repeat is not new evidence about the classifier.
+ *
+ * Total: boundaries are sorted, de-duplicated and filtered to positive values, so a caller
+ * passing them out of order or with a zero cannot produce an incoherent set of strata.
+ */
+export function stratifyByLength(
+  prompts: readonly DistinctPrompt[],
+  boundaries: readonly number[],
+): Stratum[] {
+  const cuts = [...new Set(boundaries.filter((b) => Number.isFinite(b) && b > 0))].sort(
+    (a, b) => a - b,
+  );
+  const edges = [0, ...cuts];
+  return edges.map((minChars, i) => {
+    const next = edges[i + 1];
+    const maxChars = next === undefined ? null : next - 1;
+    const count = prompts.filter(
+      (p) => p.text.length >= minChars && (maxChars === null || p.text.length <= maxChars),
+    ).length;
+    const label =
+      maxChars === null ? `>=${minChars}` : minChars === 0 ? `<${next}` : `${minChars}-${maxChars}`;
+    return { label, minChars, maxChars, count, share: rate(count, prompts.length) };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cost estimation — what a full run WOULD spend. Nothing here spends anything.
+// ---------------------------------------------------------------------------
+
+/**
+ * One leg of the full run's spend: a model the evaluation would call, how many calls each prompt
+ * costs it, and its prices. Supplied by the caller rather than read from a catalog so the estimate
+ * stays a pure function of stated numbers — an estimate whose inputs are visible is one a reviewer
+ * can re-derive.
+ */
+export interface CallSpec {
+  readonly label: string;
+  readonly callsPerPrompt: number;
+  readonly inputUsdPerMTok: number;
+  readonly outputUsdPerMTok: number;
+  /** Output budget assumed per call — a label response is short and bounded. */
+  readonly outputTokensPerCall: number;
+}
+
+/**
+ * The projected spend for one {@link CallSpec} across the whole corpus. Carries the prices it was
+ * computed from, so the printed estimate can be re-derived from the output alone — an estimate a
+ * reviewer cannot check is as misleading as a percentage without its denominator.
+ */
+export interface CostLine {
+  readonly label: string;
+  readonly calls: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly inputUsdPerMTok: number;
+  readonly outputUsdPerMTok: number;
+  readonly usd: number;
+}
+
+/** The projected spend for a full run, per leg and in total. */
+export interface CostEstimate {
+  readonly prompts: number;
+  readonly lines: readonly CostLine[];
+  readonly totalCalls: number;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalUsd: number;
+}
+
+/**
+ * Rough token count for a prompt: four characters per token, rounded up. A heuristic, and stated
+ * as one wherever the estimate is reported — no tokenizer is loaded, because an order-of-magnitude
+ * spend figure is what a cost guard needs and an exact one would cost a dependency.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** Round a dollar figure to the cent's sixth decimal, so float noise never reaches the report. */
+function usd(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+/**
+ * Project what a full run would spend, without spending it.
+ *
+ * Input tokens come from the prompts themselves; output tokens from each leg's declared per-call
+ * budget. Each DISTINCT prompt is priced once however often it was asked — the corpus is the unit
+ * of work, so a prompt repeated forty times is not forty calls.
+ */
+export function estimateRunCost(
+  prompts: readonly DistinctPrompt[],
+  specs: readonly CallSpec[],
+): CostEstimate {
+  const corpusInputTokens = prompts.reduce((sum, p) => sum + estimateTokens(p.text), 0);
+  const lines = specs.map((s) => {
+    const calls = prompts.length * s.callsPerPrompt;
+    const inputTokens = corpusInputTokens * s.callsPerPrompt;
+    const outputTokens = calls * s.outputTokensPerCall;
+    return {
+      label: s.label,
+      calls,
+      inputTokens,
+      outputTokens,
+      inputUsdPerMTok: s.inputUsdPerMTok,
+      outputUsdPerMTok: s.outputUsdPerMTok,
+      usd: usd((inputTokens / 1e6) * s.inputUsdPerMTok + (outputTokens / 1e6) * s.outputUsdPerMTok),
+    };
+  });
+  return {
+    prompts: prompts.length,
+    lines,
+    totalCalls: lines.reduce((n, l) => n + l.calls, 0),
+    totalInputTokens: lines.reduce((n, l) => n + l.inputTokens, 0),
+    totalOutputTokens: lines.reduce((n, l) => n + l.outputTokens, 0),
+    totalUsd: usd(lines.reduce((n, l) => n + l.usd, 0)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The dry-run report: what corpus a full run would use, and what it would cost.
+// ---------------------------------------------------------------------------
+
+/**
+ * Corpus length buckets in characters: terse one-liners, ordinary asks, briefs, long specs. The
+ * 60-char boundary is the one the sizing figures on MUB-215 were quoted at, so a run here stays
+ * comparable to those.
+ */
+export const DEFAULT_LENGTH_BOUNDARIES: readonly number[] = [60, 200, 1000];
+
+/**
+ * PROVISIONAL legs for the full run's spend estimate: a provider-diverse reference panel plus one
+ * replay of the harness classifier per prompt. Prices are the harness's OWN registered per-Mtok
+ * figures for those models, not figures invented here.
+ *
+ * The actual panel is MUB-216's decision. These exist only so the dry run can print a real
+ * order-of-magnitude number before that choice is made. The rendered readout prints each leg's
+ * prices, so a stale entry here shows up in the output rather than hiding inside the total.
+ */
+export const DEFAULT_CALL_SPECS: readonly CallSpec[] = [
+  {
+    label: "panel: claude-haiku-4-5",
+    callsPerPrompt: 1,
+    inputUsdPerMTok: 1.0,
+    outputUsdPerMTok: 5.0,
+    outputTokensPerCall: 120,
+  },
+  {
+    label: "panel: gpt-4o-mini",
+    callsPerPrompt: 1,
+    inputUsdPerMTok: 0.15,
+    outputUsdPerMTok: 0.6,
+    outputTokensPerCall: 120,
+  },
+  {
+    label: "panel: gemini-2.5-flash",
+    callsPerPrompt: 1,
+    inputUsdPerMTok: 0.3,
+    outputUsdPerMTok: 2.5,
+    outputTokensPerCall: 120,
+  },
+  {
+    label: "replay: harness classifier",
+    callsPerPrompt: 1,
+    inputUsdPerMTok: 1.0,
+    outputUsdPerMTok: 5.0,
+    outputTokensPerCall: 120,
+  },
+];
+
+/** What the dry run is told to measure. `scope` is descriptive only — it labels the readout. */
+export interface DryRunConfig {
+  readonly scope: string;
+  readonly lengthBoundaries: readonly number[];
+  readonly specs: readonly CallSpec[];
+}
+
+/**
+ * Every number the dry run reports. Each rate is a {@link Rate}, so no figure in here can be
+ * quoted without its denominator.
+ *
+ * Steer exclusion is reported twice on purpose. "How many records were excluded" is ambiguous
+ * between raw messages and distinct texts — a steer message repeats across runs, so the two
+ * differ a lot — and reporting one number would leave a reader guessing which was meant.
+ */
+export interface DryRunReport {
+  readonly scope: string;
+  /** Recorded user-role messages read, before any filtering. */
+  readonly rawUserRows: number;
+  /** Rows whose payload carried no prompt text at all, over all rows read. */
+  readonly unusableRows: Rate;
+  /** Raw messages excluded as harness steer text, over all rows read. */
+  readonly steerRows: Rate;
+  /** Distinct steer texts, over all distinct texts — so `corpusDistinct + n = d`. */
+  readonly steerDistinct: Rate;
+  readonly corpusDistinct: number;
+  /** Recorded messages carrying a corpus prompt — always >= corpusDistinct. */
+  readonly corpusOccurrences: number;
+  readonly strata: readonly Stratum[];
+  readonly cost: CostEstimate;
+}
+
+/** Assemble the whole dry-run readout from raw ledger rows. Pure: reads nothing, spends nothing. */
+export function buildDryRunReport(rows: readonly UserPromptRow[], cfg: DryRunConfig): DryRunReport {
+  const { corpus, excluded } = partitionSteerText(rows);
+  const corpusPrompts = distinctPrompts(corpus);
+  const steerPrompts = distinctPrompts(excluded);
+  const allDistinct = corpusPrompts.length + steerPrompts.length;
+  const unusable = rows.filter((r) => r.text === null || r.text.trim() === "").length;
+  return {
+    scope: cfg.scope,
+    rawUserRows: rows.length,
+    unusableRows: rate(unusable, rows.length),
+    steerRows: rate(excluded.length, rows.length),
+    steerDistinct: rate(steerPrompts.length, allDistinct),
+    corpusDistinct: corpusPrompts.length,
+    corpusOccurrences: corpusPrompts.reduce((n, p) => n + p.occurrences, 0),
+    strata: stratifyByLength(corpusPrompts, cfg.lengthBoundaries),
+    cost: estimateRunCost(corpusPrompts, cfg.specs),
+  };
+}
+
+/**
+ * Render the report as plain text. Lives in the pure core alongside the counting, so the shell
+ * cannot reformat a number on its way out — and so the "every rate carries its denominator"
+ * guarantee is testable without running the script.
+ */
+export function renderDryRunReport(r: DryRunReport): string {
+  const lines: string[] = [
+    "Classifier eval — DRY RUN (no billable call was made)",
+    `scope: ${r.scope}`,
+    "",
+    "Corpus",
+    `  user-role messages read      ${r.rawUserRows}`,
+    `  excluded as harness steer    ${formatRate(r.steerRows)} raw · ${formatRate(r.steerDistinct)} distinct`,
+    `  unusable (no prompt text)    ${formatRate(r.unusableRows)}`,
+    `  distinct prompts in corpus   ${r.corpusDistinct} (from ${r.corpusOccurrences} messages)`,
+    "",
+    "Length strata (chars, distinct prompts)",
+  ];
+  for (const s of r.strata) {
+    lines.push(`  ${s.label.padEnd(28)} ${formatRate(s.share)}`);
+  }
+  lines.push("", "Projected spend for a full run (~4 chars/token, estimate only)");
+  if (r.cost.lines.length === 0) {
+    lines.push("  no call legs configured");
+  }
+  for (const l of r.cost.lines) {
+    lines.push(
+      `  ${l.label.padEnd(28)} ${l.calls} calls · ${l.inputTokens} in · ${l.outputTokens} out` +
+        ` · $${l.inputUsdPerMTok}/$${l.outputUsdPerMTok} per Mtok · $${l.usd.toFixed(4)}`,
+    );
+  }
+  lines.push(
+    `  ${"TOTAL".padEnd(28)} ${r.cost.totalCalls} calls · $${r.cost.totalUsd.toFixed(4)}`,
+    "",
+    "Spending requires --spend. Nothing above cost anything.",
+  );
+  return lines.join("\n");
+}
