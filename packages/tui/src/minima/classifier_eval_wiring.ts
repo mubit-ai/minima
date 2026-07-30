@@ -38,7 +38,6 @@ import {
 } from "./classifier_eval_correlate.ts";
 import {
   DEFAULT_CONFIDENCE_BOUNDARIES,
-  type ModelReplay,
   type ReplayScoreReport,
   type ScoredReplay,
   buildReplayScoreReport,
@@ -46,6 +45,12 @@ import {
   scoreReplay,
   segmentCorpus,
 } from "./classifier_eval_score.ts";
+import {
+  REPLAY_MODELS,
+  type ReplayResolution,
+  type StoredReplayLabel,
+  toModelReplays,
+} from "./classifier_replay.ts";
 import { CLASSIFY_CONFIDENCE_FLOOR } from "./classify.ts";
 import {
   REFERENCE_PANEL,
@@ -147,10 +152,35 @@ export interface EvalReads {
   readonly prompts: readonly UserPromptRow[];
   readonly decisions: readonly RoutingDecisionRow[];
   readonly votes: readonly StoredVote[];
+  /**
+   * MUB-218's cached replay labels, as `listReplayLabels` returns them.
+   *
+   * Optional because `buildOverrideReport` takes the same reads and does not consume them. Absent
+   * or empty is the state every invocation was in before the replay existed, and it still resolves
+   * to a readout rather than an error — see {@link UNREPLAYED_MODEL_ID}.
+   */
+  readonly replayLabels?: readonly StoredReplayLabel[];
 }
 
 /**
- * Score a replay against the panel's cached labels (MUB-218).
+ * A `--score` readout: the report, and the coverage of the replay that produced it.
+ *
+ * Both halves come back from ONE call because both derive from one resolution of the cache. A shell
+ * that resolved it twice — once to score, once to report coverage — could print a coverage figure
+ * that describes a different join than the numbers above it.
+ */
+export interface ReplayScoreReadout {
+  readonly report: ReplayScoreReport;
+  readonly coverage: ReplayResolution;
+}
+
+/**
+ * Score the classifier replay against the panel's cached labels (MUB-218).
+ *
+ * The replay's labels come from the LEDGER and are re-joined to the live corpus here, rather than
+ * being handed in: the stored row is a hash (ADR 0008), so the only way back to a corpus entry is
+ * to re-hash the live text with the same `promptHash` the panel and the cache both use. Injecting
+ * that one hash — never a second implementation — is what keeps a cache hit a cache hit.
  *
  * `targetCorrectness` is the caller's, never defaulted: the non-arbitrary bar is what the service's
  * own label scores on this same corpus, which is MUB-226's adjudication and not this readout's, so
@@ -159,20 +189,27 @@ export interface EvalReads {
 export function buildScoreReport(
   reads: EvalReads,
   opts: { readonly scope: string; readonly targetCorrectness: number },
-  replays: readonly ModelReplay[] = [],
-): ReplayScoreReport {
+): ReplayScoreReadout {
   const corpus = segmentCorpus(reads.prompts, REGIME_BOUNDARY_TS);
   const reference = resolveReferenceVerdicts(
     corpus.map((e) => e.text),
     toCachedVotes(reads.votes, REFERENCE_PANEL),
     { corpusRev: CORPUS_REV, hashOf: promptHash, consensus: REFERENCE_CONSENSUS },
   );
-  const passes = replays.length ? replays : [{ modelId: UNREPLAYED_MODEL_ID, labels: [] }];
+  const coverage = toModelReplays(
+    corpus.map((e) => e.text),
+    reads.replayLabels ?? [],
+    REPLAY_MODELS,
+    { corpusRev: CORPUS_REV, hashOf: promptHash },
+  );
+  const passes = coverage.replays.length
+    ? coverage.replays
+    : [{ modelId: UNREPLAYED_MODEL_ID, labels: [] }];
   const scored: ScoredReplay[] = passes.map((r) => ({
     modelId: r.modelId,
     entries: scoreReplay(r, corpus, reference.verdicts),
   }));
-  return buildReplayScoreReport(scored, reference, {
+  const report = buildReplayScoreReport(scored, reference, {
     scope: opts.scope,
     regimeBoundaryTs: REGIME_BOUNDARY_TS,
     confidenceBoundaries: DEFAULT_CONFIDENCE_BOUNDARIES,
@@ -182,6 +219,7 @@ export function buildScoreReport(
       baseline: CLASSIFY_CONFIDENCE_FLOOR,
     },
   });
+  return { report, coverage };
 }
 
 /**

@@ -555,6 +555,36 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_consensus_labels_rev ON consensus_labels(corpus_rev, prompt_hash)",
   ],
+  // classifier replay cache (MUB-218) — the SHIPPED classifier's own labels over the same corpus,
+  // per docs/adr/0008-classifier-replay-cache.md. Batch position may shift at rebase (append-only
+  // discipline: renumber unmerged, never edit shipped), so this comment states no version number.
+  //
+  // A SEPARATE TABLE from consensus_labels, though the columns match. Those rows are the REFERENCE
+  // and these are the SUBJECT UNDER TEST, and the scorer's guarantee that no stored label can
+  // become a reference label is structural — there is no input it could arrive through. One table
+  // would demote that to a model-id filter, where a panel-membership edit silently promotes the
+  // thing being measured into the thing it is measured against.
+  //
+  // `confidence` is the classifier's RAW self-report, before CLASSIFY_CONFIDENCE_FLOOR. The floor
+  // is what this evaluation exists to argue about, so a post-floor label would leave the
+  // reliability curve with no evidence at all in the region under argument.
+  //
+  // A NULL task_type is a real answer that carried no usable label (deterministic for this
+  // (prompt, model), so cached — a rerun does not pay for it twice). A call that FAILED, in any of
+  // its three senses, writes no row at all, so a rerun retries it.
+  [
+    `CREATE TABLE IF NOT EXISTS classifier_replay_labels (
+       prompt_hash TEXT NOT NULL,     -- sha256 of the exact prompt text (the text is never stored)
+       model_id    TEXT NOT NULL,     -- the classifier model that produced this label
+       corpus_rev  TEXT NOT NULL,     -- eval-core CORPUS_REV the replay was run under
+       task_type   TEXT,              -- NULL = answered, but with no usable label
+       difficulty  TEXT,
+       confidence  REAL,              -- RAW self-report, pre-floor
+       created_at  REAL NOT NULL,
+       PRIMARY KEY (prompt_hash, model_id)
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_classifier_replay_rev ON classifier_replay_labels(corpus_rev, prompt_hash)",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -872,6 +902,25 @@ export interface UserPromptRow {
  * `task_type` is NULL when the panelist answered with nothing usable as a label.
  */
 export interface ConsensusVoteRow {
+  prompt_hash: string;
+  model_id: string;
+  corpus_rev: string;
+  task_type: string | null;
+  difficulty: string | null;
+  confidence: number | null;
+  created_at: number;
+}
+
+/**
+ * One classifier model's replayed label for one corpus prompt (MUB-218, ADR 0008). Structurally
+ * identical to {@link ConsensusVoteRow} and deliberately a different table: that one holds the
+ * REFERENCE the classifier is scored against, this one holds what the classifier said.
+ *
+ * `confidence` is the raw self-report, before `CLASSIFY_CONFIDENCE_FLOOR` — the floor is the thing
+ * under argument, so it must not have been applied on the way in. `task_type` is NULL when the
+ * classifier answered with nothing usable as a label; a failed call writes no row.
+ */
+export interface ReplayLabelRow {
   prompt_hash: string;
   model_id: string;
   corpus_rev: string;
@@ -3099,6 +3148,62 @@ export class MinimaDb {
          ORDER BY prompt_hash, model_id`,
       )
       .all(corpusRev) as ConsensusVoteRow[];
+  }
+
+  // ------------------------------------------- classifier replay cache (MUB-218, ADR 0008)
+  /**
+   * Record one classifier model's replayed label. Upsert on `(prompt_hash, model_id)`: re-running
+   * the same model over the same prompt REPLACES the label (and its `corpus_rev`), because the
+   * cache holds the current answer and a history of answers nothing reads is not worth a table.
+   *
+   * `confidence` is the RAW self-report, pre-floor. Callers pass the sha256 of the prompt, never
+   * the prompt: nothing on this path can store text.
+   */
+  upsertReplayLabel(v: {
+    promptHash: string;
+    modelId: string;
+    corpusRev: string;
+    taskType?: string | null;
+    difficulty?: string | null;
+    confidence?: number | null;
+    ts?: number;
+  }): void {
+    this.db.run(
+      `INSERT INTO classifier_replay_labels
+         (prompt_hash, model_id, corpus_rev, task_type, difficulty, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(prompt_hash, model_id) DO UPDATE SET
+         corpus_rev = excluded.corpus_rev,
+         task_type  = excluded.task_type,
+         difficulty = excluded.difficulty,
+         confidence = excluded.confidence,
+         created_at = excluded.created_at`,
+      [
+        v.promptHash,
+        v.modelId,
+        v.corpusRev,
+        v.taskType ?? null,
+        v.difficulty ?? null,
+        v.confidence ?? null,
+        v.ts ?? Date.now() / 1000,
+      ],
+    );
+  }
+
+  /**
+   * Every replayed label produced under one corpus revision, in a stable order.
+   *
+   * Scoped to the revision by construction, for the same reason `listConsensusVotes` is: a label
+   * produced against a different corpus revision describes a corpus that no longer exists, and must
+   * read as a cache MISS rather than as an answer.
+   */
+  listReplayLabels(corpusRev: string): ReplayLabelRow[] {
+    return this.db
+      .query(
+        `SELECT * FROM classifier_replay_labels WHERE corpus_rev = ?
+         ORDER BY prompt_hash, model_id`,
+      )
+      .all(corpusRev) as ReplayLabelRow[];
   }
 
   // ---------------------------------------------------------------- plan outcome (M7.1)
