@@ -1,23 +1,36 @@
 import { describe, expect, test } from "bun:test";
+import {
+  AssistantMessage,
+  type Model,
+  type StopReason,
+  text as textBlock,
+} from "../src/ai/index.ts";
+import type { complete } from "../src/ai/stream.ts";
 import { SEED_MODELS } from "../src/cli/main.ts";
 import type { ConsensusVoteRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { CORPUS_REV, type DistinctPrompt } from "../src/minima/classifier_eval.ts";
+import { CLASSIFY_SYSTEM } from "../src/minima/classify.ts";
 import { PREMIUM_CANDIDATES } from "../src/minima/config.ts";
 import {
   type PanelCallOutcome,
   type Panelist,
   REFERENCE_PANEL,
   buildPanelReport,
+  buildReferenceLabels,
   checkPanelDiversity,
   deriveConsensus,
+  makePanelCaller,
   makeSpendGuard,
   panelCallSpecs,
   planPanelRun,
   projectPanelCost,
   promptHash,
+  renderOutstandingWork,
   renderPanelReport,
+  renderPanelRunResult,
   runPanel,
+  summarizeOutstanding,
   voteKey,
 } from "../src/minima/consensus_panel.ts";
 import type { TaskType } from "../src/minima/schemas.ts";
@@ -384,6 +397,31 @@ describe("runPanel — the billable path, driven by a fake caller", () => {
     expect(res.ceilingHit).toBe(true);
   });
 
+  test("a ledger that rejects a write STOPS the run rather than keep buying", async () => {
+    // Persistence is the product here. A run whose writes are failing would go on paying for
+    // labels nothing stores — at a few hundred paid calls that is real money spent on nothing.
+    let calls = 0;
+    const res = await runPanel({
+      plans: planPanelRun(prompts, TRIO, new Set()),
+      corpusRev: CORPUS_REV,
+      call: caller(() => {
+        calls++;
+        return { kind: "labelled", taskType: "code", confidence: 1, usd: 0.01 };
+      }),
+      record: () => {
+        throw new Error("SQLITE_BUSY");
+      },
+      guard: makeSpendGuard(10),
+      concurrency: 1,
+    });
+    expect(res.ledgerFailed).toBe(true);
+    expect(calls).toBe(1);
+    expect(res.skippedForLedger).toBe(5);
+    // It stopped for the ledger, not for money — the two exits must stay distinguishable.
+    expect(res.ceilingHit).toBe(false);
+    expect(res.spentUsd).toBeCloseTo(0.01, 10);
+  });
+
   test("nothing outstanding spends nothing and calls no one", async () => {
     let calls = 0;
     const res = await runPanel({
@@ -398,6 +436,195 @@ describe("runPanel — the billable path, driven by a fake caller", () => {
     });
     expect(calls).toBe(0);
     expect(res).toMatchObject({ attempted: 0, spentUsd: 0, ceilingHit: false });
+  });
+});
+
+describe("makePanelCaller — how a reply becomes a vote, or fails to", () => {
+  /** A stubbed completion with a given stop reason and body, priced at a fixed cost. */
+  const reply = (text: string, stop_reason: StopReason, usd = 0.002) =>
+    (async () =>
+      new AssistantMessage({
+        content: [textBlock(text)],
+        stop_reason,
+        usage: { cost: { total: usd } },
+      })) as unknown as typeof complete;
+
+  const label = '{"task_type":"code","difficulty":"easy","confidence":0.9}';
+
+  test("a complete, parseable reply is a labelled vote carrying its realized cost", async () => {
+    const out = await makePanelCaller(reply(label, "stop"))(A, "fix the parser");
+    expect(out).toMatchObject({
+      kind: "labelled",
+      taskType: "code",
+      difficulty: "easy",
+      usd: 0.002,
+    });
+  });
+
+  test("a complete reply that will not parse is UNUSABLE — cached, so a rerun does not re-pay", async () => {
+    const out = await makePanelCaller(reply("I think this is a coding task!", "stop"))(A, "x");
+    expect(out.kind).toBe("unusable");
+  });
+
+  test("a TRUNCATED reply is a failure, not a cached non-answer", async () => {
+    // The expensive bug this pins. Two of three panelists reason server-side into the same
+    // max_tokens budget, so `length` is reachable — and caching it as a null vote would exclude
+    // an already-paid-for prompt permanently, from a panel that could still have labelled it.
+    // This is where the panel deliberately diverges from classify.ts, which sets no max_tokens.
+    const out = await makePanelCaller(reply("", "length"))(A, "x");
+    expect(out.kind).toBe("failed");
+    expect(out.usd).toBe(0.002); // it still billed — the money is gone either way
+  });
+
+  test("an aborted or errored call is a failure too", async () => {
+    expect((await makePanelCaller(reply("", "aborted"))(A, "x")).kind).toBe("failed");
+    expect((await makePanelCaller(reply("", "error"))(A, "x")).kind).toBe("failed");
+  });
+
+  test("a reply with no usable cost figure books zero rather than NaN", async () => {
+    const noUsage = (async () =>
+      new AssistantMessage({
+        content: [textBlock(label)],
+        stop_reason: "stop",
+      })) as unknown as typeof complete;
+    const out = await makePanelCaller(noUsage)(A, "x");
+    expect(out.usd).toBe(0);
+  });
+
+  test("the panelist's own model is what gets called, and the instruction is the shipped one", async () => {
+    // The panel is a stronger-models replay of the exact call under test; if the instruction
+    // drifted from CLASSIFY_SYSTEM, a measured gap would be prompt difference, not capability.
+    let sawModel = "";
+    let sawSystem = "";
+    const spy = (async (model: Model, ctx: { system_prompt?: string }) => {
+      sawModel = model.id;
+      sawSystem = ctx.system_prompt ?? "";
+      return new AssistantMessage({ content: [textBlock(label)], stop_reason: "stop" });
+    }) as unknown as typeof complete;
+    await makePanelCaller(spy)(B, "ship the thing");
+    expect(sawModel).toBe("model-b");
+    expect(sawSystem).toBe(CLASSIFY_SYSTEM);
+  });
+});
+
+describe("buildReferenceLabels — the pseudo-gold set MUB-218 and MUB-226 consume", () => {
+  const corpus = [prompt("p1"), prompt("p2"), prompt("p3")];
+  const votes: ConsensusVoteRow[] = [
+    row("p1", "model-a", "code"),
+    row("p1", "model-b", "code"),
+    row("p1", "model-c", "code"),
+    row("p2", "model-a", "code"),
+    row("p2", "model-b", "qa"),
+    row("p2", "model-c", "code"),
+    row("p3", "model-a", "qa"),
+    row("p3", "model-b", "qa"),
+    row("p3", "model-c", null),
+  ];
+
+  test("only unanimous panels earn a label, keyed by prompt hash", () => {
+    const labels = buildReferenceLabels(corpus, TRIO, votes, CORPUS_REV);
+    expect(labels.get(promptHash("p1"))).toBe("code");
+    expect(labels.size).toBe(1);
+  });
+
+  test("split and incomplete prompts are ABSENT, never present with a null", () => {
+    // A caller iterating this map must not be able to score a prompt that has no reference label.
+    const labels = buildReferenceLabels(corpus, TRIO, votes, CORPUS_REV);
+    expect(labels.has(promptHash("p2"))).toBe(false);
+    expect(labels.has(promptHash("p3"))).toBe(false);
+  });
+
+  test("it agrees with the report's headline count — one quorum rule, not two", () => {
+    const labels = buildReferenceLabels(corpus, TRIO, votes, CORPUS_REV);
+    const report = buildPanelReport(corpus, TRIO, votes, CORPUS_REV);
+    expect(labels.size).toBe(report.referenceLabels);
+    expect(labels.size).toBe(report.unanimity.n);
+  });
+
+  test("a stale corpus revision yields no labels at all", () => {
+    const stale = votes.map((v) => ({ ...v, corpus_rev: "r1-before" }));
+    expect(buildReferenceLabels(corpus, TRIO, stale, CORPUS_REV).size).toBe(0);
+  });
+});
+
+describe("outstanding work and the run readout — reported numbers, out of the shell", () => {
+  const corpus = [prompt("one"), prompt("two")];
+
+  test("the cached share is a rate over corpus x panel, not over the corpus", () => {
+    // "3 of 6 votes cached" and "3 of 2 prompts cached" are different claims; the denominator
+    // is the only thing that says which was meant.
+    const cached = new Set([
+      voteKey(promptHash("one"), "model-a"),
+      voteKey(promptHash("one"), "model-b"),
+      voteKey(promptHash("two"), "model-a"),
+    ]);
+    const w = summarizeOutstanding(planPanelRun(corpus, TRIO, cached), corpus.length, CORPUS_REV);
+    expect(w.votesCached).toEqual({ n: 3, d: 6, pct: 50 });
+    expect(w.cost.totalCalls).toBe(3);
+    expect(renderOutstandingWork(w)).toContain("3/6 (50.0%)");
+    expect(renderOutstandingWork(w)).toContain(CORPUS_REV);
+  });
+
+  test("a fully cached panel reports every vote cached and no cost", () => {
+    const all = new Set(
+      TRIO.flatMap((p) => corpus.map((q) => voteKey(promptHash(q.text), p.model.id))),
+    );
+    const w = summarizeOutstanding(planPanelRun(corpus, TRIO, all), corpus.length, CORPUS_REV);
+    expect(w.votesCached).toEqual({ n: 6, d: 6, pct: 100 });
+    expect(w.cost.totalUsd).toBe(0);
+  });
+
+  test("the run readout states realized against projected, with its denominator", () => {
+    const out = renderPanelRunResult(
+      {
+        attempted: 10,
+        labelled: 9,
+        unusable: 1,
+        failed: 0,
+        skippedForCeiling: 0,
+        ceilingHit: false,
+        skippedForLedger: 0,
+        ledgerFailed: false,
+        spentUsd: 0.5,
+      },
+      1.0,
+    );
+    expect(out).toContain("10 calls · 9 labelled · 1 unusable · 0 failed");
+    // The percentage needs no separate denominator: both figures it divides are on the line.
+    expect(out).toContain("realized $0.5000 against a $1.0000 projection (50.0% of it)");
+  });
+
+  test("a zero projection reports n/a rather than dividing by it", () => {
+    const out = renderPanelRunResult(
+      {
+        attempted: 0,
+        labelled: 0,
+        unusable: 0,
+        failed: 0,
+        skippedForCeiling: 0,
+        ceilingHit: false,
+        skippedForLedger: 0,
+        ledgerFailed: false,
+        spentUsd: 0,
+      },
+      0,
+    );
+    expect(out).toContain("(n/a of it)");
+  });
+
+  test("failed calls are called out as the thing a rerun would pay for", () => {
+    const base = {
+      attempted: 5,
+      labelled: 4,
+      unusable: 0,
+      skippedForCeiling: 0,
+      ceilingHit: false,
+      skippedForLedger: 0,
+      ledgerFailed: false,
+      spentUsd: 0.1,
+    };
+    expect(renderPanelRunResult({ ...base, failed: 1 }, 0.1)).toContain("re-running pays only");
+    expect(renderPanelRunResult({ ...base, failed: 0 }, 0.1)).not.toContain("re-running pays only");
   });
 });
 

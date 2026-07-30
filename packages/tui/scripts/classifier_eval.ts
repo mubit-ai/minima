@@ -52,9 +52,11 @@ import {
   makeSpendGuard,
   panelCallSpecs,
   planPanelRun,
-  projectPanelCost,
+  renderOutstandingWork,
   renderPanelReport,
+  renderPanelRunResult,
   runPanel,
+  summarizeOutstanding,
   voteKey,
 } from "../src/minima/consensus_panel.ts";
 import { hydrateEnv } from "../src/tui/config_store.ts";
@@ -145,30 +147,14 @@ try {
       REFERENCE_PANEL,
       new Set(cachedVotes.map((v) => voteKey(v.prompt_hash, v.model_id))),
     );
-    const outstanding = projectPanelCost(plans);
-    const cachedTotal = plans.reduce((n, p) => n + p.cached, 0);
-    const panelTotal = corpus.length * REFERENCE_PANEL.length;
-
-    console.log(
-      [
-        "",
-        "Reference panel (MUB-216) — what --spend would actually pay for",
-        `  corpus revision              ${CORPUS_REV}`,
-        `  votes cached at this rev     ${cachedTotal}/${panelTotal}`,
-        `  outstanding                  ${outstanding.totalCalls} calls · $${outstanding.totalUsd.toFixed(4)}`,
-      ].join("\n"),
-    );
-    for (const l of outstanding.lines) {
-      console.log(
-        `  ${l.label.padEnd(28)} ${l.calls} calls · ${l.inputTokens} in · ${l.outputTokens} out` +
-          ` · $${l.inputUsdPerMTok}/$${l.outputUsdPerMTok} per Mtok · $${l.usd.toFixed(4)}`,
-      );
-    }
+    const work = summarizeOutstanding(plans, corpus.length, CORPUS_REV);
+    console.log("");
+    console.log(renderOutstandingWork(work));
 
     // The ceiling answers what THIS run would spend, not what the whole arc would: a rerun over
     // cached labels costs nothing, and a ceiling chosen against the full-corpus figure would be
     // answering a question the run is not asking.
-    const projected = outstanding.totalUsd;
+    const projected = work.cost.totalUsd;
     const suggested = suggestCeilingUsd(projected).toFixed(2);
 
     /** Print whatever labels exist, so the panel's findings are readable without spending. */
@@ -242,7 +228,7 @@ try {
             ].join("\n"),
           );
           exitCode = 2;
-        } else if (outstanding.totalCalls === 0) {
+        } else if (work.cost.totalCalls === 0) {
           console.error(
             [
               "",
@@ -268,7 +254,7 @@ try {
               [
                 "",
                 `--spend --max-usd=${invocation.maxUsd}: accepted. Running the reference panel over`,
-                `  ${outstanding.totalCalls} outstanding calls, projected $${projected.toFixed(4)}.`,
+                `  ${work.cost.totalCalls} outstanding calls, projected $${projected.toFixed(4)}.`,
                 "  Votes are written as they land, so an interrupted run keeps what it paid for.",
               ].join("\n"),
             );
@@ -287,20 +273,20 @@ try {
                 console.error(`  … ${done}/${total} calls · $${spentUsd.toFixed(4)} realized`);
               },
             });
-            console.error(
-              [
-                "",
-                `panel run: ${result.attempted} calls · ${result.labelled} labelled ·` +
-                  ` ${result.unusable} unusable · ${result.failed} failed`,
-                `  realized $${result.spentUsd.toFixed(4)} against a $${projected.toFixed(4)} projection` +
-                  ` (${projected > 0 ? `${((result.spentUsd / projected) * 100).toFixed(0)}%` : "n/a"} of it)`,
-                result.failed > 0
-                  ? "  Failed calls wrote no row, so re-running pays only for those."
-                  : "",
-              ]
-                .filter(Boolean)
-                .join("\n"),
-            );
+            console.error(`\n${renderPanelRunResult(result, projected)}`);
+            if (result.ledgerFailed) {
+              // Persistence is the product: the run stopped rather than keep buying labels the
+              // ledger would not store.
+              console.error(
+                [
+                  "",
+                  "--spend: STOPPED — the ledger rejected a vote write.",
+                  `  ${result.skippedForLedger} calls were never dispatched. Votes written before the`,
+                  "  failure are kept; fix the ledger and re-run to finish.",
+                ].join("\n"),
+              );
+              exitCode = 2;
+            }
             if (result.ceilingHit) {
               console.error(
                 [

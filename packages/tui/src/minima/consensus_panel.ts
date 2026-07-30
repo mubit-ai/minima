@@ -182,9 +182,19 @@ export function promptHash(text: string): string {
   return hasher.digest("hex");
 }
 
+/**
+ * Delimiter for the composite keys below. NUL appears in no hex digest, no model id and no task
+ * type, so no two different pairs of parts can collide on one key.
+ *
+ * WRITTEN AS AN ESCAPE, never as a literal. A raw NUL in source is invisible in every editor and
+ * every diff, and it makes the whole file read as `charset=binary` to tooling that would otherwise
+ * treat it as text — while neither tsc nor biome objects, so nothing catches it but a hex dump.
+ */
+const KEY_SEP = "\u0000";
+
 /** The identity of one vote: a prompt and the panelist that voted on it, and nothing else. */
 export function voteKey(hash: string, modelId: string): string {
-  return `${hash} ${modelId}`;
+  return `${hash}${KEY_SEP}${modelId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +301,10 @@ export function panelCallSpecs(panel: readonly Panelist[]): CallSpec[] {
  * chosen against the full-corpus figure would be answering a question this run is not asking.
  * Each leg is priced by the same `estimateRunCost` the dry run uses, so there is one arithmetic
  * path and the printed total can be re-derived by hand.
+ *
+ * `prompts` here is the count of DISTINCT prompts with outstanding work across all legs — not the
+ * corpus size that `estimateRunCost` reports, because each leg may owe a different subset. Read the
+ * per-leg `calls` for what any single panelist owes.
  */
 export function projectPanelCost(plans: readonly PanelPlan[]): CostEstimate {
   const specs = panelCallSpecs(plans.map((p) => p.panelist));
@@ -310,6 +324,73 @@ export function projectPanelCost(plans: readonly PanelPlan[]): CostEstimate {
     totalOutputTokens: lines.reduce((n, l) => n + l.outputTokens, 0),
     totalUsd: Math.round(lines.reduce((n, l) => n + l.usd, 0) * 1e6) / 1e6,
   };
+}
+
+/**
+ * What a `--spend` run would actually pay for: how much of the panel is already cached, and what
+ * the rest projects to.
+ *
+ * Lives here rather than in the shell because every figure in it is a reported number. The cached
+ * share is a {@link Rate}, so it cannot be printed without the denominator it is a share OF —
+ * `cached/total votes`, where total is corpus × panel, not corpus.
+ */
+export interface OutstandingWork {
+  readonly corpusRev: string;
+  readonly votesCached: Rate;
+  readonly cost: CostEstimate;
+}
+
+export function summarizeOutstanding(
+  plans: readonly PanelPlan[],
+  corpusSize: number,
+  corpusRev: string,
+): OutstandingWork {
+  const cached = plans.reduce((n, p) => n + p.cached, 0);
+  return {
+    corpusRev,
+    votesCached: rate(cached, corpusSize * plans.length),
+    cost: projectPanelCost(plans),
+  };
+}
+
+/** Render the outstanding-work section. Every price it was costed at travels with its leg. */
+export function renderOutstandingWork(w: OutstandingWork): string {
+  const lines = [
+    "Reference panel (MUB-216) — what --spend would actually pay for",
+    `  corpus revision              ${w.corpusRev}`,
+    `  votes cached at this rev     ${formatRate(w.votesCached)}`,
+    `  outstanding                  ${w.cost.totalCalls} calls · $${w.cost.totalUsd.toFixed(4)}`,
+  ];
+  for (const l of w.cost.lines) {
+    lines.push(
+      `  ${l.label.padEnd(28)} ${l.calls} calls · ${l.inputTokens} in · ${l.outputTokens} out` +
+        ` · $${l.inputUsdPerMTok}/$${l.outputUsdPerMTok} per Mtok · $${l.usd.toFixed(4)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Render what a finished run actually did, against what it was projected to do.
+ *
+ * The realized-versus-projected ratio is the only feedback the cost model ever gets: the projection
+ * is a chars/4 heuristic with a declared output allowance, and printing the two side by side is how
+ * a wrong allowance becomes visible instead of just becoming the bill.
+ */
+export function renderPanelRunResult(r: PanelRunResult, projectedUsd: number): string {
+  // A bare percentage here needs no separate denominator: both dollar figures it divides are
+  // printed on the same line, so a reader can re-derive it.
+  const share = projectedUsd > 0 ? `${((r.spentUsd / projectedUsd) * 100).toFixed(1)}%` : "n/a";
+  const lines = [
+    `panel run: ${r.attempted} calls · ${r.labelled} labelled · ${r.unusable} unusable` +
+      ` · ${r.failed} failed`,
+    `  realized $${r.spentUsd.toFixed(4)} against a $${projectedUsd.toFixed(4)} projection` +
+      ` (${share} of it)`,
+  ];
+  if (r.failed > 0) {
+    lines.push("  Failed calls wrote no row, so re-running pays only for those.");
+  }
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -337,18 +418,27 @@ export interface SpendGuard {
   book(usd: number): void;
 }
 
+/**
+ * A price that may be added to a running total: anything else is 0.
+ *
+ * A NaN from a provider that reported no usage must not rewind a total, and a negative one must not
+ * buy headroom. One definition, so the guard's ceiling and the run's reported spend cannot disagree
+ * about what a booked dollar is.
+ */
+function positiveUsd(usd: number): number {
+  return Number.isFinite(usd) && usd > 0 ? usd : 0;
+}
+
 export function makeSpendGuard(maxUsd: number): SpendGuard {
-  const ceiling = Number.isFinite(maxUsd) && maxUsd > 0 ? maxUsd : 0;
+  const ceiling = positiveUsd(maxUsd);
   let spent = 0;
   return {
     maxUsd: ceiling,
     spentUsd: () => spent,
     remainingUsd: () => Math.max(0, ceiling - spent),
     mayDispatch: () => spent < ceiling,
-    // A NaN price from a provider that reported no usage must not rewind the cap, and a negative
-    // one must not buy headroom.
     book: (usd) => {
-      if (Number.isFinite(usd) && usd > 0) spent += usd;
+      spent += positiveUsd(usd);
     },
   };
 }
@@ -396,6 +486,10 @@ export interface PanelRunResult {
   /** Calls never dispatched because the live cap had already been reached. */
   readonly skippedForCeiling: number;
   readonly ceilingHit: boolean;
+  /** Calls never dispatched because the ledger stopped accepting votes. */
+  readonly skippedForLedger: number;
+  /** True when a write failed: the run paid for votes it could not store, and stopped. */
+  readonly ledgerFailed: boolean;
   readonly spentUsd: number;
 }
 
@@ -420,8 +514,13 @@ export interface RunPanelOptions {
  * call 400 of 714 must keep the 400 votes it paid for, and a rerun must owe only the rest.
  *
  * The cap is checked immediately before each dispatch, so a run that trips it stops paying rather
- * than finishing the queue. Neither a caller that throws nor a `record` that throws can end the
- * run — a bookkeeping failure must not cost the votes still to come.
+ * than finishing the queue. A caller that throws is one failed call and the run continues.
+ *
+ * A `record` that throws STOPS the run. This is the one place the harness's log-and-swallow rule
+ * does not apply: that rule protects the interactive hot path, where losing a bookkeeping row is
+ * cheaper than losing the turn. Here persistence IS the product — a run whose writes are failing
+ * would keep buying labels that nothing stores, and at a few hundred paid calls that is real money
+ * spent on nothing. Losing at most the one call in flight is the cheaper mistake.
  */
 export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
   const queue = opts.plans.flatMap((plan) =>
@@ -433,6 +532,8 @@ export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
   let unusable = 0;
   let failed = 0;
   let skipped = 0;
+  let skippedForLedger = 0;
+  let ledgerFailed = false;
   let spent = 0;
   let done = 0;
 
@@ -441,6 +542,10 @@ export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
       const i = next++;
       const job = queue[i];
       if (job === undefined) return;
+      if (ledgerFailed) {
+        skippedForLedger++;
+        continue;
+      }
       if (!opts.guard.mayDispatch()) {
         skipped++;
         continue;
@@ -453,7 +558,7 @@ export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
         outcome = { kind: "failed", usd: 0 };
       }
       opts.guard.book(outcome.usd);
-      if (Number.isFinite(outcome.usd) && outcome.usd > 0) spent += outcome.usd;
+      spent += positiveUsd(outcome.usd);
       if (outcome.kind === "failed") {
         failed++;
       } else {
@@ -469,7 +574,8 @@ export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
             confidence: outcome.kind === "labelled" ? (outcome.confidence ?? null) : null,
           });
         } catch {
-          // A ledger write that fails costs this one vote, never the run.
+          // Persistence is the product here — stop buying labels nothing can store.
+          ledgerFailed = true;
         }
       }
       done++;
@@ -490,15 +596,35 @@ export async function runPanel(opts: RunPanelOptions): Promise<PanelRunResult> {
     failed,
     skippedForCeiling: skipped,
     ceilingHit: skipped > 0,
+    skippedForLedger,
+    ledgerFailed,
     spentUsd: spent,
   };
 }
 
 /** Bounded output per call: high enough that a reasoning panelist can think and still answer, low
- * enough that a runaway costs cents. Set below any panelist's `max_tokens` on purpose. */
+ * enough that a runaway costs cents. Set below any panelist's `max_tokens` on purpose. This is the
+ * WORST case; `outputTokensPerCall` is the expected case the projection is built from, and the
+ * live {@link SpendGuard} covers the gap between the two. */
 const PANEL_MAX_TOKENS = 1024;
 /** A label call is small; a panelist that has not answered in this long is not going to. */
 const PANEL_TIMEOUT_S = 60;
+/** Prompt truncation, matching `classify.ts`'s cap so the panel sees exactly what the classifier
+ * under test would see. The corpus's longest prompt is far below this; it is a bound, not a policy. */
+const PANEL_PROMPT_CHARS = 8000;
+
+/**
+ * Stop reasons that mean "ask again", not "this model has no label for this prompt".
+ *
+ * This is the one place the panel DIVERGES from `classify.ts`, deliberately. That classifier
+ * treats only `error` as retryable, but it sets no `max_tokens` (so `length` was never reachable)
+ * and its cache is an in-memory per-session Map that costs nothing to rebuild. Here the cache is a
+ * durable, money-backed ledger row: a `length` truncation — which two of three panelists can reach
+ * by reasoning through the output budget — would otherwise be written as a null vote, permanently
+ * excluding a prompt that was already paid for, from a panel that could still have labelled it.
+ * `aborted` is the same shape of transient.
+ */
+const RETRYABLE_STOP_REASONS = new Set(["error", "length", "aborted"]);
 
 /**
  * The real caller: the shipped classify call, made by a stronger model.
@@ -508,21 +634,21 @@ const PANEL_TIMEOUT_S = 60;
  * comparable). Prompt caching is off: 238 distinct prompts share only the system prompt, and a
  * cache write costs more than the read saves at this size.
  *
- * An `error` stop reason is a FAILURE (transient — no row, so a rerun retries); a reply that will
- * not parse is UNUSABLE (deterministic — cached as a null label). Cost comes from the provider's
+ * A retryable stop reason is a FAILURE (no row, so a rerun retries); a COMPLETE reply that will not
+ * parse is UNUSABLE (deterministic — cached as a null label). Cost comes from the provider's
  * reported usage, so a panelist that reasons server-side bills what it actually burned rather than
  * what the projection guessed.
+ *
+ * `completeFn` is the test seam: `tests/consensus-panel.test.ts` drives every branch above through
+ * it, so the billable path is covered without a network.
  */
-export function makePanelCaller(
-  signal?: AbortSignal,
-  completeFn: typeof complete = complete,
-): PanelCaller {
+export function makePanelCaller(completeFn: typeof complete = complete): PanelCaller {
   return async (panelist, promptText) => {
     const resp = await completeFn(
       panelist.model,
       {
         system_prompt: CLASSIFY_SYSTEM,
-        messages: [new Message({ role: "user", content: promptText.slice(0, 8000) })],
+        messages: [new Message({ role: "user", content: promptText.slice(0, PANEL_PROMPT_CHARS) })],
         tools: [],
       },
       {
@@ -531,12 +657,11 @@ export function makePanelCaller(
           prompt_cache: false,
           max_tokens: PANEL_MAX_TOKENS,
         },
-        ...(signal ? { signal } : {}),
       },
     );
     const usdRaw = resp.usage?.cost?.total;
     const usd = Number.isFinite(usdRaw) ? (usdRaw as number) : 0;
-    if (resp.stop_reason === "error") return { kind: "failed", usd };
+    if (RETRYABLE_STOP_REASONS.has(resp.stop_reason)) return { kind: "failed", usd };
     const cls = parseClassification(resp.textContent);
     if (!cls) return { kind: "unusable", usd };
     return {
@@ -602,6 +727,77 @@ export interface PanelReport {
 /** How many disagreeing pairs the readout names. Enough to see the shape, few enough to read. */
 const TOP_DISAGREEMENTS = 8;
 
+/** The stored-vote shape these readers need. A structural type, so a caller can pass ledger rows
+ * without this module importing the db layer's row type. */
+export interface StoredVote {
+  readonly prompt_hash: string;
+  readonly model_id: string;
+  readonly corpus_rev: string;
+  readonly task_type: string | null;
+}
+
+/**
+ * Project stored votes into `hash -> modelId -> label`, filtered THREE ways: to the stated
+ * revision, to prompts still in the corpus, and to models still in the panel.
+ *
+ * Each of those filters is a way for a figure to quietly describe a different experiment than its
+ * heading claims — a vote at an old revision describes a corpus that no longer exists, and a vote
+ * from a retired panelist would complete a panel that no longer has it. Shared by every reader
+ * below so none of them can apply a different set.
+ */
+function indexVotes(
+  prompts: readonly DistinctPrompt[],
+  panel: readonly Panelist[],
+  votes: readonly StoredVote[],
+  corpusRev: string,
+): { hashes: Set<string>; byPrompt: Map<string, Map<string, TaskType | null>> } {
+  const inPanel = new Set(panel.map((p) => p.model.id));
+  const hashes = new Set(prompts.map((p) => promptHash(p.text)));
+  const byPrompt = new Map<string, Map<string, TaskType | null>>();
+  for (const v of votes) {
+    if (v.corpus_rev !== corpusRev) continue;
+    if (!hashes.has(v.prompt_hash)) continue;
+    if (!inPanel.has(v.model_id)) continue;
+    const cell = byPrompt.get(v.prompt_hash) ?? new Map<string, TaskType | null>();
+    cell.set(v.model_id, (v.task_type as TaskType | null) ?? null);
+    byPrompt.set(v.prompt_hash, cell);
+  }
+  return { hashes, byPrompt };
+}
+
+/**
+ * THE PSEUDO-GOLD SET: prompt hash → the label the panel was unanimous on.
+ *
+ * This is what MUB-218 and MUB-226 actually consume, and it is why the labels are cached at all —
+ * without it a downstream ticket would have to re-assemble the corpus, the hashing, the revision
+ * filter and the quorum rule by hand, and any one of those re-implementations could silently score
+ * against a different set than this report described.
+ *
+ * Split and incomplete panels are ABSENT from the map rather than present with a null: a prompt
+ * with no reference label is not part of the scored set, and a caller iterating this map cannot
+ * accidentally score one. Keyed by hash because the text is never stored — callers re-derive hashes
+ * from the live corpus with {@link promptHash}.
+ */
+export function buildReferenceLabels(
+  prompts: readonly DistinctPrompt[],
+  panel: readonly Panelist[],
+  votes: readonly StoredVote[],
+  corpusRev: string,
+): Map<string, TaskType> {
+  const { hashes, byPrompt } = indexVotes(prompts, panel, votes, corpusRev);
+  const labels = new Map<string, TaskType>();
+  for (const hash of hashes) {
+    const cell = byPrompt.get(hash);
+    if (!cell) continue;
+    const verdict = deriveConsensus(
+      [...cell].map(([modelId, taskType]) => ({ modelId, taskType })),
+      panel.length,
+    );
+    if (verdict.kind === "unanimous") labels.set(hash, verdict.label);
+  }
+  return labels;
+}
+
 /**
  * Assemble the panel's readout from the corpus and the stored votes. Pure: reads nothing, spends
  * nothing, and holds no prompt text.
@@ -613,28 +809,11 @@ const TOP_DISAGREEMENTS = 8;
 export function buildPanelReport(
   prompts: readonly DistinctPrompt[],
   panel: readonly Panelist[],
-  votes: readonly {
-    prompt_hash: string;
-    model_id: string;
-    corpus_rev: string;
-    task_type: string | null;
-  }[],
+  votes: readonly StoredVote[],
   corpusRev: string,
 ): PanelReport {
   const panelIds = panel.map((p) => p.model.id);
-  const inPanel = new Set(panelIds);
-  const corpusHashes = new Set(prompts.map((p) => promptHash(p.text)));
-
-  /** hash -> modelId -> label (null = answered with nothing usable). */
-  const byPrompt = new Map<string, Map<string, TaskType | null>>();
-  for (const v of votes) {
-    if (v.corpus_rev !== corpusRev) continue;
-    if (!corpusHashes.has(v.prompt_hash)) continue;
-    if (!inPanel.has(v.model_id)) continue;
-    const cell = byPrompt.get(v.prompt_hash) ?? new Map<string, TaskType | null>();
-    cell.set(v.model_id, (v.task_type as TaskType | null) ?? null);
-    byPrompt.set(v.prompt_hash, cell);
-  }
+  const { hashes: corpusHashes, byPrompt } = indexVotes(prompts, panel, votes, corpusRev);
 
   let complete = 0;
   let unanimous = 0;
@@ -658,7 +837,7 @@ export function buildPanelReport(
         const a = cell.get(panelIds[i] as string) ?? null;
         const b = cell.get(panelIds[j] as string) ?? null;
         if (a === null || b === null) continue;
-        const key = `${panelIds[i]} ${panelIds[j]}`;
+        const key = `${panelIds[i]}${KEY_SEP}${panelIds[j]}`;
         const acc = pairAgree.get(key) ?? { n: 0, d: 0 };
         acc.d++;
         if (a === b) acc.n++;
@@ -686,7 +865,7 @@ export function buildPanelReport(
     // three pairs, because all three of those confusions really did happen.
     for (let i = 0; i < verdict.labels.length; i++) {
       for (let j = i + 1; j < verdict.labels.length; j++) {
-        const key = `${verdict.labels[i]} ${verdict.labels[j]}`;
+        const key = `${verdict.labels[i]}${KEY_SEP}${verdict.labels[j]}`;
         pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
       }
     }
@@ -698,7 +877,7 @@ export function buildPanelReport(
 
   const topDisagreements = [...pairCounts]
     .map(([key, count]) => {
-      const [a, b] = key.split(" ") as [TaskType, TaskType];
+      const [a, b] = key.split(KEY_SEP) as [TaskType, TaskType];
       return { labels: [a, b] as readonly [TaskType, TaskType], count };
     })
     .sort((x, y) => y.count - x.count || x.labels[0].localeCompare(y.labels[0]))
@@ -723,7 +902,7 @@ export function buildPanelReport(
       usable: rate(usableByModel.get(p.model.id) ?? 0, corpusHashes.size),
     })),
     pairwise: [...pairAgree].map(([key, acc]) => {
-      const [a, b] = key.split(" ") as [string, string];
+      const [a, b] = key.split(KEY_SEP) as [string, string];
       return { a, b, agree: rate(acc.n, acc.d) };
     }),
   };
