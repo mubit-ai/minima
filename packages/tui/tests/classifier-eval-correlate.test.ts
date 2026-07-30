@@ -382,6 +382,43 @@ describe("MinimaDb.listRoutingDecisions", () => {
     db.close();
   });
 
+  test("carries all four task-type columns, so a reader cannot mistake one for another", () => {
+    // `task_type` is the service's FINAL label and is what an override would have replaced;
+    // `client_task_type` is the harness classifier's own; `heuristic_task_type` is the server's
+    // legacy regex opinion, reported even when something else won. Selecting one and calling it
+    // "the task type" is how a readout measures a different thing than its heading claims, so the
+    // read carries all of them and the caller picks deliberately.
+    const db = ledger();
+    write(db, {
+      recId: "d1",
+      runId: "run-a",
+      taskType: "code",
+      clientTaskType: "qa",
+      clientConfidence: 0.81,
+      heuristicTaskType: "other",
+      classifyDisagreement: 1,
+    });
+    write(db, { recId: "d2", runId: "run-a" });
+    const [full, bare] = db.listRoutingDecisions();
+    expect(full).toMatchObject({
+      task_type: "code",
+      client_task_type: "qa",
+      client_confidence: 0.81,
+      heuristic_task_type: "other",
+      classify_disagreement: 1,
+    });
+    // A row the telemetry never reached carries nulls, not absent keys: "the classifier did not
+    // run" has to be countable, and this ledger's own history is entirely that case.
+    expect(bare).toMatchObject({
+      task_type: null,
+      client_task_type: null,
+      client_confidence: null,
+      heuristic_task_type: null,
+      classify_disagreement: null,
+    });
+    db.close();
+  });
+
   test("scopes to one project's runs when asked, and spans the ledger when not", () => {
     const db = ledger();
     write(db, { recId: "in-a", runId: "run-a" });

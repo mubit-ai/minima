@@ -895,6 +895,37 @@ export interface RoutingDecisionRow {
   agent_id: string | null;
   task_label: string | null;
   routed: string;
+  /**
+   * The service's FINAL task type — `classified_task_type` off the recommendation, which is
+   * `classification_profile.final_task_type`. This is the label the service actually routed on and
+   * the one an override would have replaced, so it is the service's decision (MUB-226).
+   *
+   * It is final, not sourced: when a caller-supplied type wins, the server echoes THAT back here.
+   * So it is the service's OWN decision only while `client_task_type` is null, which is a fact
+   * about the ledger and must be asserted rather than assumed — see `client_task_type` below.
+   */
+  task_type: string | null;
+  /**
+   * The HARNESS classifier's own label, recorded raw (pre-confidence-floor, telemetry only). NULL
+   * means the client-side classifier did not run — which is every row in this ledger's history to
+   * date, and the reason `task_type` is currently uncontaminated.
+   */
+  client_task_type: string | null;
+  /** The harness classifier's self-report, the number the routing floor gates the override on. */
+  client_confidence: number | null;
+  /**
+   * The server's LEGACY heuristic opinion, reported even when another classifier won. Not the
+   * service's decision: post-PR-5 the service routes on its embed classifier, and on the rows where
+   * both are recorded these two disagree most of the time. Useful as the server's second opinion,
+   * never as its label.
+   */
+  heuristic_task_type: string | null;
+  /**
+   * Whether the client's label and the server's HEURISTIC differed (1) or matched (0); NULL when
+   * not comparable. It compares the harness against the heuristic, not against `task_type`, so it
+   * is not a substitute for adjudicating an override.
+   */
+  classify_disagreement: number | null;
 }
 
 /** One plan step with its latest gate verdict — workflow-induction mining input (F5b). */
@@ -1331,6 +1362,12 @@ export class MinimaDb {
    * Which population the correlation runs over is decided by the caller's pure core, so the counts
    * it reports are testable without a ledger.
    *
+   * All FOUR task-type-ish columns come through together, and deliberately. They mean different
+   * things — the service's final label, the harness classifier's own, the server's legacy heuristic
+   * opinion, and their disagreement flag — so a read that selected one and named it "the task type"
+   * would let a caller measure a different thing than its heading claims, with every symptom
+   * looking like a legitimate finding. `RoutingDecisionRow` documents which is which.
+   *
    * `limit` selects the MOST RECENT rows and returns them oldest-first, for the same reason
    * `listUserPrompts` does — a cap that truncated from the old end would answer with
    * pre-regime-change traffic. The `rowid` tie-break keeps the order total when timestamps collide,
@@ -1343,7 +1380,9 @@ export class MinimaDb {
     const params: (string | number)[] = projectKey ? [projectKey, limit] : [limit];
     const newestFirst = this.db
       .query(
-        `SELECT d.rec_id, d.run_id, d.ts, d.agent_id, d.task_label, d.routed
+        `SELECT d.rec_id, d.run_id, d.ts, d.agent_id, d.task_label, d.routed,
+                d.task_type, d.client_task_type, d.client_confidence,
+                d.heuristic_task_type, d.classify_disagreement
          FROM routing_decisions d ${scope}
          ORDER BY d.ts DESC, d.rowid DESC LIMIT ?`,
       )
