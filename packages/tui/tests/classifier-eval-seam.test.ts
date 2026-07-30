@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CHEAP_FALLBACK_MODELS } from "../src/ai/model_fallback.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { CORPUS_REV } from "../src/minima/classifier_eval.ts";
 import {
@@ -16,7 +17,14 @@ import {
   deriveFloor as deriveFloorFromCurve,
   resolveReferenceVerdicts,
 } from "../src/minima/classifier_eval_score.ts";
-import { buildOverrideCandidates } from "../src/minima/classifier_eval_wiring.ts";
+import {
+  OVERRIDE_REPLAY_MODELS,
+  UNREPLAYED_MODEL_ID,
+  buildOverrideCandidates,
+  buildOverrideReport,
+  resolveOverrideReplay,
+} from "../src/minima/classifier_eval_wiring.ts";
+import { REPLAY_MODELS } from "../src/minima/classifier_replay.ts";
 import {
   type CachedPanelVote,
   REFERENCE_PANEL,
@@ -406,6 +414,251 @@ describe("the ledger's own rows travel the seam", () => {
       );
       expect(report.scored).toBe(0);
       expect(report.excluded.find((e) => e.reason === "no-cached-label")?.count).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("the adjudication reads the SHIPPED classifier's replay, and only that", () => {
+  // MUB-218 replayed TWO models and only the first is the classifier the override channel would
+  // open. The other is in the replay to PRICE the model switch. Adjudicating its labels — or
+  // falling back to them where the shipped model has none — measures a channel production never
+  // opens, and every symptom of that reads as a finding: more scored rows, a fuller sweep.
+  const SHIPPED = OVERRIDE_REPLAY_MODELS[0]?.model.id as string;
+  const PRICED_ONLY = REPLAY_MODELS[1]?.model.id as string;
+
+  // Invented text, not the owner's traffic. Its only job is to be a corpus entry: a lead prompt
+  // (agent_id null) that the steer predicate does not claim.
+  const TEXT = "add a changelog entry for the release";
+  const HASH = promptHash(TEXT);
+
+  const promptRow = (ts: number, text: string) => ({
+    id: `e-${ts}`,
+    run_id: "r1",
+    ts,
+    agent_id: null,
+    text,
+  });
+  const decisionRow = (ts: number, over: Record<string, unknown> = {}) => ({
+    rec_id: `d-${ts}`,
+    run_id: "r1",
+    ts,
+    agent_id: null,
+    task_label: TEXT.slice(0, 40),
+    routed: "server",
+    // The label an override would have REPLACED. The panel below says `code`, so a shipped-model
+    // label of `code` is a correction and the other model's `qa` would be both-wrong.
+    task_type: "other",
+    client_task_type: null,
+    client_confidence: null,
+    heuristic_task_type: null,
+    classify_disagreement: null,
+    ...over,
+  });
+  /** A ledger-shaped replay row, as `listReplayLabels` returns them. */
+  const replayRow = (
+    modelId: string,
+    taskType: string | null,
+    over: { difficulty?: string | null; confidence?: number | null; rev?: string } = {},
+  ) => ({
+    prompt_hash: HASH,
+    model_id: modelId,
+    corpus_rev: over.rev ?? CORPUS_REV,
+    task_type: taskType,
+    difficulty: over.difficulty === undefined ? "medium" : over.difficulty,
+    confidence: over.confidence === undefined ? 0.9 : over.confidence,
+  });
+  /** One corpus entry, one decision on it, a unanimous `code` panel, and the replay under test. */
+  const reads = (replayLabels: ReturnType<typeof replayRow>[]) => ({
+    prompts: [promptRow(10, TEXT)],
+    decisions: [decisionRow(20)],
+    votes: panelRows(HASH, ["code", "code", "code"]),
+    replayLabels,
+  });
+
+  test("the model adjudicated IS the one production resolves, and there is exactly one", () => {
+    // The test that fails the day someone reorders REPLAY_MODELS. `cli/main.ts` builds the
+    // production classifier from `config.classifyModel ?? CHEAP_FALLBACK_MODELS[0]` and
+    // `classifyModel` defaults to null — so a reorder would silently move the adjudication onto a
+    // model the harness never runs, and every number would still render.
+    expect(OVERRIDE_REPLAY_MODELS).toHaveLength(1);
+    expect(OVERRIDE_REPLAY_MODELS[0]?.model.id).toBe(CHEAP_FALLBACK_MODELS[0] as string);
+    expect(OVERRIDE_REPLAY_MODELS[0]).toBe(REPLAY_MODELS[0] as (typeof REPLAY_MODELS)[number]);
+    // The other model is deliberately excluded, not absent — the exclusion is what is under test.
+    expect(REPLAY_MODELS.length).toBeGreaterThan(1);
+    expect(PRICED_ONLY).not.toBe(SHIPPED);
+  });
+
+  test("both models labelled the prompt — only the shipped model's label lands", () => {
+    const { replay, coverage } = resolveOverrideReplay(
+      reads([replayRow(SHIPPED, "code"), replayRow(PRICED_ONLY, "qa")]),
+    );
+    expect(replay.get(TEXT)).toEqual({ taskType: "code", confidence: 0.9 });
+    expect(coverage.replays.map((r) => r.modelId)).toEqual([SHIPPED]);
+    // The other model's row is not merged and not ignored silently: it is counted as outside the
+    // model set, which is what makes the omission auditable rather than invisible.
+    expect(coverage.rowsOutsideModelSet).toBe(1);
+
+    const report = buildOverrideReport(
+      reads([replayRow(SHIPPED, "code"), replayRow(PRICED_ONLY, "qa")]),
+      { scope: "seam" },
+    );
+    expect(report.scored).toBe(1);
+    // `code` against a `code` panel and an `other` service label is a CORRECTION. Had the join
+    // taken the priced-only model's `qa`, this same row would have scored `both-wrong`.
+    expect(report.aggregate.outcomes.corrections).toBe(1);
+    expect(report.aggregate.outcomes.bothWrong).toBe(0);
+  });
+
+  test("the priced-only model's rows alone adjudicate nothing", () => {
+    const report = buildOverrideReport(reads([replayRow(PRICED_ONLY, "qa")]), { scope: "seam" });
+    expect(report.candidates).toBe(1);
+    expect(report.scored).toBe(0);
+    expect(report.excluded.find((e) => e.reason === "no-replayed-label")?.count).toBe(1);
+    expect(resolveOverrideReplay(reads([replayRow(PRICED_ONLY, "qa")])).replay.size).toBe(0);
+  });
+
+  test("a stored abstention is a non-answer, never filled from the other model", () => {
+    // The shipped classifier answered and declined (`task_type` NULL, a paid deterministic
+    // non-answer). The other model has a perfectly good label for the same prompt. Reaching for it
+    // would turn "the classifier fails open here" into an override it never proposed.
+    const rows = [
+      replayRow(SHIPPED, null, { difficulty: null, confidence: null }),
+      replayRow(PRICED_ONLY, "qa"),
+    ];
+    const { replay, coverage } = resolveOverrideReplay(reads(rows));
+    // PRESENT with nulls, not absent: `toModelReplays` keeps the abstention distinct from a gap.
+    expect(replay.has(TEXT)).toBe(true);
+    expect(replay.get(TEXT)).toEqual({ taskType: null, confidence: null });
+    expect(coverage.perModel[0]).toMatchObject({ modelId: SHIPPED, abstentions: 1 });
+
+    const report = buildOverrideReport(reads(rows), { scope: "seam" });
+    expect(report.scored).toBe(0);
+    expect(report.excluded.find((e) => e.reason === "no-replayed-label")?.count).toBe(1);
+  });
+
+  test("a row whose taxonomy no longer re-admits is a non-answer, and is still counted", () => {
+    // Dropped by the shipped parser inside `toModelReplays`, which COUNTS the drop as `unreadable`.
+    // Pre-filtering the rows with `isReadableReplayLabel` before the join would change no label and
+    // zero that diagnostic — the drop would become invisible.
+    const rows = [replayRow(SHIPPED, "obsolete-task-type"), replayRow(PRICED_ONLY, "qa")];
+    const { replay, coverage } = resolveOverrideReplay(reads(rows));
+    expect(replay.size).toBe(0);
+    expect(coverage.perModel[0]).toMatchObject({ modelId: SHIPPED, unreadable: 1 });
+    expect(buildOverrideReport(reads(rows), { scope: "seam" }).scored).toBe(0);
+  });
+
+  test("a replay label at another corpus revision is a miss, not a stale hit", () => {
+    const rows = [replayRow(SHIPPED, "code", { rev: "r1-superseded" })];
+    const { replay, coverage } = resolveOverrideReplay(reads(rows));
+    expect(replay.size).toBe(0);
+    expect(coverage.rowsAtOtherRev).toBe(1);
+
+    const report = buildOverrideReport(reads(rows), { scope: "seam" });
+    expect(report.scored).toBe(0);
+    expect(report.excluded.find((e) => e.reason === "no-replayed-label")?.count).toBe(1);
+  });
+
+  test("a SUB-FLOOR self-report is scored, and the floor is only a sweep coordinate", () => {
+    // THE floor-applied-once pin. `CLASSIFY_CONFIDENCE_FLOOR` is applied ZERO times as a filter on
+    // this path: `overrideFloor` decides only `serviceLabelOverridden` — what the LEDGER recorded —
+    // and `currentFloor` re-enters as one coordinate of the sweep plus the "shipped floor" marker.
+    // A replay filtered on the floor would delete the evidence in the exact region the sweep exists
+    // to argue about, and the sweep would still render: every sub-floor row would simply be missing.
+    const report = buildOverrideReport(reads([replayRow(SHIPPED, "code", { confidence: 0.3 })]), {
+      scope: "seam",
+    });
+    expect(report.scored).toBe(1);
+    expect(report.aggregate.outcomes.corrections).toBe(1);
+    // The observed self-report AND the shipped floor are both sweep coordinates, ascending.
+    expect(report.aggregate.sweep.map((p) => p.threshold)).toEqual([0.3, 0.75]);
+    expect(report.aggregate.sweep.find((p) => p.threshold === 0.3)).toMatchObject({
+      overridden: 1,
+      corrections: 1,
+      harms: 0,
+      net: 1,
+    });
+    // At the shipped floor the same row is simply not admitted — which is the sweep saying what
+    // lowering the floor would buy, not the join having dropped anything.
+    expect(report.aggregate.sweep.find((p) => p.threshold === 0.75)).toMatchObject({
+      overridden: 0,
+      corrections: 0,
+      harms: 0,
+      net: 0,
+    });
+  });
+
+  test("the readout names the classifier it adjudicated, derived from the join", () => {
+    // Derived from the RESOLUTION, not from the model set: naming the eligible model would claim a
+    // replay the numbers beneath it may not rest on.
+    expect(buildOverrideReport(reads([replayRow(SHIPPED, "code")]), { scope: "seam" }).scope).toBe(
+      `seam · classifier ${SHIPPED}`,
+    );
+    expect(buildOverrideReport(reads([]), { scope: "seam" }).scope).toBe(
+      `seam · classifier ${UNREPLAYED_MODEL_ID}`,
+    );
+    // A ledger holding only the priced-only model's rows has no replay THIS readout can read, and
+    // says so rather than naming a model it did not adjudicate.
+    expect(
+      buildOverrideReport(reads([replayRow(PRICED_ONLY, "qa")]), { scope: "seam" }).scope,
+    ).toBe(`seam · classifier ${UNREPLAYED_MODEL_ID}`);
+  });
+
+  test("the whole join travels a real ledger, sub-floor self-report and all", () => {
+    // Round trip through `MinimaDb`: two models' rows in one table, snake_case columns, a string
+    // corpus revision, and a confidence below `CLASSIFY_CONFIDENCE_FLOOR` that must survive both
+    // the write and the read (ADR 0008 — the stored self-report is RAW).
+    const db = new MinimaDb(":memory:");
+    try {
+      for (const [i, taskType] of (["code", "code", "code"] as const).entries()) {
+        db.upsertConsensusVote({
+          promptHash: HASH,
+          modelId: PANEL_IDS[i] as string,
+          corpusRev: CORPUS_REV,
+          taskType,
+          difficulty: null,
+          confidence: null,
+        });
+      }
+      db.upsertReplayLabel({
+        promptHash: HASH,
+        modelId: SHIPPED,
+        corpusRev: CORPUS_REV,
+        taskType: "code",
+        difficulty: "medium",
+        confidence: 0.42,
+      });
+      db.upsertReplayLabel({
+        promptHash: HASH,
+        modelId: PRICED_ONLY,
+        corpusRev: CORPUS_REV,
+        taskType: "qa",
+        difficulty: "medium",
+        confidence: 0.99,
+      });
+
+      const ledgerReads = {
+        prompts: [promptRow(10, TEXT)],
+        decisions: [decisionRow(20)],
+        votes: db.listConsensusVotes(CORPUS_REV),
+        replayLabels: db.listReplayLabels(CORPUS_REV),
+      };
+      expect(ledgerReads.replayLabels).toHaveLength(2);
+      expect(resolveOverrideReplay(ledgerReads).replay.get(TEXT)).toEqual({
+        taskType: "code",
+        confidence: 0.42,
+      });
+
+      const report = buildOverrideReport(ledgerReads, { scope: "ledger" });
+      expect(report.scope).toBe(`ledger · classifier ${SHIPPED}`);
+      expect(report.candidates).toBe(1);
+      expect(report.scored).toBe(1);
+      expect(report.aggregate.outcomes.corrections).toBe(1);
+      // The priced-only model's 0.99 is nowhere in the sweep: only the shipped model's raw 0.42 is
+      // an observed coordinate, and only the shipped floor joins it.
+      expect(report.aggregate.sweep.map((p) => p.threshold)).toEqual([0.42, 0.75]);
+      expect(report.aggregate.sweep.find((p) => p.threshold === 0.75)?.overridden).toBe(0);
     } finally {
       db.close();
     }

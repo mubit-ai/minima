@@ -47,6 +47,7 @@ import {
 } from "./classifier_eval_score.ts";
 import {
   REPLAY_MODELS,
+  type ReplayModel,
   type ReplayResolution,
   type StoredReplayLabel,
   toModelReplays,
@@ -110,9 +111,14 @@ export interface CandidateSources {
  * prompt's whole recovery ladder onto ONE candidate. Re-deriving any of them would be a second
  * chance to disagree with the correlation report printed beside this one.
  *
- * A corpus entry with no replay answer still becomes a candidate, carrying nulls. The exclusion is
- * `scoreCandidates`'s to name — dropping the entry here would shrink the candidate denominator
- * without saying so, and `candidates` is what every exclusion count is read against.
+ * A corpus entry with no answer from the SHIPPED classifier still becomes a candidate, carrying
+ * nulls. `sources.replay` holds that one model's labels and nothing else — see
+ * {@link OVERRIDE_REPLAY_MODELS} — so three different states arrive here as the same non-answer:
+ * no stored row, a stored abstention, and a row whose taxonomy no longer re-admits. None of them is
+ * ever filled from the other replayed model, because a label from a model production does not run
+ * would adjudicate an override channel that was never open. The exclusion is `scoreCandidates`'s to
+ * name — dropping the entry here would shrink the candidate denominator without saying so, and
+ * `candidates` is what every exclusion count is read against.
  */
 export function buildOverrideCandidates(sources: CandidateSources): OverrideCandidate[] {
   const { serviceRouted } = partitionServiceRouted(sources.decisions);
@@ -155,9 +161,13 @@ export interface EvalReads {
   /**
    * MUB-218's cached replay labels, as `listReplayLabels` returns them.
    *
-   * Optional because `buildOverrideReport` takes the same reads and does not consume them. Absent
-   * or empty is the state every invocation was in before the replay existed, and it still resolves
-   * to a readout rather than an error — see {@link UNREPLAYED_MODEL_ID}.
+   * Optional because the field postdates this shape's first consumers — NOT because a consumer
+   * ignores it. Both readouts built from these reads join it now, over different model sets:
+   * `buildScoreReport` over every replayed model, `buildOverrideReport` over the shipped classifier
+   * alone ({@link OVERRIDE_REPLAY_MODELS}). Absent or empty is the state every invocation was in
+   * before the replay existed, and it still resolves to a readout rather than an error — see
+   * {@link UNREPLAYED_MODEL_ID}: `--score` reads every corpus entry as `unreplayed`, and the
+   * adjudication sets every candidate aside as `no-replayed-label`.
    */
   readonly replayLabels?: readonly StoredReplayLabel[];
 }
@@ -223,17 +233,114 @@ export function buildScoreReport(
 }
 
 /**
+ * The replay models an ADJUDICATION may read: the shipped classifier, and nothing else.
+ *
+ * MUB-218 replays two models and only the first is the classifier the override channel would
+ * actually open. `cli/main.ts` builds the production `TaskClassifier` from `config.classifyModel ??
+ * CHEAP_FALLBACK_MODELS[0]`, `config.ts` defaults `classifyModel` to null, and
+ * `tests/classifier-replay.test.ts` pins `REPLAY_MODELS[0].model.id` to `CHEAP_FALLBACK_MODELS[0]`
+ * — so the first entry IS the shipped classifier, checked rather than asserted.
+ *
+ * The second model is in {@link REPLAY_MODELS} to PRICE the model switch — read its docstring: it
+ * is there because its API can return token probabilities, which is a capability a later confidence
+ * ticket would need, not because production runs it. Merging both models' labels, or falling back
+ * to the second where the first has no row, would adjudicate an override channel production would
+ * never open — and every symptom of that mistake reads as a legitimate finding: more scored rows,
+ * a fuller sweep, a floor argued off traffic the harness never sent.
+ *
+ * `slice(0, 1)` rather than `[REPLAY_MODELS[0]!]` because `noUncheckedIndexedAccess` is on: an
+ * emptied `REPLAY_MODELS` degrades to "no model has a usable row", which is the state this module
+ * already handles honestly, instead of throwing at module load.
+ */
+export const OVERRIDE_REPLAY_MODELS: readonly ReplayModel[] = REPLAY_MODELS.slice(0, 1);
+
+/**
+ * Join the cached replay labels to the live corpus, for the shipped classifier alone.
+ *
+ * Built on `toModelReplays` — the same function `--score` reads the cache with — rather than on a
+ * lookup of its own. That is the point of it: one corpus-revision filter, one model filter, one
+ * re-admission rule and one hash. A hand-rolled join here would be a SECOND join that can silently
+ * disagree with the coverage `--score` prints, and the two readouts would describe different cache
+ * hits while both looking right.
+ *
+ * Deliberately NOT pre-filtered with `isReadableReplayLabel`: `toModelReplays` applies the shipped
+ * parser itself and COUNTS what it drops as `unreadable`. Filtering first would change no label and
+ * zero that diagnostic.
+ *
+ * Keyed on the corpus TEXT, which is what {@link buildOverrideCandidates} looks up. The stored row
+ * is a hash (ADR 0008) and the hash is one-way, so the text can only come back from the live corpus
+ * — re-hashed here with the one `promptHash` the panel, the cache and the candidates all use.
+ *
+ * The corpus is `segmentCorpus`'s, the same one `buildScoreReport` scores over, so an entry cannot
+ * be corpus to one readout and non-corpus to the other.
+ */
+export function resolveOverrideReplay(reads: EvalReads): {
+  replay: Map<string, HarnessReplay>;
+  coverage: ReplayResolution;
+} {
+  const coverage = toModelReplays(
+    segmentCorpus(reads.prompts, REGIME_BOUNDARY_TS).map((e) => e.text),
+    reads.replayLabels ?? [],
+    OVERRIDE_REPLAY_MODELS,
+    { corpusRev: CORPUS_REV, hashOf: promptHash },
+  );
+  const replay = new Map<string, HarnessReplay>();
+  // One model in the set, so there is no merge rule to get wrong: an entry is written by the
+  // shipped classifier's row or by nothing at all. Widening the set would need one — which is a
+  // reason not to widen it, not a reason to write one speculatively.
+  for (const pass of coverage.replays) {
+    for (const label of pass.labels) {
+      replay.set(label.text, {
+        // A stored abstention arrives as a PRESENT entry with both fields null (`toModelReplays`
+        // keeps that distinct from a missing row), and `scoreCandidates` sets both aside under the
+        // same reason. Present-and-declined is never filled from the other model either.
+        taskType: label.classification?.taskType ?? null,
+        // The RAW self-report, exactly as ADR 0008 stored it. Nothing here re-gates it on the
+        // floor: the floor's only role downstream is as a sweep coordinate — see
+        // {@link buildOverrideReport} — and a replay filtered on it would delete the evidence in
+        // the very region the sweep exists to argue about.
+        confidence: label.classification?.confidence ?? null,
+      });
+    }
+  }
+  return { replay, coverage };
+}
+
+/**
+ * Name the classifier this adjudication actually read, for the readout's header.
+ *
+ * Derived from the RESOLUTION, not from {@link OVERRIDE_REPLAY_MODELS}: the model set says which
+ * model is eligible, and only the join says which one had a usable row. A header naming the
+ * eligible model would claim a replay the numbers beneath it may not rest on — and "which
+ * classifier was adjudicated" is exactly the question this suffix exists to answer.
+ */
+function overrideReplayScope(coverage: ReplayResolution): string {
+  const read = coverage.replays.map((r) => r.modelId);
+  return read.length > 0 ? read.join(" + ") : UNREPLAYED_MODEL_ID;
+}
+
+/**
  * Adjudicate what overriding the service's label would have done (MUB-226).
+ *
+ * The replay is resolved HERE from the same reads, never handed in: an injected map is a second
+ * join by another name, and a defaulted empty one silently scored nothing at all for as long as it
+ * existed. There is no parameter left to default, so the empty case is now reachable only from an
+ * empty cache.
  *
  * `CLASSIFY_CONFIDENCE_FLOOR` is imported from the classifier that ships it, not restated: it is
  * both the baseline a derived floor is argued against and the gate a caller-supplied label had to
  * clear to have overridden at all, and those are the same number because they are the same rule.
+ * It is applied ZERO times as a filter here. As `overrideFloor` it decides only
+ * `serviceLabelOverridden` — a statement about what the LEDGER recorded, not about the replay — and
+ * as `currentFloor` it re-enters as one coordinate of the threshold sweep plus the "shipped floor"
+ * marker. No row is dropped for sitting below it, which is what lets the sweep say what a lower
+ * floor would have bought.
  */
 export function buildOverrideReport(
   reads: EvalReads,
   opts: { readonly scope: string },
-  replay: ReadonlyMap<string, HarnessReplay> = new Map(),
 ): AdjudicationReport {
+  const { replay, coverage } = resolveOverrideReplay(reads);
   const candidates = buildOverrideCandidates({
     decisions: reads.decisions,
     prompts: reads.prompts,
@@ -246,7 +353,7 @@ export function buildOverrideReport(
     toCachedVotes(reads.votes, REFERENCE_PANEL),
     REFERENCE_CONSENSUS,
     {
-      scope: opts.scope,
+      scope: `${opts.scope} · classifier ${overrideReplayScope(coverage)}`,
       regimeBoundaryTs: REGIME_BOUNDARY_TS,
       corpusRev: CORPUS_REV,
       currentFloor: CLASSIFY_CONFIDENCE_FLOOR,
