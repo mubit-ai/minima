@@ -10,6 +10,7 @@
 import { Box, Text, useInput } from "ink";
 import { clipPanelLines } from "./layout.ts";
 import type { PanelNavKey } from "./panel_state.ts";
+import { t } from "./theme.ts";
 
 export interface ExpandPanelProps {
   title: string;
@@ -37,14 +38,14 @@ export function ExpandPanel({ title, lines, cursor, stops, outerHeight, onKey }:
     // into scrollback (one more row trips Ink's wipe). The slack absorbs the mismatch.
     <Box
       borderStyle="round"
-      borderColor="gray"
+      borderColor={t.dim}
       paddingX={1}
       flexDirection="column"
       marginRight={2}
       height={outerHeight}
       flexShrink={0}
     >
-      <Text color="cyan" bold wrap="truncate">
+      <Text color={t.accent} bold wrap="truncate">
         {title}
       </Text>
       {windowed.map((line, i) => {
@@ -55,7 +56,7 @@ export function ExpandPanel({ title, lines, cursor, stops, outerHeight, onKey }:
           <Text
             key={idx}
             wrap="truncate"
-            color={active ? undefined : isStop ? "cyan" : "gray"}
+            color={active ? undefined : isStop ? t.accent : t.dim}
             bold={active || isStop}
           >
             {active ? `❯ ${line}` : `  ${line}`}

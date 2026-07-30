@@ -163,7 +163,7 @@ describe("app wiring (source pins, the behavior.test.ts pattern)", () => {
       "if (gateFocus || bigPlanBehavior?.block || permPrompt || questionPrompt) return;",
     );
     expect(src).toContain(
-      "if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen) return;",
+      "if ( pickerOpen || themePickerOpen !== null || paletteOpen || sessionPickerOpen || configOverlayOpen ) return;",
     );
     expect(src).toContain("const taken = takeNext(promptQueue);");
     expect(src).toContain("await submitLine(taken.next);");

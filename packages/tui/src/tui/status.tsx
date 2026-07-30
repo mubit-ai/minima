@@ -8,6 +8,7 @@ import React from "react";
 
 import type { AgentMode } from "../agent/modes.ts";
 import type { FooterBadge } from "./badge_slot.ts";
+import { t } from "./theme.ts";
 
 /**
  * The perms row's write/exec segments, mode-aware (the old fixed "w/e/b: ask" read as
@@ -89,17 +90,16 @@ export function StatusBar({
   const perms = permsSummary(mode, alwaysTools ?? [], bashGrants ?? []);
   const budgetColor = budget
     ? budget.fraction >= 0.9
-      ? "red"
+      ? t.error
       : budget.fraction >= 0.75
-        ? "yellow"
-        : "green"
-    : "gray";
-  const modelStyle = basis === "offline" ? "yellow" : "cyan";
-  const routeStyle = routeMode === "confirm" ? "yellow" : "gray";
-  const thinkStyle =
-    thinkingLevel === "high" ? "yellow" : thinkingLevel === "off" ? "gray" : "cyan";
-  const ctxStyle = ctxPct > 80 ? "red" : "gray";
-  const statusColor = statusText === "ready" ? "green" : "yellow";
+        ? t.warn
+        : t.success
+    : t.dim;
+  const modelStyle = basis === "offline" ? t.warn : t.accent;
+  const routeStyle = routeMode === "confirm" ? t.warn : t.dim;
+  const thinkStyle = thinkingLevel === "high" ? t.warn : thinkingLevel === "off" ? t.dim : t.accent;
+  const ctxStyle = ctxPct > 80 ? t.error : t.dim;
+  const statusColor = statusText === "ready" ? t.success : t.warn;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -112,31 +112,31 @@ export function StatusBar({
           <Text wrap="truncate">
             {/* B2: the [PLAN] indicator moved to the right-anchored badge slot (same row) —
                 app.tsx sets it via setFooterBadge, so no duplicate segment here. */}
-            <Text color="gray"> model: </Text>
+            <Text color={t.dim}> model: </Text>
             <Text color={modelStyle}>
               {model} ▸ {basis}
             </Text>
 
-            <Text color="gray"> · route: </Text>
+            <Text color={t.dim}> · route: </Text>
             <Text color={routeStyle}>{routeMode}</Text>
 
-            <Text color="gray"> · reason: </Text>
+            <Text color={t.dim}> · reason: </Text>
             <Text color={thinkStyle}>{thinkingLevel}</Text>
 
-            <Text color="gray"> │ ctx </Text>
+            <Text color={t.dim}> │ ctx </Text>
             <Text color={ctxStyle}>{ctxPct.toFixed(0)}%</Text>
 
-            <Text color="gray">
+            <Text color={t.dim}>
               {" "}
               · ↑{inputTokens} ↓{outputTokens}
             </Text>
 
-            <Text color="gray"> · </Text>
-            <Text color="yellow">${actualCostUsd.toFixed(4)}</Text>
+            <Text color={t.dim}> · </Text>
+            <Text color={t.warn}>${actualCostUsd.toFixed(4)}</Text>
 
             {budget && (
               <>
-                <Text color="gray"> / </Text>
+                <Text color={t.dim}> / </Text>
                 <Text color={budgetColor}>
                   ${budget.limitUsd.toFixed(2)} ({Math.round(budget.fraction * 100)}%
                   {budget.mode === "enforce" ? "⛔" : ""})
@@ -144,33 +144,36 @@ export function StatusBar({
               </>
             )}
 
-            <Text color="gray"> · sess {sessionId.slice(0, 12)}</Text>
+            <Text color={t.dim}> · sess {sessionId.slice(0, 12)}</Text>
 
-            <Text color="gray"> · </Text>
+            <Text color={t.dim}> · </Text>
             <Text color={statusColor}>{statusText}</Text>
 
             {queueNote ? (
               <>
-                <Text color="gray"> · </Text>
-                <Text color="yellow">{queueNote}</Text>
+                <Text color={t.dim}> · </Text>
+                <Text color={t.warn}>{queueNote}</Text>
               </>
             ) : null}
 
             {activeChildren ? (
               <>
-                <Text color="gray"> · </Text>
-                <Text color="cyan">▸ {activeChildren} active</Text>
+                <Text color={t.dim}> · </Text>
+                <Text color={t.accent}>▸ {activeChildren} active</Text>
               </>
             ) : null}
 
             {routingOffline && (
-              <Text color="red"> [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]</Text>
+              <Text color={t.error}>
+                {" "}
+                [offline: {(offlineReason ?? "unreachable").slice(0, 40)}]
+              </Text>
             )}
           </Text>
         </Box>
         {badge && (
           <Box flexShrink={0}>
-            <Text bold color={badge.color ?? "magenta"}>
+            <Text bold color={badge.color ?? t.plan}>
               {" "}
               [{badge.text}]
             </Text>
@@ -178,10 +181,12 @@ export function StatusBar({
         )}
       </Box>
       <Text wrap="truncate">
-        <Text color="gray">perms: </Text>
-        <Text color="green">{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
-        <Text color={mode === "plan" ? "magenta" : "gray"}> {`· ${perms.effective}`}</Text>
-        {perms.grants && <Text color="yellow"> {`· ${perms.grants}`}</Text>}
+        <Text color={t.dim}>perms: </Text>
+        <Text
+          color={t.success}
+        >{`r-x ${readDirs?.length ?? 0} dir${(readDirs?.length ?? 0) === 1 ? "" : "s"}`}</Text>
+        <Text color={mode === "plan" ? t.plan : t.dim}> {`· ${perms.effective}`}</Text>
+        {perms.grants && <Text color={t.warn}> {`· ${perms.grants}`}</Text>}
       </Text>
     </Box>
   );

@@ -10,6 +10,7 @@ import { Box, Text } from "ink";
 import React from "react";
 import { isAssistant } from "../ai/types.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
+import { t } from "./theme.ts";
 
 export interface ChildRow {
   stepId: string;
@@ -53,11 +54,11 @@ export interface ChildTreeProps {
   maxRows?: number;
 }
 
-const STATUS_COLOR: Record<ChildRow["status"], string> = {
-  running: "cyan",
-  done: "green",
-  aborted: "yellow",
-  failure: "red",
+const STATUS_COLOR: Record<ChildRow["status"], () => string> = {
+  running: () => t.accent,
+  done: () => t.success,
+  aborted: () => t.warn,
+  failure: () => t.error,
 };
 
 const STATUS_GLYPH: Record<ChildRow["status"], string> = {
@@ -79,30 +80,30 @@ export function ChildTree({ nodes, maxRows }: ChildTreeProps) {
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="gray"
+      borderColor={t.dim}
       paddingX={1}
       marginBottom={1}
     >
-      <Text color="gray" bold>
+      <Text color={t.dim} bold>
         sub-agents ({nodes.size})
       </Text>
       {rows.map((row) => {
         const indent = "  ".repeat(row.depth);
-        const color = STATUS_COLOR[row.status];
+        const color = STATUS_COLOR[row.status]();
         const glyph = STATUS_GLYPH[row.status];
         // One <Text wrap="truncate"> per row: a fixed-width row (indent + 36 cols)
         // would word-wrap to 2 rows on narrow terminals, breaking childTreeHeight()'s
         // one-row-per-child reservation — truncation makes the math width-independent.
         return (
           <Text key={row.stepId} wrap="truncate">
-            <Text color="gray">{indent}▸ </Text>
+            <Text color={t.dim}>{indent}▸ </Text>
             <Text color={color}>{glyph} </Text>
             <Text>{row.stepId.slice(0, 24).padEnd(24)}</Text>
-            <Text color="gray"> ${row.costUsd.toFixed(4)}</Text>
+            <Text color={t.dim}> ${row.costUsd.toFixed(4)}</Text>
           </Text>
         );
       })}
-      {hidden > 0 && <Text color="gray"> …+{hidden} more</Text>}
+      {hidden > 0 && <Text color={t.dim}> …+{hidden} more</Text>}
     </Box>
   );
 }

@@ -68,6 +68,28 @@ export function loadTaskPanelHidden(projectKey: string): boolean {
   return readAll()[projectKey + TASK_PANEL_SUFFIX] === "hidden";
 }
 
+// Theme is a global preference (not per-project). Same flat ui-modes.json under a
+// reserved key — project keys are absolute paths, so "__theme" can never collide, and
+// old builds never read it.
+const THEME_KEY = "__theme";
+
+/** The persisted theme name, or null. Caller validates against THEMES. */
+export function loadPersistedTheme(): string | null {
+  return readAll()[THEME_KEY] ?? null;
+}
+
+export function persistTheme(name: string): void {
+  try {
+    const all = readAll();
+    if (all[THEME_KEY] === name) return;
+    all[THEME_KEY] = name;
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsPath(), `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  } catch {
+    // Persistence is best-effort — never let it break the TUI.
+  }
+}
+
 /** Persist (hidden=true) or clear (hidden=false) the per-project task-panel override. */
 export function persistTaskPanelHidden(projectKey: string, hidden: boolean): void {
   try {
