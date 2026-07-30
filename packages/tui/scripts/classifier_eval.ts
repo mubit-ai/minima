@@ -208,13 +208,26 @@ try {
       // other exclusions are legitimately non-zero (an entry spanning the boundary is set aside
       // whatever the replay did), and requiring equality would silence the note on a real run.
       if (report.scored === 0 && noReplay > 0) {
+        // WHY there is no replayed label is now two different states of the world, and naming the
+        // wrong one is a false statement about the ledger. Before MUB-218 there was no replay to
+        // consume; there is one now, and `buildOverrideReport` still takes an empty map because
+        // wiring it into the adjudication is MUB-226's, not this readout's. DERIVED from the
+        // ledger rather than asserted, so this note cannot go stale the way the last one did the
+        // moment a replay landed.
+        const cached = reads.replayLabels.length;
         console.error(
           [
             "",
-            `note: no classifier replay is recorded, so ${noReplay} of ${report.candidates}`,
-            "  candidates were set aside as `replay gave no usable label`; the rest were set aside",
-            "  for the reasons listed above. The candidate and exclusion counts are real —",
-            "  they are what the correlation and the cache resolve to.",
+            ...(cached === 0
+              ? ["note: no classifier replay is recorded, so"]
+              : [
+                  `note: ${cached} replay labels ARE cached, but this adjudication does not read`,
+                  "  them — that wiring is MUB-226's, not this readout's. So",
+                ]),
+            `  ${noReplay} of ${report.candidates} candidates were set aside as "replay gave no`,
+            '  usable label"; the rest were set aside for the reasons listed above. The candidate',
+            "  and exclusion counts are real — they are what the correlation and the cache",
+            "  resolve to.",
           ].join("\n"),
         );
       }

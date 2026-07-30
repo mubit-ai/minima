@@ -187,7 +187,18 @@ export const CLASSIFY_PROMPT_CHARS = 8000;
  * a reader of the readout has in mind, and how many entries that is belongs in the output.
  */
 export function countTruncated(prompts: readonly DistinctPrompt[]): number {
-  return prompts.filter((p) => p.text.length > CLASSIFY_PROMPT_CHARS).length;
+  return prompts.filter((p) => isTruncated(p.text)).length;
+}
+
+/**
+ * Does the shipped truncation reach this text? THE predicate, stated once.
+ *
+ * Both the pre-run projection (over `DistinctPrompt`) and the post-run coverage readout (over
+ * corpus strings) report this count, and two copies of the comparison would be two chances to
+ * print different numbers under headings that claim to mean the same thing.
+ */
+function isTruncated(text: string): boolean {
+  return text.length > CLASSIFY_PROMPT_CHARS;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,7 +716,7 @@ export function toModelReplays(
     rowsAtOtherRev,
     rowsWithoutCorpusEntry,
     rowsOutsideModelSet,
-    truncatedEntries: corpus.filter((t) => t.length > CLASSIFY_PROMPT_CHARS).length,
+    truncatedEntries: corpus.filter(isTruncated).length,
   };
 }
 
