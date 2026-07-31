@@ -92,6 +92,7 @@ These are on by default — set the variable to `0` to opt out. Every one fails 
 | `MINIMA_TUI_PLAN_PREMIUM` | on | Premium models for plan synthesis and the design council. Off routes planning through the ordinary session pool. |
 | `MINIMA_TUI_TOOL_ALLOWLIST` | on | Per-step tool allowlists — a step naming its tools cannot use others while it is in progress. |
 | `MINIMA_TUI_FAILURE_MATCHER` | on | Failure classification on the recovery ladder. Off falls back to the blunt always-escalate behavior. |
+| `MINIMA_TUI_EDITOR` | on | Composing the prompt in `$EDITOR` — <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> and `/editor`. Off restores <kbd>Ctrl</kbd>+<kbd>E</kbd> as thinking-only. **This names a behavior, not an editor**: only `0` disables it, and `MINIMA_TUI_EDITOR=vim` leaves it on with the value ignored — set `$EDITOR` (or `$VISUAL`) to choose the binary. |
 | `MINIMA_TUI_GRADED_OUTCOME` | on | Graded outcome labels, which report unverified-but-positive evidence distinctly from verified evidence. |
 
 Two variables work the other way — they grant something the harness refuses by default:

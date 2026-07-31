@@ -114,6 +114,7 @@ jobs:
       MINIMA_TUI_FAILURE_MATCHER: "0"
       MINIMA_TUI_TOOL_ALLOWLIST: "0"
       MINIMA_TUI_GRADED_OUTCOME: "0"
+      MINIMA_TUI_EDITOR: "0"
       # Ambient reads — not reachable through configFromEnv, so only this job covers them.
       MINIMA_TUI_PLAN_CRITIC: "0"
       MINIMA_TUI_DIFF_REVIEW: "0"

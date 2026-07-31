@@ -76,6 +76,27 @@ describe("label-source configuration (Phase 0b)", () => {
     });
   });
 
+  test("$EDITOR composing is ON by default; MINIMA_TUI_EDITOR=0 opts out", () => {
+    withEnv({ MINIMA_TUI_EDITOR: undefined }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_EDITOR: "0" }, () => {
+      expect(configFromEnv().externalEditor).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_EDITOR: "1" }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+  });
+
+  test("MINIMA_TUI_EDITOR names a behavior, not an editor — only =0 disables", () => {
+    // Someone WILL try MINIMA_TUI_EDITOR=vim. That leaves the feature ON with the value
+    // ignored; $EDITOR / $VISUAL choose the binary.
+    withEnv({ MINIMA_TUI_EDITOR: "vim" }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+    expect(harnessConfig().externalEditor).toBe(true);
+  });
+
   test("judge sampling defaults to 15% of eligible turns", () => {
     expect(harnessConfig().judgeSampleRate).toBeCloseTo(0.15);
     withEnv({ MINIMA_JUDGE_SAMPLE: undefined, MINIMA_LLM_JUDGE: undefined }, () => {
