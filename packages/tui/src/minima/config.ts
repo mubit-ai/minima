@@ -168,6 +168,15 @@ export interface HarnessConfig {
    * whenever the store is absent (MINIMA_TUI_ARTIFACTS=0 or a :memory: DB): the summary
    * stays byte-identical to v1. */
   compact2: boolean;
+  /** Corrected context meter (default ON): the status bar's `ctx%` and the auto-compaction
+   * trigger both read one basis — the provider's own prompt count (input + cache_read +
+   * cache_write + output), plus a measured residue for the system prompt and tool schemas
+   * chars/4 cannot see. Opt out with MINIMA_TUI_CONTEXT_METER=0 — mirrors the bigPlan flag
+   * shape. Flag-off restores BOTH halves of the old behavior: the footer divides bare
+   * usage.input by the window again, and auto-compaction returns to the chars/4 basis, so
+   * it fires at the same point it did before. That second half is the reason the switch
+   * exists — the corrected count is larger, so compaction fires earlier on warm sessions. */
+  contextMeter: boolean;
   /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
    * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
@@ -295,6 +304,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     artifactGcMb: 512,
     bgJobs: true,
     compact2: true,
+    contextMeter: true,
     steer: true,
     contextRewind: true,
     editGuard: true,
@@ -358,6 +368,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.bgJobs = process.env.MINIMA_TUI_BGJOBS !== "0";
   cfg.compact2 = process.env.MINIMA_TUI_COMPACT2 !== "0";
+  cfg.contextMeter = process.env.MINIMA_TUI_CONTEXT_METER !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";

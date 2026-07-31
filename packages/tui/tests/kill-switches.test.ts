@@ -54,6 +54,7 @@ const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_ARTIFACTS", field: "artifacts" },
   { env: "MINIMA_TUI_BGJOBS", field: "bgJobs" },
   { env: "MINIMA_TUI_COMPACT2", field: "compact2" },
+  { env: "MINIMA_TUI_CONTEXT_METER", field: "contextMeter" },
   { env: "MINIMA_TUI_STEER", field: "steer" },
   { env: "MINIMA_TUI_REWIND", field: "contextRewind" },
   { env: "MINIMA_TUI_EDIT_GUARD", field: "editGuard" },

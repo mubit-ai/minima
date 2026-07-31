@@ -102,9 +102,14 @@ import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
+import {
+  AUTO_COMPACT_PCT,
+  type ContextUsage,
+  EMPTY_CONTEXT,
+  contextUsage,
+} from "./context_meter.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
-import { footerStatsFromMessages } from "./footer.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -835,13 +840,17 @@ export function HarnessApp({
   todos,
 }: AppProps) {
   const { exit } = useApp();
+  // One basis for the footer's ctx segment and for maybeAutoCompact (context_meter.ts). The
+  // rollback flag is passed as a parameter rather than read ambiently, so the meter stays a
+  // pure function of the transcript.
+  const ctxFor = (msgs: AgentMessage[]) =>
+    contextUsage(msgs, {
+      fallbackWindow: agent.agentState.model?.context_window,
+      legacy: agent.config.contextMeter === false,
+    });
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
   // lazy initializers below put the restored transcript + footer stats in the first frame.
-  const [initialStats] = useState(() =>
-    initialResume
-      ? footerStatsFromMessages(initialResume.messages, agent.agentState.model?.context_window)
-      : null,
-  );
+  const [initialStats] = useState(() => (initialResume ? ctxFor(initialResume.messages) : null));
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
     initialResume
       ? [
@@ -1527,7 +1536,7 @@ export function HarnessApp({
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
-  const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
+  const [ctx, setCtx] = useState<ContextUsage>(initialStats ?? EMPTY_CONTEXT);
   const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
   const [outputTokens, setOutputTokens] = useState(initialStats?.outputTokens ?? 0);
 
@@ -2201,10 +2210,10 @@ export function HarnessApp({
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
     // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
-    const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
+    const stats = ctxFor(r.messages);
     setInputTokens(stats.inputTokens);
     setOutputTokens(stats.outputTokens);
-    setCtxPct(stats.ctxPct);
+    setCtx(stats);
     setTranscriptGen((g) => g + 1);
     const notices: ChatMessage[] = [
       resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd : 0),
@@ -2331,13 +2340,10 @@ export function HarnessApp({
         const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
         undonePrompt = promptText(cut.droppedPrompt);
         agent.agentState.messages = cut.messages;
-        const stats = footerStatsFromMessages(
-          agent.agentState.messages,
-          agent.agentState.model?.context_window,
-        );
+        const stats = ctxFor(agent.agentState.messages);
         setInputTokens(stats.inputTokens);
         setOutputTokens(stats.outputTokens);
-        setCtxPct(stats.ctxPct);
+        setCtx(stats);
         notes.push(`conversation: rewound ${dropCount} turn(s)`);
       } else {
         notes.push("conversation: nothing to rewind");
@@ -2489,13 +2495,10 @@ export function HarnessApp({
           const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
           undonePrompt = promptText(cut.droppedPrompt);
           agent.agentState.messages = cut.messages;
-          const stats = footerStatsFromMessages(
-            agent.agentState.messages,
-            agent.agentState.model?.context_window,
-          );
+          const stats = ctxFor(agent.agentState.messages);
           setInputTokens(stats.inputTokens);
           setOutputTokens(stats.outputTokens);
-          setCtxPct(stats.ctxPct);
+          setCtx(stats);
         }
         if (undonePrompt) {
           setPrefill({ text: undonePrompt, nonce: Date.now() });
@@ -3405,7 +3408,7 @@ export function HarnessApp({
         setActualCost(0);
         setInputTokens(0);
         setOutputTokens(0);
-        setCtxPct(0);
+        setCtx(EMPTY_CONTEXT);
         setMessages((m) => [
           ...m,
           {
@@ -4443,25 +4446,28 @@ export function HarnessApp({
       if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
       if (agent.budget) setBudgetStatus(agent.budget.status());
 
-      const last = getLastAssistant(agent);
-      if (last?.usage) {
-        // Same helper as the resume paths — one source of truth for the footer numbers.
-        const stats = footerStatsFromMessages(
-          agent.agentState.messages,
-          agent.agentState.model?.context_window,
-        );
-        setInputTokens(stats.inputTokens);
-        setOutputTokens(stats.outputTokens);
-        setCtxPct(stats.ctxPct);
-      }
+      // Same helper as the resume paths — one source of truth for the footer numbers.
+      // Computed unconditionally: the meter returns a real estimate even when the turn
+      // recorded no usage, so the old `if (last?.usage)` guard would strand a stale number
+      // on screen after an aborted turn instead of protecting the footer from zeros.
+      const stats = ctxFor(agent.agentState.messages);
+      setInputTokens(stats.inputTokens);
+      setOutputTokens(stats.outputTokens);
+      setCtx(stats);
 
       const beforeAuto = agent.agentState.messages;
       if (maybeAutoCompact(agent)) {
+        // Name the number the footer just showed. Under the rollback flag the trigger reads a
+        // different basis than `stats`, so it falls back to the historical wording.
+        const pctNote =
+          agent.config.contextMeter !== false && stats.pct !== null
+            ? `${stats.pct.toFixed(0)}%`
+            : `>${AUTO_COMPACT_PCT}%`;
         setMessages((m) => [
           ...m,
           {
             role: "tool",
-            text: `Auto (context was >80% full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
+            text: `Auto (context was ${pctNote} full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
             toolName: "compact",
           },
         ]);
@@ -5118,7 +5124,9 @@ export function HarnessApp({
           basis={basis}
           routeMode={routeMode}
           thinkingLevel={thinkingLevel}
-          ctxPct={ctxPct}
+          ctx={ctx}
+          contextMeter={agent.config.contextMeter}
+          columns={cols}
           inputTokens={inputTokens}
           outputTokens={outputTokens}
           actualCostUsd={actualCost}
