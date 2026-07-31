@@ -30,9 +30,10 @@ import {
 import { emitGuardEvent } from "../agent/policy.ts";
 import type { AgentTool, BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { allModels } from "../ai/registry.ts";
-import type { Model } from "../ai/types.ts";
-import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import type { ImageContent, Model } from "../ai/types.ts";
+import { Message as AgentMessage, AssistantMessage, image as imageBlock } from "../ai/types.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
@@ -67,6 +68,7 @@ import { observerWhySection } from "../minima/observer.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
 import { runPlanRefutation } from "../minima/plan_refute.ts";
 import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
+import { visionCandidates } from "../minima/premium.ts";
 import { redoLastRouted } from "../minima/redo.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import {
@@ -95,11 +97,18 @@ import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
+import {
+  addAttachment,
+  attachmentToken,
+  consumeAttachments,
+  parseAttachmentTokens,
+} from "./attachments.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
+import { readClipboardImage } from "./clipboard_image.ts";
 import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import {
@@ -1580,6 +1589,12 @@ export function HarnessApp({
   // onSubmit echoed the typed prompt optimistically; the loop's message_start(user) — which
   // carries the @file-expanded/replan-prefixed run content — must be skipped, not double-posted.
   const pendingEchoRef = useRef(false);
+
+  // Images the SUBMITTED line referenced, waiting for the plan council to reach its first
+  // routed planner turn. The council composes its own `turn` string, so the user's screenshots
+  // cannot ride the argument the way they do on the build path; this hands them to the first
+  // promptPlanner call and then empties, so later council rounds re-send nothing.
+  const planAttachmentsRef = useRef<ImageContent[]>([]);
 
   // Wall-clock start of the in-flight turn, so the turn-end notification can skip turns that
   // finished while the user was plainly still watching (config.notifyAfterMs).
@@ -4300,9 +4315,12 @@ export function HarnessApp({
         agent.agentState.systemPrompt = systemPrompt;
         // Premium hard pin (constraints.candidate_models) + the plan phase tag — the tag
         // rides regardless of the premium flag so plan-turn outcomes cluster server-side.
+        const atts = planAttachmentsRef.current;
+        planAttachmentsRef.current = [];
         const routing = await agent.promptRouted(turn, {
           candidates: premium?.candidates,
           tags: ["phase:plan"],
+          attachments: atts.length > 0 ? atts : undefined,
         });
         if (getMode() !== "plan" && base != null) {
           agent.agentState.systemPrompt = base;
@@ -4392,6 +4410,45 @@ export function HarnessApp({
     drainGen,
   ]);
 
+  /**
+   * Ctrl+V, image half. Returns the token to insert, or undefined to let the composer paste
+   * the clipboard's TEXT instead — which is both "there was no image" and "there was one and
+   * we could not take it", since the second case has already said so in the transcript.
+   *
+   * Two blocking spawns on macOS (~0.5s). Acceptable on an explicit keypress; see
+   * clipboard_image.ts's header for why it must not move anywhere else.
+   */
+  function handleImagePaste(): string | undefined {
+    const res = readClipboardImage();
+    if (res.kind === "none") return undefined;
+    if (res.kind === "error") {
+      setMessages((m) => [
+        ...m,
+        { role: "tool", toolName: "paste", text: `⚠ ${res.message}`, isError: true },
+      ]);
+      return undefined;
+    }
+    const { width, height, bytes, resized } = res.image;
+    const id = addAttachment(res.image);
+    // Routing has not run yet, so the model that will SEE this is unknown — except when the
+    // user pinned one. Warn only in that knowable case; otherwise runtime.ts's drop-guard
+    // reports per rung, once the pick is real.
+    const pinnedBlind = agent.config.pinned && !supportsImageInput(agent.agentState.model);
+    const note = pinnedBlind
+      ? ` — ⚠ ${agent.agentState.model?.id ?? "this model"} has no vision, it will be dropped`
+      : "";
+    setMessages((m) => [
+      ...m,
+      {
+        role: "tool",
+        toolName: "paste",
+        text: `🖼 ${attachmentToken(id)} ${width}×${height}, ${Math.round(bytes / 1024)} KB${resized ? " (downscaled)" : ""}${note}`,
+        isError: pinnedBlind,
+      },
+    ]);
+    return `${attachmentToken(id)} `;
+  }
+
   async function onSubmit(text: string) {
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
@@ -4433,6 +4490,12 @@ export function HarnessApp({
       return;
     }
 
+    // Images resolve HERE rather than at Enter, so a prompt that sat in the mid-turn queue
+    // still carries the screenshots it was typed with. Only tokens that survived in the text
+    // count — backspacing `[Image #1]` away is how you un-attach.
+    const attachments = consumeAttachments(trimmed).map((a) => imageBlock(a.data, a.mime));
+    planAttachmentsRef.current = attachments;
+
     // Optimistic echo: the VERBATIM prompt lands before recall/route (and before any council
     // round in plan mode) — the loop's later message_start(user) is deduped via the ref.
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
@@ -4473,7 +4536,18 @@ export function HarnessApp({
           ]);
         }
         const expanded = expandAtFiles(text, process.cwd());
-        const routing = await agent.promptRouted(expanded, planOpts);
+        // Attached images narrow the pool BEFORE the request, so routing cannot hand the turn
+        // to a model that would only have to drop them. Pre-request candidate assembly, the
+        // same mechanism plan mode uses — never a re-rank of what comes back.
+        const visionPool =
+          attachments.length > 0
+            ? visionCandidates(planOpts?.candidates ?? agent.config.candidates)
+            : undefined;
+        const routing = await agent.promptRouted(expanded, {
+          ...planOpts,
+          ...(visionPool ? { candidates: visionPool } : {}),
+          attachments: attachments.length > 0 ? attachments : undefined,
+        });
         surfaceRouting(routing);
       }
     } catch (exc) {
@@ -4560,6 +4634,9 @@ export function HarnessApp({
   // width wraps the cursor onto a fresh row, which the reserve must include.
   const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
   const inputExtraLines = inputHidden ? 0 : inputRows - 1;
+  // Counted from the DRAFT, not from the store: deleting a token has to un-count it the
+  // instant it leaves the text, which is the same rule submit uses to decide what is sent.
+  const attachedCount = parseAttachmentTokens(typedText).length;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
   // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
@@ -5119,7 +5196,11 @@ export function HarnessApp({
                 and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
               <Text color={planMode ? "magenta" : "yellow"}>
-                {planMode ? " plan mode " : chordArmed ? " prompt · ^X " : " prompt "}
+                {`${planMode ? " plan mode" : chordArmed ? " prompt · ^X" : " prompt"}${
+                  attachedCount > 0
+                    ? ` · ${attachedCount} image${attachedCount === 1 ? "" : "s"}`
+                    : ""
+                } `}
               </Text>
             </Box>
             <TextInput
@@ -5149,6 +5230,9 @@ export function HarnessApp({
               // kill switch, not a branch inside the handler.
               onEditorRequest={agent.config.externalEditor === true ? openEditor : undefined}
               onChordArmed={setChordArmed}
+              // Passing undefined is the kill switch, exactly as above: with
+              // MINIMA_TUI_IMAGES=0 no clipboard-image code is reachable from Ctrl+V.
+              onImagePaste={agent.config.images ? handleImagePaste : undefined}
             />
           </Box>
         </Box>

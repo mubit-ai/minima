@@ -220,6 +220,10 @@ export const SEED_MODELS: Model[] = [
     // accepted. Without this the whole family is unusable in the agent loop, which always
     // sends tools — and gpt-5.6-luna is in DEFAULT_CANDIDATES, so routing can pick one.
     tools_require_effort_none: true,
+    // Also verified live (an image_url part is accepted). supportsImageInput is fail-closed,
+    // so leaving this off would have made routing skip the whole family for any turn carrying
+    // a pasted screenshot, and the drop-guard discard the image if it was pinned.
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-terra",
@@ -231,6 +235,7 @@ export const SEED_MODELS: Model[] = [
     max_tokens: 128_000,
     reasoning: true,
     tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-luna",
@@ -242,6 +247,7 @@ export const SEED_MODELS: Model[] = [
     max_tokens: 128_000,
     reasoning: true,
     tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.

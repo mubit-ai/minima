@@ -305,6 +305,22 @@ describe("OpenAICompatProvider — hoisted tool-result images", () => {
     expect(wire.map((m) => m.role)).toEqual(["user", "tool", "tool", "user"]);
     expect((wire[3]!.content as unknown[]).filter((b) => (b as { type: string }).type === "image_url")).toHaveLength(2);
   });
+
+  // The composer's Ctrl+V path: an image in a genuine USER message, with no hoist involved.
+  test("a pasted image serializes as an image_url part beside its question", async () => {
+    const wire = await wireFor([
+      new Message({
+        role: "user",
+        content: [text("[Image #1] what is this"), image("QUJD", "image/png")],
+      }),
+    ]);
+    expect(wire.map((m) => m.role)).toEqual(["user"]);
+    const parts = wire[0]!.content as Record<string, unknown>[];
+    expect(parts[0]).toEqual({ type: "text", text: "[Image #1] what is this" });
+    expect((parts[1] as { image_url: { url: string } }).image_url.url).toBe(
+      "data:image/png;base64,QUJD",
+    );
+  });
 });
 
 // gpt-5.6-* carry a non-"none" DEFAULT reasoning effort that /v1/chat/completions then

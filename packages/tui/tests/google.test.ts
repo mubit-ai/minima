@@ -276,4 +276,18 @@ describe("GoogleProvider — hoisted tool-result images", () => {
     expect(JSON.stringify(fnPart)).not.toContain("inlineData");
     expect(JSON.stringify(fnPart)).not.toContain("QUJD");
   });
+
+  // The composer's Ctrl+V path: an image in a genuine USER message, with no hoist involved.
+  test("a pasted image serializes as inlineData beside its question", async () => {
+    const contents = await contentsFor([
+      new Message({
+        role: "user",
+        content: [text("[Image #1] what is this"), image("QUJD", "image/png")],
+      }),
+    ]);
+    expect(contents).toHaveLength(1);
+    const parts = contents[0]!.parts as Record<string, unknown>[];
+    expect(parts[0]).toEqual({ text: "[Image #1] what is this" });
+    expect(parts[1]).toEqual({ inlineData: { mimeType: "image/png", data: "QUJD" } });
+  });
 });

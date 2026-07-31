@@ -17,9 +17,10 @@ import { Agent, type AgentOptions } from "../agent/agent.ts";
 import { getMode, modeSystemAppend } from "../agent/modes.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
-import type { Model, Usage } from "../ai/types.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
+import type { ContentBlock, ImageContent, Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
-import { AssistantMessage, Message } from "../ai/types.ts";
+import { AssistantMessage, Message, text as textBlock } from "../ai/types.ts";
 import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
@@ -343,6 +344,15 @@ export class MinimaAgent extends Agent {
        * excludedModels (the server does the subtraction). Never widened to
        * config.candidates. */
       candidates?: string[];
+      /**
+       * Images the user attached to THIS prompt (composer Ctrl+V). They ride alongside
+       * `content` in the run message, never inside it: routing, recall, the procedure lookup
+       * and lastRoutedTask all keep reading the plain task text.
+       *
+       * Re-sent on every rung of the recovery ladder, filtered per rung against the model
+       * that rung actually resolved to — see the drop-guard at the super.prompt site.
+       */
+      attachments?: ImageContent[];
     } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
@@ -647,13 +657,35 @@ export class MinimaAgent extends Agent {
         // steer to THIS rung's prompt (consumed once). The task itself is unchanged.
         const runContent = replanPrefix ? `${replanPrefix}\n\n${content}` : content;
         replanPrefix = null;
+        // The vision drop-guard. Routing picks the model AFTER the user hit Enter, and the
+        // ladder can pick a different one per rung, so whether the images may be sent is only
+        // knowable HERE. A model that cannot see them is TOLD they existed — otherwise it is
+        // left answering a question about a picture it was never shown. Enforcement lives at
+        // the payload, not in a prompt: this is what makes a 400 structurally impossible.
+        const atts = opts.attachments ?? [];
+        const runBlocks: ContentBlock[] = supportsImageInput(this.agentState.model)
+          ? [textBlock(runContent), ...atts]
+          : [
+              textBlock(
+                atts.length > 0
+                  ? `${runContent}\n\n[${atts.length} image${atts.length === 1 ? "" : "s"} omitted — ${this.agentState.model?.id ?? "this model"} has no vision]`
+                  : runContent,
+              ),
+            ];
         try {
           // LB-21: rung >= 1 re-issues the SAME task — flag it so transcript consumers
           // (the TUI echo) can tell a retry from a fresh prompt.
+          //
+          // Always a Message, never the bare block array: Agent.coercePrompts maps an array to
+          // ONE USER MESSAGE PER ELEMENT, which would split the text and its images into
+          // separate turns. `content: [text(x)]` is what the old string form built anyway, so
+          // an attachment-free prompt is unchanged.
           await super.prompt(
-            attempt > 0
-              ? new Message({ role: "user", content: runContent, ladder_reprompt: true })
-              : runContent,
+            new Message({
+              role: "user",
+              content: runBlocks,
+              ...(attempt > 0 ? { ladder_reprompt: true } : {}),
+            }),
           );
         } catch (exc) {
           runError = exc;
