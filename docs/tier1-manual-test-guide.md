@@ -12,8 +12,13 @@ Budget ~20 minutes for all four. Each section is self-contained — skip freely.
 
 ```bash
 cd /Users/eldaru/Mubit/Minima/new-features-research
-git log --oneline -5     # expect c91d266 editor, 506a8f0 ctx, 76cb5bf notify, d58a5a7 image
+git pull --ff-only origin research/new-features-research
+git log --oneline -1     # must include bb9cfa4 — read's description fix (#326)
 ```
+
+⚠️ **The `git pull` is not optional.** The image checks in §1 will fail against anything
+older than `bb9cfa4`: before that commit `read`'s description said *"Read a text file"* and
+models refused to call the tool at all. If §1 fails, check this first.
 
 Everything below runs **from source** via your `minima-loc` function, which sources
 `.env.harness` (provider keys) and execs `bun run …/packages/tui/src/cli/main.ts`:
@@ -28,14 +33,27 @@ Env overrides go **in front**, extra args after:
 MINIMA_TUI_NOTIFY=0 minima-loc --wt new-features-research --model claude-haiku-4-5 --provider anthropic
 ```
 
-Make a test image once — the repo ships none:
+Make two test images once — the repo ships none:
 
 ```bash
-screencapture -x /tmp/minima-test.png && ls -lh /tmp/minima-test.png
+mk() { cat > /tmp/$1.html <<EOF
+<html><body style="margin:0;background:#fff;display:flex;align-items:center;justify-content:center;height:760px">
+<div style="font-family:Helvetica;font-weight:bold;font-size:110px;text-align:center;line-height:1.3">$2</div>
+</body></html>
+EOF
+qlmanage -t -s 900 -o /tmp /tmp/$1.html >/dev/null 2>&1; }
+mk vt1 "MINIMA<br>CODE: PLUM8842"
+mk vt2 "MINIMA<br>CODE: FIG3317"
+ls -lh /tmp/vt1.html.png /tmp/vt2.html.png
 ```
 
-Pick something with legible text on screen before you run that, so "does the model actually
-see it" has an unambiguous answer.
+Two known codes, so "did the model actually see it" has an unambiguous answer and the
+two-image check in 1d can prove it kept them apart.
+
+**Deliberately *not* `screencapture`.** A desktop grab is ~2 MB (close to the 3.75 MB
+refusal ceiling), dense enough that weaker vision models misread it, and it ships whatever
+is on your screen to three provider APIs. Big high-contrast text isolates the harness from
+the model's OCR quality.
 
 ---
 
@@ -46,12 +64,27 @@ it in the tool result; OpenAI and Gemini get it **hoisted** into a synthetic use
 right after the tool-result run. The hoist is the part worth testing — the ordering
 invariant lives there.
 
-> ⚠️ **Phrase the prompt forcefully.** The `read` tool's description still says *"Read a
-> text file"*, so a model asked politely to "read this screenshot" will often **decline to
-> call the tool at all** and answer "I don't have a tool to read image files." That is the
-> tool description talking, not the feature failing — verified live on `claude-haiku-4-5`.
-> Every prompt below is worded to force the call. (Worth a follow-up: the description should
-> mention images.)
+> ### 📊 Calibrate before you start — this check is stochastic
+>
+> Whether the model *dispatches* `read` on a PNG is a decision it makes from the tool
+> description. `bb9cfa4` (#326) rewrote that description, which took measured dispatch from
+> **4/9 to 8/9** across three models — a large improvement, **not a guarantee**. Measured on
+> the merged branch:
+>
+> - `claude-haiku-4-5` — most reliable; dispatched every trial.
+> - `gemini-2.5-flash` — occasionally still declines (~1 in 3).
+> - `gpt-4o` — usually dispatches; declined once in four.
+>
+> **So: retry a failing check once or twice before filing a bug.** A single refusal is
+> within normal variance. A model that refuses 3× in a row on `claude-haiku-4-5` is a real
+> finding.
+>
+> **Separate two different failures.** *Refused to call the tool* is a prompt-guidance
+> issue and the residual known gap. *Called the tool and misread the text* is the model's
+> OCR quality — not the harness. The big-text images above exist to keep the two apart.
+>
+> Use natural phrasing. The old advice to write "You MUST… do not refuse" is obsolete —
+> and it never worked anyway; the pre-#326 refusals happened *with* that wording.
 
 ### 1a. Anthropic — native nesting
 
@@ -62,14 +95,14 @@ minima-loc --wt new-features-research --model claude-haiku-4-5 --provider anthro
 Then type:
 
 ```
-You MUST call the read tool with path=/tmp/minima-test.png. Do not refuse. Then tell me exactly what text you can see in the image.
+What code is shown in /tmp/vt1.html.png?
 ```
 
 | ✅ expect | ❌ fail |
 | -- | -- |
-| The model describes the actual screenshot contents | "I can't view images" *after* actually calling `read` · a 400 error · `read: image file not supported` |
+| `PLUM8842` | "I can't view images" / "use an OCR tool" — a refusal to dispatch (retry once) · a 400 error · `read: image file not supported` |
 
-The transcript row for the tool call shows `[image] /tmp/minima-test.png (image/png, NNNNN bytes)` —
+The transcript row for the tool call shows `[image] /tmp/vt1.html.png (image/png, NNNNN bytes)` —
 that descriptor line is what lands in SQLite; the base64 never does.
 
 ### 1b. OpenAI — the hoist
@@ -78,12 +111,9 @@ that descriptor line is what lands in SQLite; the base64 never does.
 minima-loc --wt new-features-research --model gpt-4o --provider openai
 ```
 
-Same prompt. Same expectation. This is a **different code path** from 1a — if 1a works and
-1b doesn't, the bug is in `hoistToolResultImages` (`src/ai/compat.ts`), not in `read`.
-
-*(1a–1c were each verified live against a 1×1 PNG while writing this guide — all three
-answered `SAW_IMAGE`. If one of them fails for you, it is your image or your key, not the
-wiring.)*
+Same prompt, same expected `PLUM8842`. This is a **different code path** from 1a — if 1a
+works and 1b doesn't *after a retry*, the bug is in `hoistToolResultImages`
+(`src/ai/compat.ts`), not in `read`.
 
 ### 1c. Gemini — the hoist again, different serializer
 
@@ -91,25 +121,25 @@ wiring.)*
 minima-loc --wt new-features-research --model gemini-2.5-flash --provider google
 ```
 
-Same prompt, same expectation.
+Same prompt, same expected `PLUM8842`. This is the model most likely to decline on a first
+try — retry before concluding anything.
 
 ### 1d. Two images in one turn — the ordering invariant
 
-Any of the three models above. First make a second image:
+The highest-value check in this section, and the only one that exercises the coalescing
+rule: OpenAI requires every `role:"tool"` message to sit in an unbroken run after the
+assistant's `tool_calls`, so both images must be hoisted into **one** synthetic user
+message placed after the *whole* run — never one message between them.
 
-```bash
-screencapture -x /tmp/minima-test-2.png
+Any of the three models above:
+
 ```
-
-Then:
-
-```
-You MUST call the read tool on /tmp/minima-test.png and on /tmp/minima-test-2.png. Do not refuse. Then tell me how the two images differ.
+Read /tmp/vt1.html.png and /tmp/vt2.html.png and tell me both codes and which file each came from.
 ```
 
 | ✅ expect | ❌ fail |
 | -- | -- |
-| The model compares both | A 400 from OpenAI about tool messages / `tool_call_id` — that means the synthetic user message was inserted *between* two tool results instead of after both |
+| `PLUM8842` from `vt1`, `FIG3317` from `vt2`, **attributed to the right file** | A 400 from OpenAI about tool messages / `tool_call_id` — the synthetic message split the run · both codes reported but swapped, or only one image seen |
 
 ### 1e. Text-only model — fail-closed refusal
 
@@ -118,12 +148,12 @@ minima-loc --wt new-features-research --model gpt-5.6-sol --provider openai
 ```
 
 ```
-You MUST call the read tool with path=/tmp/minima-test.png. Do not refuse. Report the tool's exact output.
+Read /tmp/vt1.html.png and report the tool's exact output.
 ```
 
 | ✅ expect | ❌ fail |
 | -- | -- |
-| `read: image file not supported: /tmp/minima-test.png` | A provider 400 · a silently empty result |
+| `read: image file not supported: /tmp/vt1.html.png` | A provider 400 · a silently empty result |
 
 (These `gpt-5.6-*` seeds are marked text-only because their vision support was never
 verified — fail-closed by design. The refusal is the feature working, not a bug.)
@@ -135,12 +165,12 @@ MINIMA_TUI_IMAGES=0 minima-loc --wt new-features-research --model claude-haiku-4
 ```
 
 ```
-You MUST call the read tool with path=/tmp/minima-test.png. Do not refuse. Report the tool's exact output.
+Read /tmp/vt1.html.png and report the tool's exact output.
 ```
 
 | ✅ expect |
 | -- |
-| `read: image file not supported: /tmp/minima-test.png` — byte-identical to the pre-feature message, even on a vision model |
+| `read: image file not supported: /tmp/vt1.html.png` — byte-identical to the pre-feature message, even on a vision model |
 
 ### 1g. Oversized image
 
@@ -153,7 +183,7 @@ stat -f '%z bytes' /tmp/big.png      # 5242880 bytes
 Then on a vision model:
 
 ```
-You MUST call the read tool with path=/tmp/big.png. Do not refuse. Report the tool's exact output.
+Read /tmp/big.png and report the tool's exact output.
 ```
 
 | ✅ expect |
