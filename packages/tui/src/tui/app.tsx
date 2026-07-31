@@ -106,6 +106,7 @@ import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./co
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import { footerStatsFromMessages } from "./footer.ts";
+import { setClickCallback, setMouseScrollCallback } from "./input-filter.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -328,6 +329,7 @@ const COMMANDS = [
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
   { name: "fullscreen", desc: "Toggle the fullscreen renderer (sticky composer, in-app scroll)" },
+  { name: "mouse", desc: "Toggle wheel capture (fullscreen; ON scrolls in-app, OFF frees select)" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
@@ -1399,6 +1401,15 @@ export function HarnessApp({
   const viewportRef = useRef({ total: 0, rows: 1 });
   // "N new messages" while scrolled: the message count when follow was left; -1 = pinned.
   const scrolledFromLenRef = useRef(-1);
+  // Wheel capture in fullscreen, default ON (CC parity — the wheel scrolls in-app history;
+  // hold Option/Shift to drag-select, or /mouse frees the wheel for native selection). The
+  // OLD fullscreen shipped this OFF-by-default and earned "feels broken": the wheel did
+  // nothing out of the box.
+  const [mouseEnabled, setMouseEnabled] = useState(true);
+  // A click while capture is on can never start a drag-select — surface the escape hatches
+  // on the status row for a few seconds instead of silently eating the drag.
+  const [selectHint, setSelectHint] = useState(false);
+  const selectHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1) basis for the estimate-decay bottom mount:
   // messages BEFORE this index are treated as no-longer-on-screen. 0 for a whole normal
   // session; moved to messages.length whenever the expanded panel closes. Superseded by the
@@ -1460,7 +1471,11 @@ export function HarnessApp({
       ...echoMsgs,
       {
         role: "tool",
-        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: just click-drag to select, then copy with your terminal.`,
+        text: `Copied last reply (${last.text.length} chars) via ${via}.\nTo select arbitrary text: ${
+          fullscreen && mouseEnabled
+            ? "run /mouse (frees the wheel for native selection) or hold Option/Shift while dragging."
+            : "just click-drag to select, then copy with your terminal."
+        }`,
         toolName: "copy",
       },
     ]);
@@ -1489,6 +1504,42 @@ export function HarnessApp({
   useEffect(() => {
     if (!busy) resetLiveReplyCache();
   }, [busy]);
+
+  // Fullscreen input seams: coalesced wheel notches (decoded + batched by input-filter.ts;
+  // positive = up) scroll the line viewport, clamped at mutation so over-scroll banks no
+  // dead offset; a click is a doomed drag-select attempt — arm the selection hint.
+  useEffect(() => {
+    if (!fullscreen) return;
+    setMouseScrollCallback((notches) =>
+      setScroll((cur) =>
+        scrollLinesBy(cur, -notches * 3, viewportRef.current.total, viewportRef.current.rows),
+      ),
+    );
+    setClickCallback(() => {
+      setSelectHint(true);
+      if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
+      selectHintTimerRef.current = setTimeout(() => setSelectHint(false), 4000);
+    });
+    return () => {
+      setMouseScrollCallback(null);
+      setClickCallback(null);
+      if (selectHintTimerRef.current) clearTimeout(selectHintTimerRef.current);
+      setSelectHint(false);
+    };
+  }, [fullscreen]);
+
+  // SGR mouse reporting follows (fullscreen, mouseEnabled): capture ON = wheel scrolls
+  // in-app (native click-drag selection disabled — Option/Shift-drag still selects); OFF
+  // (via /mouse) or inline = native selection restored. Wheel-only: ?1002/?1003 never.
+  useEffect(() => {
+    if (fullscreen && mouseEnabled) {
+      process.stdout.write("\u001b[?1000h");
+      process.stdout.write("\u001b[?1006h");
+    } else {
+      process.stdout.write("\u001b[?1006l");
+      process.stdout.write("\u001b[?1000l");
+    }
+  }, [fullscreen, mouseEnabled]);
 
   // Wire the beforeToolCall permission hook, then the plan done-gate (when on) so
   // permission always runs first — first block wins, and no gate check ever executes for a
@@ -1861,7 +1912,7 @@ export function HarnessApp({
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
-      suspendToShell({ fullscreen, mouse: false });
+      suspendToShell({ fullscreen, mouse: fullscreen && mouseEnabled });
       return;
     }
 
@@ -3549,6 +3600,34 @@ export function HarnessApp({
               ? "Fullscreen ON — sticky composer, wheel/PgUp/PgDn scroll history, End jumps to newest. Persisted for this project; /fullscreen again to return to inline."
               : "Fullscreen OFF — inline renderer restored: native terminal scroll, click-drag select, copy.",
             toolName: "fullscreen",
+          },
+        ]);
+        break;
+      }
+      case "mouse": {
+        if (!fullscreen) {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name}` },
+            {
+              role: "tool",
+              text: "Wheel capture is a fullscreen-mode feature; this inline session already uses the terminal's native scroll, click-drag select, and copy (no toggle needed). Run /fullscreen for the sticky-composer frame with in-app wheel scroll.",
+              toolName: "mouse",
+            },
+          ]);
+          break;
+        }
+        const nextMouse = !mouseEnabled;
+        setMouseEnabled(nextMouse);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          {
+            role: "tool",
+            text: nextMouse
+              ? "Wheel capture ON — the wheel scrolls history; native click-drag selection is off (hold Option/Shift to drag-select, or /mouse again)."
+              : "Wheel capture OFF — native click-drag selection restored; scroll history with PgUp/PgDn.",
+            toolName: "mouse",
           },
         ]);
         break;
@@ -5374,13 +5453,15 @@ export function HarnessApp({
               ))}
             </Box>
             <Text color="gray" wrap="truncate">
-              {view && !view.pinned
-                ? `  ↑ scrolled up${view.atTop ? " (top)" : ""}${
-                    newWhileScrolled > 0
-                      ? ` · ${newWhileScrolled} new message${newWhileScrolled === 1 ? "" : "s"}`
-                      : ""
-                  } · PgDn to catch up · End jumps to newest`
-                : " "}
+              {selectHint
+                ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse frees the wheel · Ctrl+Y copies last reply"
+                : view && !view.pinned
+                  ? `  ↑ scrolled up${view.atTop ? " (top)" : ""}${
+                      newWhileScrolled > 0
+                        ? ` · ${newWhileScrolled} new message${newWhileScrolled === 1 ? "" : "s"}`
+                        : ""
+                    } · PgDn to catch up · End jumps to newest`
+                  : " "}
             </Text>
           </>
         )}
