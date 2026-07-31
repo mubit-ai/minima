@@ -837,6 +837,17 @@ export function HarnessApp({
 }: AppProps) {
   const { exit } = useApp();
   const skillScan = useMemo(() => discoverSkills(process.cwd()), []);
+  // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
+  // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
+  const slashCommands = useMemo(
+    () => [
+      ...COMMANDS,
+      ...skillScan.skills
+        .filter((s) => !COMMANDS.some((c) => c.name === s.name))
+        .map((s) => ({ name: s.name, desc: `${s.description} (skill)` })),
+    ],
+    [skillScan],
+  );
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
   // lazy initializers below put the restored transcript + footer stats in the first frame.
   const [initialStats] = useState(() =>
@@ -1538,7 +1549,7 @@ export function HarnessApp({
   const MAX_SUGGESTIONS = 8;
   const allMatchingCommands =
     typedText.startsWith("/") && !hasSpace
-      ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+      ? slashCommands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
       : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
@@ -2101,7 +2112,7 @@ export function HarnessApp({
     if (hasSpace) return undefined;
 
     const prefix = val.slice(1).toLowerCase();
-    const matches = COMMANDS.filter((c) => c.name.startsWith(prefix));
+    const matches = slashCommands.filter((c) => c.name.startsWith(prefix));
 
     if (matches.length > 0) {
       return `/${matches[0]!.name} `;
