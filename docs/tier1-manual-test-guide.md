@@ -1,14 +1,11 @@
 # Tier 1 manual test guide
 
-Manual checks for the Track A — Tier 1 features (PRs #322–#325), all merged into
-`research/new-features-research`, plus **§5, clipboard image paste**, which is still on its
-own branch. Every one of these is something `bun test` **cannot** prove: they need a real
-terminal, a real provider, a real editor, or a real pasteboard.
+Manual checks for the Track A — Tier 1 features (PRs #322–#325) plus **§5, clipboard image
+paste** (#330) — all merged into `research/new-features-research`. Every one of these is
+something `bun test` **cannot** prove: they need a real terminal, a real provider, a real
+editor, or a real pasteboard.
 
 Budget ~20 minutes for §1–§4, ~5 for §5. Each section is self-contained — skip freely.
-
-⚠️ **§5 runs from a different worktree.** §1–§4 use `--wt new-features-research`; §5 is not
-merged yet and uses `--wt minima-clip-image`. Every command below already says which.
 
 ---
 
@@ -151,26 +148,36 @@ Read /tmp/vt1.html.png and /tmp/vt2.html.png and tell me both codes and which fi
 | -- | -- |
 | `PLUM8842` from `vt1`, `FIG3317` from `vt2`, **attributed to the right file** | A 400 from OpenAI about tool messages / `tool_call_id` — the synthetic message split the run · both codes reported but swapped, or only one image seen |
 
-### 1e. Text-only model — fail-closed refusal
+### 1e. `gpt-5.6` — the seed that changed twice
+
+⚠️ **This check was inverted by #330.** It used to expect a *refusal*, because the
+`gpt-5.6-*` seeds were undeclared and `supportsImageInput` is fail-closed. #330 verified the
+family live against the API and declared `input: ["text", "image"]`, so the same command now
+expects the image to be **read**.
 
 ```bash
 minima-loc --wt new-features-research --model gpt-5.6-sol --provider openai
 ```
 
 ```
-Read /tmp/vt1.html.png and report the tool's exact output.
+What code is shown in /tmp/vt1.html.png?
 ```
 
 | ✅ expect | ❌ fail |
 | -- | -- |
-| `read: image file not supported: /tmp/vt1.html.png` | A provider 400 · a silently empty result |
+| `PLUM8842` | `read: image file not supported` — the seed lost its `input` declaration · a provider 400 |
 
-(These `gpt-5.6-*` seeds are marked text-only because their vision support was never
-verified — fail-closed by design. The refusal is the feature working, not a bug.)
+Two fixes stack under this one command, which is why it is worth running:
 
-This check used to die on `HTTP 400 — Function tools with reasoning_effort are not supported`
-before `read` ever ran; #328 fixed that. If you see that 400 again, the model is missing
-`tools_require_effort_none` on its seed — not an image problem.
+- `#328` — before it, every turn on a `gpt-5.6-*` model died with
+  `HTTP 400 — Function tools with reasoning_effort are not supported` before `read` ever ran.
+  If you see that 400 again, the seed is missing `tools_require_effort_none`.
+- `#330` — before it, this model was fail-closed blind despite the API accepting images.
+
+**The fail-closed refusal itself is no longer reachable by hand.** Every seed with a key in
+`.env.harness` (openai, anthropic, google) now declares vision; the seven that don't
+(deepseek ×2, xai ×2, openrouter ×3) have no key to run them with. §1f below is the
+reachable proxy for that path, and the refusal string is pinned by unit tests.
 
 ### 1f. Kill switch
 
@@ -582,7 +589,7 @@ Take a screenshot **to the clipboard**: `⌘⇧⌃4`, then drag a region. (Witho
 file instead and the clipboard stays empty.)
 
 ```bash
-minima-loc --wt minima-clip-image --model claude-haiku-4-5 --provider anthropic
+minima-loc --wt new-features-research --model claude-haiku-4-5 --provider anthropic
 ```
 
 Press **Ctrl+V**, then type `what is in this image?` and hit Enter.
@@ -634,27 +641,34 @@ thousand pixels wide.
 1568 px is Anthropic's recommended maximum; above it every provider downsamples server-side
 anyway, so the resize costs nothing but saves real tokens.
 
-### 5e. A model that cannot see
+### 5e. A model that cannot see — ⏭️ not reachable by hand today
 
-```bash
-minima-loc --wt minima-clip-image --model deepseek-v4-flash --provider deepseek
-```
+Pinning with `--model` bypasses routing, which makes it the one case where the harness knows
+**at paste time** that an image is doomed. Pinning a blind model should give a red transcript
+line ending `⚠ <id> has no vision, it will be dropped`, and on submit the model should be
+told `[1 image omitted — <id> has no vision]` rather than being sent a payload the API would
+reject.
 
-`--model` pins, which bypasses routing — so this is the one case where the harness knows at
-paste time that the image is doomed.
+**You cannot currently produce that state.** It needs a seed that is both blind *and*
+runnable, and no such seed exists: every provider with a key in `.env.harness` (openai,
+anthropic, google) now declares vision, and the seven undeclared seeds (deepseek ×2, xai ×2,
+openrouter ×3) have no key. The drop-guard is covered by unit tests instead — including the
+recovery-ladder case where one rung sees the image and the next does not.
 
-| ✅ expect |
-| -- |
-| Ctrl+V still attaches, but the transcript line is **red** and ends `⚠ deepseek-v4-flash has no vision, it will be dropped` |
-| on submit the model is told `[1 image omitted — deepseek-v4-flash has no vision]` rather than being sent a payload the API would reject |
+> ⚠️ **The trap this section fell into, worth knowing for every pinned-model check in this
+> guide.** `--model deepseek-v4-flash --provider deepseek` does **not** fail loudly without a
+> key — it silently falls back, and the footer reads `model: gpt-4o-mini ▸ pinned`. A vision
+> model, so no warning fires and the check quietly proves nothing. **Read the model id in the
+> footer, not the one you typed.** If they differ, the key is missing and the check is void.
 
-Unpinned (routed) turns do **not** warn at paste time — routing has not picked yet. Instead
-the pool is narrowed to vision-capable candidates before the request goes out.
+Unpinned (routed) turns do **not** warn at paste time — routing has not picked yet. There the
+pool is narrowed to vision-capable candidates before the request goes out, and the drop-guard
+is the backstop per rung.
 
 ### 5f. Kill switch
 
 ```bash
-MINIMA_TUI_IMAGES=0 minima-loc --wt minima-clip-image
+MINIMA_TUI_IMAGES=0 minima-loc --wt new-features-research
 ```
 
 | ✅ expect |
