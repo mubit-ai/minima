@@ -161,4 +161,22 @@ describe("route() reasoning-aware candidate assembly", () => {
     expect(routing?.warnings.some((w) => w.startsWith("reasoning_filter_skipped"))).toBe(true);
     reg.unregister();
   });
+
+  test("the reasoning-off note shows on the first turn only", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    process.env.OPENAI_API_KEY = "k";
+    const { fetchLike } = service();
+    const { agent, reg } = buildAgent(fetchLike);
+    reg.setResponses([
+      new AssistantMessage({ content: [text("ok")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("ok")], stop_reason: "stop" }),
+    ]);
+    agent.agentState.thinkingLevel = "high";
+    const note = (w: string) => w.includes("no reasoning — running with reasoning off");
+    const first = await agent.promptRouted("hi");
+    expect(first?.warnings.some(note)).toBe(true);
+    const second = await agent.promptRouted("hi again");
+    expect(second?.warnings.some(note)).toBe(false);
+    reg.unregister();
+  });
 });

@@ -232,7 +232,9 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 6.0, cache_read: 0.1 },
     context_window: 1_050_000,
     max_tokens: 128_000,
-    reasoning: true,
+    // Luna 400s on function tools + reasoning_effort in chat/completions; reasoning:false
+    // makes the provider send the explicit reasoning_effort:"none" OpenAI requires.
+    reasoning: false,
   },
   {
     // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.

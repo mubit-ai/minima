@@ -10,13 +10,23 @@
 export interface ProviderQuirks {
   /** Name of the max-output-tokens param. */
   readonly tokenParam: string;
+  /**
+   * Extra params sent when the model has NO reasoning capability, for hosts where a
+   * server-side DEFAULT means silence from the client is not "off": OpenAI defaults
+   * reasoning_effort on chat/completions (gpt-5.6-luna 400s on function tools unless it
+   * is explicitly "none"); OpenRouter's documented off switch is reasoning.enabled=false.
+   * Absent for hosts (xai, groq, deepseek) that 400 on the param for models that do not
+   * take it — there, not sending anything IS off.
+   */
+  readonly reasoningOff?: Readonly<Record<string, unknown>>;
 }
 
 const DEFAULT_QUIRKS: ProviderQuirks = { tokenParam: "max_tokens" };
 
 // Keyed by harness provider id. Only providers that DIVERGE from the baseline appear here.
 const QUIRKS: Record<string, ProviderQuirks> = {
-  openai: { tokenParam: "max_completion_tokens" },
+  openai: { tokenParam: "max_completion_tokens", reasoningOff: { reasoning_effort: "none" } },
+  openrouter: { tokenParam: "max_tokens", reasoningOff: { reasoning: { enabled: false } } },
 };
 
 /** Quirks for `provider` (the baseline OpenAI-compatible behavior if it has none). */

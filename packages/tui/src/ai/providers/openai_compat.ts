@@ -163,14 +163,16 @@ function buildPayload(
   }
   for (const m of messages) out.push(toWire(m));
   const maxTokens = options.max_tokens ?? model.max_tokens;
+  const quirks = quirksFor(model.provider);
   const payload: Record<string, unknown> = {
     model: model.id,
     messages: out,
     stream: true,
     stream_options: { include_usage: true },
     // Per-provider request quirks (e.g. OpenAI GPT-5 needs max_completion_tokens).
-    [quirksFor(model.provider).tokenParam]: maxTokens,
+    [quirks.tokenParam]: maxTokens,
   };
+  if (!model.reasoning && quirks.reasoningOff) Object.assign(payload, quirks.reasoningOff);
   if (context.tools.length) {
     payload.tools = context.tools.map((t) => ({
       type: "function",

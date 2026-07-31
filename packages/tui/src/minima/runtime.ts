@@ -239,6 +239,18 @@ export class MinimaAgent extends Agent {
   /** Per-repo routing profile cache, keyed by project so a run switch reloads. Writes
    * (/profile, the interview) invalidate via invalidateRoutingProfile(). */
   private profileCache: { projectKey: string; row: RoutingProfileRow | null } | null = null;
+  /** The "model has no reasoning — running with reasoning off" note is shown ONCE per
+   * session, on the first affected turn; after that it is silence, not spam. */
+  private reasoningOffNoted = false;
+
+  /** Surface the once-per-session reasoning-off note when a thinking level is active but
+   * the turn's model cannot reason (covers pinned and routed paths). */
+  private noteReasoningOff(model: Model | null | undefined, warnings: string[]): void {
+    if (this.reasoningOffNoted || !model || model.reasoning === true) return;
+    if ((this.agentState.thinkingLevel ?? "off") === "off") return;
+    this.reasoningOffNoted = true;
+    warnings.push(`${model.name} has no reasoning — running with reasoning off`);
+  }
 
   /** Esc must stop BOTH phases: the in-flight route and the model run. */
   override abort(): void {
@@ -1057,7 +1069,9 @@ export class MinimaAgent extends Agent {
         this.agentState.model = model;
         this.offlineReason = null;
         this.offlineKind = null;
-        return pinnedResult(model);
+        const pinned = pinnedResult(model);
+        this.noteReasoningOff(model, pinned.warnings);
+        return pinned;
       }
     }
     try {
@@ -1145,6 +1159,7 @@ export class MinimaAgent extends Agent {
         if (overridden) return overridden;
       }
       this.agentState.model = routing.model;
+      this.noteReasoningOff(routing.model, routing.warnings);
       return routing;
     } catch (exc) {
       // An Esc during routing is a user abort, NOT a routing failure — never

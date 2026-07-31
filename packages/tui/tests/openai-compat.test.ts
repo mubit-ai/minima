@@ -157,6 +157,46 @@ describe("openai-compat SSE streaming", () => {
     expect(result.textContent).toBe("ok");
   });
 
+  test("a non-reasoning openai model sends the explicit reasoning_effort:none", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+
+    let payload: Record<string, unknown> = {};
+    const capturingFetch = async (_url: string, init: RequestInit) => {
+      payload = JSON.parse(init.body as string);
+      return sseFetch(["data: [DONE]\n\n"])(_url, init);
+    };
+    await complete(
+      { ...OPENAI_MODEL, reasoning: false },
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      { options: { fetch: capturingFetch } },
+    );
+    expect(payload.reasoning_effort).toBe("none");
+
+    await complete(
+      { ...OPENAI_MODEL, reasoning: true },
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      { options: { fetch: capturingFetch } },
+    );
+    expect(payload.reasoning_effort).toBeUndefined();
+
+    await complete(
+      { ...OPENAI_MODEL, provider: "deepseek", reasoning: false },
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      { options: { fetch: capturingFetch } },
+    );
+    expect(payload.reasoning_effort).toBeUndefined();
+    expect(payload.reasoning).toBeUndefined();
+
+    await complete(
+      { ...OPENAI_MODEL, provider: "openrouter", reasoning: false },
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      { options: { fetch: capturingFetch } },
+    );
+    expect(payload.reasoning).toEqual({ enabled: false });
+    expect(payload.reasoning_effort).toBeUndefined();
+  });
+
   test("surfaces a non-2xx response as an error event", async () => {
     resetAll();
     registerProvider("openai-completions", new OpenAICompatProvider());
