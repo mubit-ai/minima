@@ -8,6 +8,11 @@ import React from "react";
 
 import type { AgentMode } from "../agent/modes.ts";
 import type { FooterBadge } from "./badge_slot.ts";
+import { AUTO_COMPACT_PCT, type ContextUsage, fmtCtxTokens } from "./context_meter.ts";
+
+/** Below this the row already truncates near the token counts, so the `(used/window)`
+ * parenthetical would push the `$cost` segment off-screen rather than add information. */
+const CTX_DETAIL_MIN_COLS = 100;
 
 /**
  * The perms row's write/exec segments, mode-aware (the old fixed "w/e/b: ask" read as
@@ -41,7 +46,12 @@ export interface StatusBarProps {
   basis: string;
   routeMode: "auto" | "confirm";
   thinkingLevel: string;
-  ctxPct: number;
+  ctx: ContextUsage;
+  /** MINIMA_TUI_CONTEXT_METER: false renders the pre-fix segment (bare `ctx NN%`) and keeps
+   * the route/reason segments unconditional, so the row is byte-identical to what shipped. */
+  contextMeter?: boolean;
+  /** Terminal width, for the responsive `(used/window)` parenthetical. */
+  columns?: number;
   inputTokens: number;
   outputTokens: number;
   actualCostUsd?: number;
@@ -69,7 +79,9 @@ export function StatusBar({
   basis,
   routeMode,
   thinkingLevel,
-  ctxPct,
+  ctx,
+  contextMeter = true,
+  columns = 80,
   inputTokens,
   outputTokens,
   actualCostUsd = 0,
@@ -98,7 +110,22 @@ export function StatusBar({
   const routeStyle = routeMode === "confirm" ? "yellow" : "gray";
   const thinkStyle =
     thinkingLevel === "high" ? "yellow" : thinkingLevel === "off" ? "gray" : "cyan";
-  const ctxStyle = ctxPct > 80 ? "red" : "gray";
+  // Red is the same constant the auto-compaction trigger reads, on the same quantity — so
+  // red now genuinely means "compaction is imminent" rather than agreeing with it by
+  // coincidence, as two unrelated 80s did before.
+  const ctxStyle = ctx.pct !== null && ctx.pct > AUTO_COMPACT_PCT ? "red" : "gray";
+  // An unresolvable window is yellow ("attention, degraded" everywhere else in this row) and
+  // never red: red reads as "nearly full", the opposite of what UNKNOWN means. An empty
+  // context is not unknown — there is simply nothing in it, so it stays a plain 0%.
+  const ctxUnknown = contextMeter && ctx.pct === null && ctx.usedTokens > 0;
+  // A tilde marks a number carrying a chars/4 estimate: no reply has reported usage yet, or
+  // messages were appended after the one that did. An empty context has nothing to estimate.
+  const ctxTilde = contextMeter && ctx.basis !== "exact" && ctx.usedTokens > 0 ? "~" : "";
+  const ctxLabel = ctxUnknown ? "?%" : `${ctxTilde}${(ctx.pct ?? 0).toFixed(0)}%`;
+  const ctxDetail =
+    contextMeter && columns >= CTX_DETAIL_MIN_COLS && (ctx.usedTokens > 0 || ctx.pct !== null)
+      ? ` (${fmtCtxTokens(ctx.usedTokens)}/${ctx.windowTokens === null ? "?" : fmtCtxTokens(ctx.windowTokens)})`
+      : null;
   const statusColor = statusText === "ready" ? "green" : "yellow";
 
   return (
@@ -117,14 +144,26 @@ export function StatusBar({
               {model} ▸ {basis}
             </Text>
 
-            <Text color="gray"> · route: </Text>
-            <Text color={routeStyle}>{routeMode}</Text>
+            {/* Both segments are noise in their shipped default — the code already says so by
+                greying them out — and the cells they cost are what pays for the ctx
+                parenthetical. Under the rollback flag they render unconditionally again. */}
+            {(!contextMeter || routeMode !== "auto") && (
+              <>
+                <Text color="gray"> · route: </Text>
+                <Text color={routeStyle}>{routeMode}</Text>
+              </>
+            )}
 
-            <Text color="gray"> · reason: </Text>
-            <Text color={thinkStyle}>{thinkingLevel}</Text>
+            {(!contextMeter || thinkingLevel !== "off") && (
+              <>
+                <Text color="gray"> · reason: </Text>
+                <Text color={thinkStyle}>{thinkingLevel}</Text>
+              </>
+            )}
 
             <Text color="gray"> │ ctx </Text>
-            <Text color={ctxStyle}>{ctxPct.toFixed(0)}%</Text>
+            <Text color={ctxUnknown ? "yellow" : ctxStyle}>{ctxLabel}</Text>
+            {ctxDetail && <Text color="gray">{ctxDetail}</Text>}
 
             <Text color="gray">
               {" "}
