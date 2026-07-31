@@ -131,9 +131,9 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_CLASSIFY_FORCE",
   "MINIMA_TUI_SCRIBE_CONTRAST",
   "MINIMA_TUI_SCRIBE_WORKFLOW",
-  // Renderer selection (opt-in fullscreen, ADR 2026-07-31 amendment): env mirrors of the
-  // --fullscreen/--inline CLI flags, resolved once at boot in main.ts (flag > env >
-  // persisted /fullscreen pref). Not a feature kill switch — inline is the default and
+  // Renderer selection (ADR 2026-07-31 amendments; fullscreen is the default): env
+  // mirrors of the --fullscreen/--inline CLI flags, resolved once at boot in main.ts
+  // (flag > env > persisted /fullscreen pref > fullscreen). Not a feature kill switch —
   // the resolution order is pinned by tests/cli.test.ts + the fs-* tui-verify scenarios.
   "MINIMA_TUI_FULLSCREEN",
   "MINIMA_TUI_INLINE",

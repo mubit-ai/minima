@@ -136,7 +136,11 @@ done
 curl -sf "http://127.0.0.1:$MOCK_PORT/v1/health" > /dev/null || {
   echo "FAIL: mock provider did not come up on :$MOCK_PORT"; cat "$TMP/mock.log"; exit 1; }
 
-INLINE_ARGV='"bun", "run", "'$TUI'/src/cli/main.ts", "--offline", "--model", "mock-model", "--provider", "mock", "--provider-url", "http://127.0.0.1:'$MOCK_PORT'/v1"'
+# BASE_ARGV carries no renderer flag (boots the shipped default — fullscreen since the
+# 2026-07-31 user decision); INLINE_ARGV pins --inline so every inline scenario stays on
+# the main-buffer path it asserts.
+BASE_ARGV='"bun", "run", "'$TUI'/src/cli/main.ts", "--offline", "--model", "mock-model", "--provider", "mock", "--provider-url", "http://127.0.0.1:'$MOCK_PORT'/v1"'
+INLINE_ARGV=$BASE_ARGV', "--inline"'
 
 echo "== tui-verify: generating 500-message fixture =="
 (cd "$ROOT" && bun run "$TUI/scripts/gen-fixture-session.ts" \
@@ -1667,11 +1671,11 @@ PY
 python3 "$TUI/scripts/tui_assert.py" "$TMP/fs-toggle-frames.jsonl" --after 8.0 \
   --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
 
-echo "== tui-verify: scenario fs-persist (the /fullscreen pref survives a restart) =="
+echo "== tui-verify: scenario fs-persist (bare boot = fullscreen default; /fullscreen off persists) =="
 rm -rf "$TMP/prefs-fs-persist"
 SPEC=$(cat <<EOF
 {
-  "cmd": [$INLINE_ARGV],
+  "cmd": [$BASE_ARGV],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 7,
   "env": {"MINIMA_DB_PATH": "$TMP/fs-persist-a.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-persist"},
@@ -1687,7 +1691,7 @@ EOF
 capture fs-persist-a "$SPEC"
 SPEC=$(cat <<EOF
 {
-  "cmd": [$INLINE_ARGV],
+  "cmd": [$BASE_ARGV],
   "cwd": "$ROOT",
   "cols": 100, "rows": 30, "duration": 6,
   "env": {"MINIMA_DB_PATH": "$TMP/fs-persist-b.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-persist"},
@@ -1703,12 +1707,13 @@ python3 - "$TMP/fs-persist-a-raw.bin" "$TMP/fs-persist-b-raw.bin" <<'PY'
 import sys
 a = open(sys.argv[1], "rb").read()
 b = open(sys.argv[2], "rb").read()
-assert b"\x1b[?1049h" in a, "session A: /fullscreen never entered the alt screen"
+# Session A: NO renderer flag — the shipped default boots fullscreen; /fullscreen then
+# drops to inline and persists the explicit "off".
+assert b"\x1b[?1049h" in a, "session A: bare boot did not default to fullscreen"
 assert a.rfind(b"\x1b[?1049l") > a.find(b"\x1b[?1049h"), "session A: exit left the alt screen armed"
-# Session B passed NO renderer flag: the persisted per-project pref alone boots fullscreen.
-assert b"\x1b[?1049h" in b, "session B: persisted pref did not boot fullscreen"
-assert b.rfind(b"\x1b[?1049l") > b.find(b"\x1b[?1049h"), "session B: exit left the alt screen armed"
-print("tui_assert: PASS fs-persist (pref-only fullscreen boot after restart)")
+# Session B: same prefs dir, still no flag — the persisted OFF beats the default.
+assert b"\x1b[?1049h" not in b, "session B: persisted inline pref did not stick"
+print("tui_assert: PASS fs-persist (fullscreen default boot; explicit inline pref survives restart)")
 PY
 
 echo "== tui-verify: scenario fs-suspend (Ctrl+Z drops alt screen + capture; fg re-arms both) =="

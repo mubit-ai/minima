@@ -87,28 +87,27 @@ export function persistTaskPanelHidden(projectKey: string, hidden: boolean): voi
   }
 }
 
-// Opt-in fullscreen renderer (ADR decision-inline-renderer.md, 2026-07-31 amendment).
-// Same suffixed-key pattern as the task panel: only the non-default ON persists; turning
-// it off deletes the key, so the default stays the inline renderer.
+// Fullscreen renderer preference (ADR decision-inline-renderer.md, 2026-07-31 amendments;
+// fullscreen became the DEFAULT the same day by user decision). Tri-state on purpose: the
+// /fullscreen toggle persists the user's explicit choice in either direction, and null
+// (no key) lets main.ts apply the shipped default — so a future default flip never fights
+// a stale stored value.
 const FULLSCREEN_SUFFIX = "::fullscreen";
 
-/** True when the user opted this project into the fullscreen renderer. */
-export function loadFullscreenPref(projectKey: string): boolean {
-  return readAll()[projectKey + FULLSCREEN_SUFFIX] === "on";
+/** The persisted /fullscreen choice for a project: true, false, or null (never chosen). */
+export function loadFullscreenPref(projectKey: string): boolean | null {
+  const raw = readAll()[projectKey + FULLSCREEN_SUFFIX];
+  return raw === "on" ? true : raw === "off" ? false : null;
 }
 
-/** Persist (on=true) or clear (on=false) the per-project fullscreen opt-in. */
+/** Persist the explicit per-project /fullscreen choice (both directions). */
 export function persistFullscreenPref(projectKey: string, on: boolean): void {
   try {
     const all = readAll();
     const key = projectKey + FULLSCREEN_SUFFIX;
-    if (on) {
-      if (all[key] === "on") return;
-      all[key] = "on";
-    } else {
-      if (!(key in all)) return;
-      delete all[key];
-    }
+    const value = on ? "on" : "off";
+    if (all[key] === value) return;
+    all[key] = value;
     mkdirSync(prefsDir(), { recursive: true });
     writeFileSync(prefsPath(), `${JSON.stringify(all, null, 2)}\n`, "utf8");
   } catch {

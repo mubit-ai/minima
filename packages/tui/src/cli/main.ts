@@ -560,10 +560,10 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
-      --fullscreen         opt-in fullscreen renderer: alt-screen, sticky composer, in-app
-                           scroll (wheel/PgUp/PgDn); persists per project via /fullscreen
+      --fullscreen         force the fullscreen renderer (the default): alt-screen, sticky
+                           composer, in-app scroll (wheel/PgUp/PgDn); /fullscreen toggles
       --inline, --no-fullscreen
-                           force the inline renderer (the default: native scroll + select)
+                           force the inline renderer: native scroll + select + copy
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
       --experimental       turn on experimental features (same as MINIMA_TUI_EXPERIMENTAL=1)
@@ -1349,8 +1349,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
 
-  // Opt-in fullscreen renderer: explicit flag > env > the per-project persisted /fullscreen
-  // preference > inline default. Entering the alt screen BEFORE render() keeps Ink's first
+  // Renderer selection: explicit flag > env > the per-project persisted /fullscreen
+  // preference > the fullscreen default (user decision 2026-07-31 — see the ADR's second
+  // amendment; --inline / MINIMA_TUI_INLINE=1 / /fullscreen restore the inline renderer).
+  // Entering the alt screen BEFORE render() keeps Ink's first
   // frame out of the main buffer (no transition flash, no stale frame left behind on exit);
   // the escape itself lives in altscreen.ts — main.ts stays free of the literal
   // (render-buffer.test.ts pins that; app.tsx/suspend.ts own mid-session transitions).
@@ -1361,7 +1363,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         ? true
         : undefined;
   const fullscreenOn =
-    args.fullscreen ?? envFullscreen ?? loadFullscreenPref(repoIdentity(process.cwd()));
+    args.fullscreen ?? envFullscreen ?? loadFullscreenPref(repoIdentity(process.cwd())) ?? true;
   if (fullscreenOn) enterAltScreen();
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process

@@ -230,11 +230,12 @@ export interface AppProps {
    */
   todos?: TodoTask[];
   /**
-   * Opt-in fullscreen renderer at boot (ADR decision-inline-renderer.md, 2026-07-31
-   * amendment): alt-screen frame, line-viewport transcript with the composer glued to the
-   * bottom row, in-app scroll. Default false — the inline renderer (main buffer + <Static> +
-   * native scroll/select/copy) stays the default. Resolved by main.ts (flag > env >
-   * persisted /fullscreen pref); toggleable mid-session via /fullscreen.
+   * Fullscreen renderer at boot (ADR decision-inline-renderer.md, 2026-07-31 amendments):
+   * alt-screen frame, line-viewport transcript with the composer glued to the bottom row,
+   * in-app scroll. THE DEFAULT since the same-day user decision — main.ts resolves flag >
+   * env > persisted /fullscreen pref > fullscreen, and passes the result here (the prop's
+   * own false default only covers direct mounts). --inline / /fullscreen restore the
+   * inline renderer (main buffer + <Static> + native scroll/select/copy).
    */
   fullscreen?: boolean;
 }
@@ -3598,7 +3599,7 @@ export function HarnessApp({
             role: "tool",
             text: next
               ? "Fullscreen ON — sticky composer, wheel/PgUp/PgDn scroll history, End jumps to newest. Persisted for this project; /fullscreen again to return to inline."
-              : "Fullscreen OFF — inline renderer restored: native terminal scroll, click-drag select, copy.",
+              : "Fullscreen OFF — inline renderer restored: native terminal scroll, click-drag select, copy. Persisted for this project.",
             toolName: "fullscreen",
           },
         ]);

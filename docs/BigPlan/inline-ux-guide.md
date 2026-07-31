@@ -996,10 +996,10 @@ the guide is closed** (remaining follow-ups live in the MP13 audit's disposition
 
 ## 11. What NOT to do
 
-- **No fullscreen-DEFAULT resurrection** — inline is the product surface and no feature may
-  require fullscreen. (2026-07-31: the §5 bar was cleared for an *opt-in* fullscreen mode —
-  CC v2.1.89 shipped one — see the ADR amendment in `decision-inline-renderer.md`; the
-  docked sidebar and rewind overlay stay dead.)
+- **Fullscreen is the default since 2026-07-31 (user decision — see the ADR amendments in
+  `decision-inline-renderer.md`).** Inline remains fully supported (`--inline`,
+  `/fullscreen`, persisted per project) and its scenarios/budgets in this guide still bind
+  on the inline path; the docked sidebar and rewind overlay stay dead.
 - **No mouse capture in inline. Ever.** The wheel belongs to the terminal.
 - **Never let the live region reach `rows`.** Every new footer/panel element states its row
   budget; unbounded elements are rejected in review.
