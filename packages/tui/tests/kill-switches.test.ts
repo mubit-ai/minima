@@ -49,6 +49,7 @@ interface Switch {
 const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_BIG_PLAN", field: "bigPlan" },
   { env: "MINIMA_TUI_IMAGES", field: "images" },
+  { env: "MINIMA_TUI_NOTIFY", field: "notify" },
   { env: "MINIMA_TUI_MEMORY", field: "memoryLedger" },
   { env: "MINIMA_TUI_ARTIFACTS", field: "artifacts" },
   { env: "MINIMA_TUI_BGJOBS", field: "bgJobs" },
@@ -120,6 +121,7 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_ALLOW_VERIFY",
   // Numeric tunables.
   "MINIMA_TUI_ARTIFACT_GC_MB",
+  "MINIMA_TUI_NOTIFY_AFTER_MS",
   "MINIMA_TUI_TTSR_CAP",
   "MINIMA_TUI_LSP_TIMEOUT_MS",
   "MINIMA_TUI_STOP_STRIKES",

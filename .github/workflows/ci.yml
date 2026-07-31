@@ -99,6 +99,7 @@ jobs:
     env:
       MINIMA_TUI_BIG_PLAN: "0"
       MINIMA_TUI_IMAGES: "0"
+      MINIMA_TUI_NOTIFY: "0"
       MINIMA_TUI_MEMORY: "0"
       MINIMA_TUI_ARTIFACTS: "0"
       MINIMA_TUI_ARTIFACT_GC_MB: "0"
