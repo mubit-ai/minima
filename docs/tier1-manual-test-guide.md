@@ -283,15 +283,20 @@ routing *reachability* are different things, and the offline state has its own t
 minima-loc --wt new-features-research --offline
 ```
 
+Ask anything (`hi` is enough) — **all three only appear after a turn has run.** On a fresh
+session the basis still reads `▸ minima`, because nothing has tried to route yet.
+
 | where | ✅ expect |
 | -- | -- |
-| status row 1 | `model: gpt-4o-mini ▸ offline` — the **basis** segment, with the model name in **yellow** |
-| status row 2 | red `[offline: routing disabled (offline mode)]` |
+| row 1, model segment | `model: gpt-4o-mini ▸ offline` — the **basis**, and the whole segment turns **yellow** |
+| row 1, far right | red `[offline: routing disabled (offline mode)]`, just before the mode badge. It is the *last* segment of a truncating row, so on a narrow terminal you will see it clipped to `[offli…` — that is truncation, not a bug |
 | transcript | `ℹ routing offline: routing disabled (offline mode) — ran gpt-4o-mini unrouted. /reconnect to retry.` |
 
 ⚠️ **That transcript line is the feature working, not an error.** It is the harness naming
 the model it fell back to and how to get routing back. `route:` stays hidden throughout,
 because `--offline` never changes the routing mode.
+
+(Row 2 is always the `perms:` line — nothing offline-related lands there.)
 
 ### 2c. Kill switch — reverts both halves
 
