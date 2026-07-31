@@ -67,6 +67,16 @@ export interface HarnessConfig {
    * MINIMA_TUI_IMAGES=0 — read then keeps the historical "image file not supported" refusal
    * byte for byte, and every provider payload is unchanged. */
   images: boolean;
+  /** Desktop notifications (default ON): OSC 9 + BEL when a long turn finishes, a permission
+   * prompt is raised, or the `question` overlay opens — so an unfocused terminal still gets
+   * the user's attention. Opt out with MINIMA_TUI_NOTIFY=0 — mirrors the bigPlan flag shape.
+   * Inert without a TTY: headless/piped runs never emit the bytes. */
+  notify: boolean;
+  /** Minimum turn duration (ms) before a finished turn notifies (MINIMA_TUI_NOTIFY_AFTER_MS,
+   * default 10000; 0 notifies on every turn). The anti-annoyance mechanism: a turn that ends
+   * before this has elapsed is one the user is still watching. Only consulted when `notify`
+   * is on. */
+  notifyAfterMs: number;
   /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
    * END the run while the plan has incomplete/failing steps before it stops denying and asks the
    * user. `MINIMA_TUI_STOP_STRIKES`, default 3; 0 disables the stop-gate entirely (pure-nudge
@@ -267,6 +277,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     allowOffline: true,
     bigPlan: true,
     images: true,
+    notify: true,
+    notifyAfterMs: 10_000,
     stopStrikes: 3,
     spiralRepeats: 3,
     stepCap: 30,
@@ -331,6 +343,12 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
   cfg.images = process.env.MINIMA_TUI_IMAGES !== "0";
+  cfg.notify = process.env.MINIMA_TUI_NOTIFY !== "0";
+  const notifyAfterEnv = process.env.MINIMA_TUI_NOTIFY_AFTER_MS;
+  if (notifyAfterEnv !== undefined) {
+    const n = Number(notifyAfterEnv);
+    if (Number.isFinite(n) && n >= 0) cfg.notifyAfterMs = n;
+  }
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;

@@ -75,6 +75,7 @@ These are on by default — set the variable to `0` to opt out. Every one fails 
 |----------|---------|-------------------|
 | `MINIMA_TUI_BIG_PLAN` | on | [Plan verification](/harness/architecture#plan-verification) — verify commands, gates, confidence tiers. |
 | `MINIMA_TUI_MEMORY` | on | The [memory ledger](/harness/usage-flows#4-memory-that-compounds) and its per-turn injection. |
+| `MINIMA_TUI_NOTIFY` | on | Desktop notifications (OSC 9 + terminal bell) when a long turn finishes, a permission prompt is raised, or the `question` overlay opens. `MINIMA_TUI_NOTIFY_AFTER_MS` (default `10000`) is how long a turn must run before it notifies — `0` notifies on every turn. Nothing is emitted without a TTY, so headless runs stay byte-clean. |
 | `MINIMA_TUI_ARTIFACTS` | on | Artifact spill: oversized tool output is written to a content-addressed file the model can page back with `read`, instead of being truncated into the transcript. |
 | `MINIMA_TUI_ARTIFACT_GC_MB` | `512` | LRU cap (in MB) on the artifact directory; the current run is exempt. `0` disables GC entirely. |
 | `MINIMA_TUI_COMPACT2` | on | Lossless compaction: the pre-compaction transcript is kept as an artifact the summary points at, so nothing is unrecoverable. Inert when `MINIMA_TUI_ARTIFACTS=0`. |

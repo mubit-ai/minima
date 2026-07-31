@@ -45,6 +45,37 @@ describe("label-source configuration (Phase 0b)", () => {
     });
   });
 
+  test("desktop notifications are ON by default; MINIMA_TUI_NOTIFY=0 opts out", () => {
+    withEnv({ MINIMA_TUI_NOTIFY: undefined }, () => {
+      expect(configFromEnv().notify).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY: "0" }, () => {
+      expect(configFromEnv().notify).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY: "1" }, () => {
+      expect(configFromEnv().notify).toBe(true);
+    });
+  });
+
+  test("MINIMA_TUI_NOTIFY_AFTER_MS defaults to 10s; 0 notifies on every turn", () => {
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: undefined }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "0" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(0);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "30000" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(30_000);
+    });
+    // Unparseable and negative values fall back to the default rather than disabling the gate.
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "soon" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "-5" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+  });
+
   test("judge sampling defaults to 15% of eligible turns", () => {
     expect(harnessConfig().judgeSampleRate).toBeCloseTo(0.15);
     withEnv({ MINIMA_JUDGE_SAMPLE: undefined, MINIMA_LLM_JUDGE: undefined }, () => {

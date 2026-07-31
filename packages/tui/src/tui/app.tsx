@@ -127,6 +127,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
+import { notify, shouldNotifyTurnEnd } from "./notify.ts";
 import {
   type PanelNavKey,
   type PanelState,
@@ -981,11 +982,13 @@ export function HarnessApp({
     askUserRef.current = (params) =>
       new Promise<string | null>((resolve) => {
         setQuestionPrompt({ ...params, resolve });
+        // The run is blocked on a human answer — always notify, however short the turn was.
+        if (agent.config.notify) notify(`Minima asks: ${params.question}`);
       });
     return () => {
       askUserRef.current = null;
     };
-  }, [askUserRef]);
+  }, [askUserRef, agent.config.notify]);
 
   // B2 (MUB-135): Plan/Build mode lives in an external store (src/agent/modes.ts) so the
   // beforeToolCall hook, /plan, and Shift+Tab all share it. planMode stays derived — every
@@ -1468,7 +1471,13 @@ export function HarnessApp({
   useEffect(() => {
     const modeGated = makeModeGatedBeforeToolCall({
       state: permStateRef.current,
-      promptFn: (prompt) => setPermPrompt(prompt),
+      promptFn: (prompt) => {
+        setPermPrompt(prompt);
+        // Same rule as the question overlay: the run cannot proceed without the user. The
+        // body is model-derived, which is exactly why notify() sanitizes it.
+        if (agent.config.notify)
+          notify(`Minima needs permission: ${prompt.toolName} ${prompt.argsSummary}`);
+      },
       getBundle: () => bundleForMode(getMode()),
     });
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
@@ -1554,6 +1563,10 @@ export function HarnessApp({
   // onSubmit echoed the typed prompt optimistically; the loop's message_start(user) — which
   // carries the @file-expanded/replan-prefixed run content — must be skipped, not double-posted.
   const pendingEchoRef = useRef(false);
+
+  // Wall-clock start of the in-flight turn, so the turn-end notification can skip turns that
+  // finished while the user was plainly still watching (config.notifyAfterMs).
+  const turnStartRef = useRef(0);
 
   // Subscribe to the agent event stream once.
   useEffect(() => {
@@ -4358,6 +4371,7 @@ export function HarnessApp({
     // round in plan mode) — the loop's later message_start(user) is deduped via the ref.
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
     pendingEchoRef.current = true;
+    turnStartRef.current = Date.now();
     setBusy(true);
     setBusyState("reasoning");
     setStreaming("");
@@ -4413,6 +4427,14 @@ export function HarnessApp({
       // by a mid-turn mode exit (see the registration effect).
       sweepRetiredTools();
       setBusyState("ready");
+      // The turn is back in the user's hands. Only worth a banner if they had time to look
+      // away — a fast turn is one they watched land.
+      if (
+        agent.config.notify &&
+        shouldNotifyTurnEnd(Date.now() - turnStartRef.current, agent.config.notifyAfterMs)
+      ) {
+        notify("Minima finished your turn");
+      }
       setCouncilPhase(null);
       setActiveActions([]);
       setStreaming("");
