@@ -216,6 +216,10 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    // Verified against the live API: bare + tools 400s, reasoning_effort:"none" + tools is
+    // accepted. Without this the whole family is unusable in the agent loop, which always
+    // sends tools — and gpt-5.6-luna is in DEFAULT_CANDIDATES, so routing can pick one.
+    tools_require_effort_none: true,
   },
   {
     id: "gpt-5.6-terra",
@@ -226,6 +230,7 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
   },
   {
     id: "gpt-5.6-luna",
@@ -236,6 +241,7 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
   },
   {
     // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.
