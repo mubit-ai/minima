@@ -844,7 +844,12 @@ export function HarnessApp({
       ...COMMANDS,
       ...skillScan.skills
         .filter((s) => !COMMANDS.some((c) => c.name === s.name))
-        .map((s) => ({ name: s.name, desc: `${s.description} (skill)` })),
+        .map((s) => ({
+          name: s.name,
+          desc: `${
+            s.description.length > 64 ? `${s.description.slice(0, 63).trimEnd()}…` : s.description
+          } (skill)`,
+        })),
     ],
     [skillScan],
   );
@@ -1555,6 +1560,7 @@ export function HarnessApp({
   // reserved height past a short terminal and shove the input/status off-screen.
   const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
   const hiddenSuggestions = allMatchingCommands.length - matchingCommands.length;
+  const suggestionPad = matchingCommands.reduce((n, c) => Math.max(n, c.name.length + 1), 12);
 
   const [showThinking, setShowThinking] = useState(false);
   const showThinkingRef = useRef(showThinking);
@@ -5030,7 +5036,7 @@ export function HarnessApp({
               </Box>
               {matchingCommands.map((cmd) => (
                 <Box key={cmd.name}>
-                  <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
+                  <Text color="yellow">/{cmd.name.padEnd(suggestionPad)}</Text>
                   <Text color="gray">{cmd.desc}</Text>
                 </Box>
               ))}
