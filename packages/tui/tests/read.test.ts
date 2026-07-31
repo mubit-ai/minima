@@ -164,3 +164,72 @@ describe("read tool hardening", () => {
     expect(body.length).toBeLessThanOrEqual(200_100);
   });
 });
+
+// Inlined on purpose rather than imported from read.ts: this literal IS the assertion.
+// Importing the constant would make the test agree with any future edit to it, and the
+// whole point is that the no-vision wire payload stays byte-for-byte what it was before
+// image results shipped.
+const PRE_FIX_DESCRIPTION =
+  "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).";
+
+describe("read tool description", () => {
+  test("R6: with image results on, the description advertises png/jpeg/webp", () => {
+    const d = readTool({ imageResults: () => true }).description;
+    expect(d).toContain("png");
+    expect(d).toContain("jpeg");
+    expect(d).toContain("webp");
+    expect(d).toMatch(/image/i);
+    expect(d).not.toBe(PRE_FIX_DESCRIPTION);
+    // The observed failure mode was the model reaching for OCR instead of dispatching.
+    expect(d).toMatch(/OCR/);
+  });
+
+  test("R6b: with image results off, the description is byte-identical to the pre-fix string", () => {
+    expect(readTool({ imageResults: () => false }).description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6c: with imageResults absent, the description is byte-identical to the pre-fix string", () => {
+    expect(readTool().description).toBe(PRE_FIX_DESCRIPTION);
+    expect(readTool({}).description).toBe(PRE_FIX_DESCRIPTION);
+    expect(readTool({ workdir: "/tmp" }).description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6d: ONE tool instance tracks a mid-session model swap without a rebuild", () => {
+    let vision = false;
+    const tool = readTool({ imageResults: () => vision });
+
+    expect(tool.description).toBe(PRE_FIX_DESCRIPTION);
+    vision = true;
+    const withVision = tool.description;
+    expect(withVision).not.toBe(PRE_FIX_DESCRIPTION);
+    expect(withVision).toContain("png");
+    vision = false;
+    expect(tool.description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6e: the swap survives the projection agent/loop.ts actually performs", () => {
+    let vision = false;
+    const tools = [readTool({ imageResults: () => vision })];
+    // Mirrors src/agent/loop.ts: Context.tools is rebuilt from state.tools every turn.
+    const project = () =>
+      tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+
+    const turn1 = project();
+    expect(turn1[0]?.description).toBe(PRE_FIX_DESCRIPTION);
+    vision = true;
+    const turn2 = project();
+    expect(turn2[0]?.description).toContain("png");
+    expect(turn2[0]?.description).not.toBe(PRE_FIX_DESCRIPTION);
+    // The projected object is a plain snapshot — turn 1's payload did not retroactively change.
+    expect(turn1[0]?.description).toBe(PRE_FIX_DESCRIPTION);
+    expect(turn2[0]?.name).toBe("read");
+  });
+
+  test("R6f: description is a plain string at every read, not a thunk", () => {
+    for (const t of [readTool(), readTool({ imageResults: () => true })]) {
+      expect(typeof t.description).toBe("string");
+      expect(t.description.length).toBeGreaterThan(0);
+      expect(JSON.parse(JSON.stringify({ d: t.description })).d).toBe(t.description);
+    }
+  });
+});

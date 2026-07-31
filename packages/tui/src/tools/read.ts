@@ -94,11 +94,32 @@ async function readImage(p: string, size: number, opts: FsToolOptions): Promise<
   };
 }
 
+/**
+ * Two descriptions, picked per PROJECTION rather than per construction. The tool set is
+ * built once (builtin.ts) but routing re-picks the model every prompt, so a single static
+ * string is wrong in one direction or the other: say "text file" and a vision model reads
+ * it as "PNGs are out of scope" and refuses without ever dispatching (the bug this pair
+ * fixes — both Anthropic and OpenAI answered with "use an OCR tool" against a forcing
+ * prompt); mention images unconditionally and the text-only path promises a capability the
+ * dispatcher will refuse. TEXT is byte-identical to the pre-image string so the flags-off /
+ * no-vision wire payload is unchanged, matching the same discipline anthropic.ts keeps in
+ * toolResultContent.
+ */
+const READ_DESC_TEXT =
+  "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).";
+const READ_DESC_IMAGES =
+  "Read a file. Text files return lines with 1-based line numbers; png, jpeg and webp files return the image itself, which you can view directly — no OCR needed (other image formats are refused). Always read a file before editing it — never guess contents. Use offset/limit for large text files (default limit: 2000 lines).";
+
 export function readTool(opts: FsToolOptions = {}): AgentTool {
   return {
     name: "read",
-    description:
-      "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).",
+    // A getter, not a value: loop.ts rebuilds Context.tools from state.tools every turn, so
+    // this re-reads the predicate after a mid-session model swap with no tool-set rebuild.
+    // Safe because nothing on that path spreads, clones or caches the tool object, and the
+    // db's toolSchemaHash digests name + parameters only.
+    get description(): string {
+      return opts.imageResults?.() ? READ_DESC_IMAGES : READ_DESC_TEXT;
+    },
     parameters,
     async execute(_id: string, params: Record<string, unknown>): Promise<ToolResult> {
       let r = resolveWithin(String(params.path), opts.workdir);
