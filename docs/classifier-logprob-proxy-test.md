@@ -125,3 +125,150 @@ The joined population is bounded above by 167 scored entries and will be smaller
 will be single-digit in places. `MIN_REPORTABLE_SUPPORT` (n≥10) applies exactly as it does
 everywhere else in this arc: cells below it are printed with `†` and never quoted as a percentage.
 L3 is defined over reportable cells only, for that reason.
+
+---
+---
+
+# RESULTS
+
+*Everything above this line was committed at `0445e9d`, before the join produced a number.*
+
+```
+bun packages/tui/scripts/logprob_proxy_probe.ts        # free, read-only, no network
+```
+
+## The population reconciles exactly against `--score`
+
+```
+corpus entries                                   238
+no reference label (split/unvoted/incomplete)    -57   -> 181   = the readout's 181
+replay abstained (stored null)                   -14   -> 167   = the readout's 167 scored
+no self-consistency draws                         -2   -> 165   JOINED
+        correct 146 · incorrect 19 · accuracy 88.5%
+```
+
+The two dropped entries were both correct, so `--score`'s 148/167 (88.6%) becomes 146/165 (88.5%)
+here. Nothing else moved. That the chain lands on 181 and 167 — the readout's own two figures,
+derived through the shipped resolvers rather than restated — is what says this join and `--score`
+agree.
+
+## Verdict: all three conditions FAIL
+
+| | condition | threshold | measured | |
+| -- | -- | -- | -- | -- |
+| **L1** | separation | ≥ 15 pts, control < 15 | **8.1 pts** (control 1.5) | ✗ **FAIL** |
+| **L2** | reach with value | ≥ 25 entries moved | **net is negative at every threshold** | ✗ **FAIL** |
+| **L3** | monotonicity | rises across ≥2 reportable bins | **83.3 → 72.7 → 72.4 → 94.7** (inverted) | ✗ **FAIL** |
+
+**The signal question is now closed on its own evidence rather than on absence of it.** §4's
+DO-NOT-BUILD is stronger than it was written: it stood on the channel argument alone, and now the
+signal argument stands too, independently.
+
+## But the signal is real — it just has no profitable gate
+
+Recording this because the failure above is easy to over-read. Repeatability **is** more informative
+than the self-report. It is not enough, which is a different claim from "it is nothing":
+
+```
+rank statistic — P(a correct row scores above an incorrect one), 0.500 = no information
+  modal task-type frequency   0.695     <- real, weak-to-moderate discrimination
+  modal pair frequency        0.620
+  raw self-report             0.580     <- the CONTROL, near chance
+```
+
+And the bin table's true shape is not the smooth curve L3 tested for — it is **a step at unanimity**:
+
+| | accuracy |
+| -- | -- |
+| modal frequency **= 1.00** (all 10 draws agree), n=113 | **94.7%** |
+| modal frequency **< 1.00**, n=52 | **75.0%** |
+
+A **19.7-point** accuracy step, on a predictor that costs one flag to read. That is a genuine signal
+and the self-report has nothing like it.
+
+**So why does no gate profit from it?** Two reasons, both structural rather than statistical:
+
+1. **The base rate is 88.5%.** With 19 errors in 165 rows, any gate spends right answers to buy
+   wrong ones at a ratio the corpus sets. Dropping everything non-unanimous catches **13 of 19
+   errors (68%)** and costs **39 of 146 right answers (27%)** — 3 : 1 against.
+2. **6 of the 19 errors sit at modal frequency 1.00.** The classifier is *confidently, repeatably
+   wrong* on them: ten draws, ten identical answers, all disagreeing with the panel. No repeatability
+   signal can see these, and no logprob would either — they are exactly the failure mode §1.2's
+   `[self]` caveat named ("ten identical wrong answers score 1.0"). **A third of this classifier's
+   errors are invisible to any confidence signal by construction.**
+
+The sweep is also **generous to the gate and still negative everywhere**: it scores a dropped-wrong
+as a pure win, when in production dropping the override means falling back to the service label,
+which is right on 22.6% of adjudicated rows. Priced properly the column is worse than printed.
+
+## Secondary: majority vote is worth +2 rows
+
+```
+single replay label     146/165 (88.5%)
+modal label, 10 draws   148/165 (89.7%)      +2 rows, at 10x inference cost
+```
+
+Not a logprob and not what MUB-220–223 propose. Recorded so nobody proposes it later as if it were
+untested: **10× the classify spend buys two rows.**
+
+## The feasibility check that closes it independently
+
+Live probe against the API, 2026-07-31 (`request_id` in the transcript):
+
+```
+POST /v1/messages  model=claude-haiku-4-5  "top_logprobs":5
+  -> 400 invalid_request_error: "top_logprobs: Extra inputs are not permitted"
+POST /v1/messages  model=claude-haiku-4-5  "logprobs":true
+  -> 400 invalid_request_error: "logprobs: Extra inputs are not permitted"
+POST /v1/messages  model=claude-haiku-4-5  (control, no such param)
+  -> 200, content "Hi"        <- the rejection is about the PARAMETER, not the model
+```
+
+**The shipped classifier cannot return a logprob at all.** `git grep -i logprob` is empty across both
+trees, and it is empty because there is nothing to read.
+
+The escape hatch is the other replayed model — OpenAI **does** return them:
+
+```
+gpt-4o-mini, top_logprobs:3  ->  "Hello" -0.00091 · "Hi" -7.00091 · "hello" -16.75091
+```
+
+But `gpt-4o-mini` is priced in `REPLAY_MODELS` precisely because it is **not** what production calls,
+and on the identical 165 rows:
+
+| model | logprob available? | accuracy, same rows |
+| -- | -- | -- |
+| `claude-haiku-4-5` (shipped) | **no** | **146/165 (88.5%)** |
+| `gpt-4o-mini` | **yes** | 133/165 (80.6%) |
+
+**Switching providers to obtain the signal costs 13 rows of accuracy — 7.9% of the joined set.** The
+headroom a perfect signal competes for is F3's 11 net rows, 8.9% of the 124 adjudicated rows.
+
+> Those two are **not subtractable**: different denominators (165 vs 124) and different quantities
+> (raw accuracy vs net override value). Stated as shares because that is the only honest comparison
+> available, and the point survives it — the cost of acquiring the signal and the entire prize it
+> competes for are the same order of magnitude, pointing opposite ways. The trade is not obviously
+> favourable and is certainly not free. Making it exactly comparable needs an adjudication re-run
+> under a swapped classify model, which is a paid ticket nobody has opened.
+
+## What this changes
+
+**Nothing about the recommendation.** DO-NOT-BUILD stands, now on two independent legs instead of one:
+
+- **the channel** (unchanged, F3): +74 from a boolean against +11 for a perfect signal;
+- **the signal** (new): 8.1 pts separation, no profitable gate at any threshold, a third of errors
+  invisible by construction, and the shipped provider exposes no logprob to begin with.
+
+**One thing it does change.** Readout §4.2 ("what DO-NOT-BUILD does not claim") says the call rests
+on the channel being off and not on probabilities being useless. That caveat was correct when
+written and is now **narrower**: on this corpus, at this base rate, a probability signal is measured
+and it does not pay. The caveat should now read as being about *other corpora and other base rates*,
+not about this one.
+
+**What is still not tested.** A true logprob at exact precision, on a model that returns one, at a
+base rate where errors are common enough for a gate to profit. All three would have to change
+together. The n=10 proxy attenuates rather than manufactures separation, so 8.1 pts is a floor and
+not a ceiling — but it would have to reach 15 to clear L1, and L2 fails for reasons precision cannot
+fix, because L2 fails on the *ratio of right to wrong answers a gate touches*, not on the predictor's
+resolution.
+
