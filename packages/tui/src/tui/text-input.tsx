@@ -6,6 +6,11 @@
  * Ctrl+W (kill word back). Ctrl+E stays an app-level binding (thinking cycle), and other
  * Ctrl/Meta combos fall through to the app handlers.
  *
+ * Ctrl+X Ctrl+E (readline's edit-and-execute-command) hands the draft to $EDITOR. The chord
+ * lives in editor_chord.ts as a module singleton because both this component and app.tsx
+ * must read it and the two keys can arrive in ONE stdin chunk (see that file's header); it
+ * is fed at the top of the useInput body, and `onEditorRequest` being absent turns it off.
+ *
  * Paste lands here on two paths, both inserting at the cursor WITHOUT submitting:
  *  - bracketed paste (the terminal's Cmd+V): captured whole by input-filter.ts and delivered
  *    via setPasteCallback — embedded newlines and ESC bytes are data, never keypresses;
@@ -16,6 +21,7 @@
 import { Text, useInput } from "ink";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { readClipboard } from "./clipboard.ts";
+import { feedChordKey, resetChord } from "./editor_chord.ts";
 import { setNavCallback, setPasteCallback } from "./input-filter.ts";
 
 export interface TextInputProps {
@@ -41,6 +47,15 @@ export interface TextInputProps {
    */
   initialValue?: string;
   showPrefix?: boolean;
+  /**
+   * Ctrl+X Ctrl+E: hand the current draft to $EDITOR. ABSENT = the chord is off — this
+   * prop IS the kill switch at this layer, so with MINIMA_TUI_EDITOR=0 feedChordKey is
+   * never called, Ctrl+X falls into the unbound-ctrl branch and is swallowed exactly as
+   * before, and app.tsx's chordOwnsKey() stays false so Ctrl+E still cycles thinking.
+   */
+  onEditorRequest?: (draft: string) => void;
+  /** Ctrl+X armed/disarmed — drives the composer box's `· ^X` title hint. */
+  onChordArmed?: (armed: boolean) => void;
 }
 
 interface Draft {
@@ -76,6 +91,8 @@ export function TextInput({
   disabledLabel,
   initialValue,
   showPrefix = true,
+  onEditorRequest,
+  onChordArmed,
 }: TextInputProps) {
   // The REF is the source of truth; state only triggers re-render. Ink dispatches every
   // keypress of one stdin chunk synchronously (no re-render in between), so a handler that
@@ -90,6 +107,8 @@ export function TextInput({
   const [, setPaintGen] = useState(0);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onChordArmedRef = useRef(onChordArmed);
+  onChordArmedRef.current = onChordArmed;
 
   const update = useCallback((value: string, cursor: number) => {
     draftRef.current = { value, cursor: Math.max(0, Math.min(cursor, value.length)) };
@@ -127,8 +146,39 @@ export function TextInput({
     return () => setNavCallback(null);
   }, [acceptNav, update]);
 
+  // Losing the keyboard (a 🔴 gate, an overlay) or unmounting mid-chord would strand `armed`
+  // in the module singleton, and a stranded arm permanently suppresses app-level Ctrl+E.
+  const chordActive = Boolean(onEditorRequest) && !disabled && !suspended;
+  useEffect(() => {
+    if (!chordActive) {
+      resetChord();
+      onChordArmedRef.current?.(false);
+      return;
+    }
+    return () => {
+      resetChord();
+      onChordArmedRef.current?.(false);
+    };
+  }, [chordActive]);
+
   useInput((input, key) => {
     if (disabled || suspended) return;
+    // The chord is fed FIRST, before the draft is read: Ctrl+X/Ctrl+E must not reach the
+    // readline block below. A `cancel` deliberately FALLS THROUGH (no return) so the
+    // cancelling key still types — an accidental Ctrl+X prefix costs nothing.
+    if (onEditorRequest) {
+      const chord = feedChordKey(input, Boolean(key.ctrl));
+      if (chord.action === "arm") {
+        onChordArmedRef.current?.(true);
+        return;
+      }
+      if (chord.action === "launch") {
+        onChordArmedRef.current?.(false);
+        onEditorRequest(draftRef.current.value);
+        return;
+      }
+      if (chord.action === "cancel") onChordArmedRef.current?.(false);
+    }
     const { value, cursor } = draftRef.current;
     // key.return fires for '\r' (standard interactive path).
     // The ICRNL PTY path: '\r' is translated to '\n' on the slave, and may arrive

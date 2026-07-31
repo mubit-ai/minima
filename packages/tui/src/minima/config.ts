@@ -138,6 +138,17 @@ export interface HarnessConfig {
    * inert on the default path (the deterministic branch never runs without a gate). Never affects
    * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
   gradedOutcome: boolean;
+  /** Compose the prompt in $EDITOR (default ON): Ctrl+X Ctrl+E (readline's
+   * edit-and-execute-command) and `/editor` hand the draft to $VISUAL/$EDITOR and read the
+   * saved buffer back into the composer. `MINIMA_TUI_EDITOR=0` opts out — the composer never
+   * arms the chord, so Ctrl+X is swallowed exactly as today and Ctrl+E still cycles thinking.
+   * NOTE this names a BEHAVIOR, not an editor: only `=0` disables it, and
+   * `MINIMA_TUI_EDITOR=vim` leaves the feature ON with the value ignored (set $EDITOR for
+   * that). One correctness fix rides OUTSIDE this flag on purpose — splitKeypressUnits now
+   * splits solo C0 bytes, because two adjacent control bytes arriving in one stdin chunk used
+   * to register as NEITHER key, and gating a stdin parser on a feature flag would be worse
+   * than the exposure. */
+  externalEditor: boolean;
   /** Memory ledger (B1, default ON): project curated cross-session memories (SQLite
    * `memories` table, managed via /memory) into each turn's system prompt. Opt out with
    * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
@@ -299,6 +310,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     toolAllowlist: true,
     backoffMs: 0,
     gradedOutcome: true,
+    externalEditor: true,
     memoryLedger: true,
     artifacts: true,
     artifactGcMb: 512,
@@ -359,6 +371,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(notifyAfterEnv);
     if (Number.isFinite(n) && n >= 0) cfg.notifyAfterMs = n;
   }
+  cfg.externalEditor = process.env.MINIMA_TUI_EDITOR !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;

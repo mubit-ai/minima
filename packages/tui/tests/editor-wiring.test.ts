@@ -1,0 +1,155 @@
+import { describe, expect, test } from "bun:test";
+
+import { readSource } from "./_source.ts";
+
+// A LAST RESORT (see _source.ts:1-19), for the app.tsx wiring that bun test cannot exercise:
+// Ink's global useInput handler and the composer render. Everything with real logic behind it
+// lives in editor.ts / editor_chord.ts and is tested by behavior in the sibling files.
+
+const app = readSource("tui/app.tsx");
+const textInput = readSource("tui/text-input.tsx");
+
+describe("app.tsx — the Ctrl+E collision", () => {
+  test("the chord latch is read as the FIRST statement of the global handler", () => {
+    // Order matters and toContain cannot express it: read below an early return and a busy
+    // dispatch leaves justConsumed set, poisoning the NEXT Ctrl+E.
+    const handlerAt = app.indexOf("const editorChordKey = chordOwnsKey();");
+    expect(handlerAt).toBeGreaterThan(-1);
+    const ctrlZAt = app.indexOf('if (key.ctrl && input === "z") { suspendToShell(); return; }');
+    expect(ctrlZAt).toBeGreaterThan(-1);
+    expect(handlerAt).toBeLessThan(ctrlZAt);
+  });
+
+  test("the guard appears BEFORE the thinking cycle it suppresses", () => {
+    const guardAt = app.indexOf("const editorChordKey = chordOwnsKey();");
+    const cycleAt = app.indexOf("if (!editorChordKey) cycleThinkingLevel();");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(cycleAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(cycleAt);
+  });
+
+  test("Ctrl+E still returns unconditionally, so it never falls through to another binding", () => {
+    expect(app).toContain(
+      'if (key.ctrl && input === "e") { if (!editorChordKey) cycleThinkingLevel(); return; }',
+    );
+  });
+
+  test("chordOwnsKey is CALLED exactly once — it is a one-shot latch", () => {
+    expect(app.split("= chordOwnsKey();").length - 1).toBe(1);
+  });
+
+  test("Ctrl+G is untouched — it stays Plan Overview, never the editor", () => {
+    expect(app).toContain("requestPlanOverview()");
+    expect(app).not.toContain('input === "g" && openEditor');
+  });
+});
+
+describe("app.tsx — applyComposerText moves prefill AND typedText together", () => {
+  test("the pair is one helper, so a refactor cannot drop the typedText half", () => {
+    expect(app).toContain(
+      "function applyComposerText(text: string) { setPrefill({ text, nonce: Date.now() }); setTypedText(text); }",
+    );
+  });
+
+  test("the editor result is applied through the helper, never through a bare setPrefill", () => {
+    expect(app).toContain(
+      "if (outcome.apply && outcome.text !== null) applyComposerText(outcome.text);",
+    );
+    expect(app).not.toContain("setPrefill({ text: outcome.text");
+  });
+});
+
+describe("app.tsx — openEditor", () => {
+  test("it checks the config flag, not process.env", () => {
+    expect(app).toContain("if (agent.config.externalEditor !== true)");
+    expect(app).not.toContain("process.env.MINIMA_TUI_EDITOR");
+  });
+
+  test("it defers out of the keypress dispatch and re-checks busy after the defer", () => {
+    expect(app).toContain("if (busy) return; setChordArmed(false); resetChord(); setTimeout(");
+    expect(app).toContain("if (busyRef.current) return;");
+  });
+
+  test("the post-editor repaint is the reseat + <Static> remount, not a bare state bump", () => {
+    // Ink skips the write when the frame is byte-identical and throttles ~32ms; after a
+    // full-screen editor the screen is destroyed, so the remount is what forces a paint.
+    expect(app).toContain(
+      "reseatFreshScreen(); setTranscriptGen((g) => g + 1); setMessages((m) => [...m, { role: \"tool\", text: outcome.notice, toolName: \"editor\" }]);",
+    );
+  });
+
+  test("text is applied only when the outcome says apply", () => {
+    expect(app).toContain(
+      "if (outcome.apply && outcome.text !== null) applyComposerText(outcome.text);",
+    );
+  });
+
+  test("the run id is threaded so the temp file is namespaced per run", () => {
+    expect(app).toContain("openEditorForDraft(seed, { runId: agent.runId })");
+  });
+});
+
+describe("app.tsx — the composer wiring", () => {
+  test("onEditorRequest is undefined when the flag is off — the kill switch at this layer", () => {
+    expect(app).toContain(
+      "onEditorRequest={agent.config.externalEditor === true ? openEditor : undefined}",
+    );
+  });
+
+  test("onChordArmed drives the armed state", () => {
+    expect(app).toContain("onChordArmed={setChordArmed}");
+  });
+
+  test("the indicator rides the absolutely-positioned TITLE, adding no rows", () => {
+    expect(app).toContain('{planMode ? " plan mode " : chordArmed ? " prompt · ^X " : " prompt "}');
+    // The height reserve is still computed from typedText alone.
+    expect(app).toContain("height={2 + inputRows}");
+  });
+});
+
+describe("app.tsx — /editor", () => {
+  test("the command is registered and described", () => {
+    expect(app).toContain('name: "editor"');
+    expect(app).toContain("Compose in $EDITOR");
+  });
+
+  test("it passes its args as the seed (it cannot carry the live draft)", () => {
+    expect(app).toContain('case "editor": openEditor(args.trim());');
+  });
+
+  test("the chord is in the keyboard help", () => {
+    expect(app).toContain("Ctrl+X Ctrl+E compose the prompt in $EDITOR");
+  });
+});
+
+describe("text-input.tsx — the chord feed", () => {
+  test("the chord is fed after the disabled/suspended guard and before the draft is read", () => {
+    const guardAt = textInput.indexOf("if (disabled || suspended) return;");
+    const feedAt = textInput.indexOf("const chord = feedChordKey(input, Boolean(key.ctrl));");
+    const draftAt = textInput.indexOf("const { value, cursor } = draftRef.current; // key.return");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(feedAt).toBeGreaterThan(guardAt);
+    expect(draftAt === -1 || feedAt < draftAt).toBe(true);
+  });
+
+  test("a cancel FALLS THROUGH so the cancelling key still types", () => {
+    expect(textInput).toContain(
+      'if (chord.action === "cancel") onChordArmedRef.current?.(false); }',
+    );
+  });
+
+  test("losing the keyboard resets the chord, and so does unmounting", () => {
+    // Arming then losing the keyboard (a 🔴 gate, an overlay) would otherwise strand
+    // `armed` in the singleton, permanently suppressing app-level Ctrl+E.
+    expect(textInput).toContain(
+      "const chordActive = Boolean(onEditorRequest) && !disabled && !suspended;",
+    );
+    expect(textInput).toContain(
+      "if (!chordActive) { resetChord(); onChordArmedRef.current?.(false); return; } return () => { resetChord(); onChordArmedRef.current?.(false); };",
+    );
+  });
+
+  test("the launch hands over the CURRENT draft, read from the ref", () => {
+    expect(textInput).toContain("onEditorRequest(draftRef.current.value);");
+  });
+});

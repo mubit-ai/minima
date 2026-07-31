@@ -109,6 +109,8 @@ import {
   contextUsage,
 } from "./context_meter.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import { openEditorForDraft } from "./editor.ts";
+import { chordOwnsKey, resetChord } from "./editor_chord.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
 import {
   SCROLLBACK_SAFETY_ROWS,
@@ -318,6 +320,10 @@ const COMMANDS = [
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
+  {
+    name: "editor",
+    desc: "Compose in $EDITOR — opens empty (/editor <text> seeds it); Ctrl+X Ctrl+E carries the draft",
+  },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
   { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
@@ -1373,6 +1379,8 @@ export function HarnessApp({
   // B1 /memory: ids from the latest `/memory list`, so `pin 2`-style index targets resolve.
   const memoryListRef = useRef<string[]>([]);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  // Ctrl+X is armed — the composer box title shows `· ^X` until the chord resolves.
+  const [chordArmed, setChordArmed] = useState(false);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
@@ -1846,6 +1854,12 @@ export function HarnessApp({
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
+    // FIRST statement, above every early return, on purpose. Ink's useInput re-subscribes on
+    // every render and EventEmitter appends, so whether this handler or TextInput's runs
+    // first is NOT stable — chordOwnsKey() answers `armed || justConsumed` so it is correct
+    // either way, but it is a one-shot read. Read it lower down instead and a dispatch that
+    // returns early (busy, an overlay) would leave the latch set and poison the NEXT Ctrl+E.
+    const editorChordKey = chordOwnsKey();
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
@@ -2081,8 +2095,11 @@ export function HarnessApp({
       return;
     }
     // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build).
+    // The Ctrl+E of a Ctrl+X Ctrl+E chord belongs to the composer, not to thinking. With
+    // MINIMA_TUI_EDITOR=0 the composer never feeds the chord, so editorChordKey is always
+    // false here and this branch behaves byte-identically to before the feature existed.
     if (key.ctrl && input === "e") {
-      cycleThinkingLevel();
+      if (!editorChordKey) cycleThinkingLevel();
       return;
     }
     if (key.ctrl && input === "c") {
@@ -2376,6 +2393,48 @@ export function HarnessApp({
     process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
   }
 
+  // Seed the composer with text from outside it (/undo's re-prompt, the $EDITOR result).
+  // BOTH halves are required: `prefill` remounts TextInput (its draft is internal state),
+  // while `typedText` is what inputRows and the composer box `height={2 + inputRows}` are
+  // computed from — TextInput does not fire onChange at mount. Drop the setTypedText half
+  // and a 40-line editor result fuses into the border/footer, and Ctrl+D (which tests
+  // `!typedText`) EOF-quits with a large unsaved draft on screen.
+  function applyComposerText(text: string) {
+    setPrefill({ text, nonce: Date.now() });
+    setTypedText(text);
+  }
+
+  // Ctrl+X Ctrl+E / `/editor`. Deferred by a 0ms timeout so the blocking spawnSync never
+  // runs INSIDE a keypress dispatch, and `busy` is re-checked after the defer because the
+  // turn state can change in between. The post-editor repaint must be the reseat + <Static>
+  // remount that /clear and /new use: Ink skips the write when the frame is byte-identical
+  // to the last one and throttles at ~32ms, and after a full-screen editor the screen is
+  // genuinely destroyed — a bare state bump is not guaranteed to paint anything.
+  function openEditor(seed: string) {
+    if (agent.config.externalEditor !== true) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: "$EDITOR composing is OFF — unset MINIMA_TUI_EDITOR (or set it to 1) to use it.",
+          toolName: "editor",
+        },
+      ]);
+      return;
+    }
+    if (busy) return;
+    setChordArmed(false);
+    resetChord();
+    setTimeout(() => {
+      if (busyRef.current) return;
+      const outcome = openEditorForDraft(seed, { runId: agent.runId });
+      reseatFreshScreen();
+      setTranscriptGen((g) => g + 1);
+      setMessages((m) => [...m, { role: "tool", text: outcome.notice, toolName: "editor" }]);
+      if (outcome.apply && outcome.text !== null) applyComposerText(outcome.text);
+    }, 0);
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
     switch (cmdName) {
@@ -2383,6 +2442,12 @@ export function HarnessApp({
         reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
+        break;
+      // `/editor` cannot carry the draft: by the time this runs the composer has already
+      // cleared itself on submit. So it opens empty, `/editor <text>` seeds with the args,
+      // and Ctrl+X Ctrl+E is the path that carries what you were typing.
+      case "editor":
+        openEditor(args.trim());
         break;
       case "perms": {
         const ps = permStateRef.current;
@@ -3226,7 +3291,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Ctrl+X Ctrl+E compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
           },
         ]);
@@ -5050,9 +5115,13 @@ export function HarnessApp({
             height={2 + inputRows}
             flexShrink={0}
           >
+            {/* The armed-chord hint rides the box TITLE, which is position="absolute" and so
+                costs no rows. An inline marker is rejected: the height reserve above comes
+                from typedText only, so any extra glyph the composer draws can wrap a line
+                and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
               <Text color={planMode ? "magenta" : "yellow"}>
-                {planMode ? " plan mode " : " prompt "}
+                {planMode ? " plan mode " : chordArmed ? " prompt · ^X " : " prompt "}
               </Text>
             </Box>
             <TextInput
@@ -5078,6 +5147,10 @@ export function HarnessApp({
                     : ""
               }
               showPrefix={false}
+              // Passing undefined turns the chord off entirely at the composer layer — the
+              // kill switch, not a branch inside the handler.
+              onEditorRequest={agent.config.externalEditor === true ? openEditor : undefined}
+              onChordArmed={setChordArmed}
             />
           </Box>
         </Box>

@@ -32,6 +32,7 @@ The bar along the bottom shows, at a glance:
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> | Kill the previous word (also <kbd>Alt</kbd>+<kbd>Backspace</kbd>) |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | Paste clipboard (terminal paste also works) |
 | <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Copy the last assistant reply |
+| <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> | Compose the current draft in `$EDITOR` (readline's `edit-and-execute-command`) |
 | <kbd>Esc</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd> | Abort the in-flight run (<kbd>Ctrl</kbd>+<kbd>C</kbd> twice at the prompt quits) |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Suspend to the shell (`fg` returns) |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Cycle permission modes (build → accept → plan → bypass) |
@@ -102,6 +103,7 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 | `/perms` | Show current tool permission grants |
 | `/thoughts [on\|off]` | Toggle streaming the model's thinking |
 | `/copy` | Copy the last assistant reply (<kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
+| `/editor [text]` | Compose the prompt in `$EDITOR` ($VISUAL first, else `nano`/`vi`/`vim`). It opens **empty** — the composer has already cleared by the time a command runs — so `/editor some text` seeds it, and <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> is the path that carries a draft you are already typing. Saving applies; an empty buffer or a non-zero exit (vim's `:cq`) keeps the draft, as with `git commit`. |
 | `/clear` · `/help` · `/tip` | Clear chat · list commands · show a tip |
 | `/quit`, `/exit` | Exit the application |
 
