@@ -59,33 +59,58 @@ FORCE_COLOR` is the clean invocation.
   consensus_labels WHERE corpus_rev='r2-observer-steer' GROUP BY 1;` → three panelists at 238 each),
   **476/476** replay labels, **2330/2380** self-consistency draws.
 
-### 0.3 Total arc spend, and the part of it that is not recoverable
+### 0.3 Total arc spend, and the part of it this repository cannot prove
 
-The eval lanes do **not** book their spend into the ledger. `budget_events` is session-scoped agent
-spend — the harness's own turns — and no `classifier_eval*` module writes to it
-(`[sql] SELECT scope_key, kind, COUNT(*) FROM budget_events GROUP BY 1,2;` returns two session
-scopes and nothing else). ADR [0006](adr/0006-spend-ceiling-binds-outstanding-work.md) already
-records why: *"no row stores a price."* So realized spend survives only in commit bodies.
+**The arc cannot state its own cost from its own records.** No priced row carries a price: not
+`consensus_labels`, not `classifier_replay_labels`, not `classifier_self_consistency_samples` — none
+of the three has a `usd` column. `budget_events` is session-scoped *agent* spend — the harness's own
+turns — and no `classifier_eval*` module writes to it (`[sql] SELECT scope_key, kind, COUNT(*) FROM
+budget_events GROUP BY 1,2;` returns two session scopes and nothing else). ADR
+[0006](adr/0006-spend-ceiling-binds-outstanding-work.md) already concedes it: *"no row stores a
+price."* So realized spend survives only in commit bodies and in the operator's own notes from
+execution time. §6 item 5 proposes the fix.
 
-| lane | realized | where recorded | complete? |
+**Three tiers of evidence about spend, and they must not be blended.**
+
+| lane | realized | evidence tier | covers |
 | -- | -- | -- | -- |
-| panel (MUB-216) | **$2.6693** | `23fc234` body — *"681 calls, 680 labelled, 1 unusable, 0 failed. $2.6693 realized against a $2.7911 projection (96%)"* | covers 681 of the 714 cached votes |
-| replay (MUB-218) | **$0.1841** | `2c215d5` body — *"Arc spend: $0.1841 over two runs. 476/476 labels cached"* | yes, 476/476 |
-| self-consistency (MUB-217) | **not recoverable** | nowhere — no commit body and no ledger row | — |
+| panel (MUB-216) | **$2.6693** | **recorded in the tree** — `23fc234` body, *"681 calls, 680 labelled, 1 unusable, 0 failed. $2.6693 realized against a $2.7911 projection (96%)"* | 681 of the 714 cached votes |
+| replay (MUB-218) | **$0.1841** | **recorded in the tree** — `2c215d5` body, *"Arc spend: $0.1841 over two runs. 476/476 labels cached"* | 476/476 |
+| self-consistency (MUB-217) | **~$1.7182** | **observed, persisted nowhere** — see below | 2330 of 2380 draws |
 
-**Recorded arc spend: $2.8534.** Two gaps travel with it and neither is closable from here.
+**Recorded arc spend: $2.8534.** That is the part a reader can check from this repository.
 
-- The panel's 714 cached votes exceed that run's 681 calls by **33 votes = 11 prompts × 3
-  panelists**, bought by an earlier partial run whose price is recorded nowhere.
-- The self-consistency leg has **no realized figure anywhere I can find**. The brief for this ticket
-  quotes ~$1.72; I could not verify it and I am not quoting it as measured. What *is* free to
-  re-derive is the projection `[dry]` prints for that lane: **$2.0587** for the full 2380 draws,
-  minus **$0.0435** still outstanding on 50 draws, leaves **$2.0152 projected for the 2330 draws in
-  hand**. On both other lanes realized came in *below* projection (panel 96%, replay 80%), so
-  $2.0152 reads as an upper bound rather than an estimate.
+**The self-consistency leg is measured but not reproducible.** Its figures are real observations,
+read off `runSampling`'s own `onCostUsd` bookkeeping and its result line **at execution time** on
+2026-07-31, at the ceilings shown. They are not in the tree, not in the ledger, and **cannot be
+re-derived by any command in §0.1** — that irreproducibility is the finding, not a caveat on it:
 
-So the honest total is **$2.8534 measured plus a self-consistency leg of at most ~$2.02** — an arc
-of roughly **$4.87 or less, of which $2.85 is a measurement and the rest is a projection.**
+| run | invocation | draws | outcome | realized |
+| -- | -- | -- | -- | -- |
+| pilot | `--spend --max-usd=0.09 --pilot` | 100 | — | **$0.0857** |
+| full lane | `--spend --max-usd=2.06` | 2280 | 2015 labelled · 198 unusable · 67 failed | **$1.4825** |
+| top-up | `--spend --max-usd=0.15` | 46 | 16 labelled · 1 unusable · 29 failed · **stopped by the live cap** | **$0.15** (the ceiling) |
+| | | | **self-consistency leg** | **~$1.7182** |
+
+Two things that table explains, and one it does not.
+
+- **The full run came in under both its $2.06 ceiling and its $2.0587 projection** — $1.4825, 72% of
+  projection, the same direction as the panel (96%) and the replay (80%).
+- **The top-up stopped at its cap rather than exhausting the outstanding draws.** It attempted 46 of
+  the 67 the full run left owing and landed 17 rows, leaving **50** — which is exactly why coverage
+  reads **2330/2380 (97.9%)** and not 100%, and why `[dry]` still prints `outstanding (full lane) 50
+  calls · $0.0435`. The draw arithmetic closes: 100 + 2280 + 46 = 2426 attempted, less 96 failed
+  (67 + 29) = **2330 stored**.
+- What it does not explain: the panel's **33 unpriced votes**. 714 cached votes exceed that run's 681
+  calls by 33 — **11 prompts × 3 panelists** — bought by an earlier partial run whose price is
+  recorded neither in the tree nor anywhere else. That gap is not closable from here.
+
+**Total arc spend ≈ $4.57** ($2.8534 recorded + ~$1.7182 observed), of which **only $2.85 can be
+proved from this repository.** The free upper bound is worth keeping beside it because it is the
+figure a reader *can* check: `[dry]`'s projection for the 2330 draws in hand is $2.0587 − $0.0435 =
+**$2.0152**, so the arc is **≤ ~$4.87** on evidence that costs nothing to re-derive. The measured
+number and the checkable bound differ by $0.30, and both are printed here so neither has to be taken
+on trust.
 
 Reproducing this document costs **$0.0000**. `[dry]` confirms: panel outstanding 0 calls, replay
 outstanding 0 calls, self-consistency outstanding 50 calls · $0.0435 — and nothing here runs that
@@ -135,11 +160,19 @@ contact. **The run wins; these are what the instrument printed today.**
    sit in a wider band than ±0.05.
 6. **The panel's realized spend recorded in the tree is $2.6693, not $2.80** (§0.3).
 
-One prediction I want to record as *confirmed*, because it is load-bearing and easy to get wrong:
-the service's own label is wrong on **96 of 124** adjudicated rows. Verified two ways — from
+Two predictions I want to record as *confirmed*, because both are load-bearing and easy to get wrong.
+
+**The service's own label is wrong on 96 of 124 adjudicated rows.** Verified two ways — from
 `[adj]`'s cells (85 corrections + 11 both-wrong = 96) and from the module's own definition,
 `serviceRight = row.serviceLabel === row.referenceLabel` at
 `packages/tui/src/minima/classifier_eval_adjudicate.ts:293`.
+
+**The self-consistency leg's ~$1.72 is confirmed — as an observation, not as a reproducible figure.**
+My first pass declined to quote it because no command in §0.1 and no row in the ledger produces it,
+and that reason was correct and still stands. The per-run realized costs and their ceilings are in
+§0.3 and reconcile exactly against the ledger's draw counts (2426 attempted − 96 failed = 2330
+stored, leaving the 50 outstanding `[dry]` prints). **A number can be measured and still be
+unprovable from the repository**, and keeping those two facts apart is the whole of §6 item 5.
 
 ---
 
@@ -651,6 +684,10 @@ Two further limits specific to this readout:
 Ranked, recommended rather than listed, each with the measurement that motivates it. **This ticket
 changes no configuration and files no tickets; it recommends.**
 
+Items 1–4 are accuracy work, which is what AC 6 asks for. Item 5 is **instrument** work and is
+flagged as such — it earns its place because this readout is what uncovered it, and because without
+it the next arc cannot state its own cost any better than this one can (§0.3).
+
 ### 1. Turn the override channel on for the lead agent, behind the shipped floor, and measure it live — **do this first**
 
 **Motivation, measured.** The service's label is wrong on **96/124 (77.4%)** adjudicated rows; the
@@ -715,6 +752,45 @@ other side: `code` recall 15/15 (100.0%) against `code` precision **15/20 (75.0%
 **Rank it fourth because it is downstream of item 3.** Until a second panel run separates instruction
 from taxonomy, "fix the boundary" cannot tell whether the fix is three sentences of definition in
 `CLASSIFY_SYSTEM` or a merged type. Item 3 is what makes item 4 actionable; do them in that order.
+
+### 5. A `usd` column on the priced rows — so the next arc can account for itself
+
+Instrument work rather than accuracy work, and listed here because this readout is what found it.
+Items 1–4 make routing better; this one makes the *next* phase-1 readout possible to write.
+
+**Motivation, measured.** §0.3 is the motivation and it is embarrassing: **an arc that spent ~$4.57
+can currently prove $2.85 of it.** The gap is not sloppiness at the terminal — it is structural.
+None of the three caches has a price column:
+
+```
+[sql] .schema consensus_labels    -- prompt_hash · model_id · corpus_rev · task_type
+                                  -- difficulty · confidence · created_at
+[sql] .schema classifier_replay_labels             -- the same seven columns, no usd
+[sql] .schema classifier_self_consistency_samples  -- those plus sample_index and temperature,
+                                                   -- still no usd
+```
+
+`budget_events` does not cover them either — it is session-scoped agent spend, and no
+`classifier_eval*` module writes to it. So realized cost lives only in commit bodies (two lanes) and
+in a terminal scrollback that no longer exists (one lane). Two consequences already bit this
+document: the self-consistency leg's **~$1.7182 is an observation nobody can re-derive** (§0.3), and
+the panel's **33 unpriced votes — 11 prompts × 3 panelists** — cannot be attributed to any run at
+all, because 714 cached votes exceed the only priced run's 681 calls and nothing joins the two.
+
+**Shape.** One nullable `REAL usd` column per priced row, written where the caller already knows the
+number: `SpendGuard`'s `onCostUsd` bookkeeping is the same hook `runSampling` already reports
+progress from, so the value is in hand at insert time on all three lanes. Nullable because the rows
+already cached must stay readable — this is a backfill nobody can do, and pretending otherwise would
+invent prices. Append the migration batch; never insert it (ADR 0009's rule).
+
+**What it buys.** `[dry]`'s spend block stops being a projection beside a number from a commit
+message and becomes a query. ADR 0006's *"no row stores a price"* — recorded there as a consequence
+to live with — stops being true. And the invariant this arc has enforced on every rate becomes
+enforceable on cost as well: **state the denominator, and state which rows you actually paid for.**
+
+**Rank it fifth.** It changes no routing outcome and answers no measurement question in §§1–3, so it
+ranks below all four. It is also the cheapest item on the list by a wide margin, and the only one
+whose absence degrades silently — nothing looks wrong today; the number simply cannot be produced.
 
 ### Explicitly not recommended
 
