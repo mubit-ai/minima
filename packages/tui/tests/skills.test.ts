@@ -22,7 +22,12 @@ function writeSkill(root: string, name: string, frontName = name, desc = `${name
 describe("parseSkillMd", () => {
   test("parses name, description, body", () => {
     const r = parseSkillMd("---\nname: deploy\ndescription: Ship it\n---\nStep 1.\nStep 2.\n");
-    expect(r).toEqual({ name: "deploy", description: "Ship it", body: "Step 1.\nStep 2." });
+    expect(r).toEqual({
+      name: "deploy",
+      description: "Ship it",
+      body: "Step 1.\nStep 2.",
+      hidden: false,
+    });
   });
 
   test("ignores unknown frontmatter keys", () => {
@@ -78,6 +83,22 @@ describe("discoverSkills", () => {
     writeSkill(join(cwd, ".minima", "skills"), "dirname", "realname");
     const scan = discoverSkills(cwd, home);
     expect(scan.skills[0]?.name).toBe("realname");
+  });
+
+  test("hidden shadow claims the name and hides the lower-precedence skill", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "sk-cwd-"));
+    const home = mkdtempSync(join(tmpdir(), "sk-home-"));
+    const dir = join(home, ".minima-harness", "skills", "dup");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      "---\nname: dup\ndescription: tombstone\nhidden: true\n---\nhidden\n",
+    );
+    writeSkill(join(home, ".claude", "skills"), "dup");
+    writeSkill(join(home, ".claude", "skills"), "kept");
+    const scan = discoverSkills(cwd, home);
+    expect(scan.skills.map((s) => s.name)).toEqual(["kept"]);
+    expect(scan.warnings).toEqual([]);
   });
 
   test("malformed skill -> skipped with warning, others survive", () => {

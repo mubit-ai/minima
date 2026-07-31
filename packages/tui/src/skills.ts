@@ -19,7 +19,7 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 export function parseSkillMd(
   text: string,
-): { name: string; description: string; body: string } | { error: string } {
+): { name: string; description: string; body: string; hidden: boolean } | { error: string } {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!m) return { error: "missing frontmatter (--- name/description ---)" };
   const fields: Record<string, string> = {};
@@ -31,7 +31,7 @@ export function parseSkillMd(
   const description = fields.description ?? "";
   if (!NAME_RE.test(name)) return { error: `invalid or missing name: "${name}"` };
   if (!description) return { error: "missing description" };
-  return { name, description, body: (m[2] ?? "").trim() };
+  return { name, description, body: (m[2] ?? "").trim(), hidden: fields.hidden === "true" };
 }
 
 function skillRoots(cwd: string, home: string): { dir: string; source: string }[] {
@@ -69,7 +69,9 @@ export function discoverSkills(cwd: string, home: string = homedir()): SkillScan
       }
       if (seen.has(parsed.name)) continue;
       seen.add(parsed.name);
-      skills.push({ ...parsed, dir, source: root.source });
+      if (parsed.hidden) continue;
+      const { name, description, body } = parsed;
+      skills.push({ name, description, body, dir, source: root.source });
     }
   }
   return { skills, warnings };
