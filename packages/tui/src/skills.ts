@@ -74,3 +74,24 @@ export function discoverSkills(cwd: string, home: string = homedir()): SkillScan
   }
   return { skills, warnings };
 }
+
+export function skillInvocationPrompt(
+  name: string,
+  args: string,
+  skills: DiscoveredSkill[],
+  builtinNames: string[],
+): string | null {
+  if (builtinNames.includes(name)) return null;
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) return null;
+  const base = `Invoke the "skill" tool with name "${skill.name}", then follow the loaded instructions.`;
+  return args ? `${base}\n\nArguments: ${args}` : base;
+}
+
+export function skillsListText(scan: SkillScan): string {
+  const lines = scan.skills.length
+    ? scan.skills.map((s) => `  /${s.name.padEnd(16)} ${s.description}  [${s.source}]`)
+    : ["  (none found — add .minima/skills/<name>/SKILL.md and restart)"];
+  const warnings = scan.warnings.map((w) => `  ⚠ ${w}`);
+  return ["Skills:", ...lines, ...warnings].join("\n");
+}

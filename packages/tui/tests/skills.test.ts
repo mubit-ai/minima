@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverSkills, parseSkillMd } from "../src/skills.ts";
+import {
+  discoverSkills,
+  parseSkillMd,
+  skillInvocationPrompt,
+  skillsListText,
+} from "../src/skills.ts";
 
 function writeSkill(root: string, name: string, frontName = name, desc = `${name} desc`) {
   const dir = join(root, name);
@@ -102,5 +107,45 @@ describe("discoverSkills", () => {
     const s = discoverSkills(cwd, home).skills[0];
     expect(s?.dir).toBe(dir);
     expect(s?.body).toBe("Do the a thing.");
+  });
+});
+
+const SK = [
+  { name: "deploy", description: "Ship it", body: "b", dir: "/d", source: "project" },
+  { name: "plan", description: "Shadowed", body: "b", dir: "/p", source: "claude-project" },
+];
+
+describe("skillInvocationPrompt", () => {
+  test("known skill -> prompt naming the skill tool", () => {
+    const p = skillInvocationPrompt("deploy", "", SK, ["help", "plan"]);
+    expect(p).toContain("skill");
+    expect(p).toContain('"deploy"');
+  });
+
+  test("trailing args are passed through", () => {
+    const p = skillInvocationPrompt("deploy", "staging --fast", SK, []);
+    expect(p).toContain("staging --fast");
+  });
+
+  test("builtin command always wins", () => {
+    expect(skillInvocationPrompt("plan", "", SK, ["help", "plan"])).toBeNull();
+  });
+
+  test("unknown name -> null", () => {
+    expect(skillInvocationPrompt("nope", "", SK, [])).toBeNull();
+  });
+});
+
+describe("skillsListText", () => {
+  test("lists names, descriptions, sources, and warnings", () => {
+    const t = skillsListText({ skills: SK, warnings: ["skipped /x: bad"] });
+    expect(t).toContain("deploy");
+    expect(t).toContain("Ship it");
+    expect(t).toContain("project");
+    expect(t).toContain("skipped /x: bad");
+  });
+
+  test("empty scan explains where skills go", () => {
+    expect(skillsListText({ skills: [], warnings: [] })).toContain(".minima/skills");
   });
 });
