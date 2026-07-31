@@ -95,6 +95,7 @@ import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
+import { enterAltScreen, exitAltScreen } from "./altscreen.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
@@ -124,8 +125,14 @@ import {
   tailToFit,
   wrappedLineCount,
 } from "./layout.ts";
+import { linesFor, liveReplyLines, resetLiveReplyCache, thoughtsPeekLines } from "./lines.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
-import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
+import {
+  loadTaskPanelHidden,
+  persistFullscreenPref,
+  persistMode,
+  persistTaskPanelHidden,
+} from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import {
   type PanelNavKey,
@@ -182,6 +189,7 @@ import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { type TocUsage, buildSections, renderTocText, tocRows } from "./toc.ts";
+import { type ScrollState, buildLineIndex, scrollLinesBy, windowLines } from "./viewport.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -220,6 +228,14 @@ export interface AppProps {
    * unfiltered pattern the plan strip refresh uses).
    */
   todos?: TodoTask[];
+  /**
+   * Opt-in fullscreen renderer at boot (ADR decision-inline-renderer.md, 2026-07-31
+   * amendment): alt-screen frame, line-viewport transcript with the composer glued to the
+   * bottom row, in-app scroll. Default false — the inline renderer (main buffer + <Static> +
+   * native scroll/select/copy) stays the default. Resolved by main.ts (flag > env >
+   * persisted /fullscreen pref); toggleable mid-session via /fullscreen.
+   */
+  fullscreen?: boolean;
 }
 
 /** Persona the lead adopts in plan mode; the council's plan snapshot is appended each turn. */
@@ -311,6 +327,7 @@ const COMMANDS = [
   { name: "session", desc: "Show session info" },
   { name: "tree", desc: "Toggle the sub-agent tree panel" },
   { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
+  { name: "fullscreen", desc: "Toggle the fullscreen renderer (sticky composer, in-app scroll)" },
   { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
   { name: "resume", desc: "Resume a session (optionally by id)" },
   { name: "judge", desc: "Toggle LLM judging on/off" },
@@ -832,6 +849,7 @@ export function HarnessApp({
   bigPlanGateBefore,
   verifyConsentRef,
   todos,
+  fullscreen: fullscreenInitial = false,
 }: AppProps) {
   const { exit } = useApp();
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
@@ -1371,6 +1389,16 @@ export function HarnessApp({
   // suspended (draft survives).
   const [panel, setPanel] = useState<PanelState | null>(null);
   const panelCapture = panel !== null;
+  // Opt-in fullscreen renderer (main.ts already entered the alt screen when initial=true;
+  // the /fullscreen command owns mid-session transitions). Scroll state: null = pinned to
+  // the newest line (follow — structural, no follow effect); {topLine} = anchored into the
+  // virtual line space. The ref mirrors the current totals so key/wheel handlers can clamp
+  // at mutation time (published post-render — render purity).
+  const [fullscreen, setFullscreen] = useState(fullscreenInitial);
+  const [scroll, setScroll] = useState<ScrollState>(null);
+  const viewportRef = useRef({ total: 0, rows: 1 });
+  // "N new messages" while scrolled: the message count when follow was left; -1 = pinned.
+  const scrolledFromLenRef = useRef(-1);
   // LEGACY (MINIMA_TUI_ANCHOR_LEGACY=1) basis for the estimate-decay bottom mount:
   // messages BEFORE this index are treated as no-longer-on-screen. 0 for a whole normal
   // session; moved to messages.length whenever the expanded panel closes. Superseded by the
@@ -1455,6 +1483,12 @@ export function HarnessApp({
       process.stdout.write("\u001b[?1000l");
     };
   }, []);
+
+  // Turn end resets the incremental stream-line cache (fullscreen live region); harmless
+  // when inline or never used.
+  useEffect(() => {
+    if (!busy) resetLiveReplyCache();
+  }, [busy]);
 
   // Wire the beforeToolCall permission hook, then the plan done-gate (when on) so
   // permission always runs first — first block wins, and no gate check ever executes for a
@@ -1827,7 +1861,7 @@ export function HarnessApp({
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     if (key.ctrl && input === "z") {
-      suspendToShell();
+      suspendToShell({ fullscreen, mouse: false });
       return;
     }
 
@@ -1916,6 +1950,25 @@ export function HarnessApp({
       refutationControllerRef.current?.abort();
       agent.abort();
       return;
+    }
+
+    // Fullscreen: scroll the in-app history viewport (allowed mid-run, so you can read
+    // back while a reply streams). Inline leaves scrolling to native scrollback. Clamped
+    // at mutation via scrollLinesBy — reaching the bottom re-pins (null = follow).
+    if (fullscreen) {
+      const page = Math.max(1, viewportRef.current.rows - 2);
+      if (key.pageUp) {
+        setScroll((cur) =>
+          scrollLinesBy(cur, -page, viewportRef.current.total, viewportRef.current.rows),
+        );
+        return;
+      }
+      if (key.pageDown) {
+        setScroll((cur) =>
+          scrollLinesBy(cur, page, viewportRef.current.total, viewportRef.current.rows),
+        );
+        return;
+      }
     }
 
     // Ctrl+T: the expanded ToC panel in EVERY situation — idle, mid-run, narrow
@@ -2193,6 +2246,7 @@ export function HarnessApp({
     setOutputTokens(stats.outputTokens);
     setCtxPct(stats.ctxPct);
     setTranscriptGen((g) => g + 1);
+    setScroll(null); // fresh transcript — re-pin the fullscreen viewport
     const notices: ChatMessage[] = [
       resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd : 0),
     ];
@@ -2262,6 +2316,7 @@ export function HarnessApp({
     }
 
     setTranscriptGen((g) => g + 1);
+    setScroll(null); // fresh transcript — re-pin the fullscreen viewport
     setMessages(list);
     agent.agentState.messages = agentMsgs;
 
@@ -2363,6 +2418,7 @@ export function HarnessApp({
       case "clear":
         reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
+        setScroll(null);
         setMessages([]);
         break;
       case "perms": {
@@ -3210,7 +3266,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
+            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively\n  /fullscreen: sticky composer + in-app scroll (PgUp/PgDn page · End jumps to newest)`,
             toolName: "help",
           },
         ]);
@@ -3388,6 +3444,7 @@ export function HarnessApp({
         agent.reset();
         reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
+        setScroll(null);
         setMessages([]);
         setActualCost(0);
         setInputTokens(0);
@@ -3461,6 +3518,41 @@ export function HarnessApp({
           },
         ]);
         break;
+      case "fullscreen": {
+        const next = !fullscreen;
+        if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
+        persistFullscreenPref(projectKeyRef.current, next);
+        if (next) {
+          // Enter: the alt screen starts blank; the next commit paints the full frame from
+          // the viewport. The main buffer (with the <Static> transcript) is preserved
+          // underneath for the return trip.
+          enterAltScreen();
+          setFullscreen(true);
+          setScroll(null);
+        } else {
+          // Exit: back to the main buffer, then the /clear-class reseat — the gen bump
+          // remounts <Static>, which reprints the WHOLE transcript into native scrollback
+          // (messages from the fullscreen period included) while the anchor ledger
+          // cap-seeds and re-seats the composer. Shipped remount physics, no new ledger code.
+          exitAltScreen();
+          reseatFreshScreen();
+          setTranscriptGen((g) => g + 1);
+          setFullscreen(false);
+          setScroll(null);
+        }
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          {
+            role: "tool",
+            text: next
+              ? "Fullscreen ON — sticky composer, wheel/PgUp/PgDn scroll history, End jumps to newest. Persisted for this project; /fullscreen again to return to inline."
+              : "Fullscreen OFF — inline renderer restored: native terminal scroll, click-drag select, copy.",
+            toolName: "fullscreen",
+          },
+        ]);
+        break;
+      }
       case "tree":
         setTreeOpen((o) => !o);
         setMessages((m) => [
@@ -4320,6 +4412,7 @@ export function HarnessApp({
       return;
     }
     setTypedText("");
+    setScroll(null); // sending re-pins the fullscreen viewport to the newest content
     setHistory((h) => {
       const trimmed = text.trim();
       if (trimmed && (h.length === 0 || h[h.length - 1] !== trimmed)) {
@@ -4816,6 +4909,10 @@ export function HarnessApp({
     rows,
   );
   useEffect(() => {
+    // Fullscreen bypasses the ledger (the alt-screen frame has no scrollback to wipe and
+    // no <Static> commits to track). Freezing the refs is safe: exiting fullscreen bumps
+    // transcriptGen, so the next inline frame takes the gen-reset path and re-seeds.
+    if (fullscreen) return;
     liveHeightRef.current = liveHeight;
     committedLenRef.current = messages.length;
     anchorGenRef.current = { gen: transcriptGen, rows, cols };
@@ -4845,6 +4942,66 @@ export function HarnessApp({
       } catch {}
     }
   });
+
+  // Fullscreen line viewport: the transcript (staticItems — banner included, so it scrolls
+  // away like any other content) as a virtual line array cached per message in lines.ts,
+  // plus the live region (reasoning peek + FULL streaming reply — the stream scrolls
+  // in-viewport, not tail-clipped) as ordinary lines at the virtual tail. One row below
+  // the viewport is a PERMANENT status line, present in both pinned and scrolled states,
+  // so crossing pinned↔scrolled changes zero heights outside the viewport and the
+  // composer cannot move on scroll. fsFooterRows re-uses the same per-element reservations
+  // contentRows books for the inline ledger (minus the streaming rows, which live INSIDE
+  // the viewport here) — one shared set of heights, so a future footer element cannot be
+  // booked in one renderer only.
+  const fsFooterRows =
+    busyIndicatorHeight +
+    queueListHeight +
+    suggestionsHeight +
+    inputBoxHeight +
+    permPromptHeight +
+    questionPromptHeight +
+    treeHeight +
+    footerHeight +
+    pickerRows;
+  const viewportRows = Math.max(1, rows - fsFooterRows - 1);
+  const lineIndex = useMemo(
+    () => (fullscreen ? buildLineIndex(staticItems.map((m) => linesFor(m, cols).length)) : null),
+    [fullscreen, staticItems, cols],
+  );
+  const liveLines = useMemo(() => {
+    if (!fullscreen || !busy) return [];
+    const out: string[] = [];
+    if (streamingThoughts && showThinkingRef.current)
+      out.push(...thoughtsPeekLines(streamingThoughts, cols));
+    if (streaming) out.push(...liveReplyLines(streaming, cols));
+    return out;
+  }, [fullscreen, busy, streaming, streamingThoughts, cols]);
+  const view = lineIndex
+    ? windowLines(
+        lineIndex,
+        (i) => linesFor(staticItems[i]!, cols),
+        liveLines,
+        scroll,
+        viewportRows,
+      )
+    : null;
+  // Render purity: the viewport totals publish to the ref AFTER render — key/wheel
+  // handlers read them at key-time and tolerate the one-render lag.
+  const viewTotal = view ? view.total : 0;
+  useEffect(() => {
+    if (!fullscreen) return;
+    viewportRef.current = { total: viewTotal, rows: viewportRows };
+  }, [fullscreen, viewTotal, viewportRows]);
+  // "N new messages" while scrolled: latch the message count on leaving follow (-1 =
+  // pinned); the sentinel guard keeps later commits from moving the baseline.
+  useEffect(() => {
+    if (scroll === null) scrolledFromLenRef.current = -1;
+    else if (scrolledFromLenRef.current === -1) scrolledFromLenRef.current = messages.length;
+  }, [scroll, messages.length]);
+  const newWhileScrolled =
+    scroll !== null && scrolledFromLenRef.current >= 0
+      ? Math.max(0, messages.length - scrolledFromLenRef.current)
+      : 0;
 
   // Below a usable size the fixed footer + input + overlays can't coexist with even one chat row;
   // show a single resize notice instead of a clipped, garbled UI. An armed permission prompt
@@ -5035,6 +5192,15 @@ export function HarnessApp({
               onTab={handleTabComplete}
               onUp={handleHistoryUp}
               onDown={handleHistoryDown}
+              onEnd={() => {
+                // Fullscreen + scrolled: End jumps the viewport back to newest (consumed);
+                // otherwise the composer keeps its readline cursor-to-line-end default.
+                if (fullscreen && scroll !== null) {
+                  setScroll(null);
+                  return true;
+                }
+                return false;
+              }}
               disabled={gateFocus !== null && !gateFocus.noteEntry}
               suspended={panelCapture || permPrompt !== null || questionPrompt !== null}
               disabledLabel={
@@ -5151,6 +5317,78 @@ export function HarnessApp({
     </>
   );
 
+  // The D3b panel node, shared by both renderers (same reducer, same geometry identity).
+  const panelNode =
+    panelVisible && panelTop ? (
+      <ExpandPanel
+        title={
+          panelTop.kind === "toc"
+            ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
+            : panelTop.kind === "plan_overview"
+              ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
+              : panelTop.kind === "draft"
+                ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
+                : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
+        }
+        lines={panelTop.lines}
+        cursor={panelTop.cursor}
+        stops={panelTop.stops}
+        outerHeight={panelOuter}
+        onKey={handlePanelKey}
+      />
+    ) : null;
+
+  if (fullscreen) {
+    // FULLSCREEN: one frame pinned to the terminal height in the alt screen (no scrollback
+    // exists there, so Ink's full-clear repaints are harmless — the inline wipe hazard does
+    // not apply). The viewport emits ≤ viewportRows newline-free lines, each rendered as a
+    // single wrap="truncate" row, so Σ(rows) ≤ region holds by construction; flex-end
+    // bottom-anchors short transcripts and top-clips any estimate slack. The permanent
+    // status row keeps pinned↔scrolled crossings from moving the composer.
+    return (
+      <Box flexDirection="column" width={cols} height={rows} overflow="hidden">
+        {panelNode ? (
+          <Box
+            flexGrow={1}
+            minHeight={0}
+            overflow="hidden"
+            flexDirection="column"
+            justifyContent="flex-end"
+          >
+            {panelNode}
+          </Box>
+        ) : (
+          <>
+            <Box
+              flexGrow={1}
+              minHeight={0}
+              overflow="hidden"
+              flexDirection="column"
+              justifyContent="flex-end"
+            >
+              {(view?.lines ?? []).map((line, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: windowed lines, positional key is fine
+                <Text key={i} wrap="truncate">
+                  {line || " "}
+                </Text>
+              ))}
+            </Box>
+            <Text color="gray" wrap="truncate">
+              {view && !view.pinned
+                ? `  ↑ scrolled up${view.atTop ? " (top)" : ""}${
+                    newWhileScrolled > 0
+                      ? ` · ${newWhileScrolled} new message${newWhileScrolled === 1 ? "" : "s"}`
+                      : ""
+                  } · PgDn to catch up · End jumps to newest`
+                : " "}
+            </Text>
+          </>
+        )}
+        {footerBlock}
+      </Box>
+    );
+  }
+
   // The transcript commits to native scrollback via <Static>; only the live region +
   // footer re-diff. The live box carries the anchor ledger's EXPLICIT height (never
   // minHeight: Ink's wipe threshold reads the root's Yoga height, and <Static> is
@@ -5173,26 +5411,7 @@ export function HarnessApp({
         justifyContent="flex-end"
       >
         <Box flexDirection="column" flexShrink={0}>
-          {panelVisible && panelTop ? (
-            <ExpandPanel
-              title={
-                panelTop.kind === "toc"
-                  ? `${panelTop.title} · ${panelTop.sections.length} sections — j/k · pgup/pgdn · gg/G · enter reads · esc closes`
-                  : panelTop.kind === "plan_overview"
-                    ? `${panelTop.title} — j/k · pgup/pgdn · enter opens the step card · esc closes`
-                    : panelTop.kind === "draft"
-                      ? `${panelTop.title} — j/k · pgup/pgdn · gg/G · esc closes`
-                      : `${panelTop.title} — j/k · pgup/pgdn · esc/h back`
-              }
-              lines={panelTop.lines}
-              cursor={panelTop.cursor}
-              stops={panelTop.stops}
-              outerHeight={panelOuter}
-              onKey={handlePanelKey}
-            />
-          ) : (
-            chatRegion
-          )}
+          {panelNode ?? chatRegion}
           {footerBlock}
         </Box>
       </Box>

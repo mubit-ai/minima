@@ -7,6 +7,24 @@
 > entirely** — flags, alt-screen, viewport path, mouse capture, docked sidebar, SidebarChassis
 > (`inline-ux-guide.md` MP1–MP3; `tui-verify` is re-based on inline before the deletion).
 > Everything else in this ADR stands; §5's reversal bar now also gates any *re-introduction*.
+> **Amendment (2026-07-31): opt-in fullscreen re-introduced — §5's bar cleared by new
+> evidence.** Claude Code CLI v2.1.89 (April 2026) shipped an opt-in fullscreen mode
+> (`/tui fullscreen`, `CLAUDE_CODE_NO_FLICKER=1`): alt-screen, virtualized scroll viewport,
+> sticky bottom composer, jump-to-bottom affordance, wheel capture with a modifier-drag
+> selection story — i.e. the flagship of §3.1's "all inline-default" list reversed its own
+> equivalent decision for the *opt-in* case, and a user asked for exactly that behavior
+> (sticky composer while scrolled — something native scrollback structurally cannot serve,
+> the §5 third bar). Scope of the re-introduction: **inline stays the default and the
+> product surface; fullscreen is per-project opt-in** (`--fullscreen` /
+> `MINIMA_TUI_FULLSCREEN=1` / `/fullscreen`, persisted via `mode_prefs.ts`); **no feature
+> may require fullscreen**, and the §1 ban on fullscreen-as-*default* stands. §6 is
+> untouched (and moot in the alt screen, which has no scrollback to wipe). Restored from
+> the MP3 deletion: `viewport.ts` (verbatim) + `lines.ts` (re-synced to MessageRow with an
+> executable parity test against `computeMsgHeight`); alt-screen writes are owned by
+> `altscreen.ts`/`suspend.ts`/`app.tsx` — never `main.ts`. Guards amended:
+> `tests/render-buffer.test.ts` (main.ts stays `?1049`-free), `tests/cli.test.ts`
+> (tri-state renderer flags), `tests/kill-switches.test.ts` (env mirrors declared).
+> The rewind overlay and docked sidebar stay dead.
 > **Supersedes:** the fullscreen-default proposal in the prior "OpenCode-style sidebars" plan.
 > **Companion docs:** `inline-rendering-brief.md` (the *what* / build plan),
 > `tui-rendering-strategy.md` (research + prose rationale), `pr-default-renderer.md` (the

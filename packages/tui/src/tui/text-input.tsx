@@ -25,6 +25,12 @@ export interface TextInputProps {
   onTab?: (value: string) => string | undefined;
   onUp?: (value: string) => string | undefined;
   onDown?: (value: string) => string | undefined;
+  /**
+   * First look at the End key (fullscreen: jump the scrolled viewport back to newest).
+   * Return true to consume it; false/undefined keeps the readline default (cursor to
+   * line end). Home is never offered — it stays cursor-to-line-start unconditionally.
+   */
+  onEnd?: () => boolean;
   placeholder?: string;
   disabled?: boolean;
   /**
@@ -70,6 +76,7 @@ export function TextInput({
   onTab,
   onUp,
   onDown,
+  onEnd,
   placeholder,
   disabled,
   suspended,
@@ -116,11 +123,15 @@ export function TextInput({
   }, [acceptPaste, insertAt]);
 
   // Home/End arrive via the input-filter side-channel (Ink 5 swallows them — blank input,
-  // no key flag). Registered only while this input actively owns the keyboard.
+  // no key flag). Registered only while this input actively owns the keyboard. onEnd gets
+  // first look at End (via a ref, so its identity never churns the registration).
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
   const acceptNav = !disabled && !suspended;
   useEffect(() => {
     if (!acceptNav) return;
     setNavCallback((k) => {
+      if (k === "end" && onEndRef.current?.()) return;
       const d = draftRef.current;
       update(d.value, k === "home" ? 0 : d.value.length);
     });

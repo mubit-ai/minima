@@ -86,3 +86,32 @@ export function persistTaskPanelHidden(projectKey: string, hidden: boolean): voi
     // Persistence is best-effort — never let it break the TUI.
   }
 }
+
+// Opt-in fullscreen renderer (ADR decision-inline-renderer.md, 2026-07-31 amendment).
+// Same suffixed-key pattern as the task panel: only the non-default ON persists; turning
+// it off deletes the key, so the default stays the inline renderer.
+const FULLSCREEN_SUFFIX = "::fullscreen";
+
+/** True when the user opted this project into the fullscreen renderer. */
+export function loadFullscreenPref(projectKey: string): boolean {
+  return readAll()[projectKey + FULLSCREEN_SUFFIX] === "on";
+}
+
+/** Persist (on=true) or clear (on=false) the per-project fullscreen opt-in. */
+export function persistFullscreenPref(projectKey: string, on: boolean): void {
+  try {
+    const all = readAll();
+    const key = projectKey + FULLSCREEN_SUFFIX;
+    if (on) {
+      if (all[key] === "on") return;
+      all[key] = "on";
+    } else {
+      if (!(key in all)) return;
+      delete all[key];
+    }
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsPath(), `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  } catch {
+    // Persistence is best-effort — never let it break the TUI.
+  }
+}

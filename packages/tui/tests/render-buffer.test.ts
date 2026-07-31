@@ -9,9 +9,11 @@ import { readSource } from "./_source.ts";
 describe("cli/main.ts wires the inline renderer", () => {
   const src = readSource("cli/main.ts");
 
-  test("no renderer selection and no alt-screen writes remain", () => {
-    expect(src).not.toContain("fullscreen");
-    expect(src).not.toContain("MINIMA_TUI_FULLSCREEN");
+  test("alt-screen writes never live in main.ts — altscreen.ts owns the escape", () => {
+    // The opt-in fullscreen renderer (ADR 2026-07-31 amendment) enters/leaves the alternate
+    // screen ONLY through src/tui/altscreen.ts (main.ts calls enterAltScreen/exitAltScreen;
+    // app.tsx + suspend.ts own mid-session transitions). Keeping the literal out of main.ts
+    // keeps the inline boot path auditable: no conditional raw ?1049 writes to reason about.
     expect(src).not.toContain("?1049");
   });
 
@@ -52,9 +54,9 @@ describe("app.tsx /clear and /new reseat the terminal", () => {
     expect(src).not.toContain('"\\n".repeat');
   });
 
-  test("both /clear and /new go through the reseat (a gen bump alone leaves stale scrollback)", () => {
+  test("/clear, /new, and the /fullscreen exit all go through the reseat (a gen bump alone leaves stale scrollback)", () => {
     const calls = src.match(/reseatFreshScreen\(\);/g) ?? [];
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(3);
   });
 });
 
