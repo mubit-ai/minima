@@ -4,6 +4,7 @@ import {
   AssistantMessage,
   Message,
   type Model,
+  type Tool,
   OpenAICompatProvider,
   complete,
   context,
@@ -303,5 +304,74 @@ describe("OpenAICompatProvider — hoisted tool-result images", () => {
     ]);
     expect(wire.map((m) => m.role)).toEqual(["user", "tool", "tool", "user"]);
     expect((wire[3]!.content as unknown[]).filter((b) => (b as { type: string }).type === "image_url")).toHaveLength(2);
+  });
+});
+
+// gpt-5.6-* carry a non-"none" DEFAULT reasoning effort that /v1/chat/completions then
+// refuses to combine with function tools, so the whole family 400s on every agent turn
+// ("Function tools with reasoning_effort are not supported for <id> … or set
+// reasoning_effort to 'none'"). Verified against the live API: bare + tools 400s, effort
+// "none" + tools succeeds, and gpt-4o rejects the parameter outright — hence per-model.
+describe("OpenAICompatProvider — reasoning_effort for models that refuse it with tools", () => {
+  const EFFORT_MODEL: Model = { ...OPENAI_MODEL, id: "gpt-5.6-sol", tools_require_effort_none: true };
+
+  const OK_SSE = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ];
+
+  const noopTool: Tool = {
+    name: "noop",
+    description: "does nothing",
+    parameters: {
+      jsonSchema: { type: "object", properties: {} },
+      validate: (v) => ({ ok: true, value: (v ?? {}) as Record<string, unknown> }),
+    },
+  };
+
+  /** The WHOLE request payload, not just its messages. */
+  async function payloadFor(model: Model, tools: Tool[]): Promise<Record<string, unknown>> {
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    const inner = sseFetch(OK_SSE);
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    await complete(model, context({ messages: [new Message({ role: "user", content: "hi" })], tools }), {
+      options: {
+        fetch: async (url: string, init: RequestInit) => {
+          captured.push(JSON.parse(String(init.body)));
+          return inner(url, init);
+        },
+      },
+    });
+    return captured[0]!;
+  }
+
+  test("a flagged model sends reasoning_effort none alongside its tools", async () => {
+    const payload = await payloadFor(EFFORT_MODEL, [noopTool]);
+    expect(payload.reasoning_effort).toBe("none");
+    expect(payload.tools).toHaveLength(1);
+  });
+
+  // The API refuses only the COMBINATION. A tool-less call (judge, classifier, --no-tools)
+  // must keep the model's own default effort, or the quirk silently downgrades those too.
+  test("the same model sends no reasoning_effort when there are no tools", async () => {
+    const payload = await payloadFor(EFFORT_MODEL, []);
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  // gpt-4o answers "Unrecognized request argument supplied: reasoning_effort", so leaking the
+  // key onto an unflagged model would break every non-reasoning OpenAI model at once.
+  test("an unflagged model's payload is unchanged, key for key", async () => {
+    const payload = await payloadFor(OPENAI_MODEL, [noopTool]);
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(Object.keys(payload).sort()).toEqual([
+      "max_completion_tokens",
+      "messages",
+      "model",
+      "stream",
+      "stream_options",
+      "tools",
+    ]);
   });
 });

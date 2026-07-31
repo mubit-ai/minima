@@ -29,7 +29,7 @@ import {
   toolCallStart,
 } from "../events.ts";
 import { envVarsForProvider } from "../provider_catalog.ts";
-import { quirksFor } from "../provider_quirks.ts";
+import { effortNoneWithTools, quirksFor } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -180,6 +180,10 @@ function buildPayload(
         parameters: toJsonSchema(t.parameters),
       },
     }));
+    // Models whose DEFAULT effort is refused alongside function tools (gpt-5.6-*). Scoped to
+    // the tools branch on purpose: it is the combination the API rejects, and a model that
+    // never declares the quirk sends a byte-identical payload to before.
+    if (effortNoneWithTools(model, true)) payload.reasoning_effort = "none";
   }
   return payload;
 }

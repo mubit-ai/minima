@@ -73,6 +73,14 @@ export interface Model {
   // thinking:{type:"adaptive"} (+ output_config.effort) instead. Source of truth for
   // ai/provider_quirks.thinkingFormatFor.
   adaptive_thinking?: boolean;
+  // Carries a non-"none" DEFAULT reasoning effort that the API then refuses to combine with
+  // function tools (gpt-5.6-*: "Function tools with reasoning_effort are not supported for
+  // <id> in /v1/chat/completions … or set reasoning_effort to 'none'"). Flagged models send
+  // reasoning_effort:"none" whenever tools are present — the provider's own stated remedy.
+  // Per-model, never per-provider: gpt-4o rejects the parameter outright ("Unrecognized
+  // request argument"), so a provider-wide rule would break every non-reasoning OpenAI model.
+  // Source of truth for ai/provider_quirks.effortNoneWithTools.
+  tools_require_effort_none?: boolean;
   base_url?: string;
   headers?: Record<string, string>;
 }

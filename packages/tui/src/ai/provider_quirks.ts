@@ -63,6 +63,23 @@ export function supportsImageInput(model: { input?: readonly string[] } | null):
   return model?.input?.includes("image") === true;
 }
 
+/**
+ * Whether this request must pin `reasoning_effort: "none"`. Same doctrine as the two above:
+ * the capability is DATA on the registry (`Model.tools_require_effort_none`), not an
+ * id-pattern list here — and never a per-provider rule, since gpt-4o on the same provider
+ * 400s on the parameter itself.
+ *
+ * `hasTools` is load-bearing. The API refuses only the TOOLS + effort combination, so a
+ * tool-less call (judge, classifier, --no-tools) keeps the model's own default effort and
+ * still reasons; pinning it unconditionally would silently downgrade those too.
+ */
+export function effortNoneWithTools(
+  model: { tools_require_effort_none?: boolean },
+  hasTools: boolean,
+): boolean {
+  return hasTools && model.tools_require_effort_none === true;
+}
+
 // Harness ThinkingLevel -> wire `output_config.effort`. "off" (and anything unknown)
 // deliberately maps to nothing: no effort param is sent.
 const EFFORT_BY_LEVEL: Record<string, string> = {
