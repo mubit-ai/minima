@@ -89,6 +89,7 @@ import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
+import { discoverSkills, skillInvocationPrompt, skillsListText } from "../skills.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
@@ -341,6 +342,7 @@ const COMMANDS = [
     name: "profile",
     desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
+  { name: "skills", desc: "List discovered skills (SKILL.md packs)" },
 ];
 
 export interface CommandPickerProps {
@@ -834,6 +836,7 @@ export function HarnessApp({
   todos,
 }: AppProps) {
   const { exit } = useApp();
+  const skillScan = useMemo(() => discoverSkills(process.cwd()), []);
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
   // lazy initializers below put the restored transcript + footer stats in the first frame.
   const [initialStats] = useState(() =>
@@ -4118,6 +4121,14 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "skills": {
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          { role: "tool", toolName: "skills", text: skillsListText(skillScan) },
+        ]);
+        break;
+      }
       default:
         setMessages((m) => [
           ...m,
@@ -4346,12 +4357,22 @@ export function HarnessApp({
 
   async function submitLine(text: string) {
     const trimmed = text.trim();
+    let prompt = text;
     if (trimmed.startsWith("/")) {
       const firstSpace = trimmed.indexOf(" ");
       const name = firstSpace !== -1 ? trimmed.slice(1, firstSpace) : trimmed.slice(1);
       const args = firstSpace !== -1 ? trimmed.slice(firstSpace + 1).trim() : "";
-      await handleCommand(name, args);
-      return;
+      const skillPrompt = skillInvocationPrompt(
+        name,
+        args,
+        skillScan.skills,
+        COMMANDS.map((c) => c.name),
+      );
+      if (skillPrompt === null) {
+        await handleCommand(name, args);
+        return;
+      }
+      prompt = skillPrompt;
     }
 
     // Optimistic echo: the VERBATIM prompt lands before recall/route (and before any council
@@ -4369,7 +4390,7 @@ export function HarnessApp({
     setPrefill(null);
     try {
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
-        await handlePlanTurn(text);
+        await handlePlanTurn(prompt);
       } else {
         // Plan mode without a council still gets the premium hard pool + phase tag — the
         // plan-DECIDING pool restriction is a property of the MODE, not of the council. A
@@ -4392,7 +4413,7 @@ export function HarnessApp({
             },
           ]);
         }
-        const expanded = expandAtFiles(text, process.cwd());
+        const expanded = expandAtFiles(prompt, process.cwd());
         const routing = await agent.promptRouted(expanded, planOpts);
         surfaceRouting(routing);
       }

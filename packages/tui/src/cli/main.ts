@@ -42,6 +42,7 @@ import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
+import { discoverSkills } from "../skills.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
 import { BgJobRegistry } from "../tools/_bgjobs.ts";
@@ -573,7 +574,15 @@ function toolsFor(
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
+    : builtinTools({
+        bigPlan,
+        todoState,
+        onWebSearchFeeUsd,
+        artifacts,
+        seen,
+        bgJobs,
+        skills: discoverSkills(process.cwd()).skills,
+      });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
