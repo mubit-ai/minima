@@ -349,4 +349,26 @@ describe("AnthropicProvider — images in tool results", () => {
     ]);
     expect(wire).toHaveLength(2);
   });
+
+  // The composer's Ctrl+V path: an image in a genuine USER message, not hoisted out of a tool
+  // result. Same toWire branch, different entry point — and the one the paste feature rides.
+  test("a pasted image rides its own question in one user message", async () => {
+    const wire = await wireFor([
+      new Message({
+        role: "user",
+        content: [text("[Image #1] what is this"), image("QUJD", "image/png")],
+      }),
+    ]);
+    expect(wire).toHaveLength(1);
+    const content = wire[0]!.content as Record<string, unknown>[];
+    expect(content[0]).toEqual({ type: "text", text: "[Image #1] what is this" });
+    // toMatchObject, not toEqual: the prompt-cache breakpoint lands on the LAST block of the
+    // last user message, which is now the image. Anthropic accepts cache_control on an image
+    // block, so this is correct — but the marker is part of the payload and worth pinning.
+    expect(content[1]).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "QUJD" },
+    });
+    expect(content[1]).toHaveProperty("cache_control");
+  });
 });

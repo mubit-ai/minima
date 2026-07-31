@@ -111,7 +111,10 @@ describe("app.tsx — the composer wiring", () => {
   });
 
   test("the indicator rides the absolutely-positioned TITLE, adding no rows", () => {
-    expect(app).toContain('{planMode ? " plan mode " : chordArmed ? " prompt · ^X " : " prompt "}');
+    // Pinned on the FRAGMENT rather than the whole ternary: the title now also carries the
+    // attachment count (`· 2 images`), so a whole-expression pin would break on every future
+    // title addition while proving nothing more than this does.
+    expect(app).toContain('chordArmed ? " prompt · ^X"');
     // The height reserve is still computed from typedText alone.
     expect(app).toContain("height={2 + inputRows}");
   });

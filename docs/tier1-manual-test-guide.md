@@ -1,10 +1,14 @@
 # Tier 1 manual test guide
 
-Manual checks for the four Track A — Tier 1 features (PRs #322–#325), all merged into
-`research/new-features-research`. Every one of these is something `bun test` **cannot**
-prove: they need a real terminal, a real provider, or a real editor.
+Manual checks for the Track A — Tier 1 features (PRs #322–#325), all merged into
+`research/new-features-research`, plus **§5, clipboard image paste**, which is still on its
+own branch. Every one of these is something `bun test` **cannot** prove: they need a real
+terminal, a real provider, a real editor, or a real pasteboard.
 
-Budget ~20 minutes for all four. Each section is self-contained — skip freely.
+Budget ~20 minutes for §1–§4, ~5 for §5. Each section is self-contained — skip freely.
+
+⚠️ **§5 runs from a different worktree.** §1–§4 use `--wt new-features-research`; §5 is not
+merged yet and uses `--wt minima-clip-image`. Every command below already says which.
 
 ---
 
@@ -559,6 +563,109 @@ Only `=0` disables.
 
 ---
 
+## 5 · Clipboard image paste — Ctrl+V (#330)
+
+The second door into image input: an image on the **system clipboard** becomes an
+`[Image #N]` token in the draft, and the bytes ride the turn as an `ImageContent` block in
+the same user message as your question. `read` (§1) is unchanged and untouched by this.
+
+Three things `bun test` cannot prove, all of them the reason this section exists: the real
+pasteboard, the real `osascript`/`sips` round-trip, and Ink's Ctrl+V keypress.
+
+⚠️ **`⌘V` and `Ctrl+V` are different keys here.** `⌘V` is the *terminal's* paste — it has only
+ever delivered text and still does. `Ctrl+V` is the harness's own binding, and it is the only
+one that can attach an image.
+
+### 5a. The happy path
+
+Take a screenshot **to the clipboard**: `⌘⇧⌃4`, then drag a region. (Without `⌃` it goes to a
+file instead and the clipboard stays empty.)
+
+```bash
+minima-loc --wt minima-clip-image --model claude-haiku-4-5 --provider anthropic
+```
+
+Press **Ctrl+V**, then type `what is in this image?` and hit Enter.
+
+| where | ✅ expect |
+| -- | -- |
+| draft | `[Image #1] what is in this image?` |
+| composer title | ` prompt · 1 image ` |
+| transcript | `🖼 [Image #1] 1272×714, 116 KB` — the real dimensions of what you grabbed |
+| reply | describes your screenshot |
+
+There is a **~0.5 s pause** on the keypress — two `osascript` invocations, ~0.25 s each,
+nearly all interpreter startup. Expected, not a hang.
+
+### 5b. The token is the contract
+
+Ctrl+V, then **backspace over the whole `[Image #1] `**, then ask `what is in this image?`.
+
+| ✅ expect |
+| -- |
+| the model says it cannot see an image — deleting the token un-attaches it |
+| the composer title drops back to ` prompt ` the moment the token leaves the draft |
+
+Same rule in reverse: Ctrl+V twice gives `[Image #1] [Image #2]`, and both are sent, in the
+order they appear in the text.
+
+### 5c. Text still pastes
+
+Copy some **text** (`⌘C` anywhere), then press Ctrl+V.
+
+| ✅ expect |
+| -- |
+| the text inserts at the cursor, exactly as before — no token, no title count, no transcript line |
+
+This is the fall-through: no image flavor on the clipboard means the old text path runs
+untouched. Worth doing right after 5a, since it is the regression this feature could most
+easily have caused.
+
+### 5d. Oversized screenshot — the downscale
+
+Grab a **full-screen** shot to the clipboard (`⌘⇧⌃3`). On a Retina display that is several
+thousand pixels wide.
+
+| ✅ expect |
+| -- |
+| it attaches — no "too large" refusal |
+| the transcript line ends with **`(downscaled)`** and reports a long edge of `1568` |
+
+1568 px is Anthropic's recommended maximum; above it every provider downsamples server-side
+anyway, so the resize costs nothing but saves real tokens.
+
+### 5e. A model that cannot see
+
+```bash
+minima-loc --wt minima-clip-image --model deepseek-v4-flash --provider deepseek
+```
+
+`--model` pins, which bypasses routing — so this is the one case where the harness knows at
+paste time that the image is doomed.
+
+| ✅ expect |
+| -- |
+| Ctrl+V still attaches, but the transcript line is **red** and ends `⚠ deepseek-v4-flash has no vision, it will be dropped` |
+| on submit the model is told `[1 image omitted — deepseek-v4-flash has no vision]` rather than being sent a payload the API would reject |
+
+Unpinned (routed) turns do **not** warn at paste time — routing has not picked yet. Instead
+the pool is narrowed to vision-capable candidates before the request goes out.
+
+### 5f. Kill switch
+
+```bash
+MINIMA_TUI_IMAGES=0 minima-loc --wt minima-clip-image
+```
+
+| ✅ expect |
+| -- |
+| Ctrl+V with an image on the clipboard pastes **nothing** (or the clipboard's text, if it has any) — no token, no title count |
+| `read` on a PNG still gives the historical `read: image file not supported: …` |
+
+One flag governs both surfaces; there is no separate switch for the paste half.
+
+---
+
 ## Everything off at once
 
 A last sanity pass — the published rollback contract is "with the feature off the harness
@@ -586,4 +693,6 @@ MINIMA_TUI_IMAGES=0 MINIMA_TUI_NOTIFY=0 MINIMA_TUI_CONTEXT_METER=0 MINIMA_TUI_ED
 | Footer wrapped to three rows | `src/tui/status.tsx` — `app.tsx`'s `footerHeight` and `layout.ts` `PANEL_STATUS_ROWS` both hard-assume exactly two |
 | Notification debris printed as text | `src/tui/notify.ts` — `osc9Sequence` / the tmux passthrough wrap |
 | Editor opens but drops keystrokes | `src/tui/editor.ts` — `detachStdin()` / `resetInputFilter()` ordering |
+| Ctrl+V pastes text when an image is on the clipboard | `src/tui/clipboard_image.ts` — `parseClipboardInfo`; run `osascript -e 'clipboard info'` and check for a `«class PNGf»` entry |
+| Ctrl+V attaches but the model never sees it | the routed model's `Model.input` — fail-closed, so a seed missing `input: ["text","image"]` is silently blind |
 | Terminal left in a bad state after the editor | `printf '\033[r'` resets a leaked scroll region; then check the `finally` restore order in `runEditorSession` |

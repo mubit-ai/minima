@@ -14,7 +14,8 @@
  * Paste lands here on two paths, both inserting at the cursor WITHOUT submitting:
  *  - bracketed paste (the terminal's Cmd+V): captured whole by input-filter.ts and delivered
  *    via setPasteCallback — embedded newlines and ESC bytes are data, never keypresses;
- *  - Ctrl+V: reads the system clipboard directly (pbpaste / wl-paste / xclip).
+ *  - Ctrl+V: an IMAGE on the clipboard becomes an `[Image #N]` token (onImagePaste); anything
+ *    else falls through to the clipboard's TEXT (pbpaste / wl-paste / xclip), as before.
  * Multi-line drafts render as-is; the box grows via the app's wrappedLineCount reserve.
  */
 
@@ -56,6 +57,17 @@ export interface TextInputProps {
   onEditorRequest?: (draft: string) => void;
   /** Ctrl+X armed/disarmed — drives the composer box's `· ^X` title hint. */
   onChordArmed?: (armed: boolean) => void;
+  /**
+   * Ctrl+V: try the clipboard's IMAGE first. Returns the text to insert (an `[Image #N]`
+   * token) when one was taken, or undefined to fall through to the text paste below —
+   * "no image on the clipboard" and "the image could not be read" are both undefined here,
+   * because the app has already surfaced the second case in the transcript.
+   *
+   * ABSENT = the feature is off at this layer (MINIMA_TUI_IMAGES=0), the same way
+   * `onEditorRequest` is the kill switch for the chord: no clipboard-image code is reached
+   * and Ctrl+V behaves byte for byte as it did before images shipped.
+   */
+  onImagePaste?: () => string | undefined;
 }
 
 interface Draft {
@@ -93,6 +105,7 @@ export function TextInput({
   showPrefix = true,
   onEditorRequest,
   onChordArmed,
+  onImagePaste,
 }: TextInputProps) {
   // The REF is the source of truth; state only triggers re-render. Ink dispatches every
   // keypress of one stdin chunk synchronously (no re-render in between), so a handler that
@@ -244,8 +257,15 @@ export function TextInput({
         // EOF quit instead (shell parity) — see the global handler in app.tsx.
         if (cursor < value.length) update(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
       } else if (input === "v") {
-        const clip = readClipboard();
-        if (clip) insertAt(clip.replace(/\r\n?/g, "\n"));
+        // Image first, text second. The terminal's own paste (⌘V, bracketed) still delivers
+        // text unconditionally, so nothing is lost by letting Ctrl+V prefer the image when
+        // the clipboard carries both flavors — which is exactly what "Copy image" produces.
+        const token = onImagePaste?.();
+        if (token !== undefined) insertAt(token);
+        else {
+          const clip = readClipboard();
+          if (clip) insertAt(clip.replace(/\r\n?/g, "\n"));
+        }
       }
       return;
     }
