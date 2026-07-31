@@ -57,6 +57,16 @@ describe("app.tsx — applyComposerText moves prefill AND typedText together", (
     );
     expect(app).not.toContain("setPrefill({ text: outcome.text");
   });
+
+  test("EVERY text seed goes through the helper — there is exactly one setPrefill({ ... })", () => {
+    // setPrefill(null) at turn start is a clear, not a seed, so it is excluded by the shape.
+    // This is the assertion that stops a future refactor re-splitting the pair at a new site.
+    expect(app.split("setPrefill({").length - 1).toBe(1);
+  });
+
+  test("/undo and /rewind re-prompt through the helper too", () => {
+    expect(app.split("applyComposerText(undonePrompt);").length - 1).toBe(2);
+  });
 });
 
 describe("app.tsx — openEditor", () => {

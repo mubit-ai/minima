@@ -2367,8 +2367,7 @@ export function HarnessApp({
       }
     }
     if (undonePrompt) {
-      setPrefill({ text: undonePrompt, nonce: Date.now() });
-      setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
+      applyComposerText(undonePrompt);
     }
     setMessages((prev) => {
       let kept = prev;
@@ -2566,8 +2565,7 @@ export function HarnessApp({
           setCtx(stats);
         }
         if (undonePrompt) {
-          setPrefill({ text: undonePrompt, nonce: Date.now() });
-          setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
+          applyComposerText(undonePrompt);
         }
 
         setMessages((prev) => {
