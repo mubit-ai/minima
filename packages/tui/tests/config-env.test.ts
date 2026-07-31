@@ -33,6 +33,18 @@ describe("label-source configuration (Phase 0b)", () => {
     });
   });
 
+  test("image tool results are ON by default; MINIMA_TUI_IMAGES=0 opts out", () => {
+    withEnv({ MINIMA_TUI_IMAGES: undefined }, () => {
+      expect(configFromEnv().images).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_IMAGES: "0" }, () => {
+      expect(configFromEnv().images).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_IMAGES: "1" }, () => {
+      expect(configFromEnv().images).toBe(true);
+    });
+  });
+
   test("judge sampling defaults to 15% of eligible turns", () => {
     expect(harnessConfig().judgeSampleRate).toBeCloseTo(0.15);
     withEnv({ MINIMA_JUDGE_SAMPLE: undefined, MINIMA_LLM_JUDGE: undefined }, () => {

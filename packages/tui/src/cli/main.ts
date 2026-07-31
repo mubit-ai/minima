@@ -15,6 +15,7 @@ import { setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -194,6 +195,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.15, output: 0.6 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-4o",
@@ -203,6 +205,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 2.5, output: 10 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-sol",
@@ -316,6 +319,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 5.0, cache_read: 0.08, cache_write: 1.25 },
     context_window: 200_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: false,
   },
   {
@@ -326,6 +330,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -336,6 +341,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -347,6 +353,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -358,6 +365,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 10.0, output: 50.0, cache_read: 1.0, cache_write: 12.5 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -369,6 +377,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -385,6 +394,7 @@ export const SEED_MODELS: Model[] = [
     },
     context_window: 2_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -395,6 +405,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.5, output: 7.5, cache_read: 0.15 },
     context_window: 1_048_576,
     max_tokens: 65_536,
+    input: ["text", "image"],
     reasoning: true,
   },
 ];
@@ -570,10 +581,19 @@ function toolsFor(
   artifacts?: ToolArtifacts,
   seen?: SeenLedger,
   bgJobs?: BgJobRegistry,
+  imageResults?: () => boolean,
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
+    : builtinTools({
+        bigPlan,
+        todoState,
+        onWebSearchFeeUsd,
+        artifacts,
+        seen,
+        bgJobs,
+        imageResults,
+      });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -716,6 +736,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // P3 edit guard: the ledger exists from tool construction but stays fail-open (inert)
   // until the DB + run id attach below — the same late-bind pattern as bookSearchFee.
   const seenLedger = config.editGuard ? new SeenLedger() : undefined;
+  // Image results: same late-bind as bookSearchFee. Evaluated per tool call because
+  // routing re-picks agentState.model every prompt, so the answer must track the model
+  // that will actually consume the result.
+  let agentRef: MinimaAgent | null = null;
   const tools = toolsFor(
     args,
     config.bigPlan === true,
@@ -724,6 +748,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     artifactStore ?? undefined,
     seenLedger,
     bgJobRegistry ?? undefined,
+    () => config.images && supportsImageInput(agentRef?.agentState.model ?? null),
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -773,6 +798,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  agentRef = agent;
   // Hook-order contract (P2): bash-steer registers FIRST on the beforeToolCall stack —
   // ahead of the TUI permission hook (app.tsx) and the headless checkpoint/done-gate
   // hooks below. First block wins, so a steered command never raises a pointless

@@ -50,6 +50,19 @@ export function thinkingFormatFor(model: {
   return model.adaptive_thinking ? "adaptive" : "enabled";
 }
 
+/**
+ * Whether `model` accepts image input. Same doctrine as thinkingFormatFor: the capability
+ * is DATA on the registry (`Model.input`), not an id-pattern list here.
+ *
+ * FAIL-CLOSED — an absent `input` means UNKNOWN, and unknown must mean no. A text-only
+ * model 400s on an image block, and models synthesized from the service catalog or
+ * OpenRouter carry no modality until someone teaches them one. So a missing declaration
+ * costs a refused image, never a broken run.
+ */
+export function supportsImageInput(model: { input?: readonly string[] } | null): boolean {
+  return model?.input?.includes("image") === true;
+}
+
 // Harness ThinkingLevel -> wire `output_config.effort`. "off" (and anything unknown)
 // deliberately maps to nothing: no effort param is sent.
 const EFFORT_BY_LEVEL: Record<string, string> = {

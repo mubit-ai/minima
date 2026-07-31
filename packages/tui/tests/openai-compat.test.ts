@@ -11,6 +11,7 @@ import {
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
+  image,
   text,
 } from "../src/ai/index.ts";
 
@@ -237,5 +238,70 @@ describe("openai-compat surfaces the provider's own error message", () => {
     }));
     expect(msg).toContain("HTTP 500");
     expect(msg).not.toContain("already consumed");
+  });
+});
+
+// OpenAI's chat-completions API accepts only `text` parts in a role:"tool" message, so
+// ai/compat.ts hoists tool-result images into a following user message. These pin the
+// resulting wire shape, including the ordering constraint the API actually enforces.
+describe("OpenAICompatProvider — hoisted tool-result images", () => {
+  const OK_SSE = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ];
+
+  function capturingFetch(captured: Record<string, unknown>[]) {
+    const inner = sseFetch(OK_SSE);
+    return async (url: string, init: RequestInit) => {
+      captured.push(JSON.parse(String(init.body)));
+      return inner(url, init);
+    };
+  }
+
+  async function wireFor(messages: Message[]): Promise<Record<string, unknown>[]> {
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    await complete(OPENAI_MODEL, context({ messages }), {
+      options: { fetch: capturingFetch(captured) },
+    });
+    return captured[0]!.messages as Record<string, unknown>[];
+  }
+
+  const imageToolResult = (id: string, path: string) =>
+    new Message({
+      role: "toolResult",
+      content: [text(`[image] ${path}`), image("QUJD", "image/png")],
+      tool_call_id: id,
+    });
+
+  test("the image is hoisted into a user message that follows the tool message", async () => {
+    const wire = await wireFor([new Message({ role: "user", content: "look" }), imageToolResult("call_1", "x.png")]);
+    expect(wire.map((m) => m.role)).toEqual(["user", "tool", "user"]);
+    const hoisted = wire[2]!.content as Record<string, unknown>[];
+    expect(hoisted[0]).toEqual({ type: "text", text: "[image output from the preceding tool result(s)]" });
+    expect((hoisted[1] as { image_url: { url: string } }).image_url.url).toMatch(
+      /^data:image\/png;base64,QUJD$/,
+    );
+  });
+
+  test("the tool message content stays a string and carries no base64", async () => {
+    const wire = await wireFor([new Message({ role: "user", content: "look" }), imageToolResult("call_1", "x.png")]);
+    expect(typeof wire[1]!.content).toBe("string");
+    expect(wire[1]!.content).toBe("[image] x.png");
+    expect(String(wire[1]!.content)).not.toContain("QUJD");
+  });
+
+  // The API requires every role:"tool" message to sit in an unbroken run immediately after
+  // the assistant message that carried the tool_calls — one hoisted message, after both.
+  test("two parallel tool results yield exactly ONE hoisted message, after both", async () => {
+    const wire = await wireFor([
+      new Message({ role: "user", content: "look" }),
+      imageToolResult("call_1", "a.png"),
+      imageToolResult("call_2", "b.png"),
+    ]);
+    expect(wire.map((m) => m.role)).toEqual(["user", "tool", "tool", "user"]);
+    expect((wire[3]!.content as unknown[]).filter((b) => (b as { type: string }).type === "image_url")).toHaveLength(2);
   });
 });
