@@ -7,6 +7,7 @@ import {
   tryGetModel,
 } from "../src/ai/index.ts";
 import { SEED_MODELS } from "../src/cli/main.ts";
+import { supportsImageInput } from "../src/ai/provider_quirks.ts";
 import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
 import { DEFAULT_CANDIDATES, PREMIUM_CANDIDATES } from "../src/minima/config.ts";
 import { ModelMapping, syncCatalog } from "../src/minima/mapping.ts";
@@ -66,6 +67,27 @@ describe("seed registry (July 2026 lineup)", () => {
     }
     const sonnet46 = SEED_MODELS.find((s) => s.id === "claude-sonnet-4-6")!;
     expect(sonnet46.adaptive_thinking).toBeUndefined();
+  });
+});
+
+describe("populateFromMinima — vision modality", () => {
+  // Derived from capability_priors, exactly as `reasoning` is. The server emits no vision
+  // prior today, so this is inert-but-forward-compatible and needs no wire-schema change.
+  test("a vision prior >= 0.5 becomes image input; anything else stays text-only", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    const client = {
+      models: async () => ({
+        models: [
+          card("sees", "anthropic", { capability_priors: { vision: 0.9 } }),
+          card("blind", "anthropic", { capability_priors: { vision: 0.1 } }),
+          card("silent", "anthropic"),
+        ],
+      }),
+    };
+    await populateFromMinima(client);
+    expect(supportsImageInput(tryGetModel("anthropic", "sees")!)).toBe(true);
+    expect(supportsImageInput(tryGetModel("anthropic", "blind")!)).toBe(false);
+    expect(supportsImageInput(tryGetModel("anthropic", "silent")!)).toBe(false);
   });
 });
 

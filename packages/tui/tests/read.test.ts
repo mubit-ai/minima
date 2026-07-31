@@ -2,7 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SeenLedger } from "../src/tools/_seen.ts";
 import { readTool } from "../src/tools/index.ts";
+import { MAX_IMAGE_BYTES } from "../src/tools/read.ts";
+import type { FsToolOptions } from "../src/tools/types.ts";
+
+// Smallest valid PNG: 1x1, fully transparent. Written inline rather than as a fixture —
+// tests/ has no binary fixture directory and R1 already synthesizes its blob this way.
+const PNG_1X1_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 let tmp = "";
 afterEach(() => {
@@ -17,8 +25,8 @@ function newTmp(): string {
   return tmp;
 }
 
-async function run(args: Record<string, unknown>) {
-  const tool = readTool();
+async function run(args: Record<string, unknown>, opts: FsToolOptions = {}) {
+  const tool = readTool(opts);
   const parsed = tool.parameters.validate(args);
   if (!parsed.ok) throw new Error(parsed.errors.join("; "));
   return tool.execute("t1", parsed.value, null, null);
@@ -40,12 +48,81 @@ describe("read tool hardening", () => {
     expect(body).toMatch(/use bash to inspect binary content/);
   });
 
-  test("R2: image extension is rejected even when the file is empty", async () => {
+  test("R2: a real png returns a descriptor plus an image block when image results are on", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    const bytes = Buffer.from(PNG_1X1_B64, "base64");
+    writeFileSync(p, bytes);
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(res.content).toHaveLength(2);
+    // Text FIRST: db/sink, the transcript and compaction all read textContent only.
+    expect(res.content[0]?.type).toBe("text");
+    expect(bodyOf(res)).toMatch(/^\[image\] /);
+    expect(bodyOf(res)).toContain(p);
+    expect(bodyOf(res)).toContain("image/png");
+    const img = res.content[1] as { type: string; data: string; mime_type?: string };
+    expect(img.type).toBe("image");
+    expect(img.mime_type).toBe("image/png");
+    expect(img.data).toBe(bytes.toString("base64"));
+    expect(res.details?.image).toBe(true);
+    expect(res.details?.error).toBeUndefined();
+  });
+
+  test("R2b: with image results off, a real png keeps the historical refusal", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    writeFileSync(p, Buffer.from(PNG_1X1_B64, "base64"));
+    const res = await run({ path: p });
+    expect(res.content).toHaveLength(1);
+    expect(bodyOf(res)).toBe(`read: image file not supported: ${p}`);
+    expect(res.details?.error).toBe(true);
+  });
+
+  test("R2c: an empty .png is refused as invalid even with image results on", async () => {
     const d = newTmp();
     const p = join(d, "x.png");
     writeFileSync(p, "");
-    const res = await run({ path: p });
-    expect(bodyOf(res)).toMatch(/image file not supported/);
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/read: not a valid image/);
+    expect(res.content).toHaveLength(1);
+  });
+
+  test("R2d: a real gif is refused with a format message (Gemini takes no gif)", async () => {
+    const d = newTmp();
+    const p = join(d, "x.gif");
+    writeFileSync(p, Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/image format not supported \(gif\)/);
+  });
+
+  test("R2e: mime comes from magic bytes, not the extension", async () => {
+    const d = newTmp();
+    const p = join(d, "actually-jpeg.png");
+    writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toContain("image/jpeg");
+    expect((res.content[1] as { mime_type?: string }).mime_type).toBe("image/jpeg");
+  });
+
+  test("R2f: an oversized image is refused before it is read into memory", async () => {
+    const d = newTmp();
+    const p = join(d, "huge.png");
+    const head = Buffer.from(PNG_1X1_B64, "base64");
+    writeFileSync(p, Buffer.concat([head, Buffer.alloc(MAX_IMAGE_BYTES + 1 - head.length)]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/read: image too large/);
+    expect(bodyOf(res)).toContain(String(MAX_IMAGE_BYTES));
+  });
+
+  test("R2g: the image path leaves the seen ledger untouched", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    writeFileSync(p, Buffer.from(PNG_1X1_B64, "base64"));
+    const seen = new SeenLedger();
+    const res = await run({ path: p }, { imageResults: () => true, seen });
+    expect(bodyOf(res)).not.toContain("[snap:");
+    expect(res.details?.snap).toBeUndefined();
+    expect(res.details?.lines_read).toBeUndefined();
   });
 
   test("R3: huge single line is bounded by truncateLine", async () => {

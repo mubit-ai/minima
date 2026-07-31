@@ -31,6 +31,9 @@ function synthModel(card: ModelCard): Model {
   const { api, baseUrl } = apiFor(card.provider);
   const reasoning =
     (card.capability_priors?.reasoning ?? card.capability_priors?.reason ?? 0) >= 0.5;
+  // Same derivation as `reasoning`, off a prior the server does not emit yet: inert today,
+  // and it keeps vision out of the wire schema (capability_priors is already an open map).
+  const vision = (card.capability_priors?.vision ?? 0) >= 0.5;
   return {
     id: card.model_id,
     provider: card.provider,
@@ -44,6 +47,7 @@ function synthModel(card: ModelCard): Model {
     },
     context_window: card.context_window ?? 128_000,
     max_tokens: card.max_output_tokens ?? 8_192,
+    input: vision ? ["text", "image"] : ["text"],
     reasoning,
     ...(baseUrl ? { base_url: baseUrl } : {}),
   };

@@ -48,6 +48,7 @@ interface Switch {
 // reads.
 const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_BIG_PLAN", field: "bigPlan" },
+  { env: "MINIMA_TUI_IMAGES", field: "images" },
   { env: "MINIMA_TUI_MEMORY", field: "memoryLedger" },
   { env: "MINIMA_TUI_ARTIFACTS", field: "artifacts" },
   { env: "MINIMA_TUI_BGJOBS", field: "bgJobs" },
