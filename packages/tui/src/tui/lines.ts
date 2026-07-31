@@ -34,12 +34,33 @@ import {
 } from "./layout.ts";
 
 const ESC = String.fromCharCode(27);
-const RESET = `${ESC}[0m`;
 
-/** `text` wrapped in SGR codes and reset — self-contained for single-line <Text> rendering. */
+/**
+ * The specific SGR closer for one open code. Ink's Text transform (wrap-ansi) re-encodes
+ * embedded ANSI and derives its closer from the FIRST code of a combined `ESC[a;b;…m`
+ * sequence — a `37;48;2;…m` bubble row came back closed with `39m` only, leaving the
+ * background OPEN, and background-color-erase then flooded whole terminal rows with the
+ * bubble color (the fullscreen stripe bug, 2026-07-31). Separate single-code sequences
+ * with explicit per-code closers pass through the transform verbatim, so paint() emits
+ * exactly that — and never relies on `0m`, which the transform also rewrites.
+ */
+function closeFor(code: number | string): string {
+  const s = String(code);
+  if (s === "1" || s === "2") return "22";
+  if (s === "3") return "23";
+  if (s.startsWith("48")) return "49";
+  return "39"; // every foreground code
+}
+
+/** `text` wrapped in SGR codes, each opened and closed as its OWN sequence (see closeFor). */
 function paint(text: string, ...codes: Array<number | string>): string {
   if (text === "") return "";
-  return `${ESC}[${codes.join(";")}m${text}${RESET}`;
+  const open = codes.map((c) => `${ESC}[${c}m`).join("");
+  const close = [...codes]
+    .reverse()
+    .map((c) => `${ESC}[${closeFor(c)}m`)
+    .join("");
+  return open + text + close;
 }
 
 /** wrapLineToWidth over every source line of `text` — the multi-line form of the shared ruler. */
@@ -91,23 +112,22 @@ function parseInline(line: string): { cps: string[]; styles: number[] } {
   return { cps, styles };
 }
 
-/** One row [start,end) of a parsed inline line as a self-contained ANSI string. */
+/** One row [start,end) of a parsed inline line as a self-contained ANSI string. Same
+ * single-code-per-sequence + specific-closer discipline as paint() (see closeFor). */
 function emitStyledRow(cps: string[], styles: number[], start: number, end: number): string {
+  const openOf = (s: number) => (s & BOLD ? `${ESC}[1m` : "") + (s & CODE ? `${ESC}[36m` : "");
+  const closeOf = (s: number) => (s & CODE ? `${ESC}[39m` : "") + (s & BOLD ? `${ESC}[22m` : "");
   let out = "";
   let cur = 0;
   for (let i = start; i < end; i++) {
     const s = styles[i]!;
     if (s !== cur) {
-      if (cur !== 0) out += RESET;
-      const codes: number[] = [];
-      if (s & BOLD) codes.push(1);
-      if (s & CODE) codes.push(36); // inline `code` renders cyan (renderInlineMarkdown)
-      if (codes.length > 0) out += `${ESC}[${codes.join(";")}m`;
+      out += closeOf(cur) + openOf(s);
       cur = s;
     }
     out += cps[i]!;
   }
-  if (cur !== 0) out += RESET;
+  out += closeOf(cur);
   return out;
 }
 
