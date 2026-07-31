@@ -13,12 +13,18 @@ Budget ~20 minutes for all four. Each section is self-contained — skip freely.
 ```bash
 cd /Users/eldaru/Mubit/Minima/new-features-research
 git pull --ff-only origin research/new-features-research
-git log --oneline -1     # must include bb9cfa4 — read's description fix (#326)
+git log --oneline -6 | grep -cE '#326|#328'   # must print 2
 ```
 
-⚠️ **The `git pull` is not optional.** The image checks in §1 will fail against anything
-older than `bb9cfa4`: before that commit `read`'s description said *"Read a text file"* and
-models refused to call the tool at all. If §1 fails, check this first.
+⚠️ **The `git pull` is not optional.** Two fixes landed *after* the features themselves, and
+§1 fails without either:
+
+- `bb9cfa4` (#326) — before it, `read`'s description said *"Read a text file"* and models
+  refused to call the tool on a PNG at all.
+- `d41d307` (#328) — before it, every turn on a `gpt-5.6-*` model died with
+  `HTTP 400 — Function tools with reasoning_effort are not supported`, which is what §1.e runs.
+
+If §1 fails, check this first.
 
 Everything below runs **from source** via your `minima-loc` function, which sources
 `.env.harness` (provider keys) and execs `bun run …/packages/tui/src/cli/main.ts`:
@@ -158,6 +164,10 @@ Read /tmp/vt1.html.png and report the tool's exact output.
 (These `gpt-5.6-*` seeds are marked text-only because their vision support was never
 verified — fail-closed by design. The refusal is the feature working, not a bug.)
 
+This check used to die on `HTTP 400 — Function tools with reasoning_effort are not supported`
+before `read` ever ran; #328 fixed that. If you see that 400 again, the model is missing
+`tools_require_effort_none` on its seed — not an image problem.
+
 ### 1f. Kill switch
 
 ```bash
@@ -234,24 +244,54 @@ structurally blind to. If it reads near zero on turn one, something is wrong.
 
 ### 2b. `route:` / `reason:` are now conditional
 
+Both segments used to render unconditionally; now they appear only when they carry news.
+
 Still on the default run above:
 
 | ✅ expect |
-| -- | -- |
-| No `· route:` and no `· reason:` segment — they render only when non-default |
+| -- |
+| No `· route:` and no `· reason:` segment |
 
-Now force both non-default:
+`reason:` is the thinking level, and `--thinking` is what moves it:
 
 ```bash
-minima-loc --wt new-features-research --thinking medium --offline
+minima-loc --wt new-features-research --thinking medium
 ```
 
 | ✅ expect |
 | -- |
-| `· route: offline` and `· reason: medium` both reappear, and status row 1 still **does not wrap** — the footer stays exactly two rows |
+| `· reason: medium` in cyan. (`--thinking high` renders **yellow**; `off` is the default and stays hidden.) |
 
-Resize the terminal narrow and wide while a session is open and confirm the footer never
-becomes three rows.
+`route:` is the **routing mode**, and the only thing that moves it is
+<kbd>Ctrl</kbd>+<kbd>R</kbd> — a toggle between `auto` (the default, hidden) and `confirm`:
+
+| step | ✅ expect |
+| -- | -- |
+| press <kbd>Ctrl</kbd>+<kbd>R</kbd> | `· route: confirm` appears in yellow |
+| press it again | the segment disappears |
+
+With both showing, status row 1 must still **not wrap** — the footer stays exactly two rows.
+Resize the terminal narrow and wide while a session is open and confirm it never becomes
+three.
+
+### 2b-i. What `--offline` shows — and why it is *not* `route:`
+
+`--offline` bypasses Minima routing. It does **not** touch `route:`: routing *mode* and
+routing *reachability* are different things, and the offline state has its own three signals.
+
+```bash
+minima-loc --wt new-features-research --offline
+```
+
+| where | ✅ expect |
+| -- | -- |
+| status row 1 | `model: gpt-4o-mini ▸ offline` — the **basis** segment, with the model name in **yellow** |
+| status row 2 | red `[offline: routing disabled (offline mode)]` |
+| transcript | `ℹ routing offline: routing disabled (offline mode) — ran gpt-4o-mini unrouted. /reconnect to retry.` |
+
+⚠️ **That transcript line is the feature working, not an error.** It is the harness naming
+the model it fell back to and how to get routing back. `route:` stays hidden throughout,
+because `--offline` never changes the routing mode.
 
 ### 2c. Kill switch — reverts both halves
 
@@ -536,6 +576,7 @@ MINIMA_TUI_IMAGES=0 MINIMA_TUI_NOTIFY=0 MINIMA_TUI_CONTEXT_METER=0 MINIMA_TUI_ED
 | -- | -- |
 | Image works on Anthropic but not OpenAI/Gemini | `src/ai/compat.ts` — `hoistToolResultImages` |
 | `read` refuses on a model you know has vision | `Model.input` in `src/cli/main.ts` seeds — fail-closed, so an omission costs the feature |
+| A 400 naming `reasoning_effort` | `src/ai/provider_quirks.ts` — that model needs `tools_require_effort_none: true` on its seed |
 | `ctx%` looks wrong | `src/tui/context_meter.ts` — `contextUsage()`; check whether `basis` is `exact`, `adjusted` or `estimated` |
 | Footer wrapped to three rows | `src/tui/status.tsx` — `app.tsx`'s `footerHeight` and `layout.ts` `PANEL_STATUS_ROWS` both hard-assume exactly two |
 | Notification debris printed as text | `src/tui/notify.ts` — `osc9Sequence` / the tmux passthrough wrap |
