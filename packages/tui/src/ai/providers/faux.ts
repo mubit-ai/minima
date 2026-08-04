@@ -104,16 +104,6 @@ export class FauxRegistration {
   unregister(): void {
     unregisterProvider("faux");
   }
-
-  /** Use as a callback: registers, runs `fn`, always unregisters. */
-  async use<T>(fn: () => Promise<T>): Promise<T> {
-    this.register();
-    try {
-      return await fn();
-    } finally {
-      this.unregister();
-    }
-  }
 }
 
 class FauxProvider implements Provider {

@@ -8,7 +8,6 @@
  */
 
 import { errText } from "../../errtext.ts";
-import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
@@ -35,7 +34,9 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, toJsonSchema } from "./_common.ts";
+import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
+
+export { sdkTimeoutMs };
 
 const STOP_MAP: Record<string, string> = {
   end_turn: "stop",
@@ -194,14 +195,6 @@ export class AnthropicProvider {
   }
 }
 
-/** SDK timeout (ms) from the harness's seconds-based option. options.timeout is in
- * SECONDS (the harness-wide contract — google.ts converts the same way); the Anthropic
- * SDK expects milliseconds. Passing seconds through gave every request a 30-60ms
- * deadline: all Claude calls died with "Request timed out". */
-export function sdkTimeoutMs(options: Record<string, unknown>): number {
-  return Math.round(Number(options.timeout ?? 60) * 1000);
-}
-
 async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
   const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
@@ -217,8 +210,7 @@ function buildKwargs(
 ): Record<string, unknown> {
   // Prompt caching ON by default — the agent re-sends the stable prefix every turn.
   const cache = options.prompt_cache !== false;
-  const messages = normalizeForTarget(context.messages, "anthropic-messages");
-  const wire = messages.map(toWire);
+  const wire = context.messages.map(toWire);
   const kwargs: Record<string, unknown> = {
     model: model.id,
     max_tokens: options.max_tokens ?? model.max_tokens,
@@ -272,7 +264,7 @@ function toWire(m: Message): Record<string, unknown> {
         {
           type: "tool_result",
           tool_use_id: m.tool_call_id,
-          content: flattenText(m),
+          content: m.textContent,
           is_error: m.is_error,
         },
       ],
@@ -294,11 +286,4 @@ function toWire(m: Message): Record<string, unknown> {
       content.push({ type: "tool_use", id: b.id, name: b.name, input: b.arguments });
   }
   return { role: m.role, content };
-}
-
-function flattenText(m: Message): string {
-  return m.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("");
 }

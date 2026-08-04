@@ -157,6 +157,36 @@ describe("openai-compat SSE streaming", () => {
     expect(result.textContent).toBe("ok");
   });
 
+  test("a chunk carrying both reasoning keys yields one thinking block, not two", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+
+    const chunks = [
+      `data: ${JSON.stringify({
+        choices: [{ delta: { reasoning_content: "Hmm", reasoning: "Hmm" } }],
+      })}\n\n`,
+      `data: ${JSON.stringify({
+        choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+
+    const s = stream(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      { options: { fetch: sseFetch(chunks) } },
+    );
+    const deltas: string[] = [];
+    for await (const ev of s) {
+      if (ev.type === "thinking_delta") deltas.push(ev.delta);
+    }
+    const result = await s.result();
+
+    expect(deltas).toEqual(["Hmm"]);
+    expect(result.content.filter((b) => b.type === "thinking")).toHaveLength(1);
+    expect(result.content.find((b) => b.type === "thinking")).toMatchObject({ thinking: "Hmm" });
+  });
+
   test("surfaces a non-2xx response as an error event", async () => {
     resetAll();
     registerProvider("openai-completions", new OpenAICompatProvider());
@@ -237,5 +267,123 @@ describe("openai-compat surfaces the provider's own error message", () => {
     }));
     expect(msg).toContain("HTTP 500");
     expect(msg).not.toContain("already consumed");
+  });
+});
+
+describe("openai-compat credits cached prompt tokens", () => {
+  // prompt_tokens is INCLUSIVE of prompt_tokens_details.cached_tokens; billing the whole
+  // prompt at the input rate is what inflates the realized cost fed to /v1/feedback.
+  const CACHING_MODEL: Model = { ...OPENAI_MODEL, cost: { ...OPENAI_MODEL.cost, cache_read: 0.015 } };
+
+  function usageChunks(usage: Record<string, unknown>) {
+    return [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }], usage })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+  }
+
+  async function usageOf(usage: Record<string, unknown>) {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    const result = await complete(
+      CACHING_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: sseFetch(usageChunks(usage)) } },
+    );
+    return result.usage;
+  }
+
+  test("cached tokens bill at the cache rate, not the input rate", async () => {
+    const usage = await usageOf({
+      prompt_tokens: 1000,
+      completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 800 },
+    });
+
+    expect(usage.cache_read).toBe(800);
+    expect(usage.input).toBe(200); // net of cache — prompt_tokens is inclusive
+    expect(usage.cost.total).toBeCloseTo((200 * 0.15 + 5 * 0.6 + 800 * 0.015) / 1_000_000, 12);
+  });
+
+  test("a response with no cache details is unchanged", async () => {
+    const usage = await usageOf({ prompt_tokens: 1000, completion_tokens: 5 });
+    expect(usage.cache_read).toBe(0);
+    expect(usage.input).toBe(1000);
+  });
+
+  test("cached_tokens larger than prompt_tokens cannot drive input negative", async () => {
+    const usage = await usageOf({
+      prompt_tokens: 100,
+      completion_tokens: 1,
+      prompt_tokens_details: { cached_tokens: 500 },
+    });
+    expect(usage.input).toBe(0);
+  });
+});
+
+describe("openai-compat honours options.timeout", () => {
+  /** Never resolves; rejects only when the request signal aborts. */
+  function hangingFetch(seen: { signal?: AbortSignal | null }) {
+    return (_url: string, init: RequestInit) =>
+      new Promise<never>((_resolve, reject) => {
+        seen.signal = init.signal;
+        init.signal?.addEventListener("abort", () =>
+          reject((init.signal as AbortSignal).reason ?? new Error("aborted")),
+        );
+      });
+  }
+
+  test("a request that never responds is cut off at the deadline", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    const seen: { signal?: AbortSignal | null } = {};
+
+    const result = await complete(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: hangingFetch(seen), timeout: 0.05 } },
+    );
+
+    expect(result.stop_reason).toBe("error");
+    expect(result.error_message ?? "").toMatch(/timed out|timeout|abort/i);
+  });
+
+  test("the caller's own signal still aborts when a deadline is also set", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    const seen: { signal?: AbortSignal | null } = {};
+    const ac = new AbortController();
+    const pending = complete(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: hangingFetch(seen), timeout: 300 }, signal: ac.signal },
+    );
+    ac.abort(new Error("user cancelled"));
+
+    const result = await pending;
+    expect(result.stop_reason).toBe("error");
+    expect(result.error_message).toContain("user cancelled");
+  });
+
+  test("no timeout option leaves the request unbounded", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    const seen: { signal?: AbortSignal | null } = {};
+
+    const chunks = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      seen.signal = init.signal;
+      return sseFetch(chunks)(url, init);
+    };
+    await complete(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: fetchImpl } },
+    );
+
+    expect(seen.signal).toBeUndefined();
   });
 });

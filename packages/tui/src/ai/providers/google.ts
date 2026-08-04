@@ -9,7 +9,6 @@
  */
 
 import { errText } from "../../errtext.ts";
-import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
@@ -27,7 +26,6 @@ import {
 import {
   AssistantMessage,
   type Context,
-  type Message,
   type Model,
   type ToolSchema,
   text,
@@ -35,7 +33,7 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, toJsonSchema } from "./_common.ts";
+import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
 
 const FINISH_MAP: Record<string, string> = { STOP: "stop", MAX_TOKENS: "length", SAFETY: "stop" };
 
@@ -210,8 +208,7 @@ export class GoogleProvider {
 async function buildClient(options: Record<string, unknown>): Promise<GoogleClientLike> {
   const apiKey = resolveApiKey(options, "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY");
   const { GoogleGenAI } = await import("@google/genai");
-  const timeout = Math.round(Number(options.timeout ?? 60) * 1000);
-  const client = new GoogleGenAI({ apiKey, httpOptions: { timeout } });
+  const client = new GoogleGenAI({ apiKey, httpOptions: { timeout: sdkTimeoutMs(options) } });
   return client as unknown as GoogleClientLike;
 }
 
@@ -240,14 +237,13 @@ function buildConfig(
 }
 
 function toContents(context: Context): Record<string, unknown>[] {
-  const messages = normalizeForTarget(context.messages, "google-generative-ai");
   const out: Record<string, unknown>[] = [];
-  for (const m of messages) {
+  for (const m of context.messages) {
     const role = m.role === "assistant" ? "model" : "user";
     const parts: Record<string, unknown>[] = [];
     if (m.role === "toolResult") {
       parts.push({
-        functionResponse: { name: m.tool_name ?? "", response: { result: flattenText(m) } },
+        functionResponse: { name: m.tool_name ?? "", response: { result: m.textContent } },
       });
     } else {
       for (const b of m.content) {
@@ -261,13 +257,6 @@ function toContents(context: Context): Record<string, unknown>[] {
     out.push({ role, parts });
   }
   return out;
-}
-
-function flattenText(m: Message): string {
-  return m.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("");
 }
 
 const TYPE_MAP: Record<string, string> = {
