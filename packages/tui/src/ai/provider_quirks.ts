@@ -10,13 +10,27 @@
 export interface ProviderQuirks {
   /** Name of the max-output-tokens param. */
   readonly tokenParam: string;
+  /**
+   * Wire shape of "reasoning off" on this host, for the models that have to say it out
+   * loud. OpenAI's chat/completions applies a server-side DEFAULT effort, so client silence
+   * is not "off"; OpenRouter's documented switch is `reasoning.enabled=false`. Absent for
+   * hosts (xai, groq, deepseek) that 400 on the param for models that do not take it —
+   * there, sending nothing already IS off.
+   *
+   * The SHAPE is a per-provider fact; WHETHER to send it is per-model registry data
+   * (`Model.tools_require_effort_none`). Keying the trigger per-provider instead would
+   * break gpt-4o, which 400s on the parameter on the very host that requires it for
+   * gpt-5.6-* — see effortNoneWithTools below.
+   */
+  readonly reasoningOff?: Readonly<Record<string, unknown>>;
 }
 
 const DEFAULT_QUIRKS: ProviderQuirks = { tokenParam: "max_tokens" };
 
 // Keyed by harness provider id. Only providers that DIVERGE from the baseline appear here.
 const QUIRKS: Record<string, ProviderQuirks> = {
-  openai: { tokenParam: "max_completion_tokens" },
+  openai: { tokenParam: "max_completion_tokens", reasoningOff: { reasoning_effort: "none" } },
+  openrouter: { tokenParam: "max_tokens", reasoningOff: { reasoning: { enabled: false } } },
 };
 
 /** Quirks for `provider` (the baseline OpenAI-compatible behavior if it has none). */

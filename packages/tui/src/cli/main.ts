@@ -245,6 +245,11 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 6.0, cache_read: 0.1 },
     context_window: 1_050_000,
     max_tokens: 128_000,
+    // Stays true. Luna reasons fine; what it refuses is tools + effort on chat/completions,
+    // and that is what tools_require_effort_none below encodes. Declaring reasoning:false to
+    // trigger the off-param would be a lie the candidate filter believes — it drops
+    // non-reasoning models whenever a thinking level is on, so the "fix" would quietly
+    // delete luna from routing.
     reasoning: true,
     tools_require_effort_none: true,
     input: ["text", "image"],

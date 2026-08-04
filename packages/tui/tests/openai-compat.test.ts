@@ -390,4 +390,21 @@ describe("OpenAICompatProvider — reasoning_effort for models that refuse it wi
       "tools",
     ]);
   });
+
+  // "Off" is spelled differently per host: OpenRouter's documented switch is
+  // reasoning.enabled=false, and it ignores reasoning_effort. Same flagged model, same
+  // trigger — only the shape changes, which is why the shape lives in the quirk table.
+  test("the same flagged model uses OpenRouter's off shape on OpenRouter", async () => {
+    const payload = await payloadFor({ ...EFFORT_MODEL, provider: "openrouter" }, [noopTool]);
+    expect(payload.reasoning).toEqual({ enabled: false });
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  // xai/groq/deepseek 400 on the parameter itself, so a host with no quirk entry must send
+  // nothing at all — absence already means off there.
+  test("a host with no off shape sends neither key", async () => {
+    const payload = await payloadFor({ ...EFFORT_MODEL, provider: "deepseek" }, [noopTool]);
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(payload).not.toHaveProperty("reasoning");
+  });
 });

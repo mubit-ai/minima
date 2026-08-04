@@ -163,13 +163,14 @@ function buildPayload(
   }
   for (const m of messages) out.push(toWire(m));
   const maxTokens = options.max_tokens ?? model.max_tokens;
+  const quirks = quirksFor(model.provider);
   const payload: Record<string, unknown> = {
     model: model.id,
     messages: out,
     stream: true,
     stream_options: { include_usage: true },
     // Per-provider request quirks (e.g. OpenAI GPT-5 needs max_completion_tokens).
-    [quirksFor(model.provider).tokenParam]: maxTokens,
+    [quirks.tokenParam]: maxTokens,
   };
   if (context.tools.length) {
     payload.tools = context.tools.map((t) => ({
@@ -183,7 +184,11 @@ function buildPayload(
     // Models whose DEFAULT effort is refused alongside function tools (gpt-5.6-*). Scoped to
     // the tools branch on purpose: it is the combination the API rejects, and a model that
     // never declares the quirk sends a byte-identical payload to before.
-    if (effortNoneWithTools(model, true)) payload.reasoning_effort = "none";
+    //
+    // WHICH models need it is registry data; WHAT "off" looks like is the host's business,
+    // so the shape comes from the quirk table. A host with no entry gets nothing sent —
+    // xai/groq/deepseek 400 on the param itself, and there silence already means off.
+    if (effortNoneWithTools(model, true)) Object.assign(payload, quirks.reasoningOff ?? {});
   }
   return payload;
 }
