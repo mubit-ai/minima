@@ -39,15 +39,53 @@ The `keytar` native module does not bundle into the compiled binary, so the Home
 
 ## Precedence
 
-When the harness starts it loads configuration in this order — **earlier wins**, and stored values never overwrite something already set:
+When the harness starts it loads configuration in this order — **earlier wins**, and lower layers never overwrite something already set:
 
-1. **Real shell environment** — anything already exported in your shell.
-2. **Project `.env` files** in the current directory — `.env.harness`, then `.env`. Only fills keys not already set.
-3. **Per-user store** — OS keychain + `~/.minima-harness/config.env`, materialized into the environment with set-default semantics (lowest precedence).
+1. **CLI flags** — `--budget`, `--model`, and friends. The user acting now.
+2. **Real shell environment** — anything already exported in your shell.
+3. **Project `.env` files** in the current directory — `.env.harness`, then `.env`. Only fills keys not already set.
+4. **Project config** — [`.minima/config.toml`](#project-config-minimaconfigtoml), the one *committed* layer. Allowlisted keys only, and it may only move a value toward the safer side (see below).
+5. **Per-user store** — OS keychain + `~/.minima-harness/config.env`, materialized into the environment with set-default semantics (lowest precedence).
 
 <Note>
 Put shared, non-secret settings (like `MINIMA_URL` for a local recommender) in a project `.env.harness`, and keep secrets in the keychain via `minima config set`.
 </Note>
+
+## Project config (`.minima/config.toml`)
+
+Every layer above is **uncommitted**, and therefore trusted because *you* wrote it. `.minima/config.toml` is the exception: it is checked in, so it arrives with `git clone` — written by someone else. That inversion is what the rules below exist for.
+
+```toml
+# .minima/config.toml — committed, so it may only tighten what you already allow.
+[budget]
+limit_usd = 2.00        # only ever LOWERS your ceiling
+mode = "enforce"        # only ever gets STRICTER
+
+[routing]
+candidates = ["claude-haiku-4-5", "gemini-2.5-flash"]   # intersected with your pool
+
+[compaction]
+artifact_spill = true   # neutral — plainly shadows, like any other setting
+```
+
+Three rules hold:
+
+1. **The allowlist is the gate.** Keys not on the list below are ignored — not blocked, *ignored*, and the harness says so on startup. A repo cannot set your API keys, and cannot reach any variable outside the four in the table: not a feature flag, not a permission, not a search path.
+2. **A project file may only move a value toward the safer side.** Not a spend special case: every allowlisted key declares a direction, or is neutral and plainly shadows.
+3. **The clamp runs in the loader**, before anything reaches the environment — so no part of the harness downstream can ever observe an unclamped value.
+
+| Key | Variable | Direction |
+|-----|----------|-----------|
+| `budget.limit_usd` | `MINIMA_BUDGET_USD` | **Lower wins.** A project ceiling below yours applies (even one set in your shell, which otherwise outranks it); one above yours is ignored. |
+| `budget.mode` | `MINIMA_BUDGET_MODE` | **Strictest wins** (`shadow` < `warn` < `enforce`). A project file can tighten enforcement, never relax it — including below the `warn` default. |
+| `routing.candidates` | `MINIMA_CANDIDATES` | **Intersection only.** Ids you do not already allow are dropped; a pool disjoint from yours is refused outright, since an empty pool would widen routing rather than narrow it. |
+| `compaction.artifact_spill` | `MINIMA_TUI_COMPACT2` | **Neutral** — a team preference with no safer side, so it simply fills a gap you left and loses to your shell and `.env` files. It is the one allowlisted key a project file can turn *off*, which is why it had to be argued onto the list as neutral rather than assumed. |
+
+The clamp cuts across precedence in one direction only, and it stops at the flags: `--budget`, `--budget-enforce` and `--model` are you acting right now, so they win over a project file the way they win over everything else.
+
+Thinking level, judge sampling and the default model are deliberately **not** on the list — not because they are dangerous, but because nobody can yet name their safer side. The list grows by argument, not by default. Search paths are directional too (narrowing is safe, widening is not), which is why the default list is legislated in code rather than configured here.
+
+A file that will not parse is reported and skipped: config never blocks startup. `MINIMA_TUI_PROJECT_CONFIG=0` ignores the file entirely.
 
 ## Environment variables
 
@@ -62,6 +100,9 @@ Put shared, non-secret settings (like `MINIMA_URL` for a local recommender) in a
 | `MUBIT_CONSOLE_URL` | No | `https://console.mubit.ai` | Console URL used by `minima auth`. |
 | `MINIMA_NAMESPACE` | No | per-repo project | Memory isolation lane. Overrides the repo's provisioned project. |
 | `MINIMA_TIMEOUT` | No | `30` | Recommender request timeout, in seconds. |
+| `MINIMA_CANDIDATES` | No | the shipped pool | Comma-separated model ids the recommender may pick from. |
+| `MINIMA_BUDGET_USD` | No | — | Session budget ceiling, in USD. `--budget` wins over it. |
+| `MINIMA_BUDGET_MODE` | No | `warn` | `shadow` (track only), `warn` (never blocks), or `enforce`. `--budget-enforce` wins over it. |
 
 <Note>
 **Per-repo memory isolation.** If `MINIMA_NAMESPACE` is set it wins; otherwise the harness uses the namespace of the Mubit project that `minima auth` provisioned for this repo (stored in `~/.minima-harness/projects.json`). This keeps each project's `task → model → outcome` history separate.
@@ -94,6 +135,7 @@ These are on by default — set the variable to `0` to opt out. Every one fails 
 | `MINIMA_TUI_FAILURE_MATCHER` | on | Failure classification on the recovery ladder. Off falls back to the blunt always-escalate behavior. |
 | `MINIMA_TUI_EDITOR` | on | Composing the prompt in `$EDITOR` — <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> and `/editor`. Off restores <kbd>Ctrl</kbd>+<kbd>E</kbd> as thinking-only. **This names a behavior, not an editor**: only `0` disables it, and `MINIMA_TUI_EDITOR=vim` leaves it on with the value ignored — set `$EDITOR` (or `$VISUAL`) to choose the binary. |
 | `MINIMA_TUI_GRADED_OUTCOME` | on | Graded outcome labels, which report unverified-but-positive evidence distinctly from verified evidence. |
+| `MINIMA_TUI_PROJECT_CONFIG` | on | Reading [`.minima/config.toml`](#project-config-minimaconfigtoml). Off, the committed project config is not opened at all and every other layer resolves exactly as before. |
 
 Two variables work the other way — they grant something the harness refuses by default:
 
@@ -146,4 +188,5 @@ To run a model that isn't seeded, pass `--model <id> --provider <name>` — the 
 | `~/.minima-harness/config.env` | Per-user credentials (file backend, mode `0600`). |
 | `~/.minima-harness/projects.json` | Repo → Mubit instance / project / namespace mapping (written by `minima auth`). |
 | `~/.minima-harness/sessions/*.jsonl` | Append-only session history. See [Sessions](/harness/sessions). |
-| `./.env.harness`, `./.env` | Project-scoped environment overrides. |
+| `./.env.harness`, `./.env` | Project-scoped environment overrides. Never commit these. |
+| `./.minima/config.toml` | Committed project config — [allowlisted keys, safer side only](#project-config-minimaconfigtoml). |
