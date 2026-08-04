@@ -355,7 +355,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(effect).toContain("setGateFocus(null)");
     expect(effect).toContain("if (busy || bigPlanBlockId === dismissedGateRef.current) return;");
     // The ctrl+g re-arm is likewise gated on a live block.
-    expect(src).toContain('if (key.ctrl && input === "g" && bigPlanBehavior?.block) {');
+    expect(src).toContain('if (action === "plan.overview" && bigPlanBehavior?.block) {');
   });
 
   test("while armed the prompt input is disabled and shows the answer-key hint", () => {
@@ -367,7 +367,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
   test("Esc while armed dismisses without recording; steer switches to note entry", () => {
     const gateIdx = src.indexOf("if (gateFocus && bigPlanDb && !key.ctrl && !key.meta) {");
     expect(gateIdx).toBeGreaterThan(-1);
-    const branch = src.slice(gateIdx, src.indexOf("if (key.ctrl && input ===", gateIdx));
+    const branch = src.slice(gateIdx, src.indexOf('if (action === "plan.overview" &&', gateIdx));
     // Esc: remember the dismissal and clear focus — no signal write in that path.
     const escIdx = branch.indexOf("if (key.escape) {");
     expect(escIdx).toBeGreaterThan(-1);
@@ -486,7 +486,7 @@ describe("tui/app.tsx panel key routing", () => {
 
   test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
     // Global arm: the guard keeps falling through to the gate-answer arm.
-    expect(src).toContain('input === "g" && !(bigPlanBehavior?.block && !busy)');
+    expect(src).toContain('action === "plan.overview" && !(bigPlanBehavior?.block && !busy)');
     // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery — but
     // only idle, since the modal is idle-only (a busy chord swaps views, never arms dead).
     const idx = src.indexOf("function handlePanelKey");
@@ -541,7 +541,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     // non-disruptive switch; a live council still stops via the session-discard cleanup
     // effect, which owns the abort). Plan APPROVAL lives only in the exit_plan tool and
     // /plan finalize; the old MP17 Shift+Tab 3-option gate is gone.
-    const handlerIdx = src.indexOf("if (key.tab && key.shift) {");
+    const handlerIdx = src.indexOf('if (action === "permission.cycle") {');
     expect(handlerIdx).toBeGreaterThan(-1);
     const handler = src.slice(handlerIdx, handlerIdx + 1600);
     expect(handler).toContain("const next = cycleMode();");
