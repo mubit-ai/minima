@@ -31,11 +31,60 @@ these land together when it merges.
 | — | `read` description tracks vision, per turn | #326 | — | fix: dispatch 4/9 → 8/9 |
 | — | `gpt-5.6-*` unusable with tools | #328 | — | fix: `reasoning_effort:"none"` quirk flag |
 
-### ⏳ In flight
+### 🚧 In flight — 13 open PRs. **Check here before starting anything.**
 
-| what | state |
-| -- | -- |
-| **PR #329** — all of the above → `main` | open, CI 4/4 green, 15 commits, 56 files |
+⚠️ **Nothing below is merged.** `main` has not moved since **#308 (2026-07-27)**; every PR here is
+`OPEN` against `main`, none has a review decision recorded. "In flight" means *do not start it* — it does
+**not** mean the row is closed. The matrix (§3) therefore still scores these rows as gaps, and will until
+they land.
+
+**Closes a gap row — do not build these:**
+
+| PR | author | row | feature | size | state |
+| -- | -- | -- | -- | -- | -- |
+| **#327** | ammar | **E5** | **Skills (`SKILL.md`)** — discovery, `skill` tool, `/<name>` invocation | +1206/−9 | open, mergeable |
+| **#318** | ammar | **D1** | **Themes** — 10 colorschemes, live-preview picker | +581/−178 | open, mergeable |
+| **#312** | ammar | **A2** | Plan-delegated steps; **carries #309's user-defined agent types** | +5239/−97 | open, mergeable |
+| ~~#309~~ | ammar | A2 | user-defined agent types — **superseded by #312**, its body says to close this one | +2979/−140 | open, **CONFLICTING** |
+| **#315** | eldar | **F6** | localhost dashboard — read-only ledger UI | +10288/−579 | open, mergeable |
+| **#329** | eldar | A10 C9 D7 D9 | Track A Tier 1 (this arc) | +5142/−207 | open, CI 4/4 green |
+
+**No gap row — defects, refactors and already-YES rows:**
+
+| PR | author | what | touches |
+| -- | -- | -- | -- |
+| **#320** | ammar | force reasoning off for non-reasoning models | ⚠️ **collides with our #328 — see below** |
+| **#331** | ammar | `options.timeout` never read; cached tokens not credited | `openai_compat.ts` |
+| **#319** | ammar | fullscreen renderer, **made the default** | F1 (already YES). Reverses the earlier inline-only renderer decision; the PR says this is recorded as ADR amendments — worth confirming that is the decision you think it is |
+| **#310** | shankha | routing P0 — "give the optimizer something to vary" | M3 (already YES); Track B adjacent |
+| **#317** | ammar | provider SDK bumps; Gemini abort + OAuth | — |
+| **#316** | ammar | lift `HarnessApp` effects into named hooks | refactor |
+| **#314** | ammar | untrack `runs/` | chore |
+
+### ⚔️ Collision owed a decision: #320 vs our #328
+
+Two people fixed the **same defect** — `gpt-5.6-luna` 400ing with
+*"Function tools with reasoning_effort are not supported"* — two different ways, and both are open
+against `main`. They overlap in **five files** (`provider_quirks.ts`, `openai_compat.ts`, `cli/main.ts`,
+`runtime.ts`, `openai-compat.test.ts`), so the second to merge takes conflicts.
+
+They are **not** equivalent:
+
+| | **#320** (ammar) | **#328** (this arc) |
+| -- | -- | -- |
+| trigger | `model.reasoning === false` | `tools_require_effort_none` **and** tools present |
+| scope | per **provider** (`openai`, `openrouter`) | per **model** |
+| seeds changed | `gpt-5.6-luna` → `reasoning: false` | all three gpt-5.6 keep `reasoning: true` |
+| sol / terra | **still broken** — untouched | fixed |
+| tool-less calls (judge, classifier, `--no-tools`) | effort forced off too | keep the model's own effort |
+| routing side effect | luna leaves the reasoning-capable pool | pool unchanged |
+
+The substantive question is whether **`reasoning: false` is metadata or a mechanism**. gpt-5.6-luna *is*
+a reasoning model; #320 marks it non-reasoning to trigger an off-switch, which also removes it from the
+router's reasoning-capable filter. #328 treats the 400 as a wire quirk and leaves the capability claim
+true. **One of these has to be withdrawn or merged into the other — pick before either lands.**
+#320 also covers OpenRouter's `reasoning.enabled=false`, which #328 does not; #328 covers sol and terra,
+which #320 does not. A merged fix would want both halves.
 
 ### ⛔ Not shipped from the original Tier 1
 
@@ -55,12 +104,27 @@ limits stated in the shipping PRs.
 | 3 | The context meter **under-counts a fresh image** by ~1.5k tokens until the first reply reports real usage. | `tui/context_meter.ts` |
 | 4 | The **Linux clipboard path is unverified** against a real X11/Wayland pasteboard — unit-tested through a spawn seam only. | `tui/clipboard_image.ts` |
 
-### ▶️ Recommended next
+### ▶️ Recommended next — revised 2026-08-04 against what is already in flight
 
-**`.minima/` project config (E9), then Skills (E5).** Full argument in §4 Tier 1 and §4 Tier 2. Short
-version: E9 is 8/9, S–M, and is the **prerequisite for four other table-stakes rows** (E5, E6, E4, A2) —
-it is the cheapest thing that unblocks the most expensive category. The one-item alternative, if you want
-maximum reach for one unit of effort instead, is **ACP (§4 Tier 3 #12)**.
+Three of the five items this document recommended a week ago are **already being built by someone else**:
+E5 Skills (#327), D1 Themes (#318), A2 agent types (#312). Removing those, the recommendation is:
+
+**1. `.minima/` project config (E9)** — 8/9, S–M, and the case for it got *stronger*, not weaker.
+Two open PRs have each independently invented a `.minima/` subdirectory: #327 reads `.minima/skills/`,
+#312/#309 read `.minima/agents/*.md`. **The convention is being set piecemeal, by whoever ships first,
+with no config file and no precedence rules.** E9 is no longer greenfield — it is consolidation, and it
+gets more expensive every week it waits.
+
+**2. Reasoning-effort control for the main model (M8)** — 8/9, S. Still free, but **coordinate**:
+#320 and #331 both touch `openai_compat.ts` and the quirks table, and #320 is entangled with our #328.
+Settle the collision above first.
+
+**3. ACP (§4 Tier 3 #12)** — unchanged, and now the strongest *uncontested* item. Nobody is on it, and it
+is still the highest reach-per-unit-effort in Track A: implement once, run inside Zed, JetBrains and
+VS Code with no extension work.
+
+Also free and uncontested: **F9** git commit authoring (6/9), **D3** custom keybindings (6/9),
+**E6** hooks (7/9), **E1/E2** MCP (8/9, but see §6 — two ADRs owed first).
 
 ---
 
@@ -165,11 +229,11 @@ Gaps are bold.
 | E2 | MCP client, HTTP/SSE | **NO** | 8 | ✅ | OAuth is standard across all eight |
 | E3 | MCP server mode | NO | 2 | ✗ | Claude Code + Codex only |
 | E4 | User-authored slash commands | **NO** | 7 | ✅ | Amp removed its own, superseded by skills |
-| E5 | Skills (`SKILL.md`) | **NO** | 8 | ✅ | agentskills.io standard; Crush/opencode/Copilot also read `.claude/skills` |
+| E5 | Skills (`SKILL.md`) | **NO** | 8 | ✅ | 🚧 **PR #327 open** — still scored NO until it merges. agentskills.io standard; Crush/opencode/Copilot also read `.claude/skills` |
 | E6 | User-configurable hooks | **NO** | 7 | ✅ | +2 PARTIAL. Minima's hooks are internal code seams only |
 | E7 | Plugin registry/marketplace | NO | 4 | ✗ | +3 PARTIAL; Amp removed its installer |
 | E8 | Embeddable SDK | PARTIAL | 6 | ✅ | Minima exports `src/index.ts`, undocumented, no built entry |
-| E9 | Project config file | **NO** | 8 | ✅ | no `.minima/` exists at all |
+| E9 | Project config file | **NO** | 8 | ✅ | ⚠️ no `.minima/` config file exists — yet **#327 and #312 both already read `.minima/` subdirectories**. The convention is being set without it |
 | E10 | Global config file | YES | 9 | ✅ | `~/.minima-harness/config.env` |
 | E11 | Rules files | YES | 8 | ✅ | reads `AGENTS.md` + `CLAUDE.md` |
 
@@ -178,7 +242,7 @@ Gaps are bold.
 | id | feature | M | n/9 | TS | note |
 | -- | -- | -- | -- | -- | -- |
 | A1 | Sub-agents | YES | 9 | ✅ | universal |
-| A2 | User-defined custom agents | **NO** | 6 | ✅ | Minima has one hardcoded `PLANNER_PERSONA` |
+| A2 | User-defined custom agents | **NO** | 6 | ✅ | 🚧 **PR #312 open** (supersedes #309). Minima has one hardcoded `PLANNER_PERSONA` |
 | A3 | Plan mode | YES | 6 | ✅ | Amp and Crush ship none and are praised anyway |
 | A4 | Persistent plan/todo | YES | 6 | ✅ | Amp removed its TODO list Jan 2026 |
 | A5 | Background jobs | YES | 8 | ✅ | |
@@ -241,7 +305,7 @@ Gaps are bold.
 | F3 | JSON event stream | YES | 8 | ✅ | `--mode json` |
 | F4 | VS Code extension | NO | 4 | ✗ | |
 | F5 | JetBrains extension | NO | 2 | ✗ | most reach it via ACP instead |
-| F6 | Web UI | NO | 1 | ✗ | |
+| F6 | Web UI | NO | 1 | ✗ | 🚧 **PR #315 open** — localhost read-only ledger dashboard. Note this row is 1/9 and sits in "deliberately not recommended"; it is being built for the ledger thesis, not for parity |
 | F7 | Desktop app | NO | 4 | ✗ | |
 | F8 | GitHub Action | NO | 4 | ✗ | +3 PARTIAL documented-workflow-only |
 | F9 | Git commit authoring | **NO** | 6 | ✅ | reachable only via `bash` today |
@@ -263,7 +327,7 @@ Gaps are bold.
 
 | id | feature | M | n/9 | TS | note |
 | -- | -- | -- | -- | -- | -- |
-| D1 | Themes | **NO** | 7 | ✅ | deferred at `app.tsx:7`; Amp *removed* theirs |
+| D1 | Themes | **NO** | 7 | ✅ | 🚧 **PR #318 open** — 10 colorschemes. Was deferred at `app.tsx:7`; Amp *removed* theirs |
 | D2 | Vim keybindings | NO | 3 | ✗ | Copilot CLI has open issues #13/#398 |
 | D3 | Custom keybindings | **NO** | 6 | ✅ | Minima's are hardcoded |
 | D4 | Command palette | YES | 9 | ✅ | universal |
@@ -306,16 +370,26 @@ the effort numbers were the weakest in the document; that warning is now measure
 
 ### Tier 1 (revised) — table stakes Minima still lacks, cheap
 
-Re-ranked 2026-08-04. Adoption first, effort as tiebreak, exactly as before — but two rows moved on new
-information from the build, not from new research.
+Re-ranked 2026-08-04, twice: first against what this arc shipped, then against **what the rest of the
+team already has open**. Adoption first, effort as tiebreak, as before. Two rows moved on information
+from *building* rather than new research (E9, M8); three left the tier entirely because someone else is
+building them. Nothing here was re-surveyed — the denominators are the original study's.
 
 | # | row | feature | n/9 | effort | why |
 | -- | -- | -- | -- | -- | -- |
-| 1 | **E9** | **`.minima/` project config** | **8/9** | S–M | **Promoted from Tier 2 to the top.** It was ranked #8 as a prerequisite; with Tier 1 spent, its dependents are now the whole remaining list. Minima has *no* repo-checked config surface at all. Unblocks E5, E6, E4 and A2 — four table-stakes rows behind one S–M item. Nothing else in this document has that ratio. |
-| 2 | **M8** | **Reasoning-effort control for the main model** | **8/9** | **S** | **Newly cheap, and newly obvious.** #328 established that `effortForLevel` has exactly one caller (`anthropic.ts`), so `--thinking` is **inert on every openai-compat provider today** — a live defect the survey scored only as PARTIAL. That PR also built the per-model wire seam (`tools_require_effort_none`) that the fix would extend. Highest adoption-per-effort left. |
-| 3 | **D1** | **Themes** | 7/9 | S–M | Carried from the original Tier 1, unchanged and unbuilt. Still deferred at `app.tsx:7`. Amp *removed* theirs — ship a small palette set, not a theming engine. |
-| 4 | **F9** | **Git commit authoring** | 6/9 | S–M | Reachable only through `bash` today. Attribution trailers as Crush, Amp and Copilot do. Pairs naturally with F10 (Tier 3) but is independently useful. |
-| 5 | **D3** | **Custom keybindings** | 6/9 | M | `~/.minima-harness/keybindings.json`. Now slightly more attractive than at survey time: the arc added two more hardcoded chords (Ctrl+X Ctrl+E, Ctrl+V), so the hardcoded set is growing, not stable. |
+| 1 | **E9** | **`.minima/` project config** | **8/9** | S–M | **Promoted from Tier 2 to the top, and the case strengthened since.** Two open PRs already read `.minima/` subdirectories (#327 `skills/`, #312 `agents/`) with no config file and no precedence rules between them. This is no longer greenfield — it is consolidating a convention three features are inventing separately, and it gets more expensive every week it waits. Still unblocks E6 and E4 on top. |
+| 2 | **M8** | **Reasoning-effort control for the main model** | **8/9** | **S** | **Newly cheap, and newly a defect.** #328 established that `effortForLevel` has exactly one caller (`anthropic.ts`), so `--thinking` is **inert on every openai-compat provider today** — the survey scored that PARTIAL, but it is a live bug. ⚠️ **Coordinate:** #320 and #331 both touch `openai_compat.ts` and the quirks table, and #320 is entangled with #328. Settle that collision first (§0). |
+| 3 | **F9** | **Git commit authoring** | 6/9 | S–M | Reachable only through `bash` today. Attribution trailers as Crush, Amp and Copilot do. Uncontested. |
+| 4 | **D3** | **Custom keybindings** | 6/9 | M | `~/.minima-harness/keybindings.json`. More attractive than at survey time and getting more so: this arc added two hardcoded chords (Ctrl+X Ctrl+E, Ctrl+V) and #318/#319 add more surface still. Uncontested. |
+
+**Removed from this tier because someone else is already building it** — the single most important thing
+this table does now:
+
+| row | feature | n/9 | taken by |
+| -- | -- | -- | -- |
+| **D1** | Themes | 7/9 | 🚧 **#318** — was #3 here a week ago |
+| **E5** | Skills | 8/9 | 🚧 **#327** — was the §0 "next" recommendation a week ago |
+| **A2** | User-defined custom agents | 6/9 | 🚧 **#312** |
 
 **Deliberately not promoted:** **S8** diff-review-before-apply (6/9, M) and **E8** embeddable SDK
 (6/9, PARTIAL). Both are real, both are Tier 3/2 material, neither is cheap. S8 in particular is easy to
@@ -331,11 +405,11 @@ features, hooks and `CLAUDE.md` memory are category E; Gemini CLI's extensions e
 | # | feature | n/9 | effort | why |
 | -- | -- | -- | -- | -- |
 | 6 | **MCP client (stdio + HTTP)** | **8/9** | **L** | The clearest table-stakes verdict in the study; the sole non-adopter is the dormant one. See §5 — this collides with two invariants. Minima already *renders* MCP-shaped tool names in `layout.ts` without supporting MCP. |
-| 7 | **Skills (`SKILL.md`)** | 8/9 | M | A genuine cross-vendor standard, not one vendor's idea: Crush, opencode and Copilot all read `.claude/skills/` as well as their own. Cline's three-tier progressive loading (~100-token metadata → <5k instructions → on-demand resources) is a context-budget technique that fits Minima's "projections in the context" principle exactly. |
+| 7 | **Skills (`SKILL.md`)** 🚧 #327 | 8/9 | M | A genuine cross-vendor standard, not one vendor's idea: Crush, opencode and Copilot all read `.claude/skills/` as well as their own. Cline's three-tier progressive loading (~100-token metadata → <5k instructions → on-demand resources) is a context-budget technique that fits Minima's "projections in the context" principle exactly. |
 | 8 | **Project config file (`.minima/`)** | 8/9 | S–M | ⬆️ **PROMOTED to Tier 1 #1** (2026-08-04). Minima has no repo-checked config surface at all. Prerequisite for 7, 9, 10 and 11 — which is why it moved: with Tier 1 spent, its dependents are the remaining list. |
 | 9 | **User-configurable hooks** | 7/9 | M | The transplantable design is Windsurf's and Copilot's: JSON over stdin/stdout, **pre-hooks deny on exit code 2 and their stderr returns as model-visible context**, layered system → user → workspace. Fits "enforcement in the dispatcher" — a hook is dispatcher-side, not prompt text. |
 | 10 | **User-authored slash commands** | 7/9 | S–M | Markdown files with argument substitution. Amp's removal is instructive: it deleted commands *in favour of* skills, so build 7 first and this may collapse into it. |
-| 11 | **User-defined custom agents** | 6/9 | M | Markdown + YAML frontmatter in `.minima/agents/`. Minima has one hardcoded persona; six comparators let users define their own with per-agent model selection. |
+| 11 | **User-defined custom agents** 🚧 #312 | 6/9 | M | Markdown + YAML frontmatter in `.minima/agents/`. Minima has one hardcoded persona; six comparators let users define their own with per-agent model selection. |
 
 ### Tier 3 — interop, and the git surface
 
@@ -511,11 +585,12 @@ the same problems. It does not.
 
 ## 8. Reading order for review
 
-0. **§0 Delivery ledger** — what shipped, what is in flight, what is next. Start here; the rest of the
-   document is the argument behind it.
-1. **§4 Tier 1 (revised)** — five items. Read the *shipped* table above it first: three of the original
-   five estimates had a wrong premise, all in the same direction, which is the calibration you need before
-   trusting any effort number below.
+0. **§0 Delivery ledger** — what shipped, **what 13 open PRs are already building**, and what is next.
+   Start here, and re-read the in-flight table before starting anything: three of last week's five
+   recommendations are now taken. The rest of the document is the argument behind it.
+1. **§4 Tier 1 (revised)** — four items, after three were removed as already-in-flight. Read the
+   *shipped* table above it first: three of the original five estimates had a wrong premise, all in the
+   same direction, which is the calibration you need before trusting any effort number below.
 2. **§4 Tier 2** — the extensibility hole. One decision (do we do MCP + skills at all), not six. Note E9
    has been promoted out of it into Tier 1, as the cheapest unblock for the rest.
 3. **§4 #12 ACP** — the single highest leverage-per-effort item, and easy to miss because it was not in the
