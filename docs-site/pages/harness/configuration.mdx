@@ -138,6 +138,7 @@ These are on by default — set the variable to `0` to opt out. Every one fails 
 | `MINIMA_TUI_EDITOR` | on | Composing the prompt in `$EDITOR` — <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> and `/editor`. Off restores <kbd>Ctrl</kbd>+<kbd>E</kbd> as thinking-only. **This names a behavior, not an editor**: only `0` disables it, and `MINIMA_TUI_EDITOR=vim` leaves it on with the value ignored — set `$EDITOR` (or `$VISUAL`) to choose the binary. |
 | `MINIMA_TUI_GRADED_OUTCOME` | on | Graded outcome labels, which report unverified-but-positive evidence distinctly from verified evidence. |
 | `MINIMA_TUI_PROJECT_CONFIG` | on | Reading [`.minima/config.toml`](#project-config-minimaconfigtoml). Off, the committed project config is not opened at all and every other layer resolves exactly as before. |
+| `MINIMA_TUI_KEYMAP` | on | Your [keymap file](/harness/interactive#rebinding-keys) (`~/.minima-harness/keymap.toml`). Off ignores the file entirely and uses the built-in keys — exactly as if it did not exist. |
 
 Two variables work the other way — they grant something the harness refuses by default:
 

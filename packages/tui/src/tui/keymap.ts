@@ -166,10 +166,23 @@ function chordMatches(chord: Chord, ev: KeyFlags & { readonly input: string }): 
   return ev.input === chord.key;
 }
 
+/**
+ * A chord's identity — key plus the three modifiers, and deliberately NOT `looseModifiers`,
+ * which widens what a chord MATCHES without changing which chord it is. Two chords with the
+ * same id are the same keystroke; the keymap loader uses it to find a chord bound twice.
+ */
+export function chordId(chord: Chord): string {
+  const [ctrl, shift, meta] = mods(chord);
+  return `${chord.key}|${ctrl ? 1 : 0}|${shift ? 1 : 0}|${meta ? 1 : 0}`;
+}
+
 function sameChord(a: Chord, b: Chord): boolean {
-  const [aCtrl, aShift, aMeta] = mods(a);
-  const [bCtrl, bShift, bMeta] = mods(b);
-  return a.key === b.key && aCtrl === bCtrl && aShift === bShift && aMeta === bMeta;
+  return chordId(a) === chordId(b);
+}
+
+/** Does this key event press exactly this chord? The predicate resolution itself uses. */
+export function matchesChord(ev: KeyFlags & { readonly input: string }, chord: Chord): boolean {
+  return chordMatches(chord, ev);
 }
 
 /**
@@ -196,6 +209,65 @@ export function resolveBinding(
     if (!prefix && chordMatches(binding.keys[0], ev)) return binding.action;
   }
   return null;
+}
+
+/** How each named key is written for a human. Only `tab` is reachable — the rest are
+ * reserved (keymap_file.ts) — but a label table with holes in it is a trap for the next
+ * binding that needs one. */
+const NAMED_LABELS: Record<NamedKey, string> = {
+  tab: "Tab",
+  return: "Enter",
+  escape: "Esc",
+  upArrow: "↑",
+  downArrow: "↓",
+  leftArrow: "←",
+  rightArrow: "→",
+  pageUp: "PageUp",
+  pageDown: "PageDown",
+  backspace: "Backspace",
+  delete: "Delete",
+};
+
+/**
+ * `help` is the prose spelling (`Ctrl+E`, `Shift+Tab`); `legend` is the footer's compact one
+ * (`ctrl+e`, `⇧tab`), which has to stay short — that row is clipped to one line.
+ */
+export type ChordStyle = "help" | "legend";
+
+/** One chord, spelled for a human. */
+export function formatChord(chord: Chord, style: ChordStyle = "help"): string {
+  const named = NAMED.has(chord.key);
+  if (style === "legend") {
+    const key = (named ? NAMED_LABELS[chord.key as NamedKey] : chord.key).toLowerCase();
+    return `${chord.ctrl ? "ctrl+" : ""}${chord.meta ? "alt+" : ""}${chord.shift ? "⇧" : ""}${key}`;
+  }
+  const parts: string[] = [];
+  if (chord.ctrl) parts.push("Ctrl");
+  if (chord.meta) parts.push("Alt");
+  if (chord.shift) parts.push("Shift");
+  parts.push(named ? NAMED_LABELS[chord.key as NamedKey] : chord.key.toUpperCase());
+  return parts.join("+");
+}
+
+/** The keys bound to an action, or null when the keymap does not bind it at all. */
+export function keysFor(
+  action: BindingAction,
+  keymap: Keymap = DEFAULT_KEYMAP,
+): readonly Chord[] | null {
+  return keymap.find((b) => b.action === action)?.keys ?? null;
+}
+
+/**
+ * What the in-app help must print for an action — `Ctrl+T`, or `Ctrl+X Ctrl+E` for a
+ * sequence. Reads the EFFECTIVE keymap, so a rebound key never leaves the help lying.
+ */
+export function describeKeys(
+  action: BindingAction,
+  keymap: Keymap = DEFAULT_KEYMAP,
+  style: ChordStyle = "help",
+): string {
+  const keys = keysFor(action, keymap);
+  return keys ? keys.map((c) => formatChord(c, style)).join(" ") : "(unbound)";
 }
 
 /** The prefix chord this event opens, when it is the first key of a sequence binding. */

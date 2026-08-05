@@ -180,7 +180,9 @@ export function TextInput({
     // readline block below. A `cancel` deliberately FALLS THROUGH (no return) so the
     // cancelling key still types — an accidental Ctrl+X prefix costs nothing.
     if (onEditorRequest) {
-      const chord = feedChordKey(input, Boolean(key.ctrl));
+      // The WHOLE key, not just ctrl: a user keymap may bind the chord to something carrying
+      // shift or meta, and the latch has to be able to tell those apart.
+      const chord = feedChordKey(input, key);
       if (chord.action === "arm") {
         onChordArmedRef.current?.(true);
         return;

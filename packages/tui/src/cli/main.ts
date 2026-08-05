@@ -72,6 +72,7 @@ import {
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
+import { initKeymap } from "../tui/keymap_file.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 import { VERSION } from "../version.ts";
@@ -1403,6 +1404,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
     await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
+
+  // The user keymap is a startup fact: read once, here, so it is published before the first
+  // keypress can be dispatched (app.tsx and the composer's chord latch both read the
+  // singleton). A missing file, a bad file and MINIMA_TUI_KEYMAP=0 all land on the defaults;
+  // anything the file got wrong is surfaced as a chat notice on mount, never as a failure.
+  initKeymap(agent.config.keymapFile);
 
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.

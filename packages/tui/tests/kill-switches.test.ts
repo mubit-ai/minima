@@ -68,6 +68,7 @@ const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_TOOL_ALLOWLIST", field: "toolAllowlist" },
   { env: "MINIMA_TUI_GRADED_OUTCOME", field: "gradedOutcome" },
   { env: "MINIMA_TUI_EDITOR", field: "externalEditor" },
+  { env: "MINIMA_TUI_KEYMAP", field: "keymapFile" },
 ];
 
 // Opt-in: shipped disabled, `=1` enables. Promotion to default-ON moves the row up.

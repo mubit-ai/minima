@@ -32,13 +32,19 @@
  * dispatch that returns early would leave `justConsumed` set and poison the next Ctrl+E.
  */
 
-import { keyEvent, matchPrefix, prefixChordFor, resolveBinding } from "./keymap.ts";
+import {
+  DEFAULT_KEYMAP,
+  type KeyFlags,
+  type Keymap,
+  keyEvent,
+  matchPrefix,
+  prefixChordFor,
+  resolveBinding,
+} from "./keymap.ts";
+import { activeKeymap } from "./keymap_file.ts";
 
 const CTRL_X = String.fromCharCode(24);
 const CTRL_E = String.fromCharCode(5);
-
-/** The chord that arms this sequence, read from the registry rather than spelled here. */
-const EDITOR_PREFIX = prefixChordFor("editor.open");
 
 export type ChordAction = "arm" | "launch" | "cancel" | "none";
 
@@ -52,15 +58,31 @@ export interface ChordResult {
 /**
  * Pure reducer: given whether the chord is armed, classify one keypress. WHICH keys make the
  * chord is the registry's business (keymap.ts) — this file owns only the latching.
+ *
+ * `key` is Ink's whole `Key`, not just `ctrl`: a user keymap may bind the sequence to a chord
+ * carrying shift or meta, and a latch that only ever saw `ctrl` could not tell it apart.
+ * The prefix chord is looked up per call rather than at module load, because the keymap file
+ * is read at startup — after this module is imported.
  */
-export function chordReduce(armed: boolean, input: string, ctrl: boolean): ChordResult {
-  const ev = keyEvent(input, { ctrl });
-  if (matchPrefix(ev)) return { armed: true, action: "arm", consumed: true };
+export function chordReduce(
+  armed: boolean,
+  input: string,
+  key: KeyFlags,
+  keymap: Keymap = DEFAULT_KEYMAP,
+): ChordResult {
+  const ev = keyEvent(input, key);
+  if (matchPrefix(ev, keymap)) return { armed: true, action: "arm", consumed: true };
   if (armed) {
-    const completed = resolveBinding({ ...ev, prefix: EDITOR_PREFIX }) === "editor.open";
+    const prefix = prefixChordFor("editor.open", keymap);
+    const completed =
+      prefix !== null && resolveBinding({ ...ev, prefix }, keymap) === "editor.open";
     if (completed) return { armed: false, action: "launch", consumed: true };
     return { armed: false, action: "cancel", consumed: false };
   }
+  // A keymap may bind editor.open to a SINGLE chord, which has no prefix to arm: it launches
+  // on its own. Inert under the default keymap, where editor.open is only ever a sequence.
+  if (resolveBinding(ev, keymap) === "editor.open")
+    return { armed: false, action: "launch", consumed: true };
   return { armed: false, action: "none", consumed: false };
 }
 
@@ -68,11 +90,17 @@ let armed = false;
 let justConsumed = false;
 
 /**
- * Feed one keypress into the singleton. `input`/`ctrl` are Ink's useInput arguments — Ink
- * reports a control key as `input: "x", key.ctrl: true`, never the raw byte.
+ * Feed one keypress into the singleton. `input`/`key` are Ink's useInput arguments — Ink
+ * reports a control key as `input: "x", key.ctrl: true`, never the raw byte. The keymap
+ * defaults to the loaded one: the singleton half of this module reads the singleton keymap,
+ * so no caller has to thread a startup fact through the composer.
  */
-export function feedChordKey(input: string, ctrl: boolean): ChordResult {
-  const res = chordReduce(armed, input, ctrl);
+export function feedChordKey(
+  input: string,
+  key: KeyFlags,
+  keymap: Keymap = activeKeymap(),
+): ChordResult {
+  const res = chordReduce(armed, input, key, keymap);
   armed = res.armed;
   if (res.consumed) justConsumed = true;
   return res;

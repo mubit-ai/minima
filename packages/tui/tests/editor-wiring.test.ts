@@ -20,20 +20,27 @@ describe("app.tsx — the Ctrl+E collision", () => {
     expect(handlerAt).toBeLessThan(ctrlZAt);
   });
 
-  test("the guard appears BEFORE the thinking cycle it suppresses", () => {
+  test("the guard appears BEFORE every action it suppresses", () => {
+    // Since the keymap file, the suppression is general: the sequence's second key belongs to
+    // the composer whatever it is bound to (it was a thinking-only guard while Ctrl+E was the
+    // only key that could BE the second one). So it has to sit above all of them.
     const guardAt = app.indexOf("const editorChordKey = chordOwnsKey();");
-    const cycleAt = app.indexOf("if (!editorChordKey) cycleThinkingLevel();");
+    const suppressAt = app.indexOf(
+      "if (editorChordKey && matchesSecondChord(input, key)) return;",
+    );
+    const firstActionAt = app.indexOf('if (action === "permission.cycle")');
     expect(guardAt).toBeGreaterThan(-1);
-    expect(cycleAt).toBeGreaterThan(-1);
-    expect(guardAt).toBeLessThan(cycleAt);
+    expect(suppressAt).toBeGreaterThan(-1);
+    expect(firstActionAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(suppressAt);
+    expect(suppressAt).toBeLessThan(firstActionAt);
   });
 
   test("Ctrl+E still returns unconditionally, so it never falls through to another binding", () => {
-    // Which key means thinking.cycle now lives in keymap.ts; what survives here is the
-    // shape the latch depends on — resolved once, guarded, returned unconditionally.
-    expect(app).toContain(
-      'if (action === "thinking.cycle") { if (!editorChordKey) cycleThinkingLevel(); return; }',
-    );
+    // Which key means thinking.cycle lives in keymap.ts; whether the composer already owns
+    // this dispatch is decided by the guard above. What survives here is the shape the latch
+    // depends on — resolved once, returned unconditionally.
+    expect(app).toContain('if (action === "thinking.cycle") { cycleThinkingLevel(); return; }');
   });
 
   test("chordOwnsKey is CALLED exactly once — it is a one-shot latch", () => {
@@ -116,7 +123,9 @@ describe("app.tsx — the composer wiring", () => {
     // Pinned on the FRAGMENT rather than the whole ternary: the title now also carries the
     // attachment count (`· 2 images`), so a whole-expression pin would break on every future
     // title addition while proving nothing more than this does.
-    expect(app).toContain('chordArmed ? " prompt · ^X"');
+    // The chord itself is now spelled from the effective keymap (armedPrefixHint keeps `^X`
+    // for a plain Ctrl prefix, which is every default); the fragment is still what is pinned.
+    expect(app).toContain("chordArmed ? ` prompt · ${armedPrefixHint()}`");
     // The height reserve is still computed from typedText alone.
     expect(app).toContain("height={2 + inputRows}");
   });
@@ -133,14 +142,16 @@ describe("app.tsx — /editor", () => {
   });
 
   test("the chord is in the keyboard help", () => {
-    expect(app).toContain("Ctrl+X Ctrl+E compose the prompt in $EDITOR");
+    // Printed from the EFFECTIVE keymap since the keymap file landed, so what the help owes
+    // the reader is the lookup, not the literal chord.
+    expect(app).toContain('${keyHelp("editor.open")} compose the prompt in $EDITOR');
   });
 });
 
 describe("text-input.tsx — the chord feed", () => {
   test("the chord is fed after the disabled/suspended guard and before the draft is read", () => {
     const guardAt = textInput.indexOf("if (disabled || suspended) return;");
-    const feedAt = textInput.indexOf("const chord = feedChordKey(input, Boolean(key.ctrl));");
+    const feedAt = textInput.indexOf("const chord = feedChordKey(input, key);");
     const draftAt = textInput.indexOf("const { value, cursor } = draftRef.current; // key.return");
     expect(guardAt).toBeGreaterThan(-1);
     expect(feedAt).toBeGreaterThan(guardAt);
