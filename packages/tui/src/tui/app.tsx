@@ -122,7 +122,17 @@ import { type ActiveAction, currentActionLine, reduceActiveActions } from "./cur
 import { openEditorForDraft } from "./editor.ts";
 import { chordOwnsKey, resetChord } from "./editor_chord.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
-import { keyEvent, resolveBinding } from "./keymap.ts";
+import {
+  type BindingAction,
+  type KeyFlags,
+  describeKeys,
+  formatChord,
+  keyEvent,
+  keysFor,
+  matchesChord,
+  resolveBinding,
+} from "./keymap.ts";
+import { activeKeymap, keymapPath, keymapProblems } from "./keymap_file.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -264,6 +274,42 @@ function anyProviderKeyPresent(): boolean {
   return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
 }
 
+/**
+ * The chord `/help` prints for an action. Reads the EFFECTIVE keymap, so a user who rebound
+ * a key is never shown the default — the help is the only place most people will look.
+ */
+function keyHelp(action: BindingAction): string {
+  return describeKeys(action, activeKeymap());
+}
+
+/** The same, in the footer legend's compact spelling — that row is clipped to one line. */
+function keyLegend(action: BindingAction): string {
+  return describeKeys(action, activeKeymap(), "legend");
+}
+
+/**
+ * True when this keypress is the SECOND key of the $EDITOR sequence — the one the composer
+ * owns while the chord is armed. False when a keymap binds `editor.open` to a single chord:
+ * there is no second key then, and the chord launches on its own without ever arming.
+ */
+function matchesSecondChord(input: string, key: KeyFlags): boolean {
+  const second = keysFor("editor.open", activeKeymap())?.[1];
+  return second !== undefined && matchesChord(keyEvent(input, key), second);
+}
+
+/**
+ * The armed $EDITOR prefix as the composer titles it: readline's `^X` while the chord is a
+ * plain Ctrl one (what it has always shown), and the chord's own spelling once a keymap has
+ * moved it somewhere caret notation cannot express.
+ */
+function armedPrefixHint(): string {
+  const prefix = keysFor("editor.open", activeKeymap())?.[0];
+  if (!prefix) return "";
+  return prefix.ctrl && !prefix.meta && !prefix.shift && [...prefix.key].length === 1
+    ? `^${prefix.key.toUpperCase()}`
+    : formatChord(prefix, "legend");
+}
+
 /** Verification-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
 const PLAN_ON_NOTICE =
   "Plan mode ON — write/edit/bash/apply_patch ask first; todowrite/task blocked. " +
@@ -318,63 +364,90 @@ function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
   return null;
 }
 
-const COMMANDS = [
-  { name: "model", desc: "Select or pin a model (or 'auto')" },
-  { name: "clear", desc: "Clear chat messages" },
-  { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
-  { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
-  { name: "help", desc: "Show available commands list" },
-  { name: "version", desc: "Show the Minima harness version" },
-  { name: "quit", desc: "Exit the application" },
-  { name: "exit", desc: "Exit the application" },
-  { name: "cost", desc: "Show cost meter totals" },
-  { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
-  { name: "reconnect", desc: "Reconnect routing client" },
-  { name: "new", desc: "Start a fresh session" },
-  { name: "name", desc: "Set the session display name" },
-  { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
-  { name: "session", desc: "Show session info" },
-  { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
-  { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
-  {
-    name: "editor",
-    desc: "Compose in $EDITOR — opens empty (/editor <text> seeds it); Ctrl+X Ctrl+E carries the draft",
-  },
-  { name: "resume", desc: "Resume a session (optionally by id)" },
-  { name: "judge", desc: "Toggle LLM judging on/off" },
-  { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
-  { name: "thoughts", desc: "Toggle streaming model's reasoning" },
-  { name: "perms", desc: "Show current tool permission grants" },
-  { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
-  { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
-  { name: "commit", desc: "Commit staged changes with model attribution (/commit <message>)" },
-  { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
-  { name: "compact", desc: "Summarize old turns to free context" },
-  {
-    name: "plan",
-    desc: "Plan mode (Shift+Tab; asks first) + council (start·status·finalize·cancel)",
-  },
-  { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
-  { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
-  { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
-  { name: "bp-seed", desc: "Seed a demo plan with gates for this run (plan verification on only)" },
-  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
-  {
-    name: "why",
-    desc: "Show plan verification (/why <n> opens the step card, /why <sha> explains a commit)",
-  },
-  { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
-  { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
-  {
-    name: "memory",
-    desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
-  },
-  {
-    name: "profile",
-    desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
-  },
-];
+/**
+ * The slash commands — built on FIRST USE, not at module load. Five descriptions name a
+ * keybinding, and the keymap file that decides those chords is read in main.ts after this
+ * module has been imported; a module-level array would freeze the defaults into the palette
+ * and `/help` no matter what the user rebound. Memoized because the keymap cannot change
+ * after startup, and because CommandPicker takes this array as a prop — a fresh array per
+ * render would be a new identity every time.
+ */
+let commandCache: { name: string; desc: string }[] | null = null;
+function allCommands(): { name: string; desc: string }[] {
+  commandCache ??= [
+    { name: "model", desc: "Select or pin a model (or 'auto')" },
+    { name: "clear", desc: "Clear chat messages" },
+    { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
+    { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
+    { name: "help", desc: "Show available commands list" },
+    { name: "version", desc: "Show the Minima harness version" },
+    { name: "quit", desc: "Exit the application" },
+    { name: "exit", desc: "Exit the application" },
+    { name: "cost", desc: "Show cost meter totals" },
+    { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
+    { name: "reconnect", desc: "Reconnect routing client" },
+    { name: "new", desc: "Start a fresh session" },
+    { name: "name", desc: "Set the session display name" },
+    { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
+    { name: "session", desc: "Show session info" },
+    { name: "tree", desc: "Toggle the sub-agent tree panel" },
+    {
+      name: "tasks",
+      desc: `Toggle the task panel (${keyHelp("task.panel")}) · /tasks cancel rejects list + plan`,
+    },
+    {
+      name: "copy",
+      desc: `Copy the last assistant reply to the clipboard (${keyHelp("reply.copy")})`,
+    },
+    {
+      name: "editor",
+      desc: `Compose in $EDITOR — opens empty (/editor <text> seeds it); ${keyHelp("editor.open")} carries the draft`,
+    },
+    { name: "resume", desc: "Resume a session (optionally by id)" },
+    { name: "judge", desc: "Toggle LLM judging on/off" },
+    { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
+    { name: "thoughts", desc: "Toggle streaming model's reasoning" },
+    { name: "perms", desc: "Show current tool permission grants" },
+    { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
+    { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
+    { name: "commit", desc: "Commit staged changes with model attribution (/commit <message>)" },
+    {
+      name: "rewind",
+      desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])",
+    },
+    { name: "compact", desc: "Summarize old turns to free context" },
+    {
+      name: "plan",
+      desc: `Plan mode (${keyHelp("permission.cycle")}; asks first) + council (start·status·finalize·cancel)`,
+    },
+    {
+      name: "mode",
+      desc: `Show/set mode: build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles)`,
+    },
+    { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+    { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
+    {
+      name: "bp-seed",
+      desc: "Seed a demo plan with gates for this run (plan verification on only)",
+    },
+    { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
+    {
+      name: "why",
+      desc: "Show plan verification (/why <n> opens the step card, /why <sha> explains a commit)",
+    },
+    { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
+    { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
+    {
+      name: "memory",
+      desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
+    },
+    {
+      name: "profile",
+      desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
+    },
+  ];
+  return commandCache;
+}
 
 export interface CommandPickerProps {
   commands: { name: string; desc: string }[];
@@ -945,6 +1018,20 @@ export function HarnessApp({
           role: "tool",
           toolName: "setup",
           text: `No model-provider API key set — set one to run models: ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER). \`/auth\` configures routing only.`,
+        },
+      ]);
+    }
+    // A keymap file that could not be honoured says so ONCE, here. Every problem already
+    // names the action it cost and the default it kept, so this never blocks anything —
+    // the affected keys simply are what they always were.
+    const keymapTrouble = keymapProblems();
+    if (keymapTrouble.length > 0) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          toolName: "keymap",
+          text: `⚠ ${keymapPath()}\n${keymapTrouble.map((p) => `  • ${p}`).join("\n")}`,
         },
       ]);
     }
@@ -1583,7 +1670,7 @@ export function HarnessApp({
   // the picker, tab-complete or /help, and not in the dispatcher (handleCommand falls through
   // to the unknown-command reply). "Removed", not "reports itself unavailable".
   const commands = useMemo(
-    () => (commitDeps ? COMMANDS : COMMANDS.filter((c) => c.name !== "commit")),
+    () => (commitDeps ? allCommands() : allCommands().filter((c) => c.name !== "commit")),
     [commitDeps],
   );
 
@@ -1899,7 +1986,15 @@ export function HarnessApp({
     // Which of the ten app-level actions (if any) this keypress means. Pure lookup against
     // the registry — WHERE each action may fire, and in what order, is still this handler's
     // control flow below. Nothing outside the registry matches an app chord by hand.
-    const action = resolveBinding(keyEvent(input, key));
+    const action = resolveBinding(keyEvent(input, key), activeKeymap());
+    // While the $EDITOR chord is armed, its SECOND key belongs to the composer — whatever
+    // else that key means on its own. With the default keymap that key is Ctrl+E, which is
+    // why this used to be spelled as a thinking-only guard; a keymap that moves the sequence
+    // onto, say, Ctrl+X Ctrl+G would otherwise open the editor AND the plan overview from one
+    // keypress. Order-independent for the same reason the latch is: the composer running
+    // first leaves `justConsumed`, this handler running first leaves `armed` — and a key that
+    // merely CANCELS the chord is not the second key, so it still means what it means.
+    if (editorChordKey && matchesSecondChord(input, key)) return;
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
     // Not a binding: suspend and abort are terminal contracts, never rebindable.
@@ -2135,12 +2230,13 @@ export function HarnessApp({
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
     }
-    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build).
-    // The Ctrl+E of a Ctrl+X Ctrl+E chord belongs to the composer, not to thinking. With
-    // MINIMA_TUI_EDITOR=0 the composer never feeds the chord, so editorChordKey is always
-    // false here and this branch behaves byte-identically to before the feature existed.
+    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build). The Ctrl+E
+    // of a Ctrl+X Ctrl+E chord belongs to the composer, not to thinking — handled by the
+    // second-key guard at the top, which covers this the same way whatever the chord is bound
+    // to. With MINIMA_TUI_EDITOR=0 the composer never feeds the chord, so that guard is
+    // always false and this branch behaves byte-identically to before the feature existed.
     if (action === "thinking.cycle") {
-      if (!editorChordKey) cycleThinkingLevel();
+      cycleThinkingLevel();
       return;
     }
     if (key.ctrl && input === "c") {
@@ -3210,7 +3306,7 @@ export function HarnessApp({
             setMode(next ? "plan" : "build");
             pushPlan(
               next
-                ? "Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; Shift+Tab cycles on to bypass."
+                ? `Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; ${keyHelp("permission.cycle")} cycles on to bypass.`
                 : "Build mode — standard permissions.",
             );
           } else {
@@ -3335,7 +3431,7 @@ export function HarnessApp({
             echo,
             {
               role: "tool",
-              text: `Mode: ${getMode()} — /mode build | accept | plan | bypass (Shift+Tab cycles).`,
+              text: `Mode: ${getMode()} — /mode build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles).`,
               toolName: "mode",
             },
           ]);
@@ -3349,7 +3445,7 @@ export function HarnessApp({
             role: "tool",
             text:
               want === "bypass"
-                ? "⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the Shift+Tab cycle; it is never persisted."
+                ? `⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the ${keyHelp("permission.cycle")} cycle; it is never persisted.`
                 : want === "acceptEdits"
                   ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
                   : want === "plan"
@@ -3369,7 +3465,11 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${commands.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Ctrl+X Ctrl+E compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
+            text: `Available commands:\n${commands
+              .map((c) => `  /${c.name.padEnd(12)} ${c.desc}`)
+              .join(
+                "\n",
+              )}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · ${keyHelp("reply.copy")} copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  ${keyHelp("permission.cycle")} permission modes · ${keyHelp("thinking.cycle")} thinking · ${keyHelp("model.picker")} models · ${keyHelp("command.palette")} palette\n  ${keyHelp("route.mode")} route mode · ${keyHelp("toc.panel")} ToC · ${keyHelp("plan.overview")} plan overview\n  ${keyHelp("editor.open")} compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
           },
         ]);
@@ -3705,7 +3805,7 @@ export function HarnessApp({
           {
             role: "tool",
             text: nextHidden
-              ? "Task panel hidden for this project (persists). Ctrl+B or /tasks shows it again."
+              ? `Task panel hidden for this project (persists). ${keyHelp("task.panel")} or /tasks shows it again.`
               : (todos?.length ?? 0) > 0
                 ? "Task panel shown."
                 : "Task panel shown — it appears when the agent records todos.",
@@ -4764,7 +4864,7 @@ export function HarnessApp({
     // The panel owns the keyboard while mounted, so it re-resolves the same registry for
     // the two actions that mean something in here — ownership is unchanged, only the
     // matching moved.
-    const action = resolveBinding(keyEvent(input, key));
+    const action = resolveBinding(keyEvent(input, key), activeKeymap());
     if (key.ctrl && input === "c") {
       closePanelReseat();
       return;
@@ -5269,7 +5369,7 @@ export function HarnessApp({
                 and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
               <Text color={planMode ? "magenta" : "yellow"}>
-                {`${planMode ? " plan mode" : chordArmed ? " prompt · ^X" : " prompt"}${
+                {`${planMode ? " plan mode" : chordArmed ? ` prompt · ${armedPrefixHint()}` : " prompt"}${
                   attachedCount > 0
                     ? ` · ${attachedCount} image${attachedCount === 1 ? "" : "s"}`
                     : ""
@@ -5378,27 +5478,28 @@ export function HarnessApp({
             second row Yoga never budgeted (footerHeight says 1) and garble the frame. */}
         <Box justifyContent="space-between" width="100%" height={1} overflow="hidden">
           <Box>
-            <Text color="yellow">ctrl+l </Text>
+            <Text color="yellow">{keyLegend("model.picker")} </Text>
             <Text color="gray">Model </Text>
-            <Text color="yellow">ctrl+r </Text>
+            <Text color="yellow">{keyLegend("route.mode")} </Text>
             <Text color="gray">Route </Text>
-            <Text color="yellow">⇧tab </Text>
+            <Text color="yellow">{keyLegend("permission.cycle")} </Text>
             <Text color="gray">Mode </Text>
-            <Text color="yellow">ctrl+e </Text>
+            <Text color="yellow">{keyLegend("thinking.cycle")} </Text>
             <Text color="gray">Reason </Text>
-            <Text color="yellow">ctrl+b </Text>
+            <Text color="yellow">{keyLegend("task.panel")} </Text>
             <Text color="gray">Tasks </Text>
             {agent.config.bigPlan === true ? (
               <>
-                <Text color="yellow">ctrl+g </Text>
+                <Text color="yellow">{keyLegend("plan.overview")} </Text>
                 <Text color="gray">Plan </Text>
               </>
             ) : null}
+            {/* Not a binding: abort is a terminal contract, so it is spelled, not looked up. */}
             <Text color="yellow">esc </Text>
             <Text color="gray">Abort</Text>
           </Box>
           <Box>
-            <Text color="yellow">ctrl+p </Text>
+            <Text color="yellow">{keyLegend("command.palette")} </Text>
             <Text color="gray">palette</Text>
           </Box>
         </Box>

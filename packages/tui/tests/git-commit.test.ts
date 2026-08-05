@@ -544,8 +544,13 @@ describe("git_commit — the two surfaces are one code path (wiring pins)", () =
     expect(src).toContain(
       code('if (cmdName === "commit" && !commitDeps) { replyUnknownCommand(name, args); return; }'),
     );
+    // D3 renamed the source list to allCommands() so the keymap file can substitute live
+    // chords into the descriptions. The guard is unchanged in intent: the flag-off branch
+    // still filters /commit out of the one array the picker, tab-complete and /help read.
     expect(src).toContain(
-      code('() => (commitDeps ? COMMANDS : COMMANDS.filter((c) => c.name !== "commit")),'),
+      code(
+        '() => (commitDeps ? allCommands() : allCommands().filter((c) => c.name !== "commit")),',
+      ),
     );
     expect(src).toContain(code('{ name: "commit",'));
   });

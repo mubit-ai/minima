@@ -49,6 +49,32 @@ The bar along the bottom shows, at a glance:
 Scrolling, text selection, and copy are native to your terminal (wheel/trackpad) — the TUI doesn't capture the mouse. In pickers, use <kbd>↑</kbd>/<kbd>↓</kbd> to move, <kbd>Enter</kbd> to choose, <kbd>Esc</kbd> to dismiss.
 </Note>
 
+### Rebinding keys
+
+Ten of the shortcuts above are rebindable in `~/.minima-harness/keymap.toml`. It is a global file — a project can never rebind your keys — and it is read once at startup, so restart the TUI after editing it.
+
+```toml
+[keys]
+"thinking.cycle"   = "ctrl+n"        # Ctrl+E by default
+"model.picker"     = "alt+m"         # Ctrl+L
+"command.palette"  = "ctrl+p"
+"route.mode"       = "ctrl+r"
+"toc.panel"        = "ctrl+t"
+"plan.overview"    = "ctrl+g"
+"task.panel"       = "ctrl+b"
+"reply.copy"       = "ctrl+y"
+"permission.cycle" = "shift+tab"
+"editor.open"      = "ctrl+x ctrl+e" # the only action that may be a two-key sequence
+```
+
+Anything you leave out keeps its default. The `[keys]` header is optional — rows at the top level of the file mean the same thing.
+
+A chord is modifiers joined to one key by `+`: `ctrl` (or `control`) and `alt` (or `option`/`meta`). A printable key needs one of those two, because a bare key would also type into the prompt; `shift` is accepted only with `tab`, since a terminal sends the same bytes for `ctrl+k` and `ctrl+shift+k`. For the same reason `ctrl+i`, `ctrl+m`, `ctrl+h` and `ctrl+[` are refused — those bytes *are* Tab, Enter, Backspace and Escape.
+
+The editing keys are **not** rebindable, by design: the readline chords (<kbd>Ctrl</kbd>+<kbd>A</kbd>/<kbd>U</kbd>/<kbd>K</kbd>/<kbd>W</kbd>/<kbd>D</kbd>/<kbd>V</kbd>, <kbd>Alt</kbd>+<kbd>B</kbd>/<kbd>F</kbd>), abort (<kbd>Esc</kbd>, <kbd>Ctrl</kbd>+<kbd>C</kbd>), suspend (<kbd>Ctrl</kbd>+<kbd>Z</kbd>), <kbd>Enter</kbd>, <kbd>Tab</kbd> and the arrows. Naming one of them is reported and ignored — a keymap that could take away your ability to stop a running agent would leave you no way back.
+
+Two actions on one chord is reported at startup, naming both, and neither wins: the actions involved keep their defaults. The same goes for anything else the file gets wrong — a bad line costs you that one binding, never your startup. `/help` always prints the bindings actually in effect. To ignore the file entirely, set `MINIMA_TUI_KEYMAP=0`.
+
 ## Slash commands
 
 Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a command:

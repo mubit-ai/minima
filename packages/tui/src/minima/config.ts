@@ -151,6 +151,14 @@ export interface HarnessConfig {
    * to register as NEITHER key, and gating a stdin parser on a feature flag would be worse
    * than the exposure. */
   externalEditor: boolean;
+  /** User keymap file (D3, default ON): `~/.minima-harness/keymap.toml` rebinds any of the ten
+   * app-level actions the binding registry resolves (keymap.ts). `MINIMA_TUI_KEYMAP=0` skips
+   * the file entirely — the defaults are used and nothing is reported, exactly as if no file
+   * existed. GLOBAL only: a keybinding has no nameable safer side, so it is not on the project
+   * config allowlist at all (ADR 0010). The readline core, abort, suspend, Enter, Escape, Tab
+   * and the arrows are outside the registry, so no keymap can rebind them — and the loader
+   * also refuses to bind an action ONTO one of them. */
+  keymapFile: boolean;
   /** Memory ledger (B1, default ON): project curated cross-session memories (SQLite
    * `memories` table, managed via /memory) into each turn's system prompt. Opt out with
    * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
@@ -327,6 +335,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     backoffMs: 0,
     gradedOutcome: true,
     externalEditor: true,
+    keymapFile: true,
     memoryLedger: true,
     artifacts: true,
     artifactGcMb: 512,
@@ -405,6 +414,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(n) && n >= 0) cfg.notifyAfterMs = n;
   }
   cfg.externalEditor = process.env.MINIMA_TUI_EDITOR !== "0";
+  cfg.keymapFile = process.env.MINIMA_TUI_KEYMAP !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;
