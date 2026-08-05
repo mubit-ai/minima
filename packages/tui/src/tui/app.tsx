@@ -322,7 +322,7 @@ const COMMANDS = [
   { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
   { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
   { name: "compact", desc: "Summarize old turns to free context" },
-  { name: "pr", desc: "Branch, commit, push and open a PR (/pr <base>, e.g. /pr main)" },
+  { name: "pr", desc: "Branch, commit, push and open a PR into <branch> (/pr develop)" },
   {
     name: "plan",
     desc: "Plan mode (Shift+Tab; asks first) + council (start·status·finalize·cancel)",
