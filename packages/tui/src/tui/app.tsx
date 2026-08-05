@@ -87,6 +87,7 @@ import {
   makeRepoResolver,
   restore,
 } from "../session/checkpoint.ts";
+import { type CommitDeps, commitChanges } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
@@ -238,6 +239,12 @@ export interface AppProps {
    * unfiltered pattern the plan strip refresh uses).
    */
   todos?: TodoTask[];
+  /**
+   * F9a: the SAME CommitDeps main.ts handed the `git_commit` tool, so `/commit` reaches the
+   * same code path and produces an identical commit. null when MINIMA_TUI_GIT_COMMIT=0 — the
+   * command is then removed outright rather than reporting itself unavailable.
+   */
+  commitDeps?: CommitDeps | null;
 }
 
 /** Persona the lead adopts in plan mode; the council's plan snapshot is appended each turn. */
@@ -341,6 +348,7 @@ const COMMANDS = [
   { name: "perms", desc: "Show current tool permission grants" },
   { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
   { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
+  { name: "commit", desc: "Commit staged changes with model attribution (/commit <message>)" },
   { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
   { name: "compact", desc: "Summarize old turns to free context" },
   {
@@ -854,6 +862,7 @@ export function HarnessApp({
   bigPlanGateBefore,
   verifyConsentRef,
   todos,
+  commitDeps = null,
 }: AppProps) {
   const { exit } = useApp();
   // One basis for the footer's ctx segment and for maybeAutoCompact (context_meter.ts). The
@@ -1567,11 +1576,19 @@ export function HarnessApp({
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
 
+  // F9a: with MINIMA_TUI_GIT_COMMIT=0 there are no commit deps, so /commit does not exist — not in
+  // the picker, tab-complete or /help, and not in the dispatcher (handleCommand falls through
+  // to the unknown-command reply). "Removed", not "reports itself unavailable".
+  const commands = useMemo(
+    () => (commitDeps ? COMMANDS : COMMANDS.filter((c) => c.name !== "commit")),
+    [commitDeps],
+  );
+
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
   const allMatchingCommands =
     typedText.startsWith("/") && !hasSpace
-      ? COMMANDS.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+      ? commands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
       : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
@@ -2158,7 +2175,7 @@ export function HarnessApp({
     if (hasSpace) return undefined;
 
     const prefix = val.slice(1).toLowerCase();
-    const matches = COMMANDS.filter((c) => c.name.startsWith(prefix));
+    const matches = commands.filter((c) => c.name.startsWith(prefix));
 
     if (matches.length > 0) {
       return `/${matches[0]!.name} `;
@@ -2455,8 +2472,32 @@ export function HarnessApp({
     }, 0);
   }
 
+  /** The reply for a command that does not exist — shared with the flag-removed /commit, so
+   *  a switched-off command is indistinguishable from one that was never built. */
+  function replyUnknownCommand(name: string, args: string) {
+    setMessages((m) => [
+      ...m,
+      {
+        role: "user",
+        text: `/${name} ${args}`.trim(),
+      },
+      {
+        role: "tool",
+        text: `Unknown command: /${name}. Type /help to see all available commands.`,
+        toolName: "error",
+        isError: true,
+      },
+    ]);
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
+    // MINIMA_TUI_GIT_COMMIT=0 removes /commit outright (the deps are absent), so it must not reach
+    // its case: fall through to the unknown-command reply exactly as any typo would.
+    if (cmdName === "commit" && !commitDeps) {
+      replyUnknownCommand(name, args);
+      return;
+    }
     switch (cmdName) {
       case "clear":
         reseatFreshScreen();
@@ -2653,6 +2694,21 @@ export function HarnessApp({
                 )
                 .join("\n");
         setMessages((m) => [...m, echo, { role: "tool", text, toolName: "ckpt" }]);
+        break;
+      }
+      case "commit": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "commit", isError }]);
+        const message = args.trim();
+        if (!message) {
+          say("Usage: /commit <message> — commits the staged changes with model attribution.");
+          break;
+        }
+        // The same commitDeps main.ts gave the git_commit tool, so the user-initiated and
+        // model-initiated commits are one code path: same trailers, same refusals, same hooks.
+        const result = await commitChanges(commitDeps!, { message });
+        say(result.ok ? result.report : result.reason, !result.ok);
         break;
       }
       case "memory": {
@@ -3310,7 +3366,7 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Ctrl+X Ctrl+E compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
+            text: `Available commands:\n${commands.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Ctrl+X Ctrl+E compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
           },
         ]);
@@ -4219,19 +4275,7 @@ export function HarnessApp({
         break;
       }
       default:
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: `Unknown command: /${name}. Type /help to see all available commands.`,
-            toolName: "error",
-            isError: true,
-          },
-        ]);
+        replyUnknownCommand(name, args);
     }
   }
 
@@ -4942,7 +4986,7 @@ export function HarnessApp({
   const pickerRows = pickerOpen
     ? MODEL_PICKER_MAX_ROWS
     : paletteOpen
-      ? COMMANDS.length + 3
+      ? commands.length + 3
       : sessionPickerOpen
         ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
         : configOverlayOpen
@@ -5100,7 +5144,7 @@ export function HarnessApp({
         />
       ) : paletteOpen ? (
         <CommandPicker
-          commands={COMMANDS}
+          commands={commands}
           onPick={(name) => {
             setPaletteOpen(false);
             handleCommand(name, "").catch((exc) => {

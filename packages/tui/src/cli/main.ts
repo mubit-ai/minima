@@ -48,6 +48,7 @@ import { resolveEnvLayers } from "../minima/project_config.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
+import { makeCommitDeps } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
@@ -55,6 +56,7 @@ import { BgJobRegistry } from "../tools/_bgjobs.ts";
 import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
+import { registerGitCommitTool } from "../tools/git_commit.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -1174,6 +1176,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     db,
     getRunId: () => agent.runId,
   });
+  // F9a git commit authoring: ONE dependency set behind both surfaces — the `git_commit`
+  // tool registered here and the `/commit` command the TUI dispatches — so the two cannot
+  // drift into producing different commits. MINIMA_TUI_GIT_COMMIT=0 removes both.
+  const commitDeps = makeCommitDeps({
+    cwd: process.cwd(),
+    db,
+    getRunId: () => agent.runId,
+    getLiveModelId: () => agent.agentState.model?.id ?? null,
+  });
+  registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
@@ -1402,6 +1414,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
+      commitDeps: config.gitCommit ? commitDeps : null,
     }),
     { exitOnCtrlC: false },
   );
