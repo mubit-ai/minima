@@ -18,7 +18,10 @@
  */
 
 // Purely-internal signals with no user value — hidden completely.
+// reasoning_filter_skipped is covered by the runtime's once-per-session
+// "no reasoning — running with reasoning off" note; the raw token would repeat every turn.
 const HIDDEN_PREFIXES = [
+  "reasoning_filter_skipped",
   "reasoner_disabled",
   "reasoner_consulted",
   "recall_timeout",
