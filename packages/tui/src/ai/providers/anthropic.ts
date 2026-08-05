@@ -24,7 +24,7 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
-import { effortForLevel, thinkingFormatFor } from "../provider_quirks.ts";
+import { effectiveEffort, reasoningPayload, thinkingFormatFor } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -245,8 +245,11 @@ function buildKwargs(
     const format = thinkingFormatFor(model);
     if (format === "adaptive") {
       kwargs.thinking = { type: "adaptive" };
-      const effort = effortForLevel(options.thinking_level);
-      if (effort) kwargs.output_config = { effort };
+      // Same ladder the openai-compat provider and the status bar read (MUB-229). Anthropic's
+      // vocabulary is wider (xhigh reaches the wire) and it has no off-payload, both of which
+      // live in the quirks table — so behaviour here is byte-identical to what shipped.
+      const effort = effectiveEffort(model, context.tools.length > 0, options.thinking_level);
+      Object.assign(kwargs, reasoningPayload(model.provider, effort.send));
     } else if (format === "enabled") {
       kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
     }

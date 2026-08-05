@@ -79,8 +79,21 @@ export interface Model {
   // reasoning_effort:"none" whenever tools are present — the provider's own stated remedy.
   // Per-model, never per-provider: gpt-4o rejects the parameter outright ("Unrecognized
   // request argument"), so a provider-wide rule would break every non-reasoning OpenAI model.
-  // Source of truth for ai/provider_quirks.effortNoneWithTools.
+  // Rung 2 of ai/provider_quirks.effectiveEffort, which is the only reader.
   tools_require_effort_none?: boolean;
+  // Reasoning is ON by default on this model and the host demands an explicit off-payload to
+  // stop it — rung 1 of the effort ladder, and the only shape that does not 400 gpt-4o (which
+  // rejects reasoning_effort at every value, "none" included, so this can never be inferred
+  // per-provider). NEEDS LIVE VERIFICATION PER MODEL, and is therefore set on no seed: only
+  // ANTHROPIC/GEMINI/OPENAI keys were available when MUB-229 shipped, and no probed host had
+  // a model that needs it (anthropic cannot even express "off" — output_config.effort 400s
+  // on "none"). Declared debt, alongside Model.input being unset on 7 of 20 seeds.
+  requires_explicit_effort_off?: boolean;
+  // Effort vocabulary this MODEL accepts, widening (or narrowing) the host floor in
+  // ai/provider_quirks. `[]` opts the model out of the parameter entirely. Set on no seed for
+  // the same reason as above — populating it is a probe, not a decision. Models synthesized
+  // from OpenRouter DO carry it, derived from the host's declared supported_efforts.
+  effort_levels?: readonly string[];
   base_url?: string;
   headers?: Record<string, string>;
 }

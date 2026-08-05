@@ -347,7 +347,11 @@ describe("OpenAICompatProvider — reasoning_effort for models that refuse it wi
   };
 
   /** The WHOLE request payload, not just its messages. */
-  async function payloadFor(model: Model, tools: Tool[]): Promise<Record<string, unknown>> {
+  async function payloadFor(
+    model: Model,
+    tools: Tool[],
+    thinkingLevel?: string,
+  ): Promise<Record<string, unknown>> {
     resetAll();
     const captured: Record<string, unknown>[] = [];
     const inner = sseFetch(OK_SSE);
@@ -358,6 +362,8 @@ describe("OpenAICompatProvider — reasoning_effort for models that refuse it wi
           captured.push(JSON.parse(String(init.body)));
           return inner(url, init);
         },
+        // What agent/loop.ts puts on the wire options once a thinking level is set.
+        ...(thinkingLevel === undefined ? {} : { thinking: true, thinking_level: thinkingLevel }),
       },
     });
     return captured[0]!;
@@ -389,5 +395,119 @@ describe("OpenAICompatProvider — reasoning_effort for models that refuse it wi
       "stream_options",
       "tools",
     ]);
+  });
+
+  // Re-probed live 2026-08-05 on all three of gpt-5.6-{sol,terra,luna}: an explicit
+  // "high" alongside tools 400s exactly like the bare default does, so rung 2 has to
+  // outrank a requested level rather than lose to it.
+  test("the tools pin outranks a requested level", async () => {
+    const payload = await payloadFor(EFFORT_MODEL, [noopTool], "high");
+    expect(payload.reasoning_effort).toBe("none");
+  });
+});
+
+// MUB-229: before this, cycling the thinking level moved a coloured word in the status bar
+// and sent NOTHING on openai, openrouter, xai, groq and deepseek. effortForLevel had exactly
+// one caller, in the anthropic provider.
+describe("OpenAICompatProvider — a thinking level reaches the wire", () => {
+  const REASONER: Model = { ...OPENAI_MODEL, id: "gpt-5.6-luna", reasoning: true };
+
+  const OK_SSE = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ];
+
+  const noopTool: Tool = {
+    name: "noop",
+    description: "does nothing",
+    parameters: {
+      jsonSchema: { type: "object", properties: {} },
+      validate: (v) => ({ ok: true, value: (v ?? {}) as Record<string, unknown> }),
+    },
+  };
+
+  async function payloadFor(
+    model: Model,
+    tools: Tool[],
+    thinkingLevel?: string,
+  ): Promise<Record<string, unknown>> {
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    const inner = sseFetch(OK_SSE);
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    await complete(model, context({ messages: [new Message({ role: "user", content: "hi" })], tools }), {
+      options: {
+        fetch: async (url: string, init: RequestInit) => {
+          captured.push(JSON.parse(String(init.body)));
+          return inner(url, init);
+        },
+        ...(thinkingLevel === undefined ? {} : { thinking: true, thinking_level: thinkingLevel }),
+      },
+    });
+    return captured[0]!;
+  }
+
+  test("a reasoning-capable model receives the level it was asked for", async () => {
+    expect((await payloadFor(REASONER, [noopTool], "medium")).reasoning_effort).toBe("medium");
+    expect((await payloadFor(REASONER, [], "high")).reasoning_effort).toBe("high");
+  });
+
+  // Verified live: gpt-5.6-* 400 on "minimal" ("Supported values are: 'none', 'low',
+  // 'medium', 'high', and 'xhigh'"). xhigh IS accepted there, but the host floor stays
+  // conservative until a model declares effort_levels — so it clamps rather than reaching
+  // the wire, and the status bar says so.
+  test("xhigh and minimal clamp instead of reaching the wire", async () => {
+    expect((await payloadFor(REASONER, [], "xhigh")).reasoning_effort).toBe("high");
+    expect((await payloadFor(REASONER, [], "minimal")).reasoning_effort).toBe("low");
+  });
+
+  test("Model.effort_levels widens the clamp for the model that declares it", async () => {
+    const wide: Model = { ...REASONER, effort_levels: ["low", "medium", "high", "xhigh"] };
+    expect((await payloadFor(wide, [], "xhigh")).reasoning_effort).toBe("xhigh");
+  });
+
+  // The fail-closed half: a level is set, and an undeclared model STILL gets a byte-identical
+  // payload. gpt-4o rejects reasoning_effort at every value, "none" included (verified).
+  test("a model that does not declare reasoning is untouched by a set level", async () => {
+    const payload = await payloadFor(OPENAI_MODEL, [noopTool], "high");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(Object.keys(payload).sort()).toEqual([
+      "max_completion_tokens",
+      "messages",
+      "model",
+      "stream",
+      "stream_options",
+      "tools",
+    ]);
+  });
+
+  test("thinking off sends nothing, exactly as before", async () => {
+    expect(await payloadFor(REASONER, [noopTool])).not.toHaveProperty("reasoning_effort");
+    expect(await payloadFor(REASONER, [noopTool], "off")).not.toHaveProperty("reasoning_effort");
+  });
+
+  // Rung 1 is inert registry data: no seed sets it. UNVERIFIED on every host — this asserts
+  // the shape only, which is the one thing that does not need a key.
+  test("requires_explicit_effort_off sends the host's off-payload, tools or not", async () => {
+    const alwaysOff: Model = { ...REASONER, requires_explicit_effort_off: true };
+    expect((await payloadFor(alwaysOff, [noopTool], "high")).reasoning_effort).toBe("none");
+    expect((await payloadFor(alwaysOff, [])).reasoning_effort).toBe("none");
+  });
+
+  // The openrouter row of the quirks table, live at last (it was inert while every
+  // OpenRouter-synthesized model carried zero capability flags). UNVERIFIED: no
+  // OPENROUTER_API_KEY on this machine — the shape is the host's own declaration.
+  test("openrouter spells both halves its own way", async () => {
+    const viaOr: Model = {
+      ...REASONER,
+      provider: "openrouter",
+      id: "openai/gpt-5.6-luna",
+      base_url: "https://openrouter.ai/api/v1",
+    };
+    expect((await payloadFor(viaOr, [], "high")).reasoning).toEqual({ effort: "high" });
+    const pinned: Model = { ...viaOr, tools_require_effort_none: true };
+    expect((await payloadFor(pinned, [noopTool], "high")).reasoning).toEqual({ enabled: false });
+    expect(await payloadFor(pinned, [noopTool], "high")).not.toHaveProperty("reasoning_effort");
   });
 });

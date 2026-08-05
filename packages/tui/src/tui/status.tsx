@@ -7,6 +7,7 @@ import { Box, Text } from "ink";
 import React from "react";
 
 import type { AgentMode } from "../agent/modes.ts";
+import { type EffortModel, effectiveEffort } from "../ai/provider_quirks.ts";
 import type { FooterBadge } from "./badge_slot.ts";
 import { AUTO_COMPACT_PCT, type ContextUsage, fmtCtxTokens } from "./context_meter.ts";
 
@@ -41,11 +42,49 @@ export function permsSummary(
   return { effective, grants: list.length > 0 ? `--x ${list.join(", ")}` : null };
 }
 
+/**
+ * What the `reason:` segment says about the effort this turn will actually carry (MUB-229).
+ *
+ * It calls the same `effectiveEffort` the provider builds its payload from, so the indicator
+ * cannot drift from the wire: there is one answer and two readers. Before it, cycling the
+ * thinking level recoloured a word here while five openai-compat hosts received nothing.
+ *
+ * `requested→effective` whenever the two differ — a silent clamp plus a one-time note would
+ * scroll away and leave this segment claiming the requested level all session.
+ */
+export function effortIndicator(
+  requested: string,
+  model: EffortModel | null,
+  hasTools: boolean,
+): { label: string; color: string; show: boolean } {
+  const level = requested === "off" ? null : requested;
+  // No model resolved yet: nothing has been sent to anything, so report the request alone.
+  if (!model) {
+    return { label: level ?? "off", color: level ? "cyan" : "gray", show: level !== null };
+  }
+  const { send, state } = effectiveEffort(model, hasTools, requested);
+  const effective = state === "pinned-none" ? "none" : (send ?? state);
+  const diverged = level !== null && effective !== level;
+  const overriding = state === "pinned-none" || state === "off";
+  return {
+    label: diverged ? `${level}→${effective}` : effective,
+    color: diverged ? "yellow" : state === "honoured" ? "cyan" : "gray",
+    // At rest (thinking off, nothing overridden) the segment stays hidden, as it shipped —
+    // a permanent `reason: default` would cost the row a cell to say nothing.
+    show: level !== null || overriding,
+  };
+}
+
 export interface StatusBarProps {
   model: string;
   basis: string;
   routeMode: "auto" | "confirm";
+  /** The level the user asked for; what is SENT comes from effortIndicator below. */
   thinkingLevel: string;
+  /** Model the next turn runs on, and whether it carries tools — the two other inputs to the
+   *  effort ladder. Null (no model resolved yet) falls back to reporting the request. */
+  effortModel?: EffortModel | null;
+  hasTools?: boolean;
   ctx: ContextUsage;
   /** MINIMA_TUI_CONTEXT_METER: false renders the pre-fix segment (bare `ctx NN%`) and keeps
    * the route/reason segments unconditional, so the row is byte-identical to what shipped. */
@@ -79,6 +118,8 @@ export function StatusBar({
   basis,
   routeMode,
   thinkingLevel,
+  effortModel = null,
+  hasTools = true,
   ctx,
   contextMeter = true,
   columns = 80,
@@ -108,8 +149,7 @@ export function StatusBar({
     : "gray";
   const modelStyle = basis === "offline" ? "yellow" : "cyan";
   const routeStyle = routeMode === "confirm" ? "yellow" : "gray";
-  const thinkStyle =
-    thinkingLevel === "high" ? "yellow" : thinkingLevel === "off" ? "gray" : "cyan";
+  const effort = effortIndicator(thinkingLevel, effortModel, hasTools);
   // Red is the same constant the auto-compaction trigger reads, on the same quantity — so
   // red now genuinely means "compaction is imminent" rather than agreeing with it by
   // coincidence, as two unrelated 80s did before.
@@ -154,10 +194,10 @@ export function StatusBar({
               </>
             )}
 
-            {(!contextMeter || thinkingLevel !== "off") && (
+            {(!contextMeter || effort.show) && (
               <>
                 <Text color="gray"> · reason: </Text>
-                <Text color={thinkStyle}>{thinkingLevel}</Text>
+                <Text color={effort.color}>{effort.label}</Text>
               </>
             )}
 
