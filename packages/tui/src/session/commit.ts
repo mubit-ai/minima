@@ -3,23 +3,17 @@
  * the `/commit` command.
  *
  * Committing was already reachable through `bash`, so this adds no capability; it makes the
- * commits WELL-FORMED and enforceable, which a prompt instruction over an opaque bash string
- * can never be. Two paths to a commit therefore remain, and only this one is attributed —
- * an accepted cost, not an oversight (steering `git commit` in bash was rejected: bash_steer
- * ships a user-visible promise that ordinary git commands are never blocked, and `eval
- * "$CMD"` is undecidable anyway).
+ * commits well-formed. Two paths to a commit remain and only this one is attributed.
  *
  * Reuses checkpoint.ts's `git()` spawn helper and repo resolver, but deliberately NOT its
  * discipline. A checkpoint is plumbing: commit-tree into refs/minima/, no hooks, a throwaway
  * index, the `minima <minima@local>` shadow identity. A real commit inverts all three — it
  * runs the user's `pre-commit`/`commit-msg` hooks, it commits the user's own index, and it is
  * authored by the user's configured git identity. Nothing here sets GIT_AUTHOR_* or
- * GIT_COMMITTER_*, which is exactly what keeps the shadow identity out of real history.
+ * GIT_COMMITTER_*, which is what keeps the shadow identity out of real history.
  *
  * Trailers carry a POINTER, not the evidence: one deduped `Co-Authored-By` per contributing
- * model plus a single `Minima-Run-Id`. A per-turn `Minima-Rec-Id` was rejected — a commit
- * spanning a dozen turns would carry a dozen opaque trailers, and trailers reviewers find
- * noisy are trailers reviewers strip. The run's models, cost and gates stay in the ledger.
+ * model plus a single `Minima-Run-Id`. The run's models, cost and gates stay in the ledger.
  */
 
 import { existsSync } from "node:fs";
@@ -47,8 +41,9 @@ export interface CommitContext {
 }
 
 /**
- * The one dependency set behind both commit surfaces, so the `git_commit` tool and `/commit`
- * cannot drift into producing different commits.
+ * The one dependency set behind both commit surfaces: the `git_commit` tool and `/commit`
+ * share trailers, refusals, hooks and identity. Not identical, though — only the tool takes
+ * `paths`, so `/commit` always commits whatever is staged.
  *
  * Contributing models are the run's routed decisions plus the live model. Two known
  * approximations, both deliberate:

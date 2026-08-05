@@ -241,7 +241,7 @@ export interface AppProps {
   todos?: TodoTask[];
   /**
    * F9a: the SAME CommitDeps main.ts handed the `git_commit` tool, so `/commit` reaches the
-   * same code path and produces an identical commit. null when MINIMA_TUI_GIT=0 — the
+   * same code path and produces an identical commit. null when MINIMA_TUI_GIT_COMMIT=0 — the
    * command is then removed outright rather than reporting itself unavailable.
    */
   commitDeps?: CommitDeps | null;
@@ -1576,7 +1576,7 @@ export function HarnessApp({
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
 
-  // F9a: with MINIMA_TUI_GIT=0 there are no commit deps, so /commit does not exist — not in
+  // F9a: with MINIMA_TUI_GIT_COMMIT=0 there are no commit deps, so /commit does not exist — not in
   // the picker, tab-complete or /help, and not in the dispatcher (handleCommand falls through
   // to the unknown-command reply). "Removed", not "reports itself unavailable".
   const commands = useMemo(
@@ -2492,7 +2492,7 @@ export function HarnessApp({
 
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
-    // MINIMA_TUI_GIT=0 removes /commit outright (the deps are absent), so it must not reach
+    // MINIMA_TUI_GIT_COMMIT=0 removes /commit outright (the deps are absent), so it must not reach
     // its case: fall through to the unknown-command reply exactly as any typo would.
     if (cmdName === "commit" && !commitDeps) {
       replyUnknownCommand(name, args);

@@ -1178,14 +1178,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   });
   // F9a git commit authoring: ONE dependency set behind both surfaces — the `git_commit`
   // tool registered here and the `/commit` command the TUI dispatches — so the two cannot
-  // drift into producing different commits. MINIMA_TUI_GIT=0 removes both.
+  // drift into producing different commits. MINIMA_TUI_GIT_COMMIT=0 removes both.
   const commitDeps = makeCommitDeps({
     cwd: process.cwd(),
     db,
     getRunId: () => agent.runId,
     getLiveModelId: () => agent.agentState.model?.id ?? null,
   });
-  registerGitCommitTool(agent.agentState.tools, config.git, commitDeps);
+  registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
@@ -1414,7 +1414,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
-      commitDeps: config.git ? commitDeps : null,
+      commitDeps: config.gitCommit ? commitDeps : null,
     }),
     { exitOnCtrlC: false },
   );

@@ -459,7 +459,7 @@ describe("git_commit — refusals and non-repo reporting", () => {
 });
 
 describe("git_commit — registration", () => {
-  test("MINIMA_TUI_GIT=0 (enabled=false) registers no tool at all", () => {
+  test("MINIMA_TUI_GIT_COMMIT=0 (enabled=false) registers no tool at all", () => {
     expect(toolFor(tempRepo(), { enabled: false })).toBeNull();
   });
 
@@ -483,29 +483,29 @@ describe("git_commit — registration", () => {
     expect(decision?.block).toBe(true);
   });
 
-  test("MINIMA_TUI_GIT is a default-ON config switch", () => {
-    const saved = process.env.MINIMA_TUI_GIT;
+  test("MINIMA_TUI_GIT_COMMIT is a default-ON config switch", () => {
+    const saved = process.env.MINIMA_TUI_GIT_COMMIT;
     try {
-      process.env.MINIMA_TUI_GIT = undefined as unknown as string;
-      delete process.env.MINIMA_TUI_GIT;
-      expect(configFromEnv().git).toBe(true);
-      process.env.MINIMA_TUI_GIT = "0";
-      expect(configFromEnv().git).toBe(false);
+      process.env.MINIMA_TUI_GIT_COMMIT = undefined as unknown as string;
+      delete process.env.MINIMA_TUI_GIT_COMMIT;
+      expect(configFromEnv().gitCommit).toBe(true);
+      process.env.MINIMA_TUI_GIT_COMMIT = "0";
+      expect(configFromEnv().gitCommit).toBe(false);
     } finally {
-      if (saved === undefined) delete process.env.MINIMA_TUI_GIT;
-      else process.env.MINIMA_TUI_GIT = saved;
+      if (saved === undefined) delete process.env.MINIMA_TUI_GIT_COMMIT;
+      else process.env.MINIMA_TUI_GIT_COMMIT = saved;
     }
   });
 });
 
 describe("git_commit — the two surfaces are one code path (wiring pins)", () => {
-  test("main.ts registers the tool behind config.git with shared deps", () => {
+  test("main.ts registers the tool behind config.gitCommit with shared deps", () => {
     const src = readSource("cli/main.ts");
     expect(src).toContain(
-      code("registerGitCommitTool(agent.agentState.tools, config.git, commitDeps);"),
+      code("registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);"),
     );
     // The SAME deps object reaches the TUI, so /commit cannot drift from the tool.
-    expect(src).toContain(code("commitDeps: config.git ? commitDeps : null,"));
+    expect(src).toContain(code("commitDeps: config.gitCommit ? commitDeps : null,"));
   });
 
   test("/commit's call shape produces a commit identical to the tool's", async () => {

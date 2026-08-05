@@ -204,10 +204,10 @@ export interface HarnessConfig {
   /** Git commit authoring (F9a, default ON): the `git_commit` tool and the `/commit`
    * command — one code path, permission-gated under the tool's own name, adding deduped
    * `Co-Authored-By` + one `Minima-Run-Id` trailer to a commit the user's own git identity
-   * authors. Opt out with MINIMA_TUI_GIT=0 — mirrors the bigPlan flag shape. Flag-off
+   * authors. Opt out with MINIMA_TUI_GIT_COMMIT=0 — mirrors the bigPlan flag shape. Flag-off
    * removes BOTH surfaces: the tool is never registered and `/commit` is not a command, so
    * committing goes back to being reachable only through bash. */
-  git: boolean;
+  gitCommit: boolean;
   /** Edit guard (P3, default ON): read/grep stamp [snap:…] tags and record seen-lines
    * evidence (SQLite `seen_lines`); edit rejects stale or unseen targets with a
    * deterministic re-read recovery message. Opt out with MINIMA_TUI_EDIT_GUARD=0 —
@@ -328,7 +328,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     contextMeter: true,
     steer: true,
     contextRewind: true,
-    git: true,
+    gitCommit: true,
     editGuard: true,
     typedTask: true,
     fetchLocal: false,
@@ -409,7 +409,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.contextMeter = process.env.MINIMA_TUI_CONTEXT_METER !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
-  cfg.git = process.env.MINIMA_TUI_GIT !== "0";
+  cfg.gitCommit = process.env.MINIMA_TUI_GIT_COMMIT !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
   cfg.typedTask = process.env.MINIMA_TUI_TYPED_TASK !== "0";
   cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";

@@ -89,7 +89,7 @@ export function gitCommitTool(deps: CommitDeps): AgentTool {
   };
 }
 
-/** Registration is the kill switch: MINIMA_TUI_GIT=0 leaves no `git_commit` tool to call. */
+/** Registration is the kill switch: MINIMA_TUI_GIT_COMMIT=0 leaves no `git_commit` tool to call. */
 export function registerGitCommitTool(
   tools: AgentTool[],
   enabled: boolean,

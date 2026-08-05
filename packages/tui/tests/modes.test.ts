@@ -11,6 +11,7 @@ import {
   subscribeMode,
 } from "../src/agent/modes.ts";
 import { resolvePolicy } from "../src/agent/policy.ts";
+import { planModeBlockedTools } from "../src/tui/permissions.ts";
 
 beforeEach(() => setMode("build")); // module singleton — reset between tests
 
@@ -25,8 +26,22 @@ describe("mode bundles (B2)", () => {
     }
   });
 
+  // The bundle is defense-in-depth for consumers that never run the TUI's layer-1 block, so
+  // the two lists have to agree. Asserting the INVARIANT rather than a fixed list: a tool
+  // added to planModeBlockedTools and forgotten here silently keeps the catch-all `allow`,
+  // which is how `task` and `git_commit` both ended up permitted outside the TUI.
+  test("plan: the bundle denies everything the dispatcher blocks", () => {
+    for (const tool of planModeBlockedTools(false)) {
+      expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "anything at all" })).toBe("deny");
+    }
+  });
+
+  // `task` was in this list and is not read-side: a delegated child gets its own
+  // unrestricted toolset with no permission hooks, which is why planModeBlockedTools has
+  // always blocked it. `todowrite` stays because it is blocked only when bigPlan is on, and
+  // a static bundle cannot see that flag.
   test("plan: read-side tools fall through to the catch-all allow", () => {
-    for (const tool of ["read", "ls", "glob", "grep", "question", "task", "todowrite"]) {
+    for (const tool of ["read", "ls", "glob", "grep", "question", "todowrite"]) {
       expect(resolvePolicy(PLAN_BUNDLE, { tool, subject: "src/index.ts" })).toBe("allow");
     }
   });
