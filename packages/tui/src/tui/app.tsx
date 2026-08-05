@@ -5289,6 +5289,8 @@ export function HarnessApp({
           basis={basis}
           routeMode={routeMode}
           thinkingLevel={thinkingLevel}
+          effortModel={agent.agentState.model}
+          hasTools={agent.agentState.tools.length > 0}
           ctx={ctx}
           contextMeter={agent.config.contextMeter}
           columns={cols}

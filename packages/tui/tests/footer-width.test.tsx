@@ -4,6 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 import { Box, render } from "ink";
 import type React from "react";
 import stringWidth from "string-width";
+import type { EffortModel } from "../src/ai/provider_quirks.ts";
 import type { ContextUsage } from "../src/tui/context_meter.ts";
 import { StatusBar } from "../src/tui/status.tsx";
 
@@ -199,6 +200,35 @@ describe("the context segment fits, and never adds a row", () => {
     expect(row).toContain("ctx 0%");
     expect(row).not.toContain("ctx ~");
     expect(row).not.toContain("ctx ?%");
+  });
+
+  // MUB-229: the reason segment used to render the requested level whatever the wire did.
+  // These go through real Ink, so they assert the row the user actually reads.
+  describe("the reason segment renders the EFFECTIVE effort", () => {
+    const reasoner: EffortModel = { provider: "openai", reasoning: true };
+
+    test("a clamped level renders requested→effective", async () => {
+      const row = statusRows(
+        await statusLines(160, { thinkingLevel: "xhigh", effortModel: reasoner }),
+      )[0] as string;
+      expect(row).toContain("reason: xhigh→high");
+    });
+
+    test("an honoured level renders bare, with no arrow", async () => {
+      const row = statusRows(
+        await statusLines(160, { thinkingLevel: "medium", effortModel: reasoner }),
+      )[0] as string;
+      expect(row).toContain("reason: medium");
+      expect(row).not.toContain("→");
+    });
+
+    test("the tools pin is visible even with thinking off — it explains a silent model", async () => {
+      const pinned = { ...reasoner, tools_require_effort_none: true };
+      const row = statusRows(
+        await statusLines(160, { thinkingLevel: "off", effortModel: pinned, hasTools: true }),
+      )[0] as string;
+      expect(row).toContain("reason: none");
+    });
   });
 
   test("MINIMA_TUI_CONTEXT_METER=0 renders the pre-fix row: bare ctx%, route: and reason: back", async () => {

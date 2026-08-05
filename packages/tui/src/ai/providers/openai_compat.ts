@@ -29,7 +29,7 @@ import {
   toolCallStart,
 } from "../events.ts";
 import { envVarsForProvider } from "../provider_catalog.ts";
-import { effortNoneWithTools, quirksFor } from "../provider_quirks.ts";
+import { effectiveEffort, quirksFor, reasoningPayload } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -180,11 +180,13 @@ function buildPayload(
         parameters: toJsonSchema(t.parameters),
       },
     }));
-    // Models whose DEFAULT effort is refused alongside function tools (gpt-5.6-*). Scoped to
-    // the tools branch on purpose: it is the combination the API rejects, and a model that
-    // never declares the quirk sends a byte-identical payload to before.
-    if (effortNoneWithTools(model, true)) payload.reasoning_effort = "none";
   }
+  // The reasoning effort this request carries, decided in exactly one place (MUB-229) and
+  // spelled the way this host spells it. The status bar renders the same decision, so the
+  // indicator cannot claim a level the payload does not carry. A model that declares no
+  // capability adds no key here at all.
+  const effort = effectiveEffort(model, context.tools.length > 0, options.thinking_level);
+  Object.assign(payload, reasoningPayload(model.provider, effort.send));
   return payload;
 }
 
