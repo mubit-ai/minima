@@ -7,8 +7,8 @@
  * this binary only needs a MUBIT_API_KEY (routing) + a provider key (calling).
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { setMode } from "../agent/modes.ts";
@@ -25,7 +25,12 @@ import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
-import { BudgetLedger } from "../minima/budget.ts";
+import {
+  BudgetLedger,
+  type BudgetMode,
+  DEFAULT_BUDGET_MODE,
+  parseBudgetMode,
+} from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
 import {
   CostMeter,
@@ -39,6 +44,7 @@ import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
+import { resolveEnvLayers } from "../minima/project_config.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
@@ -57,10 +63,10 @@ import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
   SECTIONS,
-  hydrateEnv,
   mask,
   get as storeGet,
   setValue as storeSetValue,
+  storedValues,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
@@ -156,33 +162,24 @@ async function probeCursorRow(file: string): Promise<void> {
   });
 }
 
-// --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
-const ENV_FILES = [".env.harness", ".env"];
-
-async function loadEnvFiles(): Promise<void> {
-  for (const name of ENV_FILES) {
-    const path = resolve(name);
-    if (!existsSync(path)) continue;
-    const text = readFileSync(path, "utf8");
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("#") || !line.includes("=")) continue;
-      const eq = line.indexOf("=");
-      const key = line.slice(0, eq).trim();
-      const val = line
-        .slice(eq + 1)
-        .trim()
-        .replace(/^["']|["']$/g, "");
-      if (process.env[key] === undefined) process.env[key] = val;
-    }
-  }
+// --- config loading (cwd) — real env wins; the layers below it only fill gaps ---------
+// One resolution over every layer rather than a chain of gap-filling passes: `.minima/
+// config.toml` is a COMMITTED file, so its values are clamped to the safer side before they
+// reach process.env — and that clamp needs the project and user values simultaneously, which
+// a sequence of setdefault passes cannot provide (process.env erases which layer set what).
+async function loadConfigLayers(): Promise<void> {
   // Per-user store (OS keychain + ~/.minima-harness/config.env) — lowest precedence, so
   // shell env and project .env files still win. Failures never block startup.
+  let stored: Record<string, string> = {};
   try {
-    await hydrateEnv();
+    stored = await storedValues();
   } catch {
     // config must never block startup
   }
+  const layers = resolveEnvLayers({ projectDir: process.cwd(), env: process.env, stored });
+  // Every entry is final — precedence and the safer-side clamps are already applied.
+  for (const [key, value] of Object.entries(layers.values)) process.env[key] = value;
+  for (const notice of layers.notices) process.stderr.write(`minima: ${notice}\n`);
 }
 
 // --- a lean default model catalog --------------------------------------------------
@@ -633,6 +630,28 @@ export function buildConfig(args: CliArgs): HarnessConfig {
 }
 
 /**
+ * The session's budget ceiling and mode, from the flags plus the resolved env layers.
+ *
+ * `MINIMA_BUDGET_USD` / `MINIMA_BUDGET_MODE` are where every layer below the flags lands its
+ * ceiling — including the one a committed `.minima/config.toml` contributed, already clamped
+ * to the safer side by the loader, so nothing here needs to know where a value came from. A
+ * flag is the user acting now, so it wins outright; an unusable env value is treated as
+ * unset rather than coerced.
+ */
+export function resolveBudget(
+  args: CliArgs,
+  env: Record<string, string | undefined> = process.env,
+): { limitUsd: number | undefined; mode: BudgetMode } {
+  const envUsd = Number(env.MINIMA_BUDGET_USD);
+  return {
+    limitUsd: args.budgetUsd ?? (Number.isFinite(envUsd) && envUsd > 0 ? envUsd : undefined),
+    mode: args.budgetEnforce
+      ? "enforce"
+      : (parseBudgetMode(env.MINIMA_BUDGET_MODE) ?? DEFAULT_BUDGET_MODE),
+  };
+}
+
+/**
  * Judge wiring, extracted for tests: sampled LLM grading is ON by default whenever a
  * runnable judge model exists. The configured model (MINIMA_JUDGE_MODEL) wins when its
  * provider key is present; otherwise the cheap-model ladder substitutes the first
@@ -677,7 +696,7 @@ export function buildJudge(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  await loadEnvFiles();
+  await loadConfigLayers();
 
   // `minima config …` — credential setup (no TUI; works before any keys exist).
   if (argv[0] === "config") return configCli(argv.slice(1));
@@ -1218,19 +1237,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  // Budget following: --budget creates a session-scoped ledger (warn mode unless
-  // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
-  // TUI renders them as chat notices.
-  if (args.budgetUsd !== undefined && db && agent.runId) {
+  // Budget following: a ceiling creates a session-scoped ledger. Threshold events surface to
+  // stderr in non-interactive modes; the TUI renders them as chat notices.
+  const { limitUsd: budgetUsd, mode: budgetMode } = resolveBudget(args);
+  if (budgetUsd !== undefined && db && agent.runId) {
     agent.budget = new BudgetLedger({
       db,
       scopeKey: `session:${agent.runId}`,
-      limitUsd: args.budgetUsd,
-      mode: args.budgetEnforce ? "enforce" : "warn",
+      limitUsd: budgetUsd,
+      mode: budgetMode,
       runId: agent.runId,
     });
-  } else if (args.budgetUsd !== undefined) {
-    process.stderr.write("minima: --budget ignored (persistence unavailable)\n");
+  } else if (budgetUsd !== undefined) {
+    process.stderr.write("minima: budget ignored (persistence unavailable)\n");
   }
 
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";

@@ -16,6 +16,28 @@ import { newId } from "../db/minima_db.ts";
 
 export type BudgetMode = "shadow" | "warn" | "enforce";
 
+/** The modes, least to most strict — the staging order the rollout follows. */
+export const BUDGET_MODE_STRICTNESS: Record<BudgetMode, number> = {
+  shadow: 0,
+  warn: 1,
+  enforce: 2,
+};
+
+/** What the harness follows when nobody has said otherwise. */
+export const DEFAULT_BUDGET_MODE: BudgetMode = "warn";
+
+/**
+ * A mode from untrusted text — an env var, a committed project file — or null if it names no
+ * mode. One parser, so the CLI's idea of a valid mode and the project-config clamp's idea of
+ * one cannot drift apart.
+ */
+export function parseBudgetMode(value: string | undefined | null): BudgetMode | null {
+  const text = value?.trim();
+  return text !== undefined && Object.hasOwn(BUDGET_MODE_STRICTNESS, text)
+    ? (text as BudgetMode)
+    : null;
+}
+
 export interface BudgetStatus {
   scopeKey: string;
   limitUsd: number;

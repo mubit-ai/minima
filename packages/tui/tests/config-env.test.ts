@@ -126,6 +126,26 @@ describe("label-source configuration (Phase 0b)", () => {
   });
 });
 
+describe("candidate pool (MINIMA_CANDIDATES)", () => {
+  // This is the read site a project `.minima/config.toml` lands its already-INTERSECTED
+  // pool on. The clamp lives in the loader; here the only contract is that the env value
+  // replaces the shipped pool, and that an unusable value leaves the default standing.
+  test("parses, trims and dedupes a comma-separated pool", () => {
+    withEnv({ MINIMA_CANDIDATES: "claude-haiku-4-5, gemini-2.5-flash,,claude-haiku-4-5" }, () => {
+      expect(configFromEnv().candidates).toEqual(["claude-haiku-4-5", "gemini-2.5-flash"]);
+    });
+  });
+
+  test("unset or empty keeps the shipped default pool", () => {
+    withEnv({ MINIMA_CANDIDATES: undefined }, () => {
+      expect(configFromEnv().candidates).toEqual(harnessConfig().candidates);
+    });
+    withEnv({ MINIMA_CANDIDATES: " , " }, () => {
+      expect(configFromEnv().candidates).toEqual(harnessConfig().candidates);
+    });
+  });
+});
+
 describe("plan-premium configuration", () => {
   const CLEAR = {
     MINIMA_TUI_PLAN_PREMIUM: undefined,

@@ -29,7 +29,9 @@ export const PREMIUM_CANDIDATES: string[] = ["claude-fable-5", "claude-opus-4-8"
 export interface HarnessConfig {
   minimaUrl: string;
   minimaApiKey: string | null;
-  /** Model ids Minima is allowed to pick from (-> Constraints.candidate_models). */
+  /** Model ids Minima is allowed to pick from (-> Constraints.candidate_models).
+   * MINIMA_CANDIDATES (comma-separated) narrows the shipped pool; a project
+   * `.minima/config.toml` may only intersect with it, never widen it. */
   candidates: string[];
   /** True when the user pinned a single model via /model: routing is bypassed. */
   pinned: boolean;
@@ -347,6 +349,21 @@ export function optInFlag(value: string | undefined, experimental: boolean): boo
   return value === "1" || (experimental && value !== "0");
 }
 
+/** A comma-separated model-id pool from the environment: trimmed, deduped, order preserved.
+ * null when the variable is unset or names nothing usable, so the caller keeps its default. */
+function modelIdList(value: string | undefined): string[] | null {
+  if (value === undefined) return null;
+  const ids = [
+    ...new Set(
+      value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return ids.length ? ids : null;
+}
+
 /** Build a config from the environment + optional overrides. */
 export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
   const cfg = harnessConfig();
@@ -434,14 +451,12 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     }
   }
   cfg.planPremium = process.env.MINIMA_TUI_PLAN_PREMIUM !== "0";
-  const premiumEnv = process.env.MINIMA_PLAN_PREMIUM_MODELS;
-  if (premiumEnv !== undefined) {
-    const ids = premiumEnv
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (ids.length) cfg.planPremiumModels = [...new Set(ids)];
-  }
+  const premiumIds = modelIdList(process.env.MINIMA_PLAN_PREMIUM_MODELS);
+  if (premiumIds) cfg.planPremiumModels = premiumIds;
+  // The routable pool. A project .minima/config.toml lands its INTERSECTION here (the
+  // clamp already ran in the loader), so this site never has to know where it came from.
+  const candidateIds = modelIdList(process.env.MINIMA_CANDIDATES);
+  if (candidateIds) cfg.candidates = candidateIds;
   const planModelEnv = process.env.MINIMA_PLAN_MODEL?.trim();
   if (planModelEnv) cfg.planModel = planModelEnv;
   if (cfg.planPremium && !roundBudgetFromEnv) cfg.planRoundBudgetUsd = 1.0;
