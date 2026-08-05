@@ -70,7 +70,7 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 | `/plan` | Plan mode (<kbd>Shift</kbd>+<kbd>Tab</kbd>) + the planning council (`start` · `status` · `finalize` · `cancel`) — drafts a plan whose steps carry verify checks |
 | `/mode` | Show/set the permission mode: `build` \| `accept` \| `plan` \| `bypass` |
 | `/bp` | Show Plan Overview status |
-| `/why [n]` | Show the verification evidence behind the plan (or open step `n`'s card) |
+| `/why [n\|sha]` | Show the verification evidence behind the plan (or open step `n`'s card). Given a commit hash — seven or more hex characters — it reports which models contributed to that commit, its realized cost, and its gate verdicts instead |
 | `/verify` | Adversarial whole-plan verification pass (refutation sub-agent) |
 | `/audit` | Lint the active plan — non-discriminative checks, missing allowlists, vague steps |
 | `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + the plan |

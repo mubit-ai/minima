@@ -508,6 +508,23 @@ describe("tui/app.tsx panel key routing", () => {
     expect(body).toContain("whyReportFor(agent.db, agent.runId, sessionTotalUsd())");
     expect(body).toContain("observerWhySection(agent.db, agent.runId)");
   });
+
+  // F9b: `/why <sha>` is an argument branch on this same command. The commit branch must come
+  // FIRST (its early break is what keeps a hash out of the step-index path), and the step-card
+  // path must still be reachable past it — a `/why <n>` regression here is invisible to
+  // why.ts's unit tests, which never see the dispatcher.
+  test("/why <sha> branches to the commit reader before the step path, which survives it", () => {
+    const idx = src.indexOf('case "why": {');
+    const body = src.slice(idx, idx + 3200);
+    const commitBranch = body.indexOf("if (isCommitArg(args)) {");
+    const stepPath = body.indexOf("const overview =");
+    expect(commitBranch).toBeGreaterThan(-1);
+    expect(stepPath).toBeGreaterThan(-1);
+    expect(commitBranch).toBeLessThan(stepPath);
+    expect(body).toContain("whyCommitReport(agent.db, args, agent.config.commitLedger === true)");
+    // The step-index read that opens the card is still downstream of the commit branch.
+    expect(body.indexOf("/^\\d+$/.test(args.trim())")).toBeGreaterThan(commitBranch);
+  });
 });
 
 // LB-21: the recovery ladder re-issues super.prompt(runContent) on every rung, so rung >= 1

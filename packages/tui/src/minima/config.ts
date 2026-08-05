@@ -208,6 +208,13 @@ export interface HarnessConfig {
    * removes BOTH surfaces: the tool is never registered and `/commit` is not a command, so
    * committing goes back to being reachable only through bash. */
   gitCommit: boolean;
+  /** Commits ledger (F9b, default ON): authoring a commit records one `commits` row joining
+   * its SHA to the run, the rungs that produced it, and their realized cost, which is what
+   * lets `/why <sha>` answer LATER, by hash, which models wrote a commit and how its gates
+   * went. Opt out with MINIMA_TUI_COMMIT_LEDGER=0 — mirrors the bigPlan flag shape. Flag-off
+   * removes the ledger WRITE and the hash reader only: commits still carry their attribution
+   * trailers, because those are the half that survives without a database at all. */
+  commitLedger: boolean;
   /** Edit guard (P3, default ON): read/grep stamp [snap:…] tags and record seen-lines
    * evidence (SQLite `seen_lines`); edit rejects stale or unseen targets with a
    * deterministic re-read recovery message. Opt out with MINIMA_TUI_EDIT_GUARD=0 —
@@ -329,6 +336,7 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     steer: true,
     contextRewind: true,
     gitCommit: true,
+    commitLedger: true,
     editGuard: true,
     typedTask: true,
     fetchLocal: false,
@@ -410,6 +418,7 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
   cfg.gitCommit = process.env.MINIMA_TUI_GIT_COMMIT !== "0";
+  cfg.commitLedger = process.env.MINIMA_TUI_COMMIT_LEDGER !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
   cfg.typedTask = process.env.MINIMA_TUI_TYPED_TASK !== "0";
   cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";
