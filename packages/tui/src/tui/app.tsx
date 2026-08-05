@@ -121,6 +121,7 @@ import { type ActiveAction, currentActionLine, reduceActiveActions } from "./cur
 import { openEditorForDraft } from "./editor.ts";
 import { chordOwnsKey, resetChord } from "./editor_chord.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
+import { keyEvent, resolveBinding } from "./keymap.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -1875,8 +1876,13 @@ export function HarnessApp({
     // either way, but it is a one-shot read. Read it lower down instead and a dispatch that
     // returns early (busy, an overlay) would leave the latch set and poison the NEXT Ctrl+E.
     const editorChordKey = chordOwnsKey();
+    // Which of the ten app-level actions (if any) this keypress means. Pure lookup against
+    // the registry — WHERE each action may fire, and in what order, is still this handler's
+    // control flow below. Nothing outside the registry matches an app chord by hand.
+    const action = resolveBinding(keyEvent(input, key));
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
+    // Not a binding: suspend and abort are terminal contracts, never rebindable.
     if (key.ctrl && input === "z") {
       suspendToShell();
       return;
@@ -1894,7 +1900,7 @@ export function HarnessApp({
     // Plan APPROVAL lives only in the exit_plan tool and /plan finalize. Modal selectors
     // (pickers, palette, config, question overlay) keep the keyboard instead — Tab can
     // mean something there.
-    if (key.tab && key.shift) {
+    if (action === "permission.cycle") {
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
       const next = cycleMode();
@@ -1973,7 +1979,7 @@ export function HarnessApp({
     // (always-panel, 2026-07-20; supersedes the busy/<60-col text degrade of 2026-07-17).
     // The one-shot text block survives only below the cannot-render floor, where the
     // same-pass close effect would kill the panel anyway.
-    if (key.ctrl && input === "t") {
+    if (action === "toc.panel") {
       if (panelCanRender()) {
         const sections = buildSections(messages, buildUsageLedger());
         setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
@@ -1984,7 +1990,7 @@ export function HarnessApp({
     }
 
     // Ctrl+Y: copy the last assistant reply — read-only, allowed mid-run (like Ctrl+T).
-    if (key.ctrl && input === "y") {
+    if (action === "reply.copy") {
       copyLastReply();
       return;
     }
@@ -1992,7 +1998,7 @@ export function HarnessApp({
     // D3a (MP5): toggle the task panel — allowed mid-run (progress visibility is the
     // point). Only the explicit hide persists; showing clears the per-project override
     // so fresh projects keep the auto-show default.
-    if (key.ctrl && input === "b") {
+    if (action === "task.panel") {
       const next = !taskPanelHidden;
       setTaskPanelHidden(next);
       if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
@@ -2005,7 +2011,7 @@ export function HarnessApp({
     // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
     // states stay one-line chat notices (plan verification off / no plan yet — nothing to page); the
     // text path otherwise survives only below the cannot-render floor.
-    if (key.ctrl && input === "g" && !(bigPlanBehavior?.block && !busy)) {
+    if (action === "plan.overview" && !(bigPlanBehavior?.block && !busy)) {
       if (agent.config.bigPlan === true && panelCanRender()) {
         // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
         // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
@@ -2091,21 +2097,21 @@ export function HarnessApp({
       ]);
       return;
     }
-    if (key.ctrl && input === "g" && bigPlanBehavior?.block) {
+    if (action === "plan.overview" && bigPlanBehavior?.block) {
       dismissedGateRef.current = null;
       setGateFocus({ gateId: bigPlanBehavior.block.gateId, noteEntry: false });
       return;
     }
 
-    if (key.ctrl && input === "l") {
+    if (action === "model.picker") {
       setPickerOpen(true);
       return;
     }
-    if (key.ctrl && input === "p") {
+    if (action === "command.palette") {
       setPaletteOpen(true);
       return;
     }
-    if (key.ctrl && input === "r") {
+    if (action === "route.mode") {
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
     }
@@ -2113,7 +2119,7 @@ export function HarnessApp({
     // The Ctrl+E of a Ctrl+X Ctrl+E chord belongs to the composer, not to thinking. With
     // MINIMA_TUI_EDITOR=0 the composer never feeds the chord, so editorChordKey is always
     // false here and this branch behaves byte-identically to before the feature existed.
-    if (key.ctrl && input === "e") {
+    if (action === "thinking.cycle") {
       if (!editorChordKey) cycleThinkingLevel();
       return;
     }
@@ -4692,11 +4698,15 @@ export function HarnessApp({
   }
   function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
     const top = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
+    // The panel owns the keyboard while mounted, so it re-resolves the same registry for
+    // the two actions that mean something in here — ownership is unchanged, only the
+    // matching moved.
+    const action = resolveBinding(keyEvent(input, key));
     if (key.ctrl && input === "c") {
       closePanelReseat();
       return;
     }
-    if (key.ctrl && input === "t") {
+    if (action === "toc.panel") {
       // Ctrl+T toggles the ToC family closed; from the plan view it SWAPS to a fresh ToC.
       if (!top || top.kind === "toc" || top.kind === "reader") {
         closePanelReseat();
@@ -4706,7 +4716,7 @@ export function HarnessApp({
       setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
       return;
     }
-    if (key.ctrl && input === "g") {
+    if (action === "plan.overview") {
       // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
       // keyboard to the gate-focus modal (the same arm the global handler uses). The
       // modal is idle-only, so a busy chord swaps views instead of arming it dead.

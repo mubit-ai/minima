@@ -29,8 +29,10 @@ describe("app.tsx — the Ctrl+E collision", () => {
   });
 
   test("Ctrl+E still returns unconditionally, so it never falls through to another binding", () => {
+    // Which key means thinking.cycle now lives in keymap.ts; what survives here is the
+    // shape the latch depends on — resolved once, guarded, returned unconditionally.
     expect(app).toContain(
-      'if (key.ctrl && input === "e") { if (!editorChordKey) cycleThinkingLevel(); return; }',
+      'if (action === "thinking.cycle") { if (!editorChordKey) cycleThinkingLevel(); return; }',
     );
   });
 

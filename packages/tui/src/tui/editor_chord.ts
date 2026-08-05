@@ -32,8 +32,13 @@
  * dispatch that returns early would leave `justConsumed` set and poison the next Ctrl+E.
  */
 
+import { keyEvent, matchPrefix, prefixChordFor, resolveBinding } from "./keymap.ts";
+
 const CTRL_X = String.fromCharCode(24);
 const CTRL_E = String.fromCharCode(5);
+
+/** The chord that arms this sequence, read from the registry rather than spelled here. */
+const EDITOR_PREFIX = prefixChordFor("editor.open");
 
 export type ChordAction = "arm" | "launch" | "cancel" | "none";
 
@@ -44,11 +49,18 @@ export interface ChordResult {
   consumed: boolean;
 }
 
-/** Pure reducer: given whether the chord is armed, classify one keypress. */
+/**
+ * Pure reducer: given whether the chord is armed, classify one keypress. WHICH keys make the
+ * chord is the registry's business (keymap.ts) — this file owns only the latching.
+ */
 export function chordReduce(armed: boolean, input: string, ctrl: boolean): ChordResult {
-  if (ctrl && input === "x") return { armed: true, action: "arm", consumed: true };
-  if (armed && ctrl && input === "e") return { armed: false, action: "launch", consumed: true };
-  if (armed) return { armed: false, action: "cancel", consumed: false };
+  const ev = keyEvent(input, { ctrl });
+  if (matchPrefix(ev)) return { armed: true, action: "arm", consumed: true };
+  if (armed) {
+    const completed = resolveBinding({ ...ev, prefix: EDITOR_PREFIX }) === "editor.open";
+    if (completed) return { armed: false, action: "launch", consumed: true };
+    return { armed: false, action: "cancel", consumed: false };
+  }
   return { armed: false, action: "none", consumed: false };
 }
 
@@ -87,5 +99,9 @@ export function resetChord(): void {
   justConsumed = false;
 }
 
-/** The raw bytes, for tests that assert what a terminal actually sends. */
+/**
+ * The C0 bytes a terminal sends for Ctrl+X and Ctrl+E, for tests that assert wire behaviour.
+ * Facts about those two keystrokes, NOT a mirror of the binding — rebinding `editor.open` in
+ * the registry changes which keys latch, and leaves these two bytes as true as they were.
+ */
 export const CHORD_BYTES = { ctrlX: CTRL_X, ctrlE: CTRL_E } as const;
