@@ -155,6 +155,7 @@ import {
   renderPlanOverviewText,
   stepCardLines,
 } from "./plan_overview.ts";
+import { parsePrArgs, runPr } from "./pr.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import {
   EMPTY_QUEUE,
@@ -321,6 +322,7 @@ const COMMANDS = [
   { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
   { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
   { name: "compact", desc: "Summarize old turns to free context" },
+  { name: "pr", desc: "Branch, commit, push and open a PR (/pr <base>, e.g. /pr main)" },
   {
     name: "plan",
     desc: "Plan mode (Shift+Tab; asks first) + council (start·status·finalize·cancel)",
@@ -3868,6 +3870,50 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "why" },
         ]);
+        break;
+      }
+      case "pr": {
+        // Branch off HEAD (local commits ride along), commit the dirty tree, push, open a
+        // PR into the requested base. runPr does not mutate anything until the user confirms
+        // the proposal through the same overlay the `question` tool uses.
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const top = resolveRepoTop();
+        if (!top) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            { role: "tool", text: "/pr needs a git repository.", toolName: "pr", isError: true },
+          ]);
+          break;
+        }
+        setMessages((m) => [...m, echo]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          const outcome = await runPr({
+            top,
+            base: parsePrArgs(args).base,
+            metaModel: planMetaModel ?? null,
+            ask: askUserRef?.current ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "pr");
+            },
+          });
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: outcome.text, toolName: "pr", isError: outcome.isError },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: `pr failed: ${errText(exc)}`, toolName: "pr", isError: true },
+          ]);
+        } finally {
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "verify": {
