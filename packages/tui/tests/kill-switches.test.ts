@@ -59,6 +59,7 @@ const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_CONTEXT_METER", field: "contextMeter" },
   { env: "MINIMA_TUI_STEER", field: "steer" },
   { env: "MINIMA_TUI_REWIND", field: "contextRewind" },
+  { env: "MINIMA_TUI_GIT", field: "git" },
   { env: "MINIMA_TUI_EDIT_GUARD", field: "editGuard" },
   { env: "MINIMA_TUI_TYPED_TASK", field: "typedTask" },
   { env: "MINIMA_TUI_PLAN_PREMIUM", field: "planPremium" },
