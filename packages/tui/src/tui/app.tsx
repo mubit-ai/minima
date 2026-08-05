@@ -80,7 +80,7 @@ import {
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { isHarnessSteerText } from "../minima/stop_gate.ts";
-import { whyReportFor } from "../minima/why.ts";
+import { isCommitArg, whyCommitReport, whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
   makeCheckpointHook,
@@ -360,7 +360,10 @@ const COMMANDS = [
   { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
   { name: "bp-seed", desc: "Seed a demo plan with gates for this run (plan verification on only)" },
   { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
-  { name: "why", desc: "Show plan verification (/why <n> opens the step card)" },
+  {
+    name: "why",
+    desc: "Show plan verification (/why <n> opens the step card, /why <sha> explains a commit)",
+  },
   { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
   { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
   {
@@ -3963,6 +3966,22 @@ export function HarnessApp({
         // opens it with step n's card pushed (the shared stepCardLines surface). The text
         // path stays for verification-off, narrow terminals, and out-of-range steps — and is the
         // only path headless runs ever had (no slash commands there).
+        // F9b: `/why <sha>` is an ARGUMENT BRANCH on this command, not a command of its own —
+        // seven or more hex characters is a commit hash, anything else falls through to the
+        // step-index path below. It answers from the commits ledger, which is the one question
+        // routing_decisions alone cannot: which models wrote a given commit, later, by hash.
+        if (isCommitArg(args)) {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            {
+              role: "tool",
+              text: whyCommitReport(agent.db, args, agent.config.commitLedger === true),
+              toolName: "why",
+            },
+          ]);
+          break;
+        }
         const overview =
           agent.config.bigPlan === true && agent.db && agent.runId
             ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())

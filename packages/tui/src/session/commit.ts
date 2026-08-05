@@ -28,16 +28,37 @@ export interface CommitDeps {
   models: () => string[];
   /** The run behind the commit — one `Minima-Run-Id` pointer, or none when absent. */
   runId: () => string | null;
+  /**
+   * F9b: record the authored SHA in the commits ledger. Absent when there is no database or
+   * MINIMA_TUI_COMMIT_LEDGER=0 — the trailers above do not depend on it, which is the point
+   * of the split: the pointer survives a clone, the ledger answers by hash.
+   */
+  recordCommit?: (sha: string) => void;
 }
 
 /** What {@link makeCommitDeps} needs from the running session. The db seam is structural
  *  rather than a MinimaDb import: this module has no business knowing the whole schema. */
 export interface CommitContext {
   cwd: string;
-  db: { getRunDecisions(runId: string): Record<string, unknown>[] } | null;
+  db: CommitLedgerDb | null;
   getRunId: () => string | null;
   /** The model the CURRENT turn is running on, from live agent state. */
   getLiveModelId: () => string | null;
+  /**
+   * F9b: the rec_id of the rung currently executing (runtime's `currentRecId`). Its
+   * routing_decisions row does not exist yet — it is written when the turn ends — so the
+   * ledger must be told about it the same way the trailers are told the live model id.
+   */
+  getLiveRecId?: () => string | null;
+  /** F9b ledger switch (config.commitLedger). Omitted means on. */
+  ledger?: boolean;
+}
+
+/** The slice of MinimaDb this module uses — structural, so commit.ts still knows no schema. */
+export interface CommitLedgerDb {
+  getRunDecisions(runId: string): Record<string, unknown>[];
+  unattributedRecIds(runId: string, liveRecId?: string | null): string[];
+  recordCommit(opts: { sha: string; runId: string; recIds: readonly string[] }): void;
 }
 
 /**
@@ -72,6 +93,21 @@ export function makeCommitDeps(ctx: CommitContext): CommitDeps {
       return ids;
     },
     runId: ctx.getRunId,
+    // F9b: the ledger write, absent entirely when there is no db or the switch is off — so
+    // commitChanges has nothing to call rather than a call that decides to do nothing.
+    recordCommit:
+      ctx.db && ctx.ledger !== false
+        ? (sha: string) => {
+            const db = ctx.db;
+            const runId = ctx.getRunId();
+            if (!db || !runId) return;
+            db.recordCommit({
+              sha,
+              runId,
+              recIds: db.unattributedRecIds(runId, ctx.getLiveRecId?.() ?? null),
+            });
+          }
+        : undefined,
   };
 }
 
@@ -262,6 +298,17 @@ export async function commitChanges(
   }
 
   const sha = git(top, ["rev-parse", "HEAD"]).stdout.trim();
+  // F9b: the ledger row, written even when the run contributed no rungs — an empty
+  // contributor list is the evidence that lets `/why <sha>` say "nothing routed produced
+  // this" instead of "I have never heard of this commit". Bookkeeping never breaks the hot
+  // path: the commit is already in git's history and reporting it must not fail behind it.
+  if (sha) {
+    try {
+      deps.recordCommit?.(sha);
+    } catch {
+      // ledger unavailable — the commit stands, only its evidence row is missing
+    }
+  }
   const stat = git(top, ["show", "--stat", "--format=%s", sha]).stdout.trim();
   return { ok: true, sha, report: `Committed ${sha.slice(0, 7)}\n${stat}` };
 }

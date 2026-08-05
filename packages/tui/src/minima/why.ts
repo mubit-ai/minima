@@ -58,15 +58,7 @@ export function whyReportFor(
   for (const step of steps) {
     const gate = latestGateByStep.get(step.id);
     const display = gateVerdictFor(gate);
-    // ✓ verified · ✗ a real check that failed/couldn't run · ○ everything else (unchecked step,
-    // or no gate). `unchecked` is NOT a failure — a step that completed with no check must not
-    // read as ✗, or every check-less plan looks like a wall of failures.
-    const icon =
-      display.outcome === "verified"
-        ? "✓"
-        : display.outcome === "failed" || display.outcome === "unrunnable"
-          ? "✗"
-          : "○";
+    const icon = outcomeIcon(display.outcome);
     const verdict = display.tier
       ? `${TIER_GLYPHS[display.tier]} ${display.reason}`
       : display.reason;
@@ -81,15 +73,7 @@ export function whyReportFor(
   if (planGates.length > 0) {
     lines.push("plan gates:");
     for (const gate of planGates) {
-      const display = gateVerdictFor(gate);
-      const icon =
-        display.outcome === "verified"
-          ? "✓"
-          : display.outcome === "failed" || display.outcome === "unrunnable"
-            ? "✗"
-            : "○";
-      const tier = display.tier ? `${TIER_GLYPHS[display.tier]} ` : "";
-      lines.push(`${icon} ${gate.kind ?? "milestone"} ${tier}${display.reason}`);
+      lines.push(gateLine(gate));
       for (const reason of gateReasons(gate).slice(0, 5)) lines.push(`  - ${reason}`);
     }
   }
@@ -104,6 +88,116 @@ export function whyReportFor(
     );
   }
   lines.push(...orphanLines(db, sessionId));
+  return lines.join("\n");
+}
+
+/**
+ * ✓ verified · ✗ a real check that failed/couldn't run · ○ everything else (unchecked step, or
+ * no gate). `unchecked` is NOT a failure — a step that completed with no check must not read
+ * as ✗, or every check-less plan looks like a wall of failures.
+ */
+function outcomeIcon(outcome: GateVerdict["outcome"]): string {
+  if (outcome === "verified") return "✓";
+  if (outcome === "failed" || outcome === "unrunnable") return "✗";
+  return "○";
+}
+
+/** One gate as `/why` prints it — shared by the plan-level list and the per-commit list. */
+function gateLine(gate: GateRow, indent = ""): string {
+  const display = gateVerdictFor(gate);
+  const tier = display.tier ? `${TIER_GLYPHS[display.tier]} ` : "";
+  return `${indent}${outcomeIcon(display.outcome)} ${gate.kind ?? "milestone"} ${tier}${display.reason}`;
+}
+
+/**
+ * F9b: is this `/why` argument a commit hash or a plan step index?
+ *
+ * Disambiguated by SHAPE, not by a new command — seven or more hex characters is a hash,
+ * anything else is a step index. Seven is git's own abbreviation floor, and the rule is
+ * deliberately stated in that order: "1234567" is both all-digits and valid hex, and it is
+ * read as a hash, because no plan has a millionth step but every repo has short hashes.
+ */
+const SHA_ARG = /^[0-9a-f]{7,40}$/i;
+
+export function isCommitArg(arg: string): boolean {
+  return SHA_ARG.test(arg.trim());
+}
+
+/**
+ * `/why <sha>` — which models wrote this commit, what it cost, and how its gates went.
+ *
+ * The commit end of the join lives in `commits`; the models, cost and verdicts are read
+ * LIVE from routing_decisions and gates rather than from the row's snapshot, so feedback
+ * that landed after the commit is reflected. Every unhappy path reports plainly: an unknown
+ * hash, an ambiguous prefix, and a commit with no routed rungs are all answers, not errors.
+ */
+export function whyCommitReport(db: MinimaDb | null, shaArg: string, ledgerOn = true): string {
+  const sha = shaArg.trim();
+  if (!ledgerOn) {
+    return `The commits ledger is OFF (MINIMA_TUI_COMMIT_LEDGER=0) — unset it to look commits up by hash.\nCommits still carry their Co-Authored-By and Minima-Run-Id trailers: git log ${sha}`;
+  }
+  if (!db) return "No commits ledger available.";
+
+  const found = db.findCommitBySha(sha);
+  if (found.kind === "unknown") {
+    return `No ledger entry for commit ${sha}.\nOnly commits authored through git_commit or /commit while the ledger was on are recorded.`;
+  }
+  if (found.kind === "ambiguous") {
+    const list = found.shas.map((s) => `  ${s.slice(0, 12)}`).join("\n");
+    return `Ambiguous commit prefix ${sha} — ${found.shas.length} ledger entries match:\n${list}\nUse more characters.`;
+  }
+
+  const row = found.row;
+  const short = row.sha.slice(0, 7);
+  const claimed = db.commitRecIds(row.sha);
+  const contributions = db.commitContributions(row.sha);
+  const lines = [`Commit ${short} — run ${row.run_id}`];
+
+  if (claimed.length === 0) {
+    // A real, recorded commit that no routed rung produced: an unrouted session, or work done
+    // before routing started. Saying so is the point — an empty card would read as a bug.
+    lines.push(
+      "No routed recommendations contributed to this commit — it was authored outside a routed turn, so there are no models, cost or gates to attribute.",
+    );
+    return lines.join("\n");
+  }
+  if (contributions.length === 0) {
+    // The commit claimed rungs, but none has a decision row yet: a turn's row is written when
+    // it ends, so a commit authored mid-turn is briefly ahead of its own evidence. Distinct
+    // from the unrouted case above, and it resolves itself.
+    lines.push(
+      `${claimed.length} recommendation(s) contributed, but none has finished its turn yet — cost and gates land when the turn ends.`,
+    );
+    return lines.join("\n");
+  }
+
+  // Realized $ only, summed live over the contributing rungs. Estimates never masquerade as
+  // spend, so a rung still awaiting feedback contributes 0 rather than its estimate.
+  let totalUsd = 0;
+  const perModel = new Map<string, { calls: number; usd: number }>();
+  for (const c of contributions) {
+    const usd = c.actual_cost_usd ?? 0;
+    totalUsd += usd;
+    const model = c.chosen_model ?? "(unrecorded)";
+    const acc = perModel.get(model) ?? { calls: 0, usd: 0 };
+    acc.calls += 1;
+    acc.usd += usd;
+    perModel.set(model, acc);
+  }
+
+  lines.push(`models (${perModel.size}):`);
+  for (const [model, acc] of perModel) {
+    lines.push(`  ${model} — ${acc.calls} call(s), $${acc.usd.toFixed(4)}`);
+  }
+  lines.push(`realized cost $${totalUsd.toFixed(4)} across ${contributions.length} call(s)`);
+
+  const gates = db.commitGates(row.sha);
+  if (gates.length === 0) {
+    lines.push("gates: none recorded for these calls");
+  } else {
+    lines.push(`gates (${gates.length}):`);
+    for (const gate of gates) lines.push(gateLine(gate, "  "));
+  }
   return lines.join("\n");
 }
 

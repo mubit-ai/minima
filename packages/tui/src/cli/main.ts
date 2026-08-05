@@ -1184,6 +1184,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     db,
     getRunId: () => agent.runId,
     getLiveModelId: () => agent.agentState.model?.id ?? null,
+    // F9b: the commits-ledger write rides the same deps, so both commit surfaces record
+    // evidence identically. MINIMA_TUI_COMMIT_LEDGER=0 drops the write, never the trailers.
+    // getLiveRecId is the join's equivalent of getLiveModelId above: a commit is authored
+    // mid-turn, and this turn's decision row is not written until the turn ends.
+    getLiveRecId: () => agent.currentRecId,
+    ledger: config.commitLedger,
   });
   registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
