@@ -40,6 +40,7 @@ import {
   verifiedOutcomeFor,
 } from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
+import { cavemanSystemAppend, getCaveman } from "./caveman.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import {
   CLASSIFY_CONFIDENCE_FLOOR,
@@ -374,6 +375,13 @@ export class MinimaAgent extends Agent {
     const modeBlock = modeSystemAppend(getMode());
     if (modeBlock) {
       this.agentState.systemPrompt = (this.agentState.systemPrompt ?? "") + modeBlock;
+    }
+    // /caveman: terse-prose skill, read at prompt time like the mode block and reverted by the
+    // same `finally`. "" unless the user turned it on, so default turns are unchanged.
+    const cavemanBlock = cavemanSystemAppend(getCaveman());
+    if (cavemanBlock) {
+      const cur = this.agentState.systemPrompt;
+      this.agentState.systemPrompt = cur ? `${cur}\n\n${cavemanBlock}` : cavemanBlock;
     }
     // Plan verification: inject the verify contract + the plan of record into THIS turn's system
     // prompt (appended after recall, reverted together in `finally`). Off unless bigPlan is set.

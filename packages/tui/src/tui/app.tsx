@@ -46,6 +46,12 @@ import {
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
+  DEFAULT_CAVEMAN_LEVEL,
+  getCaveman,
+  parseCavemanArg,
+  setCaveman,
+} from "../minima/caveman.ts";
+import {
   type InterviewState,
   PlanSessionStore,
   type RoutingResult,
@@ -329,6 +335,7 @@ const COMMANDS = [
   },
   { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
   { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+  { name: "caveman", desc: "Terse-prose mode: /caveman [lite|full|ultra|wenyan-*|off]" },
   { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
   { name: "bp-seed", desc: "Seed a demo plan with gates for this run (plan verification on only)" },
   { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
@@ -3673,6 +3680,30 @@ export function HarnessApp({
         setMessages((m) => [
           ...m,
           { role: "tool", text: formatTip(advanceTip()), toolName: "tip" },
+        ]);
+        break;
+      }
+      case "caveman": {
+        const parsed = parseCavemanArg(args);
+        const next =
+          parsed === "off"
+            ? null
+            : parsed !== null
+              ? parsed
+              : getCaveman()
+                ? null
+                : DEFAULT_CAVEMAN_LEVEL;
+        setCaveman(next);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: next
+              ? `caveman: ${next} — prose compressed; code, commands and errors untouched`
+              : "caveman: off",
+            toolName: "caveman",
+          },
         ]);
         break;
       }
