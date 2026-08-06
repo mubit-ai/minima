@@ -100,7 +100,7 @@ import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_sl
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
+import { compactMessagesLLM, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
@@ -2885,13 +2885,22 @@ export function HarnessApp({
       }
       case "compact": {
         const before = agent.agentState.messages;
-        agent.agentState.messages = compactMessages(agent, before);
+        setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          agent.agentState.messages = await compactMessagesLLM(agent, before, {
+            model: planMetaModel ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "compact");
+            },
+          });
+        } finally {
+          setBusy(false);
+        }
         setMessages((m) => [
           ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
           {
             role: "tool",
             text: compactReport(before, agent.agentState.messages),
