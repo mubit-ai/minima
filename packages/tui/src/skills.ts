@@ -17,15 +17,49 @@ export interface SkillScan {
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
+/**
+ * Unwrap the two scalar forms real skills use beyond a bare word. Skill Seekers JSON-quotes
+ * any value containing `:` or `#` (most generated descriptions are sentences with a colon),
+ * and the Anthropic skill convention writes long descriptions as a folded block. Read as bare
+ * text, the first keeps its quotes and the second collapses to ">" — which is what the model
+ * would then see in the skill listing.
+ */
+function scalar(value: string, continuation: string[]): string {
+  if (value === ">" || value === ">-" || value === "|" || value === "|-") {
+    // Folded (>) joins lines with spaces; literal (|) keeps them. Either way the indent goes.
+    const lines = continuation.map((l) => l.trim());
+    return (value[0] === "|" ? lines.join("\n") : lines.join(" ")).trim();
+  }
+  if (value.length > 1 && value[0] === '"' && value.endsWith('"')) {
+    try {
+      return JSON.parse(value) as string;
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.length > 1 && value[0] === "'" && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  return value;
+}
+
 export function parseSkillMd(
   text: string,
 ): { name: string; description: string; body: string; hidden: boolean } | { error: string } {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!m) return { error: "missing frontmatter (--- name/description ---)" };
   const fields: Record<string, string> = {};
-  for (const line of (m[1] ?? "").split(/\r?\n/)) {
-    const i = line.indexOf(":");
-    if (i > 0) fields[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  const lines = (m[1] ?? "").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (/^\s/.test(line)) continue; // continuation of the previous key — consumed below
+    const c = line.indexOf(":");
+    if (c <= 0) continue;
+    const continuation: string[] = [];
+    for (let j = i + 1; j < lines.length && /^\s+\S/.test(lines[j] ?? ""); j++) {
+      continuation.push(lines[j] ?? "");
+    }
+    fields[line.slice(0, c).trim()] = scalar(line.slice(c + 1).trim(), continuation);
   }
   const name = fields.name ?? "";
   const description = fields.description ?? "";

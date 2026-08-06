@@ -47,6 +47,44 @@ describe("parseSkillMd", () => {
   test("name with spaces -> error", () => {
     expect("error" in parseSkillMd("---\nname: two words\ndescription: d\n---\nbody")).toBe(true);
   });
+
+  // Skill Seekers JSON-quotes any value containing ":" or "#" — which is most of the
+  // descriptions it generates. Read as bare text they keep their quotes.
+  test("double-quoted scalar is unquoted", () => {
+    const r = parseSkillMd('---\nname: godot\ndescription: "Godot 4.x: the engine"\n---\nbody');
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.description).toBe("Godot 4.x: the engine");
+  });
+
+  test("single-quoted scalar is unquoted", () => {
+    const r = parseSkillMd("---\nname: a\ndescription: 'it''s fine'\n---\nbody");
+    if (!("error" in r)) expect(r.description).toBe("it's fine");
+  });
+
+  // The Anthropic skill convention writes long descriptions as a folded block; read
+  // line-wise the description collapses to ">" and the real text is dropped.
+  test("folded (>) scalar joins its continuation lines", () => {
+    const r = parseSkillMd(
+      "---\nname: a\ndescription: >\n  Cuts tokens 65%.\n  Use when: user says caveman.\nhidden: false\n---\nbody",
+    );
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) {
+      expect(r.description).toBe("Cuts tokens 65%. Use when: user says caveman.");
+      expect(r.hidden).toBe(false);
+      expect(r.body).toBe("body");
+    }
+  });
+
+  test("literal (|) scalar keeps its line breaks", () => {
+    const r = parseSkillMd("---\nname: a\ndescription: |\n  one\n  two\n---\nbody");
+    if (!("error" in r)) expect(r.description).toBe("one\ntwo");
+  });
+
+  test("a folded description does not swallow the next key", () => {
+    const r = parseSkillMd("---\ndescription: >\n  wrapped\nname: keep-me\n---\nbody");
+    expect("error" in r).toBe(false);
+    if (!("error" in r)) expect(r.name).toBe("keep-me");
+  });
 });
 
 describe("discoverSkills", () => {
@@ -168,5 +206,18 @@ describe("skillsListText", () => {
 
   test("empty scan explains where skills go", () => {
     expect(skillsListText({ skills: [], warnings: [] })).toContain(".minima/skills");
+  });
+});
+
+// The rescan lives in app.tsx's /skills case (React, no headless harness) — pinned at the
+// source level like the other app.tsx behaviors, so the wiring can't silently regress.
+describe("/skills rescan", () => {
+  test("re-runs discovery and re-registers the skill tool", async () => {
+    const { readSource } = await import("./_source.ts");
+    const app = readSource("tui/app.tsx");
+    expect(app).toContain("const scan = discoverSkills(process.cwd());");
+    expect(app).toContain("setSkillScan(scan)");
+    expect(app).toContain("skillTool(scan.skills)");
+    expect(app).toContain('t.name !== "skill"');
   });
 });

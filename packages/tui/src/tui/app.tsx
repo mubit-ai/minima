@@ -93,6 +93,7 @@ import { discoverSkills, skillInvocationPrompt, skillsListText } from "../skills
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
+import { skillTool } from "../tools/skill.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
@@ -836,7 +837,10 @@ export function HarnessApp({
   todos,
 }: AppProps) {
   const { exit } = useApp();
-  const skillScan = useMemo(() => discoverSkills(process.cwd()), []);
+  // Startup scan; /skills re-runs it so a skill installed mid-session (Skill Seekers and the
+  // Claude plugin installers both write into the compat roots while the harness is running)
+  // becomes usable without a restart.
+  const [skillScan, setSkillScan] = useState(() => discoverSkills(process.cwd()));
   // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
   // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
   const slashCommands = useMemo(
@@ -4139,10 +4143,25 @@ export function HarnessApp({
         break;
       }
       case "skills": {
+        const before = skillScan.skills.map((s) => s.name).join(",");
+        const scan = discoverSkills(process.cwd());
+        setSkillScan(scan);
+        // Re-register the `skill` tool so the model's listing matches the rescan. Only when the
+        // agent has tools at all (--no-tools leaves it empty, and stays empty).
+        const tools = agent.agentState.tools;
+        if (tools.length > 0) {
+          const rest = tools.filter((t) => t.name !== "skill");
+          agent.agentState.tools = scan.skills.length ? [...rest, skillTool(scan.skills)] : rest;
+        }
+        const changed = scan.skills.map((s) => s.name).join(",") !== before;
         setMessages((m) => [
           ...m,
           { role: "user", text: `/${name}` },
-          { role: "tool", toolName: "skills", text: skillsListText(skillScan) },
+          {
+            role: "tool",
+            toolName: "skills",
+            text: `${skillsListText(scan)}${changed ? "\n  (rescanned — the model's skill list is up to date)" : ""}`,
+          },
         ]);
         break;
       }
