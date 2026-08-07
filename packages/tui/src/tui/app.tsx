@@ -841,6 +841,14 @@ export function HarnessApp({
   // Claude plugin installers both write into the compat roots while the harness is running)
   // becomes usable without a restart.
   const [skillScan, setSkillScan] = useState(() => discoverSkills(process.cwd()));
+  // Whether the rescan may (re-)register the `skill` tool: only if the startup toolset has one,
+  // or had no skills to build one from. --no-tools (empty list) and a --tools allowlist that
+  // dropped it both read as "not allowed", so /skills never conjures a tool the flags excluded.
+  const [skillToolAllowed] = useState(
+    () =>
+      agent.agentState.tools.length > 0 &&
+      (agent.agentState.tools.some((t) => t.name === "skill") || skillScan.skills.length === 0),
+  );
   // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
   // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
   const slashCommands = useMemo(
@@ -4146,10 +4154,11 @@ export function HarnessApp({
         const before = skillScan.skills.map((s) => s.name).join(",");
         const scan = discoverSkills(process.cwd());
         setSkillScan(scan);
-        // Re-register the `skill` tool so the model's listing matches the rescan. Only when the
-        // agent has tools at all (--no-tools leaves it empty, and stays empty).
+        // Re-register the `skill` tool so the model's listing matches the rescan — but never
+        // conjure one the startup toolset excluded: --no-tools leaves the list empty, and
+        // --tools <allowlist> without `skill` must stay without it.
         const tools = agent.agentState.tools;
-        if (tools.length > 0) {
+        if (skillToolAllowed) {
           const rest = tools.filter((t) => t.name !== "skill");
           agent.agentState.tools = scan.skills.length ? [...rest, skillTool(scan.skills)] : rest;
         }

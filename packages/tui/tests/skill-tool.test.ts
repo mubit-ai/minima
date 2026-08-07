@@ -44,3 +44,25 @@ describe("builtinTools skills opt", () => {
     expect(names({ skills: SKILLS })).toContain("skill");
   });
 });
+
+describe("listed descriptions are bounded", () => {
+  // The listing ships in the tool schema on every request, and a generated skill's
+  // description is whatever its generator scraped — it must not be able to tax every turn.
+  test("a long description is collapsed and truncated, the body is not", () => {
+    const long = {
+      name: "scraped",
+      description: `${"word ".repeat(400)}\n\nsecond paragraph`,
+      body: "x".repeat(5000),
+      dir: "/tmp/sk/scraped",
+      source: "claude-global",
+    };
+    const desc = skillTool([long]).description;
+    expect(desc).not.toContain("\n\nsecond paragraph");
+    expect(desc.split("Available skills:")[1]!.trim().length).toBeLessThan(300);
+    expect(desc).toContain("…");
+  });
+
+  test("a short description is passed through untouched", () => {
+    expect(skillTool(SKILLS).description).toContain("- deploy — Ship to prod");
+  });
+});

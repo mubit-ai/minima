@@ -127,7 +127,7 @@ export function skillInvocationPrompt(
 export function skillsListText(scan: SkillScan): string {
   const lines = scan.skills.length
     ? scan.skills.map((s) => `  /${s.name.padEnd(16)} ${s.description}  [${s.source}]`)
-    : ["  (none found — add .minima/skills/<name>/SKILL.md and restart)"];
+    : ["  (none found — add .minima/skills/<name>/SKILL.md, then /skills again)"];
   const warnings = scan.warnings.map((w) => `  ⚠ ${w}`);
   return ["Skills:", ...lines, ...warnings].join("\n");
 }

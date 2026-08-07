@@ -219,5 +219,6 @@ describe("/skills rescan", () => {
     expect(app).toContain("setSkillScan(scan)");
     expect(app).toContain("skillTool(scan.skills)");
     expect(app).toContain('t.name !== "skill"');
+    expect(app).toContain("if (skillToolAllowed)");
   });
 });
