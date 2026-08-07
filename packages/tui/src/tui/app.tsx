@@ -84,6 +84,7 @@ import {
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { isHarnessSteerText } from "../minima/stop_gate.ts";
+import { buildTurnDigests, formatDigest, runSummarise } from "../minima/summarise.ts";
 import { whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
@@ -350,6 +351,7 @@ const COMMANDS = [
     name: "profile",
     desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
+  { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
 ];
 
 export interface CommandPickerProps {
@@ -4202,6 +4204,43 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "bp" },
         ]);
+        break;
+      }
+      case "summarise": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "summarise" }]);
+        const turns = buildTurnDigests(
+          agent.agentState.messages,
+          Number(args) || 5,
+          agent.meter?.toolFees,
+        );
+        if (turns.length === 0) {
+          say("Nothing to summarise yet — no completed turns in this session.");
+          break;
+        }
+        const usable = planMetaModel && providerKeyPresent(planMetaModel.provider);
+        if (!usable) {
+          say(
+            `Last ${turns.length} turns (no summariser model available):\n${formatDigest(turns)}`,
+          );
+          break;
+        }
+        let spent = 0;
+        const summary = await runSummarise({
+          metaModel: planMetaModel,
+          turns,
+          onCostUsd: (usd) => {
+            spent = usd;
+            agent.meter?.addOverhead(usd);
+            agent.budget?.bookSpend(usd, "summarise");
+          },
+        });
+        say(
+          summary
+            ? `Last ${turns.length} turns\n\n${summary}\n\n  ~$${spent.toFixed(4)} · ${planMetaModel.id}`
+            : `Last ${turns.length} turns (summariser unavailable):\n${formatDigest(turns)}`,
+        );
         break;
       }
       default:
