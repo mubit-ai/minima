@@ -343,6 +343,7 @@ const COMMANDS = [
     desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
   },
   { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
+  { name: "btw", desc: "Side note to the running turn — /btw <note> (no new prompt queued)" },
 ];
 
 export interface CommandPickerProps {
@@ -4118,6 +4119,23 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "bp" },
         ]);
+        break;
+      }
+      case "btw": {
+        const note = args.trim();
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "btw" }]);
+        if (!note) {
+          say("Usage: /btw <note> — hand the running turn a side note without queueing a prompt.");
+          break;
+        }
+        if (!busy && !drainBusyRef.current) {
+          say("Nothing is running — send it as a normal prompt.");
+          break;
+        }
+        agent.steer(`By the way, from the user (extra context, not a new task):\n${note}`);
+        say("Noted — the agent sees it at its next step.");
         break;
       }
       case "summarise": {
