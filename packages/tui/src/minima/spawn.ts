@@ -14,6 +14,7 @@ import type { AgentEvent } from "../agent/events.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
+import { getDiscoveredSkills } from "../skills.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { builtinTools } from "../tools/builtin.ts";
 import { extractJson, reaskMessage, validateAgainstSchema } from "../tools/output_schema.ts";
@@ -157,6 +158,11 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       exclude: ["task"],
       artifacts: opts.artifacts,
       seen: childSeen,
+      // Read per spawn, not per session: a skill installed (or rescanned) mid-run reaches the
+      // next child. A delegation that names a skill in its objective is the case skills matter
+      // most for; without the tool the child can only fail silently. `tool_allowlist` still
+      // filters it out below when the lead scopes the child's toolset.
+      skills: getDiscoveredSkills(),
     });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);

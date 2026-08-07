@@ -124,6 +124,23 @@ export function skillInvocationPrompt(
   return args ? `${base}\n\nArguments: ${args}` : base;
 }
 
+// ------------------------------------------------------------------ current scan
+/**
+ * The scan every consumer reads, in the module-level-store pattern of `agent/modes.ts` and
+ * `tui/badge_slot.ts`. main.ts seeds it at startup and `/skills` replaces it on rescan;
+ * spawn.ts reads it when it builds a child, so a sub-agent delegated a skill gets the same
+ * catalogue the lead sees — including one installed mid-session.
+ */
+let discovered: DiscoveredSkill[] = [];
+
+export function setDiscoveredSkills(skills: DiscoveredSkill[]): void {
+  discovered = skills;
+}
+
+export function getDiscoveredSkills(): DiscoveredSkill[] {
+  return discovered;
+}
+
 export function skillsListText(scan: SkillScan): string {
   const lines = scan.skills.length
     ? scan.skills.map((s) => `  /${s.name.padEnd(16)} ${s.description}  [${s.source}]`)

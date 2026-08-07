@@ -89,7 +89,12 @@ import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
-import { discoverSkills, skillInvocationPrompt, skillsListText } from "../skills.ts";
+import {
+  discoverSkills,
+  setDiscoveredSkills,
+  skillInvocationPrompt,
+  skillsListText,
+} from "../skills.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
@@ -4154,6 +4159,7 @@ export function HarnessApp({
         const before = skillScan.skills.map((s) => s.name).join(",");
         const scan = discoverSkills(process.cwd());
         setSkillScan(scan);
+        setDiscoveredSkills(scan.skills); // sub-agents spawned after this see the rescan too
         // Re-register the `skill` tool so the model's listing matches the rescan — but never
         // conjure one the startup toolset excluded: --no-tools leaves the list empty, and
         // --tools <allowlist> without `skill` must stay without it.

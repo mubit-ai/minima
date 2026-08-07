@@ -56,6 +56,8 @@ export interface FauxRequest {
   messageCount: number;
   /** Concatenated text of the LAST user message — the prompt under test. */
   user: string;
+  /** Tool names offered on this request, in order. */
+  tools: string[];
 }
 
 /** Observable per-registration state. */
@@ -138,6 +140,7 @@ class FauxProvider implements Provider {
       systemPrompt: context.system_prompt ?? null,
       messageCount: context.messages.length,
       user: lastUser?.textContent ?? "",
+      tools: context.tools.map((t) => t.name),
     });
     const queued = this.state.responses.shift();
     if (!queued) {
