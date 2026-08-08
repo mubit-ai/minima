@@ -48,6 +48,12 @@ import {
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
 import {
+  DEFAULT_CAVEMAN_LEVEL,
+  getCaveman,
+  parseCavemanArg,
+  setCaveman,
+} from "../minima/caveman.ts";
+import {
   type InterviewState,
   PlanSessionStore,
   type RoutingResult,
@@ -81,6 +87,7 @@ import {
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { isHarnessSteerText } from "../minima/stop_gate.ts";
+import { buildTurnDigests, formatDigest, runSummarise } from "../minima/summarise.ts";
 import { isCommitArg, whyCommitReport, whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
@@ -111,7 +118,7 @@ import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.ts
 import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { readClipboardImage } from "./clipboard_image.ts";
-import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
+import { compactMessagesLLM, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
 import {
   AUTO_COMPACT_PCT,
@@ -185,6 +192,7 @@ import {
   renderPlanOverviewText,
   stepCardLines,
 } from "./plan_overview.ts";
+import { parsePrArgs, runPr } from "./pr.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import {
   EMPTY_QUEUE,
@@ -427,6 +435,7 @@ function allCommands(): { name: string; desc: string }[] {
       desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])",
     },
     { name: "compact", desc: "Summarize old turns to free context" },
+    { name: "pr", desc: "Branch, commit, push and open a PR into <branch> (/pr develop)" },
     {
       name: "plan",
       desc: `Plan mode (${keyHelp("permission.cycle")}; asks first) + council (start·status·finalize·cancel)`,
@@ -436,6 +445,7 @@ function allCommands(): { name: string; desc: string }[] {
       desc: `Show/set mode: build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles)`,
     },
     { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+    { name: "caveman", desc: "Terse-prose mode: /caveman [lite|full|ultra|wenyan-*|off]" },
     { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
     {
       name: "bp-seed",
@@ -456,6 +466,8 @@ function allCommands(): { name: string; desc: string }[] {
       name: "profile",
       desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
     },
+    { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
+    { name: "btw", desc: "Side note to the running turn — /btw <note> (no new prompt queued)" },
   ];
   return commandCache;
 }
@@ -3190,13 +3202,22 @@ export function HarnessApp({
       }
       case "compact": {
         const before = agent.agentState.messages;
-        agent.agentState.messages = compactMessages(agent, before);
+        setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          agent.agentState.messages = await compactMessagesLLM(agent, before, {
+            model: planMetaModel ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "compact");
+            },
+          });
+        } finally {
+          setBusy(false);
+        }
         setMessages((m) => [
           ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
           {
             role: "tool",
             text: compactReport(before, agent.agentState.messages),
@@ -3978,6 +3999,30 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "caveman": {
+        const parsed = parseCavemanArg(args);
+        const next =
+          parsed === "off"
+            ? null
+            : parsed !== null
+              ? parsed
+              : getCaveman()
+                ? null
+                : DEFAULT_CAVEMAN_LEVEL;
+        setCaveman(next);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: next
+              ? `caveman: ${next} — prose compressed; code, commands and errors untouched`
+              : "caveman: off",
+            toolName: "caveman",
+          },
+        ]);
+        break;
+      }
       case "judge": {
         const on = args.trim().toLowerCase() in { on: 1, "1": 1, true: 1, yes: 1 };
         agent.config.judgeEvery = on ? 1 : 0;
@@ -4197,6 +4242,50 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "why" },
         ]);
+        break;
+      }
+      case "pr": {
+        // Branch off HEAD (local commits ride along), commit the dirty tree, push, open a
+        // PR into the requested base. runPr does not mutate anything until the user confirms
+        // the proposal through the same overlay the `question` tool uses.
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const top = resolveRepoTop();
+        if (!top) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            { role: "tool", text: "/pr needs a git repository.", toolName: "pr", isError: true },
+          ]);
+          break;
+        }
+        setMessages((m) => [...m, echo]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          const outcome = await runPr({
+            top,
+            base: parsePrArgs(args).base,
+            metaModel: planMetaModel ?? null,
+            ask: askUserRef?.current ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "pr");
+            },
+          });
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: outcome.text, toolName: "pr", isError: outcome.isError },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: `pr failed: ${errText(exc)}`, toolName: "pr", isError: true },
+          ]);
+        } finally {
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "verify": {
@@ -4445,6 +4534,60 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "bp" },
         ]);
+        break;
+      }
+      case "btw": {
+        const note = args.trim();
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "btw" }]);
+        if (!note) {
+          say("Usage: /btw <note> — hand the running turn a side note without queueing a prompt.");
+          break;
+        }
+        if (!busy && !drainBusyRef.current) {
+          say("Nothing is running — send it as a normal prompt.");
+          break;
+        }
+        agent.steer(`By the way, from the user (extra context, not a new task):\n${note}`);
+        say("Noted — the agent sees it at its next step.");
+        break;
+      }
+      case "summarise": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "summarise" }]);
+        const turns = buildTurnDigests(
+          agent.agentState.messages,
+          Number(args) || 5,
+          agent.meter?.toolFees,
+        );
+        if (turns.length === 0) {
+          say("Nothing to summarise yet — no completed turns in this session.");
+          break;
+        }
+        const usable = planMetaModel && providerKeyPresent(planMetaModel.provider);
+        if (!usable) {
+          say(
+            `Last ${turns.length} turns (no summariser model available):\n${formatDigest(turns)}`,
+          );
+          break;
+        }
+        let spent = 0;
+        const summary = await runSummarise({
+          metaModel: planMetaModel,
+          turns,
+          onCostUsd: (usd) => {
+            spent = usd;
+            agent.meter?.addOverhead(usd);
+            agent.budget?.bookSpend(usd, "summarise");
+          },
+        });
+        say(
+          summary
+            ? `Last ${turns.length} turns\n\n${summary}\n\n  ~$${spent.toFixed(4)} · ${planMetaModel.id}`
+            : `Last ${turns.length} turns (summariser unavailable):\n${formatDigest(turns)}`,
+        );
         break;
       }
       default:
