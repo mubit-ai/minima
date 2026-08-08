@@ -13,6 +13,7 @@ import {
   text,
   thinking,
 } from "../src/ai/index.ts";
+import { effortForLevel } from "../src/ai/provider_quirks.ts";
 
 const FAUX_MODEL_REASONING: Model = {
   id: "test-reasoning",

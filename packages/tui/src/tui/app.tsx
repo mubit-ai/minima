@@ -34,6 +34,7 @@ import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { allModels } from "../ai/registry.ts";
 import type { ImageContent, Model } from "../ai/types.ts";
 import { Message as AgentMessage, AssistantMessage, image as imageBlock } from "../ai/types.ts";
+import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
@@ -250,6 +251,12 @@ export interface AppProps {
    */
   todos?: TodoTask[];
   /**
+   * The ambient localhost dashboard, when one was started (TTY + persistence + not opted out).
+   * Only `/dashboard` reads it, and it re-reads the rendezvous file on every call: another TUI may
+   * have started the server, or it may have moved ports since this session began.
+   */
+  dashboard?: DashboardSupervisor | null;
+  /**
    * F9a: the SAME CommitDeps main.ts handed the `git_commit` tool, so `/commit` reaches the
    * same code path and produces an identical commit. null when MINIMA_TUI_GIT_COMMIT=0 — the
    * command is then removed outright rather than reporting itself unavailable.
@@ -384,6 +391,10 @@ function allCommands(): { name: string; desc: string }[] {
     { name: "quit", desc: "Exit the application" },
     { name: "exit", desc: "Exit the application" },
     { name: "cost", desc: "Show cost meter totals" },
+    {
+      name: "dashboard",
+      desc: "Local dashboard URL · `off` stops it for this session, `on` starts it again",
+    },
     { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
     { name: "reconnect", desc: "Reconnect routing client" },
     { name: "new", desc: "Start a fresh session" },
@@ -938,6 +949,7 @@ export function HarnessApp({
   bigPlanGateBefore,
   verifyConsentRef,
   todos,
+  dashboard = null,
   commitDeps = null,
 }: AppProps) {
   const { exit } = useApp();
@@ -2652,6 +2664,46 @@ export function HarnessApp({
         copyLastReply(`/${name}`);
         break;
       }
+      case "dashboard": {
+        // Snapshotted fresh, never cached: another TUI may have started the server, or it may have
+        // moved ports since this session began. Formatting lives in dashboard/supervisor.ts so the
+        // no-dashboard branches are testable without a terminal.
+        const { dashboardReport } = await import("../dashboard/supervisor.ts");
+        const verb = args.trim().toLowerCase();
+        const echo: ChatMessage = { role: "user", text: `/dashboard${verb ? ` ${verb}` : ""}` };
+        if (verb !== "" && verb !== "on" && verb !== "off") {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: `Unknown argument "${verb}". Usage: /dashboard [on|off]`,
+              toolName: "dashboard",
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        // `off` releases this TUI's hold and stops it retrying; it never signals the server, which
+        // ends itself once its last client leaves. `on` waits briefly so the reply is the link
+        // rather than "not reachable" while the spawn is in flight.
+        if (verb === "off") await dashboard?.detach();
+        const snap = dashboard
+          ? verb === "on"
+            ? await dashboard.resume()
+            : await dashboard.snapshot()
+          : null;
+        const lines = dashboardReport(snap, {
+          disabled: process.env.MINIMA_TUI_DASHBOARD === "0",
+          age: (startedAt) => formatAge(startedAt / 1000),
+        });
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: lines.join("\n"), toolName: "dashboard" },
+        ]);
+        break;
+      }
       case "undo": {
         // B4: checkpoint restore (safety snapshot inside) + rewind marker on the events
         // spine + in-memory truncation + composer prefilled with the undone prompt.
@@ -3514,7 +3566,9 @@ export function HarnessApp({
           break;
         }
         let report = agent.meter?.report() || "(no cost metrics recorded)";
-        // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
+        // The durable view: quality/$ and the anchor comparison, from `db/anchors.ts` — the SAME
+        // functions the dashboard's cost page reads. The meter above deliberately claims no
+        // savings of its own, so this screen states one number once.
         if (agent.db && agent.runId) {
           try {
             const rows = agent.db.getRunDecisions(agent.runId) as unknown as Parameters<

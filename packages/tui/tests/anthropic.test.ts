@@ -69,7 +69,6 @@ async function kwargsFor(
   return captured[0]!;
 }
 
-
 function resetAll() {
   resetRegistry();
   resetProviderRegistration();
@@ -203,13 +202,24 @@ describe("AnthropicProvider", () => {
     // claude-fable-5 has always-on adaptive thinking and 400s on enabled+budget_tokens.
     resetAll();
     const captured: Record<string, unknown>[] = [];
-    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)));
+    registerProvider(
+      "anthropic-messages",
+      new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)),
+    );
     const fable: Model = { ...MODEL, id: "claude-fable-5", adaptive_thinking: true };
     const opts = { options: { thinking: true, thinking_budget: 2048 } };
-    await complete(fable, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
+    await complete(
+      fable,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      opts,
+    );
     expect(captured[0].thinking).toEqual({ type: "adaptive" });
 
-    await complete(MODEL, context({ messages: [new Message({ role: "user", content: "x" })] }), opts);
+    await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "x" })] }),
+      opts,
+    );
     expect(captured[1].thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
   });
 

@@ -522,10 +522,8 @@ describe("editTargetsWithinCwd (cwd-scoped accept-edits auto)", () => {
   });
 
   test("apply_patch: every Add/Update/Delete path and Move-to must be inside cwd", () => {
-    const inPatch =
-      "*** Begin Patch\n*** Add File: src/new.ts\n+x\n*** End Patch";
-    const outPatch =
-      "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
+    const inPatch = "*** Begin Patch\n*** Add File: src/new.ts\n+x\n*** End Patch";
+    const outPatch = "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
     const movePatch =
       "*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../escaped.ts\n@@\n-a\n+b\n*** End Patch";
     expect(editTargetsWithinCwd("apply_patch", { patch: inPatch }, "/repo")).toBe(true);
@@ -843,11 +841,7 @@ describe("bashCommandFamilies", () => {
       "pip",
       "git",
     ]);
-    expect(bashCommandFamilies("cat a.txt | grep foo; echo done")).toEqual([
-      "cat",
-      "grep",
-      "echo",
-    ]);
+    expect(bashCommandFamilies("cat a.txt | grep foo; echo done")).toEqual(["cat", "grep", "echo"]);
     expect(bashCommandFamilies("echo hi;")).toEqual(["echo"]); // trailing separator is harmless
   });
 
@@ -890,15 +884,10 @@ describe("persisted per-command bash grants", () => {
     expect(res3?.block).toBe(true);
 
     // An unanalyzable command never matches a grant.
-    const res4 = await checkPermission(
-      "bash",
-      { command: "pip install $(evil)" },
-      state,
-      (p) => {
-        expect(p.alwaysLabel).toBeUndefined();
-        p.resolve("deny");
-      },
-    );
+    const res4 = await checkPermission("bash", { command: "pip install $(evil)" }, state, (p) => {
+      expect(p.alwaysLabel).toBeUndefined();
+      p.resolve("deny");
+    });
     expect(res4?.block).toBe(true);
   });
 

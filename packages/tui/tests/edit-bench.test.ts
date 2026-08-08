@@ -22,7 +22,9 @@ type MemRange = { start: number; end: number };
 
 interface LedgerLike {
   enabled: boolean;
-  rows(path: string): { start_line: number; end_line: number; file_hash: string; tool: string }[] | null;
+  rows(
+    path: string,
+  ): { start_line: number; end_line: number; file_hash: string; tool: string }[] | null;
   record(path: string, fileHash: string, ranges: MemRange[], tool: string): boolean;
   applyEdit(path: string, edit: { spans: MemRange[]; lineDelta: number; newHash: string }): boolean;
 }
@@ -441,7 +443,10 @@ describe("AC7 benchmark", () => {
         const expected = sc.final(out.dir);
         const contentOk = readFileSync(expected.file, "utf8") === expected.content;
         if (allOk && contentOk) counts[mode] += 1;
-        else console.log(`edit-bench FAIL ${sc.name} guard=${mode} allOk=${allOk} contentOk=${contentOk}`);
+        else
+          console.log(
+            `edit-bench FAIL ${sc.name} guard=${mode} allOk=${allOk} contentOk=${contentOk}`,
+          );
       }
     }
     console.log(`edit-bench legit: ON ${counts.on}/12, OFF ${counts.off}/12`);
@@ -467,7 +472,10 @@ describe("AC7 benchmark", () => {
       }
       const off = await runScenario(sc, false);
       const expected = sc.final(off.dir);
-      if (!isRejected(off.finalResult) && readFileSync(expected.file, "utf8") === expected.content) {
+      if (
+        !isRejected(off.finalResult) &&
+        readFileSync(expected.file, "utf8") === expected.content
+      ) {
         appliedOff += 1;
       } else {
         console.log(`edit-bench STALE-OFF did not apply: ${sc.name}`);

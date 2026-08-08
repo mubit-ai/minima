@@ -255,11 +255,7 @@ describe("plan interview — verify answers reach seeded steps as user-origin ch
   });
 
   test("applyUserVerifies fills gaps only — authored verifies are never overwritten", () => {
-    const steps = [
-      { verify: "bun test authored" },
-      { verify: "" },
-      { verify: "" },
-    ];
+    const steps = [{ verify: "bun test authored" }, { verify: "" }, { verify: "" }];
     const applied = applyUserVerifies(steps, ["make test", "make lint"]);
     expect(applied.attached).toEqual([2, 3]);
     expect(applied.steps.map((s) => s.verify)).toEqual([

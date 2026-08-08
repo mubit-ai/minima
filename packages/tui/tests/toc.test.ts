@@ -1,12 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  AssistantMessage,
-  Message,
-  type Model,
-  Usage,
-  attachCost,
-  text,
-} from "../src/ai/index.ts";
+import { AssistantMessage, Message, type Model, Usage, attachCost, text } from "../src/ai/index.ts";
 import { computeSections } from "../src/session/sections.ts";
 import type { ChatMessage } from "../src/tui/layout.ts";
 import {

@@ -37,7 +37,11 @@ function recordingFetch() {
 describe("MinimaClient timeoutMs", () => {
   test("a GET against a black-holed server rejects with TimeoutError", async () => {
     const { fetchLike, inits } = hangingFetch();
-    const client = new MinimaClient({ baseUrl: "http://svc.local", timeoutMs: 25, fetch: fetchLike });
+    const client = new MinimaClient({
+      baseUrl: "http://svc.local",
+      timeoutMs: 25,
+      fetch: fetchLike,
+    });
     await expect(client.health()).rejects.toMatchObject({ name: "TimeoutError" });
     expect(inits[0]?.signal).toBeDefined();
   });

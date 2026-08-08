@@ -215,8 +215,12 @@ describe("makeCommitDeps — who gets credited", () => {
     getLiveModelId: () => null,
     ...over,
   });
+  // Only the trailer path is under test here, so the two ledger methods are inert — present to
+  // satisfy CommitLedgerDb, never called. The ledger itself is covered in commits-ledger.test.ts.
   const fakeDb = (models: (string | null)[]) => ({
     getRunDecisions: () => models.map((chosen_model) => ({ chosen_model })),
+    unattributedRecIds: () => [],
+    recordCommit: () => {},
   });
 
   test("credits the run's routed decisions, oldest first", () => {

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   type PanelNavKey,
   type PanelState,
-  planOverviewPanelState,
   panelReduce,
+  planOverviewPanelState,
   readerView,
   tocPanelState,
 } from "../src/tui/panel_state.ts";

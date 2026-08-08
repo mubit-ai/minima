@@ -60,11 +60,7 @@ describe("routingInfoWarnings", () => {
   });
   test("the compact note rides alongside pass-through warnings, deduplicated", () => {
     expect(
-      routingInfoWarnings([
-        "cold_start",
-        "no_model_meets_threshold",
-        "no_model_meets_threshold",
-      ]),
+      routingInfoWarnings(["cold_start", "no_model_meets_threshold", "no_model_meets_threshold"]),
     ).toEqual(["cold start — no prior outcomes for this task yet", "no_model_meets_threshold"]);
   });
   test("compactRoutingNote returns null when neither family is present", () => {

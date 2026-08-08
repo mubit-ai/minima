@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Model } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
   distillWorkflow,
@@ -180,7 +181,7 @@ describe("memory dream — procedure:known replay", () => {
     resetRegistry();
     resetProviderRegistration();
     resetModelRegistry();
-    const FAUX = {
+    const FAUX: Model = {
       id: "test-faux",
       provider: "faux",
       api: "faux",
@@ -241,8 +242,8 @@ describe("memory dream — procedure:known replay", () => {
     agent.db = db;
     agent.runId = runId;
     reg.setResponses([
-      new AssistantMessage({ content: [text("ok")], stop_reason: "endTurn" }),
-      new AssistantMessage({ content: [text("ok")], stop_reason: "endTurn" }),
+      new AssistantMessage({ content: [text("ok")], stop_reason: "stop" }),
+      new AssistantMessage({ content: [text("ok")], stop_reason: "stop" }),
     ]);
 
     await agent.promptRouted("fix the parser tests");

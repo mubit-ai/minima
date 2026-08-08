@@ -254,7 +254,9 @@ describe("plan-premium finalize (two-tier models)", () => {
         return synth();
       },
       critic: async (o) => {
-        seen.critic = o.metaModel.id;
+        // `?? "(none)"` rather than `!`: a null metaModel then fails the toEqual below by value,
+        // which is the assertion this test is making, instead of throwing on a property access.
+        seen.critic = o.metaModel?.id ?? "(none)";
         return [];
       },
     });
@@ -278,7 +280,8 @@ describe("plan-premium finalize (two-tier models)", () => {
         return synth();
       },
       critic: async (o) => {
-        seen.push(o.metaModel.id);
+        // Only the critic's metaModel is nullable; see the note above on `?? "(none)"`.
+        seen.push(o.metaModel?.id ?? "(none)");
         return [];
       },
     });

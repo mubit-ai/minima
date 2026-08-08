@@ -131,8 +131,8 @@ describe("openai-compat SSE streaming", () => {
 
     expect(result.stop_reason).toBe("toolUse");
     expect(result.toolCalls).toHaveLength(1);
-    expect(result.toolCalls[0].name).toBe("bash");
-    expect(result.toolCalls[0].arguments).toEqual({ command: "ls" });
+    expect(result.toolCalls[0]?.name).toBe("bash");
+    expect(result.toolCalls[0]?.arguments).toEqual({ command: "ls" });
   });
 
   test("emits thinking deltas from reasoning_content (deepseek-style)", async () => {

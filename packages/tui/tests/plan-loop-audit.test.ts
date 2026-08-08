@@ -25,8 +25,8 @@ import {
 } from "../src/minima/index.ts";
 import { finalizePlan } from "../src/minima/plan_finalize.ts";
 import {
-  type CouncilRoundResult,
   type BigPlanSynthesis,
+  type CouncilRoundResult,
   PlanSessionStore,
 } from "../src/minima/plan_session.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
