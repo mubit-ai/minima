@@ -6,8 +6,8 @@ import { Message } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import type { HarnessConfig } from "../src/minima/config.ts";
 import type { MinimaAgent } from "../src/minima/runtime.ts";
-import { readTool } from "../src/tools/read.ts";
 import { ArtifactStore } from "../src/tools/_artifacts.ts";
+import { readTool } from "../src/tools/read.ts";
 import type { ToolArtifacts } from "../src/tools/types.ts";
 import { compactMessages, maybeAutoCompact } from "../src/tui/compact.ts";
 
@@ -73,9 +73,7 @@ function parseArtifact(
   const out: { role: string; tool?: string; error: boolean; text: string }[] = [];
   for (let i = 0; i < count; i++) {
     const delim = readLine();
-    const dm = delim.match(
-      /^--- msg (\d+) role=(\S+)(?: tool=(\S+))?( error)? bytes=(\d+) ---$/,
-    );
+    const dm = delim.match(/^--- msg (\d+) role=(\S+)(?: tool=(\S+))?( error)? bytes=(\d+) ---$/);
     if (!dm) throw new Error(`bad delimiter: ${delim}`);
     const bytes = Number(dm[5]);
     const text = raw.subarray(pos, pos + bytes).toString("utf8");
@@ -209,11 +207,10 @@ describe("compact2 — GC run_id-exemption inheritance (AC4)", () => {
         bytes: Buffer.byteLength(content, "utf8"),
         lineCount: 1,
       });
-      db.db.run("UPDATE artifacts SET created = ?, last_used = ?, run_id = 'run-old' WHERE sha = ?", [
-        epoch,
-        epoch,
-        sha,
-      ]);
+      db.db.run(
+        "UPDATE artifacts SET created = ?, last_used = ?, run_id = 'run-old' WHERE sha = ?",
+        [epoch, epoch, sha],
+      );
       return { sha, path };
     };
     const oldA = seed("a".repeat(300), 100);
@@ -228,8 +225,7 @@ describe("compact2 — GC run_id-exemption inheritance (AC4)", () => {
     // Old-run rows + files evicted by GC.
     expect(existsSync(oldA.path)).toBe(false);
     expect(existsSync(oldB.path)).toBe(false);
-    const oldRow = (sha: string) =>
-      db.db.query("SELECT sha FROM artifacts WHERE sha = ?").get(sha);
+    const oldRow = (sha: string) => db.db.query("SELECT sha FROM artifacts WHERE sha = ?").get(sha);
     expect(oldRow(oldA.sha)).toBeNull();
     expect(oldRow(oldB.sha)).toBeNull();
 

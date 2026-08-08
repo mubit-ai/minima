@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { headlessVerifyConsent } from "../src/minima/big_plan.ts";
 import { configFromEnv, type HarnessConfig } from "../src/minima/config.ts";
+import { PROJECT_CONFIG_RELPATH, resolveEnvLayers } from "../src/minima/project_config.ts";
 import { code, readSource } from "./_source.ts";
 
 // MINIMA_TUI_<X>=0 is the documented rollback for every default-ON harness behavior
@@ -48,18 +50,25 @@ interface Switch {
 // reads.
 const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_BIG_PLAN", field: "bigPlan" },
+  { env: "MINIMA_TUI_IMAGES", field: "images" },
+  { env: "MINIMA_TUI_NOTIFY", field: "notify" },
   { env: "MINIMA_TUI_MEMORY", field: "memoryLedger" },
   { env: "MINIMA_TUI_ARTIFACTS", field: "artifacts" },
   { env: "MINIMA_TUI_BGJOBS", field: "bgJobs" },
   { env: "MINIMA_TUI_COMPACT2", field: "compact2" },
+  { env: "MINIMA_TUI_CONTEXT_METER", field: "contextMeter" },
   { env: "MINIMA_TUI_STEER", field: "steer" },
   { env: "MINIMA_TUI_REWIND", field: "contextRewind" },
+  { env: "MINIMA_TUI_GIT_COMMIT", field: "gitCommit" },
+  { env: "MINIMA_TUI_COMMIT_LEDGER", field: "commitLedger" },
   { env: "MINIMA_TUI_EDIT_GUARD", field: "editGuard" },
   { env: "MINIMA_TUI_TYPED_TASK", field: "typedTask" },
   { env: "MINIMA_TUI_PLAN_PREMIUM", field: "planPremium" },
   { env: "MINIMA_TUI_FAILURE_MATCHER", field: "failureMatcher" },
   { env: "MINIMA_TUI_TOOL_ALLOWLIST", field: "toolAllowlist" },
   { env: "MINIMA_TUI_GRADED_OUTCOME", field: "gradedOutcome" },
+  { env: "MINIMA_TUI_EDITOR", field: "externalEditor" },
+  { env: "MINIMA_TUI_KEYMAP", field: "keymapFile" },
 ];
 
 // Opt-in: shipped disabled, `=1` enables. Promotion to default-ON moves the row up.
@@ -89,6 +98,16 @@ interface AmbientSwitch {
   gate: string;
 }
 
+/**
+ * Default-ON switches read outside configFromEnv that ARE drivable from a unit test, because
+ * the feature reading them is a pure function taking its environment by injection. Neither
+ * table above fits: there is no config field to assert (so not DEFAULT_ON), but pinning a
+ * source string would be a downgrade from an assertion that actually runs the gate (so not
+ * AMBIENT_DEFAULT_ON). Each row here owns a real behavioral test below; the table exists so
+ * the completeness check knows the switch is covered.
+ */
+const PURE_DEFAULT_ON: readonly { env: string }[] = [{ env: "MINIMA_TUI_PROJECT_CONFIG" }];
+
 const AMBIENT_DEFAULT_ON: readonly AmbientSwitch[] = [
   {
     env: "MINIMA_TUI_PLAN_CRITIC",
@@ -105,6 +124,11 @@ const AMBIENT_DEFAULT_ON: readonly AmbientSwitch[] = [
     file: "minima/plan_finalize.ts",
     gate: 'if (process.env.MINIMA_TUI_AUTO_GATES !== "0") {',
   },
+  {
+    env: "MINIMA_TUI_DASHBOARD",
+    file: "cli/main.ts",
+    gate: 'process.env.MINIMA_TUI_DASHBOARD !== "0"',
+  },
 ];
 
 /**
@@ -119,6 +143,7 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_ALLOW_VERIFY",
   // Numeric tunables.
   "MINIMA_TUI_ARTIFACT_GC_MB",
+  "MINIMA_TUI_NOTIFY_AFTER_MS",
   "MINIMA_TUI_TTSR_CAP",
   "MINIMA_TUI_LSP_TIMEOUT_MS",
   // Plan-delegated steps' default budget, USD — a number, not a switch.
@@ -284,14 +309,16 @@ describe("kill-switch matrix — the documented rollback contract", () => {
       ...DEFAULT_ON.map((s) => s.env),
       ...OPT_IN.map((s) => s.env),
       ...AMBIENT_DEFAULT_ON.map((s) => s.env),
+      ...PURE_DEFAULT_ON.map((s) => s.env),
     ]);
     const uncovered = [...read].filter((e) => !covered.has(e) && !NOT_A_SWITCH.has(e)).sort();
     // A new default-ON behavior must either get a row above or be declared not-a-switch.
     expect(
       uncovered,
       "These MINIMA_TUI_* flags are read in src/ but appear in no table here. Add a row to " +
-        "DEFAULT_ON (config-backed), AMBIENT_DEFAULT_ON (read at the wiring site), OPT_IN, " +
-        "or declare it in NOT_A_SWITCH if it is a tunable or a diagnostic.",
+        "DEFAULT_ON (config-backed), AMBIENT_DEFAULT_ON (read at the wiring site), " +
+        "PURE_DEFAULT_ON (read by an injectable pure function), OPT_IN, or declare it in " +
+        "NOT_A_SWITCH if it is a tunable or a diagnostic.",
     ).toEqual([]);
   });
 
@@ -299,5 +326,26 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     expect(DEFAULT_ON.length).toBeGreaterThan(0);
     expect(OPT_IN.length).toBeGreaterThan(0);
     expect(AMBIENT_DEFAULT_ON.length).toBeGreaterThan(0);
+    expect(PURE_DEFAULT_ON.length).toBeGreaterThan(0);
+  });
+
+  test("MINIMA_TUI_PROJECT_CONFIG is ON by default and =0 ignores .minima/config.toml", () => {
+    const dir = mkdtempSync(join(tmpdir(), "minima-killsw-"));
+    try {
+      mkdirSync(join(dir, ".minima"), { recursive: true });
+      writeFileSync(join(dir, PROJECT_CONFIG_RELPATH), "[budget]\nlimit_usd = 1\n");
+      // The loader takes its environment by injection, so this asserts the gate for real
+      // rather than pinning the text of the expression that implements it.
+      expect(resolveEnvLayers({ projectDir: dir, env: {} }).values.MINIMA_BUDGET_USD).toBe("1");
+      expect(
+        resolveEnvLayers({ projectDir: dir, env: { MINIMA_TUI_PROJECT_CONFIG: "1" } }).values
+          .MINIMA_BUDGET_USD,
+      ).toBe("1");
+      const off = resolveEnvLayers({ projectDir: dir, env: { MINIMA_TUI_PROJECT_CONFIG: "0" } });
+      expect(off.values.MINIMA_BUDGET_USD).toBeUndefined();
+      expect(off.path).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

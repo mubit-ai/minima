@@ -55,10 +55,7 @@ describe("baseline capture consent (after-hook)", () => {
     try {
       const d = db();
       const leak = join(dir, "consent-leak");
-      const sink = bigPlanAfterToolCall(
-        { db: d, runId: "run1" },
-        { verifyConsent: () => false },
-      );
+      const sink = bigPlanAfterToolCall({ db: d, runId: "run1" }, { verifyConsent: () => false });
       await sink(actx([{ content: "S", status: "in_progress", verify: `touch ${leak}` }]));
       expect(existsSync(leak)).toBe(false);
       const step = d.db.query("SELECT baseline FROM plan_steps").get() as {

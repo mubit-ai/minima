@@ -14,8 +14,8 @@ import {
 import type { PlanRow, PlanStepRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
-  formatPlanProjection,
   bigPlanAfterToolCall,
+  formatPlanProjection,
   isGateBlockReason,
   isPathClaimed,
   kindForTool,
@@ -61,6 +61,11 @@ function step(over: Partial<PlanStepRow> & { idx: number }): PlanStepRow {
     created_at: null,
     verify_cwd: null,
     check_origin: null,
+    tools: null,
+    candidates: null,
+    result: null,
+    delegated_cost_usd: null,
+    agent_type: null,
     ...over,
   };
 }
@@ -71,6 +76,7 @@ const PLAN: PlanRow = {
   title: "My Plan",
   status: "active",
   created_at: null,
+  closed_at: null,
 };
 
 // --------------------------------------------------------------------------- parseTodos
@@ -858,9 +864,7 @@ describe("bigPlanAfterToolCall", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "config.ts work", status: "pending" },
     ]);
-    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
-      ctx("write", { path: "src/config.ts" }),
-    );
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
     const changes = d.getFileChanges(planId);
     expect(changes).toHaveLength(1);
     expect(changes[0]!.origin).toBe("off_plan");
@@ -869,9 +873,7 @@ describe("bigPlanAfterToolCall", () => {
 
   test("write with no active plan records nothing", async () => {
     const d = db();
-    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
-      ctx("write", { path: "src/config.ts" }),
-    );
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
     // No plan means no plan id to query against; assert via a freshly-created plan being empty.
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "pending" }]);
     expect(d.getFileChanges(planId)).toHaveLength(0);
@@ -1114,7 +1116,7 @@ describe("bigPlanAfterToolCall — delegate wiring", () => {
     // The original todowrite echo (the lead's plan-position confirmation) survives untouched...
     expect(result!.content).toContain(original[0]!);
     // ...with the delegate's report appended after it, not instead of it.
-    const joined = result!.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    const joined = result!.content!.map((c) => (c.type === "text" ? c.text : "")).join("");
     expect(joined).toContain("Todo list updated");
     expect(joined).toContain("Step delegated to a sub-agent");
   });
@@ -1123,9 +1125,9 @@ describe("bigPlanAfterToolCall — delegate wiring", () => {
 describe("isGateBlockReason (renderer signature for done-gate blocks)", () => {
   test("matches the three gate-block families", () => {
     expect(isGateBlockReason('Step not verified — "add tests": check `false` exit 1')).toBe(true);
-    expect(
-      isGateBlockReason("Only one todowrite per assistant message: another todowrite …"),
-    ).toBe(true);
+    expect(isGateBlockReason("Only one todowrite per assistant message: another todowrite …")).toBe(
+      true,
+    );
     expect(
       isGateBlockReason(
         "This todowrite marks steps completed, but the same message also calls write.",

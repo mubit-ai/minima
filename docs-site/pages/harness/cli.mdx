@@ -47,7 +47,7 @@ minima --mode json "refactor the config loader" | jq .
 | `--mode` | `interactive` \| `print` \| `json` | Select the run mode explicitly. |
 | `--model` | `ID` | Pin a model, bypassing routing. |
 | `--provider` | `NAME` | Provider for a pinned `--model` (registers unknown models on the fly). |
-| `--thinking` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | Extended-thinking level for models that support it. |
+| `--thinking` | `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | Extended-thinking level for models that declare reasoning support ([what actually reaches the model](#thinking-levels-and-what-reaches-the-model)). |
 | `--offline` | — | Bypass Minima routing entirely. |
 | `-t`, `--tools` | `LIST` | Comma-separated tool allowlist (only these run). |
 | `-xt`, `--exclude-tools` | `LIST` | Comma-separated tool denylist. |
@@ -71,6 +71,23 @@ minima --offline --model gpt-4o-mini --provider openai -p "quick summary"
 <Tip>
 `--model` (optionally with `--provider`) pins one model and skips routing; `--offline` skips the recommender while still using the seeded catalog. See [Model routing](/harness/routing) for how these interact. Tool filtering with `-t`/`-xt`/`-nt` composes with the interactive [permission system](/harness/tools).
 </Tip>
+
+### Thinking levels, and what reaches the model
+
+The level you pick (`--thinking`, or `ctrl+e` in the TUI) is a request. What the provider actually sends is decided once, and the footer's `reason:` segment renders that same decision — so the indicator and the wire cannot disagree:
+
+| `reason:` shows | What is on the wire |
+|---|---|
+| `high` | The level was sent as asked. |
+| `xhigh→high` | Sent, narrowed to what the host accepts. Hosts accept `low`/`medium`/`high` unless a model declares more, so `xhigh` and `minimal` normally narrow. |
+| `high→none` | The model refuses an effort alongside function tools, so this turn pins it off. Tool-less calls keep the level. |
+| `high→default` | Nothing was sent — the model has not declared reasoning support — so the model applies its own default. |
+| `high→off` | The model declares it cannot reason at all. |
+| hidden | Thinking is off and nothing is being overridden. |
+
+`default` is deliberately not `off`: a model whose server-side default is to reason will still reason when the harness sends nothing.
+
+Reasoning support is registry data, per model — never inferred from a model id or a provider name. A model that declares nothing never receives the parameter, because some models reject it outright.
 
 ## `minima auth`
 

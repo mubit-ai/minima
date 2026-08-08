@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { BgJobRegistry, type BgJobProbes } from "../src/tools/_bgjobs.ts";
+import { type BgJobProbes, BgJobRegistry } from "../src/tools/_bgjobs.ts";
 
 // Simulated restart: gen-1 launches a real `sleep 30` and records a `running` row, then
 // "crashes" (dropped, never shut down). gen-2 attaches under a NEW run and reaps. The

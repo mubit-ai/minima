@@ -2,7 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SeenLedger } from "../src/tools/_seen.ts";
 import { readTool } from "../src/tools/index.ts";
+import { MAX_IMAGE_BYTES } from "../src/tools/read.ts";
+import type { FsToolOptions } from "../src/tools/types.ts";
+
+// Smallest valid PNG: 1x1, fully transparent. Written inline rather than as a fixture —
+// tests/ has no binary fixture directory and R1 already synthesizes its blob this way.
+const PNG_1X1_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 let tmp = "";
 afterEach(() => {
@@ -17,8 +25,8 @@ function newTmp(): string {
   return tmp;
 }
 
-async function run(args: Record<string, unknown>) {
-  const tool = readTool();
+async function run(args: Record<string, unknown>, opts: FsToolOptions = {}) {
+  const tool = readTool(opts);
   const parsed = tool.parameters.validate(args);
   if (!parsed.ok) throw new Error(parsed.errors.join("; "));
   return tool.execute("t1", parsed.value, null, null);
@@ -40,12 +48,81 @@ describe("read tool hardening", () => {
     expect(body).toMatch(/use bash to inspect binary content/);
   });
 
-  test("R2: image extension is rejected even when the file is empty", async () => {
+  test("R2: a real png returns a descriptor plus an image block when image results are on", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    const bytes = Buffer.from(PNG_1X1_B64, "base64");
+    writeFileSync(p, bytes);
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(res.content).toHaveLength(2);
+    // Text FIRST: db/sink, the transcript and compaction all read textContent only.
+    expect(res.content[0]?.type).toBe("text");
+    expect(bodyOf(res)).toMatch(/^\[image\] /);
+    expect(bodyOf(res)).toContain(p);
+    expect(bodyOf(res)).toContain("image/png");
+    const img = res.content[1] as { type: string; data: string; mime_type?: string };
+    expect(img.type).toBe("image");
+    expect(img.mime_type).toBe("image/png");
+    expect(img.data).toBe(bytes.toString("base64"));
+    expect(res.details?.image).toBe(true);
+    expect(res.details?.error).toBeUndefined();
+  });
+
+  test("R2b: with image results off, a real png keeps the historical refusal", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    writeFileSync(p, Buffer.from(PNG_1X1_B64, "base64"));
+    const res = await run({ path: p });
+    expect(res.content).toHaveLength(1);
+    expect(bodyOf(res)).toBe(`read: image file not supported: ${p}`);
+    expect(res.details?.error).toBe(true);
+  });
+
+  test("R2c: an empty .png is refused as invalid even with image results on", async () => {
     const d = newTmp();
     const p = join(d, "x.png");
     writeFileSync(p, "");
-    const res = await run({ path: p });
-    expect(bodyOf(res)).toMatch(/image file not supported/);
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/read: not a valid image/);
+    expect(res.content).toHaveLength(1);
+  });
+
+  test("R2d: a real gif is refused with a format message (Gemini takes no gif)", async () => {
+    const d = newTmp();
+    const p = join(d, "x.gif");
+    writeFileSync(p, Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/image format not supported \(gif\)/);
+  });
+
+  test("R2e: mime comes from magic bytes, not the extension", async () => {
+    const d = newTmp();
+    const p = join(d, "actually-jpeg.png");
+    writeFileSync(p, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toContain("image/jpeg");
+    expect((res.content[1] as { mime_type?: string }).mime_type).toBe("image/jpeg");
+  });
+
+  test("R2f: an oversized image is refused before it is read into memory", async () => {
+    const d = newTmp();
+    const p = join(d, "huge.png");
+    const head = Buffer.from(PNG_1X1_B64, "base64");
+    writeFileSync(p, Buffer.concat([head, Buffer.alloc(MAX_IMAGE_BYTES + 1 - head.length)]));
+    const res = await run({ path: p }, { imageResults: () => true });
+    expect(bodyOf(res)).toMatch(/read: image too large/);
+    expect(bodyOf(res)).toContain(String(MAX_IMAGE_BYTES));
+  });
+
+  test("R2g: the image path leaves the seen ledger untouched", async () => {
+    const d = newTmp();
+    const p = join(d, "x.png");
+    writeFileSync(p, Buffer.from(PNG_1X1_B64, "base64"));
+    const seen = new SeenLedger();
+    const res = await run({ path: p }, { imageResults: () => true, seen });
+    expect(bodyOf(res)).not.toContain("[snap:");
+    expect(res.details?.snap).toBeUndefined();
+    expect(res.details?.lines_read).toBeUndefined();
   });
 
   test("R3: huge single line is bounded by truncateLine", async () => {
@@ -85,5 +162,74 @@ describe("read tool hardening", () => {
     const body = bodyOf(res);
     expect(body.endsWith("…(output capped at 200000 chars; use offset/limit)")).toBe(true);
     expect(body.length).toBeLessThanOrEqual(200_100);
+  });
+});
+
+// Inlined on purpose rather than imported from read.ts: this literal IS the assertion.
+// Importing the constant would make the test agree with any future edit to it, and the
+// whole point is that the no-vision wire payload stays byte-for-byte what it was before
+// image results shipped.
+const PRE_FIX_DESCRIPTION =
+  "Read a text file. Returns lines with 1-based line numbers. Always read a file before editing it — never guess contents. Use offset/limit for large files (default limit: 2000 lines).";
+
+describe("read tool description", () => {
+  test("R6: with image results on, the description advertises png/jpeg/webp", () => {
+    const d = readTool({ imageResults: () => true }).description;
+    expect(d).toContain("png");
+    expect(d).toContain("jpeg");
+    expect(d).toContain("webp");
+    expect(d).toMatch(/image/i);
+    expect(d).not.toBe(PRE_FIX_DESCRIPTION);
+    // The observed failure mode was the model reaching for OCR instead of dispatching.
+    expect(d).toMatch(/OCR/);
+  });
+
+  test("R6b: with image results off, the description is byte-identical to the pre-fix string", () => {
+    expect(readTool({ imageResults: () => false }).description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6c: with imageResults absent, the description is byte-identical to the pre-fix string", () => {
+    expect(readTool().description).toBe(PRE_FIX_DESCRIPTION);
+    expect(readTool({}).description).toBe(PRE_FIX_DESCRIPTION);
+    expect(readTool({ workdir: "/tmp" }).description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6d: ONE tool instance tracks a mid-session model swap without a rebuild", () => {
+    let vision = false;
+    const tool = readTool({ imageResults: () => vision });
+
+    expect(tool.description).toBe(PRE_FIX_DESCRIPTION);
+    vision = true;
+    const withVision = tool.description;
+    expect(withVision).not.toBe(PRE_FIX_DESCRIPTION);
+    expect(withVision).toContain("png");
+    vision = false;
+    expect(tool.description).toBe(PRE_FIX_DESCRIPTION);
+  });
+
+  test("R6e: the swap survives the projection agent/loop.ts actually performs", () => {
+    let vision = false;
+    const tools = [readTool({ imageResults: () => vision })];
+    // Mirrors src/agent/loop.ts: Context.tools is rebuilt from state.tools every turn.
+    const project = () =>
+      tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+
+    const turn1 = project();
+    expect(turn1[0]?.description).toBe(PRE_FIX_DESCRIPTION);
+    vision = true;
+    const turn2 = project();
+    expect(turn2[0]?.description).toContain("png");
+    expect(turn2[0]?.description).not.toBe(PRE_FIX_DESCRIPTION);
+    // The projected object is a plain snapshot — turn 1's payload did not retroactively change.
+    expect(turn1[0]?.description).toBe(PRE_FIX_DESCRIPTION);
+    expect(turn2[0]?.name).toBe("read");
+  });
+
+  test("R6f: description is a plain string at every read, not a thunk", () => {
+    for (const t of [readTool(), readTool({ imageResults: () => true })]) {
+      expect(typeof t.description).toBe("string");
+      expect(t.description.length).toBeGreaterThan(0);
+      expect(JSON.parse(JSON.stringify({ d: t.description })).d).toBe(t.description);
+    }
   });
 });

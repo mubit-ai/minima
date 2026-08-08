@@ -6,11 +6,11 @@ import {
   backendName,
   fieldFor,
   get,
-  hydrateEnv,
   location,
   mask,
   setConfigDir,
   setValue,
+  storedValues,
   unset,
 } from "../src/tui/config_store.ts";
 
@@ -71,15 +71,15 @@ describe("config_store (file backend)", () => {
     expect(mask("")).toBe("");
   });
 
-  test("hydrateEnv materializes stored values into process.env (without overwriting)", async () => {
+  // storedValues reports what the store holds; it deliberately writes nothing. Deciding what
+  // reaches process.env is the env-layer loader's job, because the project-config clamp needs
+  // every layer's value at once — see tests/project-config.test.ts for that precedence.
+  test("storedValues reports the store's contents without touching process.env", async () => {
     freshDir();
     await setValue("MUBIT_API_KEY", "from-store");
     process.env.MUBIT_API_KEY = "from-shell";
-    await hydrateEnv();
-    expect(process.env.MUBIT_API_KEY).toBe("from-shell"); // real env wins
-    delete process.env.MUBIT_API_KEY;
-    await hydrateEnv();
-    expect(process.env.MUBIT_API_KEY).toBe("from-store"); // store fills the gap
+    expect((await storedValues()).MUBIT_API_KEY).toBe("from-store");
+    expect(process.env.MUBIT_API_KEY).toBe("from-shell");
     delete process.env.MUBIT_API_KEY;
   });
 
@@ -98,9 +98,6 @@ describe("config_store (file backend)", () => {
     await setValue("EXA_API_KEY", "exa-secret");
     expect(await get("EXA_API_KEY")).toBe("exa-secret");
 
-    delete process.env.EXA_API_KEY;
-    await hydrateEnv();
-    expect(process.env.EXA_API_KEY).toBe("exa-secret");
-    delete process.env.EXA_API_KEY;
+    expect((await storedValues()).EXA_API_KEY).toBe("exa-secret");
   });
 });

@@ -707,6 +707,7 @@ describe("taskTool — the advertised menu", () => {
         ]),
       },
       null,
+      null,
     );
     expect(res.details?.error).toBe(true);
     expect(res.content.map((c) => (c.type === "text" ? c.text : "")).join("")).toContain(

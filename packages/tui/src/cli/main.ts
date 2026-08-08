@@ -7,17 +7,20 @@
  * this binary only needs a MUBIT_API_KEY (routing) + a provider key (calling).
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
-import type { Model } from "../ai/types.ts";
+import { SEED_MODELS } from "../ai/seed_models.ts";
+// Type-only: the dashboard module stays lazily imported so the TUI startup path never pays for it.
+import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/minima_db.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
@@ -25,7 +28,12 @@ import { errText } from "../errtext.ts";
 import { loadAgentTypes } from "../minima/agent_types.ts";
 import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
-import { BudgetLedger } from "../minima/budget.ts";
+import {
+  BudgetLedger,
+  type BudgetMode,
+  DEFAULT_BUDGET_MODE,
+  parseBudgetMode,
+} from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
 import {
   CostMeter,
@@ -40,9 +48,11 @@ import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
 import { makePlanDelegate } from "../minima/plan_delegate.ts";
+import { resolveEnvLayers } from "../minima/project_config.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
+import { makeCommitDeps } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
@@ -50,6 +60,7 @@ import { BgJobRegistry } from "../tools/_bgjobs.ts";
 import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
+import { registerGitCommitTool } from "../tools/git_commit.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -58,13 +69,14 @@ import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
   SECTIONS,
-  hydrateEnv,
   mask,
   get as storeGet,
   setValue as storeSetValue,
+  storedValues,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
+import { initKeymap } from "../tui/keymap_file.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 import { VERSION } from "../version.ts";
@@ -157,249 +169,29 @@ async function probeCursorRow(file: string): Promise<void> {
   });
 }
 
-// --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
-const ENV_FILES = [".env.harness", ".env"];
-
-async function loadEnvFiles(): Promise<void> {
-  for (const name of ENV_FILES) {
-    const path = resolve(name);
-    if (!existsSync(path)) continue;
-    const text = readFileSync(path, "utf8");
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("#") || !line.includes("=")) continue;
-      const eq = line.indexOf("=");
-      const key = line.slice(0, eq).trim();
-      const val = line
-        .slice(eq + 1)
-        .trim()
-        .replace(/^["']|["']$/g, "");
-      if (process.env[key] === undefined) process.env[key] = val;
-    }
-  }
+// --- config loading (cwd) — real env wins; the layers below it only fill gaps ---------
+// One resolution over every layer rather than a chain of gap-filling passes: `.minima/
+// config.toml` is a COMMITTED file, so its values are clamped to the safer side before they
+// reach process.env — and that clamp needs the project and user values simultaneously, which
+// a sequence of setdefault passes cannot provide (process.env erases which layer set what).
+async function loadConfigLayers(): Promise<void> {
   // Per-user store (OS keychain + ~/.minima-harness/config.env) — lowest precedence, so
   // shell env and project .env files still win. Failures never block startup.
+  let stored: Record<string, string> = {};
   try {
-    await hydrateEnv();
+    stored = await storedValues();
   } catch {
     // config must never block startup
   }
+  const layers = resolveEnvLayers({ projectDir: process.cwd(), env: process.env, stored });
+  // Every entry is final — precedence and the safer-side clamps are already applied.
+  for (const [key, value] of Object.entries(layers.values)) process.env[key] = value;
+  for (const notice of layers.notices) process.stderr.write(`minima: ${notice}\n`);
 }
 
-// --- a lean default model catalog --------------------------------------------------
-export const SEED_MODELS: Model[] = [
-  {
-    id: "gpt-4o-mini",
-    provider: "openai",
-    api: "openai-completions",
-    name: "GPT-4o mini",
-    cost: { input: 0.15, output: 0.6 },
-    context_window: 128_000,
-    max_tokens: 16_384,
-  },
-  {
-    id: "gpt-4o",
-    provider: "openai",
-    api: "openai-completions",
-    name: "GPT-4o",
-    cost: { input: 2.5, output: 10 },
-    context_window: 128_000,
-    max_tokens: 16_384,
-  },
-  {
-    id: "gpt-5.6-sol",
-    provider: "openai",
-    api: "openai-completions",
-    name: "GPT-5.6 Sol",
-    cost: { input: 5.0, output: 30.0, cache_read: 0.5 },
-    context_window: 1_050_000,
-    max_tokens: 128_000,
-    reasoning: true,
-  },
-  {
-    id: "gpt-5.6-terra",
-    provider: "openai",
-    api: "openai-completions",
-    name: "GPT-5.6 Terra",
-    cost: { input: 2.5, output: 15.0, cache_read: 0.25 },
-    context_window: 1_050_000,
-    max_tokens: 128_000,
-    reasoning: true,
-  },
-  {
-    id: "gpt-5.6-luna",
-    provider: "openai",
-    api: "openai-completions",
-    name: "GPT-5.6 Luna",
-    cost: { input: 1.0, output: 6.0, cache_read: 0.1 },
-    context_window: 1_050_000,
-    max_tokens: 128_000,
-    reasoning: true,
-  },
-  {
-    // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.
-    id: "deepseek-v4-flash",
-    provider: "deepseek",
-    api: "openai-completions",
-    name: "DeepSeek V4 Flash",
-    cost: { input: 0.14, output: 0.28, cache_read: 0.0028 },
-    context_window: 1_000_000,
-    max_tokens: 384_000,
-    base_url: "https://api.deepseek.com",
-  },
-  {
-    id: "deepseek-v4-pro",
-    provider: "deepseek",
-    api: "openai-completions",
-    name: "DeepSeek V4 Pro",
-    cost: { input: 0.435, output: 0.87 },
-    context_window: 1_000_000,
-    max_tokens: 384_000,
-    reasoning: true,
-    base_url: "https://api.deepseek.com",
-  },
-  {
-    id: "grok-4.5",
-    provider: "xai",
-    api: "openai-completions",
-    name: "Grok 4.5",
-    cost: { input: 2.0, output: 6.0, cache_read: 0.5 },
-    context_window: 500_000,
-    max_tokens: 16_384,
-    reasoning: true,
-    base_url: "https://api.x.ai/v1",
-  },
-  {
-    id: "grok-4.3",
-    provider: "xai",
-    api: "openai-completions",
-    name: "Grok 4.3",
-    cost: { input: 1.25, output: 2.5 },
-    context_window: 1_000_000,
-    max_tokens: 16_384,
-    reasoning: true,
-    base_url: "https://api.x.ai/v1",
-  },
-  {
-    id: "z-ai/glm-5.2",
-    provider: "openrouter",
-    api: "openai-completions",
-    name: "GLM 5.2",
-    cost: { input: 0.82, output: 2.58 },
-    context_window: 1_000_000,
-    max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
-  },
-  {
-    id: "moonshotai/kimi-k2.6",
-    provider: "openrouter",
-    api: "openai-completions",
-    name: "Kimi K2.6",
-    cost: { input: 0.66, output: 3.41 },
-    context_window: 262_144,
-    max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
-  },
-  {
-    id: "minimax/minimax-m3",
-    provider: "openrouter",
-    api: "openai-completions",
-    name: "MiniMax M3",
-    cost: { input: 0.098, output: 1.21 },
-    context_window: 1_000_000,
-    max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
-  },
-  {
-    id: "claude-haiku-4-5",
-    provider: "anthropic",
-    api: "anthropic-messages",
-    name: "Claude Haiku 4.5",
-    cost: { input: 1.0, output: 5.0, cache_read: 0.08, cache_write: 1.25 },
-    context_window: 200_000,
-    max_tokens: 8192,
-    reasoning: false,
-  },
-  {
-    id: "claude-sonnet-4-6",
-    provider: "anthropic",
-    api: "anthropic-messages",
-    name: "Claude Sonnet 4.6",
-    cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
-    context_window: 200_000,
-    max_tokens: 16384,
-    reasoning: true,
-  },
-  {
-    id: "claude-opus-4-8",
-    provider: "anthropic",
-    api: "anthropic-messages",
-    name: "Claude Opus 4.8",
-    cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
-    context_window: 200_000,
-    max_tokens: 16384,
-    reasoning: true,
-    adaptive_thinking: true,
-  },
-  {
-    id: "claude-sonnet-5",
-    provider: "anthropic",
-    api: "anthropic-messages",
-    name: "Claude Sonnet 5",
-    cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
-    context_window: 1_000_000,
-    max_tokens: 128_000,
-    reasoning: true,
-    adaptive_thinking: true,
-  },
-  {
-    id: "claude-fable-5",
-    provider: "anthropic",
-    api: "anthropic-messages",
-    name: "Claude Fable 5",
-    cost: { input: 10.0, output: 50.0, cache_read: 1.0, cache_write: 12.5 },
-    context_window: 1_000_000,
-    max_tokens: 128_000,
-    reasoning: true,
-    adaptive_thinking: true,
-  },
-  {
-    id: "gemini-2.5-flash",
-    provider: "google",
-    api: "google-generative-ai",
-    name: "Gemini 2.5 Flash",
-    cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
-    context_window: 1_000_000,
-    max_tokens: 8192,
-    reasoning: true,
-  },
-  {
-    id: "gemini-2.5-pro",
-    provider: "google",
-    api: "google-generative-ai",
-    name: "Gemini 2.5 Pro",
-    // Google prices 2.5 Pro in two tiers on prompt size: every rate doubles above 200k.
-    cost: {
-      input: 1.25,
-      output: 10.0,
-      cache_read: 0.125,
-      long_context: { above_prompt_tokens: 200_000, input: 2.5, output: 15.0, cache_read: 0.25 },
-    },
-    context_window: 2_000_000,
-    max_tokens: 8192,
-    reasoning: true,
-  },
-  {
-    id: "gemini-3.6-flash",
-    provider: "google",
-    api: "google-generative-ai",
-    name: "Gemini 3.6 Flash",
-    cost: { input: 1.5, output: 7.5, cache_read: 0.15 },
-    context_window: 1_048_576,
-    max_tokens: 65_536,
-    reasoning: true,
-  },
-];
+// The catalog itself lives in ../ai/seed_models.ts — the dashboard needs those prices and must
+// not import this file to get them. Re-exported so existing importers keep working.
+export { SEED_MODELS };
 
 function seedDefaultModels(): void {
   ensureProvidersRegistered();
@@ -538,6 +330,7 @@ const HELP = `minima — cost-aware model-routing coding agent.
 Usage: minima [prompt] [--print|--mode json] [options]
        minima auth              sign in to Mubit + provision this repo's project
        minima config [set|get]  manage stored credentials
+       minima dashboard         browse this machine's ledger at http://127.0.0.1:4180
 
   -p, --print              one-shot: print the reply and exit
       --mode {interactive|print|json}
@@ -572,10 +365,19 @@ function toolsFor(
   artifacts?: ToolArtifacts,
   seen?: SeenLedger,
   bgJobs?: BgJobRegistry,
+  imageResults?: () => boolean,
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
+    : builtinTools({
+        bigPlan,
+        todoState,
+        onWebSearchFeeUsd,
+        artifacts,
+        seen,
+        bgJobs,
+        imageResults,
+      });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -600,6 +402,28 @@ export function buildConfig(args: CliArgs): HarnessConfig {
   }
   if (args.slider !== undefined) cfg.costQualityTradeoff = args.slider;
   return cfg;
+}
+
+/**
+ * The session's budget ceiling and mode, from the flags plus the resolved env layers.
+ *
+ * `MINIMA_BUDGET_USD` / `MINIMA_BUDGET_MODE` are where every layer below the flags lands its
+ * ceiling — including the one a committed `.minima/config.toml` contributed, already clamped
+ * to the safer side by the loader, so nothing here needs to know where a value came from. A
+ * flag is the user acting now, so it wins outright; an unusable env value is treated as
+ * unset rather than coerced.
+ */
+export function resolveBudget(
+  args: CliArgs,
+  env: Record<string, string | undefined> = process.env,
+): { limitUsd: number | undefined; mode: BudgetMode } {
+  const envUsd = Number(env.MINIMA_BUDGET_USD);
+  return {
+    limitUsd: args.budgetUsd ?? (Number.isFinite(envUsd) && envUsd > 0 ? envUsd : undefined),
+    mode: args.budgetEnforce
+      ? "enforce"
+      : (parseBudgetMode(env.MINIMA_BUDGET_MODE) ?? DEFAULT_BUDGET_MODE),
+  };
 }
 
 /**
@@ -647,13 +471,16 @@ export function buildJudge(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  await loadEnvFiles();
+  await loadConfigLayers();
 
   // `minima config …` — credential setup (no TUI; works before any keys exist).
   if (argv[0] === "config") return configCli(argv.slice(1));
 
   // `minima auth` — one-click browser login + per-repo project provisioning.
   if (argv[0] === "auth") return authCli(argv.slice(1));
+
+  // `minima dashboard` — localhost ledger dashboard (no TUI, no model calls).
+  if (argv[0] === "dashboard") return dashboardCli(argv.slice(1));
 
   let args: CliArgs;
   try {
@@ -718,6 +545,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // P3 edit guard: the ledger exists from tool construction but stays fail-open (inert)
   // until the DB + run id attach below — the same late-bind pattern as bookSearchFee.
   const seenLedger = config.editGuard ? new SeenLedger() : undefined;
+  // Image results: same late-bind as bookSearchFee. Evaluated per tool call because
+  // routing re-picks agentState.model every prompt, so the answer must track the model
+  // that will actually consume the result.
+  let agentRef: MinimaAgent | null = null;
   const tools = toolsFor(
     args,
     config.bigPlan === true,
@@ -726,6 +557,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     artifactStore ?? undefined,
     seenLedger,
     bgJobRegistry ?? undefined,
+    () => config.images && supportsImageInput(agentRef?.agentState.model ?? null),
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -775,6 +607,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  agentRef = agent;
   // Hook-order contract (P2): bash-steer registers FIRST on the beforeToolCall stack —
   // ahead of the TUI permission hook (app.tsx) and the headless checkpoint/done-gate
   // hooks below. First block wins, so a steered command never raises a pointless
@@ -1029,8 +862,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write(`minima: persistence disabled: ${errText(exc)}\n`);
     db = null;
   }
+  // The localhost dashboard, ambient: one detached server per ledger, shared by every TUI, gone
+  // shortly after the last one closes. Fire-and-forget on purpose — never awaited, so a busy probe
+  // or a slow spawn cannot delay the first frame. Gated on a TTY (a `-p` run, CI or a git hook must
+  // not open a socket) and on live persistence (nothing to serve without a ledger).
+  // MINIMA_TUI_DASHBOARD=0 opts out entirely.
+  let dashboard: DashboardSupervisor | null = null;
+  if (db && process.stdout.isTTY === true && process.env.MINIMA_TUI_DASHBOARD !== "0") {
+    try {
+      const { DashboardSupervisor, resolveLedger } = await import("../dashboard/supervisor.ts");
+      dashboard = new DashboardSupervisor({ ledger: resolveLedger(dbPath).path });
+      dashboard.start();
+    } catch {
+      // A dashboard that will not start is never a reason a session does not.
+    }
+  }
   const closeDb = (status: "done" | "aborted" = "done"): void => {
     try {
+      // Drop the attach so the server's refcount falls now rather than when the kernel gets to it.
+      // Deliberately not awaited: the abort and the cancelled backoff are synchronous, and an
+      // exiting TUI has no business waiting on a socket.
+      void dashboard?.detach();
       // Orphan policy (W4.1): kill every live background job's group and durably mark it
       // `killed` before the DB closes; the reaper handles any TERM-ignoring survivor next start.
       bgJobRegistry?.shutdown();
@@ -1149,6 +1001,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     db,
     getRunId: () => agent.runId,
   });
+  // F9a git commit authoring: ONE dependency set behind both surfaces — the `git_commit`
+  // tool registered here and the `/commit` command the TUI dispatches — so the two cannot
+  // drift into producing different commits. MINIMA_TUI_GIT_COMMIT=0 removes both.
+  const commitDeps = makeCommitDeps({
+    cwd: process.cwd(),
+    db,
+    getRunId: () => agent.runId,
+    getLiveModelId: () => agent.agentState.model?.id ?? null,
+    // F9b: the commits-ledger write rides the same deps, so both commit surfaces record
+    // evidence identically. MINIMA_TUI_COMMIT_LEDGER=0 drops the write, never the trailers.
+    // getLiveRecId is the join's equivalent of getLiveModelId above: a commit is authored
+    // mid-turn, and this turn's decision row is not written until the turn ends.
+    getLiveRecId: () => agent.currentRecId,
+    ledger: config.commitLedger,
+  });
+  registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
@@ -1212,19 +1080,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  // Budget following: --budget creates a session-scoped ledger (warn mode unless
-  // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
-  // TUI renders them as chat notices.
-  if (args.budgetUsd !== undefined && db && agent.runId) {
+  // Budget following: a ceiling creates a session-scoped ledger. Threshold events surface to
+  // stderr in non-interactive modes; the TUI renders them as chat notices.
+  const { limitUsd: budgetUsd, mode: budgetMode } = resolveBudget(args);
+  if (budgetUsd !== undefined && db && agent.runId) {
     agent.budget = new BudgetLedger({
       db,
       scopeKey: `session:${agent.runId}`,
-      limitUsd: args.budgetUsd,
-      mode: args.budgetEnforce ? "enforce" : "warn",
+      limitUsd: budgetUsd,
+      mode: budgetMode,
       runId: agent.runId,
     });
-  } else if (args.budgetUsd !== undefined) {
-    process.stderr.write("minima: --budget ignored (persistence unavailable)\n");
+  } else if (budgetUsd !== undefined) {
+    process.stderr.write("minima: budget ignored (persistence unavailable)\n");
   }
 
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
@@ -1361,6 +1229,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
 
+  // The user keymap is a startup fact: read once, here, so it is published before the first
+  // keypress can be dispatched (app.tsx and the composer's chord latch both read the
+  // singleton). A missing file, a bad file and MINIMA_TUI_KEYMAP=0 all land on the defaults;
+  // anything the file got wrong is surfaced as a chat notice on mount, never as a failure.
+  initKeymap(agent.config.keymapFile);
+
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
   // exitOnCtrlC:false hands Ctrl+C to our own useInput handler — during a run it aborts the
@@ -1378,6 +1252,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
+      dashboard,
+      commitDeps: config.gitCommit ? commitDeps : null,
     }),
     { exitOnCtrlC: false },
   );
@@ -1445,6 +1321,241 @@ async function configCli(args: string[]): Promise<number> {
     }
   }
   process.stdout.write("\nUse `minima config set <KEY> <value>` to store a credential.\n");
+  return 0;
+}
+
+const DASHBOARD_HELP = `minima dashboard — browse this machine's harness ledger in a browser.
+
+Usage: minima dashboard [options]
+
+      --port N           port to bind (default 4180)
+      --host HOST        interface to bind (default 127.0.0.1 — loopback only)
+      --db PATH          ledger to read (default ~/.minima-harness/minima.db)
+      --editor CMD       editor for the jump-to-source button (default: first found on PATH;
+                         one of code, cursor, windsurf, zed, subl, idea, webstorm, vim, nvim;
+                         pass "none" to disable the endpoint entirely)
+      --open             open the printed URL in the default browser
+  -h, --help
+
+An interactive TUI starts one of these for you (detached, shared by every TUI on the same ledger,
+gone ~10s after the last one closes) — MINIMA_TUI_DASHBOARD=0 opts out for good, and in the TUI:
+
+  /dashboard         print the URL (a fresh 60-second link each time)
+  /dashboard off     stop using it in this session — the server exits ~10s after its LAST TUI
+                     leaves, so if others are attached it keeps serving them
+  /dashboard on      start it again (re-uses a running one, spawns if there is none)
+
+Because it is detached it ignores SIGINT and SIGHUP: Ctrl+C in the shell that started it, and
+closing that window, both leave it running. Running this command yourself is always independent:
+that server is never adopted or killed by any TUI.
+
+Read-only, always: the ledger is opened with a readonly SQLite handle and the dashboard has no
+write path at all. Every route is gated on a per-process token, handed over in the printed URL.
+That token is not a read-only credential — it reads the whole ledger and can spawn your editor.
+`;
+
+/**
+ * `minima dashboard --managed` — the auto-started server. Internal: a TUI spawns it detached.
+ *
+ * Differs from the foreground command in four ways, and every one of them is about not being owned
+ * by the terminal that happened to start it:
+ *   - it probes the port range instead of failing on a busy 4180, and records WHY it moved;
+ *   - it publishes a rendezvous file so every other TUI on this ledger finds it instead of starting
+ *     a second one;
+ *   - it ignores SIGINT/SIGHUP, so Ctrl+C in that shell and closing that window leave it running;
+ *   - it exits ~10s after the last TUI detaches, deleting its rendezvous FIRST so the file never
+ *     advertises a server that has already decided to die.
+ */
+async function managedDashboard(args: string[]): Promise<number> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const dash = await import("../dashboard/index.ts");
+  const ledger = dash.resolveLedger(flag("--db") ?? defaultDbPath()).path;
+  const rvPath = dash.rendezvousPath(ledger);
+  const host = flag("--host") ?? "127.0.0.1";
+  const probe = dash.httpProbe(host);
+
+  const pre = await dash.discover({ ledger, path: rvPath, probe });
+  if (pre.kind === "live") return 0; // another TUI's child won while we were being spawned
+
+  /**
+   * The rendezvous file is not sufficient on its own to decide "nobody is serving this ledger": a
+   * sibling child binds and only THEN publishes, so a file-only check can miss a winner that is
+   * already listening. Scanning the range closes that window — without it, two TUIs launched in the
+   * same instant each got a server (three, in the run that caught this).
+   *
+   * A server that is listening but still unpublished gets a moment to finish; either way this child
+   * declines to add a second one. Yielding is safe even if the sibling never publishes: an
+   * unpublished server has no clients, so it reaps itself on the idle rule and the TUI retries.
+   */
+  const already = await dash.findServing(dash.PORT_RANGE, ledger, probe);
+  if (already) {
+    for (let i = 0; i < 15; i += 1) {
+      const rv = await dash.readRendezvous(rvPath);
+      if (rv && rv.ledger === ledger && rv.port === already.port) return 0;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return 0;
+  }
+
+  let handle: ReturnType<typeof dash.startDashboard> | null = null;
+  let shuttingDown = false;
+  const shutdown = async (): Promise<never> => {
+    if (!shuttingDown) {
+      shuttingDown = true;
+      // Ordered: stop advertising, THEN stop serving. A TUI that read the file a moment ago can
+      // still land; a TUI that reads it after this point goes straight to spawning a fresh one.
+      await dash.clearRendezvous(rvPath, process.pid);
+      handle?.stop();
+    }
+    process.exit(0);
+  };
+
+  // Installed BEFORE binding, not after publishing: until they exist, the default disposition
+  // applies, so a signal arriving during startup would kill this process with its rendezvous already
+  // on disk and no handler to clear it. A detached server must also never die with the terminal that
+  // spawned its parent, and that has to be true from the first instant, not from the first request.
+  process.on("SIGINT", () => {});
+  process.on("SIGHUP", () => {});
+  process.once("SIGTERM", () => void shutdown());
+
+  try {
+    const bound = await dash.bindWithProbe({
+      ports: dash.PORT_RANGE,
+      // Re-checked before every fallback port, by both means: a published server, or an unpublished
+      // one that is nonetheless listening.
+      onFallback: async () =>
+        (await dash.discover({ ledger, path: rvPath, probe })).kind === "live" ||
+        (await dash.findServing(dash.PORT_RANGE, ledger, probe)) !== null,
+      start: (port, skipped) =>
+        dash.startDashboard({
+          port,
+          host,
+          dbPath: ledger,
+          editor: flag("--editor"),
+          portNote: portNote(skipped, pre),
+          onIdle: () => void shutdown(),
+        }),
+    });
+    if (bound.kind !== "bound") return bound.kind === "yielded" ? 0 : 1;
+    handle = bound.handle;
+    await dash.writeRendezvous(rvPath, {
+      ledger,
+      port: bound.port,
+      token: bound.handle.token,
+      pid: process.pid,
+      startedAt: Date.now(),
+      portNote: portNote(bound.skipped, pre),
+    });
+
+    /**
+     * Last resort for a dead heat. Every check above happens before binding, so two children
+     * launched in the same instant can both clear them and then take different ports — a ranged
+     * bind is a mutex per port, never per ledger. So the FILE arbitrates: whoever's write landed
+     * last owns it, everyone else stops. Deterministic, exactly one survivor, and it converges in
+     * milliseconds instead of leaving a spare server to time out on the idle rule.
+     */
+    await new Promise((r) => setTimeout(r, 300));
+    const owner = await dash.readRendezvous(rvPath);
+    if (owner?.pid !== process.pid) {
+      // Every post-publish exit goes through the same cleanup, so no path can forget it. The clear
+      // is a no-op unless the file still names us, which is exactly the guard we want here.
+      await dash.clearRendezvous(rvPath, process.pid);
+      handle.stop();
+      return 0;
+    }
+  } catch (exc) {
+    handle?.stop();
+    if (!(exc instanceof dash.LedgerUnavailableError)) {
+      process.stderr.write(`minima dashboard: ${errText(exc)}\n`);
+    }
+    return 1;
+  }
+
+  await new Promise<void>(() => {});
+  return 0;
+}
+
+/** Why this server is not on 4180, in words `/dashboard` can print verbatim. */
+function portNote(
+  skipped: number[],
+  pre: { kind: string; rv?: { pid: number } | null },
+): string | null {
+  if (skipped.length === 0) return null;
+  const taken = `${skipped.join(", ")} already in use`;
+  return pre.kind === "wedged" && pre.rv
+    ? `${taken} — recorded dashboard (pid ${pre.rv.pid}) is alive but not answering`
+    : taken;
+}
+
+/** `minima dashboard` — read-only localhost views over the ledger; no TUI, no model calls. */
+async function dashboardCli(args: string[]): Promise<number> {
+  if (args.includes("-h") || args.includes("--help")) {
+    process.stdout.write(DASHBOARD_HELP);
+    return 0;
+  }
+  if (args.includes("--managed")) return managedDashboard(args);
+  const flagValue = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const portRaw = flagValue("--port");
+  const port = portRaw === undefined ? undefined : Number(portRaw);
+  if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
+    process.stderr.write(`minima dashboard: invalid --port ${portRaw}\n`);
+    return 2;
+  }
+
+  if (args.includes("--allow-writes")) {
+    process.stderr.write(
+      "minima dashboard: --allow-writes was removed; the dashboard is read-only.\n",
+    );
+  }
+
+  const { LedgerUnavailableError, startDashboard } = await import("../dashboard/index.ts");
+  let handle: Awaited<ReturnType<typeof startDashboard>>;
+  try {
+    handle = startDashboard({
+      port,
+      host: flagValue("--host"),
+      dbPath: flagValue("--db"),
+      editor: flagValue("--editor"),
+    });
+  } catch (exc) {
+    if (exc instanceof LedgerUnavailableError) {
+      process.stderr.write(`minima dashboard: ${exc.message}\n`);
+      process.stderr.write("Run `minima` once in a repo to create the ledger, then retry.\n");
+      return 1;
+    }
+    process.stderr.write(`minima dashboard: ${errText(exc)}\n`);
+    return 1;
+  }
+
+  process.stdout.write(`minima dashboard — ${handle.url}\n`);
+  process.stdout.write(`  ledger  ${handle.ledgerPath}\n`);
+  process.stdout.write("  mode    read-only\n");
+  process.stdout.write(
+    `  editor  ${handle.editor ?? "none found — pass --editor CMD to enable jump-to-source"}\n`,
+  );
+  process.stdout.write("  Ctrl+C to stop\n");
+
+  if (args.includes("--open")) {
+    const opener =
+      process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    try {
+      Bun.spawn([opener, handle.url], { stdout: "ignore", stderr: "ignore" });
+    } catch {
+      // A missing opener is not a reason to fail the server — the URL is already printed.
+    }
+  }
+
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", () => resolve());
+    process.once("SIGTERM", () => resolve());
+  });
+  handle.stop();
   return 0;
 }
 

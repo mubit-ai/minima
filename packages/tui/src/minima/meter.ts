@@ -4,6 +4,12 @@
  * Port of the Python harness's minima/meter.py. The routing decision isn't part of the
  * AgentEvent stream, so the meter is fed directly from prompt() rather than via
  * subscribe(). Accumulates one row per prompt and renders a report + summary totals.
+ *
+ * It reports only what a live session can honestly know: actual, est, turns, quality, outcome,
+ * KV-cache hit rate and cost-of-pass. It does NOT report savings — an anchor comparison needs the
+ * per-row candidate estimates, which live in the ledger, so it belongs to `db/anchors.ts` and is
+ * printed by `metricsReport` a few lines below this report in the same `/cost` output. Two
+ * savings numbers on one screen is the same failure as a dashboard disagreeing with the TUI.
  */
 
 import type { RoutingResult } from "./router.ts";
@@ -36,6 +42,13 @@ export interface CostTotals {
   /** Non-LLM tool provider fees (web_search) — also real money outside every routed row,
    * booked per tool_call_id so sections can attribute it; never reaches feedback. */
   toolFeesUsd: number;
+  /**
+   * Σ of the router's configured-baseline estimate over the rows that carry one. Summed because
+   * it is a real column, but the meter no longer derives SAVINGS from it: `baselineModelId` is
+   * unset in practice, so this is 0 over 0 rows, and `baseline - actual` then printed the
+   * negative of session spend under the word "savings" next to "savings 0.0%". Anchor
+   * comparisons need the candidate estimates, which live in the ledger — see `db/anchors.ts`.
+   */
   baselineCostUsd: number;
   baselineRows: number;
   successes: number;
@@ -45,8 +58,6 @@ export interface CostTotals {
   /** F1 cost-of-pass inputs: labeled rows only (gate/judge) — never self-assessed. */
   labeledRows: number;
   labeledSuccesses: number;
-  get savingsUsd(): number;
-  get savingsPct(): number;
   get successRate(): number;
   /** cache_read / (cache_read + input); null before any token telemetry. A 10x realized-
    * cost lever — a harness change that breaks prefix stability shows up HERE first. */
@@ -72,12 +83,6 @@ export function emptyTotals(): CostTotals {
     inputTokens: 0,
     labeledRows: 0,
     labeledSuccesses: 0,
-    get savingsUsd() {
-      return this.baselineCostUsd - this.actualCostUsd;
-    },
-    get savingsPct() {
-      return this.baselineCostUsd <= 0 ? 0 : (100 * this.savingsUsd) / this.baselineCostUsd;
-    },
     get successRate() {
       return this.n ? (100 * this.successes) / this.n : 0;
     },
@@ -179,13 +184,15 @@ export class CostMeter {
 
   report(): string {
     if (!this.rows.length) return "(cost meter: no prompts recorded)";
+    // No save$ column: `baselineCostUsd - actualCostUsd` subtracts a per-call estimate from a
+    // per-turn realized cost, and with no baseline configured it printed "-" on every row anyway.
+    // `/cost` gets its savings from metricsReport, which reprices in ONE unit.
     const cols = [
       "label",
       "model",
       "basis",
       "est$",
       "actual$",
-      "save$",
       "turns",
       "quality",
       "outcome",
@@ -196,7 +203,6 @@ export class CostMeter {
       basis: r.decisionBasis,
       est$: r.estCostUsd.toFixed(6),
       actual$: r.actualCostUsd.toFixed(6),
-      save$: r.baselineCostUsd !== null ? (r.baselineCostUsd - r.actualCostUsd).toFixed(6) : "-",
       turns: String(r.turns),
       quality: r.quality !== null ? r.quality.toFixed(2) : "-",
       outcome: r.outcome,
@@ -213,8 +219,7 @@ export class CostMeter {
     lines.push("");
     lines.push(
       `total actual $${t.actualCostUsd.toFixed(6)} | ` +
-        `baseline $${t.baselineCostUsd.toFixed(6)} (${t.baselineRows} rows) | ` +
-        `savings ${t.savingsPct.toFixed(1)}% ($${t.savingsUsd.toFixed(6)}) | ` +
+        `est $${t.estCostUsd.toFixed(6)} | ` +
         `success ${t.successRate.toFixed(1)}% (${t.successes}/${t.n})`,
     );
     const extras: string[] = [];

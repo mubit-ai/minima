@@ -8,6 +8,8 @@ import {
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
+  image,
+  text,
 } from "../src/ai/index.ts";
 import {
   type GoogleChunk,
@@ -219,5 +221,73 @@ describe("GoogleProvider", () => {
     // The critical assertion: items must survive conversion (its absence is the 400 bug).
     expect(optsSchema.items).toBeDefined();
     expect((optsSchema.items as { type: string }).type).toBe("OBJECT");
+  });
+});
+
+// Gemini's functionResponse cannot carry inline media on the models this harness seeds
+// (2.5 Flash/Pro predate it, and @google/genai is pinned below the field), so ai/compat.ts
+// hoists tool-result images into a following user Content instead.
+describe("GoogleProvider — hoisted tool-result images", () => {
+  async function contentsFor(messages: Message[]): Promise<Record<string, unknown>[]> {
+    resetAll();
+    let captured: unknown;
+    const capturing: GoogleClientLike = {
+      models: {
+        async generateContentStream(opts: Record<string, unknown>) {
+          captured = opts.contents;
+          async function* gen(): AsyncIterable<GoogleChunk> {
+            yield { candidates: [{ content: { parts: [{ text: "ok" }] }, finish_reason: "STOP" }] };
+          }
+          return gen();
+        },
+      },
+    };
+    registerProvider("google-generative-ai", new GoogleProvider(capturing));
+    await complete(MODEL, context({ messages }));
+    return captured as Record<string, unknown>[];
+  }
+
+  const imageToolResult = new Message({
+    role: "toolResult",
+    content: [text("[image] x.png"), image("QUJD", "image/png")],
+    tool_call_id: "call_1",
+    tool_name: "read",
+  });
+
+  test("the image lands in a following user content as inlineData", async () => {
+    const contents = await contentsFor([
+      new Message({ role: "user", content: "look" }),
+      imageToolResult,
+    ]);
+    expect(contents).toHaveLength(3);
+    const parts = contents[2]!.parts as Record<string, unknown>[];
+    expect(parts[1]).toEqual({ inlineData: { mimeType: "image/png", data: "QUJD" } });
+  });
+
+  // Pins the "we hoist, we do NOT use functionResponse.parts" decision, so a future
+  // @google/genai bump is a deliberate, test-visible change rather than a silent one.
+  test("no inlineData ever appears inside a functionResponse", async () => {
+    const contents = await contentsFor([
+      new Message({ role: "user", content: "look" }),
+      imageToolResult,
+    ]);
+    const fnPart = (contents[1]!.parts as Record<string, unknown>[])[0]!;
+    expect(fnPart.functionResponse).toBeDefined();
+    expect(JSON.stringify(fnPart)).not.toContain("inlineData");
+    expect(JSON.stringify(fnPart)).not.toContain("QUJD");
+  });
+
+  // The composer's Ctrl+V path: an image in a genuine USER message, with no hoist involved.
+  test("a pasted image serializes as inlineData beside its question", async () => {
+    const contents = await contentsFor([
+      new Message({
+        role: "user",
+        content: [text("[Image #1] what is this"), image("QUJD", "image/png")],
+      }),
+    ]);
+    expect(contents).toHaveLength(1);
+    const parts = contents[0]!.parts as Record<string, unknown>[];
+    expect(parts[0]).toEqual({ text: "[Image #1] what is this" });
+    expect(parts[1]).toEqual({ inlineData: { mimeType: "image/png", data: "QUJD" } });
   });
 });

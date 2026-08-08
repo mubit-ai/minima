@@ -56,8 +56,7 @@ const HTML = (body: string) =>
     headers: { "content-type": "text/html" },
   });
 
-const REDIRECT = (location: string) =>
-  new Response(null, { status: 302, headers: { location } });
+const REDIRECT = (location: string) => new Response(null, { status: 302, headers: { location } });
 
 describe("SSRF guard: blocked targets never see a connection", () => {
   test("web_fetch to a loopback listener is refused before any TCP connect", async () => {

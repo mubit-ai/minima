@@ -39,7 +39,10 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "task",
 ]);
 
-function git(
+/** Synchronous git plumbing. Exported for session/commit.ts, which reuses the spawn helper
+ * and the repo resolver below but none of this module's discipline — a real commit fires
+ * hooks, touches the user's index, and is authored by the user's own identity. */
+export function git(
   top: string,
   args: string[],
   opts?: { env?: Record<string, string>; stdin?: Uint8Array },

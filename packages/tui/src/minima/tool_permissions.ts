@@ -44,6 +44,7 @@ export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "exit_plan",
   "checkpoint",
   "rewind",
+  "git_commit",
 ]);
 
 /**

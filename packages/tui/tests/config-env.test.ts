@@ -33,6 +33,70 @@ describe("label-source configuration (Phase 0b)", () => {
     });
   });
 
+  test("image tool results are ON by default; MINIMA_TUI_IMAGES=0 opts out", () => {
+    withEnv({ MINIMA_TUI_IMAGES: undefined }, () => {
+      expect(configFromEnv().images).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_IMAGES: "0" }, () => {
+      expect(configFromEnv().images).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_IMAGES: "1" }, () => {
+      expect(configFromEnv().images).toBe(true);
+    });
+  });
+
+  test("desktop notifications are ON by default; MINIMA_TUI_NOTIFY=0 opts out", () => {
+    withEnv({ MINIMA_TUI_NOTIFY: undefined }, () => {
+      expect(configFromEnv().notify).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY: "0" }, () => {
+      expect(configFromEnv().notify).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY: "1" }, () => {
+      expect(configFromEnv().notify).toBe(true);
+    });
+  });
+
+  test("MINIMA_TUI_NOTIFY_AFTER_MS defaults to 10s; 0 notifies on every turn", () => {
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: undefined }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "0" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(0);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "30000" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(30_000);
+    });
+    // Unparseable and negative values fall back to the default rather than disabling the gate.
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "soon" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+    withEnv({ MINIMA_TUI_NOTIFY_AFTER_MS: "-5" }, () => {
+      expect(configFromEnv().notifyAfterMs).toBe(10_000);
+    });
+  });
+
+  test("$EDITOR composing is ON by default; MINIMA_TUI_EDITOR=0 opts out", () => {
+    withEnv({ MINIMA_TUI_EDITOR: undefined }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+    withEnv({ MINIMA_TUI_EDITOR: "0" }, () => {
+      expect(configFromEnv().externalEditor).toBe(false);
+    });
+    withEnv({ MINIMA_TUI_EDITOR: "1" }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+  });
+
+  test("MINIMA_TUI_EDITOR names a behavior, not an editor — only =0 disables", () => {
+    // Someone WILL try MINIMA_TUI_EDITOR=vim. That leaves the feature ON with the value
+    // ignored; $EDITOR / $VISUAL choose the binary.
+    withEnv({ MINIMA_TUI_EDITOR: "vim" }, () => {
+      expect(configFromEnv().externalEditor).toBe(true);
+    });
+    expect(harnessConfig().externalEditor).toBe(true);
+  });
+
   test("judge sampling defaults to 15% of eligible turns", () => {
     expect(harnessConfig().judgeSampleRate).toBeCloseTo(0.15);
     withEnv({ MINIMA_JUDGE_SAMPLE: undefined, MINIMA_LLM_JUDGE: undefined }, () => {
@@ -58,6 +122,26 @@ describe("label-source configuration (Phase 0b)", () => {
     });
     withEnv({ MINIMA_LLM_JUDGE: "1", MINIMA_JUDGE_SAMPLE: "0.3" }, () => {
       expect(configFromEnv().judgeSampleRate).toBeCloseTo(0.3);
+    });
+  });
+});
+
+describe("candidate pool (MINIMA_CANDIDATES)", () => {
+  // This is the read site a project `.minima/config.toml` lands its already-INTERSECTED
+  // pool on. The clamp lives in the loader; here the only contract is that the env value
+  // replaces the shipped pool, and that an unusable value leaves the default standing.
+  test("parses, trims and dedupes a comma-separated pool", () => {
+    withEnv({ MINIMA_CANDIDATES: "claude-haiku-4-5, gemini-2.5-flash,,claude-haiku-4-5" }, () => {
+      expect(configFromEnv().candidates).toEqual(["claude-haiku-4-5", "gemini-2.5-flash"]);
+    });
+  });
+
+  test("unset or empty keeps the shipped default pool", () => {
+    withEnv({ MINIMA_CANDIDATES: undefined }, () => {
+      expect(configFromEnv().candidates).toEqual(harnessConfig().candidates);
+    });
+    withEnv({ MINIMA_CANDIDATES: " , " }, () => {
+      expect(configFromEnv().candidates).toEqual(harnessConfig().candidates);
     });
   });
 });

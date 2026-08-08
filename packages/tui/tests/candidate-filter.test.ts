@@ -161,4 +161,21 @@ describe("route() reasoning-aware candidate assembly", () => {
     expect(routing?.warnings.some((w) => w.startsWith("reasoning_filter_skipped"))).toBe(true);
     reg.unregister();
   });
+
+  // Carried from PR #320. The raw reasoning_filter_skipped token is display-hidden, so the
+  // user needs a sentence instead — once, on the first affected turn. Repeating it every
+  // turn is what made the raw token unusable to begin with.
+  test("the reasoning-off note shows on the first turn only", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    process.env.OPENAI_API_KEY = "k";
+    const { fetchLike } = service();
+    const { agent, reg } = buildAgent(fetchLike);
+    agent.agentState.thinkingLevel = "high";
+    const note = (w: string) => w.includes("no reasoning — running with reasoning off");
+    const first = await agent.promptRouted("hi");
+    expect(first?.warnings.some(note)).toBe(true);
+    const second = await agent.promptRouted("hi again");
+    expect(second?.warnings.some(note)).toBe(false);
+    reg.unregister();
+  });
 });

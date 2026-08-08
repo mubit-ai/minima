@@ -38,6 +38,8 @@ const FAUX_MODEL: Model = {
 
 // Roughly 1 token per 4 characters, per PI's faux provider.
 const CHARS_PER_TOKEN = 4;
+// Flat stand-in for an image's token cost (~1000 tokens at CHARS_PER_TOKEN).
+const IMAGE_CHARS = 4000;
 
 function estimateUsage(msg: AssistantMessage): void {
   if (msg.usage.input || msg.usage.output) return;
@@ -45,6 +47,8 @@ function estimateUsage(msg: AssistantMessage): void {
   for (const b of msg.content) {
     if (b.type === "text") charLen += b.text.length;
     else if (b.type === "thinking") charLen += b.thinking.length;
+    // An image is not free; without this a faux vision turn bills zero tokens.
+    else if (b.type === "image") charLen += IMAGE_CHARS;
   }
   msg.usage.output = Math.max(1, Math.floor(charLen / CHARS_PER_TOKEN));
 }
@@ -59,6 +63,9 @@ export interface FauxRequest {
   /** Names of the tools this call was offered, in order — lets a test assert the tool
    *  SCOPE an agent actually ran with (a sub-agent's allowlist, an agent type's tools). */
   toolNames: string[];
+  /** Every image block across all context messages, in message order — lets tests assert
+   * that an image survived tool dispatch and provider normalization. */
+  images: { mime: string; bytes: number }[];
 }
 
 /** Observable per-registration state. */
@@ -142,6 +149,11 @@ class FauxProvider implements Provider {
       messageCount: context.messages.length,
       toolNames: context.tools.map((t) => t.name),
       user: lastUser?.textContent ?? "",
+      images: context.messages.flatMap((m) =>
+        m.content
+          .filter((b) => b.type === "image")
+          .map((b) => ({ mime: b.mime_type ?? "image/png", bytes: b.data.length })),
+      ),
     });
     const queued = this.state.responses.shift();
     if (!queued) {
