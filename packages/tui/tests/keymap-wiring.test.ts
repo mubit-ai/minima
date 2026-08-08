@@ -141,7 +141,7 @@ describe("the reserved chords mirror their real owner", () => {
       textInput.indexOf("if (key.ctrl) {"),
       textInput.indexOf("if (key.meta) {"),
     );
-    const handled = new Set([...ctrlBlock.matchAll(/input === "(\w)"/g)].map((m) => m[1]));
+    const handled = new Set([...ctrlBlock.matchAll(/input === "(\w)"/g)].map((m) => m[1]!));
     const refused = new Set(
       (loader.match(/const READLINE_CTRL = new Set\(\[([^\]]*)\]/) as RegExpMatchArray)[1]
         ?.match(/"(\w)"/g)
@@ -152,7 +152,7 @@ describe("the reserved chords mirror their real owner", () => {
 
   test("the readline Alt set matches too", () => {
     const metaBlock = textInput.slice(textInput.indexOf("if (key.meta) {"));
-    const handled = new Set([...metaBlock.matchAll(/input === "(\w)"/g)].map((m) => m[1]));
+    const handled = new Set([...metaBlock.matchAll(/input === "(\w)"/g)].map((m) => m[1]!));
     const refused = new Set(
       (loader.match(/const READLINE_META = new Set\(\[([^\]]*)\]/) as RegExpMatchArray)[1]
         ?.match(/"(\w)"/g)

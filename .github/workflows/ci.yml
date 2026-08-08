@@ -122,6 +122,7 @@ jobs:
       MINIMA_TUI_PLAN_CRITIC: "0"
       MINIMA_TUI_DIFF_REVIEW: "0"
       MINIMA_TUI_AUTO_GATES: "0"
+      MINIMA_TUI_DASHBOARD: "0"
       # Matrix symmetry only: the env-layer loader takes its environment by injection, so its
       # suite passes `env` explicitly and never reads this. The gate that matters is the
       # behavioral one in tests/kill-switches.test.ts.

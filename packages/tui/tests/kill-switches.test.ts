@@ -124,6 +124,11 @@ const AMBIENT_DEFAULT_ON: readonly AmbientSwitch[] = [
     file: "minima/plan_finalize.ts",
     gate: 'if (process.env.MINIMA_TUI_AUTO_GATES !== "0") {',
   },
+  {
+    env: "MINIMA_TUI_DASHBOARD",
+    file: "cli/main.ts",
+    gate: 'process.env.MINIMA_TUI_DASHBOARD !== "0"',
+  },
 ];
 
 /**

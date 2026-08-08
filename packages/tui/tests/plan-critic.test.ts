@@ -21,7 +21,7 @@ const META: Model = {
 };
 
 const reply = (t: string) =>
-  (async () => new AssistantMessage({ content: [text(t)], stop_reason: "endTurn" })) as never;
+  (async () => new AssistantMessage({ content: [text(t)], stop_reason: "stop" })) as never;
 
 describe("plan critic — prompt + parse", () => {
   test("prompt numbers steps and shows each check (or its absence)", () => {

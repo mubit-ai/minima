@@ -31,8 +31,8 @@ import { exitPlanTool } from "../src/tools/exit_plan.ts";
 import type { QuestionParams } from "../src/tools/question.ts";
 import { todowriteTool } from "../src/tools/todowrite.ts";
 import { writeTool } from "../src/tools/write.ts";
-import { buildPlanOverview, stepCardLines } from "../src/tui/plan_overview.ts";
 import { draftPanelState, draftRows } from "../src/tui/plan_draft_view.ts";
+import { buildPlanOverview, stepCardLines } from "../src/tui/plan_overview.ts";
 
 // MP19 — the Track W acceptance story, in-process and hermetic. ONE run that: (1) PLANS — a
 // council round lands in the PlanSessionStore and the MP16 draft view renders it; (2) APPROVES

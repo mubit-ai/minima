@@ -71,9 +71,7 @@ describe("assertPublicUrl", () => {
   });
 
   test("rejects blocked literals", async () => {
-    await expect(assertPublicUrl("http://169.254.169.254/", false)).rejects.toThrow(
-      /link-local/,
-    );
+    await expect(assertPublicUrl("http://169.254.169.254/", false)).rejects.toThrow(/link-local/);
     await expect(assertPublicUrl("http://[::1]/", false)).rejects.toThrow(/loopback/);
   });
 
@@ -82,10 +80,7 @@ describe("assertPublicUrl", () => {
       assertPublicUrl("http://internal.corp/", false, async () => ["10.0.0.5"]),
     ).rejects.toThrow(/private/);
     await expect(
-      assertPublicUrl("http://rebind.host/", false, async () => [
-        "93.184.216.34",
-        "192.168.0.7",
-      ]),
+      assertPublicUrl("http://rebind.host/", false, async () => ["93.184.216.34", "192.168.0.7"]),
     ).rejects.toThrow(/private/);
     await assertPublicUrl("http://public.host/", false, async () => [
       "93.184.216.34",

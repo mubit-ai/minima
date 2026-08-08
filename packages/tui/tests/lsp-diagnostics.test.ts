@@ -10,9 +10,9 @@ import { configFromEnv } from "../src/minima/config.ts";
 import {
   type DiagnosticsResult,
   LspFramer,
+  LspManager,
   type LspServerSpec,
   type LspSpawn,
-  LspManager,
   type SpawnedConnection,
   makeLspDiagnosticsHook,
 } from "../src/tools/_lsp.ts";
@@ -298,7 +298,11 @@ describe("LSP diagnostics hook (W5.1)", () => {
       let listener: ((m: unknown) => void) | null = null;
       return {
         alive: true,
-        send(msg: { id?: number; method?: string; params?: { textDocument?: { uri: string; version: number } } }) {
+        send(msg: {
+          id?: number;
+          method?: string;
+          params?: { textDocument?: { uri: string; version: number } };
+        }) {
           if (msg.method === "initialize") {
             listener?.({ jsonrpc: "2.0", id: msg.id, result: { capabilities: {} } });
             return;
