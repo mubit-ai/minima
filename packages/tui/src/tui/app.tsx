@@ -17,16 +17,7 @@ import React, {
   useCallback,
   useSyncExternalStore,
 } from "react";
-import type { AgentEvent } from "../agent/events.ts";
-import {
-  type AgentMode,
-  MODE_BADGES,
-  bundleForMode,
-  cycleMode,
-  getMode,
-  setMode,
-  subscribeMode,
-} from "../agent/modes.ts";
+import { type AgentMode, cycleMode, getMode, setMode, subscribeMode } from "../agent/modes.ts";
 import { emitGuardEvent } from "../agent/policy.ts";
 import type { AgentTool, BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
@@ -52,7 +43,7 @@ import {
   stampVerifiedOutcome,
 } from "../minima/big_plan.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
-import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
+import { refreshCatalog } from "../minima/catalog.ts";
 import {
   DEFAULT_CAVEMAN_LEVEL,
   getCaveman,
@@ -135,9 +126,9 @@ import {
   parseAttachmentTokens,
 } from "./attachments.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
-import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
+import { getFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
-import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
+import { ChildTree } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { readClipboardImage } from "./clipboard_image.ts";
 import { compactMessagesLLM, compactReport, maybeAutoCompact } from "./compact.ts";
@@ -183,7 +174,7 @@ import {
   wrappedLineCount,
 } from "./layout.ts";
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
-import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
+import { loadTaskPanelHidden, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import { notify, shouldNotifyTurnEnd } from "./notify.ts";
 import {
@@ -194,18 +185,12 @@ import {
   readerView,
   tocPanelState,
 } from "./panel_state.ts";
-import { perfEnabled, perfSample, perfSpawns } from "./perf.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
   createPermissionState,
   finalizeAutoAcceptLanding,
-  formatActionLabel,
-  isGuardDenyReason,
-  makeModeGatedBeforeToolCall,
   modeAutoApproves,
-  planModeBlockReason,
-  planModeBlockedTools,
 } from "./permissions.ts";
 import { draftPanelState } from "./plan_draft_view.ts";
 import {
@@ -226,6 +211,7 @@ import {
   releaseOnPrompt,
   takeNext,
 } from "./prompt_queue.ts";
+import { actionableError, anyProviderKeyPresent, keyHint } from "./provider_hints.ts";
 import { QueueList, queueListRowCount } from "./queue_list.tsx";
 import { sectionReaderLines } from "./reader.ts";
 import { chatFromMessages, resumeNotice } from "./resume.ts";
@@ -237,11 +223,20 @@ import {
 } from "./rewind_picker.ts";
 import { routingSurfaceNotes } from "./routing-warnings.ts";
 import { StatusBar } from "./status.tsx";
-import { setResumeCallback, suspendToShell } from "./suspend.ts";
+import { suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { TextInput } from "./text-input.tsx";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { type TocUsage, buildSections, renderTocText, tocRows } from "./toc.ts";
+import { useAgentEvents } from "./use_agent_events.ts";
+import {
+  useChildTree,
+  useQuestionPrompt,
+  useToolCallHooks,
+  useVerifyConsent,
+} from "./use_seams.ts";
+import { useModeEffects, useSessionBoot } from "./use_session_boot.ts";
+import { useRenderPerf, useResumeRepaint, useTerminalSize } from "./use_terminal.ts";
 
 export interface AppProps {
   agent: MinimaAgent;
@@ -310,11 +305,6 @@ const PLANNER_PERSONA =
   "the user asks to proceed with it, call the exit_plan tool — it asks the user to approve " +
   "finalizing the plan and exiting plan mode. Never tell the user to run slash commands.";
 
-/** True when at least one key-requiring model provider has its key set. */
-function anyProviderKeyPresent(): boolean {
-  return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
-}
-
 /**
  * The chord `/help` prints for an action. Reads the EFFECTIVE keymap, so a user who rebound
  * a key is never shown the default — the help is the only place most people will look.
@@ -372,26 +362,6 @@ function finalizeSuccessNote(o: {
     ? "\n\n⚠ Plan synthesis failed (model output truncated or unavailable) — the doc is the deterministic assembly and NO steps were seeded to the plan ledger. The agent was told to record them with todowrite."
     : "";
   return `Plan written: ${o.outPath}.${seededNote} Plan mode OFF — write access restored.${synthNote}${o.auditNote}`;
-}
-
-/** Suggested `/config set` hint for a provider (or a generic one). */
-function keyHint(provider?: string): string {
-  const env = provider ? envVarsForProvider(provider)[0] : undefined;
-  return env ? `\`/config set ${env} <key>\`` : "a model-provider key via /config";
-}
-
-/**
- * Append actionable guidance to an auth-shaped error so a user who ran `/auth` (routing only)
- * knows to set a MODEL-provider key. Leaves already-actionable messages (our own "config set"
- * text) untouched.
- */
-function actionableError(msg: string, provider?: string): string {
-  const authish =
-    /could not resolve authentication|api[\s_-]?key|authtoken|unauthor|x-api-key|http 401|no api key/i.test(
-      msg,
-    );
-  if (!authish || /config set/i.test(msg)) return msg;
-  return `${msg}\n→ Set a model-provider key: ${keyHint(provider)} (\`/auth\` configures routing only), then /reconnect.`;
 }
 
 function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
@@ -1061,10 +1031,6 @@ export function HarnessApp({
   const [transcriptGen, setTranscriptGen] = useState(0);
   const [streaming, setStreaming] = useState("");
   const [streamingThoughts, setStreamingThoughts] = useState("");
-  const streamingBufRef = useRef("");
-  const streamingThoughtsBufRef = useRef("");
-  const streamFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const thoughtsFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   // MUB-183: prompts typed mid-turn queue here and drain one per completed turn
   // (src/tui/prompt_queue.ts holds the pure semantics). In-memory only — survives nothing.
@@ -1095,80 +1061,19 @@ export function HarnessApp({
   // Startup tips (ON by default): a rotating tip shown on the empty welcome splash. `/tip on|off`
   // toggles the persisted preference; `startupTip` holds the tip rendered this launch.
   const [tipsEnabled, setTipsEnabledState] = useState(() => isTipsEnabled());
-  const [startupTip, setStartupTip] = useState<string | null>(null);
 
   // Sub-agent tree: childrenState tracks each in-flight child; treeOpen toggles the panel.
-  const [childrenState, setChildrenState] = useState<Map<string, ChildRow>>(new Map());
   const [treeOpen, setTreeOpen] = useState(false);
 
-  // On mount: nudge if routing is set but no model-provider key is, and pull the live model
-  // catalog (Minima /v1/models + OpenRouter) so /model reflects runnable models, not just seeds.
-  useEffect(() => {
-    // Rotate a fresh startup tip for the welcome splash (ON by default; persisted preference).
-    if (isTipsEnabled()) setStartupTip(formatTip(advanceTip()));
-    if (!anyProviderKeyPresent()) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          toolName: "setup",
-          text: `No model-provider API key set — set one to run models: ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER). \`/auth\` configures routing only.`,
-        },
-      ]);
-    }
-    // A keymap file that could not be honoured says so ONCE, here. Every problem already
-    // names the action it cost and the default it kept, so this never blocks anything —
-    // the affected keys simply are what they always were.
-    const keymapTrouble = keymapProblems();
-    if (keymapTrouble.length > 0) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "tool",
-          toolName: "keymap",
-          text: `⚠ ${keymapPath()}\n${keymapTrouble.map((p) => `  • ${p}`).join("\n")}`,
-        },
-      ]);
-    }
-    // One-time bootstrap (memoized): the REGISTRY is process-global, so the catalog must
-    // not be re-synced mid-run once (sub-)agents can be in flight.
-    void refreshCatalogOnce(agent.config)
-      .then((n) => {
-        if (n > 0) setCatalogVersion((v) => v + 1);
-      })
-      .catch(() => {});
-    // Budget signals render as chat notices (not stderr — that would corrupt Ink).
-    agent.budget?.setOnEvent((e) => {
-      if (e.kind === "threshold" || e.kind === "deny") {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "tool",
-            text: `${e.kind === "deny" ? "⛔" : "💰"} ${e.note ?? e.kind}`,
-            toolName: "budget",
-            isError: e.kind === "deny",
-          },
-        ]);
-      }
-      setBudgetStatus(agent.budget?.status() ?? null);
-    });
-    setBudgetStatus(agent.budget?.status() ?? null);
-  }, [agent]);
+  /** Append one line to the transcript — the shape every hook below is handed. */
+  const pushMessage = useCallback((m: ChatMessage) => setMessages((prev) => [...prev, m]), []);
 
-  // Wire the sub-agent event feed so ChildTree stays live during multi-step runs.
-  useEffect(() => {
-    if (!childEventRef) return;
-    childEventRef.handler = (e: ChildEvent) => {
-      setChildrenState((prev) => {
-        const next = new Map(prev);
-        next.set(e.childId, applyChildEvent(next.get(e.childId), e));
-        return next;
-      });
-    };
-    return () => {
-      childEventRef.handler = null;
-    };
-  }, [childEventRef]);
+  const startupTip = useSessionBoot(agent, {
+    pushMessage,
+    setBudgetStatus,
+    bumpCatalog: () => setCatalogVersion((v) => v + 1),
+  });
+  const childrenState = useChildTree(childEventRef);
 
   // Permission system. Lazy useState: repoIdentity spawns git and loadBashGrants reads disk,
   // so the state must be built exactly once, not on every render.
@@ -1180,34 +1085,13 @@ export function HarnessApp({
     }),
   );
   const permStateRef = useRef<PermissionState>(initialPermState);
-  // MP18: swap the plan hooks' consent seam to the overlay-backed checker while the TUI is
-  // mounted. Consent keys on the exact command string; bypass mode is blanket consent
-  // (acceptEdits needs no case — todowrite is not in its auto bundle, so unseen verifies
-  // still prompt). Unmount restores the headless fail-closed default.
-  useEffect(() => {
-    if (!verifyConsentRef) return;
-    const headless = verifyConsentRef.current;
-    verifyConsentRef.current = (cmd) =>
-      getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd);
-    return () => {
-      verifyConsentRef.current = headless;
-    };
-  }, [verifyConsentRef]);
+  useVerifyConsent(verifyConsentRef, permStateRef);
 
   // `question` tool overlay: the tool awaits a promise resolved by the overlay below.
-  const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
-  useEffect(() => {
-    if (!askUserRef) return;
-    askUserRef.current = (params) =>
-      new Promise<string | null>((resolve) => {
-        setQuestionPrompt({ ...params, resolve });
-        // The run is blocked on a human answer — always notify, however short the turn was.
-        if (agent.config.notify) notify(`Minima asks: ${params.question}`);
-      });
-    return () => {
-      askUserRef.current = null;
-    };
-  }, [askUserRef, agent.config.notify]);
+  const [questionPrompt, setQuestionPrompt] = useQuestionPrompt(
+    askUserRef,
+    agent.config.notify === true,
+  );
 
   // B2 (MUB-135): Plan/Build mode lives in an external store (src/agent/modes.ts) so the
   // beforeToolCall hook, /plan, and Shift+Tab all share it. planMode stays derived — every
@@ -1246,28 +1130,22 @@ export function HarnessApp({
   const councilControllerRef = useRef<AbortController | null>(null);
   /** Last Ctrl+C-while-busy press — a second press inside the window force-quits. */
   const quitArmedAtRef = useRef(0);
-  // Mode badge in the shared slot (PLAN magenta / ⏵⏵ ACCEPT EDITS green / ⚠ BYPASS red);
-  // build shows nothing (the slot stays free for Track A guard flags). Never clears a badge
-  // it didn't write (MINIMA_TUI_BADGE seeds survive until the first mode toggle).
-  const badgeOwnedRef = useRef(false);
-  useEffect(() => {
-    const badge = MODE_BADGES[mode];
-    if (badge) {
-      setFooterBadge(badge);
-      badgeOwnedRef.current = true;
-    } else if (badgeOwnedRef.current) {
-      setFooterBadge(null);
-      badgeOwnedRef.current = false;
-    }
-  }, [mode]);
+  const projectKeyRef = useModeEffects(mode);
 
-  // Persist the mode per project (bypass excluded inside persistMode) so the next session
-  // starts where this one left off — Claude Code behavior.
-  const projectKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
-    persistMode(projectKeyRef.current, mode);
-  }, [mode]);
+  /**
+   * Keep the plan footer strip + tier behavior in step with the ledger. Fails open to null
+   * (no strip, no note/block) — every caller is a UI refresh, never a correctness path.
+   */
+  const refreshPlanStrip = useCallback(() => {
+    if (agent.config.bigPlan !== true) return;
+    try {
+      setPlanStrip(planStripInfo(agent.db, agent.runId));
+      setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
+    } catch {
+      setPlanStrip(null);
+      setBigPlanBehavior(null);
+    }
+  }, [agent]);
 
   // planning council session lifecycle (shared by /plan and the mode-exit cleanup below).
   const enterPlanMode = useCallback(
@@ -1549,34 +1427,9 @@ export function HarnessApp({
     };
   }, [mode, agent, askUserRef, exitPlanFinalize, exitPlanCancel, planSessionGen]);
 
-  // Terminal sizing (rows/cols).
-  const [rows, setRows] = useState(process.stdout.rows || 24);
-  const [cols, setCols] = useState(process.stdout.columns || 80);
-
-  // Render counter for the MINIMA_TUI_PERF probe (soak tests watch for unbounded growth).
-  const renderCountRef = useRef(0);
-  renderCountRef.current++;
-  // Ctrl+Z resume: SIGCONT bumps this nonce; the commit repaints the live region the
-  // shell drew over.
-  const [, setResumeGen] = useState(0);
-  useEffect(() => {
-    setResumeCallback(() => setResumeGen((n) => n + 1));
-    return () => setResumeCallback(null);
-  }, []);
-  // Whole-render wall time + subprocess count, sampled once per commit (the dep-less effect
-  // is intentional). ms spans render body → post-commit, so any synchronous blocking inside
-  // render (the per-render git fork bug) shows up here even when window compute stays fast.
-  const renderT0 = perfEnabled ? performance.now() : 0;
-  useEffect(() => {
-    if (!perfEnabled) return;
-    perfSample({
-      kind: "render",
-      ms: performance.now() - renderT0,
-      renders: renderCountRef.current,
-      spawns: perfSpawns(),
-      stdinListeners: process.stdin.listenerCount("readable"),
-    });
-  });
+  const { rows, cols } = useTerminalSize();
+  useResumeRepaint();
+  useRenderPerf();
   // B3 (MUB-136): git-shadow checkpoints. Repo detection via a lazy resolver: re-probes
   // while null so a mid-session `git init` is picked up (MUB-176), cached once found —
   // and only ever called at event time (/ckpt, /undo, /rewind, the checkpoint hook). A
@@ -1584,7 +1437,14 @@ export function HarnessApp({
   // and a plain useRef(detectRepo(...)) argument is evaluated on EVERY render — one blocking
   // git spawn per keystroke/wheel notch was the "TUI freezes and the title flaps bun↔git" bug.
   const [resolveRepoTop] = useState(() => makeRepoResolver(process.cwd()));
-  const checkpointArmRef = useRef<(() => void) | null>(null);
+  const checkpointArmRef = useToolCallHooks({
+    agent,
+    bigPlanGateBefore,
+    resolveRepoTop,
+    permStateRef,
+    setPermPrompt,
+    pushMessage,
+  });
   // B4 (MUB-139): /undo. Cursor = created-time of the last restored checkpoint, so stacked
   // /undo walks backwards; reset on the next real prompt. Prefill remounts TextInput (nonce
   // in its key) with the undone prompt's text seeded as the draft.
@@ -1673,85 +1533,6 @@ export function HarnessApp({
     ]);
   }
 
-  useEffect(() => {
-    const handleResize = () => {
-      setRows(process.stdout.rows || 24);
-      setCols(process.stdout.columns || 80);
-    };
-    process.stdout.on("resize", handleResize);
-
-    // Mouse tracking stays OFF so native scroll/select/copy work with <Static>.
-    process.stdout.write("\u001b[?1000l");
-    process.stdout.write("\u001b[?1006l");
-
-    return () => {
-      process.stdout.off("resize", handleResize);
-      process.stdout.write("\u001b[?1006l");
-      process.stdout.write("\u001b[?1000l");
-    };
-  }, []);
-
-  // Wire the beforeToolCall permission hook, then the plan done-gate (when on) so
-  // permission always runs first — first block wins, and no gate check ever executes for a
-  // call the user declines.
-  //
-  // Plan mode DENIES at the dispatcher (Claude Code parity, 2026-07-20 — supersedes the B2
-  // ask-every-time flow): the FULL planModeBlockedTools list (permissions.ts, single tested
-  // source) hard-blocks with the exit_plan-steering reason, audited as mode-deny. Everything
-  // else resolves through the active mode's PolicyBundle (accept-edits auto is cwd-scoped
-  // inside the hook), then the normal permission flow.
-  useEffect(() => {
-    const modeGated = makeModeGatedBeforeToolCall({
-      state: permStateRef.current,
-      promptFn: (prompt) => {
-        setPermPrompt(prompt);
-        // Same rule as the question overlay: the run cannot proceed without the user. The
-        // body is model-derived, which is exactly why notify() sanitizes it.
-        if (agent.config.notify)
-          notify(`Minima needs permission: ${prompt.toolName} ${prompt.argsSummary}`);
-      },
-      getBundle: () => bundleForMode(getMode()),
-    });
-    const disposePermission = agent.addBeforeToolCall(async (ctx) => {
-      if (getMode() === "plan") {
-        const bigPlanOn = agent.config.bigPlan === true;
-        if (planModeBlockedTools(bigPlanOn).includes(ctx.toolCall.name)) {
-          emitGuardEvent({
-            kind: "mode-deny",
-            detail: formatActionLabel(ctx.toolCall.name, ctx.args),
-          });
-          return { block: true, reason: planModeBlockReason(ctx.toolCall.name, bigPlanOn) };
-        }
-      }
-      return modeGated(ctx);
-    });
-    // B3: checkpoint snapshot rides between the permission gate (a denied call must not
-    // snapshot) and the plan done-gate (a done-gate block after a snapshot is harmless — deduped by
-    // tree). Same effect as its neighbors: a separate effect with different deps would lose
-    // the relative order on re-registration.
-    const ckpt = makeCheckpointHook({
-      top: resolveRepoTop,
-      db: agent.db ?? null,
-      getRunId: () => agent.runId,
-      getStepId: () => {
-        if (agent.config.bigPlan !== true || !agent.db || !agent.runId) return null;
-        const plan = agent.db.getActivePlan(agent.runId);
-        return plan ? (agent.db.getInProgressStep(plan.id)?.id ?? null) : null;
-      },
-      notify: (message) =>
-        setMessages((m) => [...m, { role: "tool", text: message, toolName: "ckpt" }]),
-    });
-    checkpointArmRef.current = ckpt.arm;
-    const disposeCkpt = agent.addBeforeToolCall(ckpt.hook);
-    const disposeGate = bigPlanGateBefore ? agent.addBeforeToolCall(bigPlanGateBefore) : null;
-    return () => {
-      disposeGate?.();
-      disposeCkpt();
-      checkpointArmRef.current = null;
-      disposePermission();
-    };
-  }, [agent, bigPlanGateBefore, resolveRepoTop]);
-
   // Scrolling is handled by the terminal itself (the finalized transcript renders into native
   // scrollback via <Static>), so there is no in-app scroll offset to track.
 
@@ -1821,9 +1602,6 @@ export function HarnessApp({
     showThinkingRef.current = showThinking;
   }, [showThinking]);
 
-  const thoughtsRef = useRef("");
-  const thinkingStartRef = useRef<number | null>(null);
-
   // onSubmit echoed the typed prompt optimistically; the loop's message_start(user) — which
   // carries the @file-expanded/replan-prefixed run content — must be skipped, not double-posted.
   const pendingEchoRef = useRef(false);
@@ -1838,175 +1616,22 @@ export function HarnessApp({
   // finished while the user was plainly still watching (config.notifyAfterMs).
   const turnStartRef = useRef(0);
 
-  // Subscribe to the agent event stream once.
-  useEffect(() => {
-    const unsub = agent.subscribe((ev: AgentEvent) => {
-      switch (ev.type) {
-        case "message_start":
-          if (ev.message?.role === "user") {
-            // LB-21: a recovery-ladder rung >= 1 re-issues the SAME task — the flagged
-            // re-prompt must never re-echo (the original already printed at submit).
-            if (ev.message.ladder_reprompt) break;
-            if (pendingEchoRef.current) {
-              pendingEchoRef.current = false;
-              break;
-            }
-            // R3b: harness steers render as a dim line (guardKind); the model saw the full text.
-            const utext = ev.message!.textContent;
-            const echo: ChatMessage = { role: "user", text: utext };
-            if (isHarnessSteerText(utext)) echo.guardKind = "harness";
-            setMessages((m) => [...m, echo]);
-          }
-          break;
-        case "message_update": {
-          const s = ev.assistantMessageEvent;
-          if (s?.type === "thinking_start") {
-            thinkingStartRef.current = Date.now();
-            setBusyState("reasoning");
-            streamingThoughtsBufRef.current = "";
-          } else if (s?.type === "thinking_delta") {
-            thoughtsRef.current += s.delta;
-            streamingThoughtsBufRef.current += s.delta;
-            if (!thoughtsFlushRef.current) {
-              thoughtsFlushRef.current = setTimeout(() => {
-                setStreamingThoughts(streamingThoughtsBufRef.current);
-                thoughtsFlushRef.current = null;
-              }, 80);
-            }
-          } else if (s?.type === "text_delta") {
-            setBusyState("running");
-            streamingBufRef.current += s.delta;
-            if (!streamFlushRef.current) {
-              streamFlushRef.current = setTimeout(() => {
-                setStreaming(streamingBufRef.current);
-                streamFlushRef.current = null;
-              }, 80);
-            }
-          }
-          break;
-        }
-        case "message_end":
-          if (ev.message && ev.message.role === "assistant") {
-            const assistantMsg = ev.message as AssistantMessage;
-            const text = assistantMsg.textContent.trim();
-            const isErr = assistantMsg.stop_reason === "error";
-            const errMsg = assistantMsg.error_message;
-            const elapsed = thinkingStartRef.current
-              ? (Date.now() - thinkingStartRef.current) / 1000
-              : 0;
-            const accumulatedThoughts = thoughtsRef.current.trim();
-            // MP20 (MUB-165): tear the live stream DOWN before committing to <Static>.
-            // Under the anchor ledger this ordering is UX, not correctness (either order
-            // stays bottom-anchored — the floor absorbs the shrink as padding): teardown-
-            // first still minimizes the transient padding gap and keeps the reply tail
-            // adjacent to the composer on the settled screen (the fence-verbatim gates).
-            // These setStates flush as separate Ink renders; with the old order (commit
-            // first) render A printed the static reply while the live frame was still
-            // stream-tall, and render B's erase then walked that tall height back UP from
-            // the bottom, repainting the shrunken composer mid-screen with dead rows below
-            // — the stranded-prompt class (once the static estimate saturates, no minHeight
-            // refills the shrink). Clearing first flips the order: the shrink is erased in
-            // place, then the static commit scrolls the reply in ABOVE the short frame,
-            // landing the composer on the bottom rows with the reply tail visible — CC's
-            // post-reply look. The stream tail is disposable live content; the full reply
-            // commits in the very next flush, so no frame can lose transcript rows.
-            setStreaming("");
-            setStreamingThoughts("");
-            streamingBufRef.current = "";
-            streamingThoughtsBufRef.current = "";
-            if (streamFlushRef.current) {
-              clearTimeout(streamFlushRef.current);
-              streamFlushRef.current = null;
-            }
-            if (thoughtsFlushRef.current) {
-              clearTimeout(thoughtsFlushRef.current);
-              thoughtsFlushRef.current = null;
-            }
-            thoughtsRef.current = "";
-            thinkingStartRef.current = null;
-            if (showThinkingRef.current && accumulatedThoughts) {
-              setMessages((m) => [
-                ...m,
-                {
-                  role: "thinking",
-                  text: accumulatedThoughts,
-                  thoughtDurationSecs: elapsed,
-                },
-              ]);
-            }
-            if (isErr) {
-              // A hard provider failure — render RED (role tool + isError) and, when it's an
-              // auth error, append actionable guidance naming the provider key to set.
-              const provider = agent.agentState.model?.provider;
-              setMessages((m) => [
-                ...m,
-                {
-                  role: "tool",
-                  toolName: "error",
-                  text: `⚠ ${actionableError(errMsg || "provider error (no response)", provider)}`,
-                  isError: true,
-                },
-              ]);
-            } else if (text) {
-              setMessages((m) => [...m, { role: "assistant", text }]);
-            }
-          } else if (ev.message?.role === "toolResult") {
-            // R3b: guard/mode denials (stable prefixes owned by permissions.ts) are the
-            // harness working as designed — tag them so the renderer's calm dim branch,
-            // never the red error path, picks them up. Wire content is untouched.
-            setMessages((m) => [
-              ...m,
-              {
-                role: "tool",
-                text: ev.message!.textContent,
-                toolName: ev.message!.tool_name,
-                isError: ev.message!.is_error,
-                ...(ev.message!.is_error && isGuardDenyReason(ev.message!.textContent)
-                  ? { guardKind: "deny" as const }
-                  : {}),
-              },
-            ]);
-          }
-          break;
-        case "tool_execution_start":
-          setBusyState("running");
-          setActiveActions((a) => reduceActiveActions(a, ev));
-          break;
-        case "tool_execution_end":
-          setActiveActions((a) => reduceActiveActions(a, ev));
-          // D3a: todowrite mutates the `todos` array in place — bump the gen so the memo
-          // re-reads it (the event carries no toolName; an unconditional bump is the
-          // established pattern, same as the plan refresh below).
-          setTodoGen((g) => g + 1);
-          // Keep the plan footer strip in step with the ledger the afterToolCall sink just wrote:
-          // todowrite advances the active step; write/edit/apply_patch may add off-plan drift.
-          if (agent.config.bigPlan === true) {
-            try {
-              setPlanStrip(planStripInfo(agent.db, agent.runId));
-              setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
-            } catch {
-              setPlanStrip(null);
-              setBigPlanBehavior(null);
-            }
-          }
-          break;
-      }
-    });
-    return unsub;
-  }, [agent]);
+  // Subscribe to the agent event stream once (body lifted verbatim into use_agent_events.ts).
+  useAgentEvents(agent, pendingEchoRef, showThinkingRef, {
+    pushMessage,
+    setStreaming,
+    setStreamingThoughts,
+    setBusyState,
+    setActiveActions,
+    bumpTodoGen: () => setTodoGen((g) => g + 1),
+    refreshPlanStrip,
+  });
 
   // Plan footer strip (M1.3/M2.3): seed the plan-of-record line on mount so a resumed run that
   // already has a plan shows it immediately; tool_execution_end keeps it current thereafter.
   useEffect(() => {
-    if (agent.config.bigPlan !== true) return;
-    try {
-      setPlanStrip(planStripInfo(agent.db, agent.runId));
-      setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId));
-    } catch {
-      setPlanStrip(null);
-      setBigPlanBehavior(null);
-    }
-  }, [agent]);
+    refreshPlanStrip();
+  }, [refreshPlanStrip]);
 
   // Arm the gate-focus modal whenever an unanswered 🔴 block surfaces at an idle prompt; disarm
   // when the block clears. An answered/superseded gate re-arms automatically because
