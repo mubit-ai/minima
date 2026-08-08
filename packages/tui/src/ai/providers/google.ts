@@ -81,7 +81,7 @@ export class GoogleProvider {
     opts: { options?: Record<string, unknown>; signal?: AbortSignal } = {},
   ): AsyncIterable<StreamEvent> {
     const options = (opts.options ?? {}) as Record<string, unknown>;
-    const client = this.client ?? (await buildClient(options));
+    const client = this.client ?? (await buildGoogleClient(options));
     const config = buildConfig(model, context, options);
 
     const textBuf: string[] = [];
@@ -99,13 +99,16 @@ export class GoogleProvider {
     yield startEv(assistant);
 
     try {
-      // Thread the abort signal through the request config so Esc cancels the
-      // in-flight generation (the @google/genai SDK reads it as `abortSignal`).
+      // Thread the abort signal through the request config so Esc cancels the in-flight
+      // generation (the SDK reads it as `abortSignal`). Live since the 0.3.x -> 2.x bump —
+      // the old pin had no abortSignal on generateContentStream at all, so Esc could only
+      // stop the loop BETWEEN turns while the current stream ran to completion.
+      //
+      // Caveat, per Google's own docs: abortSignal is client-side only. It stops us reading
+      // the stream; it does not cancel generation service-side, and the tokens already
+      // produced are still billed. Anthropic/OpenAI abort the request itself.
       if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const contents = toContents(context);
-      // NOTE: @google/genai 0.3.x exposes no abortSignal on generateContentStream, so opts.signal
-      // cannot cancel an in-flight Gemini stream here (unlike the Anthropic/OpenAI providers).
-      // Abort still stops the multi-turn loop between turns; mid-stream cancellation needs an SDK bump.
       const stream = await client.models.generateContentStream({
         model: model.id,
         contents,
@@ -207,8 +210,18 @@ export class GoogleProvider {
   }
 }
 
-async function buildClient(options: Record<string, unknown>): Promise<GoogleClientLike> {
+/** Exported for tests: the auth/guard path has no other seam. */
+export async function buildGoogleClient(
+  options: Record<string, unknown>,
+): Promise<GoogleClientLike> {
   const apiKey = resolveApiKey(options, "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY");
+  // Same fail-fast as anthropic.ts: an actionable error beats a network round-trip, and a
+  // hermetic run with the env blanked must not fall through to ambient credentials.
+  if (!apiKey) {
+    throw new Error(
+      'no API key for provider "google" — set GEMINI_API_KEY (e.g. `minima config set GEMINI_API_KEY <key>`). Note: `minima auth` configures routing only, not model-provider keys.',
+    );
+  }
   const { GoogleGenAI } = await import("@google/genai");
   const timeout = Math.round(Number(options.timeout ?? 60) * 1000);
   const client = new GoogleGenAI({ apiKey, httpOptions: { timeout } });

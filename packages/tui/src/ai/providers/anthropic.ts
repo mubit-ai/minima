@@ -75,7 +75,7 @@ export class AnthropicProvider {
     opts: AnthropicProviderOptions = {},
   ): AsyncIterable<StreamEvent> {
     const options = (opts.options ?? {}) as Record<string, unknown>;
-    const client = this.client ?? (await buildClient(options));
+    const client = this.client ?? (await buildAnthropicClient(options));
     const kwargs = buildKwargs(model, context, options);
     const assistant = new AssistantMessage({ content: [], model: model.id, stop_reason: "stop" });
     const textBuf = new Map<number, string[]>();
@@ -202,10 +202,26 @@ export function sdkTimeoutMs(options: Record<string, unknown>): number {
   return Math.round(Number(options.timeout ?? 60) * 1000);
 }
 
-async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
-  const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
+/** Exported for tests: the auth/guard path has no other seam. */
+export async function buildAnthropicClient(
+  options: Record<string, unknown>,
+): Promise<AnthropicClientLike> {
+  // An OAuth token is NOT an api key — it is a bearer credential, and the SDK has a separate
+  // slot for it. Passing one as `apiKey` sent it in the x-api-key header and 401'd.
+  const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY");
+  const authToken = apiKey ? undefined : resolveApiKey(options, "ANTHROPIC_OAUTH_TOKEN");
+  // Fail fast, and BEFORE the SDK can go looking. Since 0.41 the client no longer throws on a
+  // missing key at construction: it defers credential resolution to the first request and will
+  // read ambient config files to find one. That breaks two things at once — a keyless call
+  // becomes a slow network round-trip instead of an instant error, and a "hermetic" run with
+  // the env blanked could still pick up a real credential off disk.
+  if (!apiKey && !authToken) {
+    throw new Error(
+      'no API key for provider "anthropic" — set ANTHROPIC_API_KEY (e.g. `minima config set ANTHROPIC_API_KEY <key>`). Note: `minima auth` configures routing only, not model-provider keys.',
+    );
+  }
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey, timeout: sdkTimeoutMs(options) });
+  const client = new Anthropic({ apiKey, authToken, timeout: sdkTimeoutMs(options) });
   // The SDK's messages.stream() returns a MessageStream (async iterable); cast to our shape.
   return client as unknown as AnthropicClientLike;
 }
