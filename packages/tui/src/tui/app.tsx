@@ -106,9 +106,16 @@ import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
 import { SessionManager, SessionStore, type SessionSummary, formatAge } from "../session/store.ts";
+import {
+  discoverSkills,
+  setDiscoveredSkills,
+  skillInvocationPrompt,
+  skillsListText,
+} from "../skills.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
 import type { AskUserRef, QuestionOption } from "../tools/question.ts";
+import { skillTool } from "../tools/skill.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
@@ -485,6 +492,7 @@ function allCommands(): { name: string; desc: string }[] {
       name: "profile",
       desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
     },
+    { name: "skills", desc: "List discovered skills (SKILL.md packs)" },
     { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
     { name: "btw", desc: "Side note to the running turn — /btw <note> (no new prompt queued)" },
     {
@@ -1016,6 +1024,18 @@ export function HarnessApp({
   commitDeps = null,
 }: AppProps) {
   const { exit } = useApp();
+  // Startup scan; /skills re-runs it so a skill installed mid-session (Skill Seekers and the
+  // Claude plugin installers both write into the compat roots while the harness is running)
+  // becomes usable without a restart.
+  const [skillScan, setSkillScan] = useState(() => discoverSkills(process.cwd()));
+  // Whether the rescan may (re-)register the `skill` tool: only if the startup toolset has one,
+  // or had no skills to build one from. --no-tools (empty list) and a --tools allowlist that
+  // dropped it both read as "not allowed", so /skills never conjures a tool the flags excluded.
+  const [skillToolAllowed] = useState(
+    () =>
+      agent.agentState.tools.length > 0 &&
+      (agent.agentState.tools.some((t) => t.name === "skill") || skillScan.skills.length === 0),
+  );
   // One basis for the footer's ctx segment and for maybeAutoCompact (context_meter.ts). The
   // rollback flag is passed as a parameter rather than read ambiently, so the meter stays a
   // pure function of the transcript.
@@ -1759,6 +1779,23 @@ export function HarnessApp({
     () => (commitDeps ? allCommands() : allCommands().filter((c) => c.name !== "commit")),
     [commitDeps],
   );
+  // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
+  // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
+  // Built from `commands`, not allCommands(), so a hidden builtin stays hidden here too.
+  const slashCommands = useMemo(
+    () => [
+      ...commands,
+      ...skillScan.skills
+        .filter((s) => !allCommands().some((c) => c.name === s.name))
+        .map((s) => ({
+          name: s.name,
+          desc: `${
+            s.description.length > 64 ? `${s.description.slice(0, 63).trimEnd()}…` : s.description
+          } (skill)`,
+        })),
+    ],
+    [commands, skillScan],
+  );
 
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
@@ -1770,12 +1807,13 @@ export function HarnessApp({
     : typedAgentTypes
       ? typedAgentTypes.map((t) => ({ name: t.name, desc: t.description }))
       : typedText.startsWith("/") && !hasSpace
-        ? commands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+        ? slashCommands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
         : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
   const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
   const hiddenSuggestions = allMatchingCommands.length - matchingCommands.length;
+  const suggestionPad = matchingCommands.reduce((n, c) => Math.max(n, c.name.length + 1), 12);
 
   const [showThinking, setShowThinking] = useState(false);
   const showThinkingRef = useRef(showThinking);
@@ -2385,7 +2423,7 @@ export function HarnessApp({
     if (hasSpace) return undefined;
 
     const prefix = val.slice(1).toLowerCase();
-    const matches = commands.filter((c) => c.name.startsWith(prefix));
+    const matches = slashCommands.filter((c) => c.name.startsWith(prefix));
 
     if (matches.length > 0) {
       return `/${matches[0]!.name} `;
@@ -4760,6 +4798,31 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "skills": {
+        const before = skillScan.skills.map((s) => s.name).join(",");
+        const scan = discoverSkills(process.cwd());
+        setSkillScan(scan);
+        setDiscoveredSkills(scan.skills); // sub-agents spawned after this see the rescan too
+        // Re-register the `skill` tool so the model's listing matches the rescan — but never
+        // conjure one the startup toolset excluded: --no-tools leaves the list empty, and
+        // --tools <allowlist> without `skill` must stay without it.
+        const tools = agent.agentState.tools;
+        if (skillToolAllowed) {
+          const rest = tools.filter((t) => t.name !== "skill");
+          agent.agentState.tools = scan.skills.length ? [...rest, skillTool(scan.skills)] : rest;
+        }
+        const changed = scan.skills.map((s) => s.name).join(",") !== before;
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name}` },
+          {
+            role: "tool",
+            toolName: "skills",
+            text: `${skillsListText(scan)}${changed ? "\n  (rescanned — the model's skill list is up to date)" : ""}`,
+          },
+        ]);
+        break;
+      }
       case "btw": {
         const note = args.trim();
         const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
@@ -5120,12 +5183,25 @@ export function HarnessApp({
 
   async function submitLine(text: string) {
     const trimmed = text.trim();
+    let prompt = text;
     if (trimmed.startsWith("/")) {
       const firstSpace = trimmed.indexOf(" ");
       const name = firstSpace !== -1 ? trimmed.slice(1, firstSpace) : trimmed.slice(1);
       const args = firstSpace !== -1 ? trimmed.slice(firstSpace + 1).trim() : "";
-      await handleCommand(name, args);
-      return;
+      const skillPrompt = skillInvocationPrompt(
+        name,
+        args,
+        skillScan.skills,
+        // allCommands(), not the memoized `commands`: a builtin hidden from the palette
+        // (/commit without git deps) still has a case in handleCommand, so a skill of the
+        // same name must not shadow it.
+        allCommands().map((c) => c.name),
+      );
+      if (skillPrompt === null) {
+        await handleCommand(name, args);
+        return;
+      }
+      prompt = skillPrompt;
     }
 
     // Images resolve HERE rather than at Enter, so a prompt that sat in the mid-turn queue
@@ -5150,7 +5226,7 @@ export function HarnessApp({
     setPrefill(null);
     try {
       if (getMode() === "plan" && planSessionRef.current && planSpawn && planMetaModel) {
-        await handlePlanTurn(text);
+        await handlePlanTurn(prompt);
       } else {
         // Plan mode without a council still gets the premium hard pool + phase tag — the
         // plan-DECIDING pool restriction is a property of the MODE, not of the council. A
@@ -5815,7 +5891,7 @@ export function HarnessApp({
                 <Box key={cmd.name}>
                   <Text color="yellow">
                     {typedAgentTypes ? " " : "/"}
-                    {cmd.name.padEnd(12)}
+                    {cmd.name.padEnd(suggestionPad)}
                   </Text>
                   <Text color="gray">{cmd.desc}</Text>
                 </Box>

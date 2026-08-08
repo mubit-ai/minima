@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   stream,
+  AssistantMessage,
   Message,
   type Model,
   complete,
@@ -8,6 +9,7 @@ import {
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
+  toolCall,
   image,
   text,
 } from "../src/ai/index.ts";
@@ -119,6 +121,80 @@ describe("GoogleProvider", () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("bash");
     expect(result.toolCalls[0].arguments).toEqual({ command: "ls" });
+  });
+
+  test("captures thoughtSignature from a functionCall part", async () => {
+    resetAll();
+    registerProvider(
+      "google-generative-ai",
+      new GoogleProvider(
+        fakeClient([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: { name: "skill", args: { name: "deploy" } },
+                      thoughtSignature: "sig-abc",
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          { candidates: [{ finish_reason: "STOP" }] },
+        ]),
+      ),
+    );
+
+    const result = await complete(
+      MODEL,
+      context({ messages: [new Message({ role: "user", content: "go" })] }),
+    );
+    expect(result.toolCalls[0].thought_signature).toBe("sig-abc");
+  });
+
+  test("replays thought_signature on functionCall parts in history", async () => {
+    resetAll();
+    let captured: Record<string, unknown> | null = null;
+    const client: GoogleClientLike = {
+      models: {
+        async generateContentStream(
+          opts: Record<string, unknown>,
+        ): Promise<AsyncIterable<GoogleChunk>> {
+          captured = opts;
+          async function* gen(): AsyncIterable<GoogleChunk> {
+            yield {
+              candidates: [{ finish_reason: "STOP", content: { parts: [{ text: "ok" }] } }],
+            };
+          }
+          return gen();
+        },
+      },
+    };
+    registerProvider("google-generative-ai", new GoogleProvider(client));
+
+    const signed = toolCall("call_0", "skill", { name: "deploy" });
+    signed.thought_signature = "sig-abc";
+    const bare = toolCall("call_1", "read", { path: "a.md" });
+    await complete(
+      MODEL,
+      context({
+        messages: [
+          new Message({ role: "user", content: "go" }),
+          new AssistantMessage({ content: [signed, bare], stop_reason: "toolUse" }),
+          new Message({ role: "toolResult", content: "done", tool_name: "skill" }),
+        ],
+      }),
+    );
+
+    const contents = (captured as unknown as { contents: { parts: Record<string, unknown>[] }[] })
+      .contents;
+    const modelParts = contents[1].parts;
+    expect((modelParts[0].functionCall as { name: string }).name).toBe("skill");
+    expect(modelParts[0].thoughtSignature).toBe("sig-abc");
+    expect(modelParts[1].thoughtSignature).toBeUndefined();
   });
 
   test("captures thoughts as thinking when include_thoughts is on", async () => {

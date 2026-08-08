@@ -124,6 +124,9 @@ export interface ToolCall {
   name: string;
   // May be partial during streaming; defaults to {}, never null (matches PI).
   arguments: Record<string, unknown>;
+  // Gemini signs functionCall parts; the signature MUST be echoed back verbatim when
+  // replayed in history, or the API 400s. Absent for providers that don't sign.
+  thought_signature?: string;
 }
 
 export type ContentBlock = TextContent | ImageContent | ThinkingContent | ToolCall;

@@ -42,8 +42,10 @@ export interface GooglePart {
   thought?: boolean;
   text?: string;
   functionCall?: { name?: string; args?: Record<string, unknown> };
+  thoughtSignature?: string;
   // snake_case fallback for raw API responses
   function_call?: { name?: string; args?: Record<string, unknown> };
+  thought_signature?: string;
 }
 export interface GoogleChunk {
   usageMetadata?: {
@@ -152,6 +154,8 @@ export class GoogleProvider {
             } else if (part.functionCall ?? part.function_call) {
               const fc = part.functionCall ?? part.function_call!;
               const call = toolCall(`call_${toolCalls.length}`, fc.name ?? "", fc.args ?? {});
+              const sig = part.thoughtSignature ?? part.thought_signature;
+              if (sig) call.thought_signature = sig;
               toolCalls.push(call);
               const idx = toolCalls.length - 1;
               yield toolCallStart(idx);
@@ -266,7 +270,10 @@ function toContents(context: Context): Record<string, unknown>[] {
         else if (b.type === "image")
           parts.push({ inlineData: { mimeType: b.mime_type ?? "image/png", data: b.data } });
         else if (b.type === "toolCall")
-          parts.push({ functionCall: { name: b.name, args: b.arguments } });
+          parts.push({
+            functionCall: { name: b.name, args: b.arguments },
+            ...(b.thought_signature ? { thoughtSignature: b.thought_signature } : {}),
+          });
       }
     }
     out.push({ role, parts });

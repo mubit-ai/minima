@@ -7,6 +7,7 @@
  */
 
 import type { AgentTool } from "../agent/tools.ts";
+import type { DiscoveredSkill } from "../skills.ts";
 import type { BgJobRegistry } from "./_bgjobs.ts";
 import type { SeenLedger } from "./_seen.ts";
 import { applyPatchTool } from "./apply_patch.ts";
@@ -17,6 +18,7 @@ import { globTool } from "./glob.ts";
 import { grepTool } from "./grep.ts";
 import { lsTool } from "./ls.ts";
 import { readTool } from "./read.ts";
+import { skillTool } from "./skill.ts";
 import { type TodoTask, todowriteTool } from "./todowrite.ts";
 import type { ToolArtifacts } from "./types.ts";
 import { webFetchTool } from "./web_fetch.ts";
@@ -78,6 +80,12 @@ export interface BuiltinToolsOptions {
    * control tool. Sub-agents (spawn.ts) never pass one, so their bash stays foreground-only.
    */
   bgJobs?: BgJobRegistry;
+  /**
+   * Discovered SKILL.md packs. Present and non-empty = the `skill` tool is registered with
+   * the list embedded in its description. The LEAD agent's main.ts passes the startup scan;
+   * sub-agents (spawn.ts) never pass one, so they run without skills.
+   */
+  skills?: DiscoveredSkill[];
   /** Image results (MINIMA_TUI_IMAGES) — see FsToolOptions.imageResults. Absent = off. */
   imageResults?: () => boolean;
 }
@@ -105,6 +113,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     webFetchTool(),
   ];
   if (opts.bgJobs) all.push(bgJobTool(opts.bgJobs));
+  if (opts.skills?.length) all.push(skillTool(opts.skills));
   const exclude = new Set(opts.exclude ?? []);
   return all.filter((t) => !exclude.has(t.name));
 }

@@ -54,6 +54,7 @@ import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { makeCommitDeps } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
+import { discoverSkills, getDiscoveredSkills, setDiscoveredSkills } from "../skills.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
 import { BgJobRegistry } from "../tools/_bgjobs.ts";
@@ -376,6 +377,7 @@ function toolsFor(
         artifacts,
         seen,
         bgJobs,
+        skills: getDiscoveredSkills(),
         imageResults,
       });
   if (args.tools) {
@@ -491,6 +493,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   seedDefaultModels();
+  // One scan for the whole process: the lead's tool listing, /skills, and every sub-agent
+  // spawn read this store rather than re-walking the four roots.
+  setDiscoveredSkills(discoverSkills(process.cwd()).skills);
   if (args.model && !findModelByIdLocal(args.model) && args.provider) {
     registerModel({
       id: args.model,
