@@ -24,7 +24,7 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
-import { effortForLevel, thinkingFormatFor } from "../provider_quirks.ts";
+import { effectiveEffort, reasoningPayload, thinkingFormatFor } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -245,8 +245,11 @@ function buildKwargs(
     const format = thinkingFormatFor(model);
     if (format === "adaptive") {
       kwargs.thinking = { type: "adaptive" };
-      const effort = effortForLevel(options.thinking_level);
-      if (effort) kwargs.output_config = { effort };
+      // Same ladder the openai-compat provider and the status bar read (MUB-229). Anthropic's
+      // vocabulary is wider (xhigh reaches the wire) and it has no off-payload, both of which
+      // live in the quirks table — so behaviour here is byte-identical to what shipped.
+      const effort = effectiveEffort(model, context.tools.length > 0, options.thinking_level);
+      Object.assign(kwargs, reasoningPayload(model.provider, effort.send));
     } else if (format === "enabled") {
       kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
     }
@@ -272,7 +275,7 @@ function toWire(m: Message): Record<string, unknown> {
         {
           type: "tool_result",
           tool_use_id: m.tool_call_id,
-          content: flattenText(m),
+          content: toolResultContent(m),
           is_error: m.is_error,
         },
       ],
@@ -294,6 +297,27 @@ function toWire(m: Message): Record<string, unknown> {
       content.push({ type: "tool_use", id: b.id, name: b.name, input: b.arguments });
   }
   return { role: m.role, content };
+}
+
+/**
+ * `tool_result.content` for one tool result. Anthropic is the only target that can nest an
+ * image in a tool result, so no hoist runs for this api (see ai/compat.ts).
+ *
+ * The no-image case deliberately returns the plain STRING form rather than a one-element
+ * array, so every payload that existed before image results shipped is byte-identical.
+ */
+function toolResultContent(m: Message): string | Record<string, unknown>[] {
+  const images = m.content.filter((b) => b.type === "image");
+  if (images.length === 0) return flattenText(m);
+  const out: Record<string, unknown>[] = [];
+  const t = flattenText(m);
+  if (t) out.push({ type: "text", text: t });
+  for (const b of images)
+    out.push({
+      type: "image",
+      source: { type: "base64", media_type: b.mime_type ?? "image/png", data: b.data },
+    });
+  return out;
 }
 
 function flattenText(m: Message): string {

@@ -657,10 +657,29 @@ describe("MUB-178 — edit-family always grants are cwd-scoped", () => {
 });
 
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
-  test("plan verification off: the historical array plus task (the approved default-path bypass fix)", () => {
+  test("plan verification off: the historical array plus task and git_commit", () => {
     // Deliberate default-path change: a spawned child gets its own unrestricted toolset with
     // no permission hooks, so plan mode's read-only promise was bypassable by delegating.
-    expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch", "task"]);
+    // git_commit (F9a) joins for the same reason it exists at all — a commit is a mutation,
+    // and a named tool is what makes it blockable.
+    expect(planModeBlockedTools(false)).toEqual([
+      "write",
+      "edit",
+      "bash",
+      "apply_patch",
+      "task",
+      "git_commit",
+    ]);
+  });
+
+  test("git_commit is blocked in plan mode with a reason of its own", () => {
+    for (const bigPlan of [false, true]) {
+      expect(planModeBlockedTools(bigPlan)).toContain("git_commit");
+      const reason = planModeBlockReason("git_commit", bigPlan);
+      expect(reason).toContain("git_commit is blocked");
+      expect(reason).toContain("real history");
+      expect(reason).toContain("call the exit_plan tool");
+    }
   });
 
   test("plan verification on: keeps the historical set and additionally blocks todowrite and task", () => {

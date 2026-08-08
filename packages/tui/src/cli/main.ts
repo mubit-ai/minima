@@ -7,14 +7,15 @@
  * this binary only needs a MUBIT_API_KEY (routing) + a provider key (calling).
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { render } from "ink";
 import React from "react";
 import { setMode } from "../agent/modes.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
 import { CHEAP_FALLBACK_MODELS, resolveRunnableModel } from "../ai/model_fallback.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { ensureProvidersRegistered } from "../ai/providers/index.ts";
 import { findModelById, registerModel } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
@@ -24,7 +25,12 @@ import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
 import { makeBashSteerHook } from "../minima/bash_steer.ts";
 import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
-import { BudgetLedger } from "../minima/budget.ts";
+import {
+  BudgetLedger,
+  type BudgetMode,
+  DEFAULT_BUDGET_MODE,
+  parseBudgetMode,
+} from "../minima/budget.ts";
 import { collectRunDiff, runDiffReview } from "../minima/diff_review.ts";
 import {
   CostMeter,
@@ -38,9 +44,11 @@ import { ConstJudge, LLMJudge, TaskClassifier } from "../minima/index.ts";
 import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts";
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
+import { resolveEnvLayers } from "../minima/project_config.ts";
 import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
 import { runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
+import { makeCommitDeps } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { makeArtifactReadTouchHook } from "../tools/_artifact_gc.ts";
 import { ArtifactStore } from "../tools/_artifacts.ts";
@@ -48,6 +56,7 @@ import { BgJobRegistry } from "../tools/_bgjobs.ts";
 import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
+import { registerGitCommitTool } from "../tools/git_commit.ts";
 import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -56,13 +65,14 @@ import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
   SECTIONS,
-  hydrateEnv,
   mask,
   get as storeGet,
   setValue as storeSetValue,
+  storedValues,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
+import { initKeymap } from "../tui/keymap_file.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 import { VERSION } from "../version.ts";
@@ -155,33 +165,24 @@ async function probeCursorRow(file: string): Promise<void> {
   });
 }
 
-// --- .env loading (cwd) — real env / --env-file wins; file only fills gaps ----------
-const ENV_FILES = [".env.harness", ".env"];
-
-async function loadEnvFiles(): Promise<void> {
-  for (const name of ENV_FILES) {
-    const path = resolve(name);
-    if (!existsSync(path)) continue;
-    const text = readFileSync(path, "utf8");
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("#") || !line.includes("=")) continue;
-      const eq = line.indexOf("=");
-      const key = line.slice(0, eq).trim();
-      const val = line
-        .slice(eq + 1)
-        .trim()
-        .replace(/^["']|["']$/g, "");
-      if (process.env[key] === undefined) process.env[key] = val;
-    }
-  }
+// --- config loading (cwd) — real env wins; the layers below it only fill gaps ---------
+// One resolution over every layer rather than a chain of gap-filling passes: `.minima/
+// config.toml` is a COMMITTED file, so its values are clamped to the safer side before they
+// reach process.env — and that clamp needs the project and user values simultaneously, which
+// a sequence of setdefault passes cannot provide (process.env erases which layer set what).
+async function loadConfigLayers(): Promise<void> {
   // Per-user store (OS keychain + ~/.minima-harness/config.env) — lowest precedence, so
   // shell env and project .env files still win. Failures never block startup.
+  let stored: Record<string, string> = {};
   try {
-    await hydrateEnv();
+    stored = await storedValues();
   } catch {
     // config must never block startup
   }
+  const layers = resolveEnvLayers({ projectDir: process.cwd(), env: process.env, stored });
+  // Every entry is final — precedence and the safer-side clamps are already applied.
+  for (const [key, value] of Object.entries(layers.values)) process.env[key] = value;
+  for (const notice of layers.notices) process.stderr.write(`minima: ${notice}\n`);
 }
 
 // --- a lean default model catalog --------------------------------------------------
@@ -194,6 +195,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.15, output: 0.6 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-4o",
@@ -203,6 +205,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 2.5, output: 10 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-sol",
@@ -213,6 +216,14 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    // Verified against the live API: bare + tools 400s, reasoning_effort:"none" + tools is
+    // accepted. Without this the whole family is unusable in the agent loop, which always
+    // sends tools — and gpt-5.6-luna is in DEFAULT_CANDIDATES, so routing can pick one.
+    tools_require_effort_none: true,
+    // Also verified live (an image_url part is accepted). supportsImageInput is fail-closed,
+    // so leaving this off would have made routing skip the whole family for any turn carrying
+    // a pasted screenshot, and the drop-guard discard the image if it was pinned.
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-terra",
@@ -223,6 +234,8 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-luna",
@@ -233,6 +246,8 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.
@@ -316,6 +331,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 5.0, cache_read: 0.08, cache_write: 1.25 },
     context_window: 200_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: false,
   },
   {
@@ -326,6 +342,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -336,6 +353,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -347,6 +365,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -358,6 +377,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 10.0, output: 50.0, cache_read: 1.0, cache_write: 12.5 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -369,6 +389,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -385,6 +406,7 @@ export const SEED_MODELS: Model[] = [
     },
     context_window: 2_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -395,6 +417,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.5, output: 7.5, cache_read: 0.15 },
     context_window: 1_048_576,
     max_tokens: 65_536,
+    input: ["text", "image"],
     reasoning: true,
   },
 ];
@@ -570,10 +593,19 @@ function toolsFor(
   artifacts?: ToolArtifacts,
   seen?: SeenLedger,
   bgJobs?: BgJobRegistry,
+  imageResults?: () => boolean,
 ) {
   let tools = args.noTools
     ? []
-    : builtinTools({ bigPlan, todoState, onWebSearchFeeUsd, artifacts, seen, bgJobs });
+    : builtinTools({
+        bigPlan,
+        todoState,
+        onWebSearchFeeUsd,
+        artifacts,
+        seen,
+        bgJobs,
+        imageResults,
+      });
   if (args.tools) {
     const allow = new Set(args.tools.split(",").map((s) => s.trim()));
     tools = tools.filter((t) => allow.has(t.name));
@@ -598,6 +630,28 @@ export function buildConfig(args: CliArgs): HarnessConfig {
   }
   if (args.slider !== undefined) cfg.costQualityTradeoff = args.slider;
   return cfg;
+}
+
+/**
+ * The session's budget ceiling and mode, from the flags plus the resolved env layers.
+ *
+ * `MINIMA_BUDGET_USD` / `MINIMA_BUDGET_MODE` are where every layer below the flags lands its
+ * ceiling — including the one a committed `.minima/config.toml` contributed, already clamped
+ * to the safer side by the loader, so nothing here needs to know where a value came from. A
+ * flag is the user acting now, so it wins outright; an unusable env value is treated as
+ * unset rather than coerced.
+ */
+export function resolveBudget(
+  args: CliArgs,
+  env: Record<string, string | undefined> = process.env,
+): { limitUsd: number | undefined; mode: BudgetMode } {
+  const envUsd = Number(env.MINIMA_BUDGET_USD);
+  return {
+    limitUsd: args.budgetUsd ?? (Number.isFinite(envUsd) && envUsd > 0 ? envUsd : undefined),
+    mode: args.budgetEnforce
+      ? "enforce"
+      : (parseBudgetMode(env.MINIMA_BUDGET_MODE) ?? DEFAULT_BUDGET_MODE),
+  };
 }
 
 /**
@@ -645,7 +699,7 @@ export function buildJudge(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
-  await loadEnvFiles();
+  await loadConfigLayers();
 
   // `minima config …` — credential setup (no TUI; works before any keys exist).
   if (argv[0] === "config") return configCli(argv.slice(1));
@@ -716,6 +770,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // P3 edit guard: the ledger exists from tool construction but stays fail-open (inert)
   // until the DB + run id attach below — the same late-bind pattern as bookSearchFee.
   const seenLedger = config.editGuard ? new SeenLedger() : undefined;
+  // Image results: same late-bind as bookSearchFee. Evaluated per tool call because
+  // routing re-picks agentState.model every prompt, so the answer must track the model
+  // that will actually consume the result.
+  let agentRef: MinimaAgent | null = null;
   const tools = toolsFor(
     args,
     config.bigPlan === true,
@@ -724,6 +782,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     artifactStore ?? undefined,
     seenLedger,
     bgJobRegistry ?? undefined,
+    () => config.images && supportsImageInput(agentRef?.agentState.model ?? null),
   );
   const systemPrompt = buildSystemPrompt(process.cwd());
 
@@ -773,6 +832,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     judge,
     systemPrompt,
   });
+  agentRef = agent;
   // Hook-order contract (P2): bash-steer registers FIRST on the beforeToolCall stack —
   // ahead of the TUI permission hook (app.tsx) and the headless checkpoint/done-gate
   // hooks below. First block wins, so a steered command never raises a pointless
@@ -1117,6 +1177,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     db,
     getRunId: () => agent.runId,
   });
+  // F9a git commit authoring: ONE dependency set behind both surfaces — the `git_commit`
+  // tool registered here and the `/commit` command the TUI dispatches — so the two cannot
+  // drift into producing different commits. MINIMA_TUI_GIT_COMMIT=0 removes both.
+  const commitDeps = makeCommitDeps({
+    cwd: process.cwd(),
+    db,
+    getRunId: () => agent.runId,
+    getLiveModelId: () => agent.agentState.model?.id ?? null,
+    // F9b: the commits-ledger write rides the same deps, so both commit surfaces record
+    // evidence identically. MINIMA_TUI_COMMIT_LEDGER=0 drops the write, never the trailers.
+    // getLiveRecId is the join's equivalent of getLiveModelId above: a commit is authored
+    // mid-turn, and this turn's decision row is not written until the turn ends.
+    getLiveRecId: () => agent.currentRecId,
+    ledger: config.commitLedger,
+  });
+  registerGitCommitTool(agent.agentState.tools, config.gitCommit, commitDeps);
   // A2 stop-gate: the run-level gate raises the "keep going / accept / steer" overlay through the
   // same late-bound ask channel once its strikes are spent (null in headless → the run just ends).
   agent.askUser = askUserRef;
@@ -1180,19 +1256,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
 
-  // Budget following: --budget creates a session-scoped ledger (warn mode unless
-  // --budget-enforce). Threshold events surface to stderr in non-interactive modes; the
-  // TUI renders them as chat notices.
-  if (args.budgetUsd !== undefined && db && agent.runId) {
+  // Budget following: a ceiling creates a session-scoped ledger. Threshold events surface to
+  // stderr in non-interactive modes; the TUI renders them as chat notices.
+  const { limitUsd: budgetUsd, mode: budgetMode } = resolveBudget(args);
+  if (budgetUsd !== undefined && db && agent.runId) {
     agent.budget = new BudgetLedger({
       db,
       scopeKey: `session:${agent.runId}`,
-      limitUsd: args.budgetUsd,
-      mode: args.budgetEnforce ? "enforce" : "warn",
+      limitUsd: budgetUsd,
+      mode: budgetMode,
       runId: agent.runId,
     });
-  } else if (args.budgetUsd !== undefined) {
-    process.stderr.write("minima: --budget ignored (persistence unavailable)\n");
+  } else if (budgetUsd !== undefined) {
+    process.stderr.write("minima: budget ignored (persistence unavailable)\n");
   }
 
   const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
@@ -1329,6 +1405,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
 
+  // The user keymap is a startup fact: read once, here, so it is published before the first
+  // keypress can be dispatched (app.tsx and the composer's chord latch both read the
+  // singleton). A missing file, a bad file and MINIMA_TUI_KEYMAP=0 all land on the defaults;
+  // anything the file got wrong is surfaced as a chat notice on mount, never as a failure.
+  initKeymap(agent.config.keymapFile);
+
   // Interactive TUI: render and block until the app exits (Ctrl+C twice), so the process
   // stays alive for Ink's event loop. Returning here would let the bootstrap exit() kill it.
   // exitOnCtrlC:false hands Ctrl+C to our own useInput handler — during a run it aborts the
@@ -1345,6 +1427,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       bigPlanGateBefore,
       verifyConsentRef,
       todos: todoState,
+      commitDeps: config.gitCommit ? commitDeps : null,
     }),
     { exitOnCtrlC: false },
   );

@@ -48,4 +48,12 @@ export interface FsToolOptions {
    * schema is byte-identical to the historical surface and no background launch is possible.
    */
   bgJobs?: BgJobRegistry;
+  /**
+   * Image results (MINIMA_TUI_IMAGES). Consulted PER CALL, because routing re-picks the
+   * model on every prompt: true only when the feature is on AND the model that will read
+   * the result declares "image" in `Model.input`. A predicate rather than a Model so read
+   * never reaches for ambient config — which is what keeps its tests green under the
+   * flags-off CI matrix. Absent = feature off: read keeps the historical refusal.
+   */
+  imageResults?: () => boolean;
 }

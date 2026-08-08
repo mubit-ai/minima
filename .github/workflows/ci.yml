@@ -7,7 +7,7 @@ name: CI — PR checks
 # mypy runs after ruff/pytest: src/minima is now type-clean, so it gates too.
 on:
   pull_request:
-    branches: [main, feat/boosting]
+    branches: [main, feat/boosting, research/new-features-research]
   push:
     branches: [main]
 
@@ -98,23 +98,34 @@ jobs:
         working-directory: packages/tui
     env:
       MINIMA_TUI_BIG_PLAN: "0"
+      MINIMA_TUI_IMAGES: "0"
+      MINIMA_TUI_NOTIFY: "0"
       MINIMA_TUI_MEMORY: "0"
       MINIMA_TUI_ARTIFACTS: "0"
       MINIMA_TUI_ARTIFACT_GC_MB: "0"
       MINIMA_TUI_BGJOBS: "0"
       MINIMA_TUI_COMPACT2: "0"
+      MINIMA_TUI_CONTEXT_METER: "0"
       MINIMA_TUI_STEER: "0"
       MINIMA_TUI_REWIND: "0"
+      MINIMA_TUI_GIT_COMMIT: "0"
+      MINIMA_TUI_COMMIT_LEDGER: "0"
       MINIMA_TUI_EDIT_GUARD: "0"
       MINIMA_TUI_TYPED_TASK: "0"
       MINIMA_TUI_PLAN_PREMIUM: "0"
       MINIMA_TUI_FAILURE_MATCHER: "0"
       MINIMA_TUI_TOOL_ALLOWLIST: "0"
       MINIMA_TUI_GRADED_OUTCOME: "0"
+      MINIMA_TUI_EDITOR: "0"
+      MINIMA_TUI_KEYMAP: "0"
       # Ambient reads — not reachable through configFromEnv, so only this job covers them.
       MINIMA_TUI_PLAN_CRITIC: "0"
       MINIMA_TUI_DIFF_REVIEW: "0"
       MINIMA_TUI_AUTO_GATES: "0"
+      # Matrix symmetry only: the env-layer loader takes its environment by injection, so its
+      # suite passes `env` explicitly and never reads this. The gate that matters is the
+      # behavioral one in tests/kill-switches.test.ts.
+      MINIMA_TUI_PROJECT_CONFIG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v5

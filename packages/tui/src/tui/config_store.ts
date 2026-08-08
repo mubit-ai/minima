@@ -283,14 +283,22 @@ export async function location(key: string): Promise<string> {
   return (await readFileStore())[key] !== undefined ? "file" : "—";
 }
 
-/** Load stored config into process.env (setdefault → real env / project files win). */
-export async function hydrateEnv(): Promise<void> {
+/**
+ * Everything the store holds, aliases expanded, as a flat map — WITHOUT writing any of it.
+ *
+ * The store is the lowest-precedence layer, but it is not applied here: the project-config
+ * clamp needs the user's stored values and a committed `.minima/config.toml`'s values in hand
+ * at the same time (process.env erases which layer a value came from), so the env-layer
+ * loader reads the store through this and decides what reaches the environment. First writer
+ * wins, which is the order these were materialised in when this did the writing itself.
+ */
+export async function storedValues(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
   for (const f of allFields()) {
     const val = await get(f.key);
     if (!val) continue;
-    if (process.env[f.key] === undefined) process.env[f.key] = val;
-    for (const alias of f.aliases ?? []) {
-      if (process.env[alias] === undefined) process.env[alias] = val;
-    }
+    out[f.key] ??= val;
+    for (const alias of f.aliases ?? []) out[alias] ??= val;
   }
+  return out;
 }
