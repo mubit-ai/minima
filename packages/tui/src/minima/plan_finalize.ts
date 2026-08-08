@@ -65,6 +65,11 @@ export interface PlanFinalizeDeps {
   repoDir?: string | null;
   /** E3 seam (injectable for tests). */
   mineGates?: typeof mineRepoGates;
+  /** E3 auto-gates on/off (`config.autoGates`, i.e. MINIMA_TUI_AUTO_GATES). Omitted = on, so
+   * a caller that passes `repoDir` still gets mining without opting in twice. Passed rather
+   * than read from process.env here: an ambient read is invisible to the kill-switch table
+   * and cannot be asserted behaviorally. */
+  autoGates?: boolean;
   /** User-defined agent types: advertised to the recorder model, then expanded into each
    *  step's tools/candidates before the lint, the doc and the seed all see them. */
   agentTypes?: PlanFinalizeAgentTypes;
@@ -222,11 +227,11 @@ export async function finalizePlan(
   // (typecheck/lint) in-loop; the full test suite on the final step. Attached BEFORE the
   // audit/doc/critic/seed so everything downstream — including the plan the user approves,
   // which is the MP18 consent event for these commands — sees the same checks.
-  // MINIMA_TUI_AUTO_GATES=0 opts out.
+  // config.autoGates (MINIMA_TUI_AUTO_GATES=0) opts out.
   let autoGateNote = "";
   if (synth && synth.approach.length > 0 && deps.repoDir) {
     try {
-      if (process.env.MINIMA_TUI_AUTO_GATES !== "0") {
+      if (deps.autoGates !== false) {
         const mine = deps.mineGates ?? mineRepoGates;
         const gates = mine(deps.repoDir);
         if (gates.length > 0) {

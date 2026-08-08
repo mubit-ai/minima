@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { headlessVerifyConsent } from "../src/minima/big_plan.ts";
-import { configFromEnv, type HarnessConfig } from "../src/minima/config.ts";
+import { type HarnessConfig, configFromEnv } from "../src/minima/config.ts";
 import { PROJECT_CONFIG_RELPATH, resolveEnvLayers } from "../src/minima/project_config.ts";
 import { code, readSource } from "./_source.ts";
 
@@ -69,6 +69,10 @@ const DEFAULT_ON: readonly Switch[] = [
   { env: "MINIMA_TUI_GRADED_OUTCOME", field: "gradedOutcome" },
   { env: "MINIMA_TUI_EDITOR", field: "externalEditor" },
   { env: "MINIMA_TUI_KEYMAP", field: "keymapFile" },
+  { env: "MINIMA_TUI_PLAN_CRITIC", field: "planCritic" },
+  { env: "MINIMA_TUI_DIFF_REVIEW", field: "diffReview" },
+  { env: "MINIMA_TUI_AUTO_GATES", field: "autoGates" },
+  { env: "MINIMA_TUI_DASHBOARD", field: "dashboard" },
 ];
 
 // Opt-in: shipped disabled, `=1` enables. Promotion to default-ON moves the row up.
@@ -108,28 +112,15 @@ interface AmbientSwitch {
  */
 const PURE_DEFAULT_ON: readonly { env: string }[] = [{ env: "MINIMA_TUI_PROJECT_CONFIG" }];
 
-const AMBIENT_DEFAULT_ON: readonly AmbientSwitch[] = [
-  {
-    env: "MINIMA_TUI_PLAN_CRITIC",
-    file: "tui/app.tsx",
-    gate: 'critic: process.env.MINIMA_TUI_PLAN_CRITIC === "0" ? async () => null : undefined,',
-  },
-  {
-    env: "MINIMA_TUI_DIFF_REVIEW",
-    file: "cli/main.ts",
-    gate: 'process.env.MINIMA_TUI_DIFF_REVIEW !== "0" &&',
-  },
-  {
-    env: "MINIMA_TUI_AUTO_GATES",
-    file: "minima/plan_finalize.ts",
-    gate: 'if (process.env.MINIMA_TUI_AUTO_GATES !== "0") {',
-  },
-  {
-    env: "MINIMA_TUI_DASHBOARD",
-    file: "cli/main.ts",
-    gate: 'process.env.MINIMA_TUI_DASHBOARD !== "0"',
-  },
-];
+/**
+ * Default-ON switches read straight from process.env at their wiring site, with no config
+ * field to assert. EMPTY, and meant to stay that way: PLAN_CRITIC, DIFF_REVIEW, AUTO_GATES and
+ * DASHBOARD were the last four, and they now resolve through configFromEnv like every other switch, so
+ * their rows moved up to DEFAULT_ON where the assertion is behavioral rather than a grep for a
+ * source string. The table and its source-pin mechanism survive for the next ambient read that
+ * genuinely cannot be config-backed — an empty table is the ratchet, asserted below.
+ */
+const AMBIENT_DEFAULT_ON: readonly AmbientSwitch[] = [];
 
 /**
  * Tunables, umbrellas, diagnostics and legacy rollbacks. Not kill switches for a shipped
@@ -286,7 +277,7 @@ describe("kill-switch matrix — the documented rollback contract", () => {
 
   test("MINIMA_TUI_ALLOW_VERIFY is a consent gate: absent means DENY", () => {
     // headlessVerifyConsent takes its env by injection, so this one is testable for real.
-    expect(headlessVerifyConsent({}) ("echo hi")).toBe(false);
+    expect(headlessVerifyConsent({})("echo hi")).toBe(false);
     expect(headlessVerifyConsent({ MINIMA_TUI_ALLOW_VERIFY: "0" })("echo hi")).toBe(false);
     expect(headlessVerifyConsent({ MINIMA_TUI_ALLOW_VERIFY: "1" })("echo hi")).toBe(true);
     // Consent is explicit: the umbrella must not open it.
@@ -294,9 +285,10 @@ describe("kill-switch matrix — the documented rollback contract", () => {
   });
 
   test("every MINIMA_TUI_* flag read anywhere in src/ is covered by a table above", () => {
-    // Scans ALL of src/, not just config.ts: MINIMA_TUI_PLAN_CRITIC, _DIFF_REVIEW and
-    // _AUTO_GATES are read at their wiring sites, so a config.ts-only scan reported full
-    // coverage while three default-ON switches had no row at all.
+    // Scans ALL of src/, not just config.ts. It has to: MINIMA_TUI_PLAN_CRITIC, _DIFF_REVIEW
+    // and _AUTO_GATES were once read at their wiring sites, and a config.ts-only scan reported
+    // full coverage while three default-ON switches had no row at all. They are config-backed
+    // now, but the scan stays wide so the next ambient read cannot hide the same way.
     const read = new Set<string>();
     for (const file of srcFiles()) {
       const src = readFileSync(file, "utf8");
@@ -316,7 +308,8 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     expect(
       uncovered,
       "These MINIMA_TUI_* flags are read in src/ but appear in no table here. Add a row to " +
-        "DEFAULT_ON (config-backed), AMBIENT_DEFAULT_ON (read at the wiring site), " +
+        "DEFAULT_ON (config-backed — prefer this), AMBIENT_DEFAULT_ON (read at the wiring " +
+        "site), " +
         "PURE_DEFAULT_ON (read by an injectable pure function), OPT_IN, or declare it in " +
         "NOT_A_SWITCH if it is a tunable or a diagnostic.",
     ).toEqual([]);
@@ -325,8 +318,14 @@ describe("kill-switch matrix — the documented rollback contract", () => {
   test("the tables are not vacuous", () => {
     expect(DEFAULT_ON.length).toBeGreaterThan(0);
     expect(OPT_IN.length).toBeGreaterThan(0);
-    expect(AMBIENT_DEFAULT_ON.length).toBeGreaterThan(0);
     expect(PURE_DEFAULT_ON.length).toBeGreaterThan(0);
+  });
+
+  test("no default-ON switch is read ambiently from process.env", () => {
+    // The ratchet. A row here means a shipped kill switch whose only coverage is a grep for a
+    // source string — it cannot catch an inverted sense or a gate that stopped being consulted.
+    // Route the new switch through configFromEnv and give it a DEFAULT_ON row instead.
+    expect(AMBIENT_DEFAULT_ON.map((s) => s.env)).toEqual([]);
   });
 
   test("MINIMA_TUI_PROJECT_CONFIG is ON by default and =0 ignores .minima/config.toml", () => {

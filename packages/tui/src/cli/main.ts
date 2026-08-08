@@ -871,9 +871,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // shortly after the last one closes. Fire-and-forget on purpose — never awaited, so a busy probe
   // or a slow spawn cannot delay the first frame. Gated on a TTY (a `-p` run, CI or a git hook must
   // not open a socket) and on live persistence (nothing to serve without a ledger).
-  // MINIMA_TUI_DASHBOARD=0 opts out entirely.
+  // config.dashboard (MINIMA_TUI_DASHBOARD=0) opts out entirely.
   let dashboard: DashboardSupervisor | null = null;
-  if (db && process.stdout.isTTY === true && process.env.MINIMA_TUI_DASHBOARD !== "0") {
+  if (db && process.stdout.isTTY === true && config.dashboard) {
     try {
       const { DashboardSupervisor, resolveLedger } = await import("../dashboard/supervisor.ts");
       dashboard = new DashboardSupervisor({ ledger: resolveLedger(dbPath).path });
@@ -938,13 +938,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // E1 zero-context diff reviewer: when a plan closes with every step completed, review
   // the run's whole diff with fresh eyes (one cheap completion — no plan, no transcript).
   // Fire-and-forget off the tool dispatch; the exits await it briefly so a one-shot run
-  // still lands its verdict gate. MINIMA_TUI_DIFF_REVIEW=0 opts out.
-  if (
-    process.env.MINIMA_TUI_DIFF_REVIEW !== "0" &&
-    config.bigPlan &&
-    db &&
-    providerKeyPresent(planMetaModel.provider)
-  ) {
+  // still lands its verdict gate. config.diffReview (MINIMA_TUI_DIFF_REVIEW=0) opts out.
+  if (config.diffReview && config.bigPlan && db && providerKeyPresent(planMetaModel.provider)) {
     const reviewDb = db;
     const reviewTop = detectRepo(process.cwd());
     planClosedRef.current = (planId) => {

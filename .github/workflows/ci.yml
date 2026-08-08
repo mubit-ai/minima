@@ -118,7 +118,10 @@ jobs:
       MINIMA_TUI_GRADED_OUTCOME: "0"
       MINIMA_TUI_EDITOR: "0"
       MINIMA_TUI_KEYMAP: "0"
-      # Ambient reads — not reachable through configFromEnv, so only this job covers them.
+      # These four used to be ambient reads that only this job could cover. They resolve
+      # through configFromEnv now, so tests/kill-switches.test.ts asserts each one reaches
+      # its field; they stay here because this job also proves the features tolerate being
+      # off end to end, which a config assertion cannot show.
       MINIMA_TUI_PLAN_CRITIC: "0"
       MINIMA_TUI_DIFF_REVIEW: "0"
       MINIMA_TUI_AUTO_GATES: "0"
