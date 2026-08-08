@@ -11,7 +11,7 @@
  */
 
 import { PROVIDERS, providerKeyPresent } from "../ai/provider_catalog.ts";
-import { registerModel, tryGetModel } from "../ai/registry.ts";
+import { findModelById, registerModel, tryGetModel } from "../ai/registry.ts";
 import type { ApiId, Model } from "../ai/types.ts";
 import { MinimaClient } from "./client.ts";
 import type { HarnessConfig } from "./config.ts";
@@ -31,6 +31,9 @@ function synthModel(card: ModelCard): Model {
   const { api, baseUrl } = apiFor(card.provider);
   const reasoning =
     (card.capability_priors?.reasoning ?? card.capability_priors?.reason ?? 0) >= 0.5;
+  // Same derivation as `reasoning`, off a prior the server does not emit yet: inert today,
+  // and it keeps vision out of the wire schema (capability_priors is already an open map).
+  const vision = (card.capability_priors?.vision ?? 0) >= 0.5;
   return {
     id: card.model_id,
     provider: card.provider,
@@ -44,6 +47,7 @@ function synthModel(card: ModelCard): Model {
     },
     context_window: card.context_window ?? 128_000,
     max_tokens: card.max_output_tokens ?? 8_192,
+    input: vision ? ["text", "image"] : ["text"],
     reasoning,
     ...(baseUrl ? { base_url: baseUrl } : {}),
   };
@@ -70,6 +74,69 @@ interface OpenRouterModel {
   context_length?: number;
   pricing?: { prompt?: string | number; completion?: string | number };
   top_provider?: { max_completion_tokens?: number };
+  /** Which request params this model honours — "reasoning", "tools", "reasoning_effort"… */
+  supported_parameters?: string[];
+  /** Present on reasoning models; `supported_efforts` is the host's own effort vocabulary. */
+  reasoning?: {
+    mandatory?: boolean;
+    default_enabled?: boolean;
+    supported_efforts?: string[];
+    default_effort?: string;
+  };
+  architecture?: { input_modalities?: string[] };
+}
+
+/** Harness effort vocabulary, in strength order — the filter for supported_efforts. */
+const HARNESS_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+
+/**
+ * Capability flags for an OpenRouter catalog entry (MUB-229).
+ *
+ * OpenRouter has been telling us all of this for as long as we have been calling it — the
+ * parse above simply threw `supported_parameters`, `reasoning` and `architecture` away, so
+ * every synthesized model arrived with no capabilities and the harness treated the whole
+ * catalog as non-reasoning, text-only and quirk-free.
+ *
+ * UNVERIFIED ON THE WIRE: this machine has ANTHROPIC, GEMINI and OPENAI keys only, so
+ * nothing here was probed against OpenRouter itself. It is the host's own declaration,
+ * which is a great deal better than the nothing it replaces — but a declaration is not a
+ * probe, and this comment should not be upgraded to "verified" until someone with an
+ * OPENROUTER_API_KEY has actually watched a request succeed.
+ */
+function capabilitiesFor(m: OpenRouterModel): Partial<Model> {
+  const caps: Partial<Model> = {};
+  const params = m.supported_parameters ?? [];
+  if (params.includes("reasoning") || params.includes("reasoning_effort")) caps.reasoning = true;
+
+  // supported_efforts minus "none" (that is the off-payload, not a level) and minus anything
+  // the harness has no thinking level for ("max"). An empty result is left undefined so the
+  // model falls back to the conservative host floor rather than opting out of effort.
+  const efforts = HARNESS_EFFORTS.filter((e) => m.reasoning?.supported_efforts?.includes(e));
+  if (efforts.length) caps.effort_levels = efforts;
+
+  const modalities = m.architecture?.input_modalities;
+  if (modalities?.length) {
+    caps.input = modalities.includes("image") ? ["text", "image"] : ["text"];
+  }
+
+  // The one flag the catalog cannot express: it describes a refusal by the upstream API
+  // (`Function tools with reasoning_effort are not supported for <id>`), not a capability
+  // OpenRouter reports. `reasoning.default_enabled` is NOT a proxy for it — 69 of the 338
+  // models in the live catalog set it, across six vendors, so deriving from it would pin
+  // effort off on every reasoning model reached through OpenRouter.
+  //
+  // Instead it is inherited from the same model on its own host, by exact identity: the
+  // OpenRouter id `vendor/name[:variant]` maps to registry id `name`, and the flag rides
+  // along only if THAT model already declares it (gpt-5.6-*, verified live on openai).
+  // Never a pattern or a family rule — `openai/gpt-5.6-luna-pro` matches nothing and so
+  // inherits nothing. Being wrong here costs a turn that does not reason, and the status bar
+  // says `pinned`; being absent costs an HTTP 400 on every agent turn, which is what the
+  // harness does today.
+  const base = m.id.split("/").pop()?.split(":")[0];
+  if (base && findModelById(base)?.tools_require_effort_none === true) {
+    caps.tools_require_effort_none = true;
+  }
+  return caps;
 }
 
 /** Register the full OpenRouter catalog when OPENROUTER_API_KEY is set. Returns count added. */
@@ -100,6 +167,7 @@ export async function populateFromOpenRouter(fetchImpl: typeof fetch = fetch): P
       context_window: m.context_length ?? 128_000,
       max_tokens: m.top_provider?.max_completion_tokens ?? 8_192,
       base_url: OPENROUTER_BASE,
+      ...capabilitiesFor(m),
     });
     added += 1;
   }

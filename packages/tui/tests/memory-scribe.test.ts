@@ -559,7 +559,11 @@ describe("memory scribe — contrast pairs (F5a)", () => {
       projectKey: "proj",
       contrastPairs: true,
       extract: stubExtractor([
-        { kind: "lesson", content: "cheap-model passes code checks that flaky-model fails", evidence: [1] },
+        {
+          kind: "lesson",
+          content: "cheap-model passes code checks that flaky-model fails",
+          evidence: [1],
+        },
       ]),
     });
     expect(report.added).toBe(1);

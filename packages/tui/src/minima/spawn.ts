@@ -11,6 +11,7 @@
  */
 
 import type { AgentEvent } from "../agent/events.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
@@ -20,6 +21,7 @@ import { builtinTools } from "../tools/builtin.ts";
 import { extractJson, reaskMessage, validateAgainstSchema } from "../tools/output_schema.ts";
 import type { ChildResult, Delegation, SpawnContext, SpawnFn } from "../tools/task.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
+import { type AgentType, type AgentTypeRegistry, applyAgentType } from "./agent_types.ts";
 import { makeBashSteerHook } from "./bash_steer.ts";
 import { bigPlanAttributionSink, recordOpaqueMarker } from "./big_plan.ts";
 import { MinimaError } from "./errors.ts";
@@ -44,6 +46,10 @@ export interface CreateSpawnOptions {
   /** Artifact spill store shared with the lead (P1): children spill to the same dir and
    * their confined read gains the artifact-root allowance. */
   artifacts?: ToolArtifacts;
+  /** User-defined agent types (`.minima/agents/*.md`). A delegation naming one is expanded
+   * to plain Delegation fields before any of the logic below runs, so a typed child takes
+   * exactly the same code path as an untyped one. Absent → every delegation is untyped. */
+  agentTypes?: AgentTypeRegistry;
 }
 
 const TURNS_BY_EFFORT = { light: 6, standard: 12, deep: 24 } as const;
@@ -56,13 +62,19 @@ export function isNoCandidatesRouteError(exc: unknown): boolean {
   return exc instanceof Error && /no[\s_-]?candidates?/i.test(exc.message);
 }
 
-/** Render the delegation contract + dependency results as the child's system prompt. */
-export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
-  const lines = [
-    "You are a focused sub-agent executing ONE delegated subtask.",
-    `## Objective\n${d.objective}`,
-    `## Return exactly\n${d.output_format}`,
-  ];
+/** Render the delegation contract + dependency results as the child's system prompt.
+ *  An agent type contributes a `## Role` section AHEAD of the contract: it says WHO the
+ *  child is, while the delegation says what THIS instance must do. The contract sections
+ *  and the Rules block are never replaced — a persona must not be able to delete
+ *  read-before-edit or the BLOCKED escape hatch. */
+export function delegationPrompt(
+  d: Delegation,
+  ctx: SpawnContext,
+  type?: AgentType | null,
+): string {
+  const lines = ["You are a focused sub-agent executing ONE delegated subtask."];
+  if (type?.prompt.trim()) lines.push(`## Role\n${type.prompt.trim()}`);
+  lines.push(`## Objective\n${d.objective}`, `## Return exactly\n${d.output_format}`);
   if (d.output_schema) {
     lines.push(
       `## Output schema (STRICT)\nYour final reply MUST be a single JSON value that validates against this JSON Schema. Reply with ONLY the JSON — no prose, no markdown fences.\n\`\`\`json\n${JSON.stringify(
@@ -107,7 +119,13 @@ export function delegationPrompt(d: Delegation, ctx: SpawnContext): string {
 export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
   const parent = opts.parent;
 
-  return async (d: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
+  return async (rawDelegation: Delegation, ctx: SpawnContext): Promise<ChildResult> => {
+    // Agent types resolve FIRST and to nothing but plain Delegation fields: everything below
+    // — tool allowlist, candidate pool, budget stop, effort caps — is the identical code
+    // path an untyped delegation takes. An unknown/absent name is the identity.
+    const resolved = applyAgentType(rawDelegation, opts.agentTypes);
+    const d = resolved.delegation;
+    const agentType = resolved.type;
     const childId = `${d.step_id}-${newId().slice(0, 8)}`;
     const effort = d.effort ?? "standard";
 
@@ -153,6 +171,9 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       childSeen = new SeenLedger();
       childSeen.attach(parent.db, parent.runId, childId);
     }
+    // Same late-bind as the lead agent (cli/main.ts): the child's routed model is not
+    // known until it exists, and routing re-picks it per prompt.
+    let childRef: MinimaAgent | null = null;
     let tools = builtinTools({
       workdir: childWorkdir,
       exclude: ["task"],
@@ -163,6 +184,8 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       // most for; without the tool the child can only fail silently. `tool_allowlist` still
       // filters it out below when the lead scopes the child's toolset.
       skills: getDiscoveredSkills(),
+      imageResults: () =>
+        parent.config.images && supportsImageInput(childRef?.agentState.model ?? null),
     });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
@@ -200,7 +223,7 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       meter: new CostMeter(),
       tools,
       maxTurns: TURNS_BY_EFFORT[effort],
-      systemPrompt: delegationPrompt(promptDelegation, ctx),
+      systemPrompt: delegationPrompt(promptDelegation, ctx, agentType),
       shouldStopAfterTurn:
         budget !== undefined
           ? async (assistant: AssistantMessage) => {
@@ -209,6 +232,7 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
             }
           : undefined,
     });
+    childRef = child;
     // Child rows demux from the lead's in the shared DB.
     child.db = parent.db;
     child.runId = parent.runId;

@@ -82,7 +82,9 @@ function seedRewoundExploration(seed: Seeder, markerBeforeRewindTurn: boolean): 
     report_chars: 32,
   };
   if (markerBeforeRewindTurn) seed.marker(marker);
-  seed.assistant("", [{ id: "rw1", name: "rewind", args: { report: "REPORT: config lives in src/x.ts" } }]);
+  seed.assistant("", [
+    { id: "rw1", name: "rewind", args: { report: "REPORT: config lives in src/x.ts" } },
+  ]);
   if (!markerBeforeRewindTurn) seed.marker(marker);
   seed.tool(
     "rw1",
@@ -101,7 +103,9 @@ describe("rehydrate honors context_rewind markers (AC2)", () => {
     const flat = r.messages.map((m) => m.textContent).join("\n");
     expect(flat).not.toContain("PROBE-ONE");
     expect(flat).not.toContain("PROBE-TWO");
-    expect(r.messages.filter((m) => m.role === "toolResult" && m.tool_name === "probe")).toHaveLength(0);
+    expect(
+      r.messages.filter((m) => m.role === "toolResult" && m.tool_name === "probe"),
+    ).toHaveLength(0);
     expect(flat).toContain("REPORT: config lives in src/x.ts");
     expect(
       r.messages.filter((m) => m.role === "toolResult" && m.tool_call_id === "cp1"),

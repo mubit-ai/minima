@@ -53,9 +53,9 @@ async function seedOldRow(
 }
 
 function rowRunId(db: MinimaDb, path: string): string | null {
-  const r = db.db.query("SELECT run_id FROM artifacts WHERE path = ?").get(path) as
-    | { run_id: string | null }
-    | null;
+  const r = db.db.query("SELECT run_id FROM artifacts WHERE path = ?").get(path) as {
+    run_id: string | null;
+  } | null;
   return r ? r.run_id : null;
 }
 

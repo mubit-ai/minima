@@ -86,6 +86,8 @@ export interface BuiltinToolsOptions {
    * sub-agents (spawn.ts) never pass one, so they run without skills.
    */
   skills?: DiscoveredSkill[];
+  /** Image results (MINIMA_TUI_IMAGES) — see FsToolOptions.imageResults. Absent = off. */
+  imageResults?: () => boolean;
 }
 
 /** The default coding-agent toolset, minus any excluded by name. */
@@ -95,6 +97,7 @@ export function builtinTools(opts: BuiltinToolsOptions = {}): AgentTool[] {
     artifacts: opts.artifacts,
     seen: opts.seen,
     bgJobs: opts.bgJobs,
+    imageResults: opts.imageResults,
   };
   const all: AgentTool[] = [
     readTool(fs),

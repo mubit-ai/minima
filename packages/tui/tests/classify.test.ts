@@ -158,9 +158,9 @@ function classifierCalls(reg: ReturnType<typeof registerFauxProvider>): number {
 
 describe("parseClassification", () => {
   test("tiny JSON parses", () => {
-    expect(parseClassification('{"task_type":"code","difficulty":"hard","confidence":0.9}')).toEqual(
-      { taskType: "code", difficulty: "hard", confidence: 0.9 },
-    );
+    expect(
+      parseClassification('{"task_type":"code","difficulty":"hard","confidence":0.9}'),
+    ).toEqual({ taskType: "code", difficulty: "hard", confidence: 0.9 });
   });
   test("three labeled lines parse", () => {
     expect(parseClassification("task_type: qa\ndifficulty: easy\nconfidence: 0.75")).toEqual({
@@ -176,8 +176,12 @@ describe("parseClassification", () => {
   });
   test("fail-closed on junk, out-of-enum, and out-of-range confidence", () => {
     expect(parseClassification("no idea")).toBeNull();
-    expect(parseClassification('{"task_type":"poetry","difficulty":"hard","confidence":0.9}')).toBeNull();
-    expect(parseClassification('{"task_type":"code","difficulty":"hard","confidence":1.4}')).toBeNull();
+    expect(
+      parseClassification('{"task_type":"poetry","difficulty":"hard","confidence":0.9}'),
+    ).toBeNull();
+    expect(
+      parseClassification('{"task_type":"code","difficulty":"hard","confidence":1.4}'),
+    ).toBeNull();
     expect(parseClassification("")).toBeNull();
   });
 });
@@ -311,9 +315,9 @@ describe("client-side classification (MINIMA_TUI_CLASSIFY)", () => {
     expect(agent.meter!.totals().overheadUsd).toBeCloseTo(booked, 12);
     const fb = svc.feedbackCalls[0] as Record<string, unknown>;
     expect(fb.actual_cost_usd).toBe(agent.meter!.rows[0]!.actualCostUsd);
-    const spendRow = db.db
-      .query("SELECT note FROM budget_events WHERE kind = 'book'")
-      .get() as { note: string } | null;
+    const spendRow = db.db.query("SELECT note FROM budget_events WHERE kind = 'book'").get() as {
+      note: string;
+    } | null;
     expect(spendRow?.note).toBe("classify");
     reg.unregister();
     db.close();
@@ -327,8 +331,9 @@ describe("server embedding head defers the client override", () => {
     await agent.promptRouted("write a parser");
     expect(classifierCalls(reg)).toBe(0);
     const task = (svc.recommendCalls[0] as { task: unknown }).task;
-    expect(typeof task === "string" || (task as Record<string, unknown>).task_type === undefined)
-      .toBe(true);
+    expect(
+      typeof task === "string" || (task as Record<string, unknown>).task_type === undefined,
+    ).toBe(true);
     reg.unregister();
   });
 

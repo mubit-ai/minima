@@ -9,17 +9,45 @@
 export const DEFAULT_MINIMA_URL = "https://api.minima.sh";
 export const DEFAULT_JUDGE_MODEL = "claude-haiku-4-5";
 
-// Candidate set mirrors examples/agent_warmup.py so cold-start routing matches.
+/**
+ * Default candidate pool: the union of each provider's Pareto frontier for coding work.
+ *
+ * The rule is per-provider, not global, and that distinction is the whole point. The server
+ * picks the cheapest candidate clearing tau, and `runtime.ts` first drops every model whose
+ * provider key is absent — so the pool that matters is the one intersected with the user's
+ * keys. A globally-Pareto list collapses for anyone missing the provider that happens to own
+ * the cheap end: with only an Anthropic key, dropping `claude-haiku-4-5` (dominated whenever a
+ * Gemini key is present) doubles their floor. Keeping each provider's own frontier means every
+ * key combination still yields a ladder with rungs.
+ *
+ * Models NOT on their provider's frontier are excluded: they cost more than a same-provider
+ * model whose capability prior is at least as high, so no slider value can ever select them.
+ * `claude-sonnet-4-6` was the clearest case — strictly dominated by `claude-sonnet-5`.
+ *
+ * Entries whose provider key is absent cost nothing: they are filtered pre-request, so listing
+ * DeepSeek/OpenRouter here simply means the ladder improves the moment such a key is added.
+ * Ids must exist in BOTH the TUI seed registry (cli/main.ts) and the server catalog — an
+ * unregistered id resolves to nothing and is silently dropped (pinned by config.test.ts).
+ */
 export const DEFAULT_CANDIDATES: string[] = [
+  // google
+  "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
-  "claude-haiku-4-5",
-  "claude-sonnet-4-6",
-  "gemini-2.5-pro",
-  "claude-opus-4-8",
-  "claude-sonnet-5",
   "gemini-3.6-flash",
-  "deepseek-v4-flash",
+  "gemini-2.5-pro",
+  // openai
+  "gpt-4o-mini",
   "gpt-5.6-luna",
+  "gpt-5.6-terra",
+  // anthropic
+  "claude-haiku-4-5",
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+  // opt-in keys — filtered out unless DEEPSEEK_API_KEY / OPENROUTER_API_KEY is set
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "minimax/minimax-m3",
+  "z-ai/glm-5.2",
 ];
 
 /** Premium allowlist for plan-mode routed + plan-shaping calls (MINIMA_PLAN_PREMIUM_MODELS).
@@ -29,7 +57,9 @@ export const PREMIUM_CANDIDATES: string[] = ["claude-fable-5", "claude-opus-4-8"
 export interface HarnessConfig {
   minimaUrl: string;
   minimaApiKey: string | null;
-  /** Model ids Minima is allowed to pick from (-> Constraints.candidate_models). */
+  /** Model ids Minima is allowed to pick from (-> Constraints.candidate_models).
+   * MINIMA_CANDIDATES (comma-separated) narrows the shipped pool; a project
+   * `.minima/config.toml` may only intersect with it, never widen it. */
   candidates: string[];
   /** True when the user pinned a single model via /model: routing is bypassed. */
   pinned: boolean;
@@ -62,6 +92,21 @@ export interface HarnessConfig {
    * changes, and record verification gates — gate verdicts are the harness's honest label
    * source. Opt out with MINIMA_TUI_BIG_PLAN=0. */
   bigPlan: boolean;
+  /** Image tool results (default ON): `read` on a png/jpeg/webp returns the image itself as
+   * an ImageContent block, to models whose `Model.input` declares "image". Opt out with
+   * MINIMA_TUI_IMAGES=0 — read then keeps the historical "image file not supported" refusal
+   * byte for byte, and every provider payload is unchanged. */
+  images: boolean;
+  /** Desktop notifications (default ON): OSC 9 + BEL when a long turn finishes, a permission
+   * prompt is raised, or the `question` overlay opens — so an unfocused terminal still gets
+   * the user's attention. Opt out with MINIMA_TUI_NOTIFY=0 — mirrors the bigPlan flag shape.
+   * Inert without a TTY: headless/piped runs never emit the bytes. */
+  notify: boolean;
+  /** Minimum turn duration (ms) before a finished turn notifies (MINIMA_TUI_NOTIFY_AFTER_MS,
+   * default 10000; 0 notifies on every turn). The anti-annoyance mechanism: a turn that ends
+   * before this has elapsed is one the user is still watching. Only consulted when `notify`
+   * is on. */
+  notifyAfterMs: number;
   /** Run-level stop-gate strikes (A2): how many times the harness may deny the agent's attempt to
    * END the run while the plan has incomplete/failing steps before it stops denying and asks the
    * user. `MINIMA_TUI_STOP_STRIKES`, default 3; 0 disables the stop-gate entirely (pure-nudge
@@ -123,6 +168,25 @@ export interface HarnessConfig {
    * inert on the default path (the deterministic branch never runs without a gate). Never affects
    * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
   gradedOutcome: boolean;
+  /** Compose the prompt in $EDITOR (default ON): Ctrl+X Ctrl+E (readline's
+   * edit-and-execute-command) and `/editor` hand the draft to $VISUAL/$EDITOR and read the
+   * saved buffer back into the composer. `MINIMA_TUI_EDITOR=0` opts out — the composer never
+   * arms the chord, so Ctrl+X is swallowed exactly as today and Ctrl+E still cycles thinking.
+   * NOTE this names a BEHAVIOR, not an editor: only `=0` disables it, and
+   * `MINIMA_TUI_EDITOR=vim` leaves the feature ON with the value ignored (set $EDITOR for
+   * that). One correctness fix rides OUTSIDE this flag on purpose — splitKeypressUnits now
+   * splits solo C0 bytes, because two adjacent control bytes arriving in one stdin chunk used
+   * to register as NEITHER key, and gating a stdin parser on a feature flag would be worse
+   * than the exposure. */
+  externalEditor: boolean;
+  /** User keymap file (D3, default ON): `~/.minima-harness/keymap.toml` rebinds any of the ten
+   * app-level actions the binding registry resolves (keymap.ts). `MINIMA_TUI_KEYMAP=0` skips
+   * the file entirely — the defaults are used and nothing is reported, exactly as if no file
+   * existed. GLOBAL only: a keybinding has no nameable safer side, so it is not on the project
+   * config allowlist at all (ADR 0010). The readline core, abort, suspend, Enter, Escape, Tab
+   * and the arrows are outside the registry, so no keymap can rebind them — and the loader
+   * also refuses to bind an action ONTO one of them. */
+  keymapFile: boolean;
   /** Memory ledger (B1, default ON): project curated cross-session memories (SQLite
    * `memories` table, managed via /memory) into each turn's system prompt. Opt out with
    * MINIMA_TUI_MEMORY=0 — mirrors the bigPlan flag shape. Read path only: nothing
@@ -153,6 +217,15 @@ export interface HarnessConfig {
    * whenever the store is absent (MINIMA_TUI_ARTIFACTS=0 or a :memory: DB): the summary
    * stays byte-identical to v1. */
   compact2: boolean;
+  /** Corrected context meter (default ON): the status bar's `ctx%` and the auto-compaction
+   * trigger both read one basis — the provider's own prompt count (input + cache_read +
+   * cache_write + output), plus a measured residue for the system prompt and tool schemas
+   * chars/4 cannot see. Opt out with MINIMA_TUI_CONTEXT_METER=0 — mirrors the bigPlan flag
+   * shape. Flag-off restores BOTH halves of the old behavior: the footer divides bare
+   * usage.input by the window again, and auto-compaction returns to the chars/4 basis, so
+   * it fires at the same point it did before. That second half is the reason the switch
+   * exists — the corrected count is larger, so compaction fires earlier on warm sessions. */
+  contextMeter: boolean;
   /** Loop-robustness steer (P2, default ON): block the shell spellings of the native
    * tools (cat/head/tail/grep/find/sed -i) at the dispatcher with a steer message naming
    * the replacement, and never erase-and-replay a recovery-ladder rung that dispatched
@@ -164,6 +237,20 @@ export interface HarnessConfig {
    * memoryLedger flag shape. Gates tool REGISTRATION only: rehydrate honors persisted
    * context_rewind markers regardless of this flag. */
   contextRewind: boolean;
+  /** Git commit authoring (F9a, default ON): the `git_commit` tool and the `/commit`
+   * command — one code path, permission-gated under the tool's own name, adding deduped
+   * `Co-Authored-By` + one `Minima-Run-Id` trailer to a commit the user's own git identity
+   * authors. Opt out with MINIMA_TUI_GIT_COMMIT=0 — mirrors the bigPlan flag shape. Flag-off
+   * removes BOTH surfaces: the tool is never registered and `/commit` is not a command, so
+   * committing goes back to being reachable only through bash. */
+  gitCommit: boolean;
+  /** Commits ledger (F9b, default ON): authoring a commit records one `commits` row joining
+   * its SHA to the run, the rungs that produced it, and their realized cost, which is what
+   * lets `/why <sha>` answer LATER, by hash, which models wrote a commit and how its gates
+   * went. Opt out with MINIMA_TUI_COMMIT_LEDGER=0 — mirrors the bigPlan flag shape. Flag-off
+   * removes the ledger WRITE and the hash reader only: commits still carry their attribution
+   * trailers, because those are the half that survives without a database at all. */
+  commitLedger: boolean;
   /** Edit guard (P3, default ON): read/grep stamp [snap:…] tags and record seen-lines
    * evidence (SQLite `seen_lines`); edit rejects stale or unseen targets with a
    * deterministic re-read recovery message. Opt out with MINIMA_TUI_EDIT_GUARD=0 —
@@ -242,6 +329,14 @@ export interface HarnessConfig {
    * switch — NOT umbrella-covered). 0 = unset (the built-in 1500ms ceiling). Only consulted
    * when `lsp` is on. */
   lspTimeoutMs: number;
+  /** Plan-delegated steps: every step of an active plan runs as a sub-agent. OPT-IN with
+   *  MINIMA_TUI_PLAN_DELEGATE=1 for one release — the repo's default-on convention fits
+   *  additive features, and this redirects who executes every plan step. Only consulted when
+   *  `bigPlan` is on. */
+  planDelegate: boolean;
+  /** Default plan total, USD, offered at /plan finalize (MINIMA_TUI_PLAN_BUDGET). Only
+   *  consulted when `planDelegate` is on. */
+  planBudgetUsd: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -261,6 +356,9 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     streamIdleTimeoutMs: 300_000,
     allowOffline: true,
     bigPlan: true,
+    images: true,
+    notify: true,
+    notifyAfterMs: 10_000,
     stopStrikes: 3,
     spiralRepeats: 3,
     stepCap: 30,
@@ -272,13 +370,18 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     toolAllowlist: true,
     backoffMs: 0,
     gradedOutcome: true,
+    externalEditor: true,
+    keymapFile: true,
     memoryLedger: true,
     artifacts: true,
     artifactGcMb: 512,
     bgJobs: true,
     compact2: true,
+    contextMeter: true,
     steer: true,
     contextRewind: true,
+    gitCommit: true,
+    commitLedger: true,
     editGuard: true,
     typedTask: true,
     fetchLocal: false,
@@ -294,6 +397,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     ttsrCap: 0,
     lsp: false,
     lspTimeoutMs: 0,
+    planDelegate: false,
+    planBudgetUsd: 2,
     ...overrides,
   };
 }
@@ -302,9 +407,27 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
  * explicit "1" → on; explicit "0" → off (even under experimental); unset → on iff
  * experimental. Convention: every future default-off feature flag MUST resolve through
  * this helper so MINIMA_TUI_EXPERIMENTAL reaches it; consent gates (e.g.
- * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. */
+ * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. `planDelegate` is also a
+ * deliberate exception: it redirects who executes every plan step, so it ships opt-in on
+ * its own switch outside the umbrella — MINIMA_TUI_EXPERIMENTAL must not silently turn it
+ * on. */
 export function optInFlag(value: string | undefined, experimental: boolean): boolean {
   return value === "1" || (experimental && value !== "0");
+}
+
+/** A comma-separated model-id pool from the environment: trimmed, deduped, order preserved.
+ * null when the variable is unset or names nothing usable, so the caller keeps its default. */
+function modelIdList(value: string | undefined): string[] | null {
+  if (value === undefined) return null;
+  const ids = [
+    ...new Set(
+      value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return ids.length ? ids : null;
 }
 
 /** Build a config from the environment + optional overrides. */
@@ -324,6 +447,15 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     if (Number.isFinite(v) && v >= 0) cfg.streamIdleTimeoutMs = v;
   }
   cfg.bigPlan = process.env.MINIMA_TUI_BIG_PLAN !== "0";
+  cfg.images = process.env.MINIMA_TUI_IMAGES !== "0";
+  cfg.notify = process.env.MINIMA_TUI_NOTIFY !== "0";
+  const notifyAfterEnv = process.env.MINIMA_TUI_NOTIFY_AFTER_MS;
+  if (notifyAfterEnv !== undefined) {
+    const n = Number(notifyAfterEnv);
+    if (Number.isFinite(n) && n >= 0) cfg.notifyAfterMs = n;
+  }
+  cfg.externalEditor = process.env.MINIMA_TUI_EDITOR !== "0";
+  cfg.keymapFile = process.env.MINIMA_TUI_KEYMAP !== "0";
   cfg.memoryLedger = process.env.MINIMA_TUI_MEMORY !== "0";
   cfg.artifacts = process.env.MINIMA_TUI_ARTIFACTS !== "0";
   const artifactGcEnv = process.env.MINIMA_TUI_ARTIFACT_GC_MB;
@@ -333,8 +465,11 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   cfg.bgJobs = process.env.MINIMA_TUI_BGJOBS !== "0";
   cfg.compact2 = process.env.MINIMA_TUI_COMPACT2 !== "0";
+  cfg.contextMeter = process.env.MINIMA_TUI_CONTEXT_METER !== "0";
   cfg.steer = process.env.MINIMA_TUI_STEER !== "0";
   cfg.contextRewind = process.env.MINIMA_TUI_REWIND !== "0";
+  cfg.gitCommit = process.env.MINIMA_TUI_GIT_COMMIT !== "0";
+  cfg.commitLedger = process.env.MINIMA_TUI_COMMIT_LEDGER !== "0";
   cfg.editGuard = process.env.MINIMA_TUI_EDIT_GUARD !== "0";
   cfg.typedTask = process.env.MINIMA_TUI_TYPED_TASK !== "0";
   cfg.fetchLocal = process.env.MINIMA_TUI_FETCH_LOCAL === "1";
@@ -385,14 +520,12 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     }
   }
   cfg.planPremium = process.env.MINIMA_TUI_PLAN_PREMIUM !== "0";
-  const premiumEnv = process.env.MINIMA_PLAN_PREMIUM_MODELS;
-  if (premiumEnv !== undefined) {
-    const ids = premiumEnv
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (ids.length) cfg.planPremiumModels = [...new Set(ids)];
-  }
+  const premiumIds = modelIdList(process.env.MINIMA_PLAN_PREMIUM_MODELS);
+  if (premiumIds) cfg.planPremiumModels = premiumIds;
+  // The routable pool. A project .minima/config.toml lands its INTERSECTION here (the
+  // clamp already ran in the loader), so this site never has to know where it came from.
+  const candidateIds = modelIdList(process.env.MINIMA_CANDIDATES);
+  if (candidateIds) cfg.candidates = candidateIds;
   const planModelEnv = process.env.MINIMA_PLAN_MODEL?.trim();
   if (planModelEnv) cfg.planModel = planModelEnv;
   if (cfg.planPremium && !roundBudgetFromEnv) cfg.planRoundBudgetUsd = 1.0;
@@ -413,6 +546,10 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(backoffEnv);
     if (Number.isInteger(n) && n >= 0) cfg.backoffMs = n;
   }
+  cfg.planDelegate = process.env.MINIMA_TUI_PLAN_DELEGATE === "1";
+  const budgetEnv = (process.env.MINIMA_TUI_PLAN_BUDGET ?? "").trim();
+  const planBudget = budgetEnv ? Number(budgetEnv) : Number.NaN;
+  cfg.planBudgetUsd = Number.isFinite(planBudget) && planBudget >= 0 ? planBudget : 2;
   return { ...cfg, ...overrides };
 }
 

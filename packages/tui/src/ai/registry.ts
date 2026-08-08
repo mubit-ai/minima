@@ -19,10 +19,6 @@ export function registerModel(model: Model): Model {
   return model;
 }
 
-export function registerModels(models: Model[]): void {
-  for (const m of models) registerModel(m);
-}
-
 export function tryGetModel(provider: string, id: string): Model | undefined {
   return REGISTRY.get(key(provider, id));
 }

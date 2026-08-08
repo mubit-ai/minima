@@ -46,6 +46,19 @@ describe("decideBusySubmit — what Enter does while a turn is running", () => {
     });
   });
 
+  test("/btw dispatches mid-turn with its note intact, whatever the note says", () => {
+    expect(decideBusySubmit("/btw the key lives in .env.local")).toEqual({
+      kind: "dispatch",
+      name: "btw",
+      args: "the key lives in .env.local",
+    });
+    expect(decideBusySubmit("/btw clear the cache first")).toEqual({
+      kind: "dispatch",
+      name: "btw",
+      args: "clear the cache first",
+    });
+  });
+
   test("matching is case-insensitive (handleCommand lowercases too)", () => {
     expect(decideBusySubmit("/TREE").kind).toBe("dispatch");
     expect(decideBusySubmit("/Memory LIST").kind).toBe("dispatch");

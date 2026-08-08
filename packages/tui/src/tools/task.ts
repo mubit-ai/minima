@@ -33,6 +33,11 @@ export interface Delegation {
   boundaries: string;
   tool_guidance?: string;
   depends_on?: string[];
+  /** Name of a user-defined agent type (`.minima/agents/<name>.md`): a named preset for the
+   *  fields below plus a persona. Resolved in createSpawn via applyAgentType BEFORE any
+   *  spawn logic runs, and only for fields this delegation left unset — see
+   *  `src/minima/agent_types.ts`. Rejected at authoring time when the name is unknown. */
+  agent_type?: string;
   effort?: "light" | "standard" | "deep";
   difficulty?: "trivial" | "easy" | "medium" | "hard" | "expert";
   tool_allowlist?: string[];
@@ -79,9 +84,10 @@ export type SpawnFn = (d: Delegation, ctx: SpawnContext) => Promise<ChildResult>
  *  schema, so re-asking the child can never fix a malformed one. Typed-off: field untouched. */
 export function validateDelegations(
   parsed: unknown,
-  opts: { typed?: boolean } = {},
+  opts: { typed?: boolean; agentTypes?: ReadonlySet<string> } = {},
 ): { ok: true; value: Delegation[] } | { ok: false; error: string } {
   const typed = opts.typed ?? true;
+  const agentTypes = opts.agentTypes;
   if (!Array.isArray(parsed) || parsed.length === 0) {
     return { ok: false, error: "delegations must be a non-empty JSON array" };
   }
@@ -98,6 +104,21 @@ export function validateDelegations(
     }
     if (ids.has(d.step_id)) return { ok: false, error: `duplicate step_id "${d.step_id}"` };
     ids.add(d.step_id);
+    // An unknown agent_type is a typo, and a typo must be LOUD: silently ignoring it would
+    // run the subtask as a plain sub-agent, quietly dropping the persona/tool scope/budget
+    // the author asked for. Only checked when the caller supplied the known set.
+    if (agentTypes !== undefined && d.agent_type !== undefined) {
+      const key = typeof d.agent_type === "string" ? d.agent_type.trim().toLowerCase() : "";
+      if (!key || !agentTypes.has(key)) {
+        const known = [...agentTypes].sort().join(", ");
+        return {
+          ok: false,
+          error: `step "${d.step_id}" names unknown agent_type "${String(d.agent_type)}" — ${
+            known ? `available: ${known}` : "no agent types are defined in this repo"
+          }`,
+        };
+      }
+    }
     if (typed && d.output_schema !== undefined) {
       if (
         !d.output_schema ||
@@ -153,29 +174,25 @@ export function topoOrder(ds: Delegation[]): Delegation[] | null {
   return order.length === ds.length ? order : null;
 }
 
-const parameters = objectSchema(
-  {
-    delegations: {
-      type: "string",
-      description:
-        'JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", ' +
-        '"output_format": "what to return", "boundaries": "what NOT to touch", ' +
-        '"depends_on": ["other-step-ids"], "effort": "light|standard|deep", ' +
-        '"difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, ' +
-        '"candidates": ["exact-model-id"], ' +
-        '"output_schema": {"type": "object", "properties": {...}, "required": [...]}}. ' +
-        "objective/output_format/boundaries are REQUIRED per subtask. candidates is an " +
-        "OPTIONAL model pool for this subtask's routing — use only when the plan or " +
-        "observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET " +
-        "(supported: type, properties, required, items, enum) the child's final reply MUST " +
-        "validate against: the harness extracts JSON from the reply, validates it, re-asks " +
-        "ONCE quoting the errors on failure, then reports a typed failure and the validated " +
-        "object reaches dependent steps as data. Use it when a dependent needs a " +
-        "machine-readable object rather than prose.",
+/** Built per tool instance, never shared: the `agent_type` line only exists when this
+ *  harness actually has agent types loaded, so a repo with none sees the historical schema. */
+function buildParameters(hasAgentTypes: boolean): ReturnType<typeof objectSchema> {
+  return objectSchema(
+    {
+      delegations: {
+        type: "string",
+        description: `JSON array of subtasks. Each: {"step_id": "unique-id", "objective": "what to do", "output_format": "what to return", "boundaries": "what NOT to touch", "depends_on": ["other-step-ids"], "effort": "light|standard|deep", "difficulty": "trivial|easy|medium|hard|expert", "budget_usd": 0.5, "candidates": ["exact-model-id"], "output_schema": {"type": "object", "properties": {...}, "required": [...]}}. objective/output_format/boundaries are REQUIRED per subtask. candidates is an OPTIONAL model pool for this subtask's routing — use only when the plan or observed data justifies it. output_schema is an OPTIONAL JSON-Schema SUBSET (supported: type, properties, required, items, enum) the child's final reply MUST validate against: the harness extracts JSON from the reply, validates it, re-asks ONCE quoting the errors on failure, then reports a typed failure and the validated object reaches dependent steps as data. Use it when a dependent needs a machine-readable object rather than prose.${
+          hasAgentTypes
+            ? ' A subtask may also carry "agent_type": "<name>" naming one of the agent types ' +
+              "listed in this tool's description — it supplies that agent's persona, tool " +
+              "scope, model pool and budget for fields you leave unset."
+            : ""
+        }`,
+      },
     },
-  },
-  ["delegations"],
-);
+    ["delegations"],
+  );
+}
 
 export interface TaskToolOptions {
   spawn: SpawnFn;
@@ -189,6 +206,10 @@ export interface TaskToolOptions {
    *  output_schema is shape-checked at authoring time here and enforced dispatcher-side in
    *  createSpawn. Off → output_schema is authoring-inspected leniently and never enforced. */
   typedTask?: boolean;
+  /** User-defined agent types available to a delegation's `agent_type`. The menu is
+   *  appended to this instance's description and the names gate authoring-time validation.
+   *  Absent/empty → the tool is byte-identical to the pre-agent-types version. */
+  agentTypes?: { name: string; description: string }[];
   /** Book realized child spend against the parent's wallet. Children run on their own
    *  CostMeter and are never reserved against the BudgetLedger, so without this a single
    *  fan-out spends unbounded money while spent_usd stays flat and enforce mode never
@@ -287,19 +308,17 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
   const depth = opts.spawnDepth ?? 0;
   const maxDepth = opts.maxDepth ?? 2;
   const concurrency = Math.max(1, opts.concurrency ?? 4);
+  const agentTypes = opts.agentTypes ?? [];
+  const agentTypeNames = new Set(agentTypes.map((t) => t.name));
+  const agentTypeMenu = agentTypes.length
+    ? `\n\nAvailable agent types (set "agent_type": "<name>" on a delegation to run it as that agent — its persona, tool scope, model pool and budget apply to whatever you leave unset; anything you set explicitly still wins):\n${agentTypes
+        .map((t) => `- ${t.name}: ${t.description || "(no description)"}`)
+        .join("\n")}`
+    : "";
   return {
     name: "task",
-    description:
-      "Delegate subtasks to child agents, each cost-routed to its own model. Independent " +
-      "subtasks run in parallel (bounded); depends_on chains run in order. Use for " +
-      "decomposable work (research a module, make an isolated change, verify a result). " +
-      "Each delegation MUST state objective, output_format, and boundaries — boundaries " +
-      "matter for parallel edits (workers must not touch each other's files). Prefer 1 " +
-      "subtask for a focused question; more only when genuinely independent. Every call " +
-      "spawns fresh agents and spends real money: if a child's result is insufficient, do " +
-      "NOT re-run the same delegations — finish the remaining work yourself with your own " +
-      "tools, or delegate ONE new, narrower subtask.",
-    parameters,
+    description: `Delegate subtasks to child agents, each cost-routed to its own model. Independent subtasks run in parallel (bounded); depends_on chains run in order. Use for decomposable work (research a module, make an isolated change, verify a result). Each delegation MUST state objective, output_format, and boundaries — boundaries matter for parallel edits (workers must not touch each other's files). Prefer 1 subtask for a focused question; more only when genuinely independent. Every call spawns fresh agents and spends real money: if a child's result is insufficient, do NOT re-run the same delegations — finish the remaining work yourself with your own tools, or delegate ONE new, narrower subtask.${agentTypeMenu}`,
+    parameters: buildParameters(agentTypes.length > 0),
     // One task batch at a time: two task calls in one assistant turn must not interleave
     // their children (the DAG itself parallelizes within the batch).
     executionMode: "sequential",
@@ -315,7 +334,10 @@ export function taskTool(opts: TaskToolOptions): AgentTool {
       } catch (exc) {
         return errorResult(`task: delegations is not valid JSON: ${String(exc)}`);
       }
-      const v = validateDelegations(parsed, { typed: opts.typedTask });
+      const v = validateDelegations(parsed, {
+        typed: opts.typedTask,
+        ...(agentTypes.length ? { agentTypes: agentTypeNames } : {}),
+      });
       if (!v.ok) return errorResult(`task: ${v.error}`);
 
       const results = await executeDag(v.value, opts.spawn, {

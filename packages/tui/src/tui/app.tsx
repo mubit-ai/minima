@@ -30,12 +30,20 @@ import {
 import { emitGuardEvent } from "../agent/policy.ts";
 import type { AgentTool, BeforeToolCall } from "../agent/tools.ts";
 import { PROVIDERS, envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { allModels } from "../ai/registry.ts";
-import type { Model } from "../ai/types.ts";
-import { Message as AgentMessage, AssistantMessage } from "../ai/types.ts";
+import type { ImageContent, Model } from "../ai/types.ts";
+import { Message as AgentMessage, AssistantMessage, image as imageBlock } from "../ai/types.ts";
+import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import {
+  type AgentType,
+  type AgentTypeRegistry,
+  loadAgentTypes,
+  scaffoldAgentType,
+} from "../minima/agent_types.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import {
   type PlanStripInfo,
@@ -45,6 +53,12 @@ import {
 } from "../minima/big_plan.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog, refreshCatalogOnce } from "../minima/catalog.ts";
+import {
+  DEFAULT_CAVEMAN_LEVEL,
+  getCaveman,
+  parseCavemanArg,
+  setCaveman,
+} from "../minima/caveman.ts";
 import {
   type InterviewState,
   PlanSessionStore,
@@ -67,6 +81,7 @@ import { observerWhySection } from "../minima/observer.ts";
 import { formatFindings, lintPlan, stepsFromRows } from "../minima/plan_lint.ts";
 import { runPlanRefutation } from "../minima/plan_refute.ts";
 import { SEED_ROUND_1, SEED_ROUND_2 } from "../minima/plan_seed.ts";
+import { visionCandidates } from "../minima/premium.ts";
 import { redoLastRouted } from "../minima/redo.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import {
@@ -78,13 +93,15 @@ import {
 } from "../minima/scoreboard.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
 import { isHarnessSteerText } from "../minima/stop_gate.ts";
-import { whyReportFor } from "../minima/why.ts";
+import { buildTurnDigests, formatDigest, runSummarise } from "../minima/summarise.ts";
+import { isCommitArg, whyCommitReport, whyReportFor } from "../minima/why.ts";
 import {
   gcCheckpoints,
   makeCheckpointHook,
   makeRepoResolver,
   restore,
 } from "../session/checkpoint.ts";
+import { type CommitDeps, commitChanges } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
 import { promptText, truncateLastPrompts } from "../session/rewind.ts";
 import { computeSections } from "../session/sections.ts";
@@ -102,16 +119,50 @@ import { skillTool } from "../tools/skill.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
+import {
+  type AgentDraft,
+  WIZARD_FIELDS,
+  newAgentDraft,
+  wizardAdvance,
+  wizardHint,
+  wizardQuestion,
+  wizardSummary,
+} from "./agent_wizard.ts";
+import {
+  addAttachment,
+  attachmentToken,
+  consumeAttachments,
+  parseAttachmentTokens,
+} from "./attachments.ts";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "./auth.ts";
 import { getFooterBadge, setFooterBadge, subscribeFooterBadge } from "./badge_slot.ts";
 import { BusyIndicator, type CouncilPhase, councilProgressLine } from "./busy.tsx";
 import { type ChildRow, ChildTree, applyChildEvent } from "./child_tree.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import { compactMessages, compactReport, maybeAutoCompact } from "./compact.ts";
+import { readClipboardImage } from "./clipboard_image.ts";
+import { compactMessagesLLM, compactReport, maybeAutoCompact } from "./compact.ts";
 import { SECTIONS, mask, get as storeGet, setValue as storeSetValue } from "./config_store.ts";
+import {
+  AUTO_COMPACT_PCT,
+  type ContextUsage,
+  EMPTY_CONTEXT,
+  contextUsage,
+} from "./context_meter.ts";
 import { type ActiveAction, currentActionLine, reduceActiveActions } from "./current_action.ts";
+import { openEditorForDraft } from "./editor.ts";
+import { chordOwnsKey, resetChord } from "./editor_chord.ts";
 import { ExpandPanel, PANEL_CHROME_ROWS } from "./expand_panel.tsx";
-import { footerStatsFromMessages } from "./footer.ts";
+import {
+  type BindingAction,
+  type KeyFlags,
+  describeKeys,
+  formatChord,
+  keyEvent,
+  keysFor,
+  matchesChord,
+  resolveBinding,
+} from "./keymap.ts";
+import { activeKeymap, keymapPath, keymapProblems } from "./keymap_file.ts";
 import {
   SCROLLBACK_SAFETY_ROWS,
   TOC_MIN_COLS,
@@ -134,6 +185,7 @@ import {
 import { type ChatMessage, MessageRow, StreamingReply, StreamingThoughts } from "./messages.tsx";
 import { loadTaskPanelHidden, persistMode, persistTaskPanelHidden } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
+import { notify, shouldNotifyTurnEnd } from "./notify.ts";
 import {
   type PanelNavKey,
   type PanelState,
@@ -162,6 +214,7 @@ import {
   renderPlanOverviewText,
   stepCardLines,
 } from "./plan_overview.ts";
+import { parsePrArgs, runPr } from "./pr.ts";
 import { repoIdentity, setProject } from "./projects.ts";
 import {
   EMPTY_QUEUE,
@@ -205,6 +258,10 @@ export interface AppProps {
   initialResume?: RehydratedRun | null;
   /** Injectable spawn for plan-mode council researchers (child MinimaAgents). From cli/main.ts. */
   planSpawn?: SpawnFn;
+  /** User-defined agent types, loaded once by cli/main.ts. Backs `/agent` (list + run) and
+   *  is the SAME registry createSpawn resolves against, so the list can never drift from
+   *  what a delegation would actually get. */
+  agentTypes?: AgentTypeRegistry;
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
   /**
@@ -227,6 +284,18 @@ export interface AppProps {
    * unfiltered pattern the plan strip refresh uses).
    */
   todos?: TodoTask[];
+  /**
+   * The ambient localhost dashboard, when one was started (TTY + persistence + not opted out).
+   * Only `/dashboard` reads it, and it re-reads the rendezvous file on every call: another TUI may
+   * have started the server, or it may have moved ports since this session began.
+   */
+  dashboard?: DashboardSupervisor | null;
+  /**
+   * F9a: the SAME CommitDeps main.ts handed the `git_commit` tool, so `/commit` reaches the
+   * same code path and produces an identical commit. null when MINIMA_TUI_GIT_COMMIT=0 — the
+   * command is then removed outright rather than reporting itself unavailable.
+   */
+  commitDeps?: CommitDeps | null;
 }
 
 /** Persona the lead adopts in plan mode; the council's plan snapshot is appended each turn. */
@@ -244,6 +313,42 @@ const PLANNER_PERSONA =
 /** True when at least one key-requiring model provider has its key set. */
 function anyProviderKeyPresent(): boolean {
   return PROVIDERS.some((p) => p.requiresKey && providerKeyPresent(p.name));
+}
+
+/**
+ * The chord `/help` prints for an action. Reads the EFFECTIVE keymap, so a user who rebound
+ * a key is never shown the default — the help is the only place most people will look.
+ */
+function keyHelp(action: BindingAction): string {
+  return describeKeys(action, activeKeymap());
+}
+
+/** The same, in the footer legend's compact spelling — that row is clipped to one line. */
+function keyLegend(action: BindingAction): string {
+  return describeKeys(action, activeKeymap(), "legend");
+}
+
+/**
+ * True when this keypress is the SECOND key of the $EDITOR sequence — the one the composer
+ * owns while the chord is armed. False when a keymap binds `editor.open` to a single chord:
+ * there is no second key then, and the chord launches on its own without ever arming.
+ */
+function matchesSecondChord(input: string, key: KeyFlags): boolean {
+  const second = keysFor("editor.open", activeKeymap())?.[1];
+  return second !== undefined && matchesChord(keyEvent(input, key), second);
+}
+
+/**
+ * The armed $EDITOR prefix as the composer titles it: readline's `^X` while the chord is a
+ * plain Ctrl one (what it has always shown), and the chord's own spelling once a keymap has
+ * moved it somewhere caret notation cannot express.
+ */
+function armedPrefixHint(): string {
+  const prefix = keysFor("editor.open", activeKeymap())?.[0];
+  if (!prefix) return "";
+  return prefix.ctrl && !prefix.meta && !prefix.shift && [...prefix.key].length === 1
+    ? `^${prefix.key.toUpperCase()}`
+    : formatChord(prefix, "legend");
 }
 
 /** Verification-on plan-mode ON notice, shared by /plan (toggle/on), Shift+Tab, and the auto-heal effect. */
@@ -300,56 +405,130 @@ function getLastAssistant(agent: MinimaAgent): AssistantMessage | null {
   return null;
 }
 
-const COMMANDS = [
-  { name: "model", desc: "Select or pin a model (or 'auto')" },
-  { name: "clear", desc: "Clear chat messages" },
-  { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
-  { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
-  { name: "help", desc: "Show available commands list" },
-  { name: "version", desc: "Show the Minima harness version" },
-  { name: "quit", desc: "Exit the application" },
-  { name: "exit", desc: "Exit the application" },
-  { name: "cost", desc: "Show cost meter totals" },
-  { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
-  { name: "reconnect", desc: "Reconnect routing client" },
-  { name: "new", desc: "Start a fresh session" },
-  { name: "name", desc: "Set the session display name" },
-  { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
-  { name: "session", desc: "Show session info" },
-  { name: "tree", desc: "Toggle the sub-agent tree panel" },
-  { name: "tasks", desc: "Toggle the task panel (Ctrl+B) · /tasks cancel rejects list + plan" },
-  { name: "copy", desc: "Copy the last assistant reply to the clipboard (Ctrl+Y)" },
-  { name: "resume", desc: "Resume a session (optionally by id)" },
-  { name: "judge", desc: "Toggle LLM judging on/off" },
-  { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
-  { name: "thoughts", desc: "Toggle streaming model's reasoning" },
-  { name: "perms", desc: "Show current tool permission grants" },
-  { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
-  { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
-  { name: "rewind", desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])" },
-  { name: "compact", desc: "Summarize old turns to free context" },
-  {
-    name: "plan",
-    desc: "Plan mode (Shift+Tab; asks first) + council (start·status·finalize·cancel)",
-  },
-  { name: "mode", desc: "Show/set mode: build | accept | plan | bypass (Shift+Tab cycles)" },
-  { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
-  { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
-  { name: "bp-seed", desc: "Seed a demo plan with gates for this run (plan verification on only)" },
-  { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
-  { name: "why", desc: "Show plan verification (/why <n> opens the step card)" },
-  { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
-  { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
-  {
-    name: "memory",
-    desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
-  },
-  {
-    name: "profile",
-    desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
-  },
-  { name: "skills", desc: "List discovered skills (SKILL.md packs)" },
-];
+/**
+ * The slash commands — built on FIRST USE, not at module load. Five descriptions name a
+ * keybinding, and the keymap file that decides those chords is read in main.ts after this
+ * module has been imported; a module-level array would freeze the defaults into the palette
+ * and `/help` no matter what the user rebound. Memoized because the keymap cannot change
+ * after startup, and because CommandPicker takes this array as a prop — a fresh array per
+ * render would be a new identity every time.
+ */
+let commandCache: { name: string; desc: string }[] | null = null;
+function allCommands(): { name: string; desc: string }[] {
+  commandCache ??= [
+    { name: "model", desc: "Select or pin a model (or 'auto')" },
+    { name: "clear", desc: "Clear chat messages" },
+    { name: "auth", desc: "Sign in to Mubit & provision this repo's project" },
+    { name: "config", desc: "Show/set API keys (MUBIT, GEMINI, ANTHROPIC, etc.)" },
+    { name: "help", desc: "Show available commands list" },
+    { name: "version", desc: "Show the Minima harness version" },
+    { name: "quit", desc: "Exit the application" },
+    { name: "exit", desc: "Exit the application" },
+    { name: "cost", desc: "Show cost meter totals" },
+    {
+      name: "dashboard",
+      desc: "Local dashboard URL · `off` stops it for this session, `on` starts it again",
+    },
+    { name: "budget", desc: "Show/set the session budget (set <usd> · mode warn|enforce)" },
+    { name: "reconnect", desc: "Reconnect routing client" },
+    { name: "new", desc: "Start a fresh session" },
+    { name: "name", desc: "Set the session display name" },
+    { name: "rename", desc: "Rename this session (persisted; alias of /name)" },
+    { name: "session", desc: "Show session info" },
+    { name: "tree", desc: "Toggle the sub-agent tree panel" },
+    {
+      name: "tasks",
+      desc: `Toggle the task panel (${keyHelp("task.panel")}) · /tasks cancel rejects list + plan`,
+    },
+    {
+      name: "copy",
+      desc: `Copy the last assistant reply to the clipboard (${keyHelp("reply.copy")})`,
+    },
+    {
+      name: "editor",
+      desc: `Compose in $EDITOR — opens empty (/editor <text> seeds it); ${keyHelp("editor.open")} carries the draft`,
+    },
+    { name: "resume", desc: "Resume a session (optionally by id)" },
+    { name: "judge", desc: "Toggle LLM judging on/off" },
+    { name: "redo", desc: "Reject the last routed turn and re-route without that model" },
+    { name: "thoughts", desc: "Toggle streaming model's reasoning" },
+    { name: "perms", desc: "Show current tool permission grants" },
+    { name: "undo", desc: "Undo the last change: checkpoint restore + re-prompt (stacks)" },
+    { name: "ckpt", desc: "List git-shadow checkpoints (/ckpt gc prunes old runs' refs)" },
+    { name: "commit", desc: "Commit staged changes with model attribution (/commit <message>)" },
+    {
+      name: "rewind",
+      desc: "Rewind to an earlier prompt (picker · /rewind <n> [convo|code|both])",
+    },
+    { name: "compact", desc: "Summarize old turns to free context" },
+    { name: "pr", desc: "Branch, commit, push and open a PR into <branch> (/pr develop)" },
+    {
+      name: "plan",
+      desc: `Plan mode (${keyHelp("permission.cycle")}; asks first) + council (start·status·finalize·cancel)`,
+    },
+    {
+      name: "mode",
+      desc: `Show/set mode: build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles)`,
+    },
+    { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+    { name: "caveman", desc: "Terse-prose mode: /caveman [lite|full|ultra|wenyan-*|off]" },
+    { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
+    {
+      name: "bp-seed",
+      desc: "Seed a demo plan with gates for this run (plan verification on only)",
+    },
+    { name: "plan-seed", desc: "Seed a demo plan-DRAFT session round (plan verification on only)" },
+    {
+      name: "why",
+      desc: "Show plan verification (/why <n> opens the step card, /why <sha> explains a commit)",
+    },
+    { name: "verify", desc: "Adversarial whole-plan verification pass (refutation subagent)" },
+    { name: "audit", desc: "Lint the active plan (poka-yoke: checks, allowlists, vague steps)" },
+    {
+      name: "memory",
+      desc: "Curated memory: list · add <text> · dream · pin|confirm|reject|delete <n|id>",
+    },
+    {
+      name: "profile",
+      desc: "Per-repo routing profile: show · set <field> <value> · set pool.<type> <ids> · clear",
+    },
+    { name: "skills", desc: "List discovered skills (SKILL.md packs)" },
+    { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
+    { name: "btw", desc: "Side note to the running turn — /btw <note> (no new prompt queued)" },
+    {
+      name: "agent",
+      desc: "Agent types: /agent (list) · /agent make (define) · /agent <name> <task> (run)",
+    },
+  ];
+  return commandCache;
+}
+
+/**
+ * Agent types whose name matches the `/agent <partial>` being typed, sorted; null when the
+ * draft isn't an in-progress agent name (a name already followed by a task is a run, not a
+ * completion). Shared by the inline suggestion list and Tab.
+ */
+export function agentTypeMatches(
+  typed: string,
+  registry: AgentTypeRegistry | undefined,
+): AgentType[] | null {
+  const m = /^\/agent[ \t]+(\S*)$/.exec(typed);
+  if (!m) return null;
+  const prefix = m[1]!.toLowerCase();
+  const types = [...(registry?.types.values() ?? [])]
+    .filter((t) => t.name.startsWith(prefix))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  // The `make` subcommand rides the same list — it is how a first agent type gets defined at
+  // all, and an empty registry would otherwise complete to nothing. A real type named `make` wins.
+  if ("make".startsWith(prefix) && !types.some((t) => t.name === "make")) {
+    types.push({
+      name: "make",
+      description: "define a new agent type, field by field",
+      prompt: "",
+    });
+  }
+  return types;
+}
 
 export interface CommandPickerProps {
   commands: { name: string; desc: string }[];
@@ -836,10 +1015,13 @@ export function HarnessApp({
   childEventRef,
   initialResume = null,
   planSpawn,
+  agentTypes,
   planMetaModel,
   bigPlanGateBefore,
   verifyConsentRef,
   todos,
+  dashboard = null,
+  commitDeps = null,
 }: AppProps) {
   const { exit } = useApp();
   // Startup scan; /skills re-runs it so a skill installed mid-session (Skill Seekers and the
@@ -854,29 +1036,17 @@ export function HarnessApp({
       agent.agentState.tools.length > 0 &&
       (agent.agentState.tools.some((t) => t.name === "skill") || skillScan.skills.length === 0),
   );
-  // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
-  // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
-  const slashCommands = useMemo(
-    () => [
-      ...COMMANDS,
-      ...skillScan.skills
-        .filter((s) => !COMMANDS.some((c) => c.name === s.name))
-        .map((s) => ({
-          name: s.name,
-          desc: `${
-            s.description.length > 64 ? `${s.description.slice(0, 63).trimEnd()}…` : s.description
-          } (skill)`,
-        })),
-    ],
-    [skillScan],
-  );
+  // One basis for the footer's ctx segment and for maybeAutoCompact (context_meter.ts). The
+  // rollback flag is passed as a parameter rather than read ambiently, so the meter stays a
+  // pure function of the transcript.
+  const ctxFor = (msgs: AgentMessage[]) =>
+    contextUsage(msgs, {
+      fallbackWindow: agent.agentState.model?.context_window,
+      legacy: agent.config.contextMeter === false,
+    });
   // --resume seeding (B1): main.ts already applied the rehydrated run to the agent; the
   // lazy initializers below put the restored transcript + footer stats in the first frame.
-  const [initialStats] = useState(() =>
-    initialResume
-      ? footerStatsFromMessages(initialResume.messages, agent.agentState.model?.context_window)
-      : null,
-  );
+  const [initialStats] = useState(() => (initialResume ? ctxFor(initialResume.messages) : null));
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
     initialResume
       ? [
@@ -943,6 +1113,20 @@ export function HarnessApp({
           role: "tool",
           toolName: "setup",
           text: `No model-provider API key set — set one to run models: ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER). \`/auth\` configures routing only.`,
+        },
+      ]);
+    }
+    // A keymap file that could not be honoured says so ONCE, here. Every problem already
+    // names the action it cost and the default it kept, so this never blocks anything —
+    // the affected keys simply are what they always were.
+    const keymapTrouble = keymapProblems();
+    if (keymapTrouble.length > 0) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          toolName: "keymap",
+          text: `⚠ ${keymapPath()}\n${keymapTrouble.map((p) => `  • ${p}`).join("\n")}`,
         },
       ]);
     }
@@ -1017,11 +1201,13 @@ export function HarnessApp({
     askUserRef.current = (params) =>
       new Promise<string | null>((resolve) => {
         setQuestionPrompt({ ...params, resolve });
+        // The run is blocked on a human answer — always notify, however short the turn was.
+        if (agent.config.notify) notify(`Minima asks: ${params.question}`);
       });
     return () => {
       askUserRef.current = null;
     };
-  }, [askUserRef]);
+  }, [askUserRef, agent.config.notify]);
 
   // B2 (MUB-135): Plan/Build mode lives in an external store (src/agent/modes.ts) so the
   // beforeToolCall hook, /plan, and Shift+Tab all share it. planMode stays derived — every
@@ -1042,6 +1228,8 @@ export function HarnessApp({
   // where the input is re-enabled to capture one line of guidance. Arms only when bigPlanBehavior.block
   // exists, which itself requires bigPlan on — structurally inert on the default path.
   const [gateFocus, setGateFocus] = useState<{ gateId: string; noteEntry: boolean } | null>(null);
+  // `/agent make`: while set, the prompt line answers the wizard instead of the agent.
+  const [agentDraft, setAgentDraft] = useState<AgentDraft | null>(null);
   /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
   const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
@@ -1207,6 +1395,13 @@ export function HarnessApp({
           agent.meter?.addOverhead(usd);
           agent.budget?.bookSpend(usd, "plan-critic");
         },
+        // A step may name a user-defined agent type; finalize expands it into that step's
+        // tool allowlist + model pool.
+        agentTypes,
+        // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): stamp the approved
+        // total so the delegate seam's budget gate has something to spend against. No
+        // interactive approval prompt yet — that is deferred to a later change.
+        planBudgetUsd: agent.config.planDelegate ? agent.config.planBudgetUsd : null,
       });
       // MP18: approving the plan (which displays every step's verify) IS the consent event
       // for the seeded checks — without this, the first in_progress todowrite after
@@ -1238,7 +1433,7 @@ export function HarnessApp({
       }
       return outcome;
     },
-    [agent, planMetaModel],
+    [agent, planMetaModel, agentTypes],
   );
   const exitPlanFinalize = useCallback(
     async (_planMd: string | null = null, autoAcceptEdits = false) => {
@@ -1397,8 +1592,12 @@ export function HarnessApp({
   // B1 /memory: ids from the latest `/memory list`, so `pin 2`-style index targets resolve.
   const memoryListRef = useRef<string[]>([]);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  // Ctrl+X is armed — the composer box title shows `· ^X` until the chord resolves.
+  const [chordArmed, setChordArmed] = useState(false);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
+  /** Abort seam for a `/agent <name> <task>` run — Esc must reach the child agent. */
+  const agentCommandControllerRef = useRef<AbortController | null>(null);
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
@@ -1504,7 +1703,13 @@ export function HarnessApp({
   useEffect(() => {
     const modeGated = makeModeGatedBeforeToolCall({
       state: permStateRef.current,
-      promptFn: (prompt) => setPermPrompt(prompt),
+      promptFn: (prompt) => {
+        setPermPrompt(prompt);
+        // Same rule as the question overlay: the run cannot proceed without the user. The
+        // body is model-derived, which is exactly why notify() sanitizes it.
+        if (agent.config.notify)
+          notify(`Minima needs permission: ${prompt.toolName} ${prompt.argsSummary}`);
+      },
       getBundle: () => bundleForMode(getMode()),
     });
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
@@ -1554,7 +1759,7 @@ export function HarnessApp({
   const [basis, setBasis] = useState<string>(agent.config.pinned ? "pinned" : "minima");
   const [routeMode, setRouteMode] = useState<"auto" | "confirm">("auto");
   const [thinkingLevel, setThinkingLevel] = useState<string>(agent.agentState.thinkingLevel);
-  const [ctxPct, setCtxPct] = useState(initialStats?.ctxPct ?? 0);
+  const [ctx, setCtx] = useState<ContextUsage>(initialStats ?? EMPTY_CONTEXT);
   const [inputTokens, setInputTokens] = useState(initialStats?.inputTokens ?? 0);
   const [outputTokens, setOutputTokens] = useState(initialStats?.outputTokens ?? 0);
 
@@ -1567,12 +1772,43 @@ export function HarnessApp({
   // Command auto-complete & typed text
   const [typedText, setTypedText] = useState("");
 
+  // F9a: with MINIMA_TUI_GIT_COMMIT=0 there are no commit deps, so /commit does not exist — not in
+  // the picker, tab-complete or /help, and not in the dispatcher (handleCommand falls through
+  // to the unknown-command reply). "Removed", not "reports itself unavailable".
+  const commands = useMemo(
+    () => (commitDeps ? allCommands() : allCommands().filter((c) => c.name !== "commit")),
+    [commitDeps],
+  );
+  // Slash-typing surfaces only (suggestion strip + tab-complete). The Ctrl+P palette stays
+  // builtins-only: its onPick dispatches handleCommand, which has no case for skill names.
+  // Built from `commands`, not allCommands(), so a hidden builtin stays hidden here too.
+  const slashCommands = useMemo(
+    () => [
+      ...commands,
+      ...skillScan.skills
+        .filter((s) => !allCommands().some((c) => c.name === s.name))
+        .map((s) => ({
+          name: s.name,
+          desc: `${
+            s.description.length > 64 ? `${s.description.slice(0, 63).trimEnd()}…` : s.description
+          } (skill)`,
+        })),
+    ],
+    [commands, skillScan],
+  );
+
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
-  const allMatchingCommands =
-    typedText.startsWith("/") && !hasSpace
-      ? slashCommands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
-      : [];
+  // `/agent <partial>` completes agent-type names instead of commands. Neither list applies
+  // mid-wizard — there the line is a field value, and "/" is legal prose.
+  const typedAgentTypes = agentDraft ? null : agentTypeMatches(typedText, agentTypes);
+  const allMatchingCommands = agentDraft
+    ? []
+    : typedAgentTypes
+      ? typedAgentTypes.map((t) => ({ name: t.name, desc: t.description }))
+      : typedText.startsWith("/") && !hasSpace
+        ? slashCommands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+        : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
   const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
@@ -1591,6 +1827,16 @@ export function HarnessApp({
   // onSubmit echoed the typed prompt optimistically; the loop's message_start(user) — which
   // carries the @file-expanded/replan-prefixed run content — must be skipped, not double-posted.
   const pendingEchoRef = useRef(false);
+
+  // Images the SUBMITTED line referenced, waiting for the plan council to reach its first
+  // routed planner turn. The council composes its own `turn` string, so the user's screenshots
+  // cannot ride the argument the way they do on the build path; this hands them to the first
+  // promptPlanner call and then empties, so later council rounds re-send nothing.
+  const planAttachmentsRef = useRef<ImageContent[]>([]);
+
+  // Wall-clock start of the in-flight turn, so the turn-end notification can skip turns that
+  // finished while the user was plainly still watching (config.notifyAfterMs).
+  const turnStartRef = useRef(0);
 
   // Subscribe to the agent event stream once.
   useEffect(() => {
@@ -1861,8 +2107,27 @@ export function HarnessApp({
 
   // Global keybindings: Ctrl+C quits (double-tap), Esc aborts, Ctrl+L opens the model picker.
   useInput((input, key) => {
+    // FIRST statement, above every early return, on purpose. Ink's useInput re-subscribes on
+    // every render and EventEmitter appends, so whether this handler or TextInput's runs
+    // first is NOT stable — chordOwnsKey() answers `armed || justConsumed` so it is correct
+    // either way, but it is a one-shot read. Read it lower down instead and a dispatch that
+    // returns early (busy, an overlay) would leave the latch set and poison the NEXT Ctrl+E.
+    const editorChordKey = chordOwnsKey();
+    // Which of the ten app-level actions (if any) this keypress means. Pure lookup against
+    // the registry — WHERE each action may fire, and in what order, is still this handler's
+    // control flow below. Nothing outside the registry matches an app chord by hand.
+    const action = resolveBinding(keyEvent(input, key), activeKeymap());
+    // While the $EDITOR chord is armed, its SECOND key belongs to the composer — whatever
+    // else that key means on its own. With the default keymap that key is Ctrl+E, which is
+    // why this used to be spelled as a thinking-only guard; a keymap that moves the sequence
+    // onto, say, Ctrl+X Ctrl+G would otherwise open the editor AND the plan overview from one
+    // keypress. Order-independent for the same reason the latch is: the composer running
+    // first leaves `justConsumed`, this handler running first leaves `armed` — and a key that
+    // merely CANCELS the chord is not the second key, so it still means what it means.
+    if (editorChordKey && matchesSecondChord(input, key)) return;
     // Job control first: Ctrl+Z suspends to the shell (fg resumes + full repaint). Above the
     // overlay guard on purpose — suspend must work with a picker open or a turn streaming.
+    // Not a binding: suspend and abort are terminal contracts, never rebindable.
     if (key.ctrl && input === "z") {
       suspendToShell();
       return;
@@ -1880,7 +2145,7 @@ export function HarnessApp({
     // Plan APPROVAL lives only in the exit_plan tool and /plan finalize. Modal selectors
     // (pickers, palette, config, question overlay) keep the keyboard instead — Tab can
     // mean something there.
-    if (key.tab && key.shift) {
+    if (action === "permission.cycle") {
       if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
         return;
       const next = cycleMode();
@@ -1951,6 +2216,7 @@ export function HarnessApp({
       setPromptQueue(holdOnAbort);
       if (getMode() === "plan") councilControllerRef.current?.abort();
       refutationControllerRef.current?.abort();
+      agentCommandControllerRef.current?.abort();
       agent.abort();
       return;
     }
@@ -1959,7 +2225,7 @@ export function HarnessApp({
     // (always-panel, 2026-07-20; supersedes the busy/<60-col text degrade of 2026-07-17).
     // The one-shot text block survives only below the cannot-render floor, where the
     // same-pass close effect would kill the panel anyway.
-    if (key.ctrl && input === "t") {
+    if (action === "toc.panel") {
       if (panelCanRender()) {
         const sections = buildSections(messages, buildUsageLedger());
         setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
@@ -1970,7 +2236,7 @@ export function HarnessApp({
     }
 
     // Ctrl+Y: copy the last assistant reply — read-only, allowed mid-run (like Ctrl+T).
-    if (key.ctrl && input === "y") {
+    if (action === "reply.copy") {
       copyLastReply();
       return;
     }
@@ -1978,7 +2244,7 @@ export function HarnessApp({
     // D3a (MP5): toggle the task panel — allowed mid-run (progress visibility is the
     // point). Only the explicit hide persists; showing clears the per-project override
     // so fresh projects keep the auto-show default.
-    if (key.ctrl && input === "b") {
+    if (action === "task.panel") {
       const next = !taskPanelHidden;
       setTaskPanelHidden(next);
       if (projectKeyRef.current === null) projectKeyRef.current = repoIdentity(process.cwd());
@@ -1991,7 +2257,7 @@ export function HarnessApp({
     // falls through to the gate-answer arm below (its modal takes Ctrl+G first). Empty
     // states stay one-line chat notices (plan verification off / no plan yet — nothing to page); the
     // text path otherwise survives only below the cannot-render floor.
-    if (key.ctrl && input === "g" && !(bigPlanBehavior?.block && !busy)) {
+    if (action === "plan.overview" && !(bigPlanBehavior?.block && !busy)) {
       if (agent.config.bigPlan === true && panelCanRender()) {
         // MP16: during plan mode the SAME chord shows the evolving draft (the ledger has
         // no plan yet — finalize seeds it, exitPlanMode nulls the session, and the chord
@@ -2062,6 +2328,22 @@ export function HarnessApp({
         }
       }
     }
+    // `/agent make`: Esc abandons the draft, and a bare Enter takes the current field's
+    // default — TextInput never submits an empty line, so the skip has to be caught here.
+    if (agentDraft) {
+      if (key.escape) {
+        setAgentDraft(null);
+        setMessages((m) => [
+          ...m,
+          { role: "tool", toolName: "agent", text: "Cancelled — nothing written." },
+        ]);
+        return;
+      }
+      if (key.return && !typedText.trim()) {
+        answerAgentDraft(agentDraft, "");
+        return;
+      }
+    }
     // MUB-183: Esc while idle with queued prompts clears the queue (the abort branch
     // above already returned while busy, so this can never eat the abort key).
     if (key.escape && promptQueue.items.length > 0) {
@@ -2077,26 +2359,30 @@ export function HarnessApp({
       ]);
       return;
     }
-    if (key.ctrl && input === "g" && bigPlanBehavior?.block) {
+    if (action === "plan.overview" && bigPlanBehavior?.block) {
       dismissedGateRef.current = null;
       setGateFocus({ gateId: bigPlanBehavior.block.gateId, noteEntry: false });
       return;
     }
 
-    if (key.ctrl && input === "l") {
+    if (action === "model.picker") {
       setPickerOpen(true);
       return;
     }
-    if (key.ctrl && input === "p") {
+    if (action === "command.palette") {
       setPaletteOpen(true);
       return;
     }
-    if (key.ctrl && input === "r") {
+    if (action === "route.mode") {
       setRouteMode((m) => (m === "auto" ? "confirm" : "auto"));
       return;
     }
-    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build).
-    if (key.ctrl && input === "e") {
+    // B2: thinking cycle moved here from Shift+Tab (which now cycles Plan/Build). The Ctrl+E
+    // of a Ctrl+X Ctrl+E chord belongs to the composer, not to thinking — handled by the
+    // second-key guard at the top, which covers this the same way whatever the chord is bound
+    // to. With MINIMA_TUI_EDITOR=0 the composer never feeds the chord, so that guard is
+    // always false and this branch behaves byte-identically to before the feature existed.
+    if (action === "thinking.cycle") {
       cycleThinkingLevel();
       return;
     }
@@ -2130,6 +2416,8 @@ export function HarnessApp({
   }
 
   function handleTabComplete(val: string): string | undefined {
+    const types = agentTypeMatches(val, agentTypes);
+    if (types) return types[0] ? `/agent ${types[0].name} ` : undefined;
     if (!val.startsWith("/")) return undefined;
     const hasSpace = val.includes(" ");
     if (hasSpace) return undefined;
@@ -2225,10 +2513,10 @@ export function HarnessApp({
     const totals = agent.meter?.totals();
     if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
     // B1.2: footer stats survive resume (usage carried by rehydrate as of U1.1).
-    const stats = footerStatsFromMessages(r.messages, agent.agentState.model?.context_window);
+    const stats = ctxFor(r.messages);
     setInputTokens(stats.inputTokens);
     setOutputTokens(stats.outputTokens);
-    setCtxPct(stats.ctxPct);
+    setCtx(stats);
     setTranscriptGen((g) => g + 1);
     const notices: ChatMessage[] = [
       resumeNotice(r, totals ? totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd : 0),
@@ -2355,21 +2643,17 @@ export function HarnessApp({
         const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
         undonePrompt = promptText(cut.droppedPrompt);
         agent.agentState.messages = cut.messages;
-        const stats = footerStatsFromMessages(
-          agent.agentState.messages,
-          agent.agentState.model?.context_window,
-        );
+        const stats = ctxFor(agent.agentState.messages);
         setInputTokens(stats.inputTokens);
         setOutputTokens(stats.outputTokens);
-        setCtxPct(stats.ctxPct);
+        setCtx(stats);
         notes.push(`conversation: rewound ${dropCount} turn(s)`);
       } else {
         notes.push("conversation: nothing to rewind");
       }
     }
     if (undonePrompt) {
-      setPrefill({ text: undonePrompt, nonce: Date.now() });
-      setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
+      applyComposerText(undonePrompt);
     }
     setMessages((prev) => {
       let kept = prev;
@@ -2394,13 +2678,85 @@ export function HarnessApp({
     process.stdout.write("\u001b[r\u001b[?69l\u001b[2J\u001b[3J\u001b[H");
   }
 
+  // Seed the composer with text from outside it (/undo's re-prompt, the $EDITOR result).
+  // BOTH halves are required: `prefill` remounts TextInput (its draft is internal state),
+  // while `typedText` is what inputRows and the composer box `height={2 + inputRows}` are
+  // computed from — TextInput does not fire onChange at mount. Drop the setTypedText half
+  // and a 40-line editor result fuses into the border/footer, and Ctrl+D (which tests
+  // `!typedText`) EOF-quits with a large unsaved draft on screen.
+  function applyComposerText(text: string) {
+    setPrefill({ text, nonce: Date.now() });
+    setTypedText(text);
+  }
+
+  // Ctrl+X Ctrl+E / `/editor`. Deferred by a 0ms timeout so the blocking spawnSync never
+  // runs INSIDE a keypress dispatch, and `busy` is re-checked after the defer because the
+  // turn state can change in between. The post-editor repaint must be the reseat + <Static>
+  // remount that /clear and /new use: Ink skips the write when the frame is byte-identical
+  // to the last one and throttles at ~32ms, and after a full-screen editor the screen is
+  // genuinely destroyed — a bare state bump is not guaranteed to paint anything.
+  function openEditor(seed: string) {
+    if (agent.config.externalEditor !== true) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: "$EDITOR composing is OFF — unset MINIMA_TUI_EDITOR (or set it to 1) to use it.",
+          toolName: "editor",
+        },
+      ]);
+      return;
+    }
+    if (busy) return;
+    setChordArmed(false);
+    resetChord();
+    setTimeout(() => {
+      if (busyRef.current) return;
+      const outcome = openEditorForDraft(seed, { runId: agent.runId });
+      reseatFreshScreen();
+      setTranscriptGen((g) => g + 1);
+      setMessages((m) => [...m, { role: "tool", text: outcome.notice, toolName: "editor" }]);
+      if (outcome.apply && outcome.text !== null) applyComposerText(outcome.text);
+    }, 0);
+  }
+
+  /** The reply for a command that does not exist — shared with the flag-removed /commit, so
+   *  a switched-off command is indistinguishable from one that was never built. */
+  function replyUnknownCommand(name: string, args: string) {
+    setMessages((m) => [
+      ...m,
+      {
+        role: "user",
+        text: `/${name} ${args}`.trim(),
+      },
+      {
+        role: "tool",
+        text: `Unknown command: /${name}. Type /help to see all available commands.`,
+        toolName: "error",
+        isError: true,
+      },
+    ]);
+  }
+
   async function handleCommand(name: string, args: string) {
     const cmdName = name.trim().toLowerCase();
+    // MINIMA_TUI_GIT_COMMIT=0 removes /commit outright (the deps are absent), so it must not reach
+    // its case: fall through to the unknown-command reply exactly as any typo would.
+    if (cmdName === "commit" && !commitDeps) {
+      replyUnknownCommand(name, args);
+      return;
+    }
     switch (cmdName) {
       case "clear":
         reseatFreshScreen();
         setTranscriptGen((g) => g + 1);
         setMessages([]);
+        break;
+      // `/editor` cannot carry the draft: by the time this runs the composer has already
+      // cleared itself on submit. So it opens empty, `/editor <text>` seeds with the args,
+      // and Ctrl+X Ctrl+E is the path that carries what you were typing.
+      case "editor":
+        openEditor(args.trim());
         break;
       case "perms": {
         const ps = permStateRef.current;
@@ -2443,6 +2799,46 @@ export function HarnessApp({
       }
       case "copy": {
         copyLastReply(`/${name}`);
+        break;
+      }
+      case "dashboard": {
+        // Snapshotted fresh, never cached: another TUI may have started the server, or it may have
+        // moved ports since this session began. Formatting lives in dashboard/supervisor.ts so the
+        // no-dashboard branches are testable without a terminal.
+        const { dashboardReport } = await import("../dashboard/supervisor.ts");
+        const verb = args.trim().toLowerCase();
+        const echo: ChatMessage = { role: "user", text: `/dashboard${verb ? ` ${verb}` : ""}` };
+        if (verb !== "" && verb !== "on" && verb !== "off") {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              text: `Unknown argument "${verb}". Usage: /dashboard [on|off]`,
+              toolName: "dashboard",
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        // `off` releases this TUI's hold and stops it retrying; it never signals the server, which
+        // ends itself once its last client leaves. `on` waits briefly so the reply is the link
+        // rather than "not reachable" while the spawn is in flight.
+        if (verb === "off") await dashboard?.detach();
+        const snap = dashboard
+          ? verb === "on"
+            ? await dashboard.resume()
+            : await dashboard.snapshot()
+          : null;
+        const lines = dashboardReport(snap, {
+          disabled: process.env.MINIMA_TUI_DASHBOARD === "0",
+          age: (startedAt) => formatAge(startedAt / 1000),
+        });
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: lines.join("\n"), toolName: "dashboard" },
+        ]);
         break;
       }
       case "undo": {
@@ -2513,17 +2909,13 @@ export function HarnessApp({
           const cut = truncateLastPrompts(agent.agentState.messages, dropCount);
           undonePrompt = promptText(cut.droppedPrompt);
           agent.agentState.messages = cut.messages;
-          const stats = footerStatsFromMessages(
-            agent.agentState.messages,
-            agent.agentState.model?.context_window,
-          );
+          const stats = ctxFor(agent.agentState.messages);
           setInputTokens(stats.inputTokens);
           setOutputTokens(stats.outputTokens);
-          setCtxPct(stats.ctxPct);
+          setCtx(stats);
         }
         if (undonePrompt) {
-          setPrefill({ text: undonePrompt, nonce: Date.now() });
-          setTypedText(undonePrompt); // keep the prompt-box height calc in sync with the seeded draft
+          applyComposerText(undonePrompt);
         }
 
         setMessages((prev) => {
@@ -2590,6 +2982,21 @@ export function HarnessApp({
                 )
                 .join("\n");
         setMessages((m) => [...m, echo, { role: "tool", text, toolName: "ckpt" }]);
+        break;
+      }
+      case "commit": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "commit", isError }]);
+        const message = args.trim();
+        if (!message) {
+          say("Usage: /commit <message> — commits the staged changes with model attribution.");
+          break;
+        }
+        // The same commitDeps main.ts gave the git_commit tool, so the user-initiated and
+        // model-initiated commits are one code path: same trailers, same refusals, same hooks.
+        const result = await commitChanges(commitDeps!, { message });
+        say(result.ok ? result.report : result.reason, !result.ok);
         break;
       }
       case "memory": {
@@ -2704,6 +3111,143 @@ export function HarnessApp({
           "usage: /memory [list] · add <text> · pin|confirm|reject|delete <n|id>\nCurated cross-session memory for this repo — active + pinned entries are injected into the system prompt each turn.",
           true,
         );
+        break;
+      }
+      case "agent": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "agent", isError }]);
+        // Re-read from disk first: a definition created or hand-edited during the session must
+        // land without a restart (the startup load is the only other read).
+        const reload = () => {
+          if (!agentTypes) return [];
+          const fresh = loadAgentTypes(process.cwd());
+          agentTypes.types.clear();
+          for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+          return [...fresh.types.values()].sort((a, b) => a.name.localeCompare(b.name));
+        };
+        const defined = reload();
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const wanted = (parts[0] ?? "").toLowerCase();
+        // `make` is a subcommand only while no type actually claims that name.
+        if (wanted === "make" && !defined.some((t) => t.name === "make")) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              toolName: "agent",
+              text: "New agent type — answer each line, Esc to cancel.",
+            },
+          ]);
+          setAgentDraft(newAgentDraft(parts[1] ?? ""));
+          break;
+        }
+        // No name → the menu. Also the only form allowed to run mid-turn (prompt_queue.ts).
+        if (!wanted) {
+          say(
+            defined.length === 0
+              ? [
+                  "No agent types defined.",
+                  "",
+                  "  /agent make          define one — it asks for each field in turn",
+                  "  /agent make <name>   same, with the name already answered",
+                  "",
+                  "A type is a persona plus a tool allowlist, a model pool, an effort level and a",
+                  "spend cap. The lead agent can then delegate to it, a plan step can name it,",
+                  "and /agent <name> <task> runs it directly.",
+                ].join("\n")
+              : [
+                  `${defined.length} agent type${defined.length > 1 ? "s" : ""}:`,
+                  "",
+                  ...defined.map((t) => {
+                    const bits = [
+                      t.tools ? `tools: ${t.tools.join(", ")}` : null,
+                      t.candidates ? `models: ${t.candidates.join(", ")}` : null,
+                      t.effort ? `effort: ${t.effort}` : null,
+                      t.budget_usd !== undefined ? `cap: $${t.budget_usd}` : null,
+                      t.isolation ? `isolation: ${t.isolation}` : null,
+                    ].filter(Boolean);
+                    return `  ${t.name} — ${t.description || "(no description)"}${
+                      bits.length ? `\n    ${bits.join(" · ")}` : ""
+                    }`;
+                  }),
+                  "",
+                  "Run one with /agent <name> <task> · define another with /agent make.",
+                ].join("\n"),
+          );
+          break;
+        }
+        const type = defined.find((t) => t.name === wanted);
+        if (!type) {
+          say(
+            `Unknown agent type "${wanted}".${
+              defined.length
+                ? ` Defined: ${defined.map((t) => t.name).join(", ")}`
+                : ` None are defined — /agent make ${wanted} defines it.`
+            }`,
+            true,
+          );
+          break;
+        }
+        const objective = args.trim().slice(parts[0]!.length).trim();
+        if (!objective) {
+          say(`usage: /agent ${type.name} <task> — what should this agent do?`, true);
+          break;
+        }
+        if (!planSpawn) {
+          say("agent unavailable — no subagent spawner in this session", true);
+          break;
+        }
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: `Running the ${type.name} agent…`, toolName: "agent" },
+        ]);
+        setBusy(true);
+        setBusyState("running");
+        const controller = new AbortController();
+        agentCommandControllerRef.current = controller;
+        try {
+          // The contract fields the model would normally author. A type deliberately cannot
+          // supply them (it says WHO, not WHAT), so the command provides neutral ones and
+          // the user's line is the objective.
+          const res = await planSpawn(
+            {
+              step_id: type.name,
+              objective,
+              output_format: "A direct, complete answer to the objective.",
+              boundaries:
+                "Stay within the objective. Make no unrelated changes and touch no files the objective does not call for.",
+              agent_type: type.name,
+            },
+            { depth: 1, parentSignal: controller.signal, priorResults: [] },
+          );
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `${res.text || "(no output)"}\n\n---\n${type.name} · ${res.outcome} · $${res.costUsd.toFixed(4)}`,
+              toolName: "agent",
+              isError: res.outcome === "failure",
+            },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `agent failed: ${errText(exc)}`,
+              toolName: "agent",
+              isError: true,
+            },
+          ]);
+        } finally {
+          agentCommandControllerRef.current = null;
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "profile": {
@@ -2920,13 +3464,22 @@ export function HarnessApp({
       }
       case "compact": {
         const before = agent.agentState.messages;
-        agent.agentState.messages = compactMessages(agent, before);
+        setMessages((m) => [...m, { role: "user", text: `/${name} ${args}`.trim() }]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          agent.agentState.messages = await compactMessagesLLM(agent, before, {
+            model: planMetaModel ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "compact");
+            },
+          });
+        } finally {
+          setBusy(false);
+        }
         setMessages((m) => [
           ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
           {
             role: "tool",
             text: compactReport(before, agent.agentState.messages),
@@ -3088,7 +3641,7 @@ export function HarnessApp({
             setMode(next ? "plan" : "build");
             pushPlan(
               next
-                ? "Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; Shift+Tab cycles on to bypass."
+                ? `Plan mode ON — write/edit/bash/apply_patch ask first. /plan to exit; ${keyHelp("permission.cycle")} cycles on to bypass.`
                 : "Build mode — standard permissions.",
             );
           } else {
@@ -3213,7 +3766,7 @@ export function HarnessApp({
             echo,
             {
               role: "tool",
-              text: `Mode: ${getMode()} — /mode build | accept | plan | bypass (Shift+Tab cycles).`,
+              text: `Mode: ${getMode()} — /mode build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles).`,
               toolName: "mode",
             },
           ]);
@@ -3227,7 +3780,7 @@ export function HarnessApp({
             role: "tool",
             text:
               want === "bypass"
-                ? "⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the Shift+Tab cycle; it is never persisted."
+                ? `⚠ BYPASS mode — every tool call runs without prompting. Bypass is always in the ${keyHelp("permission.cycle")} cycle; it is never persisted.`
                 : want === "acceptEdits"
                   ? "Accept-edits mode — write/edit/apply_patch run without prompting; bash keeps the normal flow."
                   : want === "plan"
@@ -3247,7 +3800,11 @@ export function HarnessApp({
           },
           {
             role: "tool",
-            text: `Available commands:\n${COMMANDS.map((c) => `  /${c.name.padEnd(12)} ${c.desc}`).join("\n")}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · Ctrl+Y copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  Shift+Tab permission modes · Ctrl+E thinking · Ctrl+L models · Ctrl+P palette\n  Ctrl+R route mode · Ctrl+T ToC · Ctrl+G plan overview\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
+            text: `Available commands:\n${commands
+              .map((c) => `  /${c.name.padEnd(12)} ${c.desc}`)
+              .join(
+                "\n",
+              )}\n\nKeyboard:\n  Enter submit · ↑/↓ prompt history · ←/→ move cursor · Alt+←/→ (or Alt+B/F) word jump\n  Home/End line start/end · Ctrl+A line start · Ctrl+K kill to end · Ctrl+U kill to start\n  Ctrl+W / Alt+Backspace kill word back · Ctrl+D delete char (empty prompt: quit)\n  Ctrl+V paste clipboard (terminal Cmd+V also works) · ${keyHelp("reply.copy")} copy last reply\n  Ctrl+C abort run / press twice to quit · Ctrl+Z suspend to shell (fg returns)\n  ${keyHelp("permission.cycle")} permission modes · ${keyHelp("thinking.cycle")} thinking · ${keyHelp("model.picker")} models · ${keyHelp("command.palette")} palette\n  ${keyHelp("route.mode")} route mode · ${keyHelp("toc.panel")} ToC · ${keyHelp("plan.overview")} plan overview\n  ${keyHelp("editor.open")} compose the prompt in $EDITOR (also /editor)\n  Scroll with your terminal (wheel/trackpad); text select + copy work natively`,
             toolName: "help",
           },
         ]);
@@ -3292,7 +3849,9 @@ export function HarnessApp({
           break;
         }
         let report = agent.meter?.report() || "(no cost metrics recorded)";
-        // Persisted-run metrics (quality/$, savings, OCR) — the durable view.
+        // The durable view: quality/$ and the anchor comparison, from `db/anchors.ts` — the SAME
+        // functions the dashboard's cost page reads. The meter above deliberately claims no
+        // savings of its own, so this screen states one number once.
         if (agent.db && agent.runId) {
           try {
             const rows = agent.db.getRunDecisions(agent.runId) as unknown as Parameters<
@@ -3429,7 +3988,7 @@ export function HarnessApp({
         setActualCost(0);
         setInputTokens(0);
         setOutputTokens(0);
-        setCtxPct(0);
+        setCtx(EMPTY_CONTEXT);
         setMessages((m) => [
           ...m,
           {
@@ -3583,7 +4142,7 @@ export function HarnessApp({
           {
             role: "tool",
             text: nextHidden
-              ? "Task panel hidden for this project (persists). Ctrl+B or /tasks shows it again."
+              ? `Task panel hidden for this project (persists). ${keyHelp("task.panel")} or /tasks shows it again.`
               : (todos?.length ?? 0) > 0
                 ? "Task panel shown."
                 : "Task panel shown — it appears when the agent records todos.",
@@ -3699,6 +4258,30 @@ export function HarnessApp({
         setMessages((m) => [
           ...m,
           { role: "tool", text: formatTip(advanceTip()), toolName: "tip" },
+        ]);
+        break;
+      }
+      case "caveman": {
+        const parsed = parseCavemanArg(args);
+        const next =
+          parsed === "off"
+            ? null
+            : parsed !== null
+              ? parsed
+              : getCaveman()
+                ? null
+                : DEFAULT_CAVEMAN_LEVEL;
+        setCaveman(next);
+        setMessages((m) => [
+          ...m,
+          { role: "user", text: `/${name} ${args}`.trim() },
+          {
+            role: "tool",
+            text: next
+              ? `caveman: ${next} — prose compressed; code, commands and errors untouched`
+              : "caveman: off",
+            toolName: "caveman",
+          },
         ]);
         break;
       }
@@ -3844,6 +4427,22 @@ export function HarnessApp({
         // opens it with step n's card pushed (the shared stepCardLines surface). The text
         // path stays for verification-off, narrow terminals, and out-of-range steps — and is the
         // only path headless runs ever had (no slash commands there).
+        // F9b: `/why <sha>` is an ARGUMENT BRANCH on this command, not a command of its own —
+        // seven or more hex characters is a commit hash, anything else falls through to the
+        // step-index path below. It answers from the commits ledger, which is the one question
+        // routing_decisions alone cannot: which models wrote a given commit, later, by hash.
+        if (isCommitArg(args)) {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            {
+              role: "tool",
+              text: whyCommitReport(agent.db, args, agent.config.commitLedger === true),
+              toolName: "why",
+            },
+          ]);
+          break;
+        }
         const overview =
           agent.config.bigPlan === true && agent.db && agent.runId
             ? buildPlanOverview(agent.db, agent.runId, sessionTotalUsd())
@@ -3905,6 +4504,50 @@ export function HarnessApp({
           { role: "user", text: `/${name} ${args}`.trim() },
           { role: "tool", text, toolName: "why" },
         ]);
+        break;
+      }
+      case "pr": {
+        // Branch off HEAD (local commits ride along), commit the dirty tree, push, open a
+        // PR into the requested base. runPr does not mutate anything until the user confirms
+        // the proposal through the same overlay the `question` tool uses.
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const top = resolveRepoTop();
+        if (!top) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            { role: "tool", text: "/pr needs a git repository.", toolName: "pr", isError: true },
+          ]);
+          break;
+        }
+        setMessages((m) => [...m, echo]);
+        setBusy(true);
+        setBusyState("running");
+        try {
+          const outcome = await runPr({
+            top,
+            base: parsePrArgs(args).base,
+            metaModel: planMetaModel ?? null,
+            ask: askUserRef?.current ?? null,
+            onCostUsd: (usd) => {
+              agent.meter?.addOverhead(usd);
+              agent.budget?.bookSpend(usd, "pr");
+            },
+          });
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: outcome.text, toolName: "pr", isError: outcome.isError },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            { role: "tool", text: `pr failed: ${errText(exc)}`, toolName: "pr", isError: true },
+          ]);
+        } finally {
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "verify": {
@@ -4180,20 +4823,62 @@ export function HarnessApp({
         ]);
         break;
       }
+      case "btw": {
+        const note = args.trim();
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "btw" }]);
+        if (!note) {
+          say("Usage: /btw <note> — hand the running turn a side note without queueing a prompt.");
+          break;
+        }
+        if (!busy && !drainBusyRef.current) {
+          say("Nothing is running — send it as a normal prompt.");
+          break;
+        }
+        agent.steer(`By the way, from the user (extra context, not a new task):\n${note}`);
+        say("Noted — the agent sees it at its next step.");
+        break;
+      }
+      case "summarise": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "summarise" }]);
+        const turns = buildTurnDigests(
+          agent.agentState.messages,
+          Number(args) || 5,
+          agent.meter?.toolFees,
+        );
+        if (turns.length === 0) {
+          say("Nothing to summarise yet — no completed turns in this session.");
+          break;
+        }
+        const usable = planMetaModel && providerKeyPresent(planMetaModel.provider);
+        if (!usable) {
+          say(
+            `Last ${turns.length} turns (no summariser model available):\n${formatDigest(turns)}`,
+          );
+          break;
+        }
+        let spent = 0;
+        const summary = await runSummarise({
+          metaModel: planMetaModel,
+          turns,
+          onCostUsd: (usd) => {
+            spent = usd;
+            agent.meter?.addOverhead(usd);
+            agent.budget?.bookSpend(usd, "summarise");
+          },
+        });
+        say(
+          summary
+            ? `Last ${turns.length} turns\n\n${summary}\n\n  ~$${spent.toFixed(4)} · ${planMetaModel.id}`
+            : `Last ${turns.length} turns (summariser unavailable):\n${formatDigest(turns)}`,
+        );
+        break;
+      }
       default:
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text: `/${name} ${args}`.trim(),
-          },
-          {
-            role: "tool",
-            text: `Unknown command: /${name}. Type /help to see all available commands.`,
-            toolName: "error",
-            isError: true,
-          },
-        ]);
+        replyUnknownCommand(name, args);
     }
   }
 
@@ -4283,9 +4968,12 @@ export function HarnessApp({
         agent.agentState.systemPrompt = systemPrompt;
         // Premium hard pin (constraints.candidate_models) + the plan phase tag — the tag
         // rides regardless of the premium flag so plan-turn outcomes cluster server-side.
+        const atts = planAttachmentsRef.current;
+        planAttachmentsRef.current = [];
         const routing = await agent.promptRouted(turn, {
           candidates: premium?.candidates,
           tags: ["phase:plan"],
+          attachments: atts.length > 0 ? atts : undefined,
         });
         if (getMode() !== "plan" && base != null) {
           agent.agentState.systemPrompt = base;
@@ -4375,10 +5063,97 @@ export function HarnessApp({
     drainGen,
   ]);
 
+  /** One answer in the `/agent make` wizard. Persists on the last field. */
+  function answerAgentDraft(draft: AgentDraft, text: string) {
+    const res = wizardAdvance(draft, text);
+    const note = (t: string, isError = false) =>
+      setMessages((m) => [...m, { role: "tool", toolName: "agent", text: t, isError }]);
+    if (res.kind === "error") {
+      note(res.message, true);
+      return;
+    }
+    if (res.kind === "next") {
+      setAgentDraft(res.draft);
+      return;
+    }
+    setAgentDraft(null);
+    const d = res.draft;
+    try {
+      const path = scaffoldAgentType(process.cwd(), d.name, {
+        global: d.global,
+        description: d.description,
+        role: d.role,
+        tools: d.tools,
+        budget_usd: d.budget_usd,
+      });
+      // The registry is loaded once at startup, so the new type has to be folded into the live
+      // one or it would not be runnable (or completable) until restart.
+      if (agentTypes) {
+        const fresh = loadAgentTypes(process.cwd());
+        agentTypes.types.clear();
+        for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+      }
+      note(
+        [
+          `created ${path}`,
+          "",
+          `Run it with /agent ${d.name} <task>. The lead agent can delegate to it and a plan`,
+          "step can name it. Edit the file to add a model pool or an effort level.",
+        ].join("\n"),
+      );
+    } catch (exc) {
+      note(errText(exc), true);
+    }
+  }
+
+  /**
+   * Ctrl+V, image half. Returns the token to insert, or undefined to let the composer paste
+   * the clipboard's TEXT instead — which is both "there was no image" and "there was one and
+   * we could not take it", since the second case has already said so in the transcript.
+   *
+   * Two blocking spawns on macOS (~0.5s). Acceptable on an explicit keypress; see
+   * clipboard_image.ts's header for why it must not move anywhere else.
+   */
+  function handleImagePaste(): string | undefined {
+    const res = readClipboardImage();
+    if (res.kind === "none") return undefined;
+    if (res.kind === "error") {
+      setMessages((m) => [
+        ...m,
+        { role: "tool", toolName: "paste", text: `⚠ ${res.message}`, isError: true },
+      ]);
+      return undefined;
+    }
+    const { width, height, bytes, resized } = res.image;
+    const id = addAttachment(res.image);
+    // Routing has not run yet, so the model that will SEE this is unknown — except when the
+    // user pinned one. Warn only in that knowable case; otherwise runtime.ts's drop-guard
+    // reports per rung, once the pick is real.
+    const pinnedBlind = agent.config.pinned && !supportsImageInput(agent.agentState.model);
+    const note = pinnedBlind
+      ? ` — ⚠ ${agent.agentState.model?.id ?? "this model"} has no vision, it will be dropped`
+      : "";
+    setMessages((m) => [
+      ...m,
+      {
+        role: "tool",
+        toolName: "paste",
+        text: `🖼 ${attachmentToken(id)} ${width}×${height}, ${Math.round(bytes / 1024)} KB${resized ? " (downscaled)" : ""}${note}`,
+        isError: pinnedBlind,
+      },
+    ]);
+    return `${attachmentToken(id)} `;
+  }
+
   async function onSubmit(text: string) {
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
       answerGate(gateFocus.gateId, "steer", text.trim() || null);
+      return;
+    }
+    if (agentDraft) {
+      setTypedText("");
+      answerAgentDraft(agentDraft, text);
       return;
     }
     setTypedText("");
@@ -4417,7 +5192,10 @@ export function HarnessApp({
         name,
         args,
         skillScan.skills,
-        COMMANDS.map((c) => c.name),
+        // allCommands(), not the memoized `commands`: a builtin hidden from the palette
+        // (/commit without git deps) still has a case in handleCommand, so a skill of the
+        // same name must not shadow it.
+        allCommands().map((c) => c.name),
       );
       if (skillPrompt === null) {
         await handleCommand(name, args);
@@ -4426,10 +5204,17 @@ export function HarnessApp({
       prompt = skillPrompt;
     }
 
+    // Images resolve HERE rather than at Enter, so a prompt that sat in the mid-turn queue
+    // still carries the screenshots it was typed with. Only tokens that survived in the text
+    // count — backspacing `[Image #1]` away is how you un-attach.
+    const attachments = consumeAttachments(trimmed).map((a) => imageBlock(a.data, a.mime));
+    planAttachmentsRef.current = attachments;
+
     // Optimistic echo: the VERBATIM prompt lands before recall/route (and before any council
     // round in plan mode) — the loop's later message_start(user) is deduped via the ref.
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
     pendingEchoRef.current = true;
+    turnStartRef.current = Date.now();
     setBusy(true);
     setBusyState("reasoning");
     setStreaming("");
@@ -4464,8 +5249,19 @@ export function HarnessApp({
             },
           ]);
         }
-        const expanded = expandAtFiles(prompt, process.cwd());
-        const routing = await agent.promptRouted(expanded, planOpts);
+        const expanded = expandAtFiles(text, process.cwd());
+        // Attached images narrow the pool BEFORE the request, so routing cannot hand the turn
+        // to a model that would only have to drop them. Pre-request candidate assembly, the
+        // same mechanism plan mode uses — never a re-rank of what comes back.
+        const visionPool =
+          attachments.length > 0
+            ? visionCandidates(planOpts?.candidates ?? agent.config.candidates)
+            : undefined;
+        const routing = await agent.promptRouted(expanded, {
+          ...planOpts,
+          ...(visionPool ? { candidates: visionPool } : {}),
+          attachments: attachments.length > 0 ? attachments : undefined,
+        });
         surfaceRouting(routing);
       }
     } catch (exc) {
@@ -4485,6 +5281,14 @@ export function HarnessApp({
       // by a mid-turn mode exit (see the registration effect).
       sweepRetiredTools();
       setBusyState("ready");
+      // The turn is back in the user's hands. Only worth a banner if they had time to look
+      // away — a fast turn is one they watched land.
+      if (
+        agent.config.notify &&
+        shouldNotifyTurnEnd(Date.now() - turnStartRef.current, agent.config.notifyAfterMs)
+      ) {
+        notify("Minima finished your turn");
+      }
       setCouncilPhase(null);
       setActiveActions([]);
       setStreaming("");
@@ -4493,25 +5297,28 @@ export function HarnessApp({
       if (totals) setActualCost(totals.actualCostUsd + totals.overheadUsd + totals.toolFeesUsd);
       if (agent.budget) setBudgetStatus(agent.budget.status());
 
-      const last = getLastAssistant(agent);
-      if (last?.usage) {
-        // Same helper as the resume paths — one source of truth for the footer numbers.
-        const stats = footerStatsFromMessages(
-          agent.agentState.messages,
-          agent.agentState.model?.context_window,
-        );
-        setInputTokens(stats.inputTokens);
-        setOutputTokens(stats.outputTokens);
-        setCtxPct(stats.ctxPct);
-      }
+      // Same helper as the resume paths — one source of truth for the footer numbers.
+      // Computed unconditionally: the meter returns a real estimate even when the turn
+      // recorded no usage, so the old `if (last?.usage)` guard would strand a stale number
+      // on screen after an aborted turn instead of protecting the footer from zeros.
+      const stats = ctxFor(agent.agentState.messages);
+      setInputTokens(stats.inputTokens);
+      setOutputTokens(stats.outputTokens);
+      setCtx(stats);
 
       const beforeAuto = agent.agentState.messages;
       if (maybeAutoCompact(agent)) {
+        // Name the number the footer just showed. Under the rollback flag the trigger reads a
+        // different basis than `stats`, so it falls back to the historical wording.
+        const pctNote =
+          agent.config.contextMeter !== false && stats.pct !== null
+            ? `${stats.pct.toFixed(0)}%`
+            : `>${AUTO_COMPACT_PCT}%`;
         setMessages((m) => [
           ...m,
           {
             role: "tool",
-            text: `Auto (context was >80% full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
+            text: `Auto (context was ${pctNote} full) — ${compactReport(beforeAuto, agent.agentState.messages)}`,
             toolName: "compact",
           },
         ]);
@@ -4528,8 +5335,13 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const suggestionsHeight =
-    matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
+  // The two live boxes above the composer are mutually exclusive (the wizard suppresses the
+  // suggestion list), so one term books whichever is mounted: border rows + question + hint.
+  const suggestionsHeight = agentDraft
+    ? wizardSummary(agentDraft).length + 3 + (wizardHint(agentDraft) ? 1 : 0)
+    : matchingCommands.length > 0
+      ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0)
+      : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only hides for the pickers/overlays that replace it in the
   // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
@@ -4541,6 +5353,9 @@ export function HarnessApp({
   // width wraps the cursor onto a fresh row, which the reserve must include.
   const inputRows = inputHidden ? 1 : Math.max(1, wrappedLineCount(`${typedText}▋`, cols - 4));
   const inputExtraLines = inputHidden ? 0 : inputRows - 1;
+  // Counted from the DRAFT, not from the store: deleting a token has to un-count it the
+  // instant it leaves the text, which is the same rule submit uses to decide what is sent.
+  const attachedCount = parseAttachmentTokens(typedText).length;
   const inputBoxHeight = inputHidden ? 0 : (planMode ? 7 : 4) + inputExtraLines;
   // Expanded live-region panel (MP4 spike; D3b from MP7) — the wipe-threshold identity:
   // while the panel renders, the frame is EXACTLY panelOuter + inputBoxHeight +
@@ -4596,11 +5411,15 @@ export function HarnessApp({
   }
   function handlePanelKey(input: string, key: PanelNavKey & { ctrl?: boolean }) {
     const top = panel ? (panel.stack[panel.stack.length - 1] ?? null) : null;
+    // The panel owns the keyboard while mounted, so it re-resolves the same registry for
+    // the two actions that mean something in here — ownership is unchanged, only the
+    // matching moved.
+    const action = resolveBinding(keyEvent(input, key), activeKeymap());
     if (key.ctrl && input === "c") {
       closePanelReseat();
       return;
     }
-    if (key.ctrl && input === "t") {
+    if (action === "toc.panel") {
       // Ctrl+T toggles the ToC family closed; from the plan view it SWAPS to a fresh ToC.
       if (!top || top.kind === "toc" || top.kind === "reader") {
         closePanelReseat();
@@ -4610,7 +5429,7 @@ export function HarnessApp({
       setPanel(tocPanelState(sections, tocRows(sections, Math.max(20, cols - 6)), messages));
       return;
     }
-    if (key.ctrl && input === "g") {
+    if (action === "plan.overview") {
       // An unanswered 🔴 gate wins the chord even inside the panel: close and hand the
       // keyboard to the gate-focus modal (the same arm the global handler uses). The
       // modal is idle-only, so a busy chord swaps views instead of arming it dead.
@@ -4836,7 +5655,7 @@ export function HarnessApp({
   const pickerRows = pickerOpen
     ? MODEL_PICKER_MAX_ROWS
     : paletteOpen
-      ? COMMANDS.length + 3
+      ? commands.length + 3
       : sessionPickerOpen
         ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
         : configOverlayOpen
@@ -4994,7 +5813,7 @@ export function HarnessApp({
         />
       ) : paletteOpen ? (
         <CommandPicker
-          commands={COMMANDS}
+          commands={commands}
           onPick={(name) => {
             setPaletteOpen(false);
             handleCommand(name, "").catch((exc) => {
@@ -5066,11 +5885,14 @@ export function HarnessApp({
               flexShrink={0}
             >
               <Box position="absolute" marginTop={-1} marginLeft={2}>
-                <Text color="gray"> commands </Text>
+                <Text color="gray"> {typedAgentTypes ? "agent types" : "commands"} </Text>
               </Box>
               {matchingCommands.map((cmd) => (
                 <Box key={cmd.name}>
-                  <Text color="yellow">/{cmd.name.padEnd(suggestionPad)}</Text>
+                  <Text color="yellow">
+                    {typedAgentTypes ? " " : "/"}
+                    {cmd.name.padEnd(suggestionPad)}
+                  </Text>
                   <Text color="gray">{cmd.desc}</Text>
                 </Box>
               ))}
@@ -5082,9 +5904,36 @@ export function HarnessApp({
             </Box>
           )}
           {queueListVisible && <QueueList queue={promptQueue} />}
+          {agentDraft && (
+            <Box
+              borderStyle="round"
+              borderColor="cyan"
+              paddingX={1}
+              flexDirection="column"
+              width="100%"
+              flexShrink={0}
+            >
+              <Box position="absolute" marginTop={-1} marginLeft={2}>
+                <Text color="cyan"> new agent type </Text>
+              </Box>
+              {wizardSummary(agentDraft).map((row) => (
+                <Text key={row} color="gray" wrap="truncate">
+                  {row}
+                </Text>
+              ))}
+              <Text color="cyan" wrap="truncate">
+                {wizardQuestion(agentDraft)}
+              </Text>
+              {wizardHint(agentDraft) && (
+                <Text color="gray" wrap="truncate">
+                  {wizardHint(agentDraft)}
+                </Text>
+              )}
+            </Box>
+          )}
           <Box
             borderStyle="round"
-            borderColor={planMode ? "magenta" : "yellow"}
+            borderColor={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}
             paddingX={1}
             flexDirection="column"
             width="100%"
@@ -5094,9 +5943,21 @@ export function HarnessApp({
             height={2 + inputRows}
             flexShrink={0}
           >
+            {/* The armed-chord hint rides the box TITLE, which is position="absolute" and so
+                costs no rows. An inline marker is rejected: the height reserve above comes
+                from typedText only, so any extra glyph the composer draws can wrap a line
+                and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
-              <Text color={planMode ? "magenta" : "yellow"}>
-                {planMode ? " plan mode " : " prompt "}
+              <Text color={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}>
+                {/* Mid-wizard the line is a field value, so neither the armed-chord hint nor
+                    the attachment count applies — the field name is the whole label. */}
+                {agentDraft
+                  ? ` ${WIZARD_FIELDS[agentDraft.step]} `
+                  : `${planMode ? " plan mode" : chordArmed ? ` prompt · ${armedPrefixHint()}` : " prompt"}${
+                      attachedCount > 0
+                        ? ` · ${attachedCount} image${attachedCount === 1 ? "" : "s"}`
+                        : ""
+                    } `}
               </Text>
             </Box>
             <TextInput
@@ -5115,13 +5976,22 @@ export function HarnessApp({
                   : undefined
               }
               placeholder={
-                gateFocus?.noteEntry
-                  ? "steer guidance — Enter to record, Esc to skip note"
-                  : busy
-                    ? "turn running — Enter queues (esc aborts)"
-                    : ""
+                agentDraft
+                  ? "Enter to accept · Esc to cancel"
+                  : gateFocus?.noteEntry
+                    ? "steer guidance — Enter to record, Esc to skip note"
+                    : busy
+                      ? "turn running — Enter queues (esc aborts)"
+                      : ""
               }
               showPrefix={false}
+              // Passing undefined turns the chord off entirely at the composer layer — the
+              // kill switch, not a branch inside the handler.
+              onEditorRequest={agent.config.externalEditor === true ? openEditor : undefined}
+              onChordArmed={setChordArmed}
+              // Passing undefined is the kill switch, exactly as above: with
+              // MINIMA_TUI_IMAGES=0 no clipboard-image code is reachable from Ctrl+V.
+              onImagePaste={agent.config.images ? handleImagePaste : undefined}
             />
           </Box>
         </Box>
@@ -5168,7 +6038,11 @@ export function HarnessApp({
           basis={basis}
           routeMode={routeMode}
           thinkingLevel={thinkingLevel}
-          ctxPct={ctxPct}
+          effortModel={agent.agentState.model}
+          hasTools={agent.agentState.tools.length > 0}
+          ctx={ctx}
+          contextMeter={agent.config.contextMeter}
+          columns={cols}
           inputTokens={inputTokens}
           outputTokens={outputTokens}
           actualCostUsd={actualCost}
@@ -5190,27 +6064,28 @@ export function HarnessApp({
             second row Yoga never budgeted (footerHeight says 1) and garble the frame. */}
         <Box justifyContent="space-between" width="100%" height={1} overflow="hidden">
           <Box>
-            <Text color="yellow">ctrl+l </Text>
+            <Text color="yellow">{keyLegend("model.picker")} </Text>
             <Text color="gray">Model </Text>
-            <Text color="yellow">ctrl+r </Text>
+            <Text color="yellow">{keyLegend("route.mode")} </Text>
             <Text color="gray">Route </Text>
-            <Text color="yellow">⇧tab </Text>
+            <Text color="yellow">{keyLegend("permission.cycle")} </Text>
             <Text color="gray">Mode </Text>
-            <Text color="yellow">ctrl+e </Text>
+            <Text color="yellow">{keyLegend("thinking.cycle")} </Text>
             <Text color="gray">Reason </Text>
-            <Text color="yellow">ctrl+b </Text>
+            <Text color="yellow">{keyLegend("task.panel")} </Text>
             <Text color="gray">Tasks </Text>
             {agent.config.bigPlan === true ? (
               <>
-                <Text color="yellow">ctrl+g </Text>
+                <Text color="yellow">{keyLegend("plan.overview")} </Text>
                 <Text color="gray">Plan </Text>
               </>
             ) : null}
+            {/* Not a binding: abort is a terminal contract, so it is spelled, not looked up. */}
             <Text color="yellow">esc </Text>
             <Text color="gray">Abort</Text>
           </Box>
           <Box>
-            <Text color="yellow">ctrl+p </Text>
+            <Text color="yellow">{keyLegend("command.palette")} </Text>
             <Text color="gray">palette</Text>
           </Box>
         </Box>

@@ -47,13 +47,24 @@ export function planModeBlockedTools(bigPlan: boolean): string[] {
   // `task` is blocked in BOTH modes: a delegated child gets its own unrestricted toolset
   // (write/edit/bash) with no permission hooks, so plan mode's read-only promise was
   // trivially bypassable by delegating the write.
+  // `git_commit` (F9a) blocks in BOTH modes for the same reason as the rest: it mutates, and
+  // it mutates the one thing plan mode's read-only promise would be most embarrassing to
+  // break — the user's real history.
   return bigPlan
-    ? ["write", "edit", "bash", "apply_patch", "todowrite", "task"]
-    : ["write", "edit", "bash", "apply_patch", "task"];
+    ? ["write", "edit", "bash", "apply_patch", "todowrite", "task", "git_commit"]
+    : ["write", "edit", "bash", "apply_patch", "task", "git_commit"];
 }
 
 /** The block reason handed back to the model for a plan-mode-blocked tool call. */
 export function planModeBlockReason(toolName: string, bigPlan: boolean): string {
+  if (toolName === "git_commit") {
+    return (
+      "Plan mode is ON — git_commit is blocked: a commit writes the user's real history, " +
+      "and plan mode has made no changes to commit. When the user asks to proceed with the " +
+      "plan, call the exit_plan tool to request approval to exit plan mode; otherwise " +
+      "continue planning."
+    );
+  }
   if (!bigPlan) {
     return toolName === "task"
       ? "Plan mode is ON — task is blocked: delegated children get their own unrestricted toolset (write/edit/bash). When the user asks to proceed with the plan, call the exit_plan tool to request approval to exit plan mode; otherwise continue planning."

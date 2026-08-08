@@ -460,7 +460,7 @@ describe("sub-agents and skills", () => {
         effort: "light",
       };
       await tool.execute("1", { delegations: JSON.stringify([delegation]) }, null, null);
-      expect(reg.state.requests.at(-1)?.tools).toContain("skill");
+      expect(reg.state.requests.at(-1)?.toolNames).toContain("skill");
 
       await tool.execute(
         "2",
@@ -468,7 +468,7 @@ describe("sub-agents and skills", () => {
         null,
         null,
       );
-      expect(reg.state.requests.at(-1)?.tools).toEqual(["read"]);
+      expect(reg.state.requests.at(-1)?.toolNames).toEqual(["read"]);
 
       reg.unregister();
       db.close();
