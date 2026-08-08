@@ -37,6 +37,7 @@ export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "web_search",
   "task",
   "question",
+  "git_commit",
 ]);
 
 /**

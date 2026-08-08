@@ -8,6 +8,8 @@ import {
   registerProvider,
   resetProviderRegistration,
   resetRegistry,
+  image,
+  text,
 } from "../src/ai/index.ts";
 import {
   type AnthropicClientLike,
@@ -296,5 +298,87 @@ describe("AnthropicProvider", () => {
     );
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/401 invalid key/);
+  });
+});
+
+// Anthropic is the only target that can nest an image inside a tool_result, so ai/compat.ts
+// runs no hoist for it — the nesting has to happen here, in toWire.
+describe("AnthropicProvider — images in tool results", () => {
+  async function wireFor(messages: Message[]): Promise<Record<string, unknown>[]> {
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    registerProvider(
+      "anthropic-messages",
+      new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)),
+    );
+    await complete(MODEL, context({ messages }));
+    return captured[0]!.messages as Record<string, unknown>[];
+  }
+
+  const toolResultBlock = (wire: Record<string, unknown>[], i: number) =>
+    (wire[i]!.content as Record<string, unknown>[])[0]!;
+
+  test("a tool result carrying an image nests an image block", async () => {
+    const wire = await wireFor([
+      new Message({ role: "user", content: "look" }),
+      new Message({
+        role: "toolResult",
+        content: [text("[image] x.png"), image("QUJD", "image/png")],
+        tool_call_id: "call_1",
+      }),
+    ]);
+    const block = toolResultBlock(wire, 1);
+    expect(block.type).toBe("tool_result");
+    const content = block.content as Record<string, unknown>[];
+    expect(Array.isArray(content)).toBe(true);
+    expect(content[0]).toEqual({ type: "text", text: "[image] x.png" });
+    expect(content[1]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "QUJD" },
+    });
+  });
+
+  // Byte-identity pin: every payload that existed before image results shipped must be
+  // unchanged, so the no-image case keeps the plain STRING form, not a one-element array.
+  test("a tool result with no image still serializes content as a plain string", async () => {
+    const wire = await wireFor([
+      new Message({ role: "user", content: "hi" }),
+      new Message({ role: "toolResult", content: [text("done")], tool_call_id: "call_1" }),
+    ]);
+    expect(toolResultBlock(wire, 1).content).toBe("done");
+  });
+
+  test("no synthetic user message is inserted for this target", async () => {
+    const wire = await wireFor([
+      new Message({ role: "user", content: "look" }),
+      new Message({
+        role: "toolResult",
+        content: [text("[image] x.png"), image("QUJD", "image/png")],
+        tool_call_id: "call_1",
+      }),
+    ]);
+    expect(wire).toHaveLength(2);
+  });
+
+  // The composer's Ctrl+V path: an image in a genuine USER message, not hoisted out of a tool
+  // result. Same toWire branch, different entry point — and the one the paste feature rides.
+  test("a pasted image rides its own question in one user message", async () => {
+    const wire = await wireFor([
+      new Message({
+        role: "user",
+        content: [text("[Image #1] what is this"), image("QUJD", "image/png")],
+      }),
+    ]);
+    expect(wire).toHaveLength(1);
+    const content = wire[0]!.content as Record<string, unknown>[];
+    expect(content[0]).toEqual({ type: "text", text: "[Image #1] what is this" });
+    // toMatchObject, not toEqual: the prompt-cache breakpoint lands on the LAST block of the
+    // last user message, which is now the image. Anthropic accepts cache_control on an image
+    // block, so this is correct — but the marker is part of the payload and worth pinning.
+    expect(content[1]).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "QUJD" },
+    });
+    expect(content[1]).toHaveProperty("cache_control");
   });
 });

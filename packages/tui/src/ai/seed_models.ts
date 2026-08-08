@@ -19,6 +19,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.15, output: 0.6 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-4o",
@@ -28,6 +29,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 2.5, output: 10 },
     context_window: 128_000,
     max_tokens: 16_384,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-sol",
@@ -38,6 +40,14 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    // Verified against the live API: bare + tools 400s, reasoning_effort:"none" + tools is
+    // accepted. Without this the whole family is unusable in the agent loop, which always
+    // sends tools — and gpt-5.6-luna is in DEFAULT_CANDIDATES, so routing can pick one.
+    tools_require_effort_none: true,
+    // Also verified live (an image_url part is accepted). supportsImageInput is fail-closed,
+    // so leaving this off would have made routing skip the whole family for any turn carrying
+    // a pasted screenshot, and the drop-guard discard the image if it was pinned.
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-terra",
@@ -48,6 +58,8 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     id: "gpt-5.6-luna",
@@ -58,6 +70,8 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_050_000,
     max_tokens: 128_000,
     reasoning: true,
+    tools_require_effort_none: true,
+    input: ["text", "image"],
   },
   {
     // deepseek-chat (V3) is deprecated by DeepSeek effective 2026-07-24; V4 Flash replaces it.
@@ -141,6 +155,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.0, output: 5.0, cache_read: 0.08, cache_write: 1.25 },
     context_window: 200_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: false,
   },
   {
@@ -151,6 +166,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -161,6 +177,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25 },
     context_window: 200_000,
     max_tokens: 16384,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -172,6 +189,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -183,6 +201,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 10.0, output: 50.0, cache_read: 1.0, cache_write: 12.5 },
     context_window: 1_000_000,
     max_tokens: 128_000,
+    input: ["text", "image"],
     reasoning: true,
     adaptive_thinking: true,
   },
@@ -194,6 +213,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.3, output: 2.5, cache_read: 0.03 },
     context_window: 1_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -210,6 +230,7 @@ export const SEED_MODELS: Model[] = [
     },
     context_window: 2_000_000,
     max_tokens: 8192,
+    input: ["text", "image"],
     reasoning: true,
   },
   {
@@ -220,6 +241,7 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 1.5, output: 7.5, cache_read: 0.15 },
     context_window: 1_048_576,
     max_tokens: 65_536,
+    input: ["text", "image"],
     reasoning: true,
   },
 ];

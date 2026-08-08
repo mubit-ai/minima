@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "../src/cli/main.ts";
+import { parseArgs, resolveBudget } from "../src/cli/main.ts";
 import { code, readSource } from "./_source.ts";
 
 describe("parseArgs --resume (B1)", () => {
@@ -15,6 +15,40 @@ describe("parseArgs --resume (B1)", () => {
 
   test("omitted → undefined (fresh session)", () => {
     expect(parseArgs([]).resume).toBeUndefined();
+  });
+});
+
+describe("resolveBudget — where the env layers' ceiling lands", () => {
+  // The clamp itself lives in the loader (see project-config.test.ts); by the time a value
+  // reaches here it is already the safer one, so this only pins the flags-over-env order.
+  test("no flag and no env → no ledger, warn mode", () => {
+    const r = resolveBudget(parseArgs([]), {});
+    expect(r.limitUsd).toBeUndefined();
+    expect(r.mode).toBe("warn");
+  });
+
+  test("MINIMA_BUDGET_USD creates a ceiling without a flag", () => {
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_USD: "2.5" }).limitUsd).toBe(2.5);
+  });
+
+  test("--budget wins over the env layers (the user acting now)", () => {
+    const r = resolveBudget(parseArgs(["--budget", "9"]), { MINIMA_BUDGET_USD: "2.5" });
+    expect(r.limitUsd).toBe(9);
+  });
+
+  test("an unusable ceiling is treated as unset, never coerced", () => {
+    for (const bad of ["nope", "0", "-1", ""]) {
+      expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_USD: bad }).limitUsd).toBeUndefined();
+    }
+  });
+
+  test("MINIMA_BUDGET_MODE sets the mode; --budget-enforce still wins; junk falls back", () => {
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "enforce" }).mode).toBe("enforce");
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "shadow" }).mode).toBe("shadow");
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "loose" }).mode).toBe("warn");
+    expect(
+      resolveBudget(parseArgs(["--budget-enforce"]), { MINIMA_BUDGET_MODE: "shadow" }).mode,
+    ).toBe("enforce");
   });
 });
 

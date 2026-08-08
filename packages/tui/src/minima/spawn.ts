@@ -11,6 +11,7 @@
  */
 
 import type { AgentEvent } from "../agent/events.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { AssistantMessage } from "../ai/types.ts";
 import { newId } from "../db/minima_db.ts";
 import { attachDbSink } from "../db/sink.ts";
@@ -152,11 +153,16 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
       childSeen = new SeenLedger();
       childSeen.attach(parent.db, parent.runId, childId);
     }
+    // Same late-bind as the lead agent (cli/main.ts): the child's routed model is not
+    // known until it exists, and routing re-picks it per prompt.
+    let childRef: MinimaAgent | null = null;
     let tools = builtinTools({
       workdir: childWorkdir,
       exclude: ["task"],
       artifacts: opts.artifacts,
       seen: childSeen,
+      imageResults: () =>
+        parent.config.images && supportsImageInput(childRef?.agentState.model ?? null),
     });
     if (d.tool_allowlist?.length) {
       const allowed = new Set(d.tool_allowlist);
@@ -203,6 +209,7 @@ export function createSpawn(opts: CreateSpawnOptions): SpawnFn {
             }
           : undefined,
     });
+    childRef = child;
     // Child rows demux from the lead's in the shared DB.
     child.db = parent.db;
     child.runId = parent.runId;
