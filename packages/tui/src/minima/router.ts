@@ -163,6 +163,9 @@ export class MinimaRouter {
     /** Caller's classifier confidence — sent only alongside a task_type override. */
     taskTypeConfidence?: number;
     expectedInputTokens?: number;
+    /** Expected run-TOTAL output tokens. Omitted, the server substitutes a difficulty-scaled
+     * constant that is the same for nearly all agent traffic — see output_estimate.ts. */
+    expectedOutputTokens?: number;
     candidates?: string[];
     /** Per-call USD ceiling (server-honored as a SOFT filter + warning; enforce locally). */
     maxCostPerCall?: number;
@@ -195,7 +198,13 @@ export class MinimaRouter {
 
     // Build a TaskInput only when enriching signals are present; else pass the bare string.
     let taskInput: string | TaskInput;
-    if (opts.taskType || opts.tags || opts.difficulty || opts.expectedInputTokens !== undefined) {
+    if (
+      opts.taskType ||
+      opts.tags ||
+      opts.difficulty ||
+      opts.expectedInputTokens !== undefined ||
+      opts.expectedOutputTokens !== undefined
+    ) {
       const enriched: TaskInput = { task: opts.task };
       if (opts.taskType) enriched.task_type = opts.taskType as TaskType;
       if (opts.tags) enriched.tags = opts.tags;
@@ -204,6 +213,8 @@ export class MinimaRouter {
         enriched.task_type_confidence = opts.taskTypeConfidence;
       if (opts.expectedInputTokens !== undefined)
         enriched.expected_input_tokens = opts.expectedInputTokens;
+      if (opts.expectedOutputTokens !== undefined)
+        enriched.expected_output_tokens = opts.expectedOutputTokens;
       taskInput = enriched;
     } else {
       taskInput = opts.task;

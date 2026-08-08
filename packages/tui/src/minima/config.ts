@@ -9,17 +9,45 @@
 export const DEFAULT_MINIMA_URL = "https://api.minima.sh";
 export const DEFAULT_JUDGE_MODEL = "claude-haiku-4-5";
 
-// Candidate set mirrors examples/agent_warmup.py so cold-start routing matches.
+/**
+ * Default candidate pool: the union of each provider's Pareto frontier for coding work.
+ *
+ * The rule is per-provider, not global, and that distinction is the whole point. The server
+ * picks the cheapest candidate clearing tau, and `runtime.ts` first drops every model whose
+ * provider key is absent — so the pool that matters is the one intersected with the user's
+ * keys. A globally-Pareto list collapses for anyone missing the provider that happens to own
+ * the cheap end: with only an Anthropic key, dropping `claude-haiku-4-5` (dominated whenever a
+ * Gemini key is present) doubles their floor. Keeping each provider's own frontier means every
+ * key combination still yields a ladder with rungs.
+ *
+ * Models NOT on their provider's frontier are excluded: they cost more than a same-provider
+ * model whose capability prior is at least as high, so no slider value can ever select them.
+ * `claude-sonnet-4-6` was the clearest case — strictly dominated by `claude-sonnet-5`.
+ *
+ * Entries whose provider key is absent cost nothing: they are filtered pre-request, so listing
+ * DeepSeek/OpenRouter here simply means the ladder improves the moment such a key is added.
+ * Ids must exist in BOTH the TUI seed registry (cli/main.ts) and the server catalog — an
+ * unregistered id resolves to nothing and is silently dropped (pinned by config.test.ts).
+ */
 export const DEFAULT_CANDIDATES: string[] = [
+  // google
+  "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
-  "claude-haiku-4-5",
-  "claude-sonnet-4-6",
-  "gemini-2.5-pro",
-  "claude-opus-4-8",
-  "claude-sonnet-5",
   "gemini-3.6-flash",
-  "deepseek-v4-flash",
+  "gemini-2.5-pro",
+  // openai
+  "gpt-4o-mini",
   "gpt-5.6-luna",
+  "gpt-5.6-terra",
+  // anthropic
+  "claude-haiku-4-5",
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+  // opt-in keys — filtered out unless DEEPSEEK_API_KEY / OPENROUTER_API_KEY is set
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "minimax/minimax-m3",
+  "z-ai/glm-5.2",
 ];
 
 /** Premium allowlist for plan-mode routed + plan-shaping calls (MINIMA_PLAN_PREMIUM_MODELS).

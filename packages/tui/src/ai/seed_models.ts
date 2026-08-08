@@ -206,6 +206,20 @@ export const SEED_MODELS: Model[] = [
     adaptive_thinking: true,
   },
   {
+    // The pool's cheap rung: ~4.4x under gemini-2.5-flash, which was the floor for anyone
+    // without a DeepSeek key. `reasoning` is deliberately unset — the reasoning-aware
+    // candidate filter then drops it while a thinking level is active, which is the safe
+    // direction (a missing rung costs money, an unsupported thinking shape costs the turn).
+    id: "gemini-2.5-flash-lite",
+    provider: "google",
+    api: "google-generative-ai",
+    name: "Gemini 2.5 Flash Lite",
+    cost: { input: 0.1, output: 0.4, cache_read: 0.01 },
+    context_window: 1_048_576,
+    max_tokens: 65_536,
+    input: ["text", "image"],
+  },
+  {
     id: "gemini-2.5-flash",
     provider: "google",
     api: "google-generative-ai",
