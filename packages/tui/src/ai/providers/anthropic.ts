@@ -35,7 +35,9 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, toJsonSchema } from "./_common.ts";
+import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
+
+export { sdkTimeoutMs };
 
 const STOP_MAP: Record<string, string> = {
   end_turn: "stop",
@@ -192,14 +194,6 @@ export class AnthropicProvider {
     attachCost(model, assistant.usage);
     yield doneEv(assistant.stop_reason, assistant);
   }
-}
-
-/** SDK timeout (ms) from the harness's seconds-based option. options.timeout is in
- * SECONDS (the harness-wide contract — google.ts converts the same way); the Anthropic
- * SDK expects milliseconds. Passing seconds through gave every request a 30-60ms
- * deadline: all Claude calls died with "Request timed out". */
-export function sdkTimeoutMs(options: Record<string, unknown>): number {
-  return Math.round(Number(options.timeout ?? 60) * 1000);
 }
 
 /** Exported for tests: the auth/guard path has no other seam. */

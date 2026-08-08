@@ -40,7 +40,7 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, toJsonSchema } from "./_common.ts";
+import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
 
 const DEFAULT_BASE = "https://api.openai.com/v1";
 const FINISH_MAP: Record<string, string> = {
@@ -102,7 +102,7 @@ export class OpenAICompatProvider {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
-        signal: opts.signal,
+        signal: requestSignal(options, opts.signal),
       });
       if (!resp.ok || !resp.body) {
         throw new Error(
@@ -120,6 +120,25 @@ export class OpenAICompatProvider {
       yield errorEv("error", err);
     }
   }
+}
+
+/**
+ * The signal governing the request, honouring the caller's `options.timeout` (seconds).
+ *
+ * Unlike anthropic/google — whose SDKs impose a 60s default — an absent timeout stays
+ * unbounded here: agent-loop turns pass no timeout and a total-request deadline would
+ * guillotine a long generation mid-stream (the stream-idle watchdog in agent/loop.ts
+ * covers those). The deadline exists for the one-shot side-channel calls (judge, critic,
+ * scribe, classify) that DO pass one and previously had it silently dropped, leaving a
+ * hung request to hang forever — Bun's fetch has no default deadline.
+ */
+function requestSignal(
+  options: Record<string, unknown>,
+  callerSignal?: AbortSignal,
+): AbortSignal | undefined {
+  if (options.timeout === undefined) return callerSignal;
+  const deadline = AbortSignal.timeout(sdkTimeoutMs(options));
+  return callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
 }
 
 /** Cap on the quoted provider message — enough to diagnose, not enough to flood the TUI. */
@@ -156,12 +175,11 @@ function buildPayload(
   context: Context,
   options: Record<string, unknown>,
 ): Record<string, unknown> {
-  const messages = normalizeForTarget(context.messages, "openai-completions");
   const out: Record<string, unknown>[] = [];
   if (context.system_prompt) {
     out.push({ role: "system", content: context.system_prompt });
   }
-  for (const m of messages) out.push(toWire(m));
+  for (const m of normalizeForTarget(context.messages, "openai-completions")) out.push(toWire(m));
   const maxTokens = options.max_tokens ?? model.max_tokens;
   const payload: Record<string, unknown> = {
     model: model.id,
@@ -192,14 +210,11 @@ function buildPayload(
 
 function toWire(m: Message): Record<string, unknown> {
   if (m.role === "toolResult") {
-    return { role: "tool", tool_call_id: m.tool_call_id, content: flattenText(m) };
+    return { role: "tool", tool_call_id: m.tool_call_id, content: m.textContent };
   }
   const toolCalls = m.content.filter((b) => b.type === "toolCall");
   const entry: Record<string, unknown> = { role: m.role };
-  const textStr = m.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("");
+  const textStr = m.textContent;
   const images = m.content.filter((b) => b.type === "image");
   const parts: Record<string, unknown>[] = [];
   if (textStr) parts.push({ type: "text", text: textStr });
@@ -226,16 +241,11 @@ function toWire(m: Message): Record<string, unknown> {
   return entry;
 }
 
-function flattenText(m: Message): string {
-  return m.content
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-}
-
 async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<StreamEvent> {
-  const textBuf = new Map<number, string[]>();
-  const thinkBuf = new Map<number, string[]>();
+  // Chat Completions carries a single text and a single thinking channel per choice; both
+  // always land at block index 0.
+  const textBuf: string[] = [];
+  const thinkBuf: string[] = [];
   // tool index -> { id, name, args }
   const tools = new Map<number, { id: string; name: string; args: string }>();
   let seenText = false;
@@ -243,6 +253,7 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
   let finishReason = "stop";
   let usageInput = 0;
   let usageOutput = 0;
+  let usageCacheRead = 0;
   const assistant = new AssistantMessage({ content: [], model: model.id, stop_reason: "stop" });
   yield startEv(assistant);
 
@@ -258,10 +269,12 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
       continue;
     }
     if (typeof chunk.model === "string" && chunk.model) assistant.provider_model = chunk.model;
-    const usage = chunk.usage as Record<string, number> | undefined;
+    const usage = chunk.usage as Record<string, unknown> | undefined;
     if (usage) {
-      usageInput = usage.prompt_tokens ?? usageInput;
-      usageOutput = usage.completion_tokens ?? usageOutput;
+      usageInput = (usage.prompt_tokens as number) ?? usageInput;
+      usageOutput = (usage.completion_tokens as number) ?? usageOutput;
+      const details = usage.prompt_tokens_details as Record<string, number> | undefined;
+      usageCacheRead = details?.cached_tokens ?? usageCacheRead;
     }
     const choices = (chunk.choices as Record<string, unknown>[] | undefined) ?? [];
     if (!choices.length) continue;
@@ -270,36 +283,26 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
     const fr = choice.finish_reason as string | undefined;
     if (fr) finishReason = FINISH_MAP[fr] ?? "stop";
 
-    const reasoningContent = delta.reasoning_content as string | undefined;
-    if (reasoningContent) {
-      const idx = 0;
-      (thinkBuf.get(idx) ?? thinkBuf.set(idx, []).get(idx))!.push(reasoningContent);
-      if (!seenThink) {
-        seenThink = true;
-        yield thinkingStart(idx);
-      }
-      yield thinkingDelta(reasoningContent, idx);
-    }
-    const reasoning = delta.reasoning as string | undefined;
+    // deepseek names it reasoning_content, openrouter reasoning. Coalesce rather than
+    // handling each: a proxy that echoes BOTH used to emit the thinking block twice.
+    const reasoning = (delta.reasoning_content ?? delta.reasoning) as string | undefined;
     if (reasoning) {
-      const idx = 0;
-      (thinkBuf.get(idx) ?? thinkBuf.set(idx, []).get(idx))!.push(reasoning);
+      thinkBuf.push(reasoning);
       if (!seenThink) {
         seenThink = true;
-        yield thinkingStart(idx);
+        yield thinkingStart(0);
       }
-      yield thinkingDelta(reasoning, idx);
+      yield thinkingDelta(reasoning, 0);
     }
 
     const content = delta.content as string | undefined;
     if (content) {
-      const idx = 0;
-      (textBuf.get(idx) ?? textBuf.set(idx, []).get(idx))!.push(content);
+      textBuf.push(content);
       if (!seenText) {
         seenText = true;
-        yield textStart(idx);
+        yield textStart(0);
       }
-      yield textDelta(content, idx);
+      yield textDelta(content, 0);
     }
 
     const tcDelta = (delta.tool_calls as Record<string, unknown>[] | undefined) ?? [];
@@ -319,16 +322,14 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
 
   // finalize blocks in stable index order: thinking(0) -> text(0) -> tools
   if (seenThink) {
-    const idx = 0;
-    const t = (thinkBuf.get(idx) ?? []).join("");
+    const t = thinkBuf.join("");
     assistant.content.push(thinking(t));
-    yield thinkingEnd(t, idx);
+    yield thinkingEnd(t, 0);
   }
   if (seenText) {
-    const idx = 0;
-    const t = (textBuf.get(idx) ?? []).join("");
+    const t = textBuf.join("");
     assistant.content.push(text(t));
-    yield textEnd(t, idx);
+    yield textEnd(t, 0);
   }
   for (const idx of [...tools.keys()].sort((a, b) => a - b)) {
     const slot = tools.get(idx)!;
@@ -347,8 +348,15 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
 
   assistant.stop_reason = finishReason as AssistantMessage["stop_reason"];
   if (!assistant.content.length) assistant.content.push(text(""));
-  assistant.usage.input = usageInput;
+  // prompt_tokens is INCLUSIVE of prompt_tokens_details.cached_tokens (as Gemini's
+  // promptTokenCount is of its cache, and unlike Anthropic's exclusive input_tokens).
+  // Reporting it raw billed every cached token at the full input rate — 10x over for
+  // gpt-class models, 50x for deepseek — and that inflated total is the realized
+  // actual_cost_usd fed to the meter and to /v1/feedback, so it skewed the observed cost
+  // basis for every OpenAI-compatible model and pinned the cache-hit rate at zero.
+  assistant.usage.input = Math.max(0, usageInput - usageCacheRead);
   assistant.usage.output = usageOutput;
+  assistant.usage.cache_read = usageCacheRead;
   attachCost(model, assistant.usage);
   yield doneEv(assistant.stop_reason, assistant);
 }

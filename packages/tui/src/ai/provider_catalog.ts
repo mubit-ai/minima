@@ -109,6 +109,3 @@ export function envVarsForProvider(provider: string): string[] {
 export function providerKeyPresent(provider: string): boolean {
   return envVarsForProvider(provider).some((v) => process.env[v]);
 }
-
-/** Fallback generic env vars for an unknown/custom OpenAI-compatible provider. */
-export const GENERIC_COMPAT_ENV_VARS = ["OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY"];
