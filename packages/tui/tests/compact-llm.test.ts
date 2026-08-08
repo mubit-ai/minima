@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { AssistantMessage, Message, type Model, text } from "../src/ai/index.ts";
+import {
+  AssistantMessage,
+  Message,
+  type Model,
+  type StopReason,
+  Usage,
+  text,
+} from "../src/ai/index.ts";
 import type { MinimaAgent } from "../src/minima/runtime.ts";
 import { TTSR_REMINDER_PREFIX } from "../src/minima/ttsr.ts";
 import type { ToolArtifacts } from "../src/tools/types.ts";
@@ -19,12 +26,18 @@ const META: Model = {
   max_tokens: 1024,
 };
 
-const reply = (t: string, stop: "endTurn" | "error" = "endTurn") =>
+/** Usage carrying only a realized total — cost is attached post-generation, as in the real path. */
+const costingUsage = (total: number): Usage =>
+  Object.assign(new Usage(), {
+    cost: { input: 0, output: 0, cache_read: 0, cache_write: 0, total },
+  });
+
+const reply = (t: string, stop: StopReason = "stop") =>
   (async () =>
     new AssistantMessage({
       content: [text(t)],
       stop_reason: stop,
-      usage: { cost: { total: 0.004 } },
+      usage: costingUsage(0.004),
     })) as never;
 
 function msg(role: "user" | "assistant", content: string): Message {
@@ -47,7 +60,7 @@ async function capturePrompt(
     completeFn: (async (_m: Model, ctx: { system_prompt: string; messages: Message[] }) => {
       system = ctx.system_prompt;
       user = ctx.messages[0]!.textContent;
-      return new AssistantMessage({ content: [text("s")], stop_reason: "endTurn" });
+      return new AssistantMessage({ content: [text("s")], stop_reason: "stop" });
     }) as never,
   });
   return { system, user };
@@ -94,7 +107,7 @@ describe("compactMessagesLLM — the summary body", () => {
       model: META,
       completeFn: (async (_m: Model, ctx: { messages: Message[] }) => {
         prompt = ctx.messages[0]!.textContent;
-        return new AssistantMessage({ content: [text("ok")], stop_reason: "endTurn" });
+        return new AssistantMessage({ content: [text("ok")], stop_reason: "stop" });
       }) as never,
     });
 
@@ -127,7 +140,7 @@ describe("compactMessagesLLM — the summary body", () => {
       model: META,
       completeFn: (async (_m: Model, ctx: { messages: Message[] }) => {
         prompt = ctx.messages[0]!.textContent;
-        return new AssistantMessage({ content: [text("s")], stop_reason: "endTurn" });
+        return new AssistantMessage({ content: [text("s")], stop_reason: "stop" });
       }) as never,
     });
 
