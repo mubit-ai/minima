@@ -1,15 +1,36 @@
 /**
- * Plan-premium resolution: which models may DECIDE the plan while plan mode is active.
+ * PRE-REQUEST CANDIDATE ASSEMBLY: narrowing the pool a recommend call may pick from, before
+ * the call is made. Two policies live here.
  *
- * Single source of truth for the hard premium constraint (config.planPremium). Resolved at
- * USE time (plan turn / finalize), never snapshotted at startup — /auth can add a provider
- * key mid-session and must take effect on the next plan turn.
+ * 1. Plan-premium (config.planPremium) — which models may DECIDE the plan while plan mode is
+ *    active. Resolved at USE time (plan turn / finalize), never snapshotted at startup: /auth
+ *    can add a provider key mid-session and must take effect on the next plan turn.
+ * 2. Vision (visionCandidates) — which models may take a turn that carries attached images.
+ *
+ * Both narrow `constraints.candidate_models` on the way OUT. Neither ever re-ranks or
+ * overrides what comes back: propensity integrity means the server's pick stands.
  */
 
 import { envVarsForProvider, providerKeyPresent } from "../ai/provider_catalog.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
 import { findModelById } from "../ai/registry.ts";
 import type { Model } from "../ai/types.ts";
 import type { HarnessConfig } from "./config.ts";
+
+/**
+ * The ids in `pool` whose registry entry declares image input, or undefined to mean "do not
+ * restrict". Used when the composer has images attached, so routing cannot hand the turn to a
+ * model that would have to drop them.
+ *
+ * Undefined on an EMPTY result is the important case: if nothing in the pool can see, then
+ * narrowing to nothing would send an empty candidate list, which is worse than routing
+ * normally and letting the drop-guard report the omission per rung. `supportsImageInput` is
+ * fail-closed on an unknown model, so an id missing from the registry is treated as blind.
+ */
+export function visionCandidates(pool: string[]): string[] | undefined {
+  const seeing = pool.filter((id) => supportsImageInput(findModelById(id) ?? null));
+  return seeing.length > 0 ? seeing : undefined;
+}
 
 export interface ResolvedPlanModels {
   /** Runnable premium ids — pre-request candidate assembly for plan-routed recommend calls. */

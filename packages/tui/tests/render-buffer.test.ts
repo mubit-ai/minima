@@ -52,9 +52,15 @@ describe("app.tsx /clear and /new reseat the terminal", () => {
     expect(src).not.toContain('"\\n".repeat');
   });
 
-  test("both /clear and /new go through the reseat (a gen bump alone leaves stale scrollback)", () => {
+  test("/clear, /new and the $EDITOR return go through the reseat (a gen bump alone leaves stale scrollback)", () => {
+    // The editor return is the third site: Ink skips the write when the frame is
+    // byte-identical to the last one and throttles at ~32ms, and a full-screen editor
+    // genuinely destroys the screen — so a bare transcriptGen bump may paint nothing.
     const calls = src.match(/reseatFreshScreen\(\);/g) ?? [];
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(3);
+    // Each one is immediately followed by the <Static> remount that forces the write.
+    const paired = src.match(/reseatFreshScreen\(\); setTranscriptGen\(\(g\) => g \+ 1\);/g) ?? [];
+    expect(paired.length).toBe(3);
   });
 });
 

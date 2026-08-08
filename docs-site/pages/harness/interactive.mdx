@@ -32,6 +32,7 @@ The bar along the bottom shows, at a glance:
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> | Kill the previous word (also <kbd>Alt</kbd>+<kbd>Backspace</kbd>) |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | Paste clipboard (terminal paste also works) |
 | <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Copy the last assistant reply |
+| <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> | Compose the current draft in `$EDITOR` (readline's `edit-and-execute-command`) |
 | <kbd>Esc</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd> | Abort the in-flight run (<kbd>Ctrl</kbd>+<kbd>C</kbd> twice at the prompt quits) |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Suspend to the shell (`fg` returns) |
 | <kbd>Shift</kbd>+<kbd>Tab</kbd> | Cycle permission modes (build → accept → plan → bypass) |
@@ -47,6 +48,32 @@ The bar along the bottom shows, at a glance:
 <Note>
 Scrolling, text selection, and copy are native to your terminal (wheel/trackpad) — the TUI doesn't capture the mouse. In pickers, use <kbd>↑</kbd>/<kbd>↓</kbd> to move, <kbd>Enter</kbd> to choose, <kbd>Esc</kbd> to dismiss.
 </Note>
+
+### Rebinding keys
+
+Ten of the shortcuts above are rebindable in `~/.minima-harness/keymap.toml`. It is a global file — a project can never rebind your keys — and it is read once at startup, so restart the TUI after editing it.
+
+```toml
+[keys]
+"thinking.cycle"   = "ctrl+n"        # Ctrl+E by default
+"model.picker"     = "alt+m"         # Ctrl+L
+"command.palette"  = "ctrl+p"
+"route.mode"       = "ctrl+r"
+"toc.panel"        = "ctrl+t"
+"plan.overview"    = "ctrl+g"
+"task.panel"       = "ctrl+b"
+"reply.copy"       = "ctrl+y"
+"permission.cycle" = "shift+tab"
+"editor.open"      = "ctrl+x ctrl+e" # the only action that may be a two-key sequence
+```
+
+Anything you leave out keeps its default. The `[keys]` header is optional — rows at the top level of the file mean the same thing.
+
+A chord is modifiers joined to one key by `+`: `ctrl` (or `control`) and `alt` (or `option`/`meta`). A printable key needs one of those two, because a bare key would also type into the prompt; `shift` is accepted only with `tab`, since a terminal sends the same bytes for `ctrl+k` and `ctrl+shift+k`. For the same reason `ctrl+i`, `ctrl+m`, `ctrl+h` and `ctrl+[` are refused — those bytes *are* Tab, Enter, Backspace and Escape.
+
+The editing keys are **not** rebindable, by design: the readline chords (<kbd>Ctrl</kbd>+<kbd>A</kbd>/<kbd>U</kbd>/<kbd>K</kbd>/<kbd>W</kbd>/<kbd>D</kbd>/<kbd>V</kbd>, <kbd>Alt</kbd>+<kbd>B</kbd>/<kbd>F</kbd>), abort (<kbd>Esc</kbd>, <kbd>Ctrl</kbd>+<kbd>C</kbd>), suspend (<kbd>Ctrl</kbd>+<kbd>Z</kbd>), <kbd>Enter</kbd>, <kbd>Tab</kbd> and the arrows. Naming one of them is reported and ignored — a keymap that could take away your ability to stop a running agent would leave you no way back.
+
+Two actions on one chord is reported at startup, naming both, and neither wins: the actions involved keep their defaults. The same goes for anything else the file gets wrong — a bad line costs you that one binding, never your startup. `/help` always prints the bindings actually in effect. To ignore the file entirely, set `MINIMA_TUI_KEYMAP=0`.
 
 ## Slash commands
 
@@ -69,7 +96,7 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 | `/plan` | Plan mode (<kbd>Shift</kbd>+<kbd>Tab</kbd>) + the planning council (`start` · `status` · `finalize` · `cancel`) — drafts a plan whose steps carry verify checks |
 | `/mode` | Show/set the permission mode: `build` \| `accept` \| `plan` \| `bypass` |
 | `/bp` | Show Plan Overview status |
-| `/why [n]` | Show the verification evidence behind the plan (or open step `n`'s card) |
+| `/why [n\|sha]` | Show the verification evidence behind the plan (or open step `n`'s card). Given a commit hash — seven or more hex characters — it reports which models contributed to that commit, its realized cost, and its gate verdicts instead |
 | `/verify` | Adversarial whole-plan verification pass (refutation sub-agent) |
 | `/audit` | Lint the active plan — non-discriminative checks, missing allowlists, vague steps |
 | `/tasks` | Toggle the task panel (<kbd>Ctrl</kbd>+<kbd>B</kbd>) · `/tasks cancel` rejects the list + the plan |
@@ -102,6 +129,7 @@ Type `/` (or open the palette with <kbd>Ctrl</kbd>+<kbd>P</kbd>) and pick a comm
 | `/perms` | Show current tool permission grants |
 | `/thoughts [on\|off]` | Toggle streaming the model's thinking |
 | `/copy` | Copy the last assistant reply (<kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
+| `/editor [text]` | Compose the prompt in `$EDITOR` ($VISUAL first, else `nano`/`vi`/`vim`). It opens **empty** — the composer has already cleared by the time a command runs — so `/editor some text` seeds it, and <kbd>Ctrl</kbd>+<kbd>X</kbd> <kbd>Ctrl</kbd>+<kbd>E</kbd> is the path that carries a draft you are already typing. Saving applies; an empty buffer or a non-zero exit (vim's `:cq`) keeps the draft, as with `git commit`. |
 | `/clear` · `/help` · `/tip` | Clear chat · list commands · show a tip |
 | `/quit`, `/exit` | Exit the application |
 

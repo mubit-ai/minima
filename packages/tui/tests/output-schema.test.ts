@@ -35,16 +35,18 @@ describe("schemaShapeErrors (D2 authoring allowlist)", () => {
       type: "object",
       properties: { a: { type: "string", additionalProperties: false } },
     });
-    expect(nested.some((e) => e.includes("properties/a") && e.includes('"additionalProperties"'))).toBe(
-      true,
-    );
+    expect(
+      nested.some((e) => e.includes("properties/a") && e.includes('"additionalProperties"')),
+    ).toBe(true);
   });
 
   test("rejects a non-object schema and bad keyword values", () => {
     expect(schemaShapeErrors("nope")).not.toEqual([]);
     expect(schemaShapeErrors({ type: "widget" }).some((e) => e.includes("/type"))).toBe(true);
     expect(schemaShapeErrors({ type: [] }).some((e) => e.includes("/type"))).toBe(true);
-    expect(schemaShapeErrors({ required: "answer" }).some((e) => e.includes("/required"))).toBe(true);
+    expect(schemaShapeErrors({ required: "answer" }).some((e) => e.includes("/required"))).toBe(
+      true,
+    );
     expect(schemaShapeErrors({ enum: [] }).some((e) => e.includes("/enum"))).toBe(true);
     expect(schemaShapeErrors({ properties: [] }).some((e) => e.includes("/properties"))).toBe(true);
   });
@@ -64,7 +66,10 @@ describe("validateAgainstSchema (subset semantics)", () => {
   test("required + properties + nested paths", () => {
     const schema = {
       type: "object",
-      properties: { a: { type: "number" }, b: { type: "object", properties: { c: { type: "string" } } } },
+      properties: {
+        a: { type: "number" },
+        b: { type: "object", properties: { c: { type: "string" } } },
+      },
       required: ["a", "b"],
     };
     expect(validateAgainstSchema({ a: 1, b: { c: "ok" } }, schema)).toEqual([]);
@@ -112,7 +117,9 @@ describe("extractJson (fence-tolerant ladder)", () => {
   });
 
   test("tolerates an untagged fence and falls through to a balanced slice", () => {
-    expect((extractJson("result:\n```\n[1,2,3]\n```") as { value: unknown }).value).toEqual([1, 2, 3]);
+    expect((extractJson("result:\n```\n[1,2,3]\n```") as { value: unknown }).value).toEqual([
+      1, 2, 3,
+    ]);
     expect((extractJson('prefix {"a": 3} suffix') as { value: unknown }).value).toEqual({ a: 3 });
     expect((extractJson("prefix [1, 2] suffix") as { value: unknown }).value).toEqual([1, 2]);
   });

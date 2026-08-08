@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { Agent, type AgentTool, AgentState } from "../src/agent/index.ts";
 import { CONTEXT_REWIND_EVENT } from "../src/agent/context_prune.ts";
+import { Agent, AgentState, type AgentTool } from "../src/agent/index.ts";
 import {
   AssistantMessage,
   Message,

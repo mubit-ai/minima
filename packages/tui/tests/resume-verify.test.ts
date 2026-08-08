@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Model } from "../src/ai/types.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { reverifyNotice, reverifyOnResume, stepToReverify } from "../src/session/resume_verify.ts";
 
@@ -121,7 +122,7 @@ describe("provider session reuse", () => {
     const { rehydrateRun, applyRehydratedRun } = await import("../src/db/rehydrate.ts");
     resetRegistry();
     resetModelRegistry();
-    const FAUX = {
+    const FAUX: Model = {
       id: "test-faux",
       provider: "faux",
       api: "faux",

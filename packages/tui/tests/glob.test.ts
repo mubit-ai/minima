@@ -171,9 +171,13 @@ describe("glob rg engine via fake rg", () => {
     writeFileSync(join(d, "keep.txt"), "x");
     const fake = join(d, "fake-rg.sh");
     const argsFile = join(d, "args.txt");
-    writeFileSync(fake, `#!/bin/sh\necho "$@" > ${JSON.stringify(argsFile)}\nprintf 'keep.txt\\n'\n`, {
-      mode: 0o755,
-    });
+    writeFileSync(
+      fake,
+      `#!/bin/sh\necho "$@" > ${JSON.stringify(argsFile)}\nprintf 'keep.txt\\n'\n`,
+      {
+        mode: 0o755,
+      },
+    );
     await run(globTool({ rgCmd: fake }), { pattern: "*.txt", path: d });
     expect(readFileSync(argsFile, "utf8")).toContain("--no-config");
   });

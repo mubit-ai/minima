@@ -10,11 +10,16 @@
 import type { Message } from "../ai/types.ts";
 import type { Model } from "../ai/types.ts";
 import { errText } from "../errtext.ts";
+import { type AgentTypeRegistry, agentTypePlanPreset } from "./agent_types.ts";
 import { answerOpenQuestions, synthesizeBigPlan } from "./plan_council.ts";
 import { formatCriticNote, runPlanCritic } from "./plan_critic.ts";
 import { formatFindings, hasBlockers, synthAuditFindings } from "./plan_lint.ts";
 import type { BigPlanSynthesis, PlanSessionStore } from "./plan_session.ts";
 import { attachAutoGates, formatAutoGateNote, mineRepoGates } from "./repo_gates.ts";
+
+/** The agent-type registry finalize needs: advertised to the recorder model, then expanded
+ *  into each step's tools/candidates. Absent → every step is untyped (historical behavior). */
+export type PlanFinalizeAgentTypes = AgentTypeRegistry;
 
 export interface PlanFinalizeDb {
   seedPlanFromSteps(
@@ -25,8 +30,11 @@ export interface PlanFinalizeDb {
       verify?: string | null;
       tools?: string[] | null;
       candidates?: string[] | null;
+      agentType?: string | null;
     }[],
   ): { planId: string; stepIds: string[] };
+  /** Stamp the plan's approved total (Task 1). */
+  setPlanBudget(planId: string, usd: number): void;
 }
 
 export interface PlanFinalizeDeps {
@@ -57,6 +65,13 @@ export interface PlanFinalizeDeps {
   repoDir?: string | null;
   /** E3 seam (injectable for tests). */
   mineGates?: typeof mineRepoGates;
+  /** User-defined agent types: advertised to the recorder model, then expanded into each
+   *  step's tools/candidates before the lint, the doc and the seed all see them. */
+  agentTypes?: PlanFinalizeAgentTypes;
+  /** Plan-delegated steps' approved total, resolved by the caller from `config.planBudgetUsd`
+   *  (only when `config.planDelegate` is on — this module stays flag-agnostic). null/absent
+   *  → no plan budget is stamped, so the delegate seam's `no_budget` skip applies. */
+  planBudgetUsd?: number | null;
 }
 
 export type PlanFinalizeOutcome =
@@ -154,10 +169,26 @@ export async function finalizePlan(
         metaModel: shaper,
         signal: deps.signal,
         onCostUsd: deps.onMetaCostUsd,
+        ...(deps.agentTypes?.types.size
+          ? {
+              agentTypes: [...deps.agentTypes.types.values()].map((t) => ({
+                name: t.name,
+                description: t.description,
+              })),
+            }
+          : {}),
       });
     } catch {
       // fail-open
     }
+  }
+  // Expand `agent_type` into the two fields a step can actually enforce, BEFORE the lint,
+  // the doc and the seed — so all three agree, and a type's tool allowlist goes through the
+  // same `unknown-tool` lint an authored one does. An unknown name expands to nothing (it
+  // still renders in the doc, so the intent is not silently erased).
+  if (synth && deps.agentTypes?.types.size) {
+    const types = deps.agentTypes;
+    synth.approach = synth.approach.map((st) => ({ ...st, ...agentTypePlanPreset(st, types) }));
   }
   // An abort mid-synthesis (Esc while finalize was running) must not half-finalize: nothing
   // was written yet, so refuse and keep plan mode ON — the user retries deliberately.
@@ -251,17 +282,28 @@ export async function finalizePlan(
           verify: st.verify,
           tools: st.tools,
           candidates: st.candidates ?? null,
+          agentType: st.agent_type?.trim() ? st.agent_type.trim() : null,
         }))
         .filter((st) => st.content.length > 0);
       if (seedSteps.length > 0) {
-        seededCount = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps).stepIds
-          .length;
+        const seeded = deps.db.seedPlanFromSteps(deps.runId, synth.title || null, seedSteps);
+        seededCount = seeded.stepIds.length;
         // MP18: the verifies the user just approved WITH the plan — the caller feeds them
         // into the consent store, so the first in_progress todowrite (which carries no
         // verify text of its own) does not dead-end at the execution-time consent check.
+        // This MUST run regardless of what happens below — a budget-write failure must
+        // never leave the consent store unpopulated.
         for (const st of seedSteps) {
           const v = (st.verify ?? "").trim();
           if (v) seededVerifies.push(v);
+        }
+        if (deps.planBudgetUsd && deps.planBudgetUsd > 0) {
+          try {
+            deps.db.setPlanBudget(seeded.planId, deps.planBudgetUsd);
+          } catch {
+            // fail-open: stamping the budget is bookkeeping: a locked DB/disk error here
+            // must not undo the seeding or the consent list already recorded above.
+          }
         }
       }
     } catch {

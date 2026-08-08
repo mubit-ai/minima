@@ -7,6 +7,7 @@ import {
   tryGetModel,
 } from "../src/ai/index.ts";
 import { SEED_MODELS } from "../src/cli/main.ts";
+import { supportsImageInput } from "../src/ai/provider_quirks.ts";
 import { populateFromMinima, populateFromOpenRouter } from "../src/minima/catalog.ts";
 import { DEFAULT_CANDIDATES, PREMIUM_CANDIDATES } from "../src/minima/config.ts";
 import { ModelMapping, syncCatalog } from "../src/minima/mapping.ts";
@@ -66,6 +67,27 @@ describe("seed registry (July 2026 lineup)", () => {
     }
     const sonnet46 = SEED_MODELS.find((s) => s.id === "claude-sonnet-4-6")!;
     expect(sonnet46.adaptive_thinking).toBeUndefined();
+  });
+});
+
+describe("populateFromMinima — vision modality", () => {
+  // Derived from capability_priors, exactly as `reasoning` is. The server emits no vision
+  // prior today, so this is inert-but-forward-compatible and needs no wire-schema change.
+  test("a vision prior >= 0.5 becomes image input; anything else stays text-only", async () => {
+    process.env.ANTHROPIC_API_KEY = "k";
+    const client = {
+      models: async () => ({
+        models: [
+          card("sees", "anthropic", { capability_priors: { vision: 0.9 } }),
+          card("blind", "anthropic", { capability_priors: { vision: 0.1 } }),
+          card("silent", "anthropic"),
+        ],
+      }),
+    };
+    await populateFromMinima(client);
+    expect(supportsImageInput(tryGetModel("anthropic", "sees")!)).toBe(true);
+    expect(supportsImageInput(tryGetModel("anthropic", "blind")!)).toBe(false);
+    expect(supportsImageInput(tryGetModel("anthropic", "silent")!)).toBe(false);
   });
 });
 
@@ -163,6 +185,127 @@ describe("populateFromOpenRouter", () => {
       json: async () => ({}),
     })) as unknown as typeof fetch);
     expect(added).toBe(0);
+  });
+});
+
+// MUB-229. Entries below are copied from the live https://openrouter.ai/api/v1/models
+// response (public, no key needed — fetched 2026-08-05), so the parse is pinned against the
+// real document rather than an invented one. Until now every OpenRouter-synthesized model
+// carried ZERO capability flags, which left the harness fail-open on tools and the
+// openrouter off-shape entry inert.
+describe("populateFromOpenRouter — capabilities derived from supported_parameters", () => {
+  const REASONER = {
+    id: "openai/gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    context_length: 1_050_000,
+    pricing: { prompt: "0.000001", completion: "0.000006" },
+    top_provider: { max_completion_tokens: 128_000 },
+    architecture: { input_modalities: ["file", "image", "text"] },
+    supported_parameters: [
+      "include_reasoning",
+      "max_completion_tokens",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "tools",
+    ],
+    reasoning: {
+      mandatory: false,
+      default_enabled: true,
+      supported_efforts: ["max", "xhigh", "high", "medium", "low", "none"],
+      default_effort: "medium",
+    },
+  };
+
+  const TEXT_ONLY = {
+    id: "some-vendor/plain-chat",
+    name: "Plain Chat",
+    pricing: { prompt: "0.0000005", completion: "0.0000015" },
+    architecture: { input_modalities: ["text"] },
+    supported_parameters: ["max_tokens", "temperature", "tools"],
+  };
+
+  async function populate(...models: unknown[]): Promise<number> {
+    process.env.OPENROUTER_API_KEY = "or-key";
+    return populateFromOpenRouter((async () => ({
+      ok: true,
+      json: async () => ({ data: models }),
+    })) as unknown as typeof fetch);
+  }
+
+  test("a model advertising `reasoning` is registered as reasoning-capable", async () => {
+    await populate(REASONER);
+    expect(findModelById("openai/gpt-5.6-luna")!.reasoning).toBe(true);
+  });
+
+  test("supported_efforts becomes the model's effort vocabulary", async () => {
+    await populate(REASONER);
+    // "none" is the off-payload, not a level; "max" is outside the harness vocabulary.
+    expect(findModelById("openai/gpt-5.6-luna")!.effort_levels).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  test("input modalities become Model.input, so vision survives the trip", async () => {
+    await populate(REASONER, TEXT_ONLY);
+    expect(findModelById("openai/gpt-5.6-luna")!.input).toEqual(["text", "image"]);
+    expect(findModelById("some-vendor/plain-chat")!.input).toEqual(["text"]);
+  });
+
+  test("a model that advertises no reasoning stays unflagged", async () => {
+    await populate(TEXT_ONLY);
+    const m = findModelById("some-vendor/plain-chat")!;
+    expect(m.reasoning).toBeUndefined();
+    expect(m.effort_levels).toBeUndefined();
+    expect(m.tools_require_effort_none).toBeUndefined();
+  });
+
+  // The fail-open gap this closes: the same underlying model reached through OpenRouter used
+  // to arrive with no flags at all, so the tools quirk verified on the openai host silently
+  // stopped applying. Inheritance is by exact model identity out of the registry — never an
+  // id pattern, never a per-provider rule.
+  test("tools_require_effort_none is inherited from the same model on its own host", async () => {
+    registerModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      api: "openai-completions",
+      name: "GPT-5.6 Luna",
+      cost: { input: 1, output: 6 },
+      context_window: 1_050_000,
+      max_tokens: 128_000,
+      reasoning: true,
+      tools_require_effort_none: true,
+    });
+    await populate(REASONER);
+    expect(findModelById("openai/gpt-5.6-luna")!.tools_require_effort_none).toBe(true);
+  });
+
+  test("a sibling the registry has never verified inherits nothing", async () => {
+    registerModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      api: "openai-completions",
+      name: "GPT-5.6 Luna",
+      cost: { input: 1, output: 6 },
+      context_window: 1_050_000,
+      max_tokens: 128_000,
+      reasoning: true,
+      tools_require_effort_none: true,
+    });
+    await populate({ ...REASONER, id: "openai/gpt-5.6-luna-pro" });
+    expect(findModelById("openai/gpt-5.6-luna-pro")!.tools_require_effort_none).toBeUndefined();
+  });
+
+  // reasoning.default_enabled is true on 69 of the 338 models in the live catalog, spanning
+  // anthropic, google, x-ai, qwen, moonshot and openai — it says "this model reasons unless
+  // told otherwise", NOT "this host refuses tools alongside an effort". Deriving the quirk
+  // from it would pin effort off on every reasoning model reached through OpenRouter.
+  test("default_enabled alone never pins effort off", async () => {
+    await populate({ ...REASONER, id: "anthropic/claude-sonnet-5" });
+    expect(findModelById("anthropic/claude-sonnet-5")!.tools_require_effort_none).toBeUndefined();
   });
 });
 

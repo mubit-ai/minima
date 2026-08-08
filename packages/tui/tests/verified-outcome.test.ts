@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import { gateConfidence } from "../src/minima/behavior.ts";
-import { verifiedOutcomeFor, stampVerifiedOutcome } from "../src/minima/big_plan.ts";
+import { stampVerifiedOutcome, verifiedOutcomeFor } from "../src/minima/big_plan.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
 
 // Week 3 Track B seams under the v6 identity join: the M6.3 user_signals reader and the M7.1

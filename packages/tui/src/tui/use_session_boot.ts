@@ -11,6 +11,7 @@ import type { BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalogOnce } from "../minima/catalog.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { setFooterBadge } from "./badge_slot.ts";
+import { keymapPath, keymapProblems } from "./keymap_file.ts";
 import type { ChatMessage } from "./messages.tsx";
 import { persistMode } from "./mode_prefs.ts";
 import { repoIdentity } from "./projects.ts";
@@ -76,6 +77,17 @@ export function useSessionBoot(
         role: "tool",
         toolName: "setup",
         text: `No model-provider API key set — set one to run models: ${keyHint("anthropic")} (or OPENAI/GOOGLE/OPENROUTER). \`/auth\` configures routing only.`,
+      });
+    }
+    // A keymap file that could not be honoured says so ONCE, here. Every problem already
+    // names the action it cost and the default it kept, so this never blocks anything —
+    // the affected keys simply are what they always were.
+    const keymapTrouble = keymapProblems();
+    if (keymapTrouble.length > 0) {
+      cbRef.current.pushMessage({
+        role: "tool",
+        toolName: "keymap",
+        text: `⚠ ${keymapPath()}\n${keymapTrouble.map((p) => `  • ${p}`).join("\n")}`,
       });
     }
     // One-time bootstrap (memoized): the REGISTRY is process-global, so the catalog must

@@ -417,3 +417,64 @@ describe("createSpawn (default child factory)", () => {
     rmSync(wd, { recursive: true, force: true });
   });
 });
+
+describe("sub-agents and skills", () => {
+  // A delegation whose objective names a skill is the case skills matter most for; without
+  // the tool in the child's set it can only fail silently. Read per spawn, so a mid-run
+  // rescan reaches the next child.
+  test("the child is offered the skill tool, filtered by tool_allowlist like any other", async () => {
+    const { setDiscoveredSkills } = await import("../src/skills.ts");
+    setDiscoveredSkills([
+      {
+        name: "deploy",
+        description: "Ship it",
+        body: "Run make deploy.",
+        dir: "/tmp/sk/deploy",
+        source: "project",
+      },
+    ]);
+    try {
+      resetRegistry();
+      resetProviderRegistration();
+      resetModelRegistry();
+      registerModel(FAUX_MODEL);
+      const reg = registerFauxProvider([FAUX_MODEL]);
+      reg.setResponses([
+        new AssistantMessage({ content: [text("done")] }),
+        new AssistantMessage({ content: [text("done")] }),
+      ]);
+
+      const wd = mkdtempSync(join(tmpdir(), "minima-spawn-skill-"));
+      const db = new MinimaDb(":memory:");
+      db.ensureProject("p");
+      const runId = db.startRun({ projectKey: "p" });
+      const spawn = createSpawn({ parent: leadAgent(db, runId), workdir: wd });
+      const tool = taskTool({ spawn, spawnDepth: 0, maxDepth: 2 });
+
+      const delegation = {
+        step_id: "s",
+        objective: "use the deploy skill",
+        output_format: "one line",
+        boundaries: "none",
+        difficulty: "easy",
+        effort: "light",
+      };
+      await tool.execute("1", { delegations: JSON.stringify([delegation]) }, null, null);
+      expect(reg.state.requests.at(-1)?.toolNames).toContain("skill");
+
+      await tool.execute(
+        "2",
+        { delegations: JSON.stringify([{ ...delegation, tool_allowlist: ["read"] }]) },
+        null,
+        null,
+      );
+      expect(reg.state.requests.at(-1)?.toolNames).toEqual(["read"]);
+
+      reg.unregister();
+      db.close();
+      rmSync(wd, { recursive: true, force: true });
+    } finally {
+      setDiscoveredSkills([]);
+    }
+  });
+});

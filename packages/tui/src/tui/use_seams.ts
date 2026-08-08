@@ -18,6 +18,7 @@ import type { AskUserRef } from "../tools/question.ts";
 import type { QuestionPromptData } from "./app.tsx";
 import { type ChildRow, applyChildEvent } from "./child_tree.tsx";
 import type { ChatMessage } from "./messages.tsx";
+import { notify } from "./notify.ts";
 import {
   type PermissionPrompt,
   type PermissionState,
@@ -72,6 +73,7 @@ export function useVerifyConsent(
 /** `question` tool overlay: the tool awaits a promise resolved by the overlay in the render tree. */
 export function useQuestionPrompt(
   askUserRef: AskUserRef | undefined,
+  notifyEnabled: boolean,
 ): [QuestionPromptData | null, React.Dispatch<React.SetStateAction<QuestionPromptData | null>>] {
   const [questionPrompt, setQuestionPrompt] = useState<QuestionPromptData | null>(null);
   useEffect(() => {
@@ -79,11 +81,13 @@ export function useQuestionPrompt(
     askUserRef.current = (params) =>
       new Promise<string | null>((resolve) => {
         setQuestionPrompt({ ...params, resolve });
+        // The run is blocked on a human answer — always notify, however short the turn was.
+        if (notifyEnabled) notify(`Minima asks: ${params.question}`);
       });
     return () => {
       askUserRef.current = null;
     };
-  }, [askUserRef]);
+  }, [askUserRef, notifyEnabled]);
   return [questionPrompt, setQuestionPrompt];
 }
 
@@ -118,7 +122,13 @@ export function useToolCallHooks(opts: {
   useEffect(() => {
     const modeGated = makeModeGatedBeforeToolCall({
       state: permStateRef.current,
-      promptFn: (prompt) => cbRef.current.setPermPrompt(prompt),
+      promptFn: (prompt) => {
+        cbRef.current.setPermPrompt(prompt);
+        // Same rule as the question overlay: the run cannot proceed without the user. The
+        // body is model-derived, which is exactly why notify() sanitizes it.
+        if (agent.config.notify)
+          notify(`Minima needs permission: ${prompt.toolName} ${prompt.argsSummary}`);
+      },
       getBundle: () => bundleForMode(getMode()),
     });
     const disposePermission = agent.addBeforeToolCall(async (ctx) => {
