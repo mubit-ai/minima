@@ -32,6 +32,14 @@ const synth = (over: Partial<BigPlanSynthesis> = {}): BigPlanSynthesis => ({
   ...over,
 });
 
+interface SeededStep {
+  content: string;
+  verify?: string | null;
+  tools?: string[] | null;
+  candidates?: string[] | null;
+  agentType?: string | null;
+}
+
 function deps(over: Partial<PlanFinalizeDeps> = {}) {
   const written: { path: string; content: string }[] = [];
   const base: PlanFinalizeDeps = {
@@ -152,10 +160,61 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
   test("ledger seeding: synth steps land via db.seedPlanFromSteps; null db seeds nothing", async () => {
     const store = new PlanSessionStore("g");
     const calls: { runId: string; title: string | null }[] = [];
+    const seededSteps: SeededStep[][] = [];
+    const budgetCalls: { planId: string; usd: number }[] = [];
     const fakeDb = {
-      seedPlanFromSteps: (runId: string, title: string | null, steps: { content: string }[]) => {
+      seedPlanFromSteps: (runId: string, title: string | null, steps: SeededStep[]) => {
         calls.push({ runId, title });
+        seededSteps.push(steps);
         return { planId: "p", stepIds: steps.map((_, i) => `s${i}`) };
+      },
+      setPlanBudget: (planId: string, usd: number) => {
+        budgetCalls.push({ planId, usd });
+      },
+    };
+    const { base } = deps({
+      metaModel: META,
+      db: fakeDb,
+      runId: "run-1",
+      synthesize: async () =>
+        synth({
+          approach: [
+            {
+              action: "wire endpoint",
+              verify: "bun test endpoint",
+              tools: [],
+              agent_type: "reviewer",
+            },
+          ],
+        }),
+      planBudgetUsd: 5,
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(out.seededCount).toBe(1);
+    expect(calls).toEqual([{ runId: "run-1", title: "Ship it" }]);
+    // The seed map used to expand agent_type into tools/candidates and discard the name —
+    // a delegated child needs the name itself too (persona + spend cap), not just the
+    // allowlist it expands to.
+    expect(seededSteps[0]![0]!.agentType).toBe("reviewer");
+    expect(budgetCalls).toEqual([{ planId: "p", usd: 5 }]);
+
+    const { base: noDb } = deps({ metaModel: META, synthesize: async () => synth() });
+    const out2 = await finalizePlan(new PlanSessionStore("g"), noDb);
+    if (out2.kind !== "ok") throw new Error(`expected ok, got ${out2.kind}`);
+    expect(out2.seededCount).toBe(0);
+  });
+
+  test("without a plan budget nothing is stamped — the delegate seam's no_budget skip stands", async () => {
+    const store = new PlanSessionStore("g");
+    let budgetCalled = false;
+    const fakeDb = {
+      seedPlanFromSteps: (_s: string, _t: string | null, steps: SeededStep[]) => ({
+        planId: "p",
+        stepIds: steps.map((_, i) => `s${i}`),
+      }),
+      setPlanBudget: () => {
+        budgetCalled = true;
       },
     };
     const { base } = deps({
@@ -166,13 +225,31 @@ describe("finalizePlan (shared /plan finalize + exit_plan core)", () => {
     });
     const out = await finalizePlan(store, base);
     if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
-    expect(out.seededCount).toBe(1);
-    expect(calls).toEqual([{ runId: "run-1", title: "Ship it" }]);
+    expect(budgetCalled).toBe(false);
+  });
 
-    const { base: noDb } = deps({ metaModel: META, synthesize: async () => synth() });
-    const out2 = await finalizePlan(new PlanSessionStore("g"), noDb);
-    if (out2.kind !== "ok") throw new Error(`expected ok, got ${out2.kind}`);
-    expect(out2.seededCount).toBe(0);
+  test("a $0 plan budget also skips the stamp — 0 means capped at zero, not unset", async () => {
+    const store = new PlanSessionStore("g");
+    let budgetCalled = false;
+    const fakeDb = {
+      seedPlanFromSteps: (_s: string, _t: string | null, steps: SeededStep[]) => ({
+        planId: "p",
+        stepIds: steps.map((_, i) => `s${i}`),
+      }),
+      setPlanBudget: () => {
+        budgetCalled = true;
+      },
+    };
+    const { base } = deps({
+      metaModel: META,
+      db: fakeDb,
+      runId: "run-1",
+      synthesize: async () => synth(),
+      planBudgetUsd: 0,
+    });
+    const out = await finalizePlan(store, base);
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    expect(budgetCalled).toBe(false);
   });
 
   test("synthesis failure is SURFACED (synthFailed), never silent — no seeding happened", async () => {

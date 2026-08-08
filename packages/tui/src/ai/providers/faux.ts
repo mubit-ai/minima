@@ -60,6 +60,9 @@ export interface FauxRequest {
   messageCount: number;
   /** Concatenated text of the LAST user message — the prompt under test. */
   user: string;
+  /** Names of the tools this call was offered, in order — lets a test assert the tool
+   *  SCOPE an agent actually ran with (a sub-agent's allowlist, an agent type's tools). */
+  toolNames: string[];
   /** Every image block across all context messages, in message order — lets tests assert
    * that an image survived tool dispatch and provider normalization. */
   images: { mime: string; bytes: number }[];
@@ -144,6 +147,7 @@ class FauxProvider implements Provider {
       model: model.id,
       systemPrompt: context.system_prompt ?? null,
       messageCount: context.messages.length,
+      toolNames: context.tools.map((t) => t.name),
       user: lastUser?.textContent ?? "",
       images: context.messages.flatMap((m) =>
         m.content

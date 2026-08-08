@@ -22,7 +22,10 @@
  *  - Fail-open on any infrastructure error (handled by the caller): a broken read never blocks a turn.
  */
 
-/** Every tool the harness ships. Used to validate an authored allowlist (a typo is a real bug). */
+/** Every tool the harness ships — the builtin set plus the ones registered outside
+ *  `builtinTools()` (task/question/exit_plan/checkpoint/rewind, all lead-only). Used to
+ *  validate an authored allowlist (a typo is a real bug). Kept honest by a drift test that
+ *  asserts every name `builtinTools()` emits appears here. */
 export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "read",
   "write",
@@ -35,8 +38,12 @@ export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "todowrite",
   "web_fetch",
   "web_search",
+  "bgjob",
   "task",
   "question",
+  "exit_plan",
+  "checkpoint",
+  "rewind",
   "git_commit",
 ]);
 

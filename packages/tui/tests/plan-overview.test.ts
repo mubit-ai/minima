@@ -312,6 +312,29 @@ describe("planOverviewRows / stepCardLines / renderPlanOverviewText (U3.1 + U3.3
     expect(renderPlanOverviewText(o, 100)).not.toContain("session total");
   });
 
+  test("Task 6: a stamped plan budget adds a delegated-spend line to the panel and text", () => {
+    const { db, runId, planId, stepIds } = seededDb();
+    db.setPlanBudget(planId, 2);
+    db.recordStepDelegation(stepIds[0]!, "found the seam", 0.12);
+    db.recordStepDelegation(stepIds[1]!, "wired it up", 0.25);
+    const o = buildPlanOverview(db, runId);
+    if (!o) throw new Error("expected overview");
+    const rows = planOverviewRows(o, 80).map((r) => r.text);
+    expect(rows[rows.length - 1]).toBe("delegated: $0.37 of $2.00 budget · 2 of 4 steps");
+    expect(renderPlanOverviewText(o, 100)).toContain(
+      "delegated: $0.37 of $2.00 budget · 2 of 4 steps",
+    );
+  });
+
+  test("Task 6: no plan budget renders exactly as before — no delegated line at all", () => {
+    const { db, runId } = seededDb();
+    const o = buildPlanOverview(db, runId);
+    if (!o) throw new Error("expected overview");
+    const rows = planOverviewRows(o, 80);
+    expect(rows.some((r) => r.text.includes("delegated:"))).toBe(false);
+    expect(renderPlanOverviewText(o, 100)).not.toContain("delegated:");
+  });
+
   test("one-shot text render carries steps, tiers and the Σ line", () => {
     const { db, runId, planId, stepIds } = seededDb();
     db.insertGate({

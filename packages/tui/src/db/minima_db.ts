@@ -539,6 +539,22 @@ const MIGRATIONS: string[][] = [
      )`,
     "CREATE INDEX IF NOT EXISTS ix_commits_run ON commits(run_id, created)",
   ],
+
+  // Plan-delegated steps: a plan step's work may run as a sub-agent. `result` is the child's
+  // returned text — it feeds the NEXT step's prior-results projection, so it must survive
+  // compaction and restart and therefore lives here, not in context. `delegated_cost_usd` is
+  // both the per-step cost readout and the already-delegated marker: it is stamped on EVERY
+  // attempt including failures, and a non-NULL value means the step never spawns again (without
+  // that, a lead re-marking a step in_progress re-spawns it and one flaky step drains the plan
+  // budget in a loop). `agent_type` persists the name that agentTypePlanPreset previously
+  // discarded after expanding it into tools+candidates — the child needs the persona and the
+  // cap, not just the tool scope. `plans.budget_usd` is the total the user approved at finalize.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN result TEXT",
+    "ALTER TABLE plan_steps ADD COLUMN delegated_cost_usd REAL",
+    "ALTER TABLE plan_steps ADD COLUMN agent_type TEXT",
+    "ALTER TABLE plans ADD COLUMN budget_usd REAL",
+  ],
 ];
 
 /** Tool results larger than this spill to a content-addressed blob file (v13). */
@@ -660,6 +676,13 @@ export interface PlanStepRow {
   tools: string | null;
   /** JSON array of exact model ids this step's delegated work routes among; NULL = inherit the session pool. */
   candidates: string | null;
+  /** The delegated child's returned text; NULL when the step was not delegated. */
+  result: string | null;
+  /** Realized child spend. Non-NULL means this step was ALREADY delegated — one attempt per
+   *  step, ever — so it is stamped even when the attempt failed. */
+  delegated_cost_usd: number | null;
+  /** Name of the agent type this step runs as; NULL = a plain focused child. */
+  agent_type: string | null;
 }
 
 export interface FileChangeRow {
@@ -906,6 +929,8 @@ export interface CompletionFlip {
   verify_cwd: string | null;
   /** Stored check provenance, when known up-front (else null → compute at gate time). */
   check_origin: CheckOrigin | null;
+  /** The matched step's CURRENT status (null for a brand-new todo with no matched step). */
+  status: string | null;
 }
 
 /**
@@ -2345,6 +2370,7 @@ export class MinimaDb {
       verifyCwd?: string | null;
       tools?: string[] | null;
       candidates?: string[] | null;
+      agentType?: string | null;
     }[],
   ): { planId: string; stepIds: string[] } {
     const planId = this.insertPlan({ sessionId, title, status: "active" });
@@ -2363,6 +2389,7 @@ export class MinimaDb {
             checkOrigin: verify ? "user" : null,
             tools: st.tools ?? null,
             candidates: st.candidates ?? null,
+            agentType: st.agentType ?? null,
           }),
         );
       });
@@ -2476,10 +2503,11 @@ export class MinimaDb {
     checkOrigin?: CheckOrigin | null;
     tools?: string[] | null;
     candidates?: string[] | null;
+    agentType?: string | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools, candidates) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools, candidates, agent_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -2493,6 +2521,7 @@ export class MinimaDb {
         opts.checkOrigin ?? null,
         serializeToolList(opts.tools),
         serializeToolList(opts.candidates),
+        opts.agentType ?? null,
       ],
     );
     return id;
@@ -2502,6 +2531,38 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY idx")
       .all(planId) as PlanStepRow[];
+  }
+
+  /** Stamp a step's delegation outcome. Cost is written on failures too (it is the
+   *  one-attempt marker), so callers pass 0 rather than skipping the call. */
+  recordStepDelegation(stepId: string, result: string, costUsd: number): void {
+    this.db
+      .query("UPDATE plan_steps SET result = ?, delegated_cost_usd = ? WHERE id = ?")
+      .run(result, costUsd, stepId);
+  }
+
+  /** Best-effort, not a hard ceiling: this is a SUM() over the current plan_steps rows, and
+   *  upsertPlanFromTodos hard-deletes any step a later todowrite no longer matches — so a
+   *  lead re-emitting a shortened todo list silently erases those steps' delegation records
+   *  along with them, resetting the spend the plan budget is tracked against mid-plan. */
+  planDelegatedSpend(planId: string): number {
+    const row = this.db
+      .query(
+        "SELECT COALESCE(SUM(delegated_cost_usd), 0) AS total FROM plan_steps WHERE plan_id = ?",
+      )
+      .get(planId) as { total: number };
+    return row.total;
+  }
+
+  setPlanBudget(planId: string, usd: number | null): void {
+    this.db.query("UPDATE plans SET budget_usd = ? WHERE id = ?").run(usd, planId);
+  }
+
+  getPlanBudget(planId: string): number | null {
+    const row = this.db.query("SELECT budget_usd FROM plans WHERE id = ?").get(planId) as
+      | { budget_usd: number | null }
+      | undefined;
+    return row?.budget_usd ?? null;
   }
 
   /** The first in-progress step of a plan (the one file changes attribute to), or null. */
@@ -2606,6 +2667,7 @@ export class MinimaDb {
         baseline: verifyChanged ? null : (prev?.baseline ?? null),
         verify_cwd: t.verify_cwd ?? prev?.verify_cwd ?? null,
         check_origin: prev?.check_origin ?? null,
+        status: prev?.status ?? null,
       });
     }
     return flips;

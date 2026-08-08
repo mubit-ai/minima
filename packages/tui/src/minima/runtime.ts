@@ -1054,6 +1054,37 @@ export class MinimaAgent extends Agent {
     }
   }
 
+  /**
+   * The candidate pool of the IN-PROGRESS plan step, or null when there is none. Steps get
+   * a pool from `/plan finalize` (authored, or expanded from the step's agent type); without
+   * this read the column would be written and never consulted.
+   *
+   * Registry-filtered like every other pool assembly: ids this build cannot resolve are
+   * dropped, and a pool that empties out degrades to null (inherit) rather than routing over
+   * an empty set. Lead agent only — children route on their delegation's own pool, and are
+   * plan-blind by design. Fail-open on any read error.
+   */
+  private activeStepCandidatePool(): string[] | null {
+    if (this.config.bigPlan !== true || this.agentId !== null || !this.db || !this.runId) {
+      return null;
+    }
+    try {
+      const plan = this.db.getActivePlan(this.runId);
+      if (!plan) return null;
+      const step = this.db.getPlanSteps(plan.id).find((s) => s.status === "in_progress");
+      if (!step?.candidates) return null;
+      const parsed: unknown = JSON.parse(step.candidates);
+      if (!Array.isArray(parsed)) return null;
+      const known = parsed
+        .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+        .map((x) => x.trim())
+        .filter((id) => this.mapping.resolve(this.providerOf(id) ?? "", id) !== undefined);
+      return known.length > 0 ? known : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Sum usage over the assistant messages appended since `startIdx` (this run's turns). */
   private usageSince(startIdx: number): Usage {
     const total = new UsageClass();
@@ -1132,7 +1163,12 @@ export class MinimaAgent extends Agent {
       // If NO candidate is runnable (no provider keys at all), fall back to the full set and
       // let the provider layer surface an actionable "no API key" message. Explicit per-call
       // candidates (plan-premium) are a HARD pool: never widened back to config.candidates.
-      const pool = opts.candidates ?? profilePool ?? this.config.candidates;
+      // The IN-PROGRESS plan step's pool sits between the two: more specific than the repo
+      // profile, less authoritative than an explicit per-call pool. Same semantics as a
+      // profile pool (a default pool, never a pin) and the same propensity story — it is
+      // pre-request candidate assembly, not a re-rank of what came back.
+      const pool =
+        opts.candidates ?? this.activeStepCandidatePool() ?? profilePool ?? this.config.candidates;
       const runnable = pool.filter((id) => {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;

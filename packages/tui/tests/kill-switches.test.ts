@@ -146,6 +146,8 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_NOTIFY_AFTER_MS",
   "MINIMA_TUI_TTSR_CAP",
   "MINIMA_TUI_LSP_TIMEOUT_MS",
+  // Plan-delegated steps' default budget, USD — a number, not a switch.
+  "MINIMA_TUI_PLAN_BUDGET",
   "MINIMA_TUI_STOP_STRIKES",
   "MINIMA_TUI_SPIRAL_REPEATS",
   "MINIMA_TUI_STEP_CAP",
@@ -161,6 +163,10 @@ const NOT_A_SWITCH = new Set([
   "MINIMA_TUI_DEBUG_ANCHOR",
   "MINIMA_TUI_BADGE",
   "MINIMA_TUI_PERF",
+  // Deliberately NOT umbrella-covered (own dedicated test below, not the OPT_IN loop's
+  // EXPERIMENTAL=1 assertion): plan-delegated steps redirect who executes every plan step,
+  // so it ships opt-in for one release on its own switch, not tucked under the umbrella.
+  "MINIMA_TUI_PLAN_DELEGATE",
 ]);
 
 /** Every .ts/.tsx file under src/, so an ambient read cannot hide outside config.ts. */
@@ -212,6 +218,56 @@ describe("kill-switch matrix — the documented rollback contract", () => {
     );
     withEnv(clean({ MINIMA_TUI_ARTIFACT_GC_MB: "16" }), () =>
       expect(configFromEnv().artifactGcMb).toBe(16),
+    );
+  });
+
+  test("MINIMA_TUI_PLAN_DELEGATE is opt-in on its own switch — EXPERIMENTAL=1 must not open it", () => {
+    withEnv(clean({ MINIMA_TUI_PLAN_DELEGATE: undefined }), () =>
+      expect(configFromEnv().planDelegate).toBe(false),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_DELEGATE: "1" }), () =>
+      expect(configFromEnv().planDelegate).toBe(true),
+    );
+    // Redirects who executes every plan step — deliberately NOT under the umbrella that
+    // flips every other default-off feature on at once.
+    withEnv(clean({ MINIMA_TUI_EXPERIMENTAL: "1", MINIMA_TUI_PLAN_DELEGATE: undefined }), () =>
+      expect(configFromEnv().planDelegate).toBe(false),
+    );
+  });
+
+  test("MINIMA_TUI_PLAN_DELEGATE still gates delegate construction in cli/main.ts", () => {
+    // Bespoke, not an AMBIENT_DEFAULT_ON row: planDelegate IS config-backed (asserted above
+    // via configFromEnv), so the risk isn't an ambient process.env read bypassing config — it
+    // is cli/main.ts silently dropping the `config.planDelegate &&` guard and constructing the
+    // delegate unconditionally. No behavioral test reaches main() to catch that, so the wiring
+    // expression itself is pinned here, the same way AMBIENT_DEFAULT_ON pins its read sites.
+    expect(readSource("cli/main.ts")).toContain(code("config.planDelegate && planDb"));
+  });
+
+  test("MINIMA_TUI_PLAN_BUDGET defaults to $2 and rejects nonsense", () => {
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: undefined }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "5.50" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(5.5, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "free" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    // "0" is how a user caps spend at zero — it must mean zero, not silently fall back to
+    // the $2 default (that fallback is reserved for non-numeric/negative input).
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "0" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBe(0),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "-5" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    // Empty or whitespace-only values must fall back to $2, not disable delegation.
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "" }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
+    );
+    withEnv(clean({ MINIMA_TUI_PLAN_BUDGET: "  " }), () =>
+      expect(configFromEnv().planBudgetUsd).toBeCloseTo(2, 6),
     );
   });
 

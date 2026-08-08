@@ -301,6 +301,14 @@ export interface HarnessConfig {
    * switch — NOT umbrella-covered). 0 = unset (the built-in 1500ms ceiling). Only consulted
    * when `lsp` is on. */
   lspTimeoutMs: number;
+  /** Plan-delegated steps: every step of an active plan runs as a sub-agent. OPT-IN with
+   *  MINIMA_TUI_PLAN_DELEGATE=1 for one release — the repo's default-on convention fits
+   *  additive features, and this redirects who executes every plan step. Only consulted when
+   *  `bigPlan` is on. */
+  planDelegate: boolean;
+  /** Default plan total, USD, offered at /plan finalize (MINIMA_TUI_PLAN_BUDGET). Only
+   *  consulted when `planDelegate` is on. */
+  planBudgetUsd: number;
 }
 
 export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
@@ -361,6 +369,8 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     ttsrCap: 0,
     lsp: false,
     lspTimeoutMs: 0,
+    planDelegate: false,
+    planBudgetUsd: 2,
     ...overrides,
   };
 }
@@ -369,7 +379,10 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
  * explicit "1" → on; explicit "0" → off (even under experimental); unset → on iff
  * experimental. Convention: every future default-off feature flag MUST resolve through
  * this helper so MINIMA_TUI_EXPERIMENTAL reaches it; consent gates (e.g.
- * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. */
+ * MINIMA_TUI_ALLOW_VERIFY) and diagnostic switches are exempt. `planDelegate` is also a
+ * deliberate exception: it redirects who executes every plan step, so it ships opt-in on
+ * its own switch outside the umbrella — MINIMA_TUI_EXPERIMENTAL must not silently turn it
+ * on. */
 export function optInFlag(value: string | undefined, experimental: boolean): boolean {
   return value === "1" || (experimental && value !== "0");
 }
@@ -505,6 +518,10 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
     const n = Number(backoffEnv);
     if (Number.isInteger(n) && n >= 0) cfg.backoffMs = n;
   }
+  cfg.planDelegate = process.env.MINIMA_TUI_PLAN_DELEGATE === "1";
+  const budgetEnv = (process.env.MINIMA_TUI_PLAN_BUDGET ?? "").trim();
+  const planBudget = budgetEnv ? Number(budgetEnv) : Number.NaN;
+  cfg.planBudgetUsd = Number.isFinite(planBudget) && planBudget >= 0 ? planBudget : 2;
   return { ...cfg, ...overrides };
 }
 

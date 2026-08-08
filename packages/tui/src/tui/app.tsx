@@ -38,6 +38,12 @@ import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import {
+  type AgentType,
+  type AgentTypeRegistry,
+  loadAgentTypes,
+  scaffoldAgentType,
+} from "../minima/agent_types.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
 import {
   type PlanStripInfo,
@@ -106,6 +112,15 @@ import type { AskUserRef, QuestionOption } from "../tools/question.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import { VERSION } from "../version.ts";
+import {
+  type AgentDraft,
+  WIZARD_FIELDS,
+  newAgentDraft,
+  wizardAdvance,
+  wizardHint,
+  wizardQuestion,
+  wizardSummary,
+} from "./agent_wizard.ts";
 import {
   addAttachment,
   attachmentToken,
@@ -236,6 +251,10 @@ export interface AppProps {
   initialResume?: RehydratedRun | null;
   /** Injectable spawn for plan-mode council researchers (child MinimaAgents). From cli/main.ts. */
   planSpawn?: SpawnFn;
+  /** User-defined agent types, loaded once by cli/main.ts. Backs `/agent` (list + run) and
+   *  is the SAME registry createSpawn resolves against, so the list can never drift from
+   *  what a delegation would actually get. */
+  agentTypes?: AgentTypeRegistry;
   /** Fixed cheap model the plan-mode council uses for keeper/critic/synth completions. */
   planMetaModel?: Model;
   /**
@@ -468,8 +487,39 @@ function allCommands(): { name: string; desc: string }[] {
     },
     { name: "summarise", desc: "Summarise the results of the last 5 turns (/summarise <n>)" },
     { name: "btw", desc: "Side note to the running turn — /btw <note> (no new prompt queued)" },
+    {
+      name: "agent",
+      desc: "Agent types: /agent (list) · /agent make (define) · /agent <name> <task> (run)",
+    },
   ];
   return commandCache;
+}
+
+/**
+ * Agent types whose name matches the `/agent <partial>` being typed, sorted; null when the
+ * draft isn't an in-progress agent name (a name already followed by a task is a run, not a
+ * completion). Shared by the inline suggestion list and Tab.
+ */
+export function agentTypeMatches(
+  typed: string,
+  registry: AgentTypeRegistry | undefined,
+): AgentType[] | null {
+  const m = /^\/agent[ \t]+(\S*)$/.exec(typed);
+  if (!m) return null;
+  const prefix = m[1]!.toLowerCase();
+  const types = [...(registry?.types.values() ?? [])]
+    .filter((t) => t.name.startsWith(prefix))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  // The `make` subcommand rides the same list — it is how a first agent type gets defined at
+  // all, and an empty registry would otherwise complete to nothing. A real type named `make` wins.
+  if ("make".startsWith(prefix) && !types.some((t) => t.name === "make")) {
+    types.push({
+      name: "make",
+      description: "define a new agent type, field by field",
+      prompt: "",
+    });
+  }
+  return types;
 }
 
 export interface CommandPickerProps {
@@ -957,6 +1007,7 @@ export function HarnessApp({
   childEventRef,
   initialResume = null,
   planSpawn,
+  agentTypes,
   planMetaModel,
   bigPlanGateBefore,
   verifyConsentRef,
@@ -1157,6 +1208,8 @@ export function HarnessApp({
   // where the input is re-enabled to capture one line of guidance. Arms only when bigPlanBehavior.block
   // exists, which itself requires bigPlan on — structurally inert on the default path.
   const [gateFocus, setGateFocus] = useState<{ gateId: string; noteEntry: boolean } | null>(null);
+  // `/agent make`: while set, the prompt line answers the wizard instead of the agent.
+  const [agentDraft, setAgentDraft] = useState<AgentDraft | null>(null);
   /** Gate the user Esc-dismissed — never re-armed automatically (ctrl+g re-arms). */
   const dismissedGateRef = useRef<string | null>(null);
   // Plan-mode design council: purely in-memory session (no DB); the only durable artifact is the
@@ -1322,6 +1375,13 @@ export function HarnessApp({
           agent.meter?.addOverhead(usd);
           agent.budget?.bookSpend(usd, "plan-critic");
         },
+        // A step may name a user-defined agent type; finalize expands it into that step's
+        // tool allowlist + model pool.
+        agentTypes,
+        // Plan-delegated steps (opt-in, MINIMA_TUI_PLAN_DELEGATE=1): stamp the approved
+        // total so the delegate seam's budget gate has something to spend against. No
+        // interactive approval prompt yet — that is deferred to a later change.
+        planBudgetUsd: agent.config.planDelegate ? agent.config.planBudgetUsd : null,
       });
       // MP18: approving the plan (which displays every step's verify) IS the consent event
       // for the seeded checks — without this, the first in_progress todowrite after
@@ -1353,7 +1413,7 @@ export function HarnessApp({
       }
       return outcome;
     },
-    [agent, planMetaModel],
+    [agent, planMetaModel, agentTypes],
   );
   const exitPlanFinalize = useCallback(
     async (_planMd: string | null = null, autoAcceptEdits = false) => {
@@ -1516,6 +1576,8 @@ export function HarnessApp({
   const [chordArmed, setChordArmed] = useState(false);
   // J1.2: in-flight /verify refutation pass — aborted alongside a busy-abort (Esc/Ctrl+C).
   const refutationControllerRef = useRef<AbortController | null>(null);
+  /** Abort seam for a `/agent <name> <task>` run — Esc must reach the child agent. */
+  const agentCommandControllerRef = useRef<AbortController | null>(null);
   // ONE capture expression feeds both the global guard list and TextInput `suspended`, so
   // the two can never drift apart again (the U3/B5 key-leak class: a panel in one list but
   // not the other let arrows scrub history and Enter submit while navigating the panel).
@@ -1700,10 +1762,16 @@ export function HarnessApp({
 
   const hasSpace = typedText.includes(" ");
   const MAX_SUGGESTIONS = 8;
-  const allMatchingCommands =
-    typedText.startsWith("/") && !hasSpace
-      ? commands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
-      : [];
+  // `/agent <partial>` completes agent-type names instead of commands. Neither list applies
+  // mid-wizard — there the line is a field value, and "/" is legal prose.
+  const typedAgentTypes = agentDraft ? null : agentTypeMatches(typedText, agentTypes);
+  const allMatchingCommands = agentDraft
+    ? []
+    : typedAgentTypes
+      ? typedAgentTypes.map((t) => ({ name: t.name, desc: t.description }))
+      : typedText.startsWith("/") && !hasSpace
+        ? commands.filter((c) => c.name.startsWith(typedText.slice(1).trim().toLowerCase()))
+        : [];
   // Cap the inline suggestions so a bare "/" (which matches ALL commands) can't inflate the
   // reserved height past a short terminal and shove the input/status off-screen.
   const matchingCommands = allMatchingCommands.slice(0, MAX_SUGGESTIONS);
@@ -2110,6 +2178,7 @@ export function HarnessApp({
       setPromptQueue(holdOnAbort);
       if (getMode() === "plan") councilControllerRef.current?.abort();
       refutationControllerRef.current?.abort();
+      agentCommandControllerRef.current?.abort();
       agent.abort();
       return;
     }
@@ -2221,6 +2290,22 @@ export function HarnessApp({
         }
       }
     }
+    // `/agent make`: Esc abandons the draft, and a bare Enter takes the current field's
+    // default — TextInput never submits an empty line, so the skip has to be caught here.
+    if (agentDraft) {
+      if (key.escape) {
+        setAgentDraft(null);
+        setMessages((m) => [
+          ...m,
+          { role: "tool", toolName: "agent", text: "Cancelled — nothing written." },
+        ]);
+        return;
+      }
+      if (key.return && !typedText.trim()) {
+        answerAgentDraft(agentDraft, "");
+        return;
+      }
+    }
     // MUB-183: Esc while idle with queued prompts clears the queue (the abort branch
     // above already returned while busy, so this can never eat the abort key).
     if (key.escape && promptQueue.items.length > 0) {
@@ -2293,6 +2378,8 @@ export function HarnessApp({
   }
 
   function handleTabComplete(val: string): string | undefined {
+    const types = agentTypeMatches(val, agentTypes);
+    if (types) return types[0] ? `/agent ${types[0].name} ` : undefined;
     if (!val.startsWith("/")) return undefined;
     const hasSpace = val.includes(" ");
     if (hasSpace) return undefined;
@@ -2986,6 +3073,143 @@ export function HarnessApp({
           "usage: /memory [list] · add <text> · pin|confirm|reject|delete <n|id>\nCurated cross-session memory for this repo — active + pinned entries are injected into the system prompt each turn.",
           true,
         );
+        break;
+      }
+      case "agent": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const say = (text: string, isError = false) =>
+          setMessages((m) => [...m, echo, { role: "tool", text, toolName: "agent", isError }]);
+        // Re-read from disk first: a definition created or hand-edited during the session must
+        // land without a restart (the startup load is the only other read).
+        const reload = () => {
+          if (!agentTypes) return [];
+          const fresh = loadAgentTypes(process.cwd());
+          agentTypes.types.clear();
+          for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+          return [...fresh.types.values()].sort((a, b) => a.name.localeCompare(b.name));
+        };
+        const defined = reload();
+        const parts = args.trim().split(/\s+/).filter(Boolean);
+        const wanted = (parts[0] ?? "").toLowerCase();
+        // `make` is a subcommand only while no type actually claims that name.
+        if (wanted === "make" && !defined.some((t) => t.name === "make")) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              toolName: "agent",
+              text: "New agent type — answer each line, Esc to cancel.",
+            },
+          ]);
+          setAgentDraft(newAgentDraft(parts[1] ?? ""));
+          break;
+        }
+        // No name → the menu. Also the only form allowed to run mid-turn (prompt_queue.ts).
+        if (!wanted) {
+          say(
+            defined.length === 0
+              ? [
+                  "No agent types defined.",
+                  "",
+                  "  /agent make          define one — it asks for each field in turn",
+                  "  /agent make <name>   same, with the name already answered",
+                  "",
+                  "A type is a persona plus a tool allowlist, a model pool, an effort level and a",
+                  "spend cap. The lead agent can then delegate to it, a plan step can name it,",
+                  "and /agent <name> <task> runs it directly.",
+                ].join("\n")
+              : [
+                  `${defined.length} agent type${defined.length > 1 ? "s" : ""}:`,
+                  "",
+                  ...defined.map((t) => {
+                    const bits = [
+                      t.tools ? `tools: ${t.tools.join(", ")}` : null,
+                      t.candidates ? `models: ${t.candidates.join(", ")}` : null,
+                      t.effort ? `effort: ${t.effort}` : null,
+                      t.budget_usd !== undefined ? `cap: $${t.budget_usd}` : null,
+                      t.isolation ? `isolation: ${t.isolation}` : null,
+                    ].filter(Boolean);
+                    return `  ${t.name} — ${t.description || "(no description)"}${
+                      bits.length ? `\n    ${bits.join(" · ")}` : ""
+                    }`;
+                  }),
+                  "",
+                  "Run one with /agent <name> <task> · define another with /agent make.",
+                ].join("\n"),
+          );
+          break;
+        }
+        const type = defined.find((t) => t.name === wanted);
+        if (!type) {
+          say(
+            `Unknown agent type "${wanted}".${
+              defined.length
+                ? ` Defined: ${defined.map((t) => t.name).join(", ")}`
+                : ` None are defined — /agent make ${wanted} defines it.`
+            }`,
+            true,
+          );
+          break;
+        }
+        const objective = args.trim().slice(parts[0]!.length).trim();
+        if (!objective) {
+          say(`usage: /agent ${type.name} <task> — what should this agent do?`, true);
+          break;
+        }
+        if (!planSpawn) {
+          say("agent unavailable — no subagent spawner in this session", true);
+          break;
+        }
+        setMessages((m) => [
+          ...m,
+          echo,
+          { role: "tool", text: `Running the ${type.name} agent…`, toolName: "agent" },
+        ]);
+        setBusy(true);
+        setBusyState("running");
+        const controller = new AbortController();
+        agentCommandControllerRef.current = controller;
+        try {
+          // The contract fields the model would normally author. A type deliberately cannot
+          // supply them (it says WHO, not WHAT), so the command provides neutral ones and
+          // the user's line is the objective.
+          const res = await planSpawn(
+            {
+              step_id: type.name,
+              objective,
+              output_format: "A direct, complete answer to the objective.",
+              boundaries:
+                "Stay within the objective. Make no unrelated changes and touch no files the objective does not call for.",
+              agent_type: type.name,
+            },
+            { depth: 1, parentSignal: controller.signal, priorResults: [] },
+          );
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `${res.text || "(no output)"}\n\n---\n${type.name} · ${res.outcome} · $${res.costUsd.toFixed(4)}`,
+              toolName: "agent",
+              isError: res.outcome === "failure",
+            },
+          ]);
+        } catch (exc) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: "tool",
+              text: `agent failed: ${errText(exc)}`,
+              toolName: "agent",
+              isError: true,
+            },
+          ]);
+        } finally {
+          agentCommandControllerRef.current = null;
+          setBusy(false);
+          sweepRetiredTools();
+          setBusyState("ready");
+        }
         break;
       }
       case "profile": {
@@ -4776,6 +5000,49 @@ export function HarnessApp({
     drainGen,
   ]);
 
+  /** One answer in the `/agent make` wizard. Persists on the last field. */
+  function answerAgentDraft(draft: AgentDraft, text: string) {
+    const res = wizardAdvance(draft, text);
+    const note = (t: string, isError = false) =>
+      setMessages((m) => [...m, { role: "tool", toolName: "agent", text: t, isError }]);
+    if (res.kind === "error") {
+      note(res.message, true);
+      return;
+    }
+    if (res.kind === "next") {
+      setAgentDraft(res.draft);
+      return;
+    }
+    setAgentDraft(null);
+    const d = res.draft;
+    try {
+      const path = scaffoldAgentType(process.cwd(), d.name, {
+        global: d.global,
+        description: d.description,
+        role: d.role,
+        tools: d.tools,
+        budget_usd: d.budget_usd,
+      });
+      // The registry is loaded once at startup, so the new type has to be folded into the live
+      // one or it would not be runnable (or completable) until restart.
+      if (agentTypes) {
+        const fresh = loadAgentTypes(process.cwd());
+        agentTypes.types.clear();
+        for (const [k, v] of fresh.types) agentTypes.types.set(k, v);
+      }
+      note(
+        [
+          `created ${path}`,
+          "",
+          `Run it with /agent ${d.name} <task>. The lead agent can delegate to it and a plan`,
+          "step can name it. Edit the file to add a model pool or an effort level.",
+        ].join("\n"),
+      );
+    } catch (exc) {
+      note(errText(exc), true);
+    }
+  }
+
   /**
    * Ctrl+V, image half. Returns the token to insert, or undefined to let the composer paste
    * the clipboard's TEXT instead — which is both "there was no image" and "there was one and
@@ -4819,6 +5086,11 @@ export function HarnessApp({
     // M6.3 steer-note entry: the line is the gate note, not a prompt — record it and release.
     if (gateFocus?.noteEntry) {
       answerGate(gateFocus.gateId, "steer", text.trim() || null);
+      return;
+    }
+    if (agentDraft) {
+      setTypedText("");
+      answerAgentDraft(agentDraft, text);
       return;
     }
     setTypedText("");
@@ -4987,8 +5259,13 @@ export function HarnessApp({
   // +1 row for the live current-action line while a tool is running, so the chat window
   // shrinks instead of clipping.
   const currentAction = currentActionLine(activeActions);
-  const suggestionsHeight =
-    matchingCommands.length > 0 ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0) : 0;
+  // The two live boxes above the composer are mutually exclusive (the wizard suppresses the
+  // suggestion list), so one term books whichever is mounted: border rows + question + hint.
+  const suggestionsHeight = agentDraft
+    ? wizardSummary(agentDraft).length + 3 + (wizardHint(agentDraft) ? 1 : 0)
+    : matchingCommands.length > 0
+      ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0)
+      : 0;
   const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only hides for the pickers/overlays that replace it in the
   // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
@@ -5532,11 +5809,14 @@ export function HarnessApp({
               flexShrink={0}
             >
               <Box position="absolute" marginTop={-1} marginLeft={2}>
-                <Text color="gray"> commands </Text>
+                <Text color="gray"> {typedAgentTypes ? "agent types" : "commands"} </Text>
               </Box>
               {matchingCommands.map((cmd) => (
                 <Box key={cmd.name}>
-                  <Text color="yellow">/{cmd.name.padEnd(12)}</Text>
+                  <Text color="yellow">
+                    {typedAgentTypes ? " " : "/"}
+                    {cmd.name.padEnd(12)}
+                  </Text>
                   <Text color="gray">{cmd.desc}</Text>
                 </Box>
               ))}
@@ -5548,9 +5828,36 @@ export function HarnessApp({
             </Box>
           )}
           {queueListVisible && <QueueList queue={promptQueue} />}
+          {agentDraft && (
+            <Box
+              borderStyle="round"
+              borderColor="cyan"
+              paddingX={1}
+              flexDirection="column"
+              width="100%"
+              flexShrink={0}
+            >
+              <Box position="absolute" marginTop={-1} marginLeft={2}>
+                <Text color="cyan"> new agent type </Text>
+              </Box>
+              {wizardSummary(agentDraft).map((row) => (
+                <Text key={row} color="gray" wrap="truncate">
+                  {row}
+                </Text>
+              ))}
+              <Text color="cyan" wrap="truncate">
+                {wizardQuestion(agentDraft)}
+              </Text>
+              {wizardHint(agentDraft) && (
+                <Text color="gray" wrap="truncate">
+                  {wizardHint(agentDraft)}
+                </Text>
+              )}
+            </Box>
+          )}
           <Box
             borderStyle="round"
-            borderColor={planMode ? "magenta" : "yellow"}
+            borderColor={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}
             paddingX={1}
             flexDirection="column"
             width="100%"
@@ -5565,12 +5872,16 @@ export function HarnessApp({
                 from typedText only, so any extra glyph the composer draws can wrap a line
                 and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
-              <Text color={planMode ? "magenta" : "yellow"}>
-                {`${planMode ? " plan mode" : chordArmed ? ` prompt · ${armedPrefixHint()}` : " prompt"}${
-                  attachedCount > 0
-                    ? ` · ${attachedCount} image${attachedCount === 1 ? "" : "s"}`
-                    : ""
-                } `}
+              <Text color={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}>
+                {/* Mid-wizard the line is a field value, so neither the armed-chord hint nor
+                    the attachment count applies — the field name is the whole label. */}
+                {agentDraft
+                  ? ` ${WIZARD_FIELDS[agentDraft.step]} `
+                  : `${planMode ? " plan mode" : chordArmed ? ` prompt · ${armedPrefixHint()}` : " prompt"}${
+                      attachedCount > 0
+                        ? ` · ${attachedCount} image${attachedCount === 1 ? "" : "s"}`
+                        : ""
+                    } `}
               </Text>
             </Box>
             <TextInput
@@ -5589,11 +5900,13 @@ export function HarnessApp({
                   : undefined
               }
               placeholder={
-                gateFocus?.noteEntry
-                  ? "steer guidance — Enter to record, Esc to skip note"
-                  : busy
-                    ? "turn running — Enter queues (esc aborts)"
-                    : ""
+                agentDraft
+                  ? "Enter to accept · Esc to cancel"
+                  : gateFocus?.noteEntry
+                    ? "steer guidance — Enter to record, Esc to skip note"
+                    : busy
+                      ? "turn running — Enter queues (esc aborts)"
+                      : ""
               }
               showPrefix={false}
               // Passing undefined turns the chord off entirely at the composer layer — the

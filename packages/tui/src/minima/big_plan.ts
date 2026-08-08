@@ -25,6 +25,7 @@
  */
 import type { AfterToolCall, BeforeToolCall } from "../agent/tools.ts";
 import { AssistantMessage } from "../ai/index.ts";
+import { text } from "../ai/types.ts";
 import type {
   CompletionFlip,
   FileChangeRow,
@@ -43,6 +44,7 @@ import {
   detectTamper,
 } from "./big_plan_factors.ts";
 import { baselineFromResult, resolveCheckTimeoutMs, runCheck, wasAborted } from "./check.ts";
+import type { PlanDelegate } from "./plan_delegate.ts";
 import { parseStepTools, stepAllowlistDecision } from "./tool_permissions.ts";
 import { gateVerdictFor } from "./why.ts";
 
@@ -630,9 +632,10 @@ export const BASELINE_BUDGET_MS = 120_000;
  */
 export function bigPlanAfterToolCall(
   ref: BigPlanAgentRef,
-  opts?: { verifyConsent?: VerifyConsent },
+  opts?: { verifyConsent?: VerifyConsent; delegate?: PlanDelegate },
 ): AfterToolCall {
   const consent = opts?.verifyConsent;
+  const delegate = opts?.delegate;
   return async (ctx) => {
     try {
       const db = ref.db;
@@ -644,7 +647,7 @@ export function bigPlanAfterToolCall(
       if (name === "todowrite") {
         const todos = parseTodos(args.tasks);
         if (todos.length > 0) {
-          const { started } = db.upsertPlanFromTodos(session, todos);
+          const { planId, started } = db.upsertPlanFromTodos(session, todos);
           const deadline = performance.now() + BASELINE_BUDGET_MS;
           for (const s of started) {
             if (!s.verify) continue;
@@ -665,6 +668,31 @@ export function bigPlanAfterToolCall(
               db.setStepBaseline(s.id, baselineFromResult(result));
             } catch {
               // per-step fail-open: one failed baseline write must not skip the rest.
+            }
+          }
+
+          // Delegation runs AFTER the baseline loop: the done-gate measures red→green across the
+          // child's work, so a baseline captured after it would compare the child against itself.
+          if (delegate) {
+            const reports: string[] = [];
+            for (const s of started) {
+              // An already-aborted signal never fires its "abort" listener (spawn.ts's
+              // addEventListener registration is a no-op on a signal that's already
+              // tripped), so a child launched past this point could never be stopped —
+              // it would run to its full effort cap after the user pressed Esc.
+              if (ref.runSignal?.aborted) break;
+              const report = await delegate(planId, s.id);
+              if (report) reports.push(report);
+            }
+            // AUGMENT, never replace: ctx.result is the rendered todo list + "N/M done" summary
+            // from todowrite itself — the lead's only confirmation the list was accepted, and
+            // after compaction its only view of its own plan position. loop.ts splices this
+            // hook's `content` in place of the tool result wholesale, so dropping ctx.result.content
+            // here would silently destroy that echo on every delegating turn.
+            if (reports.length) {
+              return {
+                content: [...ctx.result.content, text(`\n\n---\n\n${reports.join("\n\n---\n\n")}`)],
+              };
             }
           }
         }
@@ -765,6 +793,20 @@ const SOLO_COMPLETION_PREFIX =
 
 function soloCompletionReason(names: string[]): string {
   return `${SOLO_COMPLETION_PREFIX}${names.join(", ")}. Completion checks run before ANY tool in the batch executes, so the verdict would be recorded against pre-batch state and a sibling could regress it after it passed. This call was refused before executing (none of its statuses were applied) — make your edits first, then mark the step completed in its own later message.`;
+}
+
+const NOT_ANNOUNCED_PREFIX = "Step not announced — ";
+
+/**
+ * Plan-delegated steps (requireInProgress, MINIMA_TUI_PLAN_DELEGATE=1 only): a step that jumps
+ * pending -> completed in one todowrite skipped the in_progress transition entirely, so the
+ * harness never ran its pre-work baseline and never delegated it — both fire ONLY when a step
+ * enters in_progress. Refusing forces the model to announce the step first, in its own message,
+ * before doing the work.
+ */
+function notAnnouncedReason(names: string[]): string {
+  const list = names.map((n) => `"${n}"`).join(", ");
+  return `${NOT_ANNOUNCED_PREFIX}${list} went straight from pending to completed without ever being marked in_progress. Mark it in_progress with todowrite FIRST, in its own message, BEFORE doing the work — the harness runs the step's pre-work baseline check and delegates it at that moment, and skipping the transition means neither ever happens. This call was refused before executing (none of its statuses were applied) — send an in_progress todowrite for ${names.length > 1 ? "these steps" : "this step"} now, then do the work, then mark it completed in a later message.`;
 }
 
 /**
@@ -925,13 +967,20 @@ export function bigPlanHooks(
     /** E1: fired (post-commit, fail-open) when a plan closes with every step completed —
      * the diff-review trigger. Must not throw and must not block (fire-and-forget). */
     onPlanClosed?: (planId: string) => void;
+    delegate?: PlanDelegate;
+    /** Plan-delegated steps only (MINIMA_TUI_PLAN_DELEGATE=1): refuse a pending -> completed
+     *  flip that skipped in_progress. OFF by default — the plan spine is on for everyone, and
+     *  universally refusing un-announced completions would change behavior for every plan user,
+     *  not just delegated ones. */
+    requireInProgress?: boolean;
   },
 ): { before: BeforeToolCall; after: AfterToolCall } {
   const budgetMs = opts?.gateBudgetMs ?? GATE_BUDGET_MS;
   const fs = opts?.fs ?? defaultFactorFs;
   const enforceAllowlist = opts?.enforceAllowlist ?? false;
+  const requireInProgress = opts?.requireInProgress ?? false;
   const consent = opts?.verifyConsent;
-  const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent });
+  const sink = bigPlanAfterToolCall(ref, { verifyConsent: consent, delegate: opts?.delegate });
   const pending = new Map<string, GateVerdict[]>();
 
   const before: BeforeToolCall = async (ctx) => {
@@ -964,6 +1013,16 @@ export function bigPlanHooks(
       if (todos.length === 0) return null;
       const flips = db.completionsForTodos(session, todos);
       if (flips.length === 0) return null;
+      // Plan-delegated steps only: a lead that does the work and THEN marks a step completed
+      // never passes through in_progress, so both the pre-work baseline capture and the step's
+      // delegation — which fire only on that transition — silently never happen. Block before
+      // running any checks; there is no point verifying a completion this call is refusing.
+      if (requireInProgress) {
+        const notAnnounced = flips.filter((f) => f.stepId !== null && f.status === "pending");
+        if (notAnnounced.length > 0) {
+          return { block: true, reason: notAnnouncedReason(notAnnounced.map((f) => f.content)) };
+        }
+      }
       // Solo-completion: a completion-flipping todowrite must be the only state-changing call
       // in its message — a mutating sibling executes AFTER this verdict is computed and could
       // regress the very state the check just verified.
