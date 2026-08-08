@@ -17,9 +17,10 @@ import { Agent, type AgentOptions } from "../agent/agent.ts";
 import { getMode, modeSystemAppend } from "../agent/modes.ts";
 import type { ThinkingLevel } from "../agent/tools.ts";
 import { providerKeyPresent } from "../ai/provider_catalog.ts";
-import type { Model, Usage } from "../ai/types.ts";
+import { supportsImageInput } from "../ai/provider_quirks.ts";
+import type { ContentBlock, ImageContent, Model, Usage } from "../ai/types.ts";
 import { Usage as UsageClass } from "../ai/types.ts";
-import { AssistantMessage, Message } from "../ai/types.ts";
+import { AssistantMessage, Message, text as textBlock } from "../ai/types.ts";
 import { type MinimaDb, type RoutingProfileRow, newId } from "../db/minima_db.ts";
 import { errText } from "../errtext.ts";
 import type { AskUserRef } from "../tools/question.ts";
@@ -40,6 +41,7 @@ import {
   verifiedOutcomeFor,
 } from "./big_plan.ts";
 import { type BudgetLedger, reserveAmount } from "./budget.ts";
+import { cavemanSystemAppend, getCaveman } from "./caveman.ts";
 import { runCheck, wasAborted } from "./check.ts";
 import {
   CLASSIFY_CONFIDENCE_FLOOR,
@@ -239,6 +241,18 @@ export class MinimaAgent extends Agent {
   /** Per-repo routing profile cache, keyed by project so a run switch reloads. Writes
    * (/profile, the interview) invalidate via invalidateRoutingProfile(). */
   private profileCache: { projectKey: string; row: RoutingProfileRow | null } | null = null;
+  /** The "model has no reasoning — running with reasoning off" note is shown ONCE per
+   * session, on the first affected turn; after that it is silence, not spam. */
+  private reasoningOffNoted = false;
+
+  /** Surface the once-per-session reasoning-off note when a thinking level is active but
+   * the turn's model cannot reason (covers pinned and routed paths). */
+  private noteReasoningOff(model: Model | null | undefined, warnings: string[]): void {
+    if (this.reasoningOffNoted || !model || model.reasoning === true) return;
+    if ((this.agentState.thinkingLevel ?? "off") === "off") return;
+    this.reasoningOffNoted = true;
+    warnings.push(`${model.name} has no reasoning — running with reasoning off`);
+  }
 
   /** Esc must stop BOTH phases: the in-flight route and the model run. */
   override abort(): void {
@@ -343,6 +357,15 @@ export class MinimaAgent extends Agent {
        * excludedModels (the server does the subtraction). Never widened to
        * config.candidates. */
       candidates?: string[];
+      /**
+       * Images the user attached to THIS prompt (composer Ctrl+V). They ride alongside
+       * `content` in the run message, never inside it: routing, recall, the procedure lookup
+       * and lastRoutedTask all keep reading the plain task text.
+       *
+       * Re-sent on every rung of the recovery ladder, filtered per rung against the model
+       * that rung actually resolved to — see the drop-guard at the super.prompt site.
+       */
+      attachments?: ImageContent[];
     } = {},
   ): Promise<RoutingResult | null> {
     const effectiveTaskType = opts.taskType ?? this.taskTypeHint;
@@ -374,6 +397,13 @@ export class MinimaAgent extends Agent {
     const modeBlock = modeSystemAppend(getMode());
     if (modeBlock) {
       this.agentState.systemPrompt = (this.agentState.systemPrompt ?? "") + modeBlock;
+    }
+    // /caveman: terse-prose skill, read at prompt time like the mode block and reverted by the
+    // same `finally`. "" unless the user turned it on, so default turns are unchanged.
+    const cavemanBlock = cavemanSystemAppend(getCaveman());
+    if (cavemanBlock) {
+      const cur = this.agentState.systemPrompt;
+      this.agentState.systemPrompt = cur ? `${cur}\n\n${cavemanBlock}` : cavemanBlock;
     }
     // Plan verification: inject the verify contract + the plan of record into THIS turn's system
     // prompt (appended after recall, reverted together in `finally`). Off unless bigPlan is set.
@@ -647,13 +677,35 @@ export class MinimaAgent extends Agent {
         // steer to THIS rung's prompt (consumed once). The task itself is unchanged.
         const runContent = replanPrefix ? `${replanPrefix}\n\n${content}` : content;
         replanPrefix = null;
+        // The vision drop-guard. Routing picks the model AFTER the user hit Enter, and the
+        // ladder can pick a different one per rung, so whether the images may be sent is only
+        // knowable HERE. A model that cannot see them is TOLD they existed — otherwise it is
+        // left answering a question about a picture it was never shown. Enforcement lives at
+        // the payload, not in a prompt: this is what makes a 400 structurally impossible.
+        const atts = opts.attachments ?? [];
+        const runBlocks: ContentBlock[] = supportsImageInput(this.agentState.model)
+          ? [textBlock(runContent), ...atts]
+          : [
+              textBlock(
+                atts.length > 0
+                  ? `${runContent}\n\n[${atts.length} image${atts.length === 1 ? "" : "s"} omitted — ${this.agentState.model?.id ?? "this model"} has no vision]`
+                  : runContent,
+              ),
+            ];
         try {
           // LB-21: rung >= 1 re-issues the SAME task — flag it so transcript consumers
           // (the TUI echo) can tell a retry from a fresh prompt.
+          //
+          // Always a Message, never the bare block array: Agent.coercePrompts maps an array to
+          // ONE USER MESSAGE PER ELEMENT, which would split the text and its images into
+          // separate turns. `content: [text(x)]` is what the old string form built anyway, so
+          // an attachment-free prompt is unchanged.
           await super.prompt(
-            attempt > 0
-              ? new Message({ role: "user", content: runContent, ladder_reprompt: true })
-              : runContent,
+            new Message({
+              role: "user",
+              content: runBlocks,
+              ...(attempt > 0 ? { ladder_reprompt: true } : {}),
+            }),
           );
         } catch (exc) {
           runError = exc;
@@ -1002,6 +1054,37 @@ export class MinimaAgent extends Agent {
     }
   }
 
+  /**
+   * The candidate pool of the IN-PROGRESS plan step, or null when there is none. Steps get
+   * a pool from `/plan finalize` (authored, or expanded from the step's agent type); without
+   * this read the column would be written and never consulted.
+   *
+   * Registry-filtered like every other pool assembly: ids this build cannot resolve are
+   * dropped, and a pool that empties out degrades to null (inherit) rather than routing over
+   * an empty set. Lead agent only — children route on their delegation's own pool, and are
+   * plan-blind by design. Fail-open on any read error.
+   */
+  private activeStepCandidatePool(): string[] | null {
+    if (this.config.bigPlan !== true || this.agentId !== null || !this.db || !this.runId) {
+      return null;
+    }
+    try {
+      const plan = this.db.getActivePlan(this.runId);
+      if (!plan) return null;
+      const step = this.db.getPlanSteps(plan.id).find((s) => s.status === "in_progress");
+      if (!step?.candidates) return null;
+      const parsed: unknown = JSON.parse(step.candidates);
+      if (!Array.isArray(parsed)) return null;
+      const known = parsed
+        .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+        .map((x) => x.trim())
+        .filter((id) => this.mapping.resolve(this.providerOf(id) ?? "", id) !== undefined);
+      return known.length > 0 ? known : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Sum usage over the assistant messages appended since `startIdx` (this run's turns). */
   private usageSince(startIdx: number): Usage {
     const total = new UsageClass();
@@ -1057,7 +1140,9 @@ export class MinimaAgent extends Agent {
         this.agentState.model = model;
         this.offlineReason = null;
         this.offlineKind = null;
-        return pinnedResult(model);
+        const pinned = pinnedResult(model);
+        this.noteReasoningOff(model, pinned.warnings);
+        return pinned;
       }
     }
     try {
@@ -1078,7 +1163,12 @@ export class MinimaAgent extends Agent {
       // If NO candidate is runnable (no provider keys at all), fall back to the full set and
       // let the provider layer surface an actionable "no API key" message. Explicit per-call
       // candidates (plan-premium) are a HARD pool: never widened back to config.candidates.
-      const pool = opts.candidates ?? profilePool ?? this.config.candidates;
+      // The IN-PROGRESS plan step's pool sits between the two: more specific than the repo
+      // profile, less authoritative than an explicit per-call pool. Same semantics as a
+      // profile pool (a default pool, never a pin) and the same propensity story — it is
+      // pre-request candidate assembly, not a re-rank of what came back.
+      const pool =
+        opts.candidates ?? this.activeStepCandidatePool() ?? profilePool ?? this.config.candidates;
       const runnable = pool.filter((id) => {
         const m = this.mapping.resolve(this.providerOf(id) ?? "", id);
         return m ? providerKeyPresent(m.provider) : false;
@@ -1145,6 +1235,7 @@ export class MinimaAgent extends Agent {
         if (overridden) return overridden;
       }
       this.agentState.model = routing.model;
+      this.noteReasoningOff(routing.model, routing.warnings);
       return routing;
     } catch (exc) {
       // An Esc during routing is a user abort, NOT a routing failure — never

@@ -45,7 +45,9 @@ describe("boundText head mode", () => {
   });
 
   test("B7: maxLines and maxChars compose; oversized line hard-cut counts as one shown line", () => {
-    const lines = Array.from({ length: 300 }, (_, i) => (i === 149 ? "X".repeat(60_000) : `line${i}`));
+    const lines = Array.from({ length: 300 }, (_, i) =>
+      i === 149 ? "X".repeat(60_000) : `line${i}`,
+    );
     const b = boundText(lines.join("\n"), { maxLines: 200, maxChars: 50_000 });
     expect(b.shownLines).toBe(150);
     expect(b.body.length).toBe(50_000);
@@ -59,7 +61,10 @@ describe("boundText head mode", () => {
 
 describe("boundText headTail mode", () => {
   test("B3: keeps both ends with inline omission marker, notice null", () => {
-    const rows = Array.from({ length: 2_000 }, (_, i) => `L${String(i).padStart(4, "0")}-${"f".repeat(93)}`);
+    const rows = Array.from(
+      { length: 2_000 },
+      (_, i) => `L${String(i).padStart(4, "0")}-${"f".repeat(93)}`,
+    );
     rows[0] = `HEAD-SENTINEL-${"f".repeat(85)}`;
     rows[rows.length - 1] = `TAIL-SENTINEL-${"f".repeat(85)}`;
     const input = rows.join("\n");

@@ -20,11 +20,7 @@ import {
   ledgerBehavior,
   redPrompt,
 } from "../src/minima/behavior.ts";
-import {
-  bigPlanHooks,
-  planStripInfo,
-  stampVerifiedOutcome,
-} from "../src/minima/big_plan.ts";
+import { bigPlanHooks, planStripInfo, stampVerifiedOutcome } from "../src/minima/big_plan.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
 import {
   ConstJudge,

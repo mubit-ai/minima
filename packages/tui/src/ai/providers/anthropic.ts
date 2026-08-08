@@ -8,6 +8,7 @@
  */
 
 import { errText } from "../../errtext.ts";
+import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
@@ -23,7 +24,7 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
-import { effortForLevel, thinkingFormatFor } from "../provider_quirks.ts";
+import { effectiveEffort, reasoningPayload, thinkingFormatFor } from "../provider_quirks.ts";
 import {
   AssistantMessage,
   type Context,
@@ -76,7 +77,7 @@ export class AnthropicProvider {
     opts: AnthropicProviderOptions = {},
   ): AsyncIterable<StreamEvent> {
     const options = (opts.options ?? {}) as Record<string, unknown>;
-    const client = this.client ?? (await buildClient(options));
+    const client = this.client ?? (await buildAnthropicClient(options));
     const kwargs = buildKwargs(model, context, options);
     const assistant = new AssistantMessage({ content: [], model: model.id, stop_reason: "stop" });
     const textBuf = new Map<number, string[]>();
@@ -195,10 +196,26 @@ export class AnthropicProvider {
   }
 }
 
-async function buildClient(options: Record<string, unknown>): Promise<AnthropicClientLike> {
-  const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN");
+/** Exported for tests: the auth/guard path has no other seam. */
+export async function buildAnthropicClient(
+  options: Record<string, unknown>,
+): Promise<AnthropicClientLike> {
+  // An OAuth token is NOT an api key — it is a bearer credential, and the SDK has a separate
+  // slot for it. Passing one as `apiKey` sent it in the x-api-key header and 401'd.
+  const apiKey = resolveApiKey(options, "ANTHROPIC_API_KEY");
+  const authToken = apiKey ? undefined : resolveApiKey(options, "ANTHROPIC_OAUTH_TOKEN");
+  // Fail fast, and BEFORE the SDK can go looking. Since 0.41 the client no longer throws on a
+  // missing key at construction: it defers credential resolution to the first request and will
+  // read ambient config files to find one. That breaks two things at once — a keyless call
+  // becomes a slow network round-trip instead of an instant error, and a "hermetic" run with
+  // the env blanked could still pick up a real credential off disk.
+  if (!apiKey && !authToken) {
+    throw new Error(
+      'no API key for provider "anthropic" — set ANTHROPIC_API_KEY (e.g. `minima config set ANTHROPIC_API_KEY <key>`). Note: `minima auth` configures routing only, not model-provider keys.',
+    );
+  }
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey, timeout: sdkTimeoutMs(options) });
+  const client = new Anthropic({ apiKey, authToken, timeout: sdkTimeoutMs(options) });
   // The SDK's messages.stream() returns a MessageStream (async iterable); cast to our shape.
   return client as unknown as AnthropicClientLike;
 }
@@ -210,7 +227,8 @@ function buildKwargs(
 ): Record<string, unknown> {
   // Prompt caching ON by default — the agent re-sends the stable prefix every turn.
   const cache = options.prompt_cache !== false;
-  const wire = context.messages.map(toWire);
+  const messages = normalizeForTarget(context.messages, "anthropic-messages");
+  const wire = messages.map(toWire);
   const kwargs: Record<string, unknown> = {
     model: model.id,
     max_tokens: options.max_tokens ?? model.max_tokens,
@@ -237,8 +255,11 @@ function buildKwargs(
     const format = thinkingFormatFor(model);
     if (format === "adaptive") {
       kwargs.thinking = { type: "adaptive" };
-      const effort = effortForLevel(options.thinking_level);
-      if (effort) kwargs.output_config = { effort };
+      // Same ladder the openai-compat provider and the status bar read (MUB-229). Anthropic's
+      // vocabulary is wider (xhigh reaches the wire) and it has no off-payload, both of which
+      // live in the quirks table — so behaviour here is byte-identical to what shipped.
+      const effort = effectiveEffort(model, context.tools.length > 0, options.thinking_level);
+      Object.assign(kwargs, reasoningPayload(model.provider, effort.send));
     } else if (format === "enabled") {
       kwargs.thinking = { type: "enabled", budget_tokens: Number(options.thinking_budget ?? 1024) };
     }
@@ -264,7 +285,7 @@ function toWire(m: Message): Record<string, unknown> {
         {
           type: "tool_result",
           tool_use_id: m.tool_call_id,
-          content: m.textContent,
+          content: toolResultContent(m),
           is_error: m.is_error,
         },
       ],
@@ -286,4 +307,32 @@ function toWire(m: Message): Record<string, unknown> {
       content.push({ type: "tool_use", id: b.id, name: b.name, input: b.arguments });
   }
   return { role: m.role, content };
+}
+
+/**
+ * `tool_result.content` for one tool result. Anthropic is the only target that can nest an
+ * image in a tool result, so no hoist runs for this api (see ai/compat.ts).
+ *
+ * The no-image case deliberately returns the plain STRING form rather than a one-element
+ * array, so every payload that existed before image results shipped is byte-identical.
+ */
+function toolResultContent(m: Message): string | Record<string, unknown>[] {
+  const images = m.content.filter((b) => b.type === "image");
+  if (images.length === 0) return flattenText(m);
+  const out: Record<string, unknown>[] = [];
+  const t = flattenText(m);
+  if (t) out.push({ type: "text", text: t });
+  for (const b of images)
+    out.push({
+      type: "image",
+      source: { type: "base64", media_type: b.mime_type ?? "image/png", data: b.data },
+    });
+  return out;
+}
+
+function flattenText(m: Message): string {
+  return m.content
+    .filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map((b) => b.text)
+    .join("");
 }

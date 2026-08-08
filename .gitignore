@@ -41,3 +41,6 @@ context_window.json
 BigPlan.md
 GROUND_TRUTH.md
 docs-site/bun.lock
+
+# eval/benchmark run outputs
+runs/

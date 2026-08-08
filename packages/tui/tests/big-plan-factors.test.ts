@@ -16,7 +16,16 @@ import {
 
 /** A minimal file_changes row (only the fields the factor code reads). */
 function fc(path: string, kind: FileChangeRow["kind"] = "modified"): FileChangeRow {
-  return { id: "x", plan_id: "p", step_id: null, path, kind, origin: null, created_at: null };
+  return {
+    id: "x",
+    plan_id: "p",
+    step_id: null,
+    path,
+    kind,
+    origin: null,
+    created_at: null,
+    agent_id: null,
+  };
 }
 
 /** An in-memory FactorFs backed by a path→contents map (absent key = missing file). */

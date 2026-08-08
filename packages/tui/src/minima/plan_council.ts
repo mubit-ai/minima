@@ -760,6 +760,10 @@ export async function synthesizeBigPlan(
     apiKey?: string;
     signal?: AbortSignal | null;
     onCostUsd?: (usd: number) => void;
+    /** User-defined agent types available in this repo. Empty/absent → the system prompt is
+     *  byte-identical to the pre-agent-types version (the recorder is never told about a
+     *  field it has no valid value for). */
+    agentTypes?: { name: string; description: string }[];
   },
 ): Promise<BigPlanSynthesis | null> {
   const stateDigest = [
@@ -788,10 +792,19 @@ export async function synthesizeBigPlan(
     .filter(Boolean)
     .join("\n\n");
 
+  // Agent types are advertised only when this repo defines some — no types, no mention, so
+  // the recorder cannot invent an "agent_type" that would expand to nothing.
+  const agentTypeNote = opts.agentTypes?.length
+    ? `\nA step MAY also carry "agent_type": one of the named agent types defined in this repo, which scopes that step to that agent's tool allowlist and model pool. Use it only when a step clearly belongs to one of them; omit it otherwise. Available: ${opts.agentTypes
+        .map((t) => `${t.name} (${t.description || "no description"})`)
+        .join("; ")}.`
+    : "";
+  const systemPrompt = agentTypeNote ? `${BIG_PLAN_SYSTEM}${agentTypeNote}` : BIG_PLAN_SYSTEM;
+
   const attempt = async (extra: string): Promise<BigPlanSynthesis | null> => {
     const raw = await completeJson<Record<string, unknown>>(
       opts.metaModel,
-      BIG_PLAN_SYSTEM,
+      systemPrompt,
       extra ? `${user}\n\n${extra}` : user,
       {},
       { apiKey: opts.apiKey, signal: opts.signal, timeout: 120, onCostUsd: opts.onCostUsd },
@@ -871,11 +884,15 @@ function sanitizeApproach(raw: unknown): SynthPlanStep[] {
       // Per-step candidate pools: keep names verbatim (exact model ids, case-sensitive);
       // createSpawn filters unknown ids against the registry at enforcement time.
       const candidates = asStrList(r.candidates);
+      // Agent type: kept verbatim (lowercased). An unknown name expands to nothing at
+      // finalize rather than erroring — the plan doc still records what was intended.
+      const agentType = asStr(r.agent_type).trim().toLowerCase();
       if (action) {
         out.push({
           action,
           verify: asStr(r.verify),
           tools,
+          ...(agentType ? { agent_type: agentType } : {}),
           ...(candidates.length > 0 ? { candidates } : {}),
         });
       }

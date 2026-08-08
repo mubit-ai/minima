@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  MinimaClient,
-  MinimaRouter,
-  ModelMapping,
-  harnessConfig,
-} from "../src/minima/index.ts";
+import { MinimaClient, MinimaRouter, ModelMapping, harnessConfig } from "../src/minima/index.ts";
 
 // The recovery ladder's memory brief: /v1/diagnose failure lessons formatted for the
 // replan preamble. Strictly fail-open — a memory outage or an old server must never
