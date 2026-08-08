@@ -3,13 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import {
-  SeenLedger,
-  coalesce,
-  hashFile,
-  occurrenceSpans,
-  sha256Hex,
-} from "../src/tools/_seen.ts";
+import { SeenLedger, coalesce, hashFile, occurrenceSpans, sha256Hex } from "../src/tools/_seen.ts";
 import { readTool } from "../src/tools/index.ts";
 
 const dirs: string[] = [];
@@ -115,9 +109,9 @@ describe("ledger semantics (AC5)", () => {
     const p = "/tmp/seen/c.txt";
     led.record(p, "h1", [{ start: 1, end: 2 }], "read");
     led.record(p, "h1", [{ start: 8, end: 10 }], "read");
-    expect(
-      led.applyEdit(p, { spans: [{ start: 4, end: 4 }], lineDelta: 2, newHash: "h2" }),
-    ).toBe(true);
+    expect(led.applyEdit(p, { spans: [{ start: 4, end: 4 }], lineDelta: 2, newHash: "h2" })).toBe(
+      true,
+    );
     expect(shape(led, p)).toEqual([
       { s: 1, e: 2, h: "h2", t: "read" },
       { s: 4, e: 6, h: "h2", t: "edit" },

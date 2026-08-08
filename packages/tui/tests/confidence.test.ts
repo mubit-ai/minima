@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { confidence } from "../src/minima/confidence.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
+import { confidence } from "../src/minima/confidence.ts";
 
 const GREEN: Factors = {
   pass: true,

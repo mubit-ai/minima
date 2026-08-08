@@ -139,9 +139,10 @@ describe("computeSections (U1.2)", () => {
     const msgs = [user("find docs"), turn(1000, 200), ws];
     const tokenCost = (1000 * 3 + 200 * 15) / 1e6;
     expect(computeSections(msgs).totals.costUSD).toBeCloseTo(tokenCost, 12);
-    expect(
-      computeSections(msgs, { toolFees: new Map([["other", 1]]) }).totals.costUSD,
-    ).toBeCloseTo(tokenCost, 12);
+    expect(computeSections(msgs, { toolFees: new Map([["other", 1]]) }).totals.costUSD).toBeCloseTo(
+      tokenCost,
+      12,
+    );
   });
 });
 

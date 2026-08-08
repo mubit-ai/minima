@@ -93,7 +93,12 @@ describe("last_used touch on artifact re-read", () => {
     await hook(readCtx(ref, errored));
     await hook(readCtx(ref, { content: [] }, true));
     await hook({
-      toolCall: { type: "toolCall" as const, id: "tc-2", name: "bash", arguments: { command: "ls" } },
+      toolCall: {
+        type: "toolCall" as const,
+        id: "tc-2",
+        name: "bash",
+        arguments: { command: "ls" },
+      },
       result: { content: [] },
       isError: false,
       context: agentState,

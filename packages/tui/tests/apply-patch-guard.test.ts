@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool, ToolResult } from "../src/agent/tools.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { applyPatchTool, editTool, readTool } from "../src/tools/index.ts";
 import { SeenLedger } from "../src/tools/_seen.ts";
+import { applyPatchTool, editTool, readTool } from "../src/tools/index.ts";
 
 const dirs: string[] = [];
 const dbs: MinimaDb[] = [];
@@ -39,7 +39,13 @@ function bodyOf(res: ToolResult): string {
 
 const FIVE = "l1\nl2\nl3\nl4\nl5\n";
 
-function updateHunk(path: string, ctxBefore: string, minus: string, plus: string, ctxAfter: string) {
+function updateHunk(
+  path: string,
+  ctxBefore: string,
+  minus: string,
+  plus: string,
+  ctxAfter: string,
+) {
   return (
     "*** Begin Patch\n" +
     `*** Update File: ${path}\n` +
@@ -146,7 +152,9 @@ describe("AC3 fresh/unseen matrix", () => {
     writeFileSync(f, FIVE);
     const seen = ledger();
     await run(readTool({ seen }), { path: f });
-    const res = await run(applyPatchTool({ seen }), { patch: updateHunk(f, "l2", "l3", "L3", "l4") });
+    const res = await run(applyPatchTool({ seen }), {
+      patch: updateHunk(f, "l2", "l3", "L3", "l4"),
+    });
     expect(res.details?.error).toBeUndefined();
     expect(readFileSync(f, "utf8")).toBe("l1\nl2\nL3\nl4\nl5\n");
   });
@@ -161,7 +169,11 @@ describe("AC3 fresh/unseen matrix", () => {
     expect(add.details?.error).toBeUndefined();
     expect(readFileSync(nf, "utf8")).toBe("alpha\nbeta\ngamma\n");
 
-    const edit = await run(editTool({ seen }), { path: nf, old_string: "beta", new_string: "BETA" });
+    const edit = await run(editTool({ seen }), {
+      path: nf,
+      old_string: "beta",
+      new_string: "BETA",
+    });
     expect(edit.details?.error).toBeUndefined();
     expect(readFileSync(nf, "utf8")).toBe("alpha\nBETA\ngamma\n");
   });
@@ -171,7 +183,9 @@ describe("AC3 fresh/unseen matrix", () => {
     const g = join(d, "g.txt");
     writeFileSync(g, FIVE);
     const seen = ledger();
-    const res = await run(applyPatchTool({ seen }), { patch: updateHunk(g, "l2", "l3", "L3", "l4") });
+    const res = await run(applyPatchTool({ seen }), {
+      patch: updateHunk(g, "l2", "l3", "L3", "l4"),
+    });
     expect(res.details?.error).toBe(true);
     expect(res.details?.edit_guard).toBe("unseen");
     expect(bodyOf(res)).toMatch(/apply_patch: unread lines/);
@@ -211,7 +225,11 @@ describe("AC3 fresh/unseen matrix", () => {
     expect(seen.rows(src)).toEqual([]);
     expect((seen.rows(dst) ?? []).length).toBeGreaterThan(0);
 
-    const edit = await run(editTool({ seen }), { path: dst, old_string: "l4\n", new_string: "L4\n" });
+    const edit = await run(editTool({ seen }), {
+      path: dst,
+      old_string: "l4\n",
+      new_string: "L4\n",
+    });
     expect(edit.details?.error).toBeUndefined();
     expect(readFileSync(dst, "utf8")).toBe("l1\nL2\nl3\nL4\nl5\n");
   });
@@ -231,11 +249,19 @@ describe("AC4 per-agent scoping (two agent ids)", () => {
 
     await run(readTool({ seen: ledA }), { path: f });
 
-    const bEdit = await run(editTool({ seen: ledB }), { path: f, old_string: "l2\n", new_string: "L2\n" });
+    const bEdit = await run(editTool({ seen: ledB }), {
+      path: f,
+      old_string: "l2\n",
+      new_string: "L2\n",
+    });
     expect(bEdit.details?.edit_guard).toBe("unseen");
     expect(readFileSync(f, "utf8")).toBe(FIVE);
 
-    const aEdit = await run(editTool({ seen: ledA }), { path: f, old_string: "l2\n", new_string: "L2\n" });
+    const aEdit = await run(editTool({ seen: ledA }), {
+      path: f,
+      old_string: "l2\n",
+      new_string: "L2\n",
+    });
     expect(aEdit.details?.error).toBeUndefined();
 
     const aRows = db.db.query("SELECT * FROM seen_lines WHERE agent_id = 'agentA'").all();

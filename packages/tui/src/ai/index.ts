@@ -9,18 +9,15 @@ export * from "./stream.ts";
 export {
   getProvider,
   registerProvider,
-  unregisterProvider,
-  registeredApis,
   resetRegistry,
   resetProviderRegistration,
   ensureProvidersRegistered,
   type Provider,
 } from "./providers/index.ts";
-export { registerFauxProvider, FauxRegistration, FauxProviderState } from "./providers/faux.ts";
+export { registerFauxProvider, FauxRegistration } from "./providers/faux.ts";
 export { OpenAICompatProvider, AnthropicProvider, GoogleProvider } from "./providers/index.ts";
 export {
   registerModel,
-  registerModels,
   tryGetModel,
   findModelById,
   allModels,

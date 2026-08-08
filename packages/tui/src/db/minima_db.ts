@@ -519,6 +519,43 @@ const MIGRATIONS: string[][] = [
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_run ON bg_jobs(run_id, started)",
     "CREATE INDEX IF NOT EXISTS ix_bg_jobs_state ON bg_jobs(state)",
   ],
+  // commits ledger (F9b, MUB-234) — the COMMIT END of a join that already existed.
+  // routing_decisions carries the chosen model, realized cost and outcome; gates carries the
+  // verdicts; both already key on rec_id. What was missing was a way in from a commit hash,
+  // which is the one question only this table can answer: `/why <sha>`, later, by hash.
+  //
+  // `rec_ids` is a JSON array rather than a commits⋈decisions child table: it is written
+  // once and read whole, never queried BY rec_id, so a child table would buy a join it has no
+  // use for. Realized cost and gate outcomes are NOT columns here — both hang off rec_ids in
+  // tables that already hold them, and a cost snapshot taken at authoring time would always
+  // be short by the authoring turn's own spend, which is not booked until that turn ends.
+  // run_id soft-joins runs(run_id) (no FK — batch stays self-contained, bg_jobs precedent).
+  [
+    `CREATE TABLE IF NOT EXISTS commits (
+       sha     TEXT PRIMARY KEY,
+       run_id  TEXT NOT NULL,
+       rec_ids TEXT NOT NULL,
+       created REAL NOT NULL
+     )`,
+    "CREATE INDEX IF NOT EXISTS ix_commits_run ON commits(run_id, created)",
+  ],
+
+  // Plan-delegated steps: a plan step's work may run as a sub-agent. `result` is the child's
+  // returned text — it feeds the NEXT step's prior-results projection, so it must survive
+  // compaction and restart and therefore lives here, not in context. `delegated_cost_usd` is
+  // both the per-step cost readout and the already-delegated marker: it is stamped on EVERY
+  // attempt including failures, and a non-NULL value means the step never spawns again (without
+  // that, a lead re-marking a step in_progress re-spawns it and one flaky step drains the plan
+  // budget in a loop). `agent_type` persists the name that agentTypePlanPreset previously
+  // discarded after expanding it into tools+candidates — the child needs the persona and the
+  // cap, not just the tool scope. `plans.budget_usd` is the total the user approved at finalize.
+  [
+    "ALTER TABLE plan_steps ADD COLUMN result TEXT",
+    "ALTER TABLE plan_steps ADD COLUMN delegated_cost_usd REAL",
+    "ALTER TABLE plan_steps ADD COLUMN agent_type TEXT",
+    "ALTER TABLE plans ADD COLUMN budget_usd REAL",
+  ],
+
   // realized token counts per rung. These were computed at feedback time (the same
   // `usageSince` totals already sent to /v1/feedback) and then thrown away locally — so the
   // harness could never check its own cost estimate against what a run actually spent, and
@@ -657,6 +694,13 @@ export interface PlanStepRow {
   tools: string | null;
   /** JSON array of exact model ids this step's delegated work routes among; NULL = inherit the session pool. */
   candidates: string | null;
+  /** The delegated child's returned text; NULL when the step was not delegated. */
+  result: string | null;
+  /** Realized child spend. Non-NULL means this step was ALREADY delegated — one attempt per
+   *  step, ever — so it is stamped even when the attempt failed. */
+  delegated_cost_usd: number | null;
+  /** Name of the agent type this step runs as; NULL = a plain focused child. */
+  agent_type: string | null;
 }
 
 export interface FileChangeRow {
@@ -691,6 +735,34 @@ export interface UserSignalRow {
   action: UserAction | null;
   at: string | null;
   note: string | null;
+}
+
+// ---------------------------------------------------------------- commits ledger rows (F9b)
+
+export interface CommitRow {
+  sha: string;
+  run_id: string;
+  /** JSON array of the rec_ids this commit claimed. Read whole; never queried by element. */
+  rec_ids: string;
+  created: number;
+}
+
+/**
+ * A hash lookup. `ambiguous` is a real outcome, not an error: seven hex characters is enough
+ * to be read as a hash and not always enough to name one commit, and the caller must say so
+ * rather than silently picking the first row.
+ */
+export type CommitLookup =
+  | { kind: "found"; row: CommitRow }
+  | { kind: "unknown" }
+  | { kind: "ambiguous"; shas: string[] };
+
+/** One contributing rung, as `/why <sha>` reports it. */
+export interface CommitContribution {
+  rec_id: string;
+  chosen_model: string | null;
+  actual_cost_usd: number | null;
+  outcome: string | null;
 }
 
 // ---------------------------------------------------------------- memory ledger rows (B1)
@@ -875,6 +947,8 @@ export interface CompletionFlip {
   verify_cwd: string | null;
   /** Stored check provenance, when known up-front (else null → compute at gate time). */
   check_origin: CheckOrigin | null;
+  /** The matched step's CURRENT status (null for a brand-new todo with no matched step). */
+  status: string | null;
 }
 
 /**
@@ -886,6 +960,21 @@ function serializeToolList(tools: string[] | null | undefined): string | null {
   if (!Array.isArray(tools)) return null;
   const clean = tools.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean);
   return clean.length > 0 ? JSON.stringify(clean) : null;
+}
+
+/**
+ * F9b: read a `commits.rec_ids` blob back. Total — a malformed or hand-edited column yields no
+ * contributors rather than throwing, because a broken ledger row must never take down the
+ * commit reader that is trying to explain it.
+ */
+function parseRecIds(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((r): r is string => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export class MinimaDb {
@@ -1495,6 +1584,112 @@ export class MinimaDb {
       )
       .get(runId) as { total: number | null } | null;
     return row?.total ?? 0;
+  }
+
+  // ================================================================ commits ledger (F9b)
+
+  /**
+   * The rungs a commit authored NOW would claim: this run's routed decisions that no earlier
+   * commit already claimed, plus `liveRecId` — the rung currently executing.
+   *
+   * This is the commit↔turn narrowing F9a deferred ("attribution is per RUN, not per diff —
+   * narrowing it needs the commit↔turn join that MUB-234 owns"). Without it the second commit
+   * in a run re-credits the first commit's turns, so the ledger's per-commit figures would sum
+   * to far more than the run ever spent.
+   *
+   * `liveRecId` is not optional decoration: a commit is authored from INSIDE a turn, and a
+   * turn's `routing_decisions` row is only written when it ends (persistDecision). Reading the
+   * table alone therefore misses the very rung that made the changes and credits it to the
+   * NEXT commit — and in a one-turn session leaves the commit with no contributors at all,
+   * indistinguishable from an unrouted one. F9a compensates for the same gap on the trailer
+   * side by appending the live model id; this is that fix for the join.
+   *
+   * Claimed rec_ids are subtracted in TypeScript rather than by `json_each`: the arrays are
+   * per-run and tiny, and this keeps the read off SQLite's JSON1 extension.
+   */
+  unattributedRecIds(runId: string, liveRecId?: string | null): string[] {
+    const claimed = new Set<string>();
+    for (const row of this.db.query("SELECT rec_ids FROM commits WHERE run_id = ?").all(runId) as {
+      rec_ids: string;
+    }[]) {
+      for (const recId of parseRecIds(row.rec_ids)) claimed.add(recId);
+    }
+    const rows = this.db
+      .query("SELECT rec_id FROM routing_decisions WHERE run_id = ? ORDER BY ts")
+      .all(runId) as { rec_id: string }[];
+    const recIds: string[] = [];
+    for (const row of rows) {
+      if (claimed.has(row.rec_id)) continue;
+      claimed.add(row.rec_id);
+      recIds.push(row.rec_id);
+    }
+    // Appended last, and only if no row already supplied it — a commit authored after the
+    // rung's row landed must not list it twice.
+    if (liveRecId && !claimed.has(liveRecId)) recIds.push(liveRecId);
+    return recIds;
+  }
+
+  /**
+   * One row per SHA. `INSERT OR IGNORE` because a SHA is the identity here: re-recording the
+   * same commit (a retry, a replayed hook) must never claim its rungs a second time.
+   *
+   * Realized cost is deliberately NOT stored. It is reachable from `rec_ids` through
+   * routing_decisions — the same join that yields the models and the gate verdicts — and a
+   * snapshot taken here would be systematically understated, because the authoring rung's own
+   * cost is not known until its turn ends. A number that is always a little wrong is worse
+   * than one derived correctly on read.
+   */
+  recordCommit(opts: { sha: string; runId: string; recIds: readonly string[] }): void {
+    this.db.run(
+      "INSERT OR IGNORE INTO commits (sha, run_id, rec_ids, created) VALUES (?, ?, ?, ?)",
+      [opts.sha, opts.runId, JSON.stringify([...opts.recIds]), Date.now() / 1000],
+    );
+  }
+
+  /** Resolve a full SHA or an abbreviated prefix. Case-insensitive; git's own hashes are lower. */
+  findCommitBySha(shaPrefix: string): CommitLookup {
+    const prefix = shaPrefix.trim().toLowerCase();
+    if (!prefix) return { kind: "unknown" };
+    const rows = this.db
+      .query("SELECT * FROM commits WHERE sha LIKE ? || '%' ORDER BY created DESC")
+      .all(prefix) as CommitRow[];
+    if (rows.length === 0) return { kind: "unknown" };
+    if (rows.length > 1) return { kind: "ambiguous", shas: rows.map((r) => r.sha) };
+    return { kind: "found", row: rows[0] as CommitRow };
+  }
+
+  /** The rec_ids a recorded commit claimed; empty for an unknown, ambiguous or unrouted one. */
+  commitRecIds(sha: string): string[] {
+    const found = this.findCommitBySha(sha);
+    return found.kind === "found" ? parseRecIds(found.row.rec_ids) : [];
+  }
+
+  /**
+   * The contributing rungs behind a commit, in routing order. A rec_id with no surviving
+   * decision row is skipped rather than reported as a blank model — the ledger's job is to
+   * name what it can still prove. That also covers the live rung claimed before its row
+   * existed: it simply appears once the turn ends.
+   */
+  commitContributions(sha: string): CommitContribution[] {
+    const recIds = this.commitRecIds(sha);
+    if (recIds.length === 0) return [];
+    const holes = recIds.map(() => "?").join(",");
+    return this.db
+      .query(
+        `SELECT rec_id, chosen_model, actual_cost_usd, outcome
+         FROM routing_decisions WHERE rec_id IN (${holes}) ORDER BY ts`,
+      )
+      .all(...recIds) as CommitContribution[];
+  }
+
+  /** Gate verdicts for a commit's rungs, via the rec_id key both tables already share. */
+  commitGates(sha: string): GateRow[] {
+    const recIds = this.commitRecIds(sha);
+    if (recIds.length === 0) return [];
+    const holes = recIds.map(() => "?").join(",");
+    return this.db
+      .query(`SELECT * FROM gates WHERE rec_id IN (${holes}) ORDER BY created_at`)
+      .all(...recIds) as GateRow[];
   }
 
   // ================================================================ checkpoints (B3)
@@ -2223,6 +2418,7 @@ export class MinimaDb {
       verifyCwd?: string | null;
       tools?: string[] | null;
       candidates?: string[] | null;
+      agentType?: string | null;
     }[],
   ): { planId: string; stepIds: string[] } {
     const planId = this.insertPlan({ sessionId, title, status: "active" });
@@ -2241,6 +2437,7 @@ export class MinimaDb {
             checkOrigin: verify ? "user" : null,
             tools: st.tools ?? null,
             candidates: st.candidates ?? null,
+            agentType: st.agentType ?? null,
           }),
         );
       });
@@ -2354,10 +2551,11 @@ export class MinimaDb {
     checkOrigin?: CheckOrigin | null;
     tools?: string[] | null;
     candidates?: string[] | null;
+    agentType?: string | null;
   }): string {
     const id = opts.id ?? newId();
     this.db.run(
-      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools, candidates) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO plan_steps (id, plan_id, idx, content, status, verify, baseline, created_at, verify_cwd, check_origin, tools, candidates, agent_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         opts.planId,
@@ -2371,6 +2569,7 @@ export class MinimaDb {
         opts.checkOrigin ?? null,
         serializeToolList(opts.tools),
         serializeToolList(opts.candidates),
+        opts.agentType ?? null,
       ],
     );
     return id;
@@ -2380,6 +2579,38 @@ export class MinimaDb {
     return this.db
       .query("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY idx")
       .all(planId) as PlanStepRow[];
+  }
+
+  /** Stamp a step's delegation outcome. Cost is written on failures too (it is the
+   *  one-attempt marker), so callers pass 0 rather than skipping the call. */
+  recordStepDelegation(stepId: string, result: string, costUsd: number): void {
+    this.db
+      .query("UPDATE plan_steps SET result = ?, delegated_cost_usd = ? WHERE id = ?")
+      .run(result, costUsd, stepId);
+  }
+
+  /** Best-effort, not a hard ceiling: this is a SUM() over the current plan_steps rows, and
+   *  upsertPlanFromTodos hard-deletes any step a later todowrite no longer matches — so a
+   *  lead re-emitting a shortened todo list silently erases those steps' delegation records
+   *  along with them, resetting the spend the plan budget is tracked against mid-plan. */
+  planDelegatedSpend(planId: string): number {
+    const row = this.db
+      .query(
+        "SELECT COALESCE(SUM(delegated_cost_usd), 0) AS total FROM plan_steps WHERE plan_id = ?",
+      )
+      .get(planId) as { total: number };
+    return row.total;
+  }
+
+  setPlanBudget(planId: string, usd: number | null): void {
+    this.db.query("UPDATE plans SET budget_usd = ? WHERE id = ?").run(usd, planId);
+  }
+
+  getPlanBudget(planId: string): number | null {
+    const row = this.db.query("SELECT budget_usd FROM plans WHERE id = ?").get(planId) as
+      | { budget_usd: number | null }
+      | undefined;
+    return row?.budget_usd ?? null;
   }
 
   /** The first in-progress step of a plan (the one file changes attribute to), or null. */
@@ -2484,6 +2715,7 @@ export class MinimaDb {
         baseline: verifyChanged ? null : (prev?.baseline ?? null),
         verify_cwd: t.verify_cwd ?? prev?.verify_cwd ?? null,
         check_origin: prev?.check_origin ?? null,
+        status: prev?.status ?? null,
       });
     }
     return flips;

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { Message } from "../src/ai/types.ts";
+import { AssistantMessage, Message, Usage, text } from "../src/ai/types.ts";
+import type { HarnessConfig } from "../src/minima/config.ts";
 import type { MinimaAgent } from "../src/minima/runtime.ts";
 import { compactMessages, compactReport, maybeAutoCompact } from "../src/tui/compact.ts";
+import { AUTO_COMPACT_PCT, contextUsage } from "../src/tui/context_meter.ts";
 
 function msg(role: "user" | "assistant", content: string): Message {
   return new Message({ role, content });
@@ -13,12 +15,22 @@ function convo(n: number, size = 40): Message[] {
   );
 }
 
-function fakeAgent(messages: Message[], contextWindow: number | null): MinimaAgent {
+/** A reply carrying provider-reported usage — what makes a message an anchor. */
+function reply(u: Partial<Pick<Usage, "input" | "output" | "cache_read">>): AssistantMessage {
+  return new AssistantMessage({ content: [text("ok")], usage: new Usage(u) });
+}
+
+function fakeAgent(
+  messages: Message[],
+  contextWindow: number | null,
+  config?: Partial<HarnessConfig>,
+): MinimaAgent {
   return {
     agentState: {
       messages,
       model: contextWindow === null ? null : { context_window: contextWindow },
     },
+    ...(config ? { config } : {}),
   } as unknown as MinimaAgent;
 }
 
@@ -68,6 +80,44 @@ describe("maybeAutoCompact threshold (80% of the context window)", () => {
   test("no model context window: never compacts", () => {
     const a = fakeAgent(convo(20, 2000), null);
     expect(maybeAutoCompact(a)).toBe(false);
+  });
+});
+
+describe("maybeAutoCompact reads the same basis as the footer", () => {
+  test("a cached prompt that chars/4 cannot see now fires compaction", () => {
+    // 11 messages of ~45 chars ≈ 116 estimated tokens — 11.6% of 1000, nowhere near the gate.
+    // The reply reports a 900-token prompt the transcript never contained: the system prompt,
+    // the tool schemas and the cached prefix. That is the context the next request will carry.
+    const messages = [...convo(10), reply({ input: 300, cache_read: 600, output: 20 })];
+    const a = fakeAgent(messages, 1000);
+    expect(maybeAutoCompact(a)).toBe(true);
+    expect(a.agentState.messages.length).toBeLessThan(messages.length);
+  });
+
+  test("the footer's red threshold and the trigger cannot disagree", () => {
+    // What the status bar paints red is exactly what compacts: same quantity, same constant.
+    for (const input of [100, 700, 799, 800, 900, 5_000]) {
+      const messages = [...convo(12), reply({ input })];
+      const overGate =
+        (contextUsage(messages, { fallbackWindow: 1_000 }).pct ?? 0) >= AUTO_COMPACT_PCT;
+      expect(maybeAutoCompact(fakeAgent(messages, 1_000))).toBe(overGate);
+    }
+  });
+
+  test("MINIMA_TUI_CONTEXT_METER=0 restores the chars/4 gate", () => {
+    const messages = [...convo(10), reply({ input: 300, cache_read: 600, output: 20 })];
+    expect(maybeAutoCompact(fakeAgent(messages, 1000, { contextMeter: false }))).toBe(false);
+    // ...and a genuinely large transcript still compacts under the old basis.
+    const bulky = convo(10, 435);
+    expect(maybeAutoCompact(fakeAgent(bulky, 1000, { contextMeter: false }))).toBe(true);
+  });
+
+  test("the denominator stays the ROUTED model's window, not the anchor reply's", () => {
+    // Routing re-picks a model per prompt. A stale anchor from a 200k model must not stop a
+    // 1k-window next request from compacting.
+    const messages = [...convo(10), reply({ input: 900 })];
+    expect(maybeAutoCompact(fakeAgent(messages, 200_000))).toBe(false);
+    expect(maybeAutoCompact(fakeAgent(messages, 1_000))).toBe(true);
   });
 });
 

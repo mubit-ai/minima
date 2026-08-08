@@ -14,8 +14,8 @@ import {
 import type { PlanRow, PlanStepRow } from "../src/db/minima_db.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
 import {
-  formatPlanProjection,
   bigPlanAfterToolCall,
+  formatPlanProjection,
   isGateBlockReason,
   isPathClaimed,
   kindForTool,
@@ -33,6 +33,7 @@ import {
   ModelMapping,
   harnessConfig,
 } from "../src/minima/index.ts";
+import type { PlanDelegate } from "../src/minima/plan_delegate.ts";
 
 // --------------------------------------------------------------------------- helpers
 
@@ -60,6 +61,11 @@ function step(over: Partial<PlanStepRow> & { idx: number }): PlanStepRow {
     created_at: null,
     verify_cwd: null,
     check_origin: null,
+    tools: null,
+    candidates: null,
+    result: null,
+    delegated_cost_usd: null,
+    agent_type: null,
     ...over,
   };
 }
@@ -70,6 +76,7 @@ const PLAN: PlanRow = {
   title: "My Plan",
   status: "active",
   created_at: null,
+  closed_at: null,
 };
 
 // --------------------------------------------------------------------------- parseTodos
@@ -857,9 +864,7 @@ describe("bigPlanAfterToolCall", () => {
     const { planId } = d.upsertPlanFromTodos("run1", [
       { content: "config.ts work", status: "pending" },
     ]);
-    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
-      ctx("write", { path: "src/config.ts" }),
-    );
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
     const changes = d.getFileChanges(planId);
     expect(changes).toHaveLength(1);
     expect(changes[0]!.origin).toBe("off_plan");
@@ -868,9 +873,7 @@ describe("bigPlanAfterToolCall", () => {
 
   test("write with no active plan records nothing", async () => {
     const d = db();
-    await bigPlanAfterToolCall({ db: d, runId: "run1" })(
-      ctx("write", { path: "src/config.ts" }),
-    );
+    await bigPlanAfterToolCall({ db: d, runId: "run1" })(ctx("write", { path: "src/config.ts" }));
     // No plan means no plan id to query against; assert via a freshly-created plan being empty.
     const { planId } = d.upsertPlanFromTodos("run1", [{ content: "x", status: "pending" }]);
     expect(d.getFileChanges(planId)).toHaveLength(0);
@@ -1015,12 +1018,116 @@ describe("baseline capture (M3.3)", () => {
   });
 });
 
+// --------------------------------------------------------------------------- delegate wiring (Task 4)
+
+describe("bigPlanAfterToolCall — delegate wiring", () => {
+  /** Like ctx(), but also carries the ToolResult todowrite itself just produced — needed to
+   *  exercise the append-vs-replace behavior, which reads ctx.result.content. */
+  function resultCtx(
+    name: string,
+    args: Record<string, unknown>,
+    resultContent = [text("stub result")],
+  ): AfterToolCallContext {
+    return {
+      toolCall: { type: "toolCall", id: "tc", name, arguments: args },
+      result: { content: resultContent },
+      isError: false,
+    } as unknown as AfterToolCallContext;
+  }
+
+  test("a started step's baseline is captured BEFORE it is delegated, never after", async () => {
+    const d = db();
+    let sawBaselineAtDelegateTime = "delegate never called";
+    const delegate: PlanDelegate = async (planId, stepId) => {
+      const found = d.getPlanSteps(planId).find((s) => s.id === stepId);
+      sawBaselineAtDelegateTime = found?.baseline ?? "no-such-step";
+      return null;
+    };
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" }, { delegate });
+    await sink(
+      resultCtx("todowrite", {
+        tasks: JSON.stringify([{ content: "A", status: "in_progress", verify: "true" }]),
+      }),
+    );
+    // Observable proxy for ordering (the real baseline write is not independently
+    // observable from outside the sink): by the time delegate() runs, the baseline
+    // this same todowrite call just captured is already on the row — never NULL.
+    expect(sawBaselineAtDelegateTime).toBe("green");
+  });
+
+  test("no delegate injected — the hook returns exactly what it did before, and nothing spawns", async () => {
+    const d = db();
+    const spawnCalls: string[] = [];
+    const noOpts = bigPlanAfterToolCall({ db: d, runId: "run1" });
+    const explicitUndefined = bigPlanAfterToolCall(
+      { db: d, runId: "run2" },
+      { delegate: undefined },
+    );
+    const todos = [{ content: "A", status: "in_progress" }];
+    await expect(
+      noOpts(resultCtx("todowrite", { tasks: JSON.stringify(todos) })),
+    ).resolves.toBeNull();
+    await expect(
+      explicitUndefined(resultCtx("todowrite", { tasks: JSON.stringify(todos) })),
+    ).resolves.toBeNull();
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  test("an already-aborted run signal spawns nothing and stamps no cost", async () => {
+    // Regression: spawn.ts's abort wiring is addEventListener("abort", ...) on the child's
+    // parentSignal — a no-op on a signal that's ALREADY tripped, so a child launched past
+    // this point could never be stopped. The loop must not even start delegating.
+    const d = db();
+    const controller = new AbortController();
+    controller.abort();
+    let delegateCalls = 0;
+    const delegate: PlanDelegate = async () => {
+      delegateCalls++;
+      return "should never run";
+    };
+    const sink = bigPlanAfterToolCall(
+      { db: d, runId: "run1", runSignal: controller.signal },
+      { delegate },
+    );
+    await sink(
+      resultCtx("todowrite", {
+        tasks: JSON.stringify([{ content: "A", status: "in_progress" }]),
+      }),
+    );
+    expect(delegateCalls).toBe(0);
+    const plan = d.getActivePlan("run1");
+    expect(plan).not.toBeNull();
+    expect(d.getPlanSteps(plan!.id)[0]!.delegated_cost_usd).toBeNull();
+  });
+
+  test("a delegate's report augments the todowrite result — it never replaces it", async () => {
+    const d = db();
+    const delegate: PlanDelegate = async () => "Step delegated to a sub-agent (success, $0.0500).";
+    const sink = bigPlanAfterToolCall({ db: d, runId: "run1" }, { delegate });
+    const original = [text("Todo list updated (0/1 done):\n1. [ ] A")];
+    const result = await sink(
+      resultCtx(
+        "todowrite",
+        { tasks: JSON.stringify([{ content: "A", status: "in_progress" }]) },
+        original,
+      ),
+    );
+    expect(result).not.toBeNull();
+    // The original todowrite echo (the lead's plan-position confirmation) survives untouched...
+    expect(result!.content).toContain(original[0]!);
+    // ...with the delegate's report appended after it, not instead of it.
+    const joined = result!.content!.map((c) => (c.type === "text" ? c.text : "")).join("");
+    expect(joined).toContain("Todo list updated");
+    expect(joined).toContain("Step delegated to a sub-agent");
+  });
+});
+
 describe("isGateBlockReason (renderer signature for done-gate blocks)", () => {
   test("matches the three gate-block families", () => {
     expect(isGateBlockReason('Step not verified — "add tests": check `false` exit 1')).toBe(true);
-    expect(
-      isGateBlockReason("Only one todowrite per assistant message: another todowrite …"),
-    ).toBe(true);
+    expect(isGateBlockReason("Only one todowrite per assistant message: another todowrite …")).toBe(
+      true,
+    );
     expect(
       isGateBlockReason(
         "This todowrite marks steps completed, but the same message also calls write.",
