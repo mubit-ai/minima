@@ -324,6 +324,46 @@ describe("v18 observer signals-bridge migration (rec_id + coverage)", () => {
   });
 });
 
+describe("commits ledger migration (F9b)", () => {
+  test("a fresh database has the commits table", () => {
+    const db = new MinimaDb(":memory:");
+    expect(db.schemaVersion).toBe(LATEST);
+    const row = db.db
+      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='commits'")
+      .get();
+    expect(row).not.toBeNull();
+    db.db.close();
+  });
+
+  test("a pre-commits database migrates append-only: the table appears, existing rows survive", () => {
+    const path = migratedDbPath();
+    const raw = new Database(path);
+    raw.exec("DROP TABLE commits");
+    raw.exec(`UPDATE schema_meta SET version = ${LATEST - 1}`);
+    raw.exec(
+      `INSERT INTO routing_decisions (rec_id, run_id, chosen_model, actual_cost_usd, ts)
+       VALUES ('rec-pre', 'run-pre', 'claude-sonnet-5', 0.5, 1)`,
+    );
+    raw.close();
+
+    const db = new MinimaDb(path);
+    expect(db.schemaVersion).toBe(LATEST);
+    // The pre-existing decision is untouched — this batch only ADDS.
+    const kept = db.db
+      .query("SELECT chosen_model FROM routing_decisions WHERE rec_id = 'rec-pre'")
+      .get() as { chosen_model: string };
+    expect(kept.chosen_model).toBe("claude-sonnet-5");
+    // And the new end of the join works against those very rows.
+    const recIds = db.unattributedRecIds("run-pre");
+    expect(recIds).toEqual(["rec-pre"]);
+    db.recordCommit({ sha: "abc1234", runId: "run-pre", recIds });
+    expect(db.commitContributions("abc1234").map((c) => c.chosen_model)).toEqual([
+      "claude-sonnet-5",
+    ]);
+    db.db.close();
+  });
+});
+
 describe("migration runner: concurrent opens", () => {
   test("two processes opening a fresh DB both succeed", async () => {
     const path = join(tempDir(), "minima.db");

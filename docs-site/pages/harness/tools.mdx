@@ -25,6 +25,7 @@ The agent gets things done by calling **tools**. Each tool call passes through a
 | `edit` | Modify an existing file | write |
 | `apply_patch` | Apply a multi-file patch | write |
 | `bash` | Run a shell command (with timeout + abort). `background: true` launches it detached and returns a job handle (`MINIMA_TUI_BGJOBS=0` removes that option) | dangerous |
+| `git_commit` | Create a git commit — what you staged, or the paths passed; never `-a`. Your git identity authors it, your `pre-commit`/`commit-msg` hooks run, and the models that contributed are credited in `Co-Authored-By` trailers (`MINIMA_TUI_GIT_COMMIT=0` removes the tool and `/commit`) | dangerous |
 | `todowrite` | Maintain the plan/todo list — when [plan verification](/harness/architecture#plan-verification) is active, marking a step complete is **gated on its verify check passing** | write |
 | `task` | Delegate subtasks to cost-routed sub-agents (see [Sub-agents](#sub-agents-the-task-tool)) | orchestration |
 | `bgjob` | Poll, read output from, or kill a background `bash` job. Every background job is killed at session end (`MINIMA_TUI_BGJOBS=0` removes the tool) | orchestration |
@@ -39,7 +40,7 @@ Approval depends on the tool's class:
 
 - **`read` / `ls`** prompt the **first time** a new directory is accessed — the working directory is not pre-approved. Granting "always" approves that directory tree, so future reads there are silent.
 - **Write tools** (`write`, `edit`, `todowrite`) always prompt. You can grant "always" for the tool.
-- **Dangerous tools** (`bash`) always prompt. You can grant "always" for the tool.
+- **Dangerous tools** (`bash`, `git_commit`) always prompt. You can grant "always" for the tool. `git_commit` is gated under its own name: an "always allow `git` commands" grant for `bash` does not approve it, and denying it does not disturb your shell.
 - **Everything else** (`glob`, `grep`, `web_fetch`, `task`) prompts per call, with the same per-tool "always" grant.
 
 When a tool needs approval, the TUI shows an inline prompt: approve once (<kbd>y</kbd>), approve always (<kbd>a</kbd>), or deny (<kbd>n</kbd> / <kbd>Esc</kbd>).

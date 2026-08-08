@@ -12,6 +12,7 @@ import { Message as AgentMessage, AssistantMessage, text } from "../ai/types.ts"
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { isTtsrReminder } from "../minima/ttsr.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
+import { AUTO_COMPACT_PCT, approxContextTokens, contextUsage } from "./context_meter.ts";
 
 const KEEP_RECENT = 6;
 
@@ -346,15 +347,6 @@ export async function compactMessagesLLM(
   return assemble(split, ref, body);
 }
 
-/** Estimated context tokens of a message list (chars/4 — the auto-threshold's own basis). */
-export function approxContextTokens(messages: Message[]): number {
-  let totalChars = 0;
-  for (const m of messages) {
-    totalChars += m.textContent.length;
-  }
-  return Math.ceil(totalChars / 4);
-}
-
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
@@ -381,9 +373,23 @@ export function maybeAutoCompact(agent: MinimaAgent): boolean {
   const model = agent.agentState.model;
   if (!model?.context_window) return false;
 
-  const pct = (approxContextTokens(agent.agentState.messages) / model.context_window) * 100;
+  // One basis with the footer (context_meter.ts): the provider's own prompt count, which
+  // includes the cached halves, the system prompt and the tool schemas that chars/4 is blind
+  // to — so this fires EARLIER on a warm session than the old estimate did.
+  // MINIMA_TUI_CONTEXT_METER=0 restores the chars/4 numerator verbatim; the optional chain
+  // mirrors the compact2 read above, since test fakes omit `config`.
+  //
+  // The DENOMINATOR stays the routed model's window, never the anchor reply's. Routing
+  // re-picks a model per prompt, so after a swap the anchor may describe a 200k model while
+  // the next request goes to a 32k one — dividing by the anchor's window would decline to
+  // compact exactly when the next request cannot fit.
+  const used =
+    agent.config?.contextMeter === false
+      ? approxContextTokens(agent.agentState.messages)
+      : contextUsage(agent.agentState.messages, { fallbackWindow: model.context_window })
+          .usedTokens;
 
-  if (pct < 80) return false;
+  if ((used / model.context_window) * 100 < AUTO_COMPACT_PCT) return false;
 
   const before = agent.agentState.messages.length;
   agent.agentState.messages = compactMessages(agent, agent.agentState.messages);

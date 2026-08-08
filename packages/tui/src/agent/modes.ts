@@ -48,6 +48,8 @@ export const PLAN_BUNDLE: PolicyBundle = {
     { tool: "edit", pattern: "*", action: "deny" },
     { tool: "apply_patch", pattern: "*", action: "deny" },
     { tool: "bash", pattern: "*", action: "deny" },
+    { tool: "task", pattern: "*", action: "deny" },
+    { tool: "git_commit", pattern: "*", action: "deny" },
   ],
 };
 

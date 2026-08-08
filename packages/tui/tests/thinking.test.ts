@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Agent } from "../src/agent/agent.ts";
 import type { AgentEvent } from "../src/agent/events.ts";
-import { effortForLevel } from "../src/ai/provider_quirks.ts";
+import { effectiveEffort, reasoningPayload } from "../src/ai/provider_quirks.ts";
 import {
   AssistantMessage,
   type Model,
@@ -156,20 +156,103 @@ describe("Thinking mode event flow", () => {
   });
 });
 
-describe("Thinking level to effort mapping", () => {
-  test("maps each harness level onto a wire effort", () => {
-    expect(effortForLevel("minimal")).toBe("low");
-    expect(effortForLevel("low")).toBe("low");
-    expect(effortForLevel("medium")).toBe("medium");
-    expect(effortForLevel("high")).toBe("high");
-    expect(effortForLevel("xhigh")).toBe("xhigh");
+// effectiveEffort is the ONE answer both the wire and the status bar read (MUB-229). These
+// assert the returned pair, never how the ladder branches internally.
+describe("effectiveEffort — the precedence ladder", () => {
+  const reasoner = { provider: "openai", reasoning: true };
+
+  test("rung 1: requires_explicit_effort_off wins over everything, tools or not", () => {
+    const m = { ...reasoner, requires_explicit_effort_off: true, tools_require_effort_none: true };
+    expect(effectiveEffort(m, true, "high")).toEqual({ send: "none", state: "off" });
+    expect(effectiveEffort(m, false, undefined)).toEqual({ send: "none", state: "off" });
   });
 
-  test("off, unknown, and missing levels map to no effort", () => {
-    expect(effortForLevel("off")).toBeUndefined();
-    expect(effortForLevel("turbo")).toBeUndefined();
-    expect(effortForLevel(undefined)).toBeUndefined();
-    expect(effortForLevel(3)).toBeUndefined();
+  test("rung 2: tools_require_effort_none pins none WITH tools, and only with tools", () => {
+    const m = { ...reasoner, tools_require_effort_none: true };
+    expect(effectiveEffort(m, true, "high")).toEqual({ send: "none", state: "pinned-none" });
+    // Tool-less and no level requested: the model's own default, not "none" (#328's scope).
+    expect(effectiveEffort(m, false, undefined)).toEqual({ send: undefined, state: "default" });
+  });
+
+  test("rung 3: a set level is honoured when the host accepts it", () => {
+    expect(effectiveEffort(reasoner, false, "low")).toEqual({ send: "low", state: "honoured" });
+    expect(effectiveEffort(reasoner, false, "medium")).toEqual({
+      send: "medium",
+      state: "honoured",
+    });
+    expect(effectiveEffort(reasoner, false, "high")).toEqual({ send: "high", state: "honoured" });
+  });
+
+  // Verified live 2026-08-05: gpt-5.6-{sol,terra,luna} answer "Unsupported value:
+  // 'reasoning_effort' does not support 'minimal'". xhigh IS accepted there, but the
+  // conservative default clamp holds for every unverified openai-compat host until a
+  // model declares effort_levels.
+  test("rung 3: levels outside the host vocabulary clamp instead of reaching the wire", () => {
+    expect(effectiveEffort(reasoner, false, "xhigh")).toEqual({ send: "high", state: "clamped" });
+    expect(effectiveEffort(reasoner, false, "minimal")).toEqual({ send: "low", state: "clamped" });
+  });
+
+  test("Model.effort_levels widens the clamp, and [] opts the model out entirely", () => {
+    const wide = { ...reasoner, effort_levels: ["low", "medium", "high", "xhigh"] };
+    expect(effectiveEffort(wide, false, "xhigh")).toEqual({ send: "xhigh", state: "honoured" });
+    const optedOut = { ...reasoner, effort_levels: [] };
+    expect(effectiveEffort(optedOut, false, "high")).toEqual({ send: undefined, state: "default" });
+  });
+
+  test("rung 4: no level, an unknown level, or `off` sends nothing", () => {
+    expect(effectiveEffort(reasoner, false, undefined)).toEqual({
+      send: undefined,
+      state: "default",
+    });
+    expect(effectiveEffort(reasoner, false, "off")).toEqual({ send: undefined, state: "default" });
+    expect(effectiveEffort(reasoner, false, "turbo")).toEqual({
+      send: undefined,
+      state: "default",
+    });
+    expect(effectiveEffort(reasoner, false, 3)).toEqual({ send: undefined, state: "default" });
+  });
+
+  // Fail-closed, same doctrine as supportsImageInput. Verified live 2026-08-05: gpt-4o and
+  // gpt-4o-mini answer "Unrecognized request argument supplied: reasoning_effort" at EVERY
+  // value, "none" included — so an undeclared model must never receive the parameter.
+  test("a model that does not declare reasoning never receives an effort", () => {
+    expect(effectiveEffort({ provider: "openai" }, true, "high")).toEqual({
+      send: undefined,
+      state: "default",
+    });
+    // Declared non-reasoning is a stronger statement than unknown: reasoning is genuinely off.
+    expect(effectiveEffort({ provider: "openai", reasoning: false }, true, "high")).toEqual({
+      send: undefined,
+      state: "off",
+    });
+  });
+
+  // Verified live 2026-08-05 on claude-opus-4-8 / claude-sonnet-5 / claude-fable-5:
+  // output_config.effort accepts low|medium|high|xhigh and 400s on minimal and none.
+  test("anthropic keeps its wider vocabulary — xhigh reaches the wire, minimal still clamps", () => {
+    const claude = { provider: "anthropic", reasoning: true };
+    expect(effectiveEffort(claude, true, "xhigh")).toEqual({ send: "xhigh", state: "honoured" });
+    expect(effectiveEffort(claude, true, "minimal")).toEqual({ send: "low", state: "clamped" });
+  });
+});
+
+describe("reasoningPayload — the wire SHAPE is per-provider data", () => {
+  test("openai-compat baseline: a flat reasoning_effort key", () => {
+    expect(reasoningPayload("openai", "high")).toEqual({ reasoning_effort: "high" });
+    expect(reasoningPayload("openai", "none")).toEqual({ reasoning_effort: "none" });
+    expect(reasoningPayload("openai", undefined)).toEqual({});
+  });
+
+  test("openrouter speaks its own nested reasoning object", () => {
+    expect(reasoningPayload("openrouter", "high")).toEqual({ reasoning: { effort: "high" } });
+    expect(reasoningPayload("openrouter", "none")).toEqual({ reasoning: { enabled: false } });
+  });
+
+  // Anthropic has no off value at all (verified: output_config.effort 400s on "none"), so a
+  // flagged anthropic model sends nothing rather than a payload the API refuses.
+  test("anthropic nests under output_config and cannot express off", () => {
+    expect(reasoningPayload("anthropic", "high")).toEqual({ output_config: { effort: "high" } });
+    expect(reasoningPayload("anthropic", "none")).toEqual({});
   });
 });
 
