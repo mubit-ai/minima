@@ -6,6 +6,27 @@ from typing import Any
 
 from minima.memory.records import OutcomeRecord, RecalledEvidence, RecallResult
 
+# Record fields a `match` clause may filter on. `kind` describes the Mubit ENTRY rather
+# than the parsed record, and every record this fake holds is an outcome, so it is not
+# compared here — a clause carrying only `kind` matches everything, as it would upstream.
+_MATCH_FIELDS = frozenset({"model_id", "task_cluster", "task_type", "difficulty", "provider"})
+
+
+def _matches_any(ev: RecalledEvidence, match: list[dict]) -> bool:
+    """Mubit /v2/core/lookup semantics: `match` is a DISJUNCTION of exact-match clauses.
+
+    Honouring it is the difference between a rig that can see a bug and one that cannot.
+    While this returned every seeded record for any key, a test could assert cluster-keyed
+    behaviour — dual-read windows, key-version migration, per-(cluster, model) cells — and
+    pass no matter which key the engine actually asked Mubit for.
+    """
+    if not match:
+        return True
+    return any(
+        all(getattr(ev.record, f, None) == v for f, v in clause.items() if f in _MATCH_FIELDS)
+        for clause in match
+    )
+
 
 class FakeMemory:
     """In-memory stand-in for MubitMemory; records every write for assertions."""
@@ -46,7 +67,7 @@ class FakeMemory:
         self.lookup_calls.append({"lane": lane, "match": match})
         if self.lookup_results is None:  # simulate a degraded keyed channel
             return None
-        return list(self.lookup_results)
+        return [ev for ev in self.lookup_results if _matches_any(ev, match)][:limit]
 
     async def dereference(self, *, lane: str, reference_id: str) -> RecalledEvidence | None:
         self.dereference_calls.append({"lane": lane, "reference_id": reference_id})
@@ -91,7 +112,6 @@ class FakeMemory:
 
     async def health(self) -> dict:
         return {"reachable": True, "transport": "fake"}
-
 
 
 def make_evidence(
