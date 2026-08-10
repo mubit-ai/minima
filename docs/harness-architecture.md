@@ -139,6 +139,45 @@ boundaries}` are required; optional `depends_on` (DAG edges), `effort`
 - `isolation: "workdir"` gives the child a temporary git worktree (with a dirty-tree
   warning, cleanup on exit, and fallback to the parent workdir on failure).
 
+### Agent types (`src/minima/agent_types.ts`)
+
+A delegation may name an **agent type** — a user-authored, named preset of the fields
+above plus a persona. Definitions are markdown with YAML frontmatter, loaded once at
+startup from `~/.minima-harness/agents/*.md` (global) then `<cwd>/.minima/agents/*.md`
+(project, git-committable — shadows global by name):
+
+```markdown
+---
+name: reviewer
+description: Reviews a diff for correctness. Read-only.
+tools: [read, grep, glob, bash]
+candidates: [gemini-2.5-flash]
+effort: light
+budget_usd: 0.25
+---
+You review code for correctness only. Never propose refactors.
+```
+
+- `applyAgentType` resolves the name to plain `Delegation` fields **before any spawn logic
+  runs**, so a typed child takes the identical code path as an untyped one. Precedence is
+  always **explicit delegation field > agent type > harness default**; an empty array counts
+  as unset, so `tool_allowlist: []` cannot silently unlock a read-only type.
+- The body renders as a `## Role` section **ahead of** the delegation contract in the child's
+  system prompt. The contract sections and the Rules block (read-before-edit, the `BLOCKED:`
+  escape hatch) are never replaced — a persona says who the child is, not what it may skip.
+- A type can set tools, model pool, persona, effort and budget. It can **never** touch
+  `pinned`, `bigPlan`, or the exclusion of `task` from a child's toolset.
+- Validation is at **load** time — unknown tool names, bad enums and typo'd frontmatter keys
+  warn to stderr at startup; an allowlist whose every entry is unknown rejects the whole type
+  rather than spawning a toolless agent. The `task` tool advertises the defined types in its
+  description and rejects an unknown `agent_type` before anything spawns.
+- Zero definition files means an empty registry, which every consumer treats as "no agent
+  types" — the tool description, its JSON schema, and the delegation prompt are unchanged.
+- A **plan step** may also name one (`agent_type` on a synthesized step): `/plan finalize`
+  expands it into that step's `tools` + `candidates` only. The lead still executes the step,
+  under that agent's tool scope (dispatcher-enforced) and model pool.
+- `/agent` lists the defined types; `/agent <name> <task>` runs one directly.
+
 ## Routing layer (`src/minima/router.ts`, `client.ts`)
 
 `MinimaClient` is the typed `/v1/*` client (recommend, workflow, feedback, diagnose,

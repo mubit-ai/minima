@@ -19,6 +19,14 @@ export function resolveApiKey(
   return undefined;
 }
 
+/** Request deadline (ms) from the harness's seconds-based option. options.timeout is in
+ * SECONDS (the harness-wide contract); every SDK and AbortSignal.timeout expects
+ * milliseconds. Passing seconds through gave every request a 30-60ms deadline: all Claude
+ * calls died with "Request timed out". */
+export function sdkTimeoutMs(options: Record<string, unknown>): number {
+  return Math.round(Number(options.timeout ?? 60) * 1000);
+}
+
 /**
  * A provider-agnostic JSON Schema for a tool's parameter model.
  *

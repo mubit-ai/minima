@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { confidence } from "../src/minima/confidence.ts";
 import {
   bashWriteHints,
   bigPlanAttributionSink,
@@ -9,6 +8,7 @@ import {
   recordOpaqueMarker,
 } from "../src/minima/big_plan.ts";
 import type { Factors } from "../src/minima/big_plan_contract.ts";
+import { confidence } from "../src/minima/confidence.ts";
 import { parseFactors } from "../src/minima/why.ts";
 
 // GT100-2 + GT101-F5: write attribution for bash and sub-agents, and the blind-evidence cap.

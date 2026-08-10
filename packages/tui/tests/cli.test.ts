@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "../src/cli/main.ts";
-import { readSource } from "./_source.ts";
+import { parseArgs, resolveBudget } from "../src/cli/main.ts";
+import { code, readSource } from "./_source.ts";
 
 describe("parseArgs --resume (B1)", () => {
   test("--resume captures the name-or-id and composes with other flags", () => {
@@ -15,6 +15,40 @@ describe("parseArgs --resume (B1)", () => {
 
   test("omitted → undefined (fresh session)", () => {
     expect(parseArgs([]).resume).toBeUndefined();
+  });
+});
+
+describe("resolveBudget — where the env layers' ceiling lands", () => {
+  // The clamp itself lives in the loader (see project-config.test.ts); by the time a value
+  // reaches here it is already the safer one, so this only pins the flags-over-env order.
+  test("no flag and no env → no ledger, warn mode", () => {
+    const r = resolveBudget(parseArgs([]), {});
+    expect(r.limitUsd).toBeUndefined();
+    expect(r.mode).toBe("warn");
+  });
+
+  test("MINIMA_BUDGET_USD creates a ceiling without a flag", () => {
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_USD: "2.5" }).limitUsd).toBe(2.5);
+  });
+
+  test("--budget wins over the env layers (the user acting now)", () => {
+    const r = resolveBudget(parseArgs(["--budget", "9"]), { MINIMA_BUDGET_USD: "2.5" });
+    expect(r.limitUsd).toBe(9);
+  });
+
+  test("an unusable ceiling is treated as unset, never coerced", () => {
+    for (const bad of ["nope", "0", "-1", ""]) {
+      expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_USD: bad }).limitUsd).toBeUndefined();
+    }
+  });
+
+  test("MINIMA_BUDGET_MODE sets the mode; --budget-enforce still wins; junk falls back", () => {
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "enforce" }).mode).toBe("enforce");
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "shadow" }).mode).toBe("shadow");
+    expect(resolveBudget(parseArgs([]), { MINIMA_BUDGET_MODE: "loose" }).mode).toBe("warn");
+    expect(
+      resolveBudget(parseArgs(["--budget-enforce"]), { MINIMA_BUDGET_MODE: "shadow" }).mode,
+    ).toBe("enforce");
   });
 });
 
@@ -86,5 +120,30 @@ describe("tui/app.tsx /version command (source pins)", () => {
     expect(src).toContain('{ name: "version", desc: "Show the Minima harness version" }');
     expect(src).toContain('case "version":');
     expect(src).toContain("minima ${VERSION}");
+  });
+});
+
+describe("tui/app.tsx /dashboard on|off (source pins)", () => {
+  /**
+   * A source pin, not a behavioural test: `app.tsx` is an Ink component with no dispatch seam, and
+   * this is how `/version` is pinned above. What the two verbs DO is covered hermetically in
+   * dashboard_supervisor.test.ts and over real sockets in dashboard_lifecycle.test.ts — this only
+   * holds the wiring and the discoverability, which is where a rename would quietly land.
+   */
+  test("the verbs are wired, validated, and advertised in the command list", () => {
+    const src = readSource("tui/app.tsx");
+    // Discoverable: /help and the composer's autocomplete both render `desc`.
+    expect(src).toContain(code("`off` stops it for this session, `on` starts it again"));
+    expect(src).toContain(code('if (verb === "off") await dashboard?.detach();'));
+    expect(src).toContain(code("await dashboard.resume()"));
+    expect(src).toContain(code("Usage: /dashboard [on|off]"));
+  });
+
+  test("the dashboard subcommand help explains both verbs and why Ctrl+C misses it", () => {
+    const src = readSource("cli/main.ts");
+    expect(src).toContain(code("/dashboard off"));
+    expect(src).toContain(code("/dashboard on"));
+    expect(src).toContain(code("its LAST TUI"));
+    expect(src).toContain(code("ignores SIGINT and SIGHUP"));
   });
 });

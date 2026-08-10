@@ -37,9 +37,11 @@ const FAUX_MODEL: Model = {
 };
 
 function judgeReturning(score: number | null) {
-  return { async grade(): Promise<number | null> {
-    return score;
-  } };
+  return {
+    async grade(): Promise<number | null> {
+      return score;
+    },
+  };
 }
 
 function mockService() {

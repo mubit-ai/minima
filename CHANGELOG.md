@@ -4,6 +4,47 @@ All notable changes to Minima are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **The candidate pool is now the union of each provider's Pareto frontier.** The old
+  9-model pool left three models that no slider value could ever select (they cost more
+  than a same-provider model with an equal-or-higher capability prior). Rebuilt per
+  provider — not globally — so any combination of provider keys still yields a ladder with
+  rungs: with a Gemini key alone `claude-haiku-4-5` is dominated, but for an
+  Anthropic-only user it is the floor. Adds `gemini-2.5-flash-lite` to the seed registry,
+  and lists DeepSeek/OpenRouter models that cost nothing when their key is absent (they are
+  filtered pre-request) and add rungs the moment one is set.
+
+  **This changes the default model on most key sets.** Two measured examples, `task=code`
+  at 4000 in / 800 out:
+
+  | keys | floor | pick at the default slider 5.0 |
+  |---|---|---|
+  | Anthropic+OpenAI+OpenRouter | $0.008000 -> $0.001080 | claude-sonnet-5 $0.016000 -> minimax/minimax-m3 $0.001360 |
+  | + Google | $0.003200 -> $0.000720 | gemini-2.5-flash $0.003200 -> minimax/minimax-m3 $0.001360 |
+
+  `minimax/minimax-m3` carries the same catalog prior for coding (0.74) as the
+  `gemini-2.5-flash` it displaces, at 2.4x less. Note it is served via OpenRouter, so on a
+  key set including OpenRouter the default routes prompts through OpenRouter rather than a
+  first-party provider. There is no environment override for the pool: pin a model with
+  `/model`, or set a per-repo routing profile, to opt out.
+
+### Added
+- **The harness now sends `expected_output_tokens`.** The server prices candidates as
+  `input_rate x expected_input + output_rate x expected_output` and picks the cheapest
+  clearing tau; the harness sent a real input figure but no output one, so the server fell
+  back to `MINIMA_DEFAULT_OUTPUT_TOKENS (500) x difficulty_multiplier` — a constant, since
+  agent traffic classifies as `medium` almost every time. The estimate is a winsorized mean
+  of realized run-total output tokens for the project (`output_estimate.ts`), preferring
+  same-task-type history, with a cold-start constant until three runs exist. It estimates
+  the same quantity feedback reports, so its error is auditable. On a 24-turn run the flat
+  500 understated cost by ~12.7x, which is what budget caps and the server's
+  `observed -> rescaled` basis were consuming.
+- Realized `input_tokens`/`output_tokens` are retained on `routing_decisions` (migration
+  v23, additive). They were computed at feedback time and discarded, so the harness could
+  never check its own estimate against what a run actually spent.
+
 ## [0.14.5] - 2026-07-27
 
 A correctness release. The headline is cost accuracy: Gemini cached tokens were billed

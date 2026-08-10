@@ -194,6 +194,15 @@ export {
   type PlanCriticOptions,
 } from "./plan_critic.ts";
 export {
+  buildTurnDigests,
+  formatDigest,
+  buildSummarisePrompt,
+  runSummarise,
+  SUMMARISE_SYSTEM,
+  type TurnDigest,
+  type SummariseOptions,
+} from "./summarise.ts";
+export {
   mineRepoGates,
   attachAutoGates,
   fastGate,

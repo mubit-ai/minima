@@ -618,14 +618,10 @@ describe("goal plumbing (MUB-180)", () => {
 
   test("finalize synthesis carries the goal into its prompt", async () => {
     reg.setResponses([json({ title: "T", goal: "restated", overview: "o", approach: ["a"] })]);
-    await synthesizeBigPlan(
-      sessionFor("GOAL-MARKER-180 finalize me"),
-      "User: transcript body",
-      { metaModel: META_MODEL },
-    );
-    expect(reg.state.requests[0]!.user).toContain(
-      "<goal>\nGOAL-MARKER-180 finalize me\n</goal>",
-    );
+    await synthesizeBigPlan(sessionFor("GOAL-MARKER-180 finalize me"), "User: transcript body", {
+      metaModel: META_MODEL,
+    });
+    expect(reg.state.requests[0]!.user).toContain("<goal>\nGOAL-MARKER-180 finalize me\n</goal>");
   });
 });
 

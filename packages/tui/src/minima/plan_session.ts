@@ -129,6 +129,13 @@ export interface SynthPlanStep {
   /** null when the model named no check — the sanitizer, the renderer and auto-gates all
    *  handle it, so the type says so rather than leaving callers to find out by crashing. */
   verify: string | null;
+  /** Name of a user-defined agent type (`.minima/agents/<name>.md`) this step is scoped to.
+   *  Expanded at /plan finalize into the step's `tools` + `candidates` (agent_types.ts:
+   *  agentTypePlanPreset) — scope only while plan-delegated steps are OFF, so the LEAD
+   *  executes the step itself under that agent's tool scope and model pool. With
+   *  MINIMA_TUI_PLAN_DELEGATE=1 the step instead runs AS that agent, identity included.
+   *  Rendered in the plan doc for the reader. */
+  agent_type?: string;
   /** A6: the minimal tool allowlist this step needs (e.g. ["read","edit","bash"]). Empty = unrestricted. */
   tools: string[];
   /** Per-step candidate pool: exact model ids this step's delegated work routes among.
@@ -548,6 +555,7 @@ export class PlanSessionStore {
         // this ran — so an unguarded .trim() only crashed on the documented rollback path
         // (MINIMA_TUI_AUTO_GATES=0), taking the whole /plan finalize down with a TypeError.
         verify: st.verify?.trim() ?? "",
+        agent_type: (st.agent_type ?? "").trim(),
         tools: (st.tools ?? []).map((t) => t.trim()).filter(Boolean),
         candidates: (st.candidates ?? []).map((c) => c.trim()).filter(Boolean),
       }))
@@ -566,6 +574,7 @@ export class PlanSessionStore {
             ? `   - verify: \`${st.verify}\``
             : "   - verify: _none — decompose or add a check_",
         );
+        if (st.agent_type) out.push(`   - agent: ${st.agent_type}`);
         if (st.tools.length > 0) out.push(`   - tools: ${st.tools.join(", ")}`);
         if (st.candidates.length > 0) out.push(`   - models: ${st.candidates.join(", ")}`);
       });

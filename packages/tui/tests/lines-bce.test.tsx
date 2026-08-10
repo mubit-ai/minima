@@ -26,7 +26,7 @@ class FakeStdout extends EventEmitter {
     this.frames.push(s);
     return true;
   }
-  off() {
+  override off() {
     return this;
   }
 }

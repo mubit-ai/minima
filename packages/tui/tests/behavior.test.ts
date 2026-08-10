@@ -355,7 +355,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
     expect(effect).toContain("setGateFocus(null)");
     expect(effect).toContain("if (busy || bigPlanBlockId === dismissedGateRef.current) return;");
     // The ctrl+g re-arm is likewise gated on a live block.
-    expect(src).toContain('if (key.ctrl && input === "g" && bigPlanBehavior?.block) {');
+    expect(src).toContain('if (action === "plan.overview" && bigPlanBehavior?.block) {');
   });
 
   test("while armed the prompt input is disabled and shows the answer-key hint", () => {
@@ -367,7 +367,7 @@ describe("tui/app.tsx wires tier→behavior", () => {
   test("Esc while armed dismisses without recording; steer switches to note entry", () => {
     const gateIdx = src.indexOf("if (gateFocus && bigPlanDb && !key.ctrl && !key.meta) {");
     expect(gateIdx).toBeGreaterThan(-1);
-    const branch = src.slice(gateIdx, src.indexOf("if (key.ctrl && input ===", gateIdx));
+    const branch = src.slice(gateIdx, src.indexOf('if (action === "plan.overview" &&', gateIdx));
     // Esc: remember the dismissal and clear focus — no signal write in that path.
     const escIdx = branch.indexOf("if (key.escape) {");
     expect(escIdx).toBeGreaterThan(-1);
@@ -486,7 +486,7 @@ describe("tui/app.tsx panel key routing", () => {
 
   test("an unanswered 🔴 gate wins Ctrl+G — outside AND inside the panel (MP9)", () => {
     // Global arm: the guard keeps falling through to the gate-answer arm.
-    expect(src).toContain('input === "g" && !(bigPlanBehavior?.block && !busy)');
+    expect(src).toContain('action === "plan.overview" && !(bigPlanBehavior?.block && !busy)');
     // In-panel arm: closing hands the keyboard to the SAME gate-focus machinery — but
     // only idle, since the modal is idle-only (a busy chord swaps views, never arms dead).
     const idx = src.indexOf("function handlePanelKey");
@@ -508,6 +508,23 @@ describe("tui/app.tsx panel key routing", () => {
     expect(body).toContain("whyReportFor(agent.db, agent.runId, sessionTotalUsd())");
     expect(body).toContain("observerWhySection(agent.db, agent.runId)");
   });
+
+  // F9b: `/why <sha>` is an argument branch on this same command. The commit branch must come
+  // FIRST (its early break is what keeps a hash out of the step-index path), and the step-card
+  // path must still be reachable past it — a `/why <n>` regression here is invisible to
+  // why.ts's unit tests, which never see the dispatcher.
+  test("/why <sha> branches to the commit reader before the step path, which survives it", () => {
+    const idx = src.indexOf('case "why": {');
+    const body = src.slice(idx, idx + 3200);
+    const commitBranch = body.indexOf("if (isCommitArg(args)) {");
+    const stepPath = body.indexOf("const overview =");
+    expect(commitBranch).toBeGreaterThan(-1);
+    expect(stepPath).toBeGreaterThan(-1);
+    expect(commitBranch).toBeLessThan(stepPath);
+    expect(body).toContain("whyCommitReport(agent.db, args, agent.config.commitLedger === true)");
+    // The step-index read that opens the card is still downstream of the commit branch.
+    expect(body.indexOf("/^\\d+$/.test(args.trim())")).toBeGreaterThan(commitBranch);
+  });
 });
 
 // LB-21: the recovery ladder re-issues super.prompt(runContent) on every rung, so rung >= 1
@@ -515,7 +532,7 @@ describe("tui/app.tsx panel key routing", () => {
 // the prompt echo in the transcript. Flagged re-prompts must be dropped BEFORE the
 // pendingEcho dedupe (which only covers the optimistic first echo).
 describe("tui/app.tsx skips ladder re-prompt echoes (LB-21)", () => {
-  const src = readSource("tui/app.tsx");
+  const src = readSource("tui/use_agent_events.ts");
 
   test("message_start(user) drops flagged ladder re-prompts before the pendingEcho dedupe", () => {
     const idx = src.indexOf('case "message_start":');
@@ -541,7 +558,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     // non-disruptive switch; a live council still stops via the session-discard cleanup
     // effect, which owns the abort). Plan APPROVAL lives only in the exit_plan tool and
     // /plan finalize; the old MP17 Shift+Tab 3-option gate is gone.
-    const handlerIdx = src.indexOf("if (key.tab && key.shift) {");
+    const handlerIdx = src.indexOf('if (action === "permission.cycle") {');
     expect(handlerIdx).toBeGreaterThan(-1);
     const handler = src.slice(handlerIdx, handlerIdx + 1600);
     expect(handler).toContain("const next = cycleMode();");
@@ -612,11 +629,12 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
   });
 
   test("guard denials and harness steers are tagged at ingestion and render dim, never red (R3b)", () => {
-    // app.tsx tags at the event seam (full text still reaches the model — only the
-    // transcript projection compacts); MessageRow's calm branches return BEFORE the red
-    // isError path, so a guard deny structurally cannot render red.
-    expect(src).toContain("isGuardDenyReason");
-    expect(src).toContain("isHarnessSteerText");
+    // The useAgentEvents hook tags at the event seam (full text still reaches the model —
+    // only the transcript projection compacts); MessageRow's calm branches return BEFORE the
+    // red isError path, so a guard deny structurally cannot render red.
+    const events = readSource("tui/use_agent_events.ts");
+    expect(events).toContain("isGuardDenyReason");
+    expect(events).toContain("isHarnessSteerText");
     const messages = readSource("tui/messages.tsx");
     const deny = messages.indexOf('msg.guardKind === "deny"');
     expect(deny).toBeGreaterThan(-1);
@@ -746,6 +764,9 @@ describe("tui/app.tsx surfaces the finalize→ledger handoff", () => {
 // @file-expanded/replan-prefixed run content — is deduped via pendingEchoRef.
 describe("tui/app.tsx echoes the prompt optimistically", () => {
   const src = readSource("tui/app.tsx");
+  // The message_start handler moved to the useAgentEvents hook; onSubmit stayed in app.tsx,
+  // so the pendingEchoRef invariant now spans both files.
+  const events = readSource("tui/use_agent_events.ts");
 
   test("verbatim echo lands in onSubmit between the slash dispatch and setBusy", () => {
     const echo = 'setMessages((m) => [...m, { role: "user", text: trimmed }]);';
@@ -760,21 +781,24 @@ describe("tui/app.tsx echoes the prompt optimistically", () => {
   });
 
   test("the loop's message_start(user) is deduped, not double-posted", () => {
-    const idx = src.indexOf('case "message_start":');
+    const idx = events.indexOf('case "message_start":');
     expect(idx).toBeGreaterThan(-1);
-    const handler = src.slice(idx, idx + 800);
+    const handler = events.slice(idx, idx + 800);
     expect(handler).toContain("if (pendingEchoRef.current) {");
     expect(handler).toContain("pendingEchoRef.current = false;");
     // The event echo survives for non-optimistic user messages (finalize handoff, replays);
     // R3b only TAGS harness steers on the same echo object — it never swallows one.
     expect(handler).toContain('{ role: "user", text: utext }');
-    expect(handler).toContain("setMessages((m) => [...m, echo]);");
+    expect(handler).toContain("pushMessage(echo);");
   });
 
   test("single-slot ref discipline: exactly one set; cleared in dedup + finally", () => {
     expect(src).toContain("const pendingEchoRef = useRef(false);");
+    // Set once, in onSubmit; cleared once in the handler's dedupe and once in onSubmit's finally.
     expect(src.split("pendingEchoRef.current = true;").length - 1).toBe(1);
-    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(2);
+    expect(events.split("pendingEchoRef.current = true;").length - 1).toBe(0);
+    expect(src.split("pendingEchoRef.current = false;").length - 1).toBe(1);
+    expect(events.split("pendingEchoRef.current = false;").length - 1).toBe(1);
   });
 
   test("the finally clear keeps a failed turn from muting a later echo", () => {

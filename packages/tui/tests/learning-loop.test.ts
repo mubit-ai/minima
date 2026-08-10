@@ -10,10 +10,10 @@ import {
   text,
 } from "../src/ai/index.ts";
 import { MinimaDb } from "../src/db/minima_db.ts";
-import { writeExhaustionGate } from "../src/minima/failure_kind.ts";
 import type { VerifiedOutcome } from "../src/minima/big_plan.ts";
 import { deterministicOutcomeLabel } from "../src/minima/big_plan.ts";
 import type { ConfidenceTier, GateOutcome } from "../src/minima/big_plan_contract.ts";
+import { writeExhaustionGate } from "../src/minima/failure_kind.ts";
 import {
   CostMeter,
   MinimaAgent,

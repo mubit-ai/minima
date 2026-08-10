@@ -51,19 +51,26 @@ describe("tui/app.tsx wires the D3a plan surface (the old plan banner is gone)",
   });
 
   test("refresh + seed are gated on bigPlan === true", () => {
-    expect(src).toContain("agent.config.bigPlan === true");
-    // Both the mount seed and the tool_execution_end refresh read the same helper.
-    const refreshes = src.split("setPlanStrip(planStripInfo(agent.db, agent.runId))").length - 1;
-    expect(refreshes).toBeGreaterThanOrEqual(2);
+    // The mount seed and the tool_execution_end refresh share one helper, which owns the gate.
+    const idx = src.indexOf("const refreshPlanStrip = useCallback(");
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, idx + 400);
+    expect(body).toContain("agent.config.bigPlan !== true) return");
+    expect(body).toContain("setPlanStrip(planStripInfo(agent.db, agent.runId))");
+    expect(body).toContain("setBigPlanBehavior(ledgerBehavior(agent.db, agent.runId))");
   });
 
   test("the refresh is driven by tool_execution_end", () => {
-    const endIdx = src.indexOf('case "tool_execution_end":');
+    // The event handler lives in the useAgentEvents hook and calls the shared helper.
+    const events = readSource("tui/use_agent_events.ts");
+    const endIdx = events.indexOf('case "tool_execution_end":');
     expect(endIdx).toBeGreaterThan(-1);
     // The plan refresh lives inside the tool_execution_end case, before the next case/break
     // (the case body also carries the D3a todoGen bump since MP5, hence the window size).
-    const after = src.slice(endIdx, endIdx + 1200);
-    expect(after).toContain("setPlanStrip(planStripInfo(agent.db, agent.runId))");
+    const after = events.slice(endIdx, endIdx + 1200);
+    expect(after).toContain("refreshPlanStrip();");
+    // ...and app.tsx hands the hook that same helper.
+    expect(src).toContain("refreshPlanStrip,");
   });
 
   test("a ledger read failure fails open to a hidden surface (never a crash)", () => {

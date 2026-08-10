@@ -102,7 +102,13 @@ describe("applyChildEvent (/tree row accumulator)", () => {
 
   test("agent_end after a clean stop flips running → done", () => {
     const a1 = assistantTurn(100, 10);
-    const row = reduce([agentStart(), turnStart(), messageEnd(a1), turnEnd(a1, []), agentEnd([a1])]);
+    const row = reduce([
+      agentStart(),
+      turnStart(),
+      messageEnd(a1),
+      turnEnd(a1, []),
+      agentEnd([a1]),
+    ]);
     expect(row.status).toBe("done");
     expect(row.costUsd).toBeCloseTo(a1.usage.cost.total, 12);
   });
@@ -134,7 +140,13 @@ describe("applyChildEvent (/tree row accumulator)", () => {
       stop_reason: "error",
       error_message: "boom",
     });
-    const row = reduce([agentStart(), turnStart(), messageEnd(err), turnEnd(err, []), agentEnd([err])]);
+    const row = reduce([
+      agentStart(),
+      turnStart(),
+      messageEnd(err),
+      turnEnd(err, []),
+      agentEnd([err]),
+    ]);
     expect(row.status).toBe("failure");
   });
 

@@ -15,15 +15,20 @@ import {
 import {
   ConstJudge,
   CostMeter,
+  type HarnessConfig,
   MinimaAgent,
   MinimaClient,
   MinimaRouter,
   ModelMapping,
-  type HarnessConfig,
   harnessConfig,
 } from "../src/minima/index.ts";
 import { createSpawn, delegationPrompt } from "../src/minima/spawn.ts";
-import { type ChildResult, type Delegation, type SpawnContext, taskTool } from "../src/tools/task.ts";
+import {
+  type ChildResult,
+  type Delegation,
+  type SpawnContext,
+  taskTool,
+} from "../src/tools/task.ts";
 
 const FAUX_MODEL: Model = {
   id: "test-faux",
@@ -145,7 +150,7 @@ describe("typed sub-agent outputs (W4.3)", () => {
 
   test("JSON is extracted from a fenced/prose reply", async () => {
     const reg = reset();
-    reg.setResponses([reply("Here you go:\n```json\n{ \"answer\": 7 }\n```\nThanks.")]);
+    reg.setResponses([reply('Here you go:\n```json\n{ "answer": 7 }\n```\nThanks.')]);
     const wd = mkdtempSync(join(tmpdir(), "typed-fence-"));
     const spawn = createSpawn({ parent: leadAgent(), workdir: wd });
 
@@ -161,11 +166,17 @@ describe("typed sub-agent outputs (W4.3)", () => {
   test("invalid output is re-asked exactly once, then succeeds", async () => {
     const reg = reset();
     const value = { answer: 42, label: "ok" };
-    reg.setResponses([reply(JSON.stringify({ answer: "forty-two" })), reply(JSON.stringify(value))]);
+    reg.setResponses([
+      reply(JSON.stringify({ answer: "forty-two" })),
+      reply(JSON.stringify(value)),
+    ]);
     const wd = mkdtempSync(join(tmpdir(), "typed-reask-ok-"));
     const spawn = createSpawn({ parent: leadAgent(), workdir: wd });
 
-    const r = await spawn(del({ step_id: "ra", output_schema: OBJ_SCHEMA }) as Delegation, emptyCtx);
+    const r = await spawn(
+      del({ step_id: "ra", output_schema: OBJ_SCHEMA }) as Delegation,
+      emptyCtx,
+    );
 
     expect(reg.state.callCount).toBe(2);
     expect((r as ChildResult & { data?: unknown }).data).toEqual(value);
@@ -187,7 +198,10 @@ describe("typed sub-agent outputs (W4.3)", () => {
     const wd = mkdtempSync(join(tmpdir(), "typed-reask-fail-"));
     const spawn = createSpawn({ parent: leadAgent(), workdir: wd });
 
-    const r = await spawn(del({ step_id: "rf", output_schema: OBJ_SCHEMA }) as Delegation, emptyCtx);
+    const r = await spawn(
+      del({ step_id: "rf", output_schema: OBJ_SCHEMA }) as Delegation,
+      emptyCtx,
+    );
 
     expect(reg.state.callCount).toBe(2);
     expect(r.outcome).toBe("failure");
@@ -200,7 +214,10 @@ describe("typed sub-agent outputs (W4.3)", () => {
   });
 
   test("delegationPrompt carries the STRICT output schema section", () => {
-    const p = delegationPrompt(del({ step_id: "p", output_schema: OBJ_SCHEMA }) as Delegation, emptyCtx);
+    const p = delegationPrompt(
+      del({ step_id: "p", output_schema: OBJ_SCHEMA }) as Delegation,
+      emptyCtx,
+    );
     expect(p).toContain("## Output schema");
     expect(p).toContain('"answer"');
   });
@@ -244,8 +261,20 @@ describe("typed sub-agent outputs (W4.3)", () => {
       "1",
       {
         delegations: JSON.stringify([
-          { step_id: "a", objective: "answer", output_format: "json", boundaries: "none", output_schema: OBJ_SCHEMA },
-          { step_id: "b", objective: "use a", output_format: "text", boundaries: "none", depends_on: ["a"] },
+          {
+            step_id: "a",
+            objective: "answer",
+            output_format: "json",
+            boundaries: "none",
+            output_schema: OBJ_SCHEMA,
+          },
+          {
+            step_id: "b",
+            objective: "use a",
+            output_format: "text",
+            boundaries: "none",
+            depends_on: ["a"],
+          },
         ]),
       },
       null,
@@ -262,9 +291,15 @@ describe("typed sub-agent outputs (W4.3)", () => {
     const reg = reset();
     reg.setResponses([reply(JSON.stringify({ answer: "not-a-number" }))]);
     const wd = mkdtempSync(join(tmpdir(), "typed-off-"));
-    const spawn = createSpawn({ parent: leadAgent({ typedTask: false } as Partial<HarnessConfig>), workdir: wd });
+    const spawn = createSpawn({
+      parent: leadAgent({ typedTask: false } as Partial<HarnessConfig>),
+      workdir: wd,
+    });
 
-    const r = await spawn(del({ step_id: "off", output_schema: OBJ_SCHEMA }) as Delegation, emptyCtx);
+    const r = await spawn(
+      del({ step_id: "off", output_schema: OBJ_SCHEMA }) as Delegation,
+      emptyCtx,
+    );
 
     expect(r.outcome).toBe("success");
     expect((r as ChildResult & { data?: unknown }).data).toBeUndefined();
@@ -300,7 +335,10 @@ describe("typed sub-agent outputs (W4.3)", () => {
     const wd = mkdtempSync(join(tmpdir(), "typed-blocked-"));
     const spawn = createSpawn({ parent: leadAgent(), workdir: wd });
 
-    const r = await spawn(del({ step_id: "bl", output_schema: OBJ_SCHEMA }) as Delegation, emptyCtx);
+    const r = await spawn(
+      del({ step_id: "bl", output_schema: OBJ_SCHEMA }) as Delegation,
+      emptyCtx,
+    );
 
     expect(r.outcome).toBe("partial");
     expect(reg.state.callCount).toBe(1);

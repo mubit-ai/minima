@@ -119,7 +119,9 @@ describe("computeMsgHeight — mirrors MessageRow, conservative (>= actual)", ()
       1 + wrappedLineCount(harnessNoiseLine(harness.text), 80),
     );
     // The compact row is bounded by the FIRST line — the body lines never render.
-    expect(computeMsgHeight(harness, 80)).toBeLessThan(computeMsgHeight({ ...harness, guardKind: undefined }, 80));
+    expect(computeMsgHeight(harness, 80)).toBeLessThan(
+      computeMsgHeight({ ...harness, guardKind: undefined }, 80),
+    );
   });
 
   test("a short assistant line = marginTop + header + 1 body row", () => {

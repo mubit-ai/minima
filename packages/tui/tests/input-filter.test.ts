@@ -190,6 +190,124 @@ describe("splitKeypressUnits (batched-arrows fix)", () => {
   });
 });
 
+describe("splitKeypressUnits (solo C0 split)", () => {
+  const CTRL_X = String.fromCharCode(0x18);
+  const CTRL_E = String.fromCharCode(0x05);
+
+  test("Ctrl+X Ctrl+E in ONE chunk becomes two units", async () => {
+    // Ink's parse-keypress classifies a control key with `s.length === 1 && s <= '\\x1a'`, so
+    // the 2-byte pair matched neither that branch nor any escape regex: it dispatched once
+    // with name "" and ctrl false, i.e. NEITHER key registered and the raw bytes were offered
+    // to the composer as printable input. tmux/ssh batching produces exactly this chunk.
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits(`${CTRL_X}${CTRL_E}`)).toEqual([CTRL_X, CTRL_E]);
+  });
+
+  test("text runs STILL stay whole — re-asserted here so the coupling is visible", async () => {
+    // The C0 split must not touch the ICRNL submit path pinned above: \n, \r and \t stay
+    // INSIDE the run. If this ever fails, the split's exclusion list is the culprit.
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits("hello\n")).toEqual(["hello\n"]);
+    expect(splitKeypressUnits("hello\r")).toEqual(["hello\r"]);
+    expect(splitKeypressUnits("hi\tthere")).toEqual(["hi\tthere"]);
+  });
+
+  test("a control byte embedded in text splits the run into three units", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    const CTRL_A = String.fromCharCode(0x01);
+    expect(splitKeypressUnits(`a${CTRL_A}b`)).toEqual(["a", CTRL_A, "b"]);
+  });
+
+  test("a run of control bytes becomes one unit each", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    const u = splitKeypressUnits(`${CTRL_X}${CTRL_X}${CTRL_E}`);
+    expect(u).toEqual([CTRL_X, CTRL_X, CTRL_E]);
+  });
+
+  test("DEL (0x7f) is deliberately left inside the run — out of scope, same class of bug", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    const DEL = String.fromCharCode(0x7f);
+    expect(splitKeypressUnits(`${DEL}${DEL}`)).toEqual([`${DEL}${DEL}`]);
+  });
+
+  test("the split composes with escape sequences in the same chunk", async () => {
+    const { splitKeypressUnits } = await import("../src/tui/input-filter.ts");
+    expect(splitKeypressUnits(`a${CTRL_X}${ESC}[D${CTRL_E}b`)).toEqual([
+      "a",
+      CTRL_X,
+      `${ESC}[D`,
+      CTRL_E,
+      "b",
+    ]);
+  });
+});
+
+describe("resetInputFilter", () => {
+  test("is a safe no-op when the filter was never installed", async () => {
+    const { resetInputFilter } = await import("../src/tui/input-filter.ts");
+    expect(() => resetInputFilter()).not.toThrow();
+  });
+
+  // installInputFilter only replaces `read`, so restoring the saved one fully undoes the
+  // patch and the monkey-patch cannot leak into another file of the same `bun test` process.
+  interface Harness {
+    read: () => unknown;
+    /** Bytes the "terminal" makes available; drained to null like a real stream. */
+    feed: (...chunks: string[]) => void;
+  }
+
+  function withPatchedStdin(fn: (h: Harness) => void): void {
+    const stdin = process.stdin as unknown as { read: (size?: number) => unknown };
+    const savedRead = stdin.read;
+    try {
+      const queue: string[] = [];
+      stdin.read = () => queue.shift() ?? null;
+      fn({
+        read: () => stdin.read(),
+        feed: (...chunks) => queue.push(...chunks),
+      });
+    } finally {
+      stdin.read = savedRead;
+    }
+  }
+
+  test("drops a held partial CSI, so a stale prefix cannot fuse with post-editor bytes", async () => {
+    const mod = await import("../src/tui/input-filter.ts");
+    withPatchedStdin((h) => {
+      mod.installInputFilter();
+      h.feed(`${ESC}[`);
+      expect(h.read()).toBeNull(); // the incomplete CSI is HELD, nothing delivered yet
+      mod.resetInputFilter();
+      // Without the reset the held `ESC[` would fuse with the next byte into a left arrow.
+      h.feed("D");
+      expect(h.read()).toBe("D");
+    });
+  });
+
+  test("drops queued keypress units", async () => {
+    const mod = await import("../src/tui/input-filter.ts");
+    const CTRL_A = String.fromCharCode(0x01);
+    withPatchedStdin((h) => {
+      mod.installInputFilter();
+      h.feed(`a${CTRL_A}b`);
+      expect(h.read()).toBe("a"); // three units queued; one delivered
+      mod.resetInputFilter();
+      expect(h.read()).toBeNull(); // the remaining two are gone, not replayed
+    });
+  });
+
+  test("DRAINS bytes already buffered in the real stream", async () => {
+    const mod = await import("../src/tui/input-filter.ts");
+    withPatchedStdin((h) => {
+      mod.installInputFilter();
+      h.feed("stale", "bytes"); // typed AT the editor, still sitting in our reader
+      mod.resetInputFilter();
+      h.feed("fresh");
+      expect(h.read()).toBe("fresh");
+    });
+  });
+});
+
 describe("home/end nav side-channel", () => {
   test("every encoding splits to one unit and diverts to the nav consumer", async () => {
     const { consumeNavUnit, setNavCallback, splitKeypressUnits } = await import(

@@ -112,9 +112,7 @@ describe("buildJudge (cli wiring)", () => {
     process.env.GEMINI_API_KEY = "k";
     const { judge, notices } = buildJudge(harnessConfig({ judgeSampleRate: 0.15 }), () => {});
     expect(judge).toBeInstanceOf(LLMJudge);
-    expect(notices.some((n) => n.includes("gemini-2.5-flash") && n.includes("instead"))).toBe(
-      true,
-    );
+    expect(notices.some((n) => n.includes("gemini-2.5-flash") && n.includes("instead"))).toBe(true);
   });
 
   test("explicit judge model with its key present → used unchanged, no substitution notice", () => {
