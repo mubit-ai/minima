@@ -1,0 +1,316 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`acp — golden frames handshake, session creation, and a streamed text turn 1`] = `
+[
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "agentCapabilities": {
+        "loadSession": false,
+        "mcpCapabilities": {},
+        "promptCapabilities": {
+          "audio": false,
+          "embeddedContext": false,
+          "image": false,
+        },
+        "sessionCapabilities": {},
+      },
+      "agentInfo": {
+        "name": "minima",
+        "title": "Minima",
+        "version": "<version>",
+      },
+      "authMethods": [],
+      "protocolVersion": 1,
+    },
+  },
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "sessionId": "<session>",
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "content": {
+          "text": "short one",
+          "type": "text",
+        },
+        "sessionUpdate": "agent_thought_chunk",
+      },
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "content": {
+          "text": "Hello from Minima.",
+          "type": "text",
+        },
+        "sessionUpdate": "agent_message_chunk",
+      },
+    },
+  },
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "stopReason": "end_turn",
+    },
+  },
+]
+`;
+
+exports[`acp — golden frames a tool call: announcement, the permission request, and the completion update 1`] = `
+[
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "agentCapabilities": {
+        "loadSession": false,
+        "mcpCapabilities": {},
+        "promptCapabilities": {
+          "audio": false,
+          "embeddedContext": false,
+          "image": false,
+        },
+        "sessionCapabilities": {},
+      },
+      "agentInfo": {
+        "name": "minima",
+        "title": "Minima",
+        "version": "<version>",
+      },
+      "authMethods": [],
+      "protocolVersion": 1,
+    },
+  },
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "sessionId": "<session>",
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "<cwd>/note.md",
+          },
+        ],
+        "name": "write",
+        "rawInput": {
+          "content": 
+"hi
+"
+,
+          "path": "<cwd>/note.md",
+        },
+        "sessionUpdate": "tool_call",
+        "status": "in_progress",
+        "title": "write: <cwd>/note.md",
+        "toolCallId": "tc-1",
+      },
+    },
+  },
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "method": "session/request_permission",
+    "params": {
+      "options": [
+        {
+          "kind": "allow_once",
+          "name": "Allow once",
+          "optionId": "allow-once",
+        },
+        {
+          "kind": "allow_always",
+          "name": "Always allow write",
+          "optionId": "allow-always",
+        },
+        {
+          "kind": "reject_once",
+          "name": "Deny write",
+          "optionId": "reject-once",
+        },
+      ],
+      "sessionId": "<session>",
+      "toolCall": {
+        "content": [
+          {
+            "content": {
+              "text": "(new file: <cwd>/note.md, 2 lines)",
+              "type": "text",
+            },
+            "type": "content",
+          },
+        ],
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "<cwd>/note.md",
+          },
+        ],
+        "name": "write",
+        "rawInput": {
+          "content": 
+"hi
+"
+,
+          "path": "<cwd>/note.md",
+        },
+        "status": "pending",
+        "title": "write: <cwd>/note.md",
+        "toolCallId": "tc-1",
+      },
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "content": [
+          {
+            "content": {
+              "text": "wrote 2 lines to <cwd>/note.md",
+              "type": "text",
+            },
+            "type": "content",
+          },
+        ],
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "toolCallId": "tc-1",
+      },
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "content": {
+          "text": "Wrote it.",
+          "type": "text",
+        },
+        "sessionUpdate": "agent_message_chunk",
+      },
+    },
+  },
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "result": {
+      "stopReason": "end_turn",
+    },
+  },
+]
+`;
+
+exports[`acp — golden frames the permission options a bash call offers, scope and all 1`] = `
+[
+  {
+    "id": "<id>",
+    "jsonrpc": "2.0",
+    "method": "session/request_permission",
+    "params": {
+      "options": [
+        {
+          "kind": "allow_once",
+          "name": "Allow once",
+          "optionId": "allow-once",
+        },
+        {
+          "kind": "allow_always",
+          "name": "Always allow \`pip\` commands",
+          "optionId": "allow-always",
+        },
+        {
+          "kind": "reject_once",
+          "name": "Deny bash",
+          "optionId": "reject-once",
+        },
+      ],
+      "sessionId": "<session>",
+      "toolCall": {
+        "kind": "execute",
+        "locations": [],
+        "name": "bash",
+        "rawInput": {
+          "command": "pip install .",
+          "timeout": 120000,
+        },
+        "status": "pending",
+        "title": "bash: pip install .",
+        "toolCallId": "tc-b",
+      },
+    },
+  },
+]
+`;
+
+exports[`acp — golden frames a denied call fails the tool call rather than vanishing 1`] = `
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "kind": "execute",
+        "locations": [],
+        "name": "bash",
+        "rawInput": {
+          "command": "rm -rf /",
+          "timeout": 120000,
+        },
+        "sessionUpdate": "tool_call",
+        "status": "in_progress",
+        "title": "bash: rm -rf /",
+        "toolCallId": "tc-d",
+      },
+    },
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "<session>",
+      "update": {
+        "content": [
+          {
+            "content": {
+              "text": "The user declined the bash call — this is a user choice, not an environment restriction or sandbox limit. Do not retry the call and do not attempt the same action through other tools; continue without it or ask the user how to proceed.",
+              "type": "text",
+            },
+            "type": "content",
+          },
+        ],
+        "sessionUpdate": "tool_call_update",
+        "status": "failed",
+        "toolCallId": "tc-d",
+      },
+    },
+  },
+]
+`;
