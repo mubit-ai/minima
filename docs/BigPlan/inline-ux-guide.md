@@ -996,8 +996,10 @@ the guide is closed** (remaining follow-ups live in the MP13 audit's disposition
 
 ## 11. What NOT to do
 
-- **No fullscreen resurrection** — no alt-screen, no `?1049`, no frame-anchored UI. The bar
-  to reverse is in `decision-inline-renderer.md` §5 (+ amendment).
+- **Fullscreen is the default since 2026-07-31 (user decision — see the ADR amendments in
+  `decision-inline-renderer.md`).** Inline remains fully supported (`--inline`,
+  `/fullscreen`, persisted per project) and its scenarios/budgets in this guide still bind
+  on the inline path; the docked sidebar and rewind overlay stay dead.
 - **No mouse capture in inline. Ever.** The wheel belongs to the terminal.
 - **Never let the live region reach `rows`.** Every new footer/panel element states its row
   budget; unbounded elements are rejected in review.
@@ -1006,6 +1008,21 @@ the guide is closed** (remaining follow-ups live in the MP13 audit's disposition
 - **No new rendering-strategy docs** — evidence lands as edits here or in the ADR.
 - **No skipping the verification-first step** — an MP that starts with implementation is
   restarted.
+
+### Scrolling back — not a bug (2026-07-31)
+
+While scrolled up in history the composer sits BELOW the viewport. This is by design and
+is exactly Claude Code's behavior: both apps render in the main buffer, the composer is
+content-pinned (bottom of the output), not viewport-pinned, and the terminal owns
+scrollback — the app never sees the scroll and no portable escape can pin UI to the
+viewport. A sticky-on-screen box requires the alt screen (see "No fullscreen
+resurrection" above). Snap-back is the terminal's native scroll-on-input: any keystroke
+returns the viewport to the bottom. Default-on in Terminal.app, iTerm2 (Profiles →
+Terminal → "Scroll to bottom on keyboard input"), VS Code (xterm.js `scrollOnUserInput`),
+and kitty; in tmux you must leave copy-mode (`q`) first. If a user reports "the box
+disappears when I scroll up", point them here — or to `/fullscreen` (2026-07-31 ADR
+amendment): the opt-in alt-screen renderer keeps the composer on-screen while scrolling
+in-app, at the documented cost of native selection under wheel capture.
 
 ## 12. Linear mapping
 

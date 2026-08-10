@@ -9,9 +9,11 @@ import { readSource } from "./_source.ts";
 describe("cli/main.ts wires the inline renderer", () => {
   const src = readSource("cli/main.ts");
 
-  test("no renderer selection and no alt-screen writes remain", () => {
-    expect(src).not.toContain("fullscreen");
-    expect(src).not.toContain("MINIMA_TUI_FULLSCREEN");
+  test("alt-screen writes never live in main.ts — altscreen.ts owns the escape", () => {
+    // The opt-in fullscreen renderer (ADR 2026-07-31 amendment) enters/leaves the alternate
+    // screen ONLY through src/tui/altscreen.ts (main.ts calls enterAltScreen/exitAltScreen;
+    // app.tsx + suspend.ts own mid-session transitions). Keeping the literal out of main.ts
+    // keeps the inline boot path auditable: no conditional raw ?1049 writes to reason about.
     expect(src).not.toContain("?1049");
   });
 
@@ -52,15 +54,16 @@ describe("app.tsx /clear and /new reseat the terminal", () => {
     expect(src).not.toContain('"\\n".repeat');
   });
 
-  test("/clear, /new and the $EDITOR return go through the reseat (a gen bump alone leaves stale scrollback)", () => {
-    // The editor return is the third site: Ink skips the write when the frame is
-    // byte-identical to the last one and throttles at ~32ms, and a full-screen editor
-    // genuinely destroys the screen — so a bare transcriptGen bump may paint nothing.
+  test("/clear, /new, the $EDITOR return and the /fullscreen exit go through the reseat (a gen bump alone leaves stale scrollback)", () => {
+    // Four sites. The editor return and the fullscreen exit are the non-obvious two: Ink
+    // skips the write when the frame is byte-identical to the last one and throttles at
+    // ~32ms, and both a full-screen editor and leaving the alt screen genuinely destroy the
+    // screen — so a bare transcriptGen bump may paint nothing.
     const calls = src.match(/reseatFreshScreen\(\);/g) ?? [];
-    expect(calls.length).toBe(3);
+    expect(calls.length).toBe(4);
     // Each one is immediately followed by the <Static> remount that forces the write.
     const paired = src.match(/reseatFreshScreen\(\); setTranscriptGen\(\(g\) => g \+ 1\);/g) ?? [];
-    expect(paired.length).toBe(3);
+    expect(paired.length).toBe(4);
   });
 });
 

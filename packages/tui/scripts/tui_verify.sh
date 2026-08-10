@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# PTY verification for the INLINE renderer — the only renderer (ADR:
-# docs/BigPlan/decision-inline-renderer.md). Scenarios assert the §3 budgets of
+# PTY verification for the INLINE renderer — the default renderer (ADR:
+# docs/BigPlan/decision-inline-renderer.md; the 2026-07-31 amendment re-introduced an
+# OPT-IN fullscreen mode, exercised by the fs-* scenarios at the bottom — their raw
+# streams are deliberately NOT in the no-mouse-capture sweep). Inline scenarios assert
+# the §3 budgets of
 # docs/BigPlan/inline-ux-guide.md against real PTY sessions driven through the committed
 # mock provider (scripts/mock_openai_sse.ts):
 #
@@ -133,7 +136,11 @@ done
 curl -sf "http://127.0.0.1:$MOCK_PORT/v1/health" > /dev/null || {
   echo "FAIL: mock provider did not come up on :$MOCK_PORT"; cat "$TMP/mock.log"; exit 1; }
 
-INLINE_ARGV='"bun", "run", "'$TUI'/src/cli/main.ts", "--offline", "--model", "mock-model", "--provider", "mock", "--provider-url", "http://127.0.0.1:'$MOCK_PORT'/v1"'
+# BASE_ARGV carries no renderer flag (boots the shipped default — fullscreen since the
+# 2026-07-31 user decision); INLINE_ARGV pins --inline so every inline scenario stays on
+# the main-buffer path it asserts.
+BASE_ARGV='"bun", "run", "'$TUI'/src/cli/main.ts", "--offline", "--model", "mock-model", "--provider", "mock", "--provider-url", "http://127.0.0.1:'$MOCK_PORT'/v1"'
+INLINE_ARGV=$BASE_ARGV', "--inline"'
 
 echo "== tui-verify: generating 500-message fixture =="
 (cd "$ROOT" && bun run "$TUI/scripts/gen-fixture-session.ts" \
@@ -1559,6 +1566,226 @@ capture margins "$SPEC"
 python3 "$TUI/scripts/tui_assert.py" "$TMP/margins-frames.jsonl" --after 2.5 \
   --check single-prompt --check advancing --check final-nonblank \
   --check bottom-anchor --bottom-slack 1
+
+# ---------------------------------------------------------------------------------------
+# fs-* — the OPT-IN fullscreen renderer (ADR 2026-07-31 amendment). Alt screen + wheel
+# capture are the POINT here, so these raw files never join the inline no-mouse sweep.
+# ---------------------------------------------------------------------------------------
+
+echo "== tui-verify: scenario fs-basic (fullscreen: scroll up mid-stream, counter, click hint, End re-pins) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV, "--fullscreen"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 24, "duration": 16,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-basic.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-basic"},
+  "frames": "$TMP/fs-basic-frames.jsonl", "raw": "$TMP/fs-basic-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "hello world one"},
+    {"after": 3.4, "send": "<CR>"},
+    {"after": 5.0, "send": "SLOW proof: respond only after a delay"},
+    {"after": 5.4, "send": "<CR>"},
+    {"after": 6.2, "send": "<WHEELUP>", "repeat": 8, "gap": 0.02},
+    {"after": 11.0, "send": "<CLICK>"},
+    {"after": 13.0, "send": "<END>"},
+    {"after": 14.5, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-basic "$SPEC"
+python3 - "$TMP/fs-basic-frames.jsonl" "$TMP/fs-basic-raw.bin" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+raw = open(sys.argv[2], "rb").read()
+def seen(needle, t0, t1=99.0):
+    return any(needle in row for f in frames if t0 <= f["t"] <= t1 for row in f["screen"])
+# Boot armed the alt screen + wheel capture (the fullscreen signature).
+assert b"\x1b[?1049h" in raw, "fullscreen boot never entered the alt screen"
+assert b"\x1b[?1000h" in raw and b"\x1b[?1006h" in raw, "wheel capture never armed"
+# The wheel storm mid-stream detaches the viewport: the permanent status row flips.
+assert seen("scrolled up", 6.2, 11.0), "wheel-up never showed the scrolled status row"
+# The SLOW reply commits WHILE scrolled -> the new-message counter appears; the visible
+# region must not have been yanked to the newest content.
+assert seen("new message", 6.0, 13.0), "commit while scrolled never showed the counter"
+# A click under capture surfaces the selection escape hatches.
+assert seen("select text: hold Option", 11.0, 13.5), "click never armed the selection hint"
+# End re-pins: newest reply visible, scrolled row gone from the settled tail.
+assert seen("Delayed reply", 13.2), "End did not re-pin to the newest content"
+tail = [f for f in frames if f["t"] >= 13.4]
+assert tail and not any("scrolled up" in row for f in tail for row in f["screen"]), (
+    "status row still says scrolled after End")
+# Ctrl+D exit leaves the alt screen behind it.
+assert raw.rfind(b"\x1b[?1049l") > raw.find(b"\x1b[?1049h"), "exit never left the alt screen"
+print("tui_assert: PASS fs-basic (scroll, counter, hint, End re-pin, alt-screen lifecycle)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/fs-basic-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario fs-toggle (/fullscreen on mid-session, off reprints the transcript) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 12,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-toggle.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-toggle"},
+  "frames": "$TMP/fs-toggle-frames.jsonl", "raw": "$TMP/fs-toggle-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "hello toggle world"},
+    {"after": 3.4, "send": "<CR>"},
+    {"after": 5.0, "send": "/fullscreen"},
+    {"after": 5.4, "send": "<CR>"},
+    {"after": 7.0, "send": "/fullscreen"},
+    {"after": 7.4, "send": "<CR>"},
+    {"after": 10.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-toggle "$SPEC"
+python3 - "$TMP/fs-toggle-frames.jsonl" "$TMP/fs-toggle-raw.bin" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+raw = open(sys.argv[2], "rb").read()
+def seen(needle, t0, t1=99.0):
+    return any(needle in row for f in frames if t0 <= f["t"] <= t1 for row in f["screen"])
+i_on = raw.find(b"\x1b[?1049h")
+assert i_on != -1, "/fullscreen never entered the alt screen"
+assert seen("Fullscreen ON", 5.4, 7.4), "the ON notice never rendered"
+i_off = raw.find(b"\x1b[?1049l", i_on)
+assert i_off != -1, "/fullscreen off never left the alt screen"
+# The exit reseat replays the boot clear AFTER leaving the alt screen, then <Static>
+# reprints the WHOLE transcript into the main buffer — the pre-toggle turn included.
+assert raw.find(b"\x1b[r\x1b[?69l\x1b[2J\x1b[3J\x1b[H", i_off) != -1, (
+    "no reseat clear after leaving the alt screen")
+# Timing-jitter-proof: the OFF notice only exists AFTER the toggle handler ran (same
+# setState batch that flips fullscreen off), so one frame holding BOTH the notice and the
+# pre-toggle echo is the reprint proof — no wall-clock window needed.
+assert any(
+    any("Fullscreen OFF" in row for row in f["screen"])
+    and any("hello toggle world" in row for row in f["screen"])
+    for f in frames
+), "no frame shows the OFF notice together with the reprinted pre-toggle transcript"
+print("tui_assert: PASS fs-toggle (alt-screen round trip + transcript reprint)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/fs-toggle-frames.jsonl" --after 8.0 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
+
+echo "== tui-verify: scenario fs-persist (bare boot = fullscreen default; /fullscreen off persists) =="
+rm -rf "$TMP/prefs-fs-persist"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$BASE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 7,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-persist-a.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-persist"},
+  "frames": "$TMP/fs-persist-a-frames.jsonl", "raw": "$TMP/fs-persist-a-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "/fullscreen"},
+    {"after": 3.4, "send": "<CR>"},
+    {"after": 5.5, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-persist-a "$SPEC"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$BASE_ARGV],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 6,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-persist-b.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-persist"},
+  "frames": "$TMP/fs-persist-b-frames.jsonl", "raw": "$TMP/fs-persist-b-raw.bin",
+  "steps": [
+    {"after": 4.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-persist-b "$SPEC"
+python3 - "$TMP/fs-persist-a-raw.bin" "$TMP/fs-persist-b-raw.bin" <<'PY'
+import sys
+a = open(sys.argv[1], "rb").read()
+b = open(sys.argv[2], "rb").read()
+# Session A: NO renderer flag — the shipped default boots fullscreen; /fullscreen then
+# drops to inline and persists the explicit "off".
+assert b"\x1b[?1049h" in a, "session A: bare boot did not default to fullscreen"
+assert a.rfind(b"\x1b[?1049l") > a.find(b"\x1b[?1049h"), "session A: exit left the alt screen armed"
+# Session B: same prefs dir, still no flag — the persisted OFF beats the default.
+assert b"\x1b[?1049h" not in b, "session B: persisted inline pref did not stick"
+print("tui_assert: PASS fs-persist (fullscreen default boot; explicit inline pref survives restart)")
+PY
+
+echo "== tui-verify: scenario fs-suspend (Ctrl+Z drops alt screen + capture; fg re-arms both) =="
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV, "--fullscreen"],
+  "cwd": "$ROOT",
+  "cols": 100, "rows": 30, "duration": 10,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-suspend.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-suspend"},
+  "frames": "$TMP/fs-suspend-frames.jsonl", "raw": "$TMP/fs-suspend-raw.bin",
+  "steps": [
+    {"after": 3.0, "send": "hello suspend"},
+    {"after": 3.4, "send": "<CR>"},
+    {"after": 5.5, "send": "<CTRLZ>"},
+    {"after": 7.0, "signal": "CONT"},
+    {"after": 8.5, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-suspend "$SPEC"
+python3 - "$TMP/fs-suspend-raw.bin" <<'PY'
+import sys
+raw = open(sys.argv[1], "rb").read()
+i_boot = raw.find(b"\x1b[?1049h")
+assert i_boot != -1, "fullscreen boot never entered the alt screen"
+# Suspend signature: capture off + alt screen off + paste off + cursor show.
+i_down = raw.find(b"\x1b[?1049l", i_boot)
+assert i_down != -1, "Ctrl+Z never left the alt screen"
+assert raw.find(b"\x1b[?1000l", i_boot) != -1, "Ctrl+Z never dropped wheel capture"
+# Resume signature: alt screen + capture re-armed after the drop.
+i_up = raw.find(b"\x1b[?1049h", i_down)
+assert i_up != -1, "SIGCONT never re-entered the alt screen"
+assert raw.find(b"\x1b[?1000h", i_down) != -1 and raw.find(b"\x1b[?1006h", i_down) != -1, (
+    "SIGCONT never re-armed wheel capture")
+assert raw.find(b"\x1b[?1049l", i_up) != -1, "exit after resume never left the alt screen"
+print("tui_assert: PASS fs-suspend (suspend/resume re-arms alt screen + capture)")
+PY
+
+echo "== tui-verify: scenario fs-perm (permission overlay answerable inside the fullscreen frame) =="
+rm -rf "$TMP/fs-grantwork" && mkdir -p "$TMP/fs-grantwork"
+SPEC=$(cat <<EOF
+{
+  "cmd": [$INLINE_ARGV, "--fullscreen"],
+  "cwd": "$TMP/fs-grantwork",
+  "cols": 100, "rows": 30, "duration": 12,
+  "env": {"MINIMA_DB_PATH": "$TMP/fs-perm.db", "MINIMA_HARNESS_DIR": "$TMP/prefs-fs-perm"},
+  "frames": "$TMP/fs-perm-frames.jsonl", "raw": "$TMP/fs-perm-raw.bin",
+  "steps": [
+    {"after": 3.5, "send": "BASHCMD run under fullscreen"},
+    {"after": 4.0, "send": "<CR>"},
+    {"after": 6.5, "send": "y"},
+    {"after": 10.0, "send": "<CTRLD>"}
+  ]
+}
+EOF
+)
+capture fs-perm "$SPEC"
+python3 - "$TMP/fs-perm-frames.jsonl" <<'PY'
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1])]
+def seen(needle, t0, t1=99.0):
+    return any(needle in row for f in frames if t0 <= f["t"] <= t1 for row in f["screen"])
+assert seen("BASHCMD run under fullscreen", 4.0), (
+    "typed prompt truncated - the send raced the app mount, retime the steps")
+# The bash permission overlay renders INSIDE the height=rows frame and is answerable.
+assert seen("RUN COMMAND", 4.0, 6.5), "permission overlay never rendered in fullscreen"
+assert seen("Command recorded", 6.5), "the y answer never completed the bash turn"
+print("tui_assert: PASS fs-perm (overlay rendered + answerable in the fullscreen frame)")
+PY
+python3 "$TUI/scripts/tui_assert.py" "$TMP/fs-perm-frames.jsonl" --after 2.5 \
+  --check single-prompt --check final-nonblank --check bottom-anchor --bottom-slack 1
 
 echo "== tui-verify: no-mouse-capture sweep (every raw stream) =="
 python3 - "$TMP"/echo-raw.bin "$TMP"/stream-raw.bin "$TMP"/resume-raw.bin \

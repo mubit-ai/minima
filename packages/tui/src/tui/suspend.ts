@@ -3,8 +3,11 @@
  * SIGTSTP itself — the app's Ctrl+Z binding calls suspendToShell(), which restores the
  * terminal to a shell-usable state (the mirror of main.ts's shutdown writes), cooks the
  * tty, and stops the process with a self-SIGTSTP. `fg` (SIGCONT) reverses everything and
- * invokes the registered resume callback so the app repaints the live region.
+ * invokes the registered resume callback so the app repaints — in fullscreen any commit
+ * repaints the whole frame, so a state bump is a full redraw.
  */
+
+import { enterAltScreen, exitAltScreen } from "./altscreen.ts";
 
 let resumeCallback: (() => void) | null = null;
 
@@ -13,27 +16,43 @@ export function setResumeCallback(fn: (() => void) | null): void {
   resumeCallback = fn;
 }
 
-export function suspendToShell(): void {
+export interface SuspendOptions {
+  fullscreen: boolean;
+  /** Re-arm SGR mouse capture on resume (the capture state at suspend time). */
+  mouse: boolean;
+}
+
+export function suspendToShell(opts: SuspendOptions = { fullscreen: false, mouse: false }): void {
   const out = process.stdout;
+  if (opts.mouse) {
+    out.write("\u001b[?1006l");
+    out.write("\u001b[?1000l");
+  }
   out.write("\u001b[?2004l");
+  if (opts.fullscreen) exitAltScreen();
   out.write("\u001b[?25h");
   try {
     process.stdin.setRawMode?.(false);
   } catch {
     // not a tty (tests) — job control still works, the tty state just isn't ours
   }
-  process.once("SIGCONT", resume);
+  process.once("SIGCONT", () => resume(opts));
   process.kill(process.pid, "SIGTSTP");
 }
 
-function resume(): void {
+function resume(opts: SuspendOptions): void {
   try {
     process.stdin.setRawMode?.(true);
   } catch {
     // see above
   }
   const out = process.stdout;
+  if (opts.fullscreen) enterAltScreen();
   out.write("\u001b[?25l");
   out.write("\u001b[?2004h");
+  if (opts.mouse) {
+    out.write("\u001b[?1000h");
+    out.write("\u001b[?1006h");
+  }
   resumeCallback?.();
 }
