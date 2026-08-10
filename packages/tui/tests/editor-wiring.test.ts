@@ -15,7 +15,9 @@ describe("app.tsx — the Ctrl+E collision", () => {
     // dispatch leaves justConsumed set, poisoning the NEXT Ctrl+E.
     const handlerAt = app.indexOf("const editorChordKey = chordOwnsKey();");
     expect(handlerAt).toBeGreaterThan(-1);
-    const ctrlZAt = app.indexOf('if (key.ctrl && input === "z") { suspendToShell(); return; }');
+    // Prefix, not the whole statement: what this asserts is ORDER, and suspendToShell's
+    // arguments are not part of that (the fullscreen renderer passes it the renderer state).
+    const ctrlZAt = app.indexOf('if (key.ctrl && input === "z") { suspendToShell(');
     expect(ctrlZAt).toBeGreaterThan(-1);
     expect(handlerAt).toBeLessThan(ctrlZAt);
   });

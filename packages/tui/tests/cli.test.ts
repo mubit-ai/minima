@@ -52,9 +52,15 @@ describe("resolveBudget — where the env layers' ceiling lands", () => {
   });
 });
 
-describe("parseArgs renderer flags are gone (MP3, MUB-146 — inline is the only renderer)", () => {
-  test("CliArgs carries no fullscreen field and no renderer flags parse", () => {
-    expect("fullscreen" in parseArgs([])).toBe(false);
+describe("parseArgs renderer flags (opt-in fullscreen, ADR 2026-07-31 amendment)", () => {
+  test("tri-state: unset by default; --fullscreen true; --inline/--no-fullscreen false", () => {
+    // undefined = no explicit choice — main() falls back to env, then the persisted
+    // per-project /fullscreen pref, then the inline default.
+    expect(parseArgs([]).fullscreen).toBeUndefined();
+    expect(parseArgs(["--fullscreen"]).fullscreen).toBe(true);
+    expect(parseArgs(["--inline"]).fullscreen).toBe(false);
+    expect(parseArgs(["--no-fullscreen"]).fullscreen).toBe(false);
+    expect(parseArgs(["--fullscreen", "--inline"]).fullscreen).toBe(false); // last wins
   });
 });
 

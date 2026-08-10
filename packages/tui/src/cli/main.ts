@@ -66,6 +66,7 @@ import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
+import { enterAltScreen, exitAltScreen } from "../tui/altscreen.ts";
 import { HarnessApp } from "../tui/app.tsx";
 import { DEFAULT_CONSOLE_URL, ProvisioningPending, runAuth } from "../tui/auth.ts";
 import {
@@ -78,7 +79,7 @@ import {
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
 import { initKeymap } from "../tui/keymap_file.ts";
-import { loadPersistedMode } from "../tui/mode_prefs.ts";
+import { loadFullscreenPref, loadPersistedMode } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
 import { VERSION } from "../version.ts";
 
@@ -224,6 +225,14 @@ export interface CliArgs {
   bypassPermissions?: boolean;
   /** Turn on the experimental umbrella (same as MINIMA_TUI_EXPERIMENTAL=1). */
   experimental?: boolean;
+  /**
+   * Opt-in fullscreen renderer (ADR decision-inline-renderer.md, 2026-07-31 amendment):
+   * alternate screen, in-app scroll viewport with the composer glued to the bottom of the
+   * frame, wheel/PgUp/PgDn history scroll. Tri-state: undefined = no explicit flag — main()
+   * falls back to MINIMA_TUI_FULLSCREEN/MINIMA_TUI_INLINE, then the per-project persisted
+   * /fullscreen preference, then the inline default (native scroll + select + copy).
+   */
+  fullscreen?: boolean;
 }
 
 /** What -v/--version prints (single line, stdout — scripts parse this). */
@@ -268,6 +277,13 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--offline":
         opts.offline = true;
+        break;
+      case "--fullscreen":
+        opts.fullscreen = true;
+        break;
+      case "--inline":
+      case "--no-fullscreen":
+        opts.fullscreen = false;
         break;
       case "--dangerously-bypass-permissions":
         opts.bypassPermissions = true;
@@ -340,6 +356,10 @@ Usage: minima [prompt] [--print|--mode json] [options]
       --provider-url URL   OpenAI-compatible base URL for a custom --provider (ollama/vLLM)
       --thinking LEVEL     off|minimal|low|medium|high|xhigh
       --offline            bypass Minima routing
+      --fullscreen         force the fullscreen renderer (the default): alt-screen, sticky
+                           composer, in-app scroll (wheel/PgUp/PgDn); /fullscreen toggles
+      --inline, --no-fullscreen
+                           force the inline renderer: native scroll + select + copy
       --dangerously-bypass-permissions
                            start in bypass mode: every tool call runs without prompting
       --experimental       turn on experimental features (same as MINIMA_TUI_EXPERIMENTAL=1)
@@ -1229,6 +1249,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await probeCursorRow(process.env.MINIMA_TUI_DEBUG_ANCHOR);
   }
 
+  // Renderer selection: explicit flag > env > the per-project persisted /fullscreen
+  // preference > the fullscreen default (user decision 2026-07-31 — see the ADR's second
+  // amendment; --inline / MINIMA_TUI_INLINE=1 / /fullscreen restore the inline renderer).
+  // Entering the alt screen BEFORE render() keeps Ink's first
+  // frame out of the main buffer (no transition flash, no stale frame left behind on exit);
+  // the escape itself lives in altscreen.ts — main.ts stays free of the literal
+  // (render-buffer.test.ts pins that; app.tsx/suspend.ts own mid-session transitions).
+  const envFullscreen =
+    process.env.MINIMA_TUI_INLINE === "1"
+      ? false
+      : process.env.MINIMA_TUI_FULLSCREEN === "1"
+        ? true
+        : undefined;
+  const fullscreenOn =
+    args.fullscreen ?? envFullscreen ?? loadFullscreenPref(repoIdentity(process.cwd())) ?? true;
+  if (fullscreenOn) enterAltScreen();
   // The user keymap is a startup fact: read once, here, so it is published before the first
   // keypress can be dispatched (app.tsx and the composer's chord latch both read the
   // singleton). A missing file, a bad file and MINIMA_TUI_KEYMAP=0 all land on the defaults;
@@ -1245,6 +1281,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       banner: "minima",
       askUserRef,
       childEventRef,
+      fullscreen: fullscreenOn,
       initialResume,
       planSpawn: spawnFactory,
       agentTypes,
@@ -1259,7 +1296,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   );
   await instance.waitUntilExit();
 
-  // Shutdown: drop bracketed paste, restore cursor.
+  // Shutdown: leave the alt screen if the session ended in fullscreen (restores the main
+  // buffer + its scrollback), then drop bracketed paste, restore cursor.
+  exitAltScreen();
   process.stdout.write("\u001b[?2004l");
   process.stdout.write("\u001b[?25h");
   await endSessionSafely(agent); // reflect + checkpoint this session into durable memory

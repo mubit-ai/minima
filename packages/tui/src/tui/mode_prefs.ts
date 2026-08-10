@@ -86,3 +86,31 @@ export function persistTaskPanelHidden(projectKey: string, hidden: boolean): voi
     // Persistence is best-effort — never let it break the TUI.
   }
 }
+
+// Fullscreen renderer preference (ADR decision-inline-renderer.md, 2026-07-31 amendments;
+// fullscreen became the DEFAULT the same day by user decision). Tri-state on purpose: the
+// /fullscreen toggle persists the user's explicit choice in either direction, and null
+// (no key) lets main.ts apply the shipped default — so a future default flip never fights
+// a stale stored value.
+const FULLSCREEN_SUFFIX = "::fullscreen";
+
+/** The persisted /fullscreen choice for a project: true, false, or null (never chosen). */
+export function loadFullscreenPref(projectKey: string): boolean | null {
+  const raw = readAll()[projectKey + FULLSCREEN_SUFFIX];
+  return raw === "on" ? true : raw === "off" ? false : null;
+}
+
+/** Persist the explicit per-project /fullscreen choice (both directions). */
+export function persistFullscreenPref(projectKey: string, on: boolean): void {
+  try {
+    const all = readAll();
+    const key = projectKey + FULLSCREEN_SUFFIX;
+    const value = on ? "on" : "off";
+    if (all[key] === value) return;
+    all[key] = value;
+    mkdirSync(prefsDir(), { recursive: true });
+    writeFileSync(prefsPath(), `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  } catch {
+    // Persistence is best-effort — never let it break the TUI.
+  }
+}

@@ -7,6 +7,36 @@
 > entirely** — flags, alt-screen, viewport path, mouse capture, docked sidebar, SidebarChassis
 > (`inline-ux-guide.md` MP1–MP3; `tui-verify` is re-based on inline before the deletion).
 > Everything else in this ADR stands; §5's reversal bar now also gates any *re-introduction*.
+> **Amendment (2026-07-31): opt-in fullscreen re-introduced — §5's bar cleared by new
+> evidence.** Claude Code CLI v2.1.89 (April 2026) shipped an opt-in fullscreen mode
+> (`/tui fullscreen`, `CLAUDE_CODE_NO_FLICKER=1`): alt-screen, virtualized scroll viewport,
+> sticky bottom composer, jump-to-bottom affordance, wheel capture with a modifier-drag
+> selection story — i.e. the flagship of §3.1's "all inline-default" list reversed its own
+> equivalent decision for the *opt-in* case, and a user asked for exactly that behavior
+> (sticky composer while scrolled — something native scrollback structurally cannot serve,
+> the §5 third bar). Scope of the re-introduction: **inline stays the default and the
+> product surface; fullscreen is per-project opt-in** (`--fullscreen` /
+> `MINIMA_TUI_FULLSCREEN=1` / `/fullscreen`, persisted via `mode_prefs.ts`); **no feature
+> may require fullscreen**, and the §1 ban on fullscreen-as-*default* stands. §6 is
+> untouched (and moot in the alt screen, which has no scrollback to wipe). Restored from
+> the MP3 deletion: `viewport.ts` (verbatim) + `lines.ts` (re-synced to MessageRow with an
+> executable parity test against `computeMsgHeight`); alt-screen writes are owned by
+> `altscreen.ts`/`suspend.ts`/`app.tsx` — never `main.ts`. Guards amended:
+> `tests/render-buffer.test.ts` (main.ts stays `?1049`-free), `tests/cli.test.ts`
+> (tri-state renderer flags), `tests/kill-switches.test.ts` (env mirrors declared).
+> The rewind overlay and docked sidebar stay dead.
+> **Amendment (2026-07-31, later the same day): fullscreen is now the DEFAULT — user
+> decision.** After using the opt-in mode, the user chose it as the boot default ("so I
+> don't have to add --fullscreen"). This supersedes §1's inline-default clause and the
+> first 2026-07-31 amendment's "inline stays the default" scope line. Resolution order:
+> `--fullscreen`/`--inline` flag > `MINIMA_TUI_FULLSCREEN`/`MINIMA_TUI_INLINE` env > the
+> per-project persisted `/fullscreen` choice (now tri-state: on/off/unset) > fullscreen.
+> The inline renderer remains fully supported one command away (`--inline`, `/fullscreen`,
+> persisted per project) and every inline PTY scenario now pins `--inline` explicitly
+> (`BASE_ARGV` vs `INLINE_ARGV` in tui_verify.sh; fs-persist proves the bare-boot default
+> and that an explicit inline choice survives restarts). The known trade is accepted as
+> the default experience: wheel capture disables native click-drag selection
+> (Option/Shift-drag, `/mouse`, and Ctrl+Y remain the escape hatches).
 > **Supersedes:** the fullscreen-default proposal in the prior "OpenCode-style sidebars" plan.
 > **Companion docs:** `inline-rendering-brief.md` (the *what* / build plan),
 > `tui-rendering-strategy.md` (research + prose rationale), `pr-default-renderer.md` (the

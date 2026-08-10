@@ -71,7 +71,7 @@ export const BANNER_TAGLINES = [
   "CLI · cost-aware model routing",
   "recommend → run → judge → feedback → memory",
   "type a prompt, or / for commands",
-  "scroll with your terminal (wheel / trackpad) · select & copy freely",
+  "wheel / PgUp / PgDn scrolls · End jumps to newest · /fullscreen toggles the renderer",
 ];
 
 /** Rendered rows of the MINIMA banner block (live and committed forms are the same JSX). */
