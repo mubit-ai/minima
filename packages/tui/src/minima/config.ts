@@ -168,6 +168,30 @@ export interface HarnessConfig {
    * inert on the default path (the deterministic branch never runs without a gate). Never affects
    * the recovery-ladder trigger (a red still `failed`) nor `verified_in_production` (green-only). */
   gradedOutcome: boolean;
+  /** Planning Critic (E1): one cheap completion at `/plan` finalize over the approved steps +
+   * verifies, surfacing non-discriminative checks and hidden dependencies as advisory flags in
+   * the finalize note — never blockers. `MINIMA_TUI_PLAN_CRITIC`, default on (`0` disables →
+   * finalize writes the plan with no critic pass and books no critic spend). Only consulted
+   * when `bigPlan` is on — inert on the default path. */
+  planCritic: boolean;
+  /** Zero-context diff reviewer (E1): when a plan closes fully completed, a fresh-eyes review of
+   * the run's whole diff with no session context. An objection writes a yellow judge milestone
+   * gate (worst-tier resolution can yellow the plan, never green it); approval or skip writes
+   * nothing. `MINIMA_TUI_DIFF_REVIEW`, default on (`0` disables → no review, no gate).
+   * Distinct from `/verify`'s ledger-briefed refutation pass. */
+  diffReview: boolean;
+  /** Auto-gates (E3): mine the repo's own test commands at `/plan` finalize and attach them to
+   * steps that authored no `verify` of their own, as fast/full tiers. `MINIMA_TUI_AUTO_GATES`,
+   * default on (`0` disables → only hand-authored verifies attach, and finalize still
+   * succeeds). Only consulted when `bigPlan` is on — inert on the default path. */
+  autoGates: boolean;
+  /** Localhost dashboard (default ON): one detached server per ledger, shared by every TUI and
+   * gone shortly after the last one closes. `MINIMA_TUI_DASHBOARD`, default on (`0` disables →
+   * no socket is ever opened, and `/dashboard` reports itself disabled). Also gated on a TTY
+   * and on live persistence, so `-p`, CI and git-hook runs never start one regardless.
+   * The supervisor passes `MINIMA_TUI_DASHBOARD=0` in the child's env so a spawned harness
+   * cannot start a second server — that crosses a process boundary, so it stays an env var. */
+  dashboard: boolean;
   /** Compose the prompt in $EDITOR (default ON): Ctrl+X Ctrl+E (readline's
    * edit-and-execute-command) and `/editor` hand the draft to $VISUAL/$EDITOR and read the
    * saved buffer back into the composer. `MINIMA_TUI_EDITOR=0` opts out — the composer never
@@ -370,6 +394,10 @@ export function harnessConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     toolAllowlist: true,
     backoffMs: 0,
     gradedOutcome: true,
+    planCritic: true,
+    diffReview: true,
+    autoGates: true,
+    dashboard: true,
     externalEditor: true,
     keymapFile: true,
     memoryLedger: true,
@@ -541,6 +569,10 @@ export function configFromEnv(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (process.env.MINIMA_TUI_FAILURE_MATCHER === "0") cfg.failureMatcher = false;
   if (process.env.MINIMA_TUI_TOOL_ALLOWLIST === "0") cfg.toolAllowlist = false;
   if (process.env.MINIMA_TUI_GRADED_OUTCOME === "0") cfg.gradedOutcome = false;
+  if (process.env.MINIMA_TUI_PLAN_CRITIC === "0") cfg.planCritic = false;
+  if (process.env.MINIMA_TUI_DIFF_REVIEW === "0") cfg.diffReview = false;
+  if (process.env.MINIMA_TUI_AUTO_GATES === "0") cfg.autoGates = false;
+  if (process.env.MINIMA_TUI_DASHBOARD === "0") cfg.dashboard = false;
   const backoffEnv = process.env.MINIMA_TUI_BACKOFF_MS;
   if (backoffEnv !== undefined) {
     const n = Number(backoffEnv);

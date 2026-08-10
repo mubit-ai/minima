@@ -1266,9 +1266,12 @@ export function HarnessApp({
         runId: agent.runId,
         // E3 auto-gates: mine this repo's own check commands into verify-less steps.
         repoDir: process.cwd(),
-        // E1 Planning Critic: spend books like judge/council spend (MINIMA_TUI_PLAN_CRITIC=0
-        // disables by injecting a no-op critic — the seam stays, the call never happens).
-        critic: process.env.MINIMA_TUI_PLAN_CRITIC === "0" ? async () => null : undefined,
+        // E3 auto-gates: config.autoGates (MINIMA_TUI_AUTO_GATES=0) turns mining off.
+        autoGates: agent.config.autoGates,
+        // E1 Planning Critic: spend books like judge/council spend (config.planCritic, i.e.
+        // MINIMA_TUI_PLAN_CRITIC=0, disables by injecting a no-op critic — the seam stays,
+        // the call never happens).
+        critic: agent.config.planCritic ? undefined : async () => null,
         onCriticCostUsd: (usd) => {
           agent.meter?.addOverhead(usd);
           agent.budget?.bookSpend(usd, "plan-critic");
@@ -2456,7 +2459,7 @@ export function HarnessApp({
             : await dashboard.snapshot()
           : null;
         const lines = dashboardReport(snap, {
-          disabled: process.env.MINIMA_TUI_DASHBOARD === "0",
+          disabled: !agent.config.dashboard,
           age: (startedAt) => formatAge(startedAt / 1000),
         });
         setMessages((m) => [
