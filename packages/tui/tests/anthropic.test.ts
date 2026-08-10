@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   stream,
+  AssistantMessage,
   Message,
   type Model,
   complete,
@@ -10,6 +11,7 @@ import {
   resetRegistry,
   image,
   text,
+  thinking,
 } from "../src/ai/index.ts";
 import {
   type AnthropicClientLike,
@@ -298,6 +300,54 @@ describe("AnthropicProvider", () => {
     );
     expect(result.stop_reason).toBe("error");
     expect(result.error_message).toMatch(/401 invalid key/);
+  });
+});
+
+// The API 400s on a text block with no non-whitespace text and on an empty content array.
+// Both are reachable from ordinary history, and agent/loop.ts only filters error turns.
+describe("AnthropicProvider — no empty blocks reach the wire", () => {
+  async function wireFor(messages: Message[]): Promise<Record<string, unknown>[]> {
+    resetAll();
+    const captured: Record<string, unknown>[] = [];
+    registerProvider("anthropic-messages", new AnthropicProvider(fakeClient(TEXT_EVENTS, captured)));
+    await complete(MODEL, context({ messages }));
+    return captured[0]!.messages as Record<string, unknown>[];
+  }
+
+  const blocks = (wire: Record<string, unknown>[], i: number) =>
+    wire[i]!.content as Record<string, unknown>[];
+
+  // Every provider pushes text("") when a completion produced no content.
+  test("an empty assistant turn is replayed as a placeholder, not an empty block", async () => {
+    const empty = new AssistantMessage({ content: [text("")] });
+    const wire = await wireFor([new Message({ role: "user", content: "hi" }), empty]);
+    expect(blocks(wire, 1)).toHaveLength(1);
+    expect(blocks(wire, 1)[0]).toMatchObject({ type: "text", text: "(no content)" });
+  });
+
+  // A /model switch replays a Gemini turn here; toWire drops its unsigned thinking block,
+  // which would otherwise leave content: [].
+  test("a message whose only block was unsigned thinking is not emptied out", async () => {
+    const gemini = new AssistantMessage({ content: [thinking("hmm")] });
+    const wire = await wireFor([new Message({ role: "user", content: "hi" }), gemini]);
+    expect(blocks(wire, 1)).toHaveLength(1);
+    expect(blocks(wire, 1)[0]).toMatchObject({ type: "text", text: "(no content)" });
+  });
+
+  test("a tool that returned no output still carries content", async () => {
+    const wire = await wireFor([
+      new Message({ role: "user", content: "hi" }),
+      new Message({ role: "toolResult", content: [text("  ")], tool_call_id: "call_1" }),
+    ]);
+    expect(blocks(wire, 1)[0]!.content).toBe("(no content)");
+  });
+
+  // The guard must not touch a message that already has real content beside an empty block.
+  test("an empty block beside real content is dropped, not replaced", async () => {
+    const mixed = new AssistantMessage({ content: [text(""), text("real")] });
+    const wire = await wireFor([new Message({ role: "user", content: "hi" }), mixed]);
+    expect(blocks(wire, 1)).toHaveLength(1);
+    expect(blocks(wire, 1)[0]).toMatchObject({ type: "text", text: "real" });
   });
 });
 

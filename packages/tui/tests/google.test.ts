@@ -367,3 +367,62 @@ describe("GoogleProvider — hoisted tool-result images", () => {
     expect(parts[1]).toEqual({ inlineData: { mimeType: "image/png", data: "QUJD" } });
   });
 });
+
+// The SDK resolves generateContentStream only after checking the response status, so a retry
+// there is always pre-stream. Retried off ApiError.status rather than the SDK's own
+// retryOptions, which would replace the provider's message with p-retry's wording.
+describe("GoogleProvider retries a transient failure", () => {
+  const OK: GoogleChunk[] = [
+    {
+      candidates: [{ content: { parts: [{ text: "ok" }] }, finish_reason: "STOP" }],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+    },
+  ];
+
+  /** Rejects with each status in order (ApiError-shaped), then streams a normal reply. */
+  function flakyClient(statuses: number[]) {
+    const calls = { n: 0 };
+    const client: GoogleClientLike = {
+      models: {
+        async generateContentStream(): Promise<AsyncIterable<GoogleChunk>> {
+          const status = statuses[calls.n++];
+          if (status !== undefined) {
+            throw Object.assign(new Error(`{"error":{"message":"model overloaded"}}`), { status });
+          }
+          async function* gen(): AsyncIterable<GoogleChunk> {
+            for (const c of OK) yield c;
+          }
+          return gen();
+        },
+      },
+    };
+    return { client, calls };
+  }
+
+  async function runWith(client: GoogleClientLike) {
+    resetAll();
+    registerProvider("google-generative-ai", new GoogleProvider(client));
+    return complete(MODEL, context({ messages: [new Message({ role: "user", content: "hi" })] }));
+  }
+
+  test("a 503 then a 429 still lands the reply on the third attempt", async () => {
+    const { client, calls } = flakyClient([503, 429]);
+    const result = await runWith(client);
+    expect(result.textContent).toBe("ok");
+    expect(calls.n).toBe(3);
+  });
+
+  test("the cap holds, and the provider's own message survives", async () => {
+    const { client, calls } = flakyClient([500, 500, 500, 500]);
+    const result = await runWith(client);
+    expect(calls.n).toBe(3);
+    expect(result.stop_reason).toBe("error");
+    expect(result.error_message).toContain("model overloaded");
+  });
+
+  test("a 400 is not retried", async () => {
+    const { client, calls } = flakyClient([400]);
+    expect((await runWith(client)).stop_reason).toBe("error");
+    expect(calls.n).toBe(1);
+  });
+});

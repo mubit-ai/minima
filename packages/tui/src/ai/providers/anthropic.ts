@@ -7,12 +7,10 @@
  * injected client for hermetic tests.
  */
 
-import { errText } from "../../errtext.ts";
 import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
-  error as errorEv,
   start as startEv,
   textDelta,
   textEnd,
@@ -35,7 +33,7 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
+import { providerError, resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
 
 export { sdkTimeoutMs };
 
@@ -176,13 +174,7 @@ export class AnthropicProvider {
         }
       }
     } catch (exc) {
-      const err = new AssistantMessage({
-        content: [text("")],
-        stop_reason: "error",
-        error_message: errText(exc),
-      });
-      err.model = model.id;
-      yield errorEv("error", err);
+      yield providerError(model, exc);
       return;
     }
 
@@ -277,6 +269,16 @@ function markLastBlock(wireMsg: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Stand-in for content Anthropic will not accept as empty. The API 400s on a text block with
+ * no non-whitespace text AND on an empty content array, and both are reachable from ordinary
+ * history: every provider pushes `text("")` for an empty completion, a tool can return no
+ * output, and a message whose only block was UNSIGNED thinking (dropped just below) empties
+ * out entirely when a `/model` switch replays a Gemini turn here. agent/loop.ts already drops
+ * error turns for this reason; these are the cases it cannot see.
+ */
+const EMPTY_BLOCK = "(no content)";
+
 function toWire(m: Message): Record<string, unknown> {
   if (m.role === "toolResult") {
     return {
@@ -293,8 +295,9 @@ function toWire(m: Message): Record<string, unknown> {
   }
   const content: Record<string, unknown>[] = [];
   for (const b of m.content) {
-    if (b.type === "text") content.push({ type: "text", text: b.text });
-    else if (b.type === "image")
+    if (b.type === "text") {
+      if (b.text.trim()) content.push({ type: "text", text: b.text });
+    } else if (b.type === "image")
       content.push({
         type: "image",
         source: { type: "base64", media_type: b.mime_type ?? "image/png", data: b.data },
@@ -306,6 +309,7 @@ function toWire(m: Message): Record<string, unknown> {
     } else if (b.type === "toolCall")
       content.push({ type: "tool_use", id: b.id, name: b.name, input: b.arguments });
   }
+  if (!content.length) content.push({ type: "text", text: EMPTY_BLOCK });
   return { role: m.role, content };
 }
 
@@ -318,10 +322,10 @@ function toWire(m: Message): Record<string, unknown> {
  */
 function toolResultContent(m: Message): string | Record<string, unknown>[] {
   const images = m.content.filter((b) => b.type === "image");
-  if (images.length === 0) return flattenText(m);
-  const out: Record<string, unknown>[] = [];
   const t = flattenText(m);
-  if (t) out.push({ type: "text", text: t });
+  if (images.length === 0) return t.trim() ? t : EMPTY_BLOCK;
+  const out: Record<string, unknown>[] = [];
+  if (t.trim()) out.push({ type: "text", text: t });
   for (const b of images)
     out.push({
       type: "image",

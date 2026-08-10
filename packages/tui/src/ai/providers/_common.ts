@@ -4,7 +4,84 @@
  * Port of the Python harness's ai/providers/_common.py.
  */
 
-import type { ToolSchema } from "../types.ts";
+import { errText } from "../../errtext.ts";
+import { type ErrorEvent, error as errorEv } from "../events.ts";
+import { AssistantMessage, type Model, type ToolSchema, text } from "../types.ts";
+
+/**
+ * The uniform "this call failed" event every provider yields: an error-stopped
+ * AssistantMessage tagged with the model that failed. `reason` takes a thrown value or a
+ * plain message string. agent/loop.ts drops these from history before the next request,
+ * which is why the empty text block here never reaches a provider.
+ */
+export function providerError(model: Model, reason: unknown): ErrorEvent {
+  const err = new AssistantMessage({
+    content: [text("")],
+    stop_reason: "error",
+    error_message: errText(reason),
+  });
+  err.model = model.id;
+  return errorEv("error", err);
+}
+
+/**
+ * A failure worth a second attempt: a network blip, or a status the host wants us to come
+ * back on. Providers classify; {@link retryTransient} only counts and sleeps.
+ */
+export class TransientError extends Error {}
+
+/** Attempts for a request that fails BEFORE any bytes arrive. 3 adds at most 1.5s. */
+const RETRY_ATTEMPTS = 3;
+const RETRY_BASE_MS = 500;
+
+/**
+ * Status codes worth retrying: request timeout, rate limit, and any server-side failure
+ * (which covers Anthropic's 529 and whatever a proxy invents). Everything else — 400, 401,
+ * 404 — is the request's own fault and repeating it just wastes the user's time.
+ */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/** Sleep `ms`, waking early if `signal` aborts, so Esc is never stuck behind a backoff. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * Run `fn`, retrying ONLY what it marks {@link TransientError}, 3 attempts at 500ms → 1s.
+ *
+ * Callers wrap the part of a request that runs before the first byte of the response body:
+ * once deltas are out a retry would duplicate them, so a mid-stream failure is terminal and
+ * belongs to the recovery ladder (minima/runtime.ts), which is the layer that can re-route.
+ *
+ * `enabled: false` collapses this to a single attempt — how tests keep their suites instant
+ * without pretending the retry does not exist.
+ */
+export async function retryTransient<T>(
+  fn: () => Promise<T>,
+  opts: { signal?: AbortSignal; enabled?: boolean } = {},
+): Promise<T> {
+  const attempts = opts.enabled === false ? 1 : RETRY_ATTEMPTS;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (exc) {
+      if (attempt >= attempts || !(exc instanceof TransientError) || opts.signal?.aborted)
+        throw exc;
+      await sleep(RETRY_BASE_MS * 2 ** (attempt - 1), opts.signal);
+      if (opts.signal?.aborted) throw exc;
+    }
+  }
+}
 
 /** Options value wins, then the first set environment variable. */
 export function resolveApiKey(

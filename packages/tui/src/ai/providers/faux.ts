@@ -9,7 +9,6 @@
 import type { StreamEvent } from "../events.ts";
 import {
   done as doneEv,
-  error as errorEv,
   start as startEv,
   textDelta,
   textEnd,
@@ -20,8 +19,9 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
-import { AssistantMessage, type Context, type Model, text } from "../types.ts";
+import type { AssistantMessage, Context, Model } from "../types.ts";
 import { attachCost } from "../usage.ts";
+import { providerError } from "./_common.ts";
 import { type Provider, registerProvider, unregisterProvider } from "./base.ts";
 
 const FAUX_MODEL: Model = {
@@ -147,13 +147,7 @@ class FauxProvider implements Provider {
     });
     const queued = this.state.responses.shift();
     if (!queued) {
-      const err = new AssistantMessage({
-        content: [text("")],
-        stop_reason: "error",
-        error_message: "No more faux responses queued",
-      });
-      err.model = model.id;
-      yield errorEv("error", err);
+      yield providerError(model, "No more faux responses queued");
       return;
     }
 

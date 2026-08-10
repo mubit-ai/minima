@@ -13,7 +13,6 @@ import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
-  error as errorEv,
   start as startEv,
   textDelta,
   textEnd,
@@ -34,7 +33,15 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
+import {
+  TransientError,
+  isRetryableStatus,
+  providerError,
+  resolveApiKey,
+  retryTransient,
+  sdkTimeoutMs,
+  toJsonSchema,
+} from "./_common.ts";
 
 const FINISH_MAP: Record<string, string> = { STOP: "stop", MAX_TOKENS: "length", SAFETY: "stop" };
 
@@ -110,32 +117,44 @@ export class GoogleProvider {
       // produced are still billed. Anthropic/OpenAI abort the request itself.
       if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const contents = toContents(context);
-      const stream = await client.models.generateContentStream({
-        model: model.id,
-        contents,
-        config: opts.signal ? { ...config, abortSignal: opts.signal } : config,
-      });
+      // The SDK resolves this promise only after the response status is checked, so a retry
+      // here is always pre-stream and can never duplicate a delta. Retried off ApiError.status
+      // rather than the SDK's own `retryOptions`, which routes failures through p-retry and
+      // replaces the provider's message ("API key not valid") with "Non-retryable exception
+      // Bad Request sending request" — and turns an exhausted 500 into text that
+      // minima/failure_kind.ts cannot recognize as transient, so the ladder would charge the
+      // model for an infra fault.
+      const stream = await retryTransient(
+        async () => {
+          try {
+            return await client.models.generateContentStream({
+              model: model.id,
+              contents,
+              config: opts.signal ? { ...config, abortSignal: opts.signal } : config,
+            });
+          } catch (exc) {
+            const status = (exc as { status?: unknown }).status;
+            if (typeof status === "number" && isRetryableStatus(status)) {
+              throw new TransientError(errText(exc));
+            }
+            throw exc;
+          }
+        },
+        { signal: opts.signal, enabled: options.retry !== false },
+      );
       for await (const chunk of stream) {
         const version = (chunk as { modelVersion?: string }).modelVersion;
         if (version) assistant.provider_model = version;
         const usage = chunk.usageMetadata ?? chunk.usage_metadata;
         if (usage) {
-          inTokens =
-            ((usage as Record<string, unknown>).promptTokenCount as number | undefined) ??
-            ((usage as Record<string, unknown>).prompt_token_count as number | undefined) ??
-            0;
-          outTokens =
-            ((usage as Record<string, unknown>).candidatesTokenCount as number | undefined) ??
-            ((usage as Record<string, unknown>).candidates_token_count as number | undefined) ??
-            0;
-          thoughtTokens =
-            ((usage as Record<string, unknown>).thoughtsTokenCount as number | undefined) ??
-            ((usage as Record<string, unknown>).thoughts_token_count as number | undefined) ??
-            0;
-          cacheRead =
-            ((usage as Record<string, unknown>).cachedContentTokenCount as number | undefined) ??
-            ((usage as Record<string, unknown>).cached_content_token_count as number | undefined) ??
-            0;
+          // The SDK spells these camelCase; a raw API response (or a proxy) spells them
+          // snake_case. Read both off whichever object arrived.
+          const counts = usage as Record<string, number | undefined>;
+          const pick = (camel: string, snake: string) => counts[camel] ?? counts[snake] ?? 0;
+          inTokens = pick("promptTokenCount", "prompt_token_count");
+          outTokens = pick("candidatesTokenCount", "candidates_token_count");
+          thoughtTokens = pick("thoughtsTokenCount", "thoughts_token_count");
+          cacheRead = pick("cachedContentTokenCount", "cached_content_token_count");
         }
         for (const cand of chunk.candidates ?? []) {
           const fr = cand.finishReason ?? cand.finish_reason;
@@ -172,13 +191,7 @@ export class GoogleProvider {
         }
       }
     } catch (exc) {
-      const err = new AssistantMessage({
-        content: [text("")],
-        stop_reason: "error",
-        error_message: errText(exc),
-      });
-      err.model = model.id;
-      yield errorEv("error", err);
+      yield providerError(model, exc);
       return;
     }
 
