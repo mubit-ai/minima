@@ -146,7 +146,7 @@ describe("app wiring (source pins, the prompt-queue.test.ts pattern)", () => {
   test("the list mounts in the composer column directly above the prompt box", () => {
     expect(src).toContain("{queueListVisible && <QueueList queue={promptQueue} />}");
     const mountAt = src.indexOf("{queueListVisible && <QueueList queue={promptQueue} />}");
-    const promptBoxAt = src.indexOf('borderColor={agentDraft ? "cyan" : planMode ? "magenta"');
+    const promptBoxAt = src.indexOf("borderColor={agentDraft ? t.accent : planMode ? t.plan");
     expect(mountAt).toBeGreaterThan(0);
     expect(promptBoxAt).toBeGreaterThan(mountAt);
   });

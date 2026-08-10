@@ -79,8 +79,9 @@ import {
 import { buildSystemPrompt } from "../tui/context.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
 import { initKeymap } from "../tui/keymap_file.ts";
-import { loadFullscreenPref, loadPersistedMode } from "../tui/mode_prefs.ts";
+import { loadFullscreenPref, loadPersistedMode, loadPersistedTheme } from "../tui/mode_prefs.ts";
 import { getProject, repoIdentity, setProject } from "../tui/projects.ts";
+import { setTheme } from "../tui/theme.ts";
 import { VERSION } from "../version.ts";
 
 // --- MINIMA_TUI_DEBUG_ANCHOR diagnostics ---------------------------------------------
@@ -1175,6 +1176,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     const savedMode = loadPersistedMode(repoIdentity(process.cwd()));
     if (savedMode) setMode(savedMode);
   }
+
+  const savedTheme = loadPersistedTheme();
+  if (savedTheme) setTheme(savedTheme);
 
   // B2 quiet-timer: ~90s of tool-call silence marks a natural pause — enqueue a reflect
   // job and drain in the background. unref'd so the timer never keeps the process alive.

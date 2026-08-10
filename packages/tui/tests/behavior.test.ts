@@ -638,7 +638,7 @@ describe("tui/app.tsx Shift+Tab enters the real planning workflow", () => {
     const messages = readSource("tui/messages.tsx");
     const deny = messages.indexOf('msg.guardKind === "deny"');
     expect(deny).toBeGreaterThan(-1);
-    expect(deny).toBeLessThan(messages.indexOf('msg.isError ? "red"'));
+    expect(deny).toBeLessThan(messages.indexOf("msg.isError ? t.error"));
     const denyBranch = messages.slice(deny, deny + 400);
     expect(denyBranch).toContain("dimColor");
     expect(denyBranch).toContain("guardDenyLine");

@@ -22,6 +22,7 @@ import {
   harnessNoiseLine,
   toolHiddenMarker,
 } from "./layout.ts";
+import { t } from "./theme.ts";
 
 // Re-exported so app.tsx keeps a single import site.
 export type { ChatMessage };
@@ -43,7 +44,7 @@ function renderInlineMarkdown(text: string): ReactNode {
     if (index > lastIndex) {
       const segment = currentText.slice(lastIndex, index);
       tokens.push(
-        <Text key={lastIndex} bold={boldActive} color={codeActive ? "cyan" : undefined}>
+        <Text key={lastIndex} bold={boldActive} color={codeActive ? t.accent : undefined}>
           {segment}
         </Text>,
       );
@@ -62,7 +63,7 @@ function renderInlineMarkdown(text: string): ReactNode {
   if (lastIndex < currentText.length) {
     const segment = currentText.slice(lastIndex);
     tokens.push(
-      <Text key={lastIndex} bold={boldActive} color={codeActive ? "cyan" : undefined}>
+      <Text key={lastIndex} bold={boldActive} color={codeActive ? t.accent : undefined}>
         {segment}
       </Text>,
     );
@@ -85,7 +86,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginTop={1}
               marginBottom={0}
             >
-              <Text bold color="cyan">
+              <Text bold color={t.accent}>
                 {l.text || " "}
               </Text>
             </Box>
@@ -100,7 +101,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
               marginLeft={2}
               flexDirection="row"
             >
-              <Text color="yellow">{`${l.bullet} `}</Text>
+              <Text color={t.warn}>{`${l.bullet} `}</Text>
               <Text>{renderInlineMarkdown(l.text)}</Text>
             </Box>
           );
@@ -167,17 +168,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text:
 export function BannerBlock({ tip, width }: { tip: string | null; width?: number }) {
   return (
     <Box flexDirection="column" alignItems="center" marginTop={1} width={width}>
-      <Text color="green" bold>
+      <Text color={t.success} bold>
         {getAsciiBanner("MINIMA")}
       </Text>
       {BANNER_TAGLINES.map((line) => (
         <Box key={line} marginTop={1}>
-          <Text color="gray">{line}</Text>
+          <Text color={t.dim}>{line}</Text>
         </Box>
       ))}
       {tip ? (
         <Box marginTop={1}>
-          <Text color="yellow">{tip}</Text>
+          <Text color={t.warn}>{tip}</Text>
         </Box>
       ) : null}
     </Box>
@@ -204,8 +205,8 @@ export const MessageRow = memo(function MessageRow({
     }
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Text color="green">{"▸ you"}</Text>
-        <Text backgroundColor="#2a2a35" color="white">
+        <Text color={t.success}>{"▸ you"}</Text>
+        <Text backgroundColor="#2a2a35" color={t.text}>
           {` ${msg.text} `}
         </Text>
       </Box>
@@ -231,7 +232,7 @@ export const MessageRow = memo(function MessageRow({
     if (gateBlock) {
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="yellow">{"  ⊘ verify gate — completion blocked, statuses unchanged:"}</Text>
+          <Text color={t.warn}>{"  ⊘ verify gate — completion blocked, statuses unchanged:"}</Text>
           <Text>{body}</Text>
           {hiddenLines > 0 && <Text dimColor>{`  ${toolHiddenMarker(hiddenLines)}`}</Text>}
         </Box>
@@ -239,9 +240,9 @@ export const MessageRow = memo(function MessageRow({
     }
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Text color={msg.isError ? "red" : "yellow"}>{`  ⚙ ${msg.toolName ?? "tool"}:`}</Text>
+        <Text color={msg.isError ? t.error : t.warn}>{`  ⚙ ${msg.toolName ?? "tool"}:`}</Text>
         {/* default fg (no hardcoded white — invisible on light themes); body is clipped */}
-        <Text color={msg.isError ? "red" : undefined}>{body}</Text>
+        <Text color={msg.isError ? t.error : undefined}>{body}</Text>
         {hiddenLines > 0 && <Text dimColor>{`  ${toolHiddenMarker(hiddenLines)}`}</Text>}
       </Box>
     );
@@ -254,7 +255,7 @@ export const MessageRow = memo(function MessageRow({
         marginTop={1}
         paddingLeft={2}
         borderStyle="single"
-        borderColor="gray"
+        borderColor={t.dim}
         // Hard guard against horizontal spill past the border: Ink only wraps when
         // string-width judges a line too wide, and it under-counts glyphs like 🧠/wide
         // emoji, so those lines skip wrapping and draw PAST the right border. Clip
@@ -262,10 +263,10 @@ export const MessageRow = memo(function MessageRow({
         width="100%"
         overflowX="hidden"
       >
-        <Text color="gray" italic>
+        <Text color={t.dim} italic>
           {`🧠 reasoning (${msg.thoughtDurationSecs?.toFixed(1) ?? "0.0"}s)`}
         </Text>
-        <Text color="gray" italic>
+        <Text color={t.dim} italic>
           {msg.text}
         </Text>
       </Box>
@@ -274,7 +275,7 @@ export const MessageRow = memo(function MessageRow({
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color="magenta">{"◆ assistant"}</Text>
+      <Text color={t.plan}>{"◆ assistant"}</Text>
       <MarkdownRenderer text={msg.text} />
     </Box>
   );
@@ -284,7 +285,7 @@ export const MessageRow = memo(function MessageRow({
 export function StreamingReply({ text }: { text: string }) {
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color="magenta">{"◆ assistant"}</Text>
+      <Text color={t.plan}>{"◆ assistant"}</Text>
       <MarkdownRenderer text={text} />
     </Box>
   );
@@ -293,10 +294,10 @@ export function StreamingReply({ text }: { text: string }) {
 /** The live reasoning peek (dynamic region); truncated so it never grows past a couple of rows. */
 export function StreamingThoughts({ text }: { text: string }) {
   return (
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1} width="100%">
+    <Box borderStyle="round" borderColor={t.accent} paddingX={1} marginTop={1} width="100%">
       <Box flexDirection="column">
-        <Text color="cyan">{"🧠 reasoning..."}</Text>
-        <Text color="gray" wrap="truncate">
+        <Text color={t.accent}>{"🧠 reasoning..."}</Text>
+        <Text color={t.dim} wrap="truncate">
           {text.slice(-300)}
         </Text>
       </Box>

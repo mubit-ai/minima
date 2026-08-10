@@ -8,6 +8,7 @@
  * Rows render with wrap="truncate", so no width math lives here.
  */
 import type { TodoTask } from "../tools/todowrite.ts";
+import { t } from "./theme.ts";
 
 export interface TaskFooterBigPlan {
   stepPos: number;
@@ -41,16 +42,16 @@ export function taskFooterRows(
     rows.push({
       kind: "header",
       text: ` plan ${bigPlan.stepPos}/${bigPlan.stepTotal} · ▸ ${oneLine(bigPlan.title)}${cost}`,
-      color: "cyan",
+      color: t.accent,
       bold: true,
     });
     if (bigPlan.blocked) {
-      rows.push({ kind: "alert", text: " !! gate blocked — ^G", color: "red", bold: true });
+      rows.push({ kind: "alert", text: " !! gate blocked — ^G", color: t.error, bold: true });
     } else if (bigPlan.drift > 0) {
       rows.push({
         kind: "alert",
         text: ` drift: ${bigPlan.drift} file${bigPlan.drift === 1 ? "" : "s"} off-plan`,
-        color: "yellow",
+        color: t.warn,
       });
     }
   } else {
@@ -63,7 +64,7 @@ export function taskFooterRows(
         {
           kind: "header",
           text: ` tasks ${done}/${todos.length} · all done`,
-          color: "green",
+          color: t.success,
           bold: true,
         },
       ];
@@ -71,11 +72,11 @@ export function taskFooterRows(
     rows.push({
       kind: "header",
       text: ` tasks ${done}/${todos.length} · ▸ ${oneLine(current.content)}`,
-      color: "cyan",
+      color: t.accent,
       bold: true,
     });
     const next = todos.slice(todos.indexOf(current) + 1).find((t) => t.status === "pending");
-    if (next) rows.push({ kind: "next", text: `   next: ${oneLine(next.content)}`, color: "gray" });
+    if (next) rows.push({ kind: "next", text: `   next: ${oneLine(next.content)}`, color: t.dim });
   }
   return rows;
 }

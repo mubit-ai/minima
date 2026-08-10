@@ -10,6 +10,7 @@
 
 import { Box, Text, useStdout } from "ink";
 import React, { useEffect, useState } from "react";
+import { t } from "./theme.ts";
 import { formatTip, pick } from "./tips.ts";
 
 // Braille spinner — the widely-used cli-spinners "dots" frames.
@@ -121,16 +122,16 @@ export function BusyIndicator({ active, showTip = true, statusLine = null }: Bus
       {/* One truncating row: a long tip on a narrow terminal must not wrap to a 2nd line
           (busyIndicatorHeight reserves exactly 1 line + the marginTop). */}
       <Text wrap="truncate">
-        <Text color="yellow">{spinnerFrame(tick)} </Text>
+        <Text color={t.warn}>{spinnerFrame(tick)} </Text>
         {statusLine ? (
-          <Text color="gray">{statusLine} </Text>
+          <Text color={t.dim}>{statusLine} </Text>
         ) : (
           <>
-            <Text color="gray">{verb}… </Text>
-            {showTip ? <Text color="yellow">{formatTip(pick(tipIdx))} </Text> : null}
+            <Text color={t.dim}>{verb}… </Text>
+            {showTip ? <Text color={t.warn}>{formatTip(pick(tipIdx))} </Text> : null}
           </>
         )}
-        <Text color="gray">{`· ${elapsed}s · esc to abort`}</Text>
+        <Text color={t.dim}>{`· ${elapsed}s · esc to abort`}</Text>
       </Text>
     </Box>
   );

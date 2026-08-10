@@ -181,6 +181,7 @@ import {
   loadTaskPanelHidden,
   persistFullscreenPref,
   persistTaskPanelHidden,
+  persistTheme,
 } from "./mode_prefs.ts";
 import { MODEL_PICKER_MAX_ROWS, ModelPicker } from "./model-picker.tsx";
 import { notify, shouldNotifyTurnEnd } from "./notify.ts";
@@ -233,6 +234,8 @@ import { StatusBar } from "./status.tsx";
 import { suspendToShell } from "./suspend.ts";
 import { grantTaskRows, taskFooterRows } from "./task_footer.ts";
 import { TextInput } from "./text-input.tsx";
+import { ThemePicker } from "./theme-picker.tsx";
+import { THEME_NAMES, currentTheme, setTheme, t } from "./theme.ts";
 import { advance as advanceTip, formatTip, isTipsEnabled, setTipsEnabled } from "./tips.ts";
 import { type TocUsage, buildSections, renderTocText, tocRows } from "./toc.ts";
 import { useAgentEvents } from "./use_agent_events.ts";
@@ -463,6 +466,7 @@ function allCommands(): { name: string; desc: string }[] {
       desc: `Show/set mode: build | accept | plan | bypass (${keyHelp("permission.cycle")} cycles)`,
     },
     { name: "tip", desc: "Show a tip (or /tip on|off to toggle startup tips)" },
+    { name: "themes", desc: "Pick a colorscheme (live preview; /themes <name> sets directly)" },
     { name: "caveman", desc: "Terse-prose mode: /caveman [lite|full|ultra|wenyan-*|off]" },
     { name: "bp", desc: "Show Plan Overview status (MINIMA_TUI_BIG_PLAN)" },
     {
@@ -559,23 +563,23 @@ export function CommandPicker({ commands, onPick, onDismiss }: CommandPickerProp
       flexDirection="column"
       borderStyle="round"
       paddingX={1}
-      borderColor="magenta"
+      borderColor={t.plan}
       width="100%"
       overflowX="hidden"
     >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
-        <Text color="magenta"> palette </Text>
+        <Text color={t.plan}> palette </Text>
       </Box>
       {commands.map((c, i) => (
-        <Text key={c.name} color={i === cursor ? "cyan" : undefined}>
+        <Text key={c.name} color={i === cursor ? t.accent : undefined}>
           {i === cursor ? "❯" : " "} {i < 9 ? `${i + 1} ` : "  "}
-          <Text bold color="yellow">
+          <Text bold color={t.warn}>
             /{c.name.padEnd(12)}
           </Text>
-          <Text color="gray">{c.desc}</Text>
+          <Text color={t.dim}>{c.desc}</Text>
         </Text>
       ))}
-      <Text color="gray">{"↑/↓ select · ⏎ run · Esc cancel"}</Text>
+      <Text color={t.dim}>{"↑/↓ select · ⏎ run · Esc cancel"}</Text>
     </Box>
   );
 }
@@ -615,34 +619,34 @@ export function SessionPicker({ sessions, onPick, onDismiss }: SessionPickerProp
       flexDirection="column"
       borderStyle="round"
       paddingX={1}
-      borderColor="magenta"
+      borderColor={t.plan}
       width="100%"
       overflowX="hidden"
     >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
-        <Text color="magenta"> sessions </Text>
+        <Text color={t.plan}> sessions </Text>
       </Box>
       {sessions.length === 0 ? (
-        <Text color="gray">No previous sessions found.</Text>
+        <Text color={t.dim}>No previous sessions found.</Text>
       ) : (
         sessions.slice(0, 15).map((s, i) => {
           const ageCreated = formatAge(s.created);
           const ageUpdated = formatAge(s.mtime);
           const label = s.displayName || s.sessionId;
           return (
-            <Text key={s.path} color={i === cursor ? "cyan" : undefined}>
+            <Text key={s.path} color={i === cursor ? t.accent : undefined}>
               {i === cursor ? "❯" : " "} {i < 9 ? `${i + 1} ` : "  "}
-              <Text bold color="yellow">
+              <Text bold color={t.warn}>
                 {label.padEnd(16)}
               </Text>
-              <Text color="gray">
+              <Text color={t.dim}>
                 {` · ${s.nEntries} entries · created ${ageCreated} · updated ${ageUpdated}`}
               </Text>
             </Text>
           );
         })
       )}
-      <Text color="gray">{"↑/↓ select · ⏎ resume · Esc cancel"}</Text>
+      <Text color={t.dim}>{"↑/↓ select · ⏎ resume · Esc cancel"}</Text>
     </Box>
   );
 }
@@ -673,7 +677,7 @@ export function PermissionOverlay({
 
   if (minimal) {
     return (
-      <Text color="yellow" wrap="truncate">
+      <Text color={t.warn} wrap="truncate">
         {permToolLabel(prompt.toolName)} {prompt.argsSummary || prompt.promptText} · [y/a/n]
       </Text>
     );
@@ -682,26 +686,26 @@ export function PermissionOverlay({
   return (
     <Box
       borderStyle="round"
-      borderColor="yellow"
+      borderColor={t.warn}
       paddingX={1}
       flexDirection="column"
       width="100%"
       overflowX="hidden"
     >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
-        <Text color="yellow" bold>
+        <Text color={t.warn} bold>
           {" permission "}
         </Text>
       </Box>
       <Box flexDirection="column">
         <Text>
-          <Text color="yellow" bold>
+          <Text color={t.warn} bold>
             {permToolLabel(prompt.toolName)}
           </Text>
-          <Text color="white"> {prompt.promptText}</Text>
+          <Text color={t.text}> {prompt.promptText}</Text>
         </Text>
         {prompt.argsSummary && !prompt.diffPreview ? (
-          <Text color="gray"> target: {prompt.argsSummary.slice(0, 80)}</Text>
+          <Text color={t.dim}> target: {prompt.argsSummary.slice(0, 80)}</Text>
         ) : null}
       </Box>
       {prompt.diffPreview ? (
@@ -717,18 +721,20 @@ export function PermissionOverlay({
                 {lines.map((line, i) => (
                   <Text
                     key={permPreviewKey(i, line)}
-                    color={line.startsWith("+") ? "green" : line.startsWith("-") ? "red" : "gray"}
+                    color={
+                      line.startsWith("+") ? t.success : line.startsWith("-") ? t.error : t.dim
+                    }
                   >
                     {line}
                   </Text>
                 ))}
-                {hidden > 0 ? <Text color="yellow">{permHiddenMarker(hidden)}</Text> : null}
+                {hidden > 0 ? <Text color={t.warn}>{permHiddenMarker(hidden)}</Text> : null}
               </>
             );
           })()}
         </Box>
       ) : null}
-      <Text color="gray" wrap="truncate">
+      <Text color={t.dim} wrap="truncate">
         {isReadTool
           ? "[y] Yes once · [a] Always for this directory · [n] Reject"
           : `[y] Yes once · [a] ${prompt.alwaysLabel ?? "Always allow this tool"} · [n] Reject`}
@@ -820,47 +826,53 @@ export function QuestionOverlay({
   });
 
   return (
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column" width="100%">
+    <Box
+      borderStyle="round"
+      borderColor={t.accent}
+      paddingX={1}
+      flexDirection="column"
+      width="100%"
+    >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
-        <Text color="cyan" bold>
+        <Text color={t.accent} bold>
           {prompt.header ? ` ${prompt.header} ` : " question "}
         </Text>
       </Box>
-      <Text color="white" bold>
+      <Text color={t.text} bold>
         {questionDisplayText(prompt.question, cols)}
       </Text>
       {typing ? (
         <Box marginTop={0}>
-          <Text color="gray">{"› "}</Text>
+          <Text color={t.dim}>{"› "}</Text>
           {/* truncate-start keeps the draft to ONE row (showing its tail) so the overlay never
               outgrows the rows questionOverlayHeight() reserved for it in the layout budget. */}
-          <Text color="white" wrap="truncate-start">
+          <Text color={t.text} wrap="truncate-start">
             {draft}
           </Text>
-          <Text color="gray">{"▋"}</Text>
+          <Text color={t.dim}>{"▋"}</Text>
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={0}>
-          {winStart > 0 ? <Text color="gray"> ↑ +{winStart} more</Text> : null}
+          {winStart > 0 ? <Text color={t.dim}> ↑ +{winStart} more</Text> : null}
           {prompt.options.slice(winStart, Math.min(winEnd, optionCount)).map((opt, idx) => {
             const i = winStart + idx;
             return (
-              <Text key={opt.label} color={i === cursor ? "cyan" : "white"} wrap="truncate">
+              <Text key={opt.label} color={i === cursor ? t.accent : t.text} wrap="truncate">
                 {i === cursor ? "› " : "  "}
                 {opt.label}
-                {opt.description ? <Text color="gray"> — {opt.description}</Text> : null}
+                {opt.description ? <Text color={t.dim}> — {opt.description}</Text> : null}
               </Text>
             );
           })}
           {prompt.allow_freetext && winEnd === rowCount ? (
-            <Text color={cursor === optionCount ? "cyan" : "gray"} wrap="truncate">
+            <Text color={cursor === optionCount ? t.accent : t.dim} wrap="truncate">
               {cursor === optionCount ? "› " : "  "}✎ Other (type a custom answer)
             </Text>
           ) : null}
-          {winEnd < rowCount ? <Text color="gray"> ↓ +{rowCount - winEnd} more</Text> : null}
+          {winEnd < rowCount ? <Text color={t.dim}> ↓ +{rowCount - winEnd} more</Text> : null}
         </Box>
       )}
-      <Text color="gray" wrap="truncate">
+      <Text color={t.dim} wrap="truncate">
         {typing
           ? "⏎ submit · Esc cancel"
           : `↑↓ select · ⏎ confirm${prompt.allow_freetext ? " · t type" : ""} · Esc dismiss`}
@@ -954,18 +966,18 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
       flexDirection="column"
       borderStyle="round"
       paddingX={1}
-      borderColor="cyan"
+      borderColor={t.accent}
       width="100%"
       overflowX="hidden"
     >
       <Box position="absolute" marginTop={-1} marginLeft={2}>
-        <Text color="cyan" bold>
+        <Text color={t.accent} bold>
           {" config "}
         </Text>
       </Box>
       {SECTIONS.map((section) => (
         <Box key={section.title} flexDirection="column">
-          <Text color="gray" bold>
+          <Text color={t.dim} bold>
             {section.title}
           </Text>
           {section.fields.map((f) => {
@@ -976,9 +988,9 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
             // landed on its row. (Editing uses a separate, also-masked buffer.)
             const shown = f.secret ? mask(val) : val;
             return (
-              <Text key={f.key} color={isActive ? "cyan" : undefined}>
+              <Text key={f.key} color={isActive ? t.accent : undefined}>
                 {isActive ? "❯" : " "} {f.key.padEnd(20)}
-                <Text color={val ? "green" : "gray"}>{shown || "(not set)"}</Text>
+                <Text color={val ? t.success : t.dim}>{shown || "(not set)"}</Text>
               </Text>
             );
           })}
@@ -986,14 +998,14 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
       ))}
       {editing && field ? (
         <Box marginTop={1}>
-          <Text color="yellow" bold>
+          <Text color={t.warn} bold>
             {field.key}:{" "}
           </Text>
-          <Text color="white">{field.secret ? editValue.replace(/./g, "*") : editValue}</Text>
-          <Text color="gray">{"▋"}</Text>
+          <Text color={t.text}>{field.secret ? editValue.replace(/./g, "*") : editValue}</Text>
+          <Text color={t.dim}>{"▋"}</Text>
         </Box>
       ) : null}
-      <Text color="gray">
+      <Text color={t.dim}>
         {savedMsg ?? (editing ? "⏎ save · Esc cancel" : "↑/↓ navigate · ⏎ edit · Esc close")}
       </Text>
     </Box>
@@ -1073,6 +1085,10 @@ export function HarnessApp({
   );
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Open = the theme name active when the picker opened (Esc reverts to it); null = closed.
+  const [themePickerOpen, setThemePickerOpen] = useState<string | null>(null);
+  // Bumped after setTheme so live chrome re-reads the mutated palette.
+  const [, setThemeGen] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionsList, setSessionsList] = useState<SessionSummary[]>([]);
@@ -1862,7 +1878,14 @@ export function HarnessApp({
     // (pickers, palette, config, question overlay) keep the keyboard instead — Tab can
     // mean something there.
     if (action === "permission.cycle") {
-      if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen || questionPrompt)
+      if (
+        pickerOpen ||
+        themePickerOpen !== null ||
+        paletteOpen ||
+        sessionPickerOpen ||
+        configOverlayOpen ||
+        questionPrompt
+      )
         return;
       const next = cycleMode();
       // A pending permission prompt re-evaluates under the new mode: accept-edits
@@ -1896,6 +1919,7 @@ export function HarnessApp({
 
     if (
       pickerOpen ||
+      themePickerOpen !== null ||
       paletteOpen ||
       sessionPickerOpen ||
       permPrompt ||
@@ -4040,6 +4064,34 @@ export function HarnessApp({
         }
         break;
       }
+      case "themes": {
+        const target = args.trim().toLowerCase();
+        if (!target) {
+          setThemePickerOpen(currentTheme());
+          break;
+        }
+        if (setTheme(target)) {
+          persistTheme(target);
+          setThemeGen((g) => g + 1);
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            { role: "tool", text: `Theme: ${target}`, toolName: "themes" },
+          ]);
+        } else {
+          setMessages((m) => [
+            ...m,
+            { role: "user", text: `/${name} ${args}`.trim() },
+            {
+              role: "tool",
+              text: `Unknown theme: "${target}". Available: ${THEME_NAMES.join(" · ")}`,
+              toolName: "themes",
+              isError: true,
+            },
+          ]);
+        }
+        break;
+      }
       case "tip": {
         const arg = args.trim().toLowerCase();
         if (arg === "on" || arg === "off") {
@@ -4828,7 +4880,14 @@ export function HarnessApp({
   useEffect(() => {
     if (busy || drainBusyRef.current) return;
     if (gateFocus || bigPlanBehavior?.block || permPrompt || questionPrompt) return;
-    if (pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen) return;
+    if (
+      pickerOpen ||
+      themePickerOpen !== null ||
+      paletteOpen ||
+      sessionPickerOpen ||
+      configOverlayOpen
+    )
+      return;
     const taken = takeNext(promptQueue);
     if (!taken) return;
     drainBusyRef.current = true;
@@ -4859,6 +4918,7 @@ export function HarnessApp({
     permPrompt,
     questionPrompt,
     pickerOpen,
+    themePickerOpen,
     paletteOpen,
     sessionPickerOpen,
     configOverlayOpen,
@@ -5145,7 +5205,8 @@ export function HarnessApp({
     : matchingCommands.length > 0
       ? matchingCommands.length + 2 + (hiddenSuggestions > 0 ? 1 : 0)
       : 0;
-  const overlayOpen = pickerOpen || paletteOpen || sessionPickerOpen || configOverlayOpen;
+  const overlayOpen =
+    pickerOpen || themePickerOpen !== null || paletteOpen || sessionPickerOpen || configOverlayOpen;
   // The prompt/plan input box only hides for the pickers/overlays that replace it in the
   // render tree. Under a permission/question prompt it stays MOUNTED-but-suspended (LB-20):
   // unmounting zeroed its booked rows AND dropped the draft's keyboard home, and the prompt
@@ -5457,13 +5518,15 @@ export function HarnessApp({
   );
   const pickerRows = pickerOpen
     ? MODEL_PICKER_MAX_ROWS
-    : paletteOpen
-      ? commands.length + 3
-      : sessionPickerOpen
-        ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
-        : configOverlayOpen
-          ? CONFIG_OVERLAY_MAX_ROWS
-          : 0;
+    : themePickerOpen !== null
+      ? THEME_NAMES.length + 4 // border(2) + title(1) + hint(1)
+      : paletteOpen
+        ? commands.length + 3
+        : sessionPickerOpen
+          ? 3 + Math.max(1, Math.min(sessionsList.length, 15))
+          : configOverlayOpen
+            ? CONFIG_OVERLAY_MAX_ROWS
+            : 0;
   const streamTailRows = busy && streamTail ? 2 + markdownBodyHeight(streamTail, cols) : 0;
   const contentRows =
     panelVisible && panelTop
@@ -5619,10 +5682,10 @@ export function HarnessApp({
         alignItems="center"
         overflow="hidden"
       >
-        <Text color="yellow" bold>
+        <Text color={t.warn} bold>
           Terminal too small
         </Text>
-        <Text color="gray">{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
+        <Text color={t.dim}>{`resize to at least 40×10 (now ${cols}×${rows})`}</Text>
         {permPrompt && (
           <PermissionOverlay
             prompt={{
@@ -5678,6 +5741,29 @@ export function HarnessApp({
           onPick={pickModel}
           onDismiss={() => setPickerOpen(false)}
         />
+      ) : themePickerOpen !== null ? (
+        <ThemePicker
+          currentName={themePickerOpen}
+          onPreview={(name) => {
+            setTheme(name);
+            setThemeGen((g) => g + 1);
+          }}
+          onPick={(name) => {
+            setThemePickerOpen(null);
+            setTheme(name);
+            persistTheme(name);
+            setThemeGen((g) => g + 1);
+            setMessages((m) => [
+              ...m,
+              { role: "tool", text: `Theme: ${name}`, toolName: "themes" },
+            ]);
+          }}
+          onDismiss={() => {
+            setTheme(themePickerOpen);
+            setThemePickerOpen(null);
+            setThemeGen((g) => g + 1);
+          }}
+        />
       ) : paletteOpen ? (
         <CommandPicker
           commands={commands}
@@ -5728,8 +5814,8 @@ export function HarnessApp({
         // so the overlay below owns the keys, its rows still booked (inputBoxHeight).
         <Box flexDirection="column" width="100%" marginTop={1} flexShrink={0}>
           {planMode && (
-            <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={0}>
-              <Text color="magenta" bold wrap="truncate">
+            <Box borderStyle="round" borderColor={t.plan} paddingX={1} marginBottom={0}>
+              <Text color={t.plan} bold wrap="truncate">
                 {" ⚠ PLAN MODE — write/edit/bash ask first · shift+tab cycles (next: bypass) "}
               </Text>
             </Box>
@@ -5744,7 +5830,7 @@ export function HarnessApp({
           {matchingCommands.length > 0 && !panelVisible && (
             <Box
               borderStyle="round"
-              borderColor="gray"
+              borderColor={t.dim}
               paddingX={1}
               flexDirection="column"
               width="100%"
@@ -5752,19 +5838,19 @@ export function HarnessApp({
               flexShrink={0}
             >
               <Box position="absolute" marginTop={-1} marginLeft={2}>
-                <Text color="gray"> {typedAgentTypes ? "agent types" : "commands"} </Text>
+                <Text color={t.dim}> {typedAgentTypes ? "agent types" : "commands"} </Text>
               </Box>
               {matchingCommands.map((cmd) => (
                 <Box key={cmd.name}>
-                  <Text color="yellow">
+                  <Text color={t.warn}>
                     {typedAgentTypes ? " " : "/"}
                     {cmd.name.padEnd(suggestionPad)}
                   </Text>
-                  <Text color="gray">{cmd.desc}</Text>
+                  <Text color={t.dim}>{cmd.desc}</Text>
                 </Box>
               ))}
               {hiddenSuggestions > 0 && (
-                <Text color="gray">
+                <Text color={t.dim}>
                   …+{hiddenSuggestions} more · keep typing or Tab to complete
                 </Text>
               )}
@@ -5774,25 +5860,25 @@ export function HarnessApp({
           {agentDraft && (
             <Box
               borderStyle="round"
-              borderColor="cyan"
+              borderColor={t.accent}
               paddingX={1}
               flexDirection="column"
               width="100%"
               flexShrink={0}
             >
               <Box position="absolute" marginTop={-1} marginLeft={2}>
-                <Text color="cyan"> new agent type </Text>
+                <Text color={t.accent}> new agent type </Text>
               </Box>
               {wizardSummary(agentDraft).map((row) => (
-                <Text key={row} color="gray" wrap="truncate">
+                <Text key={row} color={t.dim} wrap="truncate">
                   {row}
                 </Text>
               ))}
-              <Text color="cyan" wrap="truncate">
+              <Text color={t.accent} wrap="truncate">
                 {wizardQuestion(agentDraft)}
               </Text>
               {wizardHint(agentDraft) && (
-                <Text color="gray" wrap="truncate">
+                <Text color={t.dim} wrap="truncate">
                   {wizardHint(agentDraft)}
                 </Text>
               )}
@@ -5800,7 +5886,7 @@ export function HarnessApp({
           )}
           <Box
             borderStyle="round"
-            borderColor={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}
+            borderColor={agentDraft ? t.accent : planMode ? t.plan : t.warn}
             paddingX={1}
             flexDirection="column"
             width="100%"
@@ -5815,7 +5901,7 @@ export function HarnessApp({
                 from typedText only, so any extra glyph the composer draws can wrap a line
                 and overflow the box — the exact failure the height comment describes. */}
             <Box position="absolute" marginTop={-1} marginLeft={2}>
-              <Text color={agentDraft ? "cyan" : planMode ? "magenta" : "yellow"}>
+              <Text color={agentDraft ? t.accent : planMode ? t.plan : t.warn}>
                 {/* Mid-wizard the line is a field value, so neither the armed-chord hint nor
                     the attachment count applies — the field name is the whole label. */}
                 {agentDraft
@@ -5905,7 +5991,7 @@ export function HarnessApp({
         {/* Suppressed under the panel like the busy indicator: a busy-only footer row
             would exceed the PANEL_STATUS_ROWS the panel identity budgeted. */}
         {currentAction && !panelVisible ? (
-          <Text color="yellow" wrap="truncate">
+          <Text color={t.warn} wrap="truncate">
             {currentAction}
           </Text>
         ) : null}
@@ -5940,36 +6026,36 @@ export function HarnessApp({
             second row Yoga never budgeted (footerHeight says 1) and garble the frame. */}
         <Box justifyContent="space-between" width="100%" height={1} overflow="hidden">
           <Box>
-            <Text color="yellow">{keyLegend("model.picker")} </Text>
-            <Text color="gray">Model </Text>
-            <Text color="yellow">{keyLegend("route.mode")} </Text>
-            <Text color="gray">Route </Text>
-            <Text color="yellow">{keyLegend("permission.cycle")} </Text>
-            <Text color="gray">Mode </Text>
-            <Text color="yellow">{keyLegend("thinking.cycle")} </Text>
-            <Text color="gray">Reason </Text>
-            <Text color="yellow">{keyLegend("task.panel")} </Text>
-            <Text color="gray">Tasks </Text>
+            <Text color={t.warn}>{keyLegend("model.picker")} </Text>
+            <Text color={t.dim}>Model </Text>
+            <Text color={t.warn}>{keyLegend("route.mode")} </Text>
+            <Text color={t.dim}>Route </Text>
+            <Text color={t.warn}>{keyLegend("permission.cycle")} </Text>
+            <Text color={t.dim}>Mode </Text>
+            <Text color={t.warn}>{keyLegend("thinking.cycle")} </Text>
+            <Text color={t.dim}>Reason </Text>
+            <Text color={t.warn}>{keyLegend("task.panel")} </Text>
+            <Text color={t.dim}>Tasks </Text>
             {agent.config.bigPlan === true ? (
               <>
-                <Text color="yellow">{keyLegend("plan.overview")} </Text>
-                <Text color="gray">Plan </Text>
+                <Text color={t.warn}>{keyLegend("plan.overview")} </Text>
+                <Text color={t.dim}>Plan </Text>
               </>
             ) : null}
             {/* Not a binding: abort is a terminal contract, so it is spelled, not looked up. */}
-            <Text color="yellow">esc </Text>
-            <Text color="gray">Abort</Text>
+            <Text color={t.warn}>esc </Text>
+            <Text color={t.dim}>Abort</Text>
           </Box>
           <Box>
-            <Text color="yellow">{keyLegend("command.palette")} </Text>
-            <Text color="gray">palette</Text>
+            <Text color={t.warn}>{keyLegend("command.palette")} </Text>
+            <Text color={t.dim}>palette</Text>
           </Box>
         </Box>
 
         {/* Suppressed under the panel like the busy/currentAction rows: an ungated footer
             row breaks the panel frame's rows−2 height identity (one extra row is the
             difference between a clean frame and Ink's scrollback-wiping clearTerminal). */}
-        {quitArmed && !panelVisible ? <Text color="yellow"> Ctrl+C again to quit</Text> : null}
+        {quitArmed && !panelVisible ? <Text color={t.warn}> Ctrl+C again to quit</Text> : null}
       </Box>
     </>
   );
@@ -6030,7 +6116,7 @@ export function HarnessApp({
                 </Text>
               ))}
             </Box>
-            <Text color="gray" wrap="truncate">
+            <Text color={t.dim} wrap="truncate">
               {selectHint
                 ? "  select text: hold Option (iTerm2) / Shift while dragging · /mouse frees the wheel · Ctrl+Y copies last reply"
                 : view && !view.pinned

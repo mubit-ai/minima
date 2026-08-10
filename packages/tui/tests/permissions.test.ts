@@ -246,7 +246,7 @@ describe("tui/app.tsx sizes the permission overlay by wrapped rows", () => {
     const hintIdx = src.indexOf("[y] Yes once");
     expect(hintIdx).toBeGreaterThan(-1);
     const before = src.slice(hintIdx - 200, hintIdx);
-    expect(before).toContain('<Text color="gray" wrap="truncate">');
+    expect(before).toContain('<Text color={t.dim} wrap="truncate">');
   });
 
   test("a real plan-verification todowrite preview round-trips through the helpers without hiding the verify", async () => {

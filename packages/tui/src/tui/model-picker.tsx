@@ -10,6 +10,7 @@
 import { Box, Text, useInput } from "ink";
 import React, { useState } from "react";
 import type { Model } from "../ai/types.ts";
+import { t } from "./theme.ts";
 
 export interface ModelPickerProps {
   models: Model[];
@@ -81,33 +82,33 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
 
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
-      <Text bold color="magenta">
+      <Text bold color={t.plan}>
         {" model "}
       </Text>
-      <Text color="gray">
+      <Text color={t.dim}>
         {"filter: "}
-        <Text color="white">{filter || " "}</Text>
-        <Text color="gray">{`  (${filtered.length}/${models.length})`}</Text>
+        <Text color={t.text}>{filter || " "}</Text>
+        <Text color={t.dim}>{`  (${filtered.length}/${models.length})`}</Text>
       </Text>
-      {start > 0 ? <Text color="gray">{`  ↑ ${start} more`}</Text> : null}
+      {start > 0 ? <Text color={t.dim}>{`  ↑ ${start} more`}</Text> : null}
       {view.length === 0 ? (
-        <Text color="gray">{"  (no models match)"}</Text>
+        <Text color={t.dim}>{"  (no models match)"}</Text>
       ) : (
         view.map((m, i) => {
           const idx = start + i;
           return (
-            <Text key={`${m.provider}:${m.id}`} color={idx === cur ? "cyan" : undefined}>
+            <Text key={`${m.provider}:${m.id}`} color={idx === cur ? t.accent : undefined}>
               {idx === cur ? "❯ " : "  "}
-              {m.name} <Text color="gray">{`(${m.provider}/${m.id})`}</Text>
-              {m.id === currentId ? <Text color="green"> ✓</Text> : null}
+              {m.name} <Text color={t.dim}>{`(${m.provider}/${m.id})`}</Text>
+              {m.id === currentId ? <Text color={t.success}> ✓</Text> : null}
             </Text>
           );
         })
       )}
       {start + WINDOW < filtered.length ? (
-        <Text color="gray">{`  ↓ ${filtered.length - start - WINDOW} more`}</Text>
+        <Text color={t.dim}>{`  ↓ ${filtered.length - start - WINDOW} more`}</Text>
       ) : null}
-      <Text color="gray">{"↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel"}</Text>
+      <Text color={t.dim}>{"↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel"}</Text>
     </Box>
   );
 }

@@ -24,6 +24,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { readClipboard } from "./clipboard.ts";
 import { feedChordKey, resetChord } from "./editor_chord.ts";
 import { setNavCallback, setPasteCallback } from "./input-filter.ts";
+import { t } from "./theme.ts";
 
 export interface TextInputProps {
   /** Called when the user hits Enter with a non-empty line. */
@@ -297,7 +298,7 @@ export function TextInput({
   if (disabled) {
     return (
       <Text wrap="truncate">
-        {showPrefix && <Text color="cyan">{"›"}</Text>} {disabledLabel ?? "(busy…)"}
+        {showPrefix && <Text color={t.accent}>{"›"}</Text>} {disabledLabel ?? "(busy…)"}
       </Text>
     );
   }
@@ -308,10 +309,10 @@ export function TextInput({
   const after = value.slice(cursor + 1);
   return (
     <Text>
-      {showPrefix && <Text color="cyan">{"›"}</Text>} {before}
-      {value[cursor] !== undefined ? <Text inverse>{at}</Text> : <Text color="gray">{"▋"}</Text>}
+      {showPrefix && <Text color={t.accent}>{"›"}</Text>} {before}
+      {value[cursor] !== undefined ? <Text inverse>{at}</Text> : <Text color={t.dim}>{"▋"}</Text>}
       {after}
-      {!value && placeholder ? <Text color="gray"> {placeholder}</Text> : null}
+      {!value && placeholder ? <Text color={t.dim}> {placeholder}</Text> : null}
     </Text>
   );
 }
