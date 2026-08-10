@@ -13,6 +13,11 @@ name: Catalog — refresh vendored snapshot
 #
 # We deliberately DO NOT commit straight to main and DO NOT hand-edit the JSON:
 # a reviewer sees the diff, and the automation (not a human) keeps it current.
+#
+# This org does not let Actions open PRs, so the job pushes the branch and files
+# (or comments on) a `catalog-snapshot` issue with a compare link instead. Red is
+# therefore reserved for a genuinely broken refresh — a failed fetch, a live
+# catalog that came back too small, a push that did not land.
 on:
   schedule:
     - cron: "17 6 * * *" # daily (~every 24h); minute offset avoids the top-of-hour rush
@@ -26,6 +31,9 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # The org forbids Actions-created PRs, so the job falls back to filing an issue that
+  # links the pushed branch. Without this the fallback fails the same way the PR does.
+  issues: write
 
 env:
   # Source-of-truth: the live served catalog. Override via repo/environment var
@@ -97,17 +105,39 @@ jobs:
           # --force-with-lease always fails with "stale info" once the branch exists.
           git push -u origin "$BRANCH" --force
 
-          # Fail LOUD when the PR can't be opened: `|| echo` masked a hard denial
-          # ("GitHub Actions is not permitted to create ... pull requests") for days —
-          # green runs, branch pushed, no PR, nobody the wiser. An existing open PR is
-          # the only benign create-failure; anything else must turn the run red.
-          if ! gh pr create --base main --head "$BRANCH" \
-            --title "chore(catalog): refresh vendored model snapshot" \
-            --body "Automated refresh of \`$SNAPSHOT_PATH\` from the live catalog at \`$CATALOG_URL\` (normalized to the loader's shape). Opened by \`.github/workflows/catalog-snapshot.yml\`. Review the diff — this is the cold-start fallback the server serves when the live cost feed is unreachable."; then
-            if [ -n "$(gh pr list --base main --head "$BRANCH" --json number --jq '.[0].number // empty')" ]; then
-              echo "PR already open for $BRANCH; pushed update."
-            else
-              echo "::error::pushed $BRANCH but could not open its PR — likely the repo forbids Actions-created PRs (Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests')"
-              exit 1
-            fi
+          BODY="Automated refresh of \`$SNAPSHOT_PATH\` from the live catalog at \`$CATALOG_URL\` (normalized to the loader's shape). Opened by \`.github/workflows/catalog-snapshot.yml\`. Review the diff — this is the cold-start fallback the server serves when the live cost feed is unreachable."
+
+          # The refresh itself must never be silently lost. `|| echo` once masked a hard
+          # denial for days — green runs, branch pushed, no PR, nobody the wiser — so every
+          # path below ends in something a human is notified about.
+          if gh pr create --base main --head "$BRANCH" \
+            --title "chore(catalog): refresh vendored model snapshot" --body "$BODY"; then
+            exit 0
+          fi
+          if [ -n "$(gh pr list --base main --head "$BRANCH" --json number --jq '.[0].number // empty')" ]; then
+            echo "PR already open for $BRANCH; pushed update."
+            exit 0
+          fi
+
+          # This org forbids Actions-created PRs ("GitHub Actions is not permitted to create
+          # or approve pull requests"), which is a settings decision, not a bug in this job.
+          # Failing the run was the old answer and it did not work: the run went red daily
+          # for weeks and nobody looked, while the refreshed branch sat unmerged. An issue
+          # notifies watchers, survives until someone closes it, and leaves the run green so
+          # a NEW failure (a bad fetch, a broken jq projection) is once again visible as red.
+          # Reuse the open issue instead of filing one a day.
+          existing="$(gh issue list --state open --label catalog-snapshot --json number --jq '.[0].number // empty')"
+          link="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Snapshot refreshed again on \`$BRANCH\`. [Open the PR]($link)."
+            echo "Commented on existing issue #$existing."
+          else
+            gh label create catalog-snapshot --color ededed \
+              --description "Vendored catalog snapshot awaiting a human-opened PR" 2>/dev/null || true
+            why="Actions cannot open the PR itself (org setting: Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests'), so the refreshed branch is pushed and waiting."
+            cta="**[Open the PR]($link)** — or flip that setting and this job will do it unattended."
+            reuse="This issue is reused by later runs; close it once the branch is merged."
+            gh issue create --label catalog-snapshot \
+              --title "chore(catalog): vendored snapshot refresh is waiting for a PR" \
+              --body "$(printf '%s\n\n%s\n\n%s\n\n%s' "$BODY" "$why" "$cta" "$reuse")"
           fi

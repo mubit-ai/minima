@@ -208,7 +208,7 @@ describe("tui/app.tsx wires the D3a task panel", () => {
   });
 
   test("Ctrl+B sits ABOVE the busy gate — mid-run toggling is the point", () => {
-    const ctrlB = src.indexOf('key.ctrl && input === "b"');
+    const ctrlB = src.indexOf('action === "task.panel"');
     const busyGate = src.indexOf("// Everything below opens an overlay / changes mode");
     expect(ctrlB).toBeGreaterThan(-1);
     expect(busyGate).toBeGreaterThan(-1);

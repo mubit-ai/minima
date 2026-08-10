@@ -522,10 +522,8 @@ describe("editTargetsWithinCwd (cwd-scoped accept-edits auto)", () => {
   });
 
   test("apply_patch: every Add/Update/Delete path and Move-to must be inside cwd", () => {
-    const inPatch =
-      "*** Begin Patch\n*** Add File: src/new.ts\n+x\n*** End Patch";
-    const outPatch =
-      "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
+    const inPatch = "*** Begin Patch\n*** Add File: src/new.ts\n+x\n*** End Patch";
+    const outPatch = "*** Begin Patch\n*** Add File: /tmp/evil.ts\n+x\n*** End Patch";
     const movePatch =
       "*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: ../escaped.ts\n@@\n-a\n+b\n*** End Patch";
     expect(editTargetsWithinCwd("apply_patch", { patch: inPatch }, "/repo")).toBe(true);
@@ -657,10 +655,29 @@ describe("MUB-178 — edit-family always grants are cwd-scoped", () => {
 });
 
 describe("planModeBlockedTools (dispatcher-enforced plan-mode blocklist)", () => {
-  test("plan verification off: the historical array plus task (the approved default-path bypass fix)", () => {
+  test("plan verification off: the historical array plus task and git_commit", () => {
     // Deliberate default-path change: a spawned child gets its own unrestricted toolset with
     // no permission hooks, so plan mode's read-only promise was bypassable by delegating.
-    expect(planModeBlockedTools(false)).toEqual(["write", "edit", "bash", "apply_patch", "task"]);
+    // git_commit (F9a) joins for the same reason it exists at all — a commit is a mutation,
+    // and a named tool is what makes it blockable.
+    expect(planModeBlockedTools(false)).toEqual([
+      "write",
+      "edit",
+      "bash",
+      "apply_patch",
+      "task",
+      "git_commit",
+    ]);
+  });
+
+  test("git_commit is blocked in plan mode with a reason of its own", () => {
+    for (const bigPlan of [false, true]) {
+      expect(planModeBlockedTools(bigPlan)).toContain("git_commit");
+      const reason = planModeBlockReason("git_commit", bigPlan);
+      expect(reason).toContain("git_commit is blocked");
+      expect(reason).toContain("real history");
+      expect(reason).toContain("call the exit_plan tool");
+    }
   });
 
   test("plan verification on: keeps the historical set and additionally blocks todowrite and task", () => {
@@ -782,13 +799,13 @@ describe("MP18 — mode interaction with verify consent", () => {
     expect(resolvePolicy(ACCEPT_EDITS_BUNDLE, { tool: "todowrite", subject: "" })).not.toBe("auto");
   });
 
-  test("the TUI consent checker grants bypass mode blanket consent (source pin)", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readSource("tui/app.tsx");
+  test("the TUI consent checker grants bypass mode blanket consent (source pin)", () => {
+    // The consent seam lives in the useVerifyConsent hook that app.tsx mounts.
+    const src = readSource("tui/use_seams.ts");
     expect(src).toContain(
       'getMode() === "bypass" || permStateRef.current.approvedVerifies.has(cmd)',
     );
+    expect(readSource("tui/app.tsx")).toContain("useVerifyConsent(verifyConsentRef, permStateRef)");
   });
 });
 
@@ -824,11 +841,7 @@ describe("bashCommandFamilies", () => {
       "pip",
       "git",
     ]);
-    expect(bashCommandFamilies("cat a.txt | grep foo; echo done")).toEqual([
-      "cat",
-      "grep",
-      "echo",
-    ]);
+    expect(bashCommandFamilies("cat a.txt | grep foo; echo done")).toEqual(["cat", "grep", "echo"]);
     expect(bashCommandFamilies("echo hi;")).toEqual(["echo"]); // trailing separator is harmless
   });
 
@@ -871,15 +884,10 @@ describe("persisted per-command bash grants", () => {
     expect(res3?.block).toBe(true);
 
     // An unanalyzable command never matches a grant.
-    const res4 = await checkPermission(
-      "bash",
-      { command: "pip install $(evil)" },
-      state,
-      (p) => {
-        expect(p.alwaysLabel).toBeUndefined();
-        p.resolve("deny");
-      },
-    );
+    const res4 = await checkPermission("bash", { command: "pip install $(evil)" }, state, (p) => {
+      expect(p.alwaysLabel).toBeUndefined();
+      p.resolve("deny");
+    });
     expect(res4?.block).toBe(true);
   });
 

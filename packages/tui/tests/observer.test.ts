@@ -117,7 +117,10 @@ describe("observer feed — non-blocking fan-out", () => {
   test("a blocked drain consumer never delays agent turn completion", async () => {
     const reg = registerFauxProvider([FAUX_MODEL]);
     reg.setResponses([
-      new AssistantMessage({ content: [toolCall("c1", "echo", { msg: "x" })], stop_reason: "toolUse" }),
+      new AssistantMessage({
+        content: [toolCall("c1", "echo", { msg: "x" })],
+        stop_reason: "toolUse",
+      }),
       new AssistantMessage({ content: [text("all good")] }),
     ]);
     const agent = new Agent({ model: reg.getModel(), tools: [echoTool()] });
@@ -189,9 +192,14 @@ describe("observer tripwires", () => {
     const turn = turnFixture({ filesTouched: ["tests/parser.test.ts"] });
     const v = testEditTripwire({ turn, planSteps: inProgress });
     expect(v).toMatchObject({ kind: "test_edit", severity: "warn" });
-    expect(testEditTripwire({ turn, planSteps: [{ content: "x", status: "completed" }] })).toBeNull();
     expect(
-      testEditTripwire({ turn: turnFixture({ filesTouched: ["src/parser.ts"] }), planSteps: inProgress }),
+      testEditTripwire({ turn, planSteps: [{ content: "x", status: "completed" }] }),
+    ).toBeNull();
+    expect(
+      testEditTripwire({
+        turn: turnFixture({ filesTouched: ["src/parser.ts"] }),
+        planSteps: inProgress,
+      }),
     ).toBeNull();
   });
 
@@ -199,7 +207,9 @@ describe("observer tripwires", () => {
     const turn = turnFixture({ claims: ["done"], assistantText: "we are done" });
     const v = doneClaimTripwire({ turn, planSteps: inProgress });
     expect(v).toMatchObject({ kind: "done_claim", severity: "warn" });
-    expect(doneClaimTripwire({ turn, planSteps: [{ content: "x", status: "completed" }] })).toBeNull();
+    expect(
+      doneClaimTripwire({ turn, planSteps: [{ content: "x", status: "completed" }] }),
+    ).toBeNull();
     expect(doneClaimTripwire({ turn: turnFixture(), planSteps: inProgress })).toBeNull();
     expect(doneClaimTripwire({ turn, planSteps: [] })).toBeNull();
   });
@@ -208,7 +218,9 @@ describe("observer tripwires", () => {
     expect(
       offPlanBurstTripwire({ turn: turnFixture({ offPlanChanges: 3 }), planSteps: [] }),
     ).toMatchObject({ kind: "off_plan_burst", severity: "warn" });
-    expect(offPlanBurstTripwire({ turn: turnFixture({ offPlanChanges: 2 }), planSteps: [] })).toBeNull();
+    expect(
+      offPlanBurstTripwire({ turn: turnFixture({ offPlanChanges: 2 }), planSteps: [] }),
+    ).toBeNull();
   });
 
   test("anti-stub heuristic: big comment + trivial body fires; real code does not", () => {
@@ -233,7 +245,9 @@ describe("observer tripwires", () => {
     expect(extractDoneClaims("All tests passing — the fix is complete")).toHaveLength(2);
     expect(extractDoneClaims("still working on it")).toHaveLength(0);
     expect(
-      patchPaths("*** Begin Patch\n*** Update File: src/a.ts\n+x\n*** Add File: tests/b.test.ts\n+y\n*** End Patch"),
+      patchPaths(
+        "*** Begin Patch\n*** Update File: src/a.ts\n+x\n*** Add File: tests/b.test.ts\n+y\n*** End Patch",
+      ),
     ).toEqual(["src/a.ts", "tests/b.test.ts"]);
   });
 });
@@ -247,7 +261,12 @@ describe("observer controller — tripwire wiring", () => {
     const steers: string[] = [];
     const c = new ObserverController({ db, runId, steer: (n) => steers.push(n) });
 
-    await c.consume({ type: "tool_start", name: "edit", path: "tests/parser.test.ts", content: "x" });
+    await c.consume({
+      type: "tool_start",
+      name: "edit",
+      path: "tests/parser.test.ts",
+      content: "x",
+    });
     await c.consume({ type: "turn_end", assistantText: "tweaking the test", recId: null });
 
     const verdicts = db.getObserverVerdicts(runId);
@@ -272,7 +291,9 @@ describe("observer controller — tripwire wiring", () => {
     await c.consume({ type: "tool_start", name: "write", path: "src/impl.py", content: stub });
     await c.consume({ type: "turn_end", assistantText: "", recId: null });
     expect(db.getObserverVerdicts(runId).map((v) => v.kind)).toEqual(["stub_write"]);
-    expect(db.getGates(planId).filter((g) => JSON.parse(g.factors_json ?? "{}").observer)).toHaveLength(0);
+    expect(
+      db.getGates(planId).filter((g) => JSON.parse(g.factors_json ?? "{}").observer),
+    ).toHaveLength(0);
   });
 
   test("steer rate cap: max 3 steers per run, further verdicts store-only", async () => {
@@ -281,7 +302,12 @@ describe("observer controller — tripwire wiring", () => {
     const steers: string[] = [];
     const c = new ObserverController({ db, runId, steer: (n) => steers.push(n) });
     for (let i = 0; i < 5; i++) {
-      await c.consume({ type: "tool_start", name: "edit", path: `tests/f${i}.test.ts`, content: "x" });
+      await c.consume({
+        type: "tool_start",
+        name: "edit",
+        path: `tests/f${i}.test.ts`,
+        content: "x",
+      });
       await c.consume({ type: "turn_end", assistantText: "", recId: null });
     }
     expect(steers).toHaveLength(3);
@@ -311,7 +337,9 @@ describe("observer — sampled adversarial pass", () => {
     });
     await c.consume({ type: "turn_end", assistantText: "it is finished", recId: null });
     const verdicts = db.getObserverVerdicts(runId);
-    expect(verdicts.some((v) => v.kind === "done_claim" && v.claim.includes("gate red"))).toBe(true);
+    expect(verdicts.some((v) => v.kind === "done_claim" && v.claim.includes("gate red"))).toBe(
+      true,
+    );
     expect(steers.some((s) => s.includes("gate red"))).toBe(true);
   });
 
@@ -349,7 +377,9 @@ describe("observer — sampled adversarial pass", () => {
     await c.consume({ type: "turn_end", assistantText: "x", recId: null });
     expect(calls).toBe(0);
     const runEvents = db.listObserverEvents(null);
-    expect(runEvents.some((e) => e.event === "pass_skipped" && e.detail?.includes("budget"))).toBe(true);
+    expect(runEvents.some((e) => e.event === "pass_skipped" && e.detail?.includes("budget"))).toBe(
+      true,
+    );
   });
 
   test("per-pass cost cap: an estimate above the cap skips up front", async () => {
@@ -369,7 +399,11 @@ describe("observer — sampled adversarial pass", () => {
     await c.consume({ type: "turn_end", assistantText: "x", recId: null });
     expect(calls).toBe(0);
     expect(estimatedPassCostUsd(PRICEY, 1000)).toBeGreaterThan(OBSERVER_PASS_CAP_USD);
-    expect(db.listObserverEvents(null).some((e) => e.event === "pass_skipped" && e.detail?.includes("cap"))).toBe(true);
+    expect(
+      db
+        .listObserverEvents(null)
+        .some((e) => e.event === "pass_skipped" && e.detail?.includes("cap")),
+    ).toBe(true);
   });
 
   test("pass spend books through onCostUsd", async () => {
@@ -395,7 +429,9 @@ describe("observer — sampled adversarial pass", () => {
     const one = parseObserverRefutations(
       'noise [{"kind":"k","claim":"c","refuted":true,"evidence":"e","severity":"warn"},{"claim":"missing kind","refuted":true}] noise',
     );
-    expect(one).toEqual([{ kind: "k", claim: "c", refuted: true, evidence: "e", severity: "warn" }]);
+    expect(one).toEqual([
+      { kind: "k", claim: "c", refuted: true, evidence: "e", severity: "warn" },
+    ]);
   });
 });
 
@@ -515,9 +551,27 @@ describe("observer — escalation to ONE yellow milestone gate", () => {
 describe("observer — scribe mines observer_flag signals", () => {
   test("warn verdicts surface as recurrence-gated signals; info ones do not", () => {
     const { db, runId } = freshDb();
-    db.insertObserverVerdict({ runId, turn: 1, kind: "test_edit", claim: "edited a test mid-step", severity: "warn" });
-    db.insertObserverVerdict({ runId, turn: 3, kind: "test_edit", claim: "edited a test mid-step", severity: "warn" });
-    db.insertObserverVerdict({ runId, turn: 4, kind: "stub_write", claim: "stub", severity: "info" });
+    db.insertObserverVerdict({
+      runId,
+      turn: 1,
+      kind: "test_edit",
+      claim: "edited a test mid-step",
+      severity: "warn",
+    });
+    db.insertObserverVerdict({
+      runId,
+      turn: 3,
+      kind: "test_edit",
+      claim: "edited a test mid-step",
+      severity: "warn",
+    });
+    db.insertObserverVerdict({
+      runId,
+      turn: 4,
+      kind: "stub_write",
+      claim: "stub",
+      severity: "info",
+    });
 
     const signals = mineSignals(db, "proj");
     const flags = signals.filter((s) => s.kind === "observer_flag");
@@ -531,13 +585,29 @@ describe("observer — scribe mines observer_flag signals", () => {
 
   test("an observer-sourced memory lands PENDING (not gate-cited → provenance holds)", async () => {
     const { db, runId } = freshDb();
-    db.insertObserverVerdict({ runId, turn: 1, kind: "test_edit", claim: "edited a test mid-step", severity: "warn" });
-    db.insertObserverVerdict({ runId, turn: 2, kind: "test_edit", claim: "edited a test mid-step", severity: "warn" });
+    db.insertObserverVerdict({
+      runId,
+      turn: 1,
+      kind: "test_edit",
+      claim: "edited a test mid-step",
+      severity: "warn",
+    });
+    db.insertObserverVerdict({
+      runId,
+      turn: 2,
+      kind: "test_edit",
+      claim: "edited a test mid-step",
+      severity: "warn",
+    });
     const report = await runScribePass({
       db,
       projectKey: "proj",
       extract: async () => [
-        { kind: "guardrail", content: "Do not edit tests while a step is in progress.", evidence: [1, 2] },
+        {
+          kind: "guardrail",
+          content: "Do not edit tests while a step is in progress.",
+          evidence: [1, 2],
+        },
       ],
     });
     expect(report.added).toBe(1);
@@ -627,7 +697,13 @@ describe("observer — default OFF contract", () => {
     const { db, runId } = freshDb();
     expect(observerWhySection(db, runId)).toBeNull();
     for (let i = 1; i <= 4; i++) {
-      db.insertObserverVerdict({ runId, turn: i, kind: "done_claim", claim: `claim ${i}`, severity: "warn" });
+      db.insertObserverVerdict({
+        runId,
+        turn: i,
+        kind: "done_claim",
+        claim: `claim ${i}`,
+        severity: "warn",
+      });
     }
     const section = observerWhySection(db, runId)!;
     expect(section).toContain("4 verdict(s)");

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { AssistantMessage, Message, text, toolCall } from "../src/ai/types.ts";
 import {
   CONTEXT_REWIND_EVENT,
   type PendingContextRewind,
@@ -9,6 +8,7 @@ import {
   parseContextRewindMarker,
   truncateAfterAnchor,
 } from "../src/agent/context_prune.ts";
+import { AssistantMessage, Message, text, toolCall } from "../src/ai/types.ts";
 
 const user = (t: string) => new Message({ role: "user", content: t });
 
@@ -199,7 +199,11 @@ describe("parseContextRewindMarker", () => {
       report: "found it",
       report_chars: 8,
     });
-    expect(m).toEqual({ anchor_tool_call_id: "cp1", rewind_tool_call_id: "rw1", report: "found it" });
+    expect(m).toEqual({
+      anchor_tool_call_id: "cp1",
+      rewind_tool_call_id: "rw1",
+      report: "found it",
+    });
   });
 
   test("rewind_tool_call_id is optional", () => {

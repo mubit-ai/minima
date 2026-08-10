@@ -47,6 +47,7 @@ describe("MinimaDb.adoptActivePlans (resume)", () => {
         baseline: "red",
         verify_cwd: null,
         check_origin: null,
+        status: "in_progress",
       },
     ]);
     // The projection points at the adopted plan.

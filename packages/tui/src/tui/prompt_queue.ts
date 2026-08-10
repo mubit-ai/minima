@@ -37,11 +37,21 @@ function isLocalWhileBusy(name: string, args: string): boolean {
     case "perms":
     case "help":
       return true;
+    // /btw is the one mid-turn WRITER: its whole point is to hand the running turn a side
+    // note (agent.steer), which the loop injects at the next step boundary. Free text, so
+    // any args pass.
+    case "btw":
+      return true;
     case "tasks":
     case "cost":
       return args === "";
     case "memory":
       return args === "" || args === "list";
+    // Bare `/agent` lists the defined types (a disk-free read of the loaded registry);
+    // `/agent <name> <task>` spawns a child agent and spends money, so it queues. `/agent make`
+    // queues too — its wizard takes over the prompt line, which the running turn still owns.
+    case "agent":
+      return args === "";
     default:
       return false;
   }

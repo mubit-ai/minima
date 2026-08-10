@@ -7,8 +7,14 @@ import { Box, Text } from "ink";
 import React from "react";
 
 import type { AgentMode } from "../agent/modes.ts";
+import { type EffortModel, effectiveEffort } from "../ai/provider_quirks.ts";
 import type { FooterBadge } from "./badge_slot.ts";
+import { AUTO_COMPACT_PCT, type ContextUsage, fmtCtxTokens } from "./context_meter.ts";
 import { t } from "./theme.ts";
+
+/** Below this the row already truncates near the token counts, so the `(used/window)`
+ * parenthetical would push the `$cost` segment off-screen rather than add information. */
+const CTX_DETAIL_MIN_COLS = 100;
 
 /**
  * The perms row's write/exec segments, mode-aware (the old fixed "w/e/b: ask" read as
@@ -37,12 +43,55 @@ export function permsSummary(
   return { effective, grants: list.length > 0 ? `--x ${list.join(", ")}` : null };
 }
 
+/**
+ * What the `reason:` segment says about the effort this turn will actually carry (MUB-229).
+ *
+ * It calls the same `effectiveEffort` the provider builds its payload from, so the indicator
+ * cannot drift from the wire: there is one answer and two readers. Before it, cycling the
+ * thinking level recoloured a word here while five openai-compat hosts received nothing.
+ *
+ * `requested→effective` whenever the two differ — a silent clamp plus a one-time note would
+ * scroll away and leave this segment claiming the requested level all session.
+ */
+export function effortIndicator(
+  requested: string,
+  model: EffortModel | null,
+  hasTools: boolean,
+): { label: string; color: string; show: boolean } {
+  const level = requested === "off" ? null : requested;
+  // No model resolved yet: nothing has been sent to anything, so report the request alone.
+  if (!model) {
+    return { label: level ?? "off", color: level ? t.accent : t.dim, show: level !== null };
+  }
+  const { send, state } = effectiveEffort(model, hasTools, requested);
+  const effective = state === "pinned-none" ? "none" : (send ?? state);
+  const diverged = level !== null && effective !== level;
+  const overriding = state === "pinned-none" || state === "off";
+  return {
+    label: diverged ? `${level}→${effective}` : effective,
+    color: diverged ? t.warn : state === "honoured" ? t.accent : t.dim,
+    // At rest (thinking off, nothing overridden) the segment stays hidden, as it shipped —
+    // a permanent `reason: default` would cost the row a cell to say nothing.
+    show: level !== null || overriding,
+  };
+}
+
 export interface StatusBarProps {
   model: string;
   basis: string;
   routeMode: "auto" | "confirm";
+  /** The level the user asked for; what is SENT comes from effortIndicator below. */
   thinkingLevel: string;
-  ctxPct: number;
+  /** Model the next turn runs on, and whether it carries tools — the two other inputs to the
+   *  effort ladder. Null (no model resolved yet) falls back to reporting the request. */
+  effortModel?: EffortModel | null;
+  hasTools?: boolean;
+  ctx: ContextUsage;
+  /** MINIMA_TUI_CONTEXT_METER: false renders the pre-fix segment (bare `ctx NN%`) and keeps
+   * the route/reason segments unconditional, so the row is byte-identical to what shipped. */
+  contextMeter?: boolean;
+  /** Terminal width, for the responsive `(used/window)` parenthetical. */
+  columns?: number;
   inputTokens: number;
   outputTokens: number;
   actualCostUsd?: number;
@@ -70,7 +119,11 @@ export function StatusBar({
   basis,
   routeMode,
   thinkingLevel,
-  ctxPct,
+  effortModel = null,
+  hasTools = true,
+  ctx,
+  contextMeter = true,
+  columns = 80,
   inputTokens,
   outputTokens,
   actualCostUsd = 0,
@@ -97,8 +150,23 @@ export function StatusBar({
     : t.dim;
   const modelStyle = basis === "offline" ? t.warn : t.accent;
   const routeStyle = routeMode === "confirm" ? t.warn : t.dim;
-  const thinkStyle = thinkingLevel === "high" ? t.warn : thinkingLevel === "off" ? t.dim : t.accent;
-  const ctxStyle = ctxPct > 80 ? t.error : t.dim;
+  const effort = effortIndicator(thinkingLevel, effortModel, hasTools);
+  // Red is the same constant the auto-compaction trigger reads, on the same quantity — so
+  // red now genuinely means "compaction is imminent" rather than agreeing with it by
+  // coincidence, as two unrelated 80s did before.
+  const ctxStyle = ctx.pct !== null && ctx.pct > AUTO_COMPACT_PCT ? t.error : t.dim;
+  // An unresolvable window is yellow ("attention, degraded" everywhere else in this row) and
+  // never red: red reads as "nearly full", the opposite of what UNKNOWN means. An empty
+  // context is not unknown — there is simply nothing in it, so it stays a plain 0%.
+  const ctxUnknown = contextMeter && ctx.pct === null && ctx.usedTokens > 0;
+  // A tilde marks a number carrying a chars/4 estimate: no reply has reported usage yet, or
+  // messages were appended after the one that did. An empty context has nothing to estimate.
+  const ctxTilde = contextMeter && ctx.basis !== "exact" && ctx.usedTokens > 0 ? "~" : "";
+  const ctxLabel = ctxUnknown ? "?%" : `${ctxTilde}${(ctx.pct ?? 0).toFixed(0)}%`;
+  const ctxDetail =
+    contextMeter && columns >= CTX_DETAIL_MIN_COLS && (ctx.usedTokens > 0 || ctx.pct !== null)
+      ? ` (${fmtCtxTokens(ctx.usedTokens)}/${ctx.windowTokens === null ? "?" : fmtCtxTokens(ctx.windowTokens)})`
+      : null;
   const statusColor = statusText === "ready" ? t.success : t.warn;
 
   return (
@@ -117,14 +185,26 @@ export function StatusBar({
               {model} ▸ {basis}
             </Text>
 
-            <Text color={t.dim}> · route: </Text>
-            <Text color={routeStyle}>{routeMode}</Text>
+            {/* Both segments are noise in their shipped default — the code already says so by
+                greying them out — and the cells they cost are what pays for the ctx
+                parenthetical. Under the rollback flag they render unconditionally again. */}
+            {(!contextMeter || routeMode !== "auto") && (
+              <>
+                <Text color={t.dim}> · route: </Text>
+                <Text color={routeStyle}>{routeMode}</Text>
+              </>
+            )}
 
-            <Text color={t.dim}> · reason: </Text>
-            <Text color={thinkStyle}>{thinkingLevel}</Text>
+            {(!contextMeter || effort.show) && (
+              <>
+                <Text color={t.dim}> · reason: </Text>
+                <Text color={effort.color}>{effort.label}</Text>
+              </>
+            )}
 
             <Text color={t.dim}> │ ctx </Text>
-            <Text color={ctxStyle}>{ctxPct.toFixed(0)}%</Text>
+            <Text color={ctxUnknown ? t.warn : ctxStyle}>{ctxLabel}</Text>
+            {ctxDetail && <Text color={t.dim}>{ctxDetail}</Text>}
 
             <Text color={t.dim}>
               {" "}

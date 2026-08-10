@@ -2,7 +2,9 @@
 
 Runs against a REAL trained artifact (scripts/classifier/train.py output) named by
 MINIMA_CLASSIFIER_ARTIFACT; skipped when unset so `make eval` stays runnable without
-one. Label judgment calls baked into the frozen set (documented here, adjudicated
+one — conftest then prints a banner saying the gates did NOT run, and
+MINIMA_CLASSIFIER_GATES_REQUIRED=1 makes the absence a hard failure instead.
+Label judgment calls baked into the frozen set (documented here, adjudicated
 2026-07-23): tool_use = "perform an action in an external system", so text-only list
 generation ("make me a packing list") is other/creative; explanation-imperatives are
 qa; rewrite/draft/tone work is creative; comparison/advice analysis is reasoning.
@@ -26,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.eval.conftest import classifier_gates_required, mark_gates_disarmed
+
 pytestmark = pytest.mark.eval
 
 _ARTIFACT = os.environ.get("MINIMA_CLASSIFIER_ARTIFACT", "")
@@ -40,7 +44,15 @@ def rows():
 @pytest.fixture(scope="module")
 def clf():
     if not _ARTIFACT:
-        pytest.skip("MINIMA_CLASSIFIER_ARTIFACT not set — gate suite needs a trained artifact")
+        # A skip reads exactly like a pass once the run scrolls by, and these are the gates
+        # that decide whether the classifier ships. Default stays a skip so `make eval` runs
+        # without an artifact (conftest prints a banner saying they did NOT run); CI and
+        # release checks set MINIMA_CLASSIFIER_GATES_REQUIRED=1 to make it fail instead.
+        msg = "MINIMA_CLASSIFIER_ARTIFACT not set — gate suite needs a trained artifact"
+        if classifier_gates_required():
+            pytest.fail(f"{msg} (MINIMA_CLASSIFIER_GATES_REQUIRED=1)")
+        mark_gates_disarmed()
+        pytest.skip(msg)
     from minima.recommender.classify import high_precision_type, infer_task_type
     from minima.recommender.classify_embed import EmbedResult, load_embed_classifier
 

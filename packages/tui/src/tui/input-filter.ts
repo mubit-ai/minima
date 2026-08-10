@@ -240,16 +240,34 @@ const NAV_UNITS: Record<string, NavKey> = {
 
 /**
  * Split filtered stdin into keypress units: each escape sequence (CSI `ESC[...final`,
- * SS3 `ESC O x`, meta `ESC x`, or a lone trailing ESC = the Esc key) is its own unit;
- * runs of non-ESC text stay together (Ink handles multi-char printable input, and the
- * TextInput ICRNL "text\n" submit path depends on the batching).
+ * SS3 `ESC O x`, meta `ESC x`, or a lone trailing ESC = the Esc key) is its own unit, each
+ * solo C0 control byte is its own unit, and runs of ordinary text stay together (Ink handles
+ * multi-char printable input, and the TextInput ICRNL "text\n" submit path depends on the
+ * batching).
  *
- * WHY: Ink's parse-keypress consumes ONE keypress per useInput dispatch, and its stdin
- * handler emits one dispatch per read() chunk — so a chunk carrying several escape
- * sequences (arrow-key autorepeat, tmux input batching) registered only the FIRST arrow
- * and dropped the rest ("cursor won't move"). Ink drains read() in a while-!==null loop
- * (ink App.handleReadable), so handing it one unit per read() call dispatches them all.
+ * WHY escape sequences split: Ink's parse-keypress consumes ONE keypress per useInput
+ * dispatch, and its stdin handler emits one dispatch per read() chunk — so a chunk carrying
+ * several escape sequences (arrow-key autorepeat, tmux input batching) registered only the
+ * FIRST arrow and dropped the rest ("cursor won't move"). Ink drains read() in a
+ * while-!==null loop (ink App.handleReadable), so handing it one unit per read() call
+ * dispatches them all.
+ *
+ * WHY C0 bytes split: parse-keypress classifies a control key with `s.length === 1 && s <=
+ * '\x1a'`, so two adjacent control bytes in ONE chunk match NEITHER that branch nor any
+ * escape-sequence regex — the pair falls through to the default and Ink dispatches it as a
+ * single keypress with `name: ""`, `ctrl: false` and the raw bytes as `input`. So "\x18\x05"
+ * (Ctrl+X Ctrl+E) registered as neither Ctrl+X nor Ctrl+E, and the raw bytes were offered to
+ * the composer as printable text. Any batching terminal (tmux, ssh under load, a PTY test
+ * writing both tokens in one write) hits this. Tab/LF/CR stay INSIDE the run: they are the
+ * C0 bytes that legitimately arrive glued to text, and splitting them would break the ICRNL
+ * submit path above and Tab completion. \x7f (delete) is left alone — same class of latent
+ * bug, deliberately out of scope here.
  */
+function isSoloControl(c: string): boolean {
+  const n = c.charCodeAt(0);
+  return n <= 0x1f && c !== "\t" && c !== "\n" && c !== "\r";
+}
+
 export function splitKeypressUnits(s: string): string[] {
   const units: string[] = [];
   const n = s.length;
@@ -274,8 +292,13 @@ export function splitKeypressUnits(s: string): string[] {
       }
       continue;
     }
+    if (isSoloControl(s[i]!)) {
+      units.push(s[i]!); // one control byte = one keypress, so a chord's two keys both land
+      i++;
+      continue;
+    }
     let j = i;
-    while (j < n && s[j] !== ESC) j++;
+    while (j < n && s[j] !== ESC && !isSoloControl(s[j]!)) j++;
     units.push(s.slice(i, j));
     i = j;
   }
@@ -293,6 +316,23 @@ export function consumeNavUnit(unit: string): boolean {
   return true;
 }
 
+// The installed filter's reset hook. installInputFilter keeps its state in a closure with no
+// handle, so this is the only way back in; null until installed (tests, headless).
+let activeReset: (() => void) | null = null;
+
+/**
+ * Drop every byte the filter is holding and drain whatever real stdin has buffered.
+ *
+ * Called around handing the terminal to a child process (src/tui/editor.ts): a half-received
+ * CSI or a queued keypress unit describes a terminal state that no longer exists, and
+ * replaying it after the child exits would inject a stray key. Draining realRead() covers the
+ * bytes the editor's own keystrokes may have left in our reader. A no-op when the filter was
+ * never installed, so callers need no guard.
+ */
+export function resetInputFilter(): void {
+  activeReset?.();
+}
+
 export function installInputFilter(): void {
   const stdin = process.stdin;
   const realRead = stdin.read.bind(stdin);
@@ -300,6 +340,22 @@ export function installInputFilter(): void {
   // Keypress units pending delivery — one per read() call (see splitKeypressUnits).
   let unitQueue: string[] = [];
   let queueAsBuffer = false;
+
+  activeReset = () => {
+    state = { csiBuffer: "", paste: null };
+    unitQueue = [];
+    queueAsBuffer = false;
+    // Bytes already buffered in the real stream are pre-handover input — discard them too.
+    for (;;) {
+      let chunk: unknown;
+      try {
+        chunk = realRead();
+      } catch {
+        break; // stdin closed/errored mid-drain — nothing left worth holding anyway
+      }
+      if (chunk === null || chunk === undefined) break;
+    }
+  };
 
   // Ink calls stdin.setEncoding('utf8'), so read() returns strings.
   // We handle both string and Buffer for safety.

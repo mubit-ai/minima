@@ -32,7 +32,7 @@ export function ensureProvidersRegistered(): void {
   const present = new Set(registeredApis());
 
   // Always available: raw-fetch OpenAI-compatible provider.
-  registerIfAbsent(present, "openai-completions", () => {
+  registerIfAbsent(present, () => {
     const provider = new OpenAICompatProvider();
     return [provider.apiId, provider] as const;
   });
@@ -41,7 +41,7 @@ export function ensureProvidersRegistered(): void {
   // the instances is safe even without keys present; a missing key surfaces only when a
   // model of that api is actually called.
   for (const ctor of [AnthropicProvider, GoogleProvider]) {
-    registerIfAbsent(present, "", () => {
+    registerIfAbsent(present, () => {
       const p = new ctor();
       return [p.apiId, p] as const;
     });
@@ -51,11 +51,7 @@ export function ensureProvidersRegistered(): void {
 }
 
 /** Register only when not already present, so tests' injected providers aren't clobbered. */
-function registerIfAbsent(
-  present: Set<string>,
-  _expected: string,
-  build: () => readonly [string, Provider],
-): void {
+function registerIfAbsent(present: Set<string>, build: () => readonly [string, Provider]): void {
   try {
     const [api, provider] = build();
     if (present.has(api)) return;
