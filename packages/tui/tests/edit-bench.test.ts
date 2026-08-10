@@ -1,10 +1,24 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool, ToolResult } from "../src/agent/tools.ts";
 import { grepTool } from "../src/tools/grep.ts";
 import { editTool, readTool, writeTool } from "../src/tools/index.ts";
+
+/**
+ * Everything here drives real files through the tool dispatcher — 24 scenario runs in the
+ * first test alone — so wall time tracks disk contention, not the code under test. The whole
+ * file runs in ~180ms locally; on a loaded CI runner the first test was observed at 5584ms,
+ * which overran bun's 5000ms default and turned a green suite red. A bare re-run passed with
+ * nothing changed, which is the signature of a timeout that is too tight rather than a bug.
+ *
+ * File-scoped rather than the suite raising its global default: 5s is the right guard for a
+ * test that should never touch the disk, and only files known to be I/O-bound should opt out.
+ * This also covers the afterAll hook — bun applies the default to hooks too, and that one
+ * rmSync's every temp dir this file created.
+ */
+setDefaultTimeout(30_000);
 
 const cleanups: (() => void)[] = [];
 afterAll(() => {
