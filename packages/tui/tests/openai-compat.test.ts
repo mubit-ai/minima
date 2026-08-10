@@ -135,6 +135,101 @@ describe("openai-compat SSE streaming", () => {
     expect(result.toolCalls[0]?.arguments).toEqual({ command: "ls" });
   });
 
+  // agent/loop.ts dispatches tool calls only on stop_reason "toolUse". A host that omits
+  // finish_reason, or reports "stop" beside tool_calls, would otherwise get its calls dropped
+  // AND leave an orphaned assistant tool_calls message that 400s the next request.
+  test("tool calls force toolUse even when the host says stop", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+
+    const call = {
+      index: 0,
+      id: "call_1",
+      function: { name: "bash", arguments: '{"command":"ls"}' },
+    };
+    for (const finish of ["stop", null]) {
+      const result = await complete(
+        OPENAI_MODEL,
+        context({ messages: [new Message({ role: "user", content: "run ls" })] }),
+        {
+          options: {
+            fetch: sseFetch([
+              `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}\n\n`,
+              `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finish }] })}\n\n`,
+              "data: [DONE]\n\n",
+            ]),
+          },
+        },
+      );
+      expect(result.stop_reason).toBe("toolUse");
+      expect(result.toolCalls).toHaveLength(1);
+    }
+  });
+
+  test("toolcall_start precedes its deltas", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+
+    const s = stream(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "run ls" })] }),
+      {
+        options: {
+          fetch: sseFetch([
+            `data: ${JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      { index: 0, id: "c1", function: { name: "bash", arguments: "{}" } },
+                    ],
+                  },
+                },
+              ],
+            })}\n\n`,
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`,
+            "data: [DONE]\n\n",
+          ]),
+        },
+      },
+    );
+    const types: string[] = [];
+    for await (const ev of s) types.push(ev.type);
+    expect(types).toEqual(["start", "toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
+  });
+
+  // Model.base_url still wins; without the provider-catalog fallback a groq/xai/deepseek model
+  // registered without one posts that provider's key to api.openai.com.
+  test("a provider with no explicit base_url falls back to its catalog endpoint", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+
+    const urls: string[] = [];
+    const ok = sseFetch([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+    const capture = async (url: string, init: RequestInit) => {
+      urls.push(url);
+      return ok(url, init);
+    };
+    const ctx = context({ messages: [new Message({ role: "user", content: "hi" })] });
+
+    await complete({ ...OPENAI_MODEL, provider: "deepseek" }, ctx, {
+      options: { fetch: capture, api_key: "k" },
+    });
+    await complete({ ...OPENAI_MODEL, provider: "xai", base_url: "http://local/v1" }, ctx, {
+      options: { fetch: capture, api_key: "k" },
+    });
+    await complete(OPENAI_MODEL, ctx, { options: { fetch: capture, api_key: "k" } });
+
+    expect(urls).toEqual([
+      "https://api.deepseek.com/chat/completions",
+      "http://local/v1/chat/completions",
+      "https://api.openai.com/v1/chat/completions",
+    ]);
+  });
+
   test("emits thinking deltas from reasoning_content (deepseek-style)", async () => {
     resetAll();
     registerProvider("openai-completions", new OpenAICompatProvider());
@@ -217,7 +312,9 @@ describe("openai-compat surfaces the provider's own error message", () => {
     const result = await complete(
       OPENAI_MODEL,
       context({ messages: [new Message({ role: "user", content: "hi" })] }),
-      { options: { fetch: fetchImpl, api_key: "k" } },
+      // retry:false — these pin the MESSAGE, and a retryable status would otherwise make
+      // each one sleep out the backoff ladder first. The retry itself is tested below.
+      { options: { fetch: fetchImpl, api_key: "k", retry: false } },
     );
     return result.error_message ?? "";
   }
@@ -269,6 +366,87 @@ describe("openai-compat surfaces the provider's own error message", () => {
     }));
     expect(msg).toContain("HTTP 500");
     expect(msg).not.toContain("already consumed");
+  });
+});
+
+// A 429/5xx before the first byte costs the caller nothing to repeat — no tokens were
+// generated. Retrying here keeps an infra blip from burning a recovery-ladder rung, and is
+// the only retry the side-channel callers (judge, classify, scribe, critic) ever get.
+describe("openai-compat retries a transient failure", () => {
+  const OK_SSE = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ];
+
+  /** Fails with `statuses` in order, then streams a normal reply. Counts every attempt. */
+  function flakyFetch(statuses: number[]) {
+    const ok = sseFetch(OK_SSE);
+    const calls = { n: 0 };
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      const status = statuses[calls.n++];
+      if (status === undefined) return ok(url, init);
+      return { status, ok: false, body: null, text: async () => `{"error":{"message":"busy"}}` };
+    };
+    return { fetchImpl, calls };
+  }
+
+  async function runWith(fetchImpl: unknown, signal?: AbortSignal) {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    return complete(
+      OPENAI_MODEL,
+      context({ messages: [new Message({ role: "user", content: "hi" })] }),
+      { options: { fetch: fetchImpl, api_key: "k" }, signal },
+    );
+  }
+
+  test("a 429 then a 503 still lands the reply on the third attempt", async () => {
+    const { fetchImpl, calls } = flakyFetch([429, 503]);
+    const result = await runWith(fetchImpl);
+    expect(result.textContent).toBe("ok");
+    expect(result.stop_reason).toBe("stop");
+    expect(calls.n).toBe(3);
+  });
+
+  test("the cap holds — three attempts, then the provider's own message", async () => {
+    const { fetchImpl, calls } = flakyFetch([500, 500, 500, 500]);
+    const result = await runWith(fetchImpl);
+    expect(calls.n).toBe(3);
+    expect(result.stop_reason).toBe("error");
+    expect(result.error_message).toContain("HTTP 500");
+    expect(result.error_message).toContain("busy");
+  });
+
+  // 400/401/404 are the request's own fault; repeating them just wastes the user's time.
+  test("a 401 is not retried", async () => {
+    const { fetchImpl, calls } = flakyFetch([401]);
+    const result = await runWith(fetchImpl);
+    expect(calls.n).toBe(1);
+    expect(result.error_message).toContain("HTTP 401");
+  });
+
+  test("a network throw is retried, but an abort is not", async () => {
+    resetAll();
+    registerProvider("openai-completions", new OpenAICompatProvider());
+    let n = 0;
+    const ok = sseFetch(OK_SSE);
+    const flaky = async (url: string, init: RequestInit) => {
+      if (n++ === 0) throw new TypeError("fetch failed");
+      return ok(url, init);
+    };
+    expect((await runWith(flaky)).textContent).toBe("ok");
+    expect(n).toBe(2);
+
+    const ac = new AbortController();
+    ac.abort(new Error("user cancelled"));
+    let aborts = 0;
+    const aborting = async () => {
+      aborts++;
+      throw new Error("user cancelled");
+    };
+    const result = await runWith(aborting, ac.signal);
+    expect(aborts).toBe(1);
+    expect(result.error_message).toContain("user cancelled");
   });
 });
 

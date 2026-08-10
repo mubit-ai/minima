@@ -2,8 +2,9 @@
  * OpenAI-compatible Chat Completions provider (raw fetch, no `openai` SDK).
  *
  * Port of the Python harness's ai/providers/openai_compat.py. One implementation covers
- * openai, openrouter, groq, xai, deepseek, together, and any server speaking the
- * `POST {base_url}/chat/completions` SSE protocol — selected by Model.base_url.
+ * openai, openrouter, groq, xai, deepseek, and any server speaking the
+ * `POST {base_url}/chat/completions` SSE protocol — selected by Model.base_url, falling
+ * back to the provider catalog's endpoint.
  *
  * Streaming deltas carry: choices[0].delta.content (text), .tool_calls (function
  * calls assembled from partial JSON), and .reasoning_content / .reasoning (thinking
@@ -16,7 +17,6 @@ import { normalizeForTarget } from "../compat.ts";
 import {
   type StreamEvent,
   done as doneEv,
-  error as errorEv,
   start as startEv,
   textDelta,
   textEnd,
@@ -28,7 +28,7 @@ import {
   toolCallEnd,
   toolCallStart,
 } from "../events.ts";
-import { envVarsForProvider } from "../provider_catalog.ts";
+import { baseUrlForProvider, envVarsForProvider } from "../provider_catalog.ts";
 import { effectiveEffort, quirksFor, reasoningPayload } from "../provider_quirks.ts";
 import {
   AssistantMessage,
@@ -40,7 +40,15 @@ import {
   toolCall,
 } from "../types.ts";
 import { attachCost } from "../usage.ts";
-import { resolveApiKey, sdkTimeoutMs, toJsonSchema } from "./_common.ts";
+import {
+  TransientError,
+  isRetryableStatus,
+  providerError,
+  resolveApiKey,
+  retryTransient,
+  sdkTimeoutMs,
+  toJsonSchema,
+} from "./_common.ts";
 
 const DEFAULT_BASE = "https://api.openai.com/v1";
 const FINISH_MAP: Record<string, string> = {
@@ -79,7 +87,10 @@ export class OpenAICompatProvider {
     const options = (opts.options ?? {}) as Record<string, unknown>;
     const apiKeys = [...envVarsForProvider(model.provider)];
     const apiKey = resolveApiKey(options, ...apiKeys);
-    const base = (model.base_url ?? DEFAULT_BASE).replace(/\/+$/, "");
+    const base = (model.base_url ?? baseUrlForProvider(model.provider) ?? DEFAULT_BASE).replace(
+      /\/+$/,
+      "",
+    );
     const url = `${base}/chat/completions`;
     const payload = buildPayload(model, context, options);
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -98,26 +109,29 @@ export class OpenAICompatProvider {
           `no API key for provider "${model.provider}" — set ${apiKeys[0]} (e.g. \`minima config set ${apiKeys[0]} <key>\`). Note: \`minima auth\` configures routing only, not model-provider keys.`,
         );
       }
-      const resp = await fetchImpl(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-        signal: requestSignal(options, opts.signal),
-      });
-      if (!resp.ok || !resp.body) {
-        throw new Error(
-          `openai-compat request failed: HTTP ${resp.status}${await errorDetail(resp)}`,
-        );
-      }
+      // ONE deadline for the whole call, retries included: options.timeout is the caller's
+      // total budget (judge/critic/scribe pass one), not a per-attempt allowance.
+      const signal = requestSignal(options, opts.signal);
+      const body = JSON.stringify(payload);
+      const resp = await retryTransient(
+        async () => {
+          let r: CompatResponse;
+          try {
+            r = await fetchImpl(url, { method: "POST", headers, body, signal });
+          } catch (exc) {
+            // An abort — user Esc or the deadline — is a decision, not a blip.
+            if (signal?.aborted) throw exc;
+            throw new TransientError(errText(exc));
+          }
+          if (!r.ok && isRetryableStatus(r.status)) throw new TransientError(await failedText(r));
+          return r;
+        },
+        { signal, enabled: options.retry !== false },
+      );
+      if (!resp.ok || !resp.body) throw new Error(await failedText(resp));
       yield* consumeSse(resp, model);
     } catch (exc) {
-      const err = new AssistantMessage({
-        content: [text("")],
-        stop_reason: "error",
-        error_message: errText(exc),
-      });
-      err.model = model.id;
-      yield errorEv("error", err);
+      yield providerError(model, exc);
     }
   }
 }
@@ -143,6 +157,12 @@ function requestSignal(
 
 /** Cap on the quoted provider message — enough to diagnose, not enough to flood the TUI. */
 const ERROR_DETAIL_CAP = 400;
+
+/** The user-facing text for a failed request. Identical whether it failed once or three
+ *  times, so a retried call reads exactly like an unretried one — just later. */
+async function failedText(resp: CompatResponse): Promise<string> {
+  return `openai-compat request failed: HTTP ${resp.status}${await errorDetail(resp)}`;
+}
 
 /**
  * The provider's own explanation of a failed request. Without it a bare "HTTP 400" is
@@ -308,7 +328,13 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
     const tcDelta = (delta.tool_calls as Record<string, unknown>[] | undefined) ?? [];
     for (const tc of tcDelta) {
       const idx = (tc.index as number | undefined) ?? 0;
-      const slot = tools.get(idx) ?? tools.set(idx, { id: "", name: "", args: "" }).get(idx)!;
+      let slot = tools.get(idx);
+      if (!slot) {
+        // start BEFORE the first delta of this block, as anthropic/google emit it.
+        slot = { id: "", name: "", args: "" };
+        tools.set(idx, slot);
+        yield toolCallStart(idx);
+      }
       const fn = (tc.function as Record<string, unknown> | undefined) ?? {};
       if (tc.id && !slot.id) slot.id = tc.id as string;
       if (fn.name && !slot.name) slot.name = fn.name as string;
@@ -342,10 +368,15 @@ async function* consumeSse(resp: CompatResponse, model: Model): AsyncIterable<St
     }
     const call = toolCall(slot.id || `call_${idx}`, slot.name, args);
     assistant.content.push(call);
-    yield toolCallStart(idx);
     yield toolCallEnd(call, idx);
   }
 
+  // Tool calls outrank whatever finish_reason said. Hosts that omit it, or report "stop"
+  // alongside tool_calls, would otherwise leave stop_reason "stop" — and agent/loop.ts only
+  // dispatches calls on "toolUse", so the calls are dropped AND the orphaned assistant
+  // tool_calls message (no tool replies after it) 400s the next request. google.ts has
+  // always done this; here it was the one path that trusted the host.
+  if (tools.size) finishReason = "toolUse";
   assistant.stop_reason = finishReason as AssistantMessage["stop_reason"];
   if (!assistant.content.length) assistant.content.push(text(""));
   // prompt_tokens is INCLUSIVE of prompt_tokens_details.cached_tokens (as Gemini's

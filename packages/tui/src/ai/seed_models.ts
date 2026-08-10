@@ -6,6 +6,10 @@
  * turn against a model the router did not pick, and importing `src/cli/main.ts` for a price
  * table would drag Ink, React and 40-odd other modules into a lazily-loaded read-only server.
  * The only dependency is the `Model` type.
+ *
+ * No entry carries a `base_url`: the openai-compat provider falls back to the endpoint in
+ * ai/provider_catalog.ts for the model's provider, so the URLs live in exactly one place.
+ * Set one here only to override that (a proxy, a self-hosted server).
  */
 
 import type { Model } from "./types.ts";
@@ -82,7 +86,6 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.14, output: 0.28, cache_read: 0.0028 },
     context_window: 1_000_000,
     max_tokens: 384_000,
-    base_url: "https://api.deepseek.com",
   },
   {
     id: "deepseek-v4-pro",
@@ -93,7 +96,6 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_000_000,
     max_tokens: 384_000,
     reasoning: true,
-    base_url: "https://api.deepseek.com",
   },
   {
     id: "grok-4.5",
@@ -104,7 +106,6 @@ export const SEED_MODELS: Model[] = [
     context_window: 500_000,
     max_tokens: 16_384,
     reasoning: true,
-    base_url: "https://api.x.ai/v1",
   },
   {
     id: "grok-4.3",
@@ -115,7 +116,6 @@ export const SEED_MODELS: Model[] = [
     context_window: 1_000_000,
     max_tokens: 16_384,
     reasoning: true,
-    base_url: "https://api.x.ai/v1",
   },
   {
     id: "z-ai/glm-5.2",
@@ -125,7 +125,6 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.82, output: 2.58 },
     context_window: 1_000_000,
     max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
   },
   {
     id: "moonshotai/kimi-k2.6",
@@ -135,7 +134,6 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.66, output: 3.41 },
     context_window: 262_144,
     max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
   },
   {
     id: "minimax/minimax-m3",
@@ -145,7 +143,6 @@ export const SEED_MODELS: Model[] = [
     cost: { input: 0.098, output: 1.21 },
     context_window: 1_000_000,
     max_tokens: 16_384,
-    base_url: "https://openrouter.ai/api/v1",
   },
   {
     id: "claude-haiku-4-5",

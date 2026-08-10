@@ -7,7 +7,9 @@
  * does. env_var order = resolution order (first set wins).
  */
 
-export type ApiId = "anthropic-messages" | "google-generative-ai" | "openai-completions" | "faux";
+import type { ApiId } from "./types.ts";
+
+export type { ApiId };
 
 export interface ProviderSpec {
   readonly name: string;
@@ -103,6 +105,15 @@ const BY_NAME = new Map(PROVIDERS.map((p) => [p.name, p]));
 /** Env vars that supply the API key for `provider` (resolution order = first set wins). */
 export function envVarsForProvider(provider: string): string[] {
   return [...(BY_NAME.get(provider)?.envVars ?? [])];
+}
+
+/**
+ * The provider's own OpenAI-compatible endpoint, when it has one. `Model.base_url` still
+ * wins; this is the fallback, so a model registered for groq/xai/deepseek/openrouter without
+ * one no longer posts that provider's key to api.openai.com.
+ */
+export function baseUrlForProvider(provider: string): string | undefined {
+  return BY_NAME.get(provider)?.baseUrl;
 }
 
 /** True when an env var supplying this provider's key is set (or it needs none). */
