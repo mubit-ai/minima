@@ -31,6 +31,7 @@ import {
   type PaletteItem,
   costView,
   fileView,
+  mainOnly,
   memoryView,
   notFoundView,
   overviewView,
@@ -41,7 +42,7 @@ import {
   runsView,
   shell,
 } from "./render.ts";
-import { overview, planView, sessionList } from "./stats.ts";
+import { gateTiers, overview, planView, sessionList } from "./stats.ts";
 
 export const DEFAULT_PORT = 4180;
 const COOKIE = "minima_dash";
@@ -401,7 +402,33 @@ function navFor(path: string, scope: Scope): NavItem[] {
   }));
 }
 
-function html(body: string, status = 200): Response {
+/**
+ * The page's own capability list, and the last line of defence for the escaping in render.ts.
+ *
+ * Every value this dashboard renders comes out of the ledger — plan titles, step text, memory
+ * content, file paths — and reaches the page through ~60 hand-placed `escapeHtml` calls. On an
+ * ordinary read-only page a missed one is a defacement; here the page can POST to
+ * `/api/v1/open`, which spawns a process, so it is worth more than that.
+ *
+ * `script-src` takes the per-response nonce and nothing else, so an injected `<script>` simply
+ * does not run. `style-src` cannot use the nonce — a nonce makes the browser ignore
+ * `'unsafe-inline'` for that directive, and the views use inline `style=` attributes (the meter
+ * fills), which no nonce can cover. Styles are not the escalation path, scripts are.
+ */
+function cspHeader(nonce: string): string {
+  return [
+    "default-src 'none'",
+    `script-src 'nonce-${nonce}'`,
+    "style-src 'unsafe-inline'",
+    "img-src 'none'",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+function html(body: string, status = 200, nonce?: string): Response {
   return new Response(body, {
     status,
     headers: {
@@ -409,6 +436,7 @@ function html(body: string, status = 200): Response {
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
+      ...(nonce ? { "content-security-policy": cspHeader(nonce) } : {}),
     },
   });
 }
@@ -440,26 +468,6 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       })),
   ];
 
-  const page = (
-    path: string,
-    scope: Scope,
-    title: string,
-    body: string,
-    opts: { projectFilter?: boolean } = {},
-  ): Response =>
-    html(
-      shell({
-        title,
-        nav: navFor(path, scope),
-        projects: ctx.store.projects(),
-        scope,
-        ledgerPath: ctx.store.path,
-        body,
-        commands: paletteFor(scope),
-        projectFilter: opts.projectFilter,
-      }),
-    );
-
   // Detail views drop the project filter: a session, a plan, and a recorded file each belong to
   // exactly one project, so the control could only ever reload the same page. The scope itself is
   // NOT dropped — it stays in the URL and on every nav link, so returning to a scoped list works.
@@ -468,6 +476,37 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const path = url.pathname;
+
+    // The live refresh asks for `<main>` and throws the rest away (see render.ts's `refresh`),
+    // so sending the rest is 30KB of CSS, the whole palette and a second shell per ledger
+    // change. The header shipped before the server honoured it; this is the other half.
+    const partial = req.headers.get("x-partial") === "1";
+
+    const page = (
+      viewPath: string,
+      scope: Scope,
+      title: string,
+      body: string,
+      opts: { projectFilter?: boolean } = {},
+    ): Response => {
+      if (partial) return html(mainOnly(body));
+      const nonce = crypto.randomUUID();
+      return html(
+        shell({
+          title,
+          nav: navFor(viewPath, scope),
+          projects: ctx.store.projects(),
+          scope,
+          ledgerPath: ctx.store.path,
+          body,
+          commands: paletteFor(scope),
+          projectFilter: opts.projectFilter,
+          nonce,
+        }),
+        200,
+        nonce,
+      );
+    };
 
     // The discovery primitive: unauthenticated on purpose, because a TUI has to be able to ask
     // "is the thing on this port MY dashboard" before it holds a token worth using. It reports the
@@ -674,6 +713,9 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
       });
     }
     if (path.startsWith("/api/")) return json({ error: "not_found" }, 404);
+    // Every navigation makes the browser ask for this. Falling through to the catch-all rendered
+    // a whole "Not found" page — shell, palette, CSS and all — as the answer.
+    if (path === "/favicon.ico") return new Response(null, { status: 404 });
 
     // ---- HTML views ----
     if (path === "/") {
@@ -712,7 +754,10 @@ export function createHandler(ctx: Ctx): (req: Request) => Promise<Response> {
         path,
         scope,
         "Plans & gates",
-        plansView(ctx.store.plans(scope, 200), overview(ctx.store, scope).gates, now),
+        // gateTiers directly, not `overview(...).gates` — that computed the decision window, the
+        // anchor board, the model mix, the scoreboard and the daily spend series, then threw all
+        // of it away to read one field.
+        plansView(ctx.store.plans(scope, 200), gateTiers(ctx.store.gateRows(scope)), now),
       );
     }
     const planMatch = /^\/plans\/([^/]+)$/.exec(path);

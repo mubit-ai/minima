@@ -19,8 +19,27 @@ import {
   readRecorded,
   resolveRecorded,
 } from "../src/dashboard/files.ts";
-import { DashboardStore, LedgerUnavailableError } from "../src/dashboard/queries.ts";
-import { agoCell, fileView, planDetailView, runsView } from "../src/dashboard/render.ts";
+import {
+  DashboardStore,
+  type LedgerTotals,
+  LedgerUnavailableError,
+} from "../src/dashboard/queries.ts";
+
+/** An empty ledger's totals — the "nothing recorded" case the tiles must not fabricate. */
+const EMPTY_TOTALS: LedgerTotals = {
+  decisions: 0,
+  runs: 0,
+  actualUsd: 0,
+  routedUsd: 0,
+  unroutedUsd: 0,
+};
+import {
+  agoCell,
+  fileView,
+  memoryView,
+  planDetailView,
+  runsView,
+} from "../src/dashboard/render.ts";
 import {
   ActivityHub,
   ClientRegistry,
@@ -215,6 +234,23 @@ describe("queries", () => {
     expect(store.runDetail("no-such-run")).toBeNull();
     store.close();
   });
+
+  // The single-entity queries are the scoped list queries with their WHERE swapped out. A swap
+  // that silently misses leaves an UNSCOPED query whose `.get(id, 1)` hands back whichever row
+  // sorts first — so both directions are asserted: one of them must break if scoping is lost.
+  test("run detail returns the run it was asked for, never the first row", () => {
+    const db = new MinimaDb(dbPath);
+    const second = db.startRun({ projectKey: PROJECT });
+    db.writeToolCall({ runId: second, toolName: "read", args: {}, result: "ok", isError: false });
+    db.close();
+
+    const store = new DashboardStore(dbPath);
+    expect(store.runs(PROJECT)).toHaveLength(2);
+    expect(store.runDetail(seeded.runId)!.run.run_id).toBe(seeded.runId);
+    expect(store.runDetail(second)!.run.run_id).toBe(second);
+    expect(store.runDetail(second)!.decisions).toHaveLength(0);
+    store.close();
+  });
 });
 
 describe("stats honesty", () => {
@@ -293,7 +329,7 @@ describe("stats honesty", () => {
   });
 
   test("a metric with no coverage reports no-data instead of a fabricated zero", () => {
-    const tiles = kpis([], 0, gateTiers([]));
+    const tiles = kpis([], EMPTY_TOTALS, gateTiers([]));
     const qpd = tiles.find((k) => k.key === "qpd")!;
     expect(qpd.raw).toBeNull();
     expect(qpd.value).toBe("no data");
@@ -313,6 +349,39 @@ describe("stats honesty", () => {
     expect(tile.raw).toBeCloseTo(4 * 0.4 + 0.2 - (4 * 0.02 + 0.2), 6);
     expect(tile.note).toContain("5 direct / 0 solved");
     expect(tile.note).toContain("realized tokens are not recorded");
+    store.close();
+  });
+
+  // The tiles were summed from `decisions()`, which is LIMITed, while the chart beside them is an
+  // unbounded SQL GROUP BY. Past the window the two disagreed about the same money on one page.
+  test("the spend tile and the spend chart speak for the same money", () => {
+    const store = new DashboardStore(dbPath);
+    const payload = overview(store, PROJECT);
+    const charted = payload.spendByDay.reduce((s, d) => s + d.cost_usd, 0);
+    expect(payload.kpis.find((k) => k.key === "spend")!.raw).toBeCloseTo(charted, 9);
+    expect(charted).toBeCloseTo(4 * 0.02 + 0.2, 9);
+    store.close();
+  });
+
+  test("a windowed page of decisions cannot shrink the headline totals", () => {
+    const store = new DashboardStore(dbPath);
+    const totals = store.totals(PROJECT);
+    expect(totals.decisions).toBe(5);
+    expect(totals.runs).toBe(1);
+
+    // What overview() would produce if the window only reached two of the five rows.
+    const tiles = kpis(store.decisions(PROJECT, 2), totals, gateTiers([]));
+    expect(tiles.find((k) => k.key === "spend")!.raw).toBeCloseTo(totals.actualUsd, 9);
+    expect(tiles.find((k) => k.key === "runs")!.note).toContain("5 routed decisions");
+    // …and the row-derived metric says out loud that it only saw part of it.
+    expect(tiles.find((k) => k.key === "qpd")!.note).toContain("newest 2 of 5 decisions");
+    store.close();
+  });
+
+  test("nothing windowed is claimed when the window covers the whole ledger", () => {
+    const store = new DashboardStore(dbPath);
+    const note = overview(store, PROJECT).kpis.find((k) => k.key === "qpd")!.note;
+    expect(note).not.toContain("newest");
     store.close();
   });
 
@@ -529,6 +598,84 @@ describe("rendering safety", () => {
     ).text();
     expect(body).not.toContain("<script>alert");
     expect(body).toContain("&lt;script&gt;alert");
+  });
+
+  // The page can POST /api/v1/open, which spawns an editor, so a script that reached it through
+  // a missed escapeHtml would be an escalation rather than a defacement.
+  test("a page ships a CSP whose script-src is the nonce its own script carries", async () => {
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
+    const res = await handler(
+      new Request("http://127.0.0.1:4180/", { headers: { cookie: `minima_dash=${TOKEN}` } }),
+    );
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
+    expect(nonce).toBeTruthy();
+    const body = await res.text();
+    expect(body).toContain(`<script nonce="${nonce}">`);
+    // No bare <script> — one that CSP would refuse to run is the whole point.
+    expect(body).not.toContain("<script>");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("connect-src 'self'"); // the EventSource
+    expect(csp).toContain("style-src 'unsafe-inline'"); // inline style= on meter fills
+    expect(csp).not.toContain("script-src 'unsafe-inline'");
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("two responses never reuse a nonce", async () => {
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
+    const get = async () =>
+      (
+        await handler(
+          new Request("http://127.0.0.1:4180/", { headers: { cookie: `minima_dash=${TOKEN}` } }),
+        )
+      ).headers.get("content-security-policy");
+    expect(await get()).not.toBe(await get());
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  // render.ts's refresh() fetches with this header and keeps only <main>. The server ignored it,
+  // so every ledger change re-sent the shell, the palette and 30KB of CSS to be discarded.
+  test("x-partial returns just the <main> the live refresh keeps", async () => {
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
+    const headers = { cookie: `minima_dash=${TOKEN}` };
+    const full = await (
+      await handler(new Request("http://127.0.0.1:4180/", { headers }))
+    ).text();
+    const part = await (
+      await handler(
+        new Request("http://127.0.0.1:4180/", { headers: { ...headers, "x-partial": "1" } }),
+      )
+    ).text();
+
+    expect(part.startsWith("<main>")).toBe(true);
+    expect(part).not.toContain("<!doctype html>");
+    expect(part).not.toContain("<style>");
+    expect(part).not.toContain("id=\"pal\"");
+    expect(part.length).toBeLessThan(full.length);
+    // The client does doc.querySelector("main") on this text — if that misses, live refresh
+    // silently stops updating, so the wrapper is load-bearing.
+    expect(part).toContain("</main>");
+    ctx.hub.stop();
+    ctx.store.close();
+  });
+
+  test("favicon.ico 404s instead of rendering a whole page", async () => {
+    const ctx = ctxFor();
+    const handler = createHandler(ctx);
+    const res = await handler(
+      new Request("http://127.0.0.1:4180/favicon.ico", {
+        headers: { cookie: `minima_dash=${TOKEN}` },
+      }),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("");
+    ctx.hub.stop();
+    ctx.store.close();
   });
 
   test("createHandler renders from a bare readonly context", async () => {
@@ -1517,6 +1664,20 @@ describe("client affordances", () => {
     expect(filter).toContain("2 rows");
   });
 
+  // `td` is nowrap by default, and the class has to land on the td — a `<span class="wrap">`
+  // inside one inherits the nowrap, which is how memory content shipped as one endless line.
+  test("a wrap column puts the class on the td, where the CSS rule actually is", async () => {
+    const rows = [{ a: "some prose that needs to wrap" }];
+    const cols = [{ header: "A", wrap: true, cell: (r: { a: string }) => r.a }];
+    expect(dataTable(rows, cols, "empty")).toContain('<td class="wrap">');
+
+    const store = new DashboardStore(dbPath);
+    const html = memoryView(store.memories(PROJECT), 1_700_000_000);
+    expect(html).toContain('<td class="wrap">prefer cheap-1 for small edits</td>');
+    expect(html).not.toContain('<span class="wrap">');
+    store.close();
+  });
+
   test("listeners are delegated, so a live <main> swap does not kill them", async () => {
     const { handler, ctx } = createDashboard({ dbPath, token: TOKEN });
     const body = await (
@@ -1525,6 +1686,10 @@ describe("client affordances", () => {
     // Bound-by-id listeners would go dead the first time the SSE refresh replaces <main>.
     expect(body).toContain('document.addEventListener("click"');
     expect(body).not.toContain('getElementById("copypath").addEventListener');
+    // #anchor is rendered inside <main>, so binding it by id left the tile-anchor picker dead
+    // after the first ledger change.
+    expect(body).toContain('document.addEventListener("change"');
+    expect(body).not.toContain('getElementById("anchor")');
     // And the superseded 10s full-page meta-reload must be gone entirely.
     expect(body).not.toContain("Auto-refresh");
     expect(body).toContain('new EventSource("/api/v1/stream")');

@@ -247,8 +247,20 @@ export interface TableColumn<T> {
   header: string;
   /** Right-align + tabular figures for numeric columns. */
   numeric?: boolean;
+  /**
+   * Let this column's text wrap. `td` is `white-space: nowrap` by default — right for ids and
+   * numbers, wrong for prose, and the class has to land on the `td` itself (a `<span class="wrap">`
+   * inside one inherits the nowrap and does nothing, which is how memory content shipped as a
+   * single unwrappable line).
+   */
+  wrap?: boolean;
   cell: (row: T) => string;
 }
+
+const cellClass = <T>(c: TableColumn<T>): string => {
+  const names = [c.numeric ? "num" : "", c.wrap ? "wrap" : ""].filter(Boolean);
+  return names.length > 0 ? ` class="${names.join(" ")}"` : "";
+};
 
 /** The table counterpart every chart needs — also the primary view for dense ledger rows. */
 export function dataTable<T>(
@@ -263,10 +275,7 @@ export function dataTable<T>(
     .map((c) => `<th${c.numeric ? ' class="num"' : ""}>${escapeHtml(c.header)}</th>`)
     .join("");
   const body = rows
-    .map(
-      (r) =>
-        `<tr>${cols.map((c) => `<td${c.numeric ? ' class="num"' : ""}>${c.cell(r)}</td>`).join("")}</tr>`,
-    )
+    .map((r) => `<tr>${cols.map((c) => `<td${cellClass(c)}>${c.cell(r)}</td>`).join("")}</tr>`)
     .join("");
   const attrs = id ? ` id="${escapeHtml(id)}" class="sortable"` : "";
   return `<div class="table-wrap"><table${attrs}><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
