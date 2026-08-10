@@ -23,8 +23,9 @@ import { MinimaDb, type RunRow, defaultDbPath, toolSchemaHash } from "../db/mini
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { type DbSinkHandle, attachDbSink } from "../db/sink.ts";
 import { errText } from "../errtext.ts";
+import { type FrontEnd, attachPermissionSeam, promptsForPermission } from "../frontend.ts";
 import { makeBashSteerHook } from "../minima/bash_steer.ts";
-import { type VerifyConsent, bigPlanHooks, headlessVerifyConsent } from "../minima/big_plan.ts";
+import { bigPlanHooks } from "../minima/big_plan.ts";
 import {
   BudgetLedger,
   type BudgetMode,
@@ -45,8 +46,8 @@ import { drainMemoryJobs, makeRoutedExtractor } from "../minima/memory_scribe.ts
 import { createMubitMemory } from "../minima/mubit_memory_factory.ts";
 import { type ObserverHandle, maybeAttachObserver } from "../minima/observer.ts";
 import { resolveEnvLayers } from "../minima/project_config.ts";
-import { type ChildEvent, createSpawn } from "../minima/spawn.ts";
-import { runJson, runPrint } from "../run_modes.ts";
+import { createSpawn } from "../minima/spawn.ts";
+import { nonInteractiveFrontEnd, runJson, runPrint } from "../run_modes.ts";
 import { detectRepo, makeCheckpointHook } from "../session/checkpoint.ts";
 import { makeCommitDeps } from "../session/commit.ts";
 import { reverifyNotice, reverifyOnResume } from "../session/resume_verify.ts";
@@ -57,7 +58,7 @@ import { LspManager, makeLspDiagnosticsHook } from "../tools/_lsp.ts";
 import { SeenLedger } from "../tools/_seen.ts";
 import { registerContextRewindTools } from "../tools/checkpoint_rewind.ts";
 import { registerGitCommitTool } from "../tools/git_commit.ts";
-import { type AskUserRef, builtinTools, questionTool } from "../tools/index.ts";
+import { builtinTools, questionTool } from "../tools/index.ts";
 import { taskTool } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
 import type { ToolArtifacts } from "../tools/types.ts";
@@ -71,6 +72,7 @@ import {
   storedValues,
 } from "../tui/config_store.ts";
 import { buildSystemPrompt } from "../tui/context.ts";
+import { terminalFrontEnd } from "../tui/frontend.ts";
 import { installInputFilter } from "../tui/input-filter.ts";
 import { initKeymap } from "../tui/keymap_file.ts";
 import { loadPersistedMode } from "../tui/mode_prefs.ts";
@@ -838,6 +840,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // hooks below. First block wins, so a steered command never raises a pointless
   // permission overlay. Keep this line immediately after agent construction.
   agent.addBeforeToolCall(makeBashSteerHook(config));
+  // The front-end contract (frontend.ts): ONE named object per run declaring how the driver
+  // fills the six user-facing seams — permission, the user question, verify consent, child
+  // events, the agent event stream, and (S4) file IO. Chosen here, this early, because
+  // everything below is built against its slots long before a front-end exists to fill them.
+  const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
+  const frontEnd: FrontEnd = nonInteractive
+    ? nonInteractiveFrontEnd(args.mode === "json" ? "json" : "print")
+    : terminalFrontEnd();
+  // Seam 1 — permission. A front-end that declares it never prompts has no seam and nothing is
+  // attached, so its tool calls reach the dispatcher through exactly the hook stack they did
+  // before this contract existed. The attachment sits here, after bash-steer and ahead of
+  // everything a front-end registers once it is up, so the P2 hook order
+  // (steer → permission → checkpoint → done-gate) is unchanged.
+  if (frontEnd.permission) attachPermissionSeam(agent, frontEnd.permission);
   // W3.3: a successful tool call whose `path` argument resolves into the artifact dir
   // bumps that row's last_used, so paged-back artifacts survive the LRU prune longest.
   if (artifactStore) agent.addAfterToolCall(makeArtifactReadTouchHook(artifactStore));
@@ -922,7 +938,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // exists, so closure events route through this ref; the reviewer is armed further down.
   const planClosedRef: { current: ((planId: string) => void) | null } = { current: null };
   let pendingDiffReview: Promise<unknown> | null = null;
-  const verifyConsentRef: { current: VerifyConsent } = { current: headlessVerifyConsent() };
+  // Seam 3 — verify consent, held by the front-end (fail-closed until something that can ask
+  // takes the slot; see terminalFrontEnd/nonInteractiveFrontEnd for what each does with it).
+  const verifyConsentRef = frontEnd.verifyConsent;
   try {
     db = new MinimaDb();
     const projectKey = repoIdentity(process.cwd());
@@ -1074,9 +1092,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Children get their own routed model, meter, confined tools, and budget slice; their
   // rows land in the same run under agentId=childId.
   //
-  // childEventRef: mutable handler set by HarnessApp on mount so sub-agent events reach
-  // React state without the TUI needing to exist at createSpawn time.
-  const childEventRef: { handler: ((e: ChildEvent) => void) | null } = { handler: null };
+  // Seam 4 — child events: the handler is set by whichever front-end can render them (the TUI
+  // on mount), so sub-agent events reach it without that front-end existing at createSpawn
+  // time. Empty means they are dropped; the child's result still returns through the tool.
+  const childEventRef = frontEnd.childEvents;
   const spawnFactory = createSpawn({
     parent: agent,
     workdir: process.cwd(),
@@ -1166,9 +1185,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   };
 
   // The `question` tool lets the model ask the user a structured clarifying question mid-run.
-  // The ask callback is late-bound: the TUI populates askUserRef.current once it mounts an
-  // overlay; in headless/print modes it stays null and the tool tells the model to proceed.
-  const askUserRef: AskUserRef = { current: null };
+  // Seam 2 — the ask callback is late-bound: the TUI populates askUserRef.current once it
+  // mounts an overlay; the non-interactive front-end leaves it null by declaration and the
+  // tool tells the model to proceed.
+  const askUserRef = frontEnd.askUser;
   agent.agentState.tools.push(questionTool(askUserRef));
   // P4 checkpoint/rewind: flag gates REGISTRATION only — rehydrate honors persisted
   // context_rewind markers regardless (they are data about what the model saw).
@@ -1271,7 +1291,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write("minima: budget ignored (persistence unavailable)\n");
   }
 
-  const nonInteractive = args.print || args.mode === "print" || args.mode === "json";
   // Headless: budget signals go to stderr. (The TUI re-targets them to chat notices.)
   if (nonInteractive && agent.budget) {
     agent.budget.setOnEvent((e) => {
@@ -1280,9 +1299,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       }
     });
   }
-  // Headless has no permission hook, so B3's checkpoint hook registers first (snapshot
-  // before the done-gate can block) and the done-gate second — same relative order as the
-  // TUI's stack. One-shot run = one prompt, so arm once here.
+  // Headless has no permission hook (seam 1, declared null by nonInteractiveFrontEnd), so
+  // B3's checkpoint hook registers first (snapshot before the done-gate can block) and the
+  // done-gate second — same relative order as the TUI's stack. One-shot run = one prompt, so
+  // arm once here.
   if (nonInteractive && agent.db) {
     const headlessTop = detectRepo(process.cwd());
     const ckpt = makeCheckpointHook({
@@ -1308,7 +1328,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // the run row + close the DB, or the run leaks as 'active'.
     let rc = 1;
     try {
-      rc = args.mode === "json" ? await runJson(agent, prompt) : await runPrint(agent, prompt);
+      rc =
+        args.mode === "json"
+          ? await runJson(agent, prompt, frontEnd)
+          : await runPrint(agent, prompt);
     } catch (exc) {
       process.stderr.write(`minima: ${errText(exc)}\n`);
       rc = 1;
@@ -1320,6 +1343,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       closeDb(rc === 0 ? "done" : "aborted");
     }
     return rc;
+  }
+
+  // The terminal UI fills the permission seam on mount, so only a front-end that HAS one can
+  // drive it. Statically true today — the non-interactive branch returned above — but stated
+  // rather than assumed: quietly accepting a front-end that declares it never prompts would
+  // mount the overlay against a slot nothing reads, which is the invisible gap this contract
+  // exists to close. Checked before the screen is cleared, so the message survives.
+  if (!promptsForPermission(frontEnd)) {
+    process.stderr.write(
+      `minima: the ${frontEnd.name} front-end declares no permission seam — it cannot drive the terminal UI\n`,
+    );
+    closeDb("aborted");
+    return 1;
   }
 
   // Shift+Tab permission mode for the interactive TUI: the CLI flag wins; otherwise restore
@@ -1419,13 +1455,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     React.createElement(HarnessApp, {
       agent,
       banner: "minima",
-      askUserRef,
-      childEventRef,
+      // The terminal UI's half of the front-end contract: it fills these seams on mount and
+      // empties them on unmount. Passed whole so no seam is bound outside the contract.
+      frontEnd,
       initialResume,
       planSpawn: spawnFactory,
       planMetaModel,
       bigPlanGateBefore,
-      verifyConsentRef,
       todos: todoState,
       commitDeps: config.gitCommit ? commitDeps : null,
     }),
