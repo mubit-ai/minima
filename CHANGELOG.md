@@ -6,6 +6,18 @@ All notable changes to Minima are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-10
+
+The harness release. Fifteen PRs, almost all of them in `packages/tui`: the terminal UI
+gets a fullscreen renderer and colorschemes, the ledger gets a browser, plans get
+sub-agents, and the router finally gets something to vary. Three append-only migration
+batches (`commits`, plan-step delegation columns, realized tokens on
+`routing_decisions`).
+
+The two things to know before upgrading: **the default model changes on most key sets**
+(see the pool entry below), and **the TUI now boots into the alternate screen** — set
+`MINIMA_TUI_INLINE=1` if you want the old inline renderer back.
+
 ### Changed
 - **The candidate pool is now the union of each provider's Pareto frontier.** The old
   9-model pool left three models that no slider value could ever select (they cost more
@@ -29,8 +41,91 @@ All notable changes to Minima are documented here. The format follows
   key set including OpenRouter the default routes prompts through OpenRouter rather than a
   first-party provider. There is no environment override for the pool: pin a model with
   `/model`, or set a per-repo routing profile, to opt out.
+- **The fullscreen renderer is now the default** (#319). Alternate screen, an in-app scroll
+  viewport, and the composer glued to the bottom of the frame, with wheel/PgUp/PgDn history
+  scroll and mouse capture on. Resolution order is `--fullscreen`/`--inline` →
+  `MINIMA_TUI_FULLSCREEN`/`MINIMA_TUI_INLINE` → the per-project `/fullscreen` preference →
+  on. This reinstates what MP3 deleted in 0.11; the ADR
+  (`docs/BigPlan/decision-inline-renderer.md`) carries the amendments that reversed it.
+  The trade is real and is why it was inline for four releases: the terminal's own
+  scrollback, select and copy stop applying inside the viewport. `/mouse` releases capture
+  when you want to drag-select, and `MINIMA_TUI_INLINE=1` restores the old behaviour
+  wholesale.
+- **Provider SDKs bumped** (#317): `@anthropic-ai/sdk` 0.40.1 → 0.115.0, `@google/genai`
+  0.3.1 → 2.13.0. Both pins dated from early 2025 and `@google/genai` was still pre-1.0.
+  Verified live against both providers before release.
+- **The context meter is unified with auto-compaction** (#324) — the number in the status
+  bar and the threshold that fires the compaction are now the same computation.
+- **The last four ambient kill switches route through `config.ts`** (#350).
+  `MINIMA_TUI_PLAN_CRITIC`, `_DIFF_REVIEW`, `_AUTO_GATES` and `_DASHBOARD` were read
+  straight from `process.env` at their wiring sites, so the kill-switch test could only
+  cover them by grepping for a source string — which cannot catch an inverted sense or a
+  flag that stopped being consulted. The ambient table is now empty and a test asserts it
+  stays that way.
+- **`HarnessApp`'s effect clusters are split into named hooks** (#316), taking `app.tsx`
+  from 5,201 lines with 21 `useEffect` in one component down to five sibling files with
+  the bodies unchanged.
+- **The daily catalog-snapshot job files an issue instead of failing** (#348). The org
+  forbids Actions-created pull requests, so `gh pr create` could never succeed there; the
+  job had been red every day for weeks while the refreshed branch sat unmerged — the exact
+  outcome the loud failure was meant to prevent. It now pushes the branch and opens (or
+  comments on) a `catalog-snapshot` issue with a compare link.
 
 ### Added
+- **Skills — `SKILL.md` packs** (#327). Discovery walks four roots (including the
+  `~/.claude/skills` compat root, so generated packs work unmodified); a skill is invocable
+  as `/<name>` or loaded on demand by the model through a `skill` tool whose listing ships
+  in the schema. Sub-agents get the tool too — "use the deploy skill" was precisely the
+  delegation that could not work before. `/skills` re-runs discovery, so a pack installed
+  mid-session needs no restart. `hidden: true` frontmatter shadow-hides a lower-precedence
+  skill of the same name.
+- **The localhost dashboard** (#315) — a read-only web view over the harness ledger:
+  spend over time, model mix, gate tiers, a task-type × model scoreboard, plus session,
+  plan, memory and cost views. Server-rendered HTML and SVG from template strings, no new
+  dependencies, shipped inside the compiled binary. One server per ledger, auto-started and
+  refcounted, `/dashboard off` to stop it and `MINIMA_TUI_DASHBOARD=0` to never start it.
+  It binds loopback, holds a per-process constant-time token in an HttpOnly cookie, and
+  opens its own `readonly` handle so no route can write. The honesty rules from `/cost` are
+  mirrored: judged rows only for quality-per-dollar with coverage stated, green only from
+  deterministic gates, sub-n cells suppressed, and negative savings labelled "overspent"
+  rather than shown as a bare minus.
+- **`/themes` — ten colorschemes with a live-preview picker** (#318). A six-role palette
+  (accent/plan/dim/warn/success/error) now sits behind every Ink colour prop, replacing
+  ~120 hardcoded ANSI names. `minima` — the current look — stays the default; the other
+  nine are hex truecolor themes that never paint the terminal background or default
+  foreground, so your own scheme still shows through. The picker restyles the UI live as
+  the cursor moves (Enter keeps, Esc reverts); the choice persists globally.
+- **Plan-delegated steps** (#312, opt in with `MINIMA_TUI_PLAN_DELEGATE=1` for one
+  release): a plan step runs as a sub-agent with its own persona, tool scope and slice of
+  the plan budget. The child's returned text feeds the next step's prior-results
+  projection, so it is persisted rather than left in context. `delegated_cost_usd` doubles
+  as the already-delegated marker — stamped on every attempt including failures, so a lead
+  re-marking a step `in_progress` cannot re-spawn it and drain the budget in a loop. Ships
+  with **user-defined agent types** and `/agent make` to author one.
+- **The slash-command wave** (#347): `/pr` cuts a branch, commits what is dirty, pushes and
+  opens a PR — nothing local is mutated until you confirm the proposal, and a missing `gh`
+  degrades to a pushed branch plus a compare URL. `/compact` now spends one cheap metaModel
+  call on the full window instead of clipping each message to 200 characters, with
+  structural pre-reduction upstream of it and a fail-open path back to the old
+  deterministic body on all five failure modes (auto-compaction still truncates, by
+  design — it fires mid-turn). Also `/summarise`, `/btw` (hand the running turn a side
+  note), and `/caveman`.
+- **Tier 1 UX parity** (#341), the four features every terminal-native comparator shipped
+  and Minima did not: **image input** (`read` returns the image to models that can see;
+  per-target serialization since only Anthropic accepts image blocks inside a tool result),
+  **clipboard image paste** with Ctrl+V, **desktop notifications** (OSC 9 + bell,
+  `MINIMA_TUI_NOTIFY=0`), and **compose-in-`$EDITOR`** with Ctrl+X Ctrl+E.
+- **`.minima/config.toml`** (#333) — a committed per-project config that may only move
+  values toward the safer side, so checking one in cannot widen another user's permissions.
+- **A user keymap file** (#337) rebinding the ten app-level chords, which now route through
+  a binding registry (#334). A bad file is surfaced as a chat notice on mount, never a
+  failure.
+- **`git_commit` + `/commit` with attribution trailers, and the commits ledger** (#335,
+  #339). `/why <sha>` joins a commit hash back to the models that wrote it, what they cost
+  and which gates passed — the commit end of a join that already keyed on `rec_id` from
+  both other sides.
+- **Reasoning effort reaches every provider** (#336), and the status bar stops reporting an
+  effort that was never sent.
 - **The harness now sends `expected_output_tokens`.** The server prices candidates as
   `input_rate x expected_input + output_rate x expected_output` and picks the cheapest
   clearing tau; the harness sent a real input figure but no output one, so the server fell
@@ -44,6 +139,40 @@ All notable changes to Minima are documented here. The format follows
 - Realized `input_tokens`/`output_tokens` are retained on `routing_decisions` (migration
   v23, additive). They were computed at feedback time and discarded, so the harness could
   never check its own estimate against what a run actually spent.
+
+### Fixed
+- **Esc now kills a Gemini turn** (#317). The `@google/genai` 0.3.x pin had no
+  `abortSignal` on `generateContentStream`, so `opts.signal` was inert — `google.ts` said
+  exactly that in a comment while passing the signal anyway. Stated honestly in the new
+  comment: per Google's docs the signal is client-side only, so it stops us reading the
+  stream but does not cancel generation service-side, and the tokens produced are still
+  billed. Anthropic and OpenAI abort the request itself.
+- **`ANTHROPIC_OAUTH_TOKEN` works** (#317). It was resolved into the SDK's `apiKey` slot
+  and therefore sent as an `x-api-key` header, which 401s. It now goes to `authToken`.
+- **The OpenAI-compatible provider honours `options.timeout`** (#331) — the one serving
+  openai, openrouter, groq, xai, deepseek and together. It never read the option, so seven
+  `src/minima` call sites that pass an explicit deadline (judge 30s, diff review 45s, plan
+  critic, classify, scribe, observer, plan council) had none; they go through `complete()`
+  rather than `agentLoop`, so the stream-idle watchdog did not cover them either, and Bun's
+  `fetch` has no default. A hung request hung forever.
+- **Cached tokens are credited in the OpenAI-compatible provider** (#331).
+  `prompt_tokens_details.cached_tokens` was ignored, so `usage.cache_read` was always 0 and
+  the whole prompt billed at the input rate — 10× over for gpt-class, 50× for deepseek.
+  That inflated figure is the realized `actual_cost_usd` sent to `/v1/feedback`, so it
+  skewed the observed cost basis server-side, not just the local wallet. Same class of bug
+  as the Gemini one fixed in 0.14.5.
+- **A proxy echoing both `delta.reasoning_content` and `delta.reasoning` no longer emits the
+  thinking block twice** (#331).
+- **`gpt-5.6-*` works again** (#328): `reasoning_effort` is sent as `none` when tools are
+  in the request.
+- **Gemini `thoughtSignature` is echoed on replayed `functionCall` parts** (#327).
+- **The test suite stops overstating its own coverage** (#349). `FakeMemory.lookup`
+  recorded its `match` argument and then returned every seeded record regardless of it, so
+  every test asserting cluster-keyed behaviour — dual-read windows, key-version migration,
+  per-(cluster, model) cells — passed no matter which key the engine actually asked for. The
+  double now filters, and 5 of the 7 new pinning cases fail against the old pass-through.
+  Separately, the classifier gate suite skipped silently without a trained artifact; it now
+  says so, and `MINIMA_CLASSIFIER_GATES_REQUIRED=1` turns the skip into a failure.
 
 ## [0.14.5] - 2026-07-27
 
