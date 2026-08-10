@@ -54,13 +54,49 @@ export function parseDiffReviewVerdict(text: string): DiffReviewVerdict | null {
   return { objects, concerns };
 }
 
-/** The run's whole change as one patch: committed since base + the working tree. */
+/** Untracked files rendered as real patches, capped so a stray build dir is not the review. */
+const UNTRACKED_FILE_CAP = 20;
+
+/**
+ * `git diff` cannot see untracked files, so a brand-new file — the most reviewable thing a
+ * change can contain — was invisible to every reviewer built on it. Each one is rendered
+ * with `git diff --no-index`, which produces a real patch WITHOUT touching the index (the
+ * `git add -N` trick would mutate the user's staging area behind their back). `--no-index`
+ * exits 1 whenever the files differ, which is always here, so the status is not checked.
+ */
+function untrackedDiff(top: string): string {
+  const ls = Bun.spawnSync(["git", "ls-files", "--others", "--exclude-standard"], { cwd: top });
+  if (ls.exitCode !== 0) return "";
+  const files = ls.stdout.toString().split("\n").filter(Boolean).slice(0, UNTRACKED_FILE_CAP);
+  return files
+    .map((f) =>
+      Bun.spawnSync(["git", "diff", "--no-index", "--", "/dev/null", f], {
+        cwd: top,
+      }).stdout.toString(),
+    )
+    .join("");
+}
+
+/** Current HEAD, or null outside a repo / on an unborn branch. A caller that wants "everything
+ *  since I started" takes this first and passes it back as `baseSha` — that is what keeps a
+ *  change the agent COMMITTED mid-run inside the diff instead of vanishing from it. */
+export function headSha(top: string): string | null {
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: top });
+    const sha = proc.stdout.toString().trim();
+    return proc.exitCode === 0 && sha ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The run's whole change as one patch: committed since base + the working tree + untracked. */
 export function collectRunDiff(top: string, baseSha: string | null): string | null {
   try {
     const args = baseSha ? ["git", "diff", baseSha] : ["git", "diff", "HEAD"];
     const proc = Bun.spawnSync(args, { cwd: top });
     if (proc.exitCode !== 0) return null;
-    const out = proc.stdout.toString();
+    const out = proc.stdout.toString() + untrackedDiff(top);
     return out.trim() ? out : null;
   } catch {
     return null;
