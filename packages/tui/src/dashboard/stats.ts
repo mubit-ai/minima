@@ -30,6 +30,7 @@ import type {
   DashboardStore,
   DayRow,
   FileChangeRow,
+  LedgerTotals,
   ModelMixRow,
   PlanDetail,
   PlanStepRow,
@@ -129,6 +130,10 @@ const anchorNote = (t: AnchorTotals, routedUsd: number): string => {
   }
   return `estimated · ${anchorEvidence(t, routedUsd)} · realized tokens are not recorded`;
 };
+
+/** Routed $ across the SAME window the anchor was computed over — `anchorEvidence` reports the
+ *  anchor's coverage as a share of it, so mixing in the ledger-wide total would misstate it. */
+const windowedRoutedUsd = (rows: DecisionRowLike[]): number => savings(rows).routedUsd;
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -239,33 +244,40 @@ export function scoreboardCells(rows: ScoreboardRow[], minN = SCOREBOARD_MIN_N):
  */
 export function kpis(
   decisions: DecisionRowLike[],
-  runs: number,
+  totals: LedgerTotals,
   tiers: GateTiers,
   anchor: AnchorTotals | null = null,
 ): Kpi[] {
   const qpd = qualityPerDollar(decisions);
-  const sav = savings(decisions);
   // Coverage in DOLLARS, not rows. 47 of 492 rows sounds survivable; $1.15 of $45.17 does not,
   // and the second one is what tells you how much of the spend this number actually speaks for.
-  const judgedShare = sav.actualUsd > 0 ? qpd.judgedCostUsd / sav.actualUsd : 0;
+  // Denominator is the LEDGER's spend, not the window's, so the share cannot flatter itself by
+  // shrinking what it is a share of.
+  const judgedShare = totals.actualUsd > 0 ? qpd.judgedCostUsd / totals.actualUsd : 0;
   const priced = anchor !== null && anchor.directRows + anchor.solvedRows > 0;
+  // The row-derived metrics below (quality per dollar, the anchor) see only the newest page of
+  // decisions. Saying so is the difference between a windowed number and a wrong one.
+  const windowed =
+    totals.decisions > decisions.length
+      ? ` · over the newest ${decisions.length} of ${totals.decisions} decisions`
+      : "";
 
   return [
     {
       key: "runs",
       label: "Sessions",
-      value: String(runs),
-      raw: runs,
-      note: `${decisions.length} routed decisions`,
+      value: String(totals.runs),
+      raw: totals.runs,
+      note: `${totals.decisions} routed decisions`,
     },
     {
       key: "spend",
       label: "Realized spend",
-      value: usd(sav.actualUsd),
-      raw: sav.actualUsd,
+      value: usd(totals.actualUsd),
+      raw: totals.actualUsd,
       note:
-        sav.unroutedUsd > 0
-          ? `${usd(sav.unroutedUsd)} of it unrouted (offline/pinned)`
+        totals.unroutedUsd > 0
+          ? `${usd(totals.unroutedUsd)} of it unrouted (offline/pinned)`
           : "all of it routed",
     },
     {
@@ -273,7 +285,9 @@ export function kpis(
       label: priced ? `Saved vs ${anchor.modelId}` : "Saved vs anchor",
       value: priced ? usd(anchor.savedUsd) : "no data",
       raw: priced ? anchor.savedUsd : null,
-      note: priced ? anchorNote(anchor, sav.routedUsd) : "no routed rows this anchor can price",
+      note: priced
+        ? `${anchorNote(anchor, windowedRoutedUsd(decisions))}${windowed}`
+        : "no routed rows this anchor can price",
     },
     {
       key: "qpd",
@@ -282,7 +296,7 @@ export function kpis(
       raw: qpd.qpd,
       note:
         qpd.judgedRows > 0
-          ? `judged rows only · ${qpd.judgedRows}/${qpd.totalRows} rows — ${usd(qpd.judgedCostUsd)} of ${usd(sav.actualUsd)}, ${pctFine(judgedShare)} of the money`
+          ? `judged rows only · ${qpd.judgedRows}/${qpd.totalRows} rows — ${usd(qpd.judgedCostUsd)} of ${usd(totals.actualUsd)}, ${pctFine(judgedShare)} of the money${windowed}`
           : "nothing judged yet",
     },
     {
@@ -320,7 +334,9 @@ export function overview(
   return {
     scope,
     ledger: { path: store.path, schemaVersion: store.schemaVersion() },
-    kpis: kpis(decisions, store.runs(scope, 1000).length, tiers, anchor),
+    // Counted in SQL. This was `store.runs(scope, 1000).length`, which materialized a thousand
+    // rows to take a length and then reported exactly "1000" for any ledger with more.
+    kpis: kpis(decisions, store.totals(scope), tiers, anchor),
     anchors: board,
     anchorId,
     spendByDay: gapFillDays(store.spendByDay(scope)),

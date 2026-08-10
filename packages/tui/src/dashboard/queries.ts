@@ -185,6 +185,34 @@ export interface RunDetail {
 /** Thrown when the ledger is missing or unreadable — the CLI turns this into a clean exit. */
 export class LedgerUnavailableError extends Error {}
 
+/** The scope predicate every list query carries, and the marker `scopedTo` swaps out. */
+const SCOPE_WHERE = "(?1 IS NULL OR r.project_key = ?1)";
+
+/**
+ * Re-point a scoped query at a single entity — the same SQL, filtered by run or plan instead
+ * of by project.
+ *
+ * It THROWS when the marker is absent, and that is the entire point. This was a bare
+ * `.replace()`, which fails by returning the string unchanged: reformat `SCOPE_WHERE` and
+ * every one of these silently becomes an unscoped query whose `.get(id, 1)` hands back the
+ * most recent row instead of the one asked for. Wrong data, no error, five call sites.
+ */
+function scopedTo(sql: string, predicate: string): string {
+  if (!sql.includes(SCOPE_WHERE)) {
+    throw new Error(`scopedTo: no scope predicate in query (looked for ${SCOPE_WHERE})`);
+  }
+  return sql.replace(SCOPE_WHERE, predicate);
+}
+
+/** Ledger-wide totals, summed in SQL over EVERY row rather than a windowed page of them. */
+export interface LedgerTotals {
+  decisions: number;
+  runs: number;
+  actualUsd: number;
+  routedUsd: number;
+  unroutedUsd: number;
+}
+
 const RUNS_SQL = `
   SELECT r.run_id, r.project_key, r.display_name, r.status, r.created, r.updated,
          (SELECT COUNT(*) FROM routing_decisions d WHERE d.run_id = r.run_id) AS decisions,
@@ -318,6 +346,21 @@ const STEP_COSTS_SQL = `
   WHERE step_id IN (SELECT id FROM plan_steps WHERE plan_id = ?1)
   GROUP BY step_id`;
 
+// Every routed decision in scope, aggregated by SQLite. The list queries above are all
+// LIMITed — a headline total computed by summing one of those pages reports the window, not
+// the ledger, and sits on the same page as an unbounded chart that disagrees with it.
+const TOTALS_SQL = `
+  SELECT COUNT(*) AS decisions,
+         COALESCE(SUM(COALESCE(d.actual_cost_usd, 0)), 0) AS actualUsd,
+         COALESCE(SUM(CASE WHEN d.routed = 'server' THEN COALESCE(d.actual_cost_usd, 0) ELSE 0 END), 0)
+           AS routedUsd
+  FROM routing_decisions d
+  JOIN runs r ON r.run_id = d.run_id
+  WHERE (?1 IS NULL OR r.project_key = ?1)`;
+
+const RUN_COUNT_SQL = `
+  SELECT COUNT(*) AS n FROM runs r WHERE (?1 IS NULL OR r.project_key = ?1)`;
+
 const MEMORIES_SQL = `
   SELECT id, project_key, kind, status, origin, evidence_source, content, trigger, updated
   FROM memories
@@ -385,6 +428,28 @@ export class DashboardStore {
     return this.db.query(DECISIONS_SQL).all(scope, limit) as DecisionRecord[];
   }
 
+  /** The window `decisions()` returns by default — what a windowed metric speaks for. */
+  static readonly DECISION_WINDOW = 2000;
+
+  /** Counts and sums over EVERY row in scope, so a headline number is never a page total. */
+  totals(scope: Scope): LedgerTotals {
+    const row = this.db.query(TOTALS_SQL).get(scope) as {
+      decisions: number;
+      actualUsd: number;
+      routedUsd: number;
+    } | null;
+    const runs = (this.db.query(RUN_COUNT_SQL).get(scope) as { n: number } | null)?.n ?? 0;
+    const actualUsd = row?.actualUsd ?? 0;
+    const routedUsd = row?.routedUsd ?? 0;
+    return {
+      decisions: row?.decisions ?? 0,
+      runs,
+      actualUsd,
+      routedUsd,
+      unroutedUsd: Math.max(0, actualUsd - routedUsd),
+    };
+  }
+
   modelMix(scope: Scope): ModelMixRow[] {
     return this.db.query(MODEL_MIX_SQL).all(scope) as ModelMixRow[];
   }
@@ -440,7 +505,7 @@ export class DashboardStore {
   /** One plan and everything attached to it. null = no such plan. */
   planDetail(planId: string): PlanDetail | null {
     const plan = this.db
-      .query(PLANS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "p.id = ?1"))
+      .query(scopedTo(PLANS_SQL, "p.id = ?1"))
       .get(planId, 1) as PlanSummary | null;
     if (!plan) return null;
     const routed = plan.session_id
@@ -479,17 +544,15 @@ export class DashboardStore {
 
   runDetail(runId: string): RunDetail | null {
     const run = this.db
-      .query(`${RUNS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "r.run_id = ?1")}`)
+      .query(scopedTo(RUNS_SQL, "r.run_id = ?1"))
       .get(runId, 1) as RunSummary | null;
     if (!run) return null;
     const decisions = this.db
-      .query(DECISIONS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "r.run_id = ?1"))
+      .query(scopedTo(DECISIONS_SQL, "r.run_id = ?1"))
       .all(runId, 500) as DecisionRecord[];
-    const tools = this.db
-      .query(TOOLS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "r.run_id = ?1"))
-      .all(runId, 20) as ToolRow[];
+    const tools = this.db.query(scopedTo(TOOLS_SQL, "r.run_id = ?1")).all(runId, 20) as ToolRow[];
     const plans = this.db
-      .query(PLANS_SQL.replace("(?1 IS NULL OR r.project_key = ?1)", "p.session_id = ?1"))
+      .query(scopedTo(PLANS_SQL, "p.session_id = ?1"))
       .all(runId, 20) as PlanSummary[];
     return { run, decisions, tools, plans };
   }

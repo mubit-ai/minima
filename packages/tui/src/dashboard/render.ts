@@ -81,6 +81,13 @@ export interface ShellOptions {
    * is withheld, so nothing is lost by hiding it.
    */
   projectFilter?: boolean;
+  /**
+   * Per-response CSP nonce for the one inline `<script>`. The server sends the matching
+   * `script-src 'nonce-…'`, so a `<script>` that reached the page through a missed escape does
+   * not run — which matters here more than on an ordinary read-only page, because this one can
+   * POST to `/api/v1/open` and spawn an editor.
+   */
+  nonce?: string;
 }
 
 export const fmtUsd = (n: number | null): string => {
@@ -513,19 +520,18 @@ const SCRIPT = `
     if (saved) root.setAttribute("data-theme", saved);
   } catch (e) {}
 
-  var scope = document.getElementById("scope");
-  if (scope) scope.addEventListener("change", function () {
+  // DELEGATED for the same reason the click handler below is, and it is not cosmetic here:
+  // #anchor is rendered INSIDE <main>, which the live refresh replaces wholesale, so a listener
+  // bound to the element at load was dead from the first ledger change onward — the tile-anchor
+  // picker simply stopped doing anything. Both selects set the URL param named by their own id.
+  var PARAM = { scope: "project", anchor: "anchor" };
+  document.addEventListener("change", function (e) {
+    var sel = e.target;
+    var param = sel && PARAM[sel.id];
+    if (!param) return;
     var url = new URL(window.location.href);
-    if (scope.value) url.searchParams.set("project", scope.value);
-    else url.searchParams.delete("project");
-    window.location.href = url.toString();
-  });
-
-  var anchor = document.getElementById("anchor");
-  if (anchor) anchor.addEventListener("change", function () {
-    var url = new URL(window.location.href);
-    if (anchor.value) url.searchParams.set("anchor", anchor.value);
-    else url.searchParams.delete("anchor");
+    if (sel.value) url.searchParams.set(param, sel.value);
+    else url.searchParams.delete(param);
     window.location.href = url.toString();
   });
 
@@ -805,9 +811,14 @@ export function shell(opts: ShellOptions): string {
     <ul></ul>
   </div>
 </div>
-<script>${SCRIPT}</script>
+<script${opts.nonce ? ` nonce="${escapeHtml(opts.nonce)}"` : ""}>${SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/** The `<main>` the live refresh actually keeps — see `partialShell` in server.ts. */
+export function mainOnly(body: string): string {
+  return `<main>${body}</main>`;
 }
 
 function kpiTiles(kpis: Kpi[]): string {
@@ -1465,7 +1476,7 @@ export function memoryView(rows: MemorySummary[], now: number): string {
         cell: (m) =>
           `<span class="pill ${m.status === "pinned" || m.status === "active" ? "good" : m.status === "rejected" ? "bad" : "warn"}">${escapeHtml(m.status)}</span>`,
       },
-      { header: "Content", cell: (m) => `<span class="wrap">${escapeHtml(m.content)}</span>` },
+      { header: "Content", wrap: true, cell: (m) => escapeHtml(m.content) },
       { header: "Origin", cell: (m) => escapeHtml(`${m.origin}/${m.evidence_source}`) },
       { header: "Updated", numeric: true, cell: (m) => agoCell(m.updated, now) },
     ],
@@ -1503,7 +1514,10 @@ export function costView(payload: OverviewPayload, budgets: BudgetSummary[], now
   return `${kpiTiles(payload.kpis.filter((k) => k.key !== "runs" && k.key !== "gate_green"))}
 <section class="card"><h2>Realized spend per day</h2>${areaChart(spend, { valueFmt: (n) => (n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`) })}</section>
 ${anchorSection(payload)}
-<section class="card"><h2>Budget ledger</h2>${budgetTable}</section>`;
+<section class="card"><h2>Budget ledger</h2>${budgetTable}
+  <p class="note">Every budget scope in the ledger — the project filter does not narrow this table.
+  A budget's <span class="mono">scope_key</span> is its own namespace (session, plan, global), not a
+  project key, so there is nothing to filter it by.</p></section>`;
 }
 
 export function notFoundView(path: string): string {

@@ -232,10 +232,11 @@ export async function openInEditor(
   const argv = editorArgv(editor, absPath, line);
   if (!argv) return { ok: false, error: "unknown_editor" };
   try {
-    // Detached and drained: the dashboard must not hold a pipe open to a GUI editor that
-    // outlives the request, which is exactly the non-draining-stdout shape that has bitten
-    // this codebase before.
-    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+    // Detached, and every stream IGNORED rather than piped. A pipe nobody reads is the
+    // non-draining shape that has bitten this codebase before: `proc.unref()` returns
+    // immediately, so a `stderr: "pipe"` here had no reader at all, and an editor chatty
+    // enough to fill the ~64KB pipe buffer would block on write forever.
+    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
     proc.unref();
     return { ok: true, argv };
   } catch (e) {
