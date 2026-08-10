@@ -84,6 +84,41 @@ minima
 Routing auth (`MUBIT_API_KEY`) + one provider key is enough to start. `--offline`
 bypasses the recommender; `--model`/`--provider` pin a model and skip routing.
 
+### In an editor (`minima acp`)
+
+`minima acp` serves the [Agent Client Protocol](https://agentclientprotocol.com) over stdio,
+so Zed, JetBrains, VS Code and anything else speaking ACP can drive Minima with no extension.
+It takes no prompt and runs until the client closes the pipe. The **full harness** is behind the
+socket — routing, the plan verification spine, the memory ledger, the budget ledger, feedback —
+so an editor session strengthens the evidence base rather than diluting it.
+
+Zed, in `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "Minima": { "command": "minima", "args": ["acp"] }
+  }
+}
+```
+
+Tool calls raise the editor's own permission dialog, and an "always allow" says exactly what it
+grants: the **command family** for a shell call (*"Always allow `git` commands"*), or the
+**directory** for a read (*"Always allow reading /repo/src"*) — never a broader promise than the
+one the harness actually keeps. The fully-permissive mode is not reachable over the protocol; it
+stays a deliberate local act (`--dangerously-bypass-permissions`).
+
+**One session per process.** A second `session/new`, or a session for a directory other than the
+one the process was started in, is refused with a clear error — run identity, permission mode and
+the ambient working directory are all process-wide today. Concurrent processes are safe, so a
+client that wants two threads should launch two. This is a limitation to be lifted, not a
+decision to preserve.
+
+Capability negotiation reports honestly, so a client is never offered a button that does nothing.
+Not yet advertised, each landing with its own slice: session loading and images, cost and routing
+metadata on the wire, client-owned file IO, session modes and config options, slash commands,
+sub-agent streams, and editor sign-in.
+
 ## Status
 
 Phases 0–7 complete: scaffold → client → AI layer (3 providers) → agent core → tools →
