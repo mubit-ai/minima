@@ -6,6 +6,85 @@ All notable changes to Minima are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-08-10
+
+A fix release for 0.15.0, out the same day. Nine bugs across the two surfaces 0.15.0
+changed most — the provider layer and the new dashboard — plus a correction to 0.15.0's
+own changelog, which named the wrong default model.
+
+### Fixed
+- **A provider's API key could be posted to the wrong host** (#353). `base_url` resolved
+  from the model's seed entry alone and fell back to `api.openai.com`, so a
+  groq/xai/deepseek/openrouter model registered without one sent *that provider's* key to
+  OpenAI. It now falls back to the provider catalog's endpoint, and the seven duplicated
+  URLs are gone from `seed_models.ts`. Verified live as well as in CI — a wrong endpoint
+  typechecks perfectly: all four providers with keys on hand (Anthropic, Google, and both
+  OpenRouter rungs) were driven through the harness's own provider code, 28/28 checks,
+  every request reaching the right host.
+- **Tool calls were silently dropped when the host didn't say `tool_calls`** (#353).
+  `openai_compat.ts` took `finish_reason` at its word; a server that omits it, or reports
+  `stop` beside `tool_calls` (Groq and Together have both done it), had its calls dropped
+  by the dispatcher — *and* left an orphaned assistant `tool_calls` message with no tool
+  replies after it, which 400s the next request. `google.ts` has always forced `toolUse`
+  when calls are present; now both do.
+- **Empty blocks reaching Anthropic** (#353). The API 400s on a text block with no
+  non-whitespace text and on an empty content array, and both are reachable from ordinary
+  history: every provider pushes `text("")` for an empty completion, a tool can return no
+  output, and a `/model` switch replaying a Gemini turn can empty a message out entirely.
+- **No retry on transient failures** (#353). A 429 or 503 before the first byte ended the
+  turn on openai-compat and google (Anthropic's SDK already retried). Now 3 attempts,
+  500ms → 1s, and deliberately narrow: pre-stream only, because once deltas are out a
+  retry would duplicate them; aborts are never retried and the backoff wakes early on
+  abort, so Esc is never stuck behind it; and one deadline covers the whole call, so a
+  judge call with `timeout: 30` gets 30s rather than 90s. `options.retry: false` collapses
+  it to a single attempt. Net effect: an infra blip no longer burns a recovery-ladder
+  rung, and the side channels (judge, classify, scribe, critic, compaction) stop losing
+  their turn to a single rate limit.
+- **A proxy echoing both `delta.reasoning_content` and `delta.reasoning` no longer emits
+  the thinking block twice** (#353).
+- **The dashboard's Sessions tile silently capped at 1000** (#354) — a thousand rows
+  materialized just to take a `.length`, and any larger ledger reported exactly `1000` as
+  though it were a measurement.
+- **Two numbers on one dashboard page disagreed about the same money** (#354). The spend
+  tile summed a 2000-row window while the chart beside it was an unbounded SQL
+  `GROUP BY`, so past the window the tile under-reported the chart. Headline totals now
+  come from SQL over every row; the genuinely row-derived metrics (quality per dollar, the
+  anchor board) still see the newest page and now say so — `over the newest 2000 of 5310
+  decisions`.
+- **`.replace()` on shared SQL failed silently** (#354). Five sites built their
+  single-entity query by replacing the scope predicate out of the shared list SQL;
+  `.replace()` fails by returning the string unchanged, so reformatting the predicate
+  turned `runDetail(id)` into an unscoped query returning whichever row sorted first —
+  wrong data, no error. A `scopedTo()` helper throws instead.
+- **An undrained stderr pipe** (#354) that would block an editor forever past the ~64KB
+  pipe buffer, directly below a comment warning about that exact shape.
+- Three smaller dashboard defects (#354): the memory Content column could never wrap
+  (the CSS rule targets `td`, the markup emitted a `span`), the tile-anchor picker died on
+  the first ledger change (bound by id, inside the `<main>` the SSE refresh replaces), and
+  two wasted renders — `/plans` computing a full overview to read one field, and
+  `/favicon.ico` rendering a complete page instead of 404ing.
+- **0.15.0's changelog named the wrong default model** (#355). It claimed
+  `minimax/minimax-m3` was the pick at the default slider; on a cold start it cannot be
+  selected at all. See the corrected 0.15.0 entry below for the arithmetic.
+- **The `edit-bench` AC7 flake** (#356) — 24 filesystem scenario runs against bun's 5000ms
+  default, observed at 5584ms on a loaded CI runner and green on a bare re-run. Given a
+  file-scoped 30s budget, which also covers the `afterAll` hook that `rmSync`s every temp
+  dir the file created.
+
+### Added
+- **The dashboard sends a CSP with a per-response nonce** (#354). Everything it renders
+  comes out of the ledger — plan titles, step text, memory content, file paths — through
+  ~60 hand-placed `escapeHtml` calls, and the page can `POST /api/v1/open`, which spawns a
+  process. That makes a single missed escape an escalation rather than a defacement.
+  `script-src` takes the nonce and nothing else; `style-src` deliberately keeps
+  `'unsafe-inline'` *without* a nonce, because a nonce makes the browser ignore
+  `'unsafe-inline'` for that directive and the views use inline `style=` for meter fills.
+  Plus `default-src 'none'`, `connect-src 'self'`, `img-src 'none'`, and
+  `base-uri`/`form-action`/`frame-ancestors 'none'`.
+- **The dashboard honours `x-partial`** (#354). The live refresh has always sent the
+  header and kept only `<main>`; the server ignored it and re-sent the shell, the palette
+  JSON and 30KB of CSS on every ledger change.
+
 ## [0.15.0] - 2026-08-10
 
 The harness release. Fifteen PRs, almost all of them in `packages/tui`: the terminal UI
