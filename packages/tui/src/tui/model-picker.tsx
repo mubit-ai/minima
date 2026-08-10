@@ -17,7 +17,14 @@ export interface ModelPickerProps {
   currentId: string;
   onPick: (model: Model, pinned: boolean) => void;
   onDismiss: () => void;
+  /** Header text (default " model "). `/crossvalidation` reuses the picker to ask WHICH
+   *  role is being filled, so the two stages are distinguishable while it is open. */
+  title?: string;
+  /** Footer key hints. Callers that ignore the `pinned` flag replace the Tab wording. */
+  hint?: string;
 }
+
+export const MODEL_PICKER_HINT = "↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel";
 
 const WINDOW = 12; // visible rows
 
@@ -35,7 +42,14 @@ export function matches(model: Model, filter: string): boolean {
   return tokens.every((t) => hay.includes(t));
 }
 
-export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPickerProps) {
+export function ModelPicker({
+  models,
+  currentId,
+  onPick,
+  onDismiss,
+  title,
+  hint,
+}: ModelPickerProps) {
   const [filter, setFilter] = useState("");
   const [cursor, setCursor] = useState(0);
   const [closed, setClosed] = useState(false);
@@ -83,7 +97,7 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
       <Text bold color={t.plan}>
-        {" model "}
+        {title ?? " model "}
       </Text>
       <Text color={t.dim}>
         {"filter: "}
@@ -108,7 +122,7 @@ export function ModelPicker({ models, currentId, onPick, onDismiss }: ModelPicke
       {start + WINDOW < filtered.length ? (
         <Text color={t.dim}>{`  ↓ ${filtered.length - start - WINDOW} more`}</Text>
       ) : null}
-      <Text color={t.dim}>{"↑/↓ select · ⏎ run · Tab pin · type to filter · Esc cancel"}</Text>
+      <Text color={t.dim}>{hint ?? MODEL_PICKER_HINT}</Text>
     </Box>
   );
 }

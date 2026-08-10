@@ -56,11 +56,17 @@ import {
   type RoutingResult,
   buildPlanTranscript,
   buildPlannerSystemPrompt,
+  buildWriterContext,
+  collectRunDiff,
+  crossValidate,
   finalizePlan,
+  formatCrossValidateReport,
   formatDreamReport,
+  headSha,
   newInterviewState,
   parseProfileCandidates,
   planModeRoutingOpts,
+  recordCrossValidationObjection,
   resolvePlanModels,
   runCouncilRound,
   runDream,
@@ -494,6 +500,10 @@ function allCommands(): { name: string; desc: string }[] {
     {
       name: "agent",
       desc: "Agent types: /agent (list) · /agent make (define) · /agent <name> <task> (run)",
+    },
+    {
+      name: "crossvalidation",
+      desc: "Two models: one writes the change, another reviews it (/crossvalidation <task>)",
     },
   ];
   return commandCache;
@@ -1085,6 +1095,11 @@ export function HarnessApp({
   );
   const [quitArmed, setQuitArmed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // `/crossvalidation` in flight through the model picker: it rides `pickerOpen` rather than
+  // adding a second overlay, so every existing modal guard (mode cycle, key routing, the
+  // anchor ledger's row reservation) keeps working untouched. null = the picker is the plain
+  // `/model` one; writer=null = stage ①, writer set = stage ②.
+  const [xval, setXval] = useState<{ task: string; writer: Model | null } | null>(null);
   // Open = the theme name active when the picker opened (Esc reverts to it); null = closed.
   const [themePickerOpen, setThemePickerOpen] = useState<string | null>(null);
   // Bumped after setTheme so live chrome re-reads the mutated palette.
@@ -2162,6 +2177,21 @@ export function HarnessApp({
   });
 
   function pickModel(model: Model, pinned: boolean) {
+    // `/crossvalidation` borrows the picker for its two role prompts. Stage ① banks the
+    // writer and leaves the overlay up for stage ②; only stage ② closes it and starts the
+    // run. `pinned` (Tab) is meaningless here — a role choice is not a session pin — so it
+    // is ignored and the footer hint says so.
+    if (xval) {
+      if (!xval.writer) {
+        setXval({ task: xval.task, writer: model });
+        return;
+      }
+      const { task, writer } = xval;
+      setXval(null);
+      setPickerOpen(false);
+      void runCrossValidation(task, writer, model);
+      return;
+    }
     agent.agentState.model = model;
     if (pinned) {
       agent.config.pinned = true;
@@ -2172,6 +2202,98 @@ export function HarnessApp({
       setBasis("minima");
     }
     setPickerOpen(false);
+  }
+
+  /**
+   * `/crossvalidation` — the writer sub-agent, then the reviewer, then one answering pass.
+   * The reviewer's spend books as overhead like judge/diff-review spend; the children's
+   * spend books like `/verify`'s (spawn keeps a child meter but never touches the parent
+   * budget — only the taskTool wrapper does, and this path does not go through it).
+   */
+  async function runCrossValidation(task: string, writer: Model, reviewer: Model) {
+    const say = (text: string, isError = false) =>
+      setMessages((m) => [...m, { role: "tool", text, toolName: "crossvalidation", isError }]);
+    if (!planSpawn) {
+      say("crossvalidation unavailable — no subagent spawner in this session", true);
+      return;
+    }
+    const top = resolveRepoTop();
+    if (!top) {
+      say("crossvalidation needs a git repository — the reviewer reads the diff.", true);
+      return;
+    }
+    // A keyless provider is caught HERE, not at call time. The reviewer fails quiet by
+    // design (a broken reviewer must never lose the writer's work), so an unreachable one
+    // would otherwise surface as "no verdict" — a change nobody reviewed, reported in the
+    // same shape as a change that was reviewed and rambled about.
+    const keyless = [writer, reviewer].find((m) => !providerKeyPresent(m.provider));
+    if (keyless) {
+      say(
+        `no API key for ${keyless.provider} (${keyless.id}) — set ${
+          envVarsForProvider(keyless.provider).join(" or ") || "its key"
+        }, or /config. Cross-validation needs BOTH models reachable.`,
+        true,
+      );
+      return;
+    }
+    // Everything since this moment, committed or not: the writer has bash and may commit,
+    // and a HEAD-relative diff would then come back empty — an unreviewed change reported
+    // as "nothing to review". Anything ALREADY uncommitted is in the diff too and cannot be
+    // separated out, so it is disclosed rather than silently attributed to the writer.
+    const baseSha = headSha(top);
+    const dirtyBefore = Boolean(collectRunDiff(top, baseSha)?.trim());
+    say(`${writer.id} writes · ${reviewer.id} reviews\n${task}`);
+    setBusy(true);
+    setBusyState("running");
+    const controller = new AbortController();
+    agentCommandControllerRef.current = controller;
+    try {
+      const result = await crossValidate({
+        task,
+        writerId: writer.id,
+        reviewer,
+        spawn: planSpawn,
+        // Re-read per round so a fix pass is what round 2 actually reviews.
+        collectDiff: () => collectRunDiff(top, baseSha),
+        // The writer alone gets the conversation tail — the reviewer's independence is the
+        // whole command, and priming it with this would just be the writer with extra steps.
+        context: buildWriterContext(messages),
+        signal: controller.signal,
+        onCostUsd: (usd) => {
+          agent.meter?.addOverhead(usd);
+          agent.budget?.bookSpend(usd, "crossvalidation");
+        },
+        onProgress: (line) => say(line),
+      });
+      agent.budget?.bookSpend(result.childCostUsd, "crossvalidation");
+      const last = result.rounds.at(-1)?.verdict;
+      const note = dirtyBefore
+        ? "note: the tree already had uncommitted changes — the reviewer saw those too.\n\n"
+        : "";
+      // An objection the fix pass could not answer becomes a yellow milestone gate, so it
+      // shows up in /why and can pull an active plan's tier down instead of scrolling away.
+      const gateId =
+        last?.objects && agent.db && agent.runId
+          ? recordCrossValidationObjection(agent.db, agent.runId, last.concerns, reviewer.id)
+          : null;
+      const gateNote = gateId ? "\nlogged as a yellow milestone gate — see /why and /bp." : "";
+      setMessages((m) => [
+        ...m,
+        {
+          role: "tool",
+          text: note + formatCrossValidateReport(result, writer.id, reviewer.id) + gateNote,
+          toolName: "crossvalidation",
+          isError: result.write.outcome === "failure" || last?.objects === true,
+        },
+      ]);
+    } catch (exc) {
+      say(`crossvalidation failed: ${errText(exc)}`, true);
+    } finally {
+      agentCommandControllerRef.current = null;
+      setBusy(false);
+      sweepRetiredTools();
+      setBusyState("ready");
+    }
   }
 
   function handleTabComplete(val: string): string | undefined {
@@ -2985,6 +3107,10 @@ export function HarnessApp({
             },
             { depth: 1, parentSignal: controller.signal, priorResults: [] },
           );
+          // A direct planSpawn call bypasses taskTool, which is what books child spend
+          // against the ledger — without this the money a /agent run spends is invisible to
+          // /budget and to enforce mode.
+          agent.budget?.bookSpend(res.costUsd, "agent");
           setMessages((m) => [
             ...m,
             {
@@ -3010,6 +3136,48 @@ export function HarnessApp({
           sweepRetiredTools();
           setBusyState("ready");
         }
+        break;
+      }
+      case "crossvalidation": {
+        const echo: ChatMessage = { role: "user", text: `/${name} ${args}`.trim() };
+        const task = args.trim();
+        if (!task) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              toolName: "crossvalidation",
+              text: [
+                "usage: /crossvalidation <task>",
+                "",
+                "One model writes the change, a second one reviews the diff it produced, and",
+                "the writer gets one pass to answer the objections. You pick both models when",
+                "the pickers open — ① who writes, then ② who reviews.",
+                "",
+                "Advisory only: no gate is written, nothing is auto-accepted.",
+              ].join("\n"),
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        if (!planSpawn) {
+          setMessages((m) => [
+            ...m,
+            echo,
+            {
+              role: "tool",
+              toolName: "crossvalidation",
+              text: "crossvalidation unavailable — no subagent spawner in this session",
+              isError: true,
+            },
+          ]);
+          break;
+        }
+        setMessages((m) => [...m, echo]);
+        setXval({ task, writer: null });
+        setPickerOpen(true);
         break;
       }
       case "profile": {
@@ -5736,10 +5904,19 @@ export function HarnessApp({
 
       {pickerOpen ? (
         <ModelPicker
+          // Remount between the two /crossvalidation stages: ModelPicker latches `closed`
+          // after a pick (double-fire guard), so without a fresh key stage ② would be dead
+          // to the keyboard. The remount also clears the filter, which is what you want.
+          key={xval ? (xval.writer ? "xval-review" : "xval-write") : "model"}
           models={allModels()}
-          currentId={agent.agentState.model?.id ?? ""}
+          currentId={xval ? "" : (agent.agentState.model?.id ?? "")}
+          title={xval ? (xval.writer ? " ② who REVIEWS it? " : " ① who WRITES it? ") : undefined}
+          hint={xval ? "↑/↓ select · ⏎ choose · type to filter · Esc cancel" : undefined}
           onPick={pickModel}
-          onDismiss={() => setPickerOpen(false)}
+          onDismiss={() => {
+            setXval(null);
+            setPickerOpen(false);
+          }}
         />
       ) : themePickerOpen !== null ? (
         <ThemePicker

@@ -224,10 +224,22 @@ export {
   runDiffReview,
   parseDiffReviewVerdict,
   collectRunDiff,
+  headSha,
   DIFF_REVIEW_SYSTEM,
   DIFF_REVIEW_CAP_CHARS,
   type DiffReviewVerdict,
   type DiffReviewOutcome,
   type DiffReviewOptions,
 } from "./diff_review.ts";
+export {
+  crossValidate,
+  formatCrossValidateReport,
+  buildWriterContext,
+  writerObjective,
+  recordCrossValidationObjection,
+  CROSSVALIDATE_SYSTEM,
+  type CrossValidateOptions,
+  type CrossValidateResult,
+  type CrossValidateRound,
+} from "./crossvalidate.ts";
 export type { PlanFinalizeDeps, PlanFinalizeOutcome, PlanFinalizeDb } from "./plan_finalize.ts";
