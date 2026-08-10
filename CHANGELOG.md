@@ -28,19 +28,28 @@ The two things to know before upgrading: **the default model changes on most key
   and lists DeepSeek/OpenRouter models that cost nothing when their key is absent (they are
   filtered pre-request) and add rungs the moment one is set.
 
-  **This changes the default model on most key sets.** Two measured examples, `task=code`
-  at 4000 in / 800 out:
+  **This changes the default model on most key sets.** Measured on a cold start (no
+  recalled evidence — what a new install sees), `task=code` at 4000 in / 800 out, slider
+  at the default 5.0:
 
-  | keys | floor | pick at the default slider 5.0 |
+  | keys | pool floor | pick at the default slider 5.0 |
   |---|---|---|
-  | Anthropic+OpenAI+OpenRouter | $0.008000 -> $0.001080 | claude-sonnet-5 $0.016000 -> minimax/minimax-m3 $0.001360 |
-  | + Google | $0.003200 -> $0.000720 | gemini-2.5-flash $0.003200 -> minimax/minimax-m3 $0.001360 |
+  | Anthropic+OpenAI+OpenRouter | $0.008000 -> $0.001080 | claude-sonnet-5 $0.016000 -> z-ai/glm-5.2 $0.005344 |
+  | + Google | $0.003200 -> $0.000720 | gemini-3.6-flash $0.012000 -> z-ai/glm-5.2 $0.005344 |
 
-  `minimax/minimax-m3` carries the same catalog prior for coding (0.74) as the
-  `gemini-2.5-flash` it displaces, at 2.4x less. Note it is served via OpenRouter, so on a
-  key set including OpenRouter the default routes prompts through OpenRouter rather than a
-  first-party provider. There is no environment override for the pool: pin a model with
-  `/model`, or set a per-repo routing profile, to opt out.
+  The pool floor and the pick are different numbers and the gap is the point: the floor is
+  the cheapest model in the pool, the pick is the cheapest one clearing the quality
+  threshold. At slider 5.0 that threshold is 0.735, raised to 0.765 by the cold-start
+  margin while every candidate is still evidence-free. `minimax/minimax-m3` prices lowest
+  among the plausible picks ($0.001360) but its coding prior is 0.74, so it misses the
+  cold-start bar by 0.025 and only becomes selectable once evidence lifts the margin.
+  Until then `z-ai/glm-5.2` (prior 0.90) is the pick.
+
+  Note both are served via OpenRouter, so on a key set including an OpenRouter key the
+  default routes prompts through an aggregator rather than a first-party provider. With a
+  DeepSeek key present the pick is `deepseek-v4-flash` at $0.000784 instead. There is no
+  environment override for the pool: pin a model with `/model`, or set a per-repo routing
+  profile, to opt out.
 - **The fullscreen renderer is now the default** (#319). Alternate screen, an in-app scroll
   viewport, and the composer glued to the bottom of the frame, with wheel/PgUp/PgDn history
   scroll and mouse capture on. Resolution order is `--fullscreen`/`--inline` →
